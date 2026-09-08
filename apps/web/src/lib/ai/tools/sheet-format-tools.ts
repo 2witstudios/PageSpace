@@ -1549,19 +1549,24 @@ export const sheetFormatTools = {
             ],
           };
         } else {
+          // An id that is not on the tab is treated as already removed, with a
+          // warning, not refused: a retried call whose first attempt committed
+          // but lost its response reads a tab where the id is already gone,
+          // and refusing it would report failure for a request that landed.
+          // The store would refuse the op (a remove names an id and asserts it
+          // exists), so it is simply not planned.
           const removals = new Set<string>();
           (removeRuleIds ?? []).forEach((id, index) => {
-            if (!existingIds.includes(id)) {
-              refuse(
-                INVALID_RULE_REQUEST,
-                `removeRuleIds[${index}]: no rule "${id}" on this tab. Rules that exist: ` +
-                  (existingIds.length > 0 ? existingIds.map((existingId) => `"${existingId}"`).join(', ') : 'none') +
-                  '.',
-                NOTHING_APPLIED
-              );
-            }
             if (removals.has(id)) return;
             removals.add(id);
+            if (!existingIds.includes(id)) {
+              warnings.push(
+                `removeRuleIds[${index}]: no rule "${id}" on this tab — treated as already removed. Rules that exist: ` +
+                  (existingIds.length > 0 ? existingIds.map((existingId) => `"${existingId}"`).join(', ') : 'none') +
+                  '.'
+              );
+              return;
+            }
             planned.push({ label: `removeRuleIds[${index}]`, op: { type: 'removeConditionalRule', id } });
           });
           remaining = existing.filter((rule) => !removals.has(rule.id));

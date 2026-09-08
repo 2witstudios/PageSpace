@@ -2074,6 +2074,27 @@ export function planFormatOps(
           chargeInspection(index, op.type)
         );
 
+        // Content BEFORE id. A caller that mints ids dedupes by content
+        // before its call, but two overlapping calls (a timeout retry racing
+        // the original) both see no duplicate; the store replans HERE under
+        // its lock, so this is the one check that refuses the second one
+        // atomically — as the duplicate it is, which the caller recovers
+        // from, and not as an id collision, which it cannot. A caller that
+        // derives ids from content sends the SAME id both times, so checking
+        // the id first would turn the retry it was designed for into an
+        // ordinary refusal. Without this the tab holds two rules that paint
+        // the same cells the same way and evaluates the formula twice.
+        const key = conditionalRuleContentKey(rule);
+        const twin = rules.find((existing) => conditionalRuleContentKey(existing) === key);
+        if (twin !== undefined) {
+          throw new SheetDuplicateRuleError(
+            `Op ${index} (${op.type}): An identical rule is already on this sheet as "${twin.id}". ` +
+              'Use updateConditionalRule to change it, or removeConditionalRule if it is no longer wanted.',
+            index,
+            twin.id
+          );
+        }
+
         if (rules.some((existing) => existing.id === rule.id)) {
           // Two rules under one id: `update` and `move` reach the first by
           // `findIndex` while `remove` filters out both, so the new rule is no
@@ -2083,25 +2104,6 @@ export function planFormatOps(
             op.type,
             `A rule "${rule.id}" is already on this sheet. Use updateConditionalRule to change it, ` +
               'or give the new rule its own id.'
-          );
-        }
-
-        // Content, not only id. A caller that mints ids dedupes by content
-        // before its call, but two overlapping calls (a timeout retry racing
-        // the original) both see no duplicate and mint different ids; the
-        // store replans HERE under its lock, so this is the one check that
-        // refuses the second one atomically. Without it the tab holds two
-        // rules that paint the same cells the same way and evaluates the
-        // formula twice per cell, and the "sending the same rules twice adds
-        // them once" promise is broken for precisely the retry it was made for.
-        const key = conditionalRuleContentKey(rule);
-        const twin = rules.find((existing) => conditionalRuleContentKey(existing) === key);
-        if (twin !== undefined) {
-          throw new SheetDuplicateRuleError(
-            `Op ${index} (${op.type}): An identical rule is already on this sheet as "${twin.id}". ` +
-              'Use updateConditionalRule to change it, or removeConditionalRule if it is no longer wanted.',
-            index,
-            twin.id
           );
         }
 

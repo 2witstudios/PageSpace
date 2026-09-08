@@ -622,16 +622,21 @@ describe('set_conditional_format', () => {
     assert({ given: 'the tab after', should: 'hold only the other writer’s rule', actual: state.conditionalFormats.length, expected: 1 });
   });
 
-  it('removeRuleIds naming an absent id lists the ids that exist', async () => {
+  it('removeRuleIds naming an absent id is treated as already removed, and the warning lists the ids that exist', async () => {
+    // Not a refusal: a retried call whose removal already landed reads a tab
+    // where the id is gone, and must not report failure for a request that
+    // succeeded. The warning still tells a caller who got the id wrong.
     state.conditionalFormats = [
       { id: 'rule-a', kind: 'dataBar', ranges: ['A1'], color: '#3b82f6' },
       { id: 'rule-b', kind: 'dataBar', ranges: ['A2'], color: '#3b82f6' },
     ];
-    const result = await conditional({ removeRuleIds: ['rule-zzz'] });
-    assert({ given: 'an unknown id', should: 'refuse', actual: result.success, expected: false });
-    expect(message(result)).toContain('removeRuleIds[0]');
-    expect(message(result)).toContain('"rule-a"');
-    expect(message(result)).toContain('"rule-b"');
+    const result = (await conditional({ removeRuleIds: ['rule-zzz'] })) as { success: boolean; removed?: number; warnings?: string[] };
+    assert({ given: 'an unknown id', should: 'succeed with nothing removed', actual: [result.success, result.removed], expected: [true, 0] });
+    const warning = result.warnings?.join(' ') ?? '';
+    expect(warning).toContain('removeRuleIds[0]');
+    expect(warning).toContain('already removed');
+    expect(warning).toContain('"rule-a"');
+    expect(warning).toContain('"rule-b"');
     expect(mockApplyFormatOps).not.toHaveBeenCalled();
   });
 
@@ -761,6 +766,23 @@ describe('set_conditional_format', () => {
     assert({ given: 'the tab after', should: 'hold them in the NEW order and nothing else', actual: state.conditionalFormats.map((rule) => rule.id), expected: [first.ruleIds![1], first.ruleIds![0]] });
     assert({ given: 'the concurrent rule', should: 'be counted as removed', actual: reordered.removed, expected: 1 });
     expect(vi.mocked(logSheetCellActivity)).toHaveBeenCalled();
+  });
+
+  it('replaying an append that removed and added is a satisfied retry, not a refusal', async () => {
+    // The first attempt commits (rule "old" removed, rule X added) but its
+    // response is lost. The identical retry must succeed: the removal is
+    // reported as already done and the addition as already present.
+    state.conditionalFormats = [{ id: 'old', kind: 'dataBar', ranges: ['Z1:Z9'], color: '#000000' }];
+    const x = { kind: 'dataBar' as const, ranges: ['A1:A9'], color: '#3b82f6' };
+    const first = (await conditional({ rules: [x], removeRuleIds: ['old'] })) as { ruleIds?: string[]; added?: number; removed?: number };
+    assert({ given: 'the first attempt', should: 'add one and remove one', actual: [first.added, first.removed], expected: [1, 1] });
+
+    const retry = (await conditional({ rules: [x], removeRuleIds: ['old'] })) as { success: boolean; ruleIds?: string[]; added?: number; removed?: number; warnings?: string[] };
+    assert({ given: 'the identical retry', should: 'succeed', actual: retry.success, expected: true });
+    assert({ given: 'the identical retry', should: 'add and remove nothing', actual: [retry.added, retry.removed], expected: [0, 0] });
+    assert({ given: 'the identical retry', should: 'return the id the first attempt minted', actual: retry.ruleIds, expected: first.ruleIds });
+    expect(retry.warnings?.join(' ')).toContain('treated as already removed');
+    assert({ given: 'the tab after', should: 'hold exactly X', actual: state.conditionalFormats.map((rule) => rule.id), expected: first.ruleIds });
   });
 
   it('replaceAll refuses the same rule twice in one call', async () => {

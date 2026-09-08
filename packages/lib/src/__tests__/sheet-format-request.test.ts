@@ -695,6 +695,22 @@ describe('planFormatOps — conditional rules', () => {
     expect(plan([{ type: 'clearConditionalRules' }]).conditionalFormats).toEqual([]);
   });
 
+  it('addConditionalRule with the same id AND the same content is the duplicate, not an id collision', () => {
+    // A caller deriving ids from content sends the same id on a retry; the
+    // retry must surface as SheetDuplicateRuleError (recoverable), which
+    // means content is compared before the id.
+    const tab = tabWith({ conditionalFormats: [rule('a')] });
+    let caught: unknown;
+    try {
+      plan([{ type: 'addConditionalRule', rule: rule('a') }], tab);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(SheetDuplicateRuleError);
+    // Same id, different content is still the id collision.
+    expect(refusalOf([{ type: 'addConditionalRule', rule: rule('a', '2') }], tab)).toContain('is already on this sheet');
+  });
+
   it('setConditionalRules replaces the whole list in the given order', () => {
     // Order is load-bearing: later rules win. A list that reverses two
     // existing rules is a real change, not two duplicates.
@@ -2245,8 +2261,10 @@ describe('planFormatOps — rule identity', () => {
     // Two rules under one id: `update` and `move` reach the first by index
     // while `remove` filters out both, so the new rule is not addressable at
     // all. The region path already refused this.
+    // Different content under the same id — identical content is the
+    // duplicate case, tested separately.
     const tab = tabWith({ conditionalFormats: [rule('a')] });
-    const message = refusalOf([{ type: 'addConditionalRule', rule: rule('a') }], tab);
+    const message = refusalOf([{ type: 'addConditionalRule', rule: rule('a', '2') }], tab);
     expect(message).toContain('A rule "a" is already on this sheet');
     expect(message).toContain('updateConditionalRule');
   });
