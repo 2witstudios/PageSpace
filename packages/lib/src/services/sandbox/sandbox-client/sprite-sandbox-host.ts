@@ -18,6 +18,7 @@
 
 import {
   SandboxSpriteReplacedError,
+  SandboxControlPlaneTimeoutError,
   SandboxStreamOpenTimeoutError,
   type SandboxHandle,
   type SandboxHost,
@@ -171,6 +172,34 @@ export function normalizeSpritePowerState(status: string | undefined): SandboxPo
   return 'unknown';
 }
 
+/**
+ * How long to wait on a control-plane READ before giving up on the wait.
+ * Generous: this is a hang guard, not a latency budget, and a read that has
+ * not answered in fifteen seconds is not about to.
+ */
+const CONTROL_PLANE_READ_TIMEOUT_MS = 15_000;
+
+/**
+ * Bound the WAIT on a read. See {@link SandboxControlPlaneTimeoutError} for
+ * why mutations are pointedly excluded.
+ */
+async function boundedRead<T>(operation: string, run: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      run(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => { reject(new SandboxControlPlaneTimeoutError(operation, CONTROL_PLANE_READ_TIMEOUT_MS)); },
+          CONTROL_PLANE_READ_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 function wrapSpriteServices(getSprite: () => Promise<SpriteInstanceLike>): SandboxServicesApi {
   return {
     async create({ name, command, args, httpPort }) {
@@ -187,17 +216,21 @@ function wrapSpriteServices(getSprite: () => Promise<SpriteInstanceLike>): Sandb
       );
     },
     async list() {
-      const sprite = await getSprite();
-      return (await sprite.listServices()).map(normalizeSpriteService);
+      return boundedRead('services.list', async () => {
+        const sprite = await getSprite();
+        return (await sprite.listServices()).map(normalizeSpriteService);
+      });
     },
     async get(name) {
       // Derived from list rather than the SDK's getService: the SDK rejects a
       // miss with an untyped `Error('Service not found: …')` that message-match
       // classification would have to fish out — an absent row from the listing
       // is the same answer without the fragility.
-      const sprite = await getSprite();
-      const record = (await sprite.listServices()).find((s) => s.name === name);
-      return record !== undefined ? normalizeSpriteService(record) : null;
+      return boundedRead('services.get', async () => {
+        const sprite = await getSprite();
+        const record = (await sprite.listServices()).find((s) => s.name === name);
+        return record !== undefined ? normalizeSpriteService(record) : null;
+      });
     },
     async start(name) {
       const sprite = await getSprite();
