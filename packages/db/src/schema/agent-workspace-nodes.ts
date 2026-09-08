@@ -153,7 +153,7 @@ export const agentWorkspaceNodes = pgTable('agent_workspace_nodes', {
   fraction: real('fraction'),
 
   /**
-   * `'chat' | 'terminal' | 'page'` — what a bound pane is a viewport onto.
+   * `'chat' | 'terminal' | 'page' | 'ports'` — what a bound pane is a viewport onto.
    * NULL (together with `targetId`) is an unbound pane rendering the picker.
    */
   targetKind: text('targetKind'),
@@ -305,7 +305,7 @@ export const agentWorkspaceNodes = pgTable('agent_workspace_nodes', {
   ),
   targetKindValues: check(
     'agent_workspace_nodes_target_kind_chk',
-    sql`${table.targetKind} IS NULL OR ${table.targetKind} IN ('chat', 'terminal', 'page')`,
+    sql`${table.targetKind} IS NULL OR ${table.targetKind} IN ('chat', 'terminal', 'page', 'ports')`,
   ),
 }));
 

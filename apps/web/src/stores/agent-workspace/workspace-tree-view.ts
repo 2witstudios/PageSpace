@@ -59,6 +59,7 @@ const GENERIC_TITLE: Record<PaneTargetKind, string> = {
   chat: 'Conversation',
   terminal: 'Shell',
   page: 'Page',
+  ports: 'Ports',
 };
 
 /** Every pane in the workspace. Membership is presence, and presence is the tree. */

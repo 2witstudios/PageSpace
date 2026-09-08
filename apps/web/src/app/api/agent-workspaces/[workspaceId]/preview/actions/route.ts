@@ -46,7 +46,7 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
     if (isAuthError(auth)) return auth.error;
 
     const action = readDevPreviewUserAction(await request.json().catch(() => null));
-    if (action === null) return NextResponse.json({ error: 'action must be "stop", "resume", or "approve" with the port shown' }, { status: 400 });
+    if (action === null) return NextResponse.json({ error: 'action must be "stop", "resume", "approve" with the port shown, or "select" with a port from the list' }, { status: 400 });
 
     const session = await findSessionRecord(workspaceId);
     if (!session) return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, 'session_not_found', ROUTE);
@@ -62,7 +62,7 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
       return NextResponse.json({ error: manage.message }, { status: 403 });
     }
 
-    const result = await applyDevPreviewUserActionForHolder({ holder, action, userId: auth.userId, wakeSubject: authorization.wakeSubject });
+    const result = await applyDevPreviewUserActionForHolder({ holder, action, userId: auth.userId, wakeSubject: authorization.wakeSubject, sandboxId: authorization.sandboxId });
     return respondToDevPreviewUserAction({ request, userId: auth.userId, route: ROUTE, holder, action, result });
   } catch (error) {
     loggers.api.error('Failed to apply session preview action', error instanceof Error ? error : new Error(String(error)));

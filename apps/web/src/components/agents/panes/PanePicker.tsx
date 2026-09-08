@@ -108,6 +108,12 @@ export interface PanePickerProps {
   onReattachShell?(shellId: string, name: string): void;
   /** Bind this pane to a page — `title` is a display label, never an address. */
   onPickPage?(pageId: string, title: string): void;
+  /**
+   * Bind this pane to the sandbox's ports: what is listening, and a preview
+   * of the one you pick. Synchronous like a page — nothing is minted, and
+   * the pane probes nothing until Scan is pressed.
+   */
+  onPickPorts?(): void;
 }
 
 export default function PanePicker({
@@ -117,6 +123,7 @@ export default function PanePicker({
   canRunSandbox,
   autoFocus = false,
   canPickAssistant = false,
+  onPickPorts,
   existingShells = [],
   onPickAgent,
   onPickShell,
@@ -154,6 +161,18 @@ export default function PanePicker({
           onClick={onPickShell}
           testId="pick-shell"
         />
+
+        {/* Same sandbox as the shell, same gate: a tier that cannot run a
+            sandbox has no ports to list. Disabled rather than hidden, like
+            Shell, so the choice is visible and the reason is the tooltip. */}
+        {onPickPorts && (
+          <ShellPickButton
+            label="Ports"
+            disabled={!canRunSandbox}
+            onClick={onPickPorts}
+            testId="pick-ports"
+          />
+        )}
 
         {canPickAssistant && (
           <Button

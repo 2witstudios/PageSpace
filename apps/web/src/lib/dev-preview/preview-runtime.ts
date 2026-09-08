@@ -37,6 +37,8 @@ import {
 import type { DevPreviewHolderRef } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 import {
   applyDevPreviewUserAction,
+  probeDevPreviewPorts,
+  type DevPreviewPortsResult,
   gatherDevPreviewStatus,
   type DevPreviewStatusResult,
   type DevPreviewUserAction,
@@ -238,12 +240,15 @@ export function applyDevPreviewUserActionForHolder({
   action,
   userId,
   wakeSubject,
+  sandboxId,
 }: {
   holder: DevPreviewHolderRef;
   action: DevPreviewUserAction;
   userId: string;
   /** `PreviewAuthorization.wakeSubject` — the payer the resume wake gate is asked about. */
   wakeSubject: { driveId: string | null; ownerId: string };
+  /** `PreviewAuthorization.sandboxId` — what a SELECT attaches to when no row exists yet. */
+  sandboxId?: string | null;
 }): Promise<DevPreviewUserActionResult> {
   const deps = buildPreviewAccessDeps();
   return applyDevPreviewUserAction({
@@ -251,7 +256,30 @@ export function applyDevPreviewUserActionForHolder({
     action,
     userId,
     wakeSubject,
+    sandboxId,
     deps: { previewStore: deps.previewStore, attach: deps.attach, readListeners: readDevPreviewListeners, canRunCode: deps.canRunCode, lock: getPreviewLock(), now: deps.now },
+  });
+}
+
+/** The ports list, bound to the real store, host and gate — see `probeDevPreviewPorts`. */
+export function probeDevPreviewPortsForHolder({
+  holder,
+  userId,
+  wakeSubject,
+  sandboxId,
+}: {
+  holder: DevPreviewHolderRef;
+  userId: string;
+  wakeSubject: { driveId: string | null; ownerId: string };
+  sandboxId: string | null;
+}): Promise<DevPreviewPortsResult> {
+  const deps = buildPreviewAccessDeps();
+  return probeDevPreviewPorts({
+    holder,
+    userId,
+    wakeSubject,
+    sandboxId,
+    deps: { previewStore: deps.previewStore, attach: deps.attach, readListeners: readDevPreviewListeners, canRunCode: deps.canRunCode, now: deps.now },
   });
 }
 

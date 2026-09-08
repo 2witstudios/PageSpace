@@ -972,6 +972,11 @@ async function resolveTargetsByWorkspace(
         case 'page':
           pageIds.add(node.target.id);
           break;
+        case 'ports':
+          // Nothing to look up: the title is constant and the target is the
+          // workspace itself. Spelled out so the `never` guard below stays a
+          // build failure for the NEXT kind, not a silent hole for this one.
+          break;
         default: {
           const _exhaustive: never = node.target.kind;
           void _exhaustive;
@@ -1060,6 +1065,12 @@ async function resolveTargetsByWorkspace(
       if (!wanted.has(`${kind}:${id}`)) return;
       targets.push({ id, kind, title, lastMessageAt: lastMessageAt?.toISOString() ?? null, agentPageId });
     };
+
+    // A ports pane has no row to join: its target IS this workspace and its
+    // title is constant. It still goes through `push`, so it appears only when
+    // a node of THIS subject points at it — and without it `list_panes` reported
+    // the pane as unresolved (`name: ''`) while the grid labelled it "Ports".
+    push('ports', subject.workspaceId, 'Ports', null, null);
 
     for (const row of chatRows) {
       // CONTAINMENT, and it has moved from a column compare to the tree itself.

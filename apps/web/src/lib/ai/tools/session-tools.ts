@@ -733,9 +733,9 @@ export interface PaneGridNodeEntry {
   position: number;
   /** A container's split direction; null on a pane. */
   axis: 'row' | 'column' | null;
-  /** `'chat' | 'terminal' | 'page'`, or null for an unbound pane showing the picker. */
+  /** `'chat' | 'terminal' | 'page' | 'ports'`, or null for an unbound pane showing the picker. A ports pane's targetId is the workspace id. */
   kind: PaneTargetKind | null;
-  /** The conversationId / shellId / pageId this pane shows, or null when unbound. */
+  /** The conversationId / shellId / pageId — or, for a ports pane, the workspaceId — this pane shows, or null when unbound. */
   targetId: string | null;
   /** Display label only — never an address. Empty when the target resolves to nothing. */
   name: string;

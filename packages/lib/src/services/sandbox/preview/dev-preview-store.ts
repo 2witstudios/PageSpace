@@ -72,6 +72,32 @@ export interface DevPreviewStore {
    */
   approvePort(holder: DevPreviewHolderRef, input: { port: number; spriteInstanceId: string; at: Date; byUserId: string }): Promise<DevPreviewRecord | null>;
   /**
+   * A person PICKED `port` from the ports pane: make it the target, record
+   * consent for it, PIN it, and clear any stop — in ONE statement.
+   *
+   * `approvePort` cannot express this. It is a filtered UPDATE on
+   * `targetPort = port`, and the whole point of a pick is naming a port the
+   * row does NOT currently target — usually with no row at all, since a
+   * server the watch channel cannot see was never detected. Nor can it be
+   * done in two steps (planner upsert, then approve): the planner's upsert
+   * refuses to write approval, so the row would land carrying the OLD port's
+   * consent and `isPreviewShareable` would send it straight back to
+   * `await-approval`.
+   *
+   * Insert-or-update by holder, guarded on `spriteInstanceId` the way
+   * `approvePort` is: the instance is echoed from the render, and a pick made
+   * against a sandbox that has since been rebuilt must not select the
+   * replacement VM's server of the same number. Resolves the row AS WRITTEN,
+   * or `null` when a row exists for a DIFFERENT instance (the caller answers
+   * `instance-changed`). A missing row is not a refusal — it is the common
+   * case — so it is created.
+   *
+   * `relayServiceName` is left as it was: the planner decides the relay, and
+   * this write must not claim one exists. Row-first ordering still holds —
+   * the relay work that follows reads this row under the same lock.
+   */
+  selectPort(holder: DevPreviewHolderRef, input: { port: number; spriteInstanceId: string; sandboxId: string; at: Date; byUserId: string }): Promise<DevPreviewRecord | null>;
+  /**
    * Holders whose STOP intent has outlived its relay for longer than
    * `staleAfterMs` — the backstop sweep's candidate list
    * (`dev-preview-reconcile.ts`). Oldest first and capped, so one tick is
@@ -127,6 +153,7 @@ const rowColumns = {
   stoppedByUserAt: devPreviewServices.stoppedByUserAt,
   approvedPort: devPreviewServices.approvedPort,
   approvedAt: devPreviewServices.approvedAt,
+  selectedByUserAt: devPreviewServices.selectedByUserAt,
 } as const;
 
 function holderColumn(holder: DevPreviewHolderRef) {
@@ -159,6 +186,8 @@ export function createDbDevPreviewStore(): DevPreviewStore {
         // on it yet, and a detection is not consent.
         approvedPort: null,
         approvedAt: null,
+        // Nor is a detection a PICK: only the ports pane pins a target.
+        selectedByUserAt: null,
       };
       const written = await db
         .insert(devPreviewServices)
@@ -192,8 +221,10 @@ export function createDbDevPreviewStore(): DevPreviewStore {
             relayServiceName: values.relayServiceName,
             detectedAt: values.detectedAt,
             stoppedByUserAt: values.stoppedByUserAt,
-            // THE APPROVAL COLUMNS ARE NOT THE PLANNER'S TO WRITE. Only
-            // `approvePort` grants consent, so a detection frame must not
+            // THE APPROVAL COLUMNS ARE NOT THE PLANNER'S TO WRITE. Only a
+            // person grants consent — through `approvePort` (agreeing to what
+            // detection found) or `selectPort` (naming a port by hand) — so a
+            // detection frame must not
             // carry a value it read moments ago — a user's Share landing in
             // between would be silently wiped, and the stop guard above does
             // not cover these columns. Expressed as SQL over the STORED row
@@ -206,6 +237,16 @@ export function createDbDevPreviewStore(): DevPreviewStore {
             approvedPort: sql`CASE WHEN ${devPreviewServices.spriteInstanceId} = ${sql.param(intent.spriteInstanceId, devPreviewServices.spriteInstanceId)} THEN ${devPreviewServices.approvedPort} ELSE NULL END`,
             approvedAt: sql`CASE WHEN ${devPreviewServices.spriteInstanceId} = ${sql.param(intent.spriteInstanceId, devPreviewServices.spriteInstanceId)} THEN ${devPreviewServices.approvedAt} ELSE NULL END`,
             approvedByUserId: sql`CASE WHEN ${devPreviewServices.spriteInstanceId} = ${sql.param(intent.spriteInstanceId, devPreviewServices.spriteInstanceId)} THEN ${devPreviewServices.approvedByUserId} ELSE NULL END`,
+            // THE PIN SURVIVES ONLY ITS OWN PORT. A planner upsert that lands
+            // here is detection moving the target, and a pin vouches for the
+            // port a person named — never for whatever replaced it. So it is
+            // kept when the stored target is the one being written (a
+            // reconcile of the same port, which must not quietly unpin it)
+            // and cleared otherwise, including on a rebuild. Same
+            // SQL-over-the-stored-row shape as the approval columns, for the
+            // same reason: no read-modify-write window a user's pick could
+            // fall into.
+            selectedByUserAt: sql`CASE WHEN ${devPreviewServices.spriteInstanceId} = ${sql.param(intent.spriteInstanceId, devPreviewServices.spriteInstanceId)} AND ${devPreviewServices.targetPort} = ${sql.param(intent.targetPort, devPreviewServices.targetPort)} THEN ${devPreviewServices.selectedByUserAt} ELSE NULL END`,
             // Not `now()`: `updatedAt` is a UTC wall-clock timestamp column and
             // `now()` resolves through the session TZ (see the SQL-now rule).
             updatedAt: sql`(now() at time zone 'utc')`,
@@ -224,6 +265,56 @@ export function createDbDevPreviewStore(): DevPreviewStore {
       return row ?? null;
     },
 
+    async selectPort(holder, { port, spriteInstanceId, sandboxId, at, byUserId }) {
+      const column = holderColumn(holder);
+      // No `id`: the schema's `$defaultFn` mints one, exactly as `upsert` relies on.
+      const values = {
+        workspaceId: holder.kind === 'workspace' ? holder.id : null,
+        envId: holder.kind === 'env' ? holder.id : null,
+        spriteInstanceId,
+        sandboxId,
+        targetPort: port,
+        // Not this write's to claim; the planner reconciles it next, under
+        // the same lock, from the row this returns.
+        relayServiceName: null,
+        detectedAt: at,
+        stoppedByUserAt: null,
+        approvedPort: port,
+        approvedAt: at,
+        approvedByUserId: byUserId,
+        selectedByUserAt: at,
+      };
+      const [written] = await db
+        .insert(devPreviewServices)
+        .values(values)
+        .onConflictDoUpdate({
+          target: column,
+          targetWhere: sql`${column} IS NOT NULL`,
+          // THE INSTANCE GUARD, as the predicate: a pick echoes the instance it
+          // was made against, and a row for a different one is a rebuilt
+          // sandbox — the pick must not land on it. Same shape as
+          // `approvePort`, expressed here as "update only when it matches".
+          setWhere: sql`${devPreviewServices.spriteInstanceId} = ${sql.param(spriteInstanceId, devPreviewServices.spriteInstanceId)}`,
+          set: {
+            targetPort: port,
+            // A pick names a port the row may not have known. A relay pointed
+            // at the previous target is the planner's to replace, and it does
+            // so from this row — but the NAME must survive here so the planner
+            // can see there is one to take down (`replace-relay` needs it).
+            detectedAt: at,
+            stoppedByUserAt: null,
+            approvedPort: port,
+            approvedAt: at,
+            approvedByUserId: byUserId,
+            selectedByUserAt: at,
+            updatedAt: sql`(now() at time zone 'utc')`,
+          },
+        })
+        .returning(rowColumns);
+      // `returning` yields nothing when `setWhere` refused — the instance
+      // guard held. Distinguish that from "no row" for the caller's sentence.
+      return written ?? null;
+    },
     async findStoppedWithRelay({ staleAfterMs, limit, now }) {
       const rows = await db
         .select({

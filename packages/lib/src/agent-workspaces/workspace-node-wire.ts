@@ -44,7 +44,7 @@ import { MAX_NODES } from './workspace-node-validate';
 export type WireWorkspaceNode = WorkspaceNode & { rootId?: string };
 
 const nodeAxisSchema = z.enum(['row', 'column']);
-const paneTargetKindSchema = z.enum(['chat', 'terminal', 'page']);
+const paneTargetKindSchema = z.enum(['chat', 'terminal', 'page', 'ports']);
 
 /**
  * `.finite()`, and not decoration. JSON cannot spell `NaN`, but it can spell

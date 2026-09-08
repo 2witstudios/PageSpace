@@ -171,7 +171,7 @@ describe('dev_preview_services', () => {
       expect(names.filter((name) => name.includes(banned)), `no column mentioning "${banned}"`).toEqual([]);
     }
     expect(Object.keys(columns).sort()).toEqual(
-      ['approvedAt', 'approvedByUserId', 'approvedPort', 'createdAt', 'detectedAt', 'envId', 'id', 'relayServiceName', 'sandboxId', 'spriteInstanceId', 'stoppedByUserAt', 'targetPort', 'updatedAt', 'workspaceId'],
+      ['approvedAt', 'approvedByUserId', 'approvedPort', 'createdAt', 'detectedAt', 'envId', 'id', 'relayServiceName', 'sandboxId', 'selectedByUserAt', 'spriteInstanceId', 'stoppedByUserAt', 'targetPort', 'updatedAt', 'workspaceId'],
     );
   });
 

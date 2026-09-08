@@ -202,3 +202,19 @@ describe('PanePicker', () => {
     });
   });
 });
+
+describe('ports', () => {
+  it('offers Ports beside Shell only when a handler is supplied, and calls it', async () => {
+    const onPickPorts = vi.fn();
+    render(<PanePicker agents={agents} canRunSandbox onPickAgent={vi.fn()} onPickShell={vi.fn()} onPickPorts={onPickPorts} />);
+    await userEvent.click(screen.getByTestId('pick-ports'));
+    expect(onPickPorts).toHaveBeenCalledTimes(1);
+  });
+
+  it('is absent without a handler, and DISABLED (not hidden) when the tier cannot run a sandbox — same gate as Shell', () => {
+    const { rerender } = render(<PanePicker agents={agents} canRunSandbox onPickAgent={vi.fn()} onPickShell={vi.fn()} />);
+    expect(screen.queryByTestId('pick-ports')).toBeNull();
+    rerender(<PanePicker agents={agents} canRunSandbox={false} onPickAgent={vi.fn()} onPickShell={vi.fn()} onPickPorts={vi.fn()} />);
+    expect(screen.getByTestId('pick-ports')).toBeDisabled();
+  });
+});

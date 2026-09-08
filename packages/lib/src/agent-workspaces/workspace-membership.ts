@@ -65,6 +65,7 @@ import {
   compile,
   openConversation,
   openPage,
+  openPorts,
   openShell,
   type CommandCode,
   type CommandResult,
@@ -195,6 +196,8 @@ function place(
       return openShell(nodes, { ...shared, target: { kind: 'terminal', id: target.id } });
     case 'page':
       return openPage(nodes, { ...shared, target: { kind: 'page', id: target.id } });
+    case 'ports':
+      return openPorts(nodes, { ...shared, target: { kind: 'ports', id: target.id } });
   }
 }
 

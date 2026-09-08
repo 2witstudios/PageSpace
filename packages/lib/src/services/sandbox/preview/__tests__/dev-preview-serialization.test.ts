@@ -33,6 +33,7 @@ function sharedStore(initial: DevPreviewRecord | null) {
   let pause: { promise: Promise<void>; release: () => void } | null = null;
   const store: DevPreviewStore = {
     approvePort: async () => null,
+    selectPort: async () => null,
     findStoppedWithRelay: async () => [],
     markSwept: async () => {},
     markRelayStopped: async () => {},
@@ -54,7 +55,7 @@ function sharedStore(initial: DevPreviewRecord | null) {
       }
       log.push(`upsert:${intent.targetPort}`);
       const { basedOnStoppedByUserAt: _guard, ...rest } = intent;
-      row = { id: 'r1', ...rest, stoppedByUserAt: null, approvedPort: null, approvedAt: null };
+      row = { id: 'r1', ...rest, stoppedByUserAt: null, approvedPort: null, approvedAt: null, selectedByUserAt: null };
       return true;
     },
     setStoppedByUser: async (_holder, at) => {
@@ -153,7 +154,7 @@ function row(targetPort: number, overrides: Partial<DevPreviewRecord> = {}): Dev
     sandboxId: 'sbx',
     targetPort,
     relayServiceName: targetPort === 8080 ? null : PREVIEW_RELAY_SERVICE_NAME,
-    approvedAt: null,
+    approvedAt: null, selectedByUserAt: null,
     detectedAt: new Date('2026-09-07T11:00:00.000Z'),
     stoppedByUserAt: null, approvedPort: null,
     ...overrides,

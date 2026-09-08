@@ -85,3 +85,53 @@ describe('respondToDevPreviewUserAction', () => {
     expect(vi.mocked(auditRequest).mock.calls[0]?.[1]).toMatchObject({ eventType: 'authz.access.denied', riskScore: 0.5 });
   });
 });
+
+describe('the select failures each get a sentence a person can act on', () => {
+  const selectAction = { kind: 'select' as const, port: 3000, spriteInstanceId: 'inst' };
+  const respondSelect = (result: DevPreviewUserActionResult) =>
+    respondToDevPreviewUserAction({
+      request: new Request('https://app.test/api/x', { method: 'POST' }),
+      userId: 'u1',
+      route: 'POST /api/x',
+      holder: ENV,
+      action: selectAction,
+      result,
+    });
+
+  it('sandbox-unavailable is a 409 that says how to fix it', async () => {
+    const res = respondSelect({ ok: false, reason: 'sandbox-unavailable' });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain('Open a shell');
+  });
+
+  it('probe-failed is a 503 that names WHICH way the look failed, and invites a rescan', async () => {
+    const res = respondSelect({ ok: false, reason: 'probe-failed', detail: 'timed-out' });
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.error).toContain('did not answer in time');
+    expect(body.error).toContain('Scan again');
+    expect(body.detail).toBe('timed-out');
+  });
+
+  it('port-not-listening is a 409 naming the port', async () => {
+    const res = respondSelect({ ok: false, reason: 'port-not-listening', port: 3000 });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain('port 3000');
+  });
+
+  it('port-refused is a 422 that explains WHY, and is audited as a denial', async () => {
+    const db = respondSelect({ ok: false, reason: 'port-refused', port: 5432, detail: 'non-http-service-port' });
+    expect(db.status).toBe(422);
+    expect((await db.json()).error).toContain('database');
+    expect(vi.mocked(auditRequest).mock.calls.at(-1)?.[1]).toMatchObject({ eventType: 'authz.access.denied', details: { action: 'select', port: 3000, reason: 'port_refused', detail: 'non-http-service-port' } });
+
+    const relay = respondSelect({ ok: false, reason: 'port-refused', port: 8080, detail: 'relay-own-listener' });
+    expect((await relay.json()).error).toContain('relay itself');
+  });
+
+  it('a successful select audits the port it selected, like approve does', async () => {
+    const res = respondSelect({ ok: true, applied: null });
+    expect(res.status).toBe(200);
+    expect(vi.mocked(auditRequest).mock.calls.at(-1)?.[1]).toMatchObject({ eventType: 'data.write', details: { action: 'select', port: 3000 } });
+  });
+});

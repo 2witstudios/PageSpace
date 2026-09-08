@@ -36,7 +36,7 @@ function relayRow(targetPort: number, overrides: Partial<DevPreviewRow> = {}): D
     detectedAt: new Date('2026-09-05T11:00:00.000Z'),
     stoppedByUserAt: null,
     approvedPort: null,
-    approvedAt: null,
+    approvedAt: null, selectedByUserAt: null,
     ...overrides,
   };
 }
@@ -274,7 +274,10 @@ describe('planDevServerService', () => {
   });
 
   it('re-points the relay when the dev server moves ports', () => {
-    const plan = planDevServerService(planInput({ detected: detected(3000), row: relayRow(5173), relay: relayService(5173) }));
+    // `listenerSource: 'probe'` says HOW we know 5173 is gone. The fixture's
+    // `detected()` marks every port 'unlisted', so without it the thrash guard
+    // now (correctly) holds a target whose absence nothing has established.
+    const plan = planDevServerService(planInput({ detected: detected(3000), row: relayRow(5173), relay: relayService(5173), listenerSource: 'probe' }));
     assert({
       given: 'row=5173 relay live, next dev detected on 3000',
       should: 'plan replace-relay from 5173 with the 3000 service',
@@ -299,7 +302,7 @@ describe('planDevServerService', () => {
         row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 8080, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null },
       },
     });
-    const plan = planDevServerService(planInput({ detected: detected(8080, 5), row: relayRow(5173), relay: relayService(5173, { status: 'failed' }) }));
+    const plan = planDevServerService(planInput({ detected: detected(8080, 5), row: relayRow(5173), relay: relayService(5173, { status: 'failed' }), listenerSource: 'probe' }));
     assert({
       given: 'the user moved to 8080 while a dead 5173 relay is still defined',
       should: 'plan record-direct and remove the relay',
@@ -395,7 +398,7 @@ describe('resolveDevPreviewHolder — the holder is whoever OWNS the sprite poin
   it('has two sessions in one env converge on ONE row intent', () => {
     const envHolder = resolveDevPreviewHolder({ id: 'ws-1', envId: 'env-1' });
     const first = planDevServerService(planInput({ holder: envHolder, detected: detected(5173) }));
-    const second = planDevServerService(planInput({ holder: resolveDevPreviewHolder({ id: 'ws-2', envId: 'env-1' }), row: first.action === 'start-relay' ? { ...first.row, stoppedByUserAt: null, approvedPort: null, approvedAt: null } : null, relay: relayService(5173), detected: detected(5173) }));
+    const second = planDevServerService(planInput({ holder: resolveDevPreviewHolder({ id: 'ws-2', envId: 'env-1' }), row: first.action === 'start-relay' ? { ...first.row, stoppedByUserAt: null, approvedPort: null, approvedAt: null, selectedByUserAt: null } : null, relay: relayService(5173), detected: detected(5173) }));
     assert({ given: 'session ws-1 detecting 5173 in env-1', should: 'write an env-keyed row', actual: first.action === 'start-relay' ? first.row.holder : first.action, expected: { kind: 'env', id: 'env-1' } });
     assert({ given: 'session ws-2 then detecting the same server', should: 'find the env row already relaying and write nothing new', actual: second, expected: { action: 'none', reason: 'already-relaying', staleRowIgnored: false } });
   });
@@ -415,9 +418,9 @@ describe('planDevServerService — thrash guard', () => {
     // The guard no longer applies (5173 is gone), so 9230 becomes the target —
     // but an unlisted target is not SHARED without a person's say-so, so the
     // plan is to record it and take the old relay down, not to re-point it.
-    const gone = planDevServerService(planInput({ row: relayRow(5173), relay: relayService(5173), listeners: [{ port: 8080, pid: 42 }], detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' } }));
+    const gone = planDevServerService(planInput({ row: relayRow(5173), relay: relayService(5173), listeners: [{ port: 8080, pid: 42 }], listenerSource: 'probe', detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' } }));
     assert({ given: 'row=5173 no longer bound, unlisted 9230 opens', should: 'take the target but await approval, removing the old relay', actual: [gone.action, gone.action === 'await-approval' && gone.removeRelay], expected: ['await-approval', true] });
-    const approvedGone = planDevServerService(planInput({ row: relayRow(5173, { approvedPort: 9230 }), relay: relayService(5173), listeners: [{ port: 8080, pid: 42 }], detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' } }));
+    const approvedGone = planDevServerService(planInput({ row: relayRow(5173, { approvedPort: 9230 }), relay: relayService(5173), listeners: [{ port: 8080, pid: 42 }], listenerSource: 'probe', detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' } }));
     assert({ given: 'the same move with 9230 already approved', should: 'replace the relay', actual: approvedGone.action, expected: 'replace-relay' });
     const known = planDevServerService(planInput({ row: relayRow(5173), relay: relayService(5173), listeners: [{ port: 5173, pid: 1 }], detected: { kind: 'dev-server', port: 3000, likelihood: 'known-dev-port' } }));
     assert({ given: 'row=5173 still bound, known 3000 opens', should: 'replace the relay', actual: known.action, expected: 'replace-relay' });
@@ -475,7 +478,7 @@ describe('describeServiceState', () => {
     assert({
       given: 'relay running but the snapshot shows 5173 no longer bound',
       should: 'be down via relay (the dev server exited)',
-      actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: relayService(5173), listeners: [{ port: 8080, pid: 42 }] }).status,
+      actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: relayService(5173), listeners: [{ port: 8080, pid: 42 }], listenerSource: 'probe' }).status,
       expected: 'down',
     });
     assert({
@@ -533,7 +536,7 @@ describe('describeServiceState', () => {
   it('describes a direct 8080 preview from the listener snapshot alone', () => {
     const row = relayRow(8080);
     assert({ given: 'direct row, 8080 bound', should: 'be live via direct', actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: null, listeners: [{ port: 8080, pid: 5 }] }), expected: { status: 'live', targetPort: 8080, via: 'direct', message: 'Serving port 8080 directly.' } });
-    assert({ given: 'direct row, snapshot shows 8080 unbound', should: 'be down via direct', actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: null, listeners: [] }).status, expected: 'down' });
+    assert({ given: 'direct row, snapshot shows 8080 unbound', should: 'be down via direct', actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: null, listeners: [], listenerSource: 'probe' }).status, expected: 'down' });
     assert({ given: 'direct row, no snapshot', should: 'be live (nothing contradicts the row)', actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: null, listeners: null }).status, expected: 'live' });
     assert({
       given: 'direct row, but a leftover relay is still running on 8080',
@@ -551,6 +554,124 @@ describe('describeServiceState', () => {
    * "this plan does something". A `none` plan (`already-direct` /
    * `already-relaying`) is a Restart button that provably no-ops.
    */
+  it('a target the WATCH channel cannot see is not "gone" — it is unknown, and renders as recorded', () => {
+    // The bug this pins, verified against a real sprite: `ports/watch` never
+    // reports a Next.js dev server's bind at all. Reading that silence as
+    // absence made `describeServiceState` announce "the dev server on port
+    // 3000 is not listening any more" about a server that was serving fine —
+    // and `repairable: false` took away the one control that might have
+    // helped. A snapshot proves what IS bound and nothing about what is not.
+    const invisible = describeServiceState({
+      liveInstanceId: INSTANCE,
+      row: relayRow(3000),
+      relay: relayService(3000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+    });
+    assert({
+      given: 'a live relay whose target is missing from a WATCH snapshot',
+      should: 'stay live — absence was never observed, only unreported',
+      actual: invisible.status,
+      expected: 'live',
+    });
+
+    // The counterweight: a PROBE is complete, so its silence IS evidence.
+    const probed = describeServiceState({
+      liveInstanceId: INSTANCE,
+      row: relayRow(3000),
+      relay: relayService(3000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+      listenerSource: 'probe',
+    });
+    assert({
+      given: 'the same inputs from an authoritative probe',
+      should: 'be down — here the absence really was observed',
+      actual: probed.status,
+      expected: 'down',
+    });
+  });
+
+  it('a USER-PINNED target outranks any detection, however likely-looking', () => {
+    // The thrash guard only shields against UNLISTED newcomers, which is
+    // right for a target detection chose. A pinned target is different: the
+    // person already answered the question, so even a textbook dev port
+    // yields to it. Without this, a user who picked 9000 in the ports pane
+    // would lose it the moment vite came up on 5173.
+    const known = planDevServerService(planInput({
+      row: relayRow(9000, { approvedPort: 9000, selectedByUserAt: NOW }),
+      relay: relayService(9000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+      detected: { kind: 'dev-server', port: 5173, likelihood: 'known-dev-port' },
+    }));
+    assert({
+      given: 'a pinned 9000 when a KNOWN dev port opens',
+      should: 'keep the pinned target',
+      actual: [known.action, known.action === 'none' && known.reason],
+      expected: ['none', 'user-selected-target'],
+    });
+
+    // It yields to exactly one thing: a probe proving the pinned port is gone.
+    const gone = planDevServerService(planInput({
+      row: relayRow(9000, { approvedPort: 9000, selectedByUserAt: NOW }),
+      relay: relayService(9000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+      listenerSource: 'probe',
+      detected: { kind: 'dev-server', port: 5173, likelihood: 'known-dev-port' },
+    }));
+    assert({
+      given: 'a PROBE proving the pinned port stopped listening',
+      should: 'release the pin and take the newcomer',
+      actual: gone.action,
+      expected: 'replace-relay',
+    });
+
+    // And an UNPINNED row behaves as before — the pin is not a blanket freeze.
+    const unpinned = planDevServerService(planInput({
+      row: relayRow(9000, { approvedPort: 9000 }),
+      relay: relayService(9000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+      detected: { kind: 'dev-server', port: 5173, likelihood: 'known-dev-port' },
+    }));
+    assert({
+      given: 'the same case with no pin',
+      should: 'let the known dev port take over',
+      actual: unpinned.action,
+      expected: 'replace-relay',
+    });
+  });
+
+  it('the thrash guard protects a target the watch channel cannot see', () => {
+    // Same root cause, worse consequence: the guard required a POSITIVE
+    // sighting of the current target, so for an invisible port it never
+    // fired, and the next unlisted bind silently replaced a preview the user
+    // had explicitly chosen.
+    const held = planDevServerService(planInput({
+      row: relayRow(9000, { approvedPort: 9000 }),
+      relay: relayService(9000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+      detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' },
+    }));
+    assert({
+      given: 'an approved target absent from a WATCH snapshot when another unlisted port opens',
+      should: 'keep the current target — nothing established that it went away',
+      actual: [held.action, held.action === 'none' && held.reason],
+      expected: ['none', 'current-target-preferred'],
+    });
+
+    const released = planDevServerService(planInput({
+      row: relayRow(9000, { approvedPort: 9000 }),
+      relay: relayService(9000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+      listenerSource: 'probe',
+      detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' },
+    }));
+    assert({
+      given: 'the same case where a PROBE proves the target is gone',
+      should: 'release the guard and take the newcomer',
+      actual: released.action,
+      expected: 'await-approval',
+    });
+  });
+
   it('repairable says exactly whether a reconcile\'s plan would change anything', () => {
     const cases: { name: string; row: DevPreviewRow; relay: SandboxServiceInfo | null; listeners: readonly { port: number; pid?: number }[] }[] = [
       { name: 'relay crashed', row: relayRow(5173), relay: relayService(5173, { status: 'failed', error: 'boom' }), listeners: [{ port: 5173, pid: 7 }] },
@@ -561,7 +682,7 @@ describe('describeServiceState', () => {
       { name: 'direct row, server gone', row: relayRow(SPRITE_HTTP_PORT), relay: null, listeners: [] },
     ];
     for (const { name, row, relay, listeners } of cases) {
-      const state = describeServiceState({ liveInstanceId: INSTANCE, row, relay, listeners });
+      const state = describeServiceState({ liveInstanceId: INSTANCE, row, relay, listeners, listenerSource: 'probe' });
       expect(state.status, `${name} should be down`).toBe('down');
       if (state.status !== 'down') continue;
       const plan = planDevServerService(planInput({ row, relay, listeners, detected: null }));
@@ -615,7 +736,7 @@ describe('sharing an UNLISTED port is a decision, not a default', () => {
 
     // The server moved to another unlisted port: the old approval does not
     // travel with it, so exposure stops until the user agrees again.
-    const moved = planDevServerService(planInput({ row: relayRow(9000, { approvedPort: 9000 }), relay: relayService(9000), listeners: [{ port: 8080, pid: 42 }], detected: { kind: 'dev-server', port: 9001, likelihood: 'unlisted' } }));
+    const moved = planDevServerService(planInput({ row: relayRow(9000, { approvedPort: 9000 }), relay: relayService(9000), listeners: [{ port: 8080, pid: 42 }], listenerSource: 'probe', detected: { kind: 'dev-server', port: 9001, likelihood: 'unlisted' } }));
     assert({ given: 'an approved 9000 moving to 9001', should: 'await approval again AND remove the 9000 relay', actual: [moved.action, moved.action === 'await-approval' && moved.removeRelay], expected: ['await-approval', true] });
   });
 

@@ -31,6 +31,8 @@ export const envDevPreviewPath = (driveId: string, envId: string): string =>
 
 /** The actions route for a status path — one derivation, so a caller can never pair them wrongly. */
 export const devPreviewActionsPath = (statusPath: string): string => `${statusPath}/actions`;
+/** The on-demand port probe — POST, because it can wake a paused sprite and a GET that wakes is unsafe by HTTP semantics. */
+export const devPreviewPortsPath = (statusPath: string): string => `${statusPath}/ports`;
 
 /**
  * `fetchJSON`, not a hand-rolled `fetchWithAuth` + `ok` check: the

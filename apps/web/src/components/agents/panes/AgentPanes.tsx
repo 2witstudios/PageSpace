@@ -92,6 +92,7 @@ import {
 } from './workspace-conversations';
 import PaneChat from './PaneChat';
 import PagePaneView from './PagePaneView';
+import { PortsPane } from '@/components/dev-preview/PortsPane';
 import Shell from '../shell/Shell';
 
 export interface AgentPanesProps {
@@ -1479,6 +1480,14 @@ export default function AgentPanes({
     [bindPane, sessionId],
   );
 
+  // A ports pane addresses this workspace's one sandbox, so the target IS the
+  // workspace. Synchronous like a page: nothing is minted, and the pane
+  // probes nothing until its Scan button is pressed.
+  const handlePickPorts = useCallback(
+    (nodeId: string) => bindPane(sessionId, nodeId, { kind: 'ports', id: sessionId }),
+    [bindPane, sessionId],
+  );
+
   const paneLabel = useCallback((node: PaneNode) => titleOf(targetIndex, node), [targetIndex]);
 
   const renderPane = ({
@@ -1578,6 +1587,7 @@ export default function AgentPanes({
               onPickShell={() => void handlePickShell(node.id)}
               onReattachShell={(shellId) => handleReattachShell(node.id, shellId)}
               onPickPage={(pageId) => handlePickPage(node.id, pageId)}
+              onPickPorts={() => handlePickPorts(node.id)}
             />
           ) : surface.surface === 'loading' ? (
             <div className="flex h-full items-center justify-center">
@@ -1585,6 +1595,8 @@ export default function AgentPanes({
             </div>
           ) : surface.surface === 'page' ? (
             <PagePaneView pageId={surface.pageId} />
+          ) : surface.surface === 'ports' ? (
+            <PortsPane workspaceId={surface.workspaceId} />
           ) : surface.surface === 'terminal' ? (
             <Shell key={surface.shellId} shellId={surface.shellId} name={titleOf(targetIndex, node)} />
           ) : null}

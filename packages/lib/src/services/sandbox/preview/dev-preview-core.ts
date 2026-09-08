@@ -125,6 +125,12 @@ export interface DevPreviewRow {
   approvedPort: number | null;
   /** When that consent was given; `null` exactly when `approvedPort` is. */
   approvedAt: Date | null;
+  /**
+   * When a person PICKED this port out of the ports pane, or `null` if the
+   * target was found by detection. A pinned target is not a guess for the
+   * detector to revise — see the guard in {@link planDevServerService}.
+   */
+  selectedByUserAt: Date | null;
 }
 
 /**
@@ -300,6 +306,42 @@ export interface HttpPortSlotInput {
   relay: SandboxServiceInfo | null;
 }
 
+/**
+ * WHERE a listener set came from, because that decides what its SILENCE means.
+ *
+ *  - `'watch'` — the `ports/watch` channel. **Positive-only evidence.** It
+ *    proves what IS bound and NOTHING about what is not: verified against a
+ *    real sprite, the channel never reports a Next.js dev server's bind at
+ *    all (`ss` shows `*:3000` LISTENING, the channel stays silent, while
+ *    python over IPv4 and IPv6, node grandchildren and TTY-session binds are
+ *    all reported). Reading absence here as "not listening" told a user their
+ *    working preview was down.
+ *  - `'probe'` — an authoritative `ss` read of the sprite. Complete, so
+ *    absence IS evidence of absence.
+ *
+ * Defaults to `'watch'` everywhere, which is the conservative reading: a
+ * caller that has not said where its data came from does not get to infer a
+ * negative from it.
+ */
+export type ListenerSource = 'watch' | 'probe';
+
+/**
+ * Pure: is `port` listening — `true`, `false`, or `null` for "cannot say".
+ *
+ * The `null` is the whole point. Only a complete source may answer `false`;
+ * a `watch` source that lacks the port has not observed it, which is not the
+ * same as having observed its absence.
+ */
+export function isPortListening(
+  listeners: readonly ListeningPort[] | null,
+  port: number,
+  source: ListenerSource = 'watch',
+): boolean | null {
+  if (listeners === null) return null;
+  if (listeners.some((entry) => entry.port === port)) return true;
+  return source === 'probe' ? false : null;
+}
+
 export type HttpPortSlotHolder = 'none' | 'relay' | 'user-process';
 
 /**
@@ -368,6 +410,23 @@ export interface PlanDevServerServiceInput {
    * a direct 8080 row needs no relay, and stopping never needs the slot.
    */
   listenersKnown?: boolean;
+  /**
+   * Where {@link PlanDevServerServiceInput.listeners} came from; defaults to
+   * `'watch'`. Orthogonal to {@link PlanDevServerServiceInput.listenersKnown}:
+   * that one says whether a snapshot is in hand at all, this one says what
+   * the snapshot's SILENCE is worth (see {@link ListenerSource}).
+   *
+   * Deliberately NOT used to gate "is 8080 free". Requiring a probe there
+   * would be the stricter rule, but the detector's only source is the watch
+   * channel, so it would refuse `slot-unknown` on every reconcile and no
+   * relay would ever start on its own — the feature would stop working for
+   * every framework in order to be correct about one. The weaker inference
+   * stays, and it is self-correcting in the way this module already documents:
+   * a relay planned onto an occupied 8080 fails to bind, lands `failed`, and
+   * the next call sees a non-live relay beside a listener. A wrong "down" had
+   * no such correction, which is why that one is fixed and this one is not.
+   */
+  listenerSource?: ListenerSource;
   /** Chosen by the effects layer after probing the sprite; `'node'` is the verified default. */
   relayRuntime?: PreviewRelayRuntime;
   now: Date;
@@ -445,7 +504,8 @@ export type DevServerServicePlan =
          * unlisted port is offered again the moment the current target stops
          * listening, or if the user re-points explicitly.
          */
-        | 'current-target-preferred';
+        | 'current-target-preferred'
+        | 'user-selected-target';
       /** True when a row for a DIFFERENT instance was present and ignored — the UI's "needs re-creating" signal. */
       staleRowIgnored: boolean;
     }
@@ -490,11 +550,38 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
   // working, explicitly-shared preview back into needs-approval and make the
   // user agree to it all over again. Everything else — a known port, or any
   // port once the current target is gone — replaces freely.
+  // A port the USER PICKED is not a guess to be revised. The thrash guard
+  // below only shields against UNLISTED newcomers, which is right for a
+  // detected target — a known dev port appearing is usually the real one. A
+  // pinned target is different: the person already answered the question the
+  // detector is trying to answer, so ANY newcomer yields to it, whatever its
+  // likelihood. It releases on exactly one condition — a PROBE proving the
+  // pinned port is gone — because only a probe can establish that, and the
+  // channel that would otherwise "prove" it cannot see the very servers
+  // people pick by hand.
+  if (
+    detected !== null && row !== null && detected.port !== row.targetPort
+    && row.selectedByUserAt !== null
+    && isPortListening(listeners, row.targetPort, input.listenerSource) !== false
+  ) {
+    return { action: 'none', reason: 'user-selected-target', staleRowIgnored };
+  }
+
+  //
+  // The presence clause asks "is the current target STILL listening", and it
+  // must accept "cannot say" as a yes. It used to require a positive sighting
+  // in the listener set, which inverted the guard for exactly the ports it
+  // most needed to protect: a target the `ports/watch` channel cannot see
+  // (every Next.js dev server) is absent from every snapshot, so the guard
+  // never fired and the next unlisted bind — a `node --inspect`, a second
+  // worker — silently replaced a preview the user had explicitly chosen.
+  // Only a KNOWN-absent target (`false`, which only a probe can produce)
+  // releases it.
   if (
     detected !== null && row !== null && detected.port !== row.targetPort
     && detected.likelihood === 'unlisted'
     && isPreviewShareable(row, row.targetPort)
-    && listeners.some((entry) => entry.port === row.targetPort)
+    && isPortListening(listeners, row.targetPort, input.listenerSource) !== false
   ) {
     return { action: 'none', reason: 'current-target-preferred', staleRowIgnored };
   }
@@ -602,6 +689,15 @@ export interface DescribeServiceStateInput {
    * the sprite and a wake is billed (spike §6). Rendering must be free.
    */
   listeners: readonly ListeningPort[] | null;
+  /**
+   * Where {@link DescribeServiceStateInput.listeners} came from. Defaults to
+   * `'watch'`, whose silence proves nothing — see {@link ListenerSource}. A
+   * target missing from a watch snapshot is therefore rendered as it was
+   * RECORDED, not as `down`: this module used to answer "the dev server on
+   * port N is not listening any more" about a server that was serving
+   * perfectly well, for every framework the channel cannot see.
+   */
+  listenerSource?: ListenerSource;
 }
 
 export type DevPreviewServiceState =
@@ -669,7 +765,7 @@ export const HTTP_PORT_BUSY_MESSAGE =
   `Port ${SPRITE_HTTP_PORT} is already in use by something that is not the preview relay. Run your dev server on port ${SPRITE_HTTP_PORT} to preview it, or free the port.`;
 
 /** Pure: the row folded with the live service read, as one UI-consumable status. */
-export function describeServiceState({ liveInstanceId, row, relay, listeners }: DescribeServiceStateInput): DevPreviewServiceState {
+export function describeServiceState({ liveInstanceId, row, relay, listeners, listenerSource = 'watch' }: DescribeServiceStateInput): DevPreviewServiceState {
   if (row === null) return { status: 'none', message: 'No dev server has been detected in this sandbox yet.' };
   if (liveInstanceId === null) {
     return { status: 'instance-unknown', message: 'The sandbox could not be identified, so its preview state cannot be shown.' };
@@ -690,7 +786,7 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners }: 
     };
   }
 
-  const targetListening = listeners === null ? null : listeners.some((entry) => entry.port === row.targetPort);
+  const targetListening = isPortListening(listeners, row.targetPort, listenerSource);
 
   const holder = describeHttpPortSlot({ listeners: listeners ?? [], relay });
 

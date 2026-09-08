@@ -64,8 +64,16 @@
 /** A container's split direction. A row of columns; a column of stacked panes. */
 export type NodeAxis = 'row' | 'column';
 
-/** What a bound pane is a viewport onto. Polymorphic, exactly as the rows are. */
-export type PaneTargetKind = 'chat' | 'terminal' | 'page';
+/**
+ * What a bound pane is a viewport onto. Polymorphic, exactly as the rows are.
+ *
+ * `'ports'` is the dev-server preview: what is listening in the session's
+ * sandbox, and a preview of the port the user picks. Its `id` is the
+ * WORKSPACE id — the holder is resolved server-side (an env-bound session
+ * previews its env), and one sandbox has exactly one preview, so several
+ * ports panes are several views of the same state, like a page open twice.
+ */
+export type PaneTargetKind = 'chat' | 'terminal' | 'page' | 'ports';
 
 /**
  * A pane's binding. Held as one object rather than two loose columns so a
