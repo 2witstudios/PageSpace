@@ -606,7 +606,8 @@ function documentCellFormats(
 ): [string, CellFormat][] {
   if (!formats) return [];
 
-  const wanted = new Set(rowIndexes);
+  // The window's SPAN, and only the span.
+  //
   // A format-only row is a real shape and a legacy sheet's most likely one: a
   // blank input row someone pre-styled. `windowed` is built from `sheet.cells`,
   // so such a row is not in it — while `rowsFromSheetData` materialises the
@@ -614,13 +615,22 @@ function documentCellFormats(
   // after migration and dropped it before. Silently losing formatting across a
   // migration is exactly the drift this module exists to remove.
   //
-  // Bounded by the window's SPAN rather than admitted from anywhere in the
-  // document: a styled row between the first and last row returned is inside
-  // what the reader is looking at, while one a thousand rows further down is
-  // not, and letting those in would spend the budget on rows the agent cannot
-  // see. An empty window spans nothing and admits nothing.
-  const spanStart = rowIndexes.length > 0 ? rowIndexes[0] : -1;
-  const spanEnd = rowIndexes.length > 0 ? rowIndexes[rowIndexes.length - 1] : -2;
+  // A styled row between the first and last row returned is inside what the
+  // reader is looking at; one a thousand rows further down is not, and letting
+  // those in would spend the budget on rows the agent cannot see. Testing
+  // membership as well would be dead weight — every row in the window is inside
+  // its own span by definition. An empty window spans nothing and admits
+  // nothing, which is what the inverted default encodes.
+  //
+  // Min and max rather than first and last: the one caller passes a sorted
+  // window, but a span that silently inverts if it ever stopped being sorted is
+  // a worse failure than one extra pass over at most `limit` numbers.
+  let spanStart = Infinity;
+  let spanEnd = -Infinity;
+  for (const index of rowIndexes) {
+    if (index < spanStart) spanStart = index;
+    if (index > spanEnd) spanEnd = index;
+  }
   const entries: { row: number; label: string; address: string; format: CellFormat }[] = [];
 
   for (const [address, format] of Object.entries(formats)) {
@@ -633,7 +643,7 @@ function documentCellFormats(
     } catch {
       continue;
     }
-    if (!wanted.has(decoded.row) && !(decoded.row >= spanStart && decoded.row <= spanEnd)) continue;
+    if (decoded.row < spanStart || decoded.row > spanEnd) continue;
     const label = encodeColumnLabel(decoded.column);
     if (only && !only.has(label)) continue;
     // Re-encoded from the decoded position rather than passed through, so this
