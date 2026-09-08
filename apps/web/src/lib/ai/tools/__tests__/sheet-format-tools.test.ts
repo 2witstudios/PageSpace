@@ -317,6 +317,73 @@ describe('format_sheet refuses an op that is wrong across its fields, before any
     });
   });
 
+  // Kills: resolving an omitted axis from the tab snapshot instead of the
+  // running state — the second op would then emit {rows: null, columns: 1}
+  // and unfreeze the row the first op had just frozen.
+  it('two freeze ops naming one axis each compose, the second keeping the first', async () => {
+    const result = await format({
+      ops: [
+        { op: 'freeze', frozenRows: 1 },
+        { op: 'freeze', frozenColumns: 1 },
+      ],
+    });
+    assert({ given: 'freeze rows then freeze columns', should: 'accept', actual: result.success, expected: true });
+    assert({
+      given: 'a tab with nothing frozen',
+      should: 'freeze one row and, in the second op, keep it while freezing one column',
+      actual: applied[0],
+      expected: [
+        { type: 'setFrozen', rows: 1, columns: null },
+        { type: 'setFrozen', rows: 1, columns: 1 },
+      ],
+    });
+  });
+
+  // Kills: seeding the running freeze state from the snapshot without the
+  // region's freezeHeader — a columns-only op after it would then emit
+  // {rows: null, columns: 1} and erase the header rows the region pinned.
+  it('a freeze op after a region with freezeHeader keeps the header rows the region pinned', async () => {
+    const result = await format({
+      regions: [{ range: 'A1:F', headerRows: 2, freezeHeader: true }],
+      ops: [{ op: 'freeze', frozenColumns: 1 }],
+    });
+    assert({ given: 'freezeHeader then a columns-only freeze', should: 'accept', actual: result.success, expected: true });
+    const ops = applied[0];
+    assert({
+      given: 'two header rows pinned by the region',
+      should: 'keep those two rows when the op names only columns',
+      actual: ops.filter((op) => op.type === 'setFrozen'),
+      expected: [
+        { type: 'setFrozen', rows: 2, columns: null },
+        { type: 'setFrozen', rows: 2, columns: 1 },
+      ],
+    });
+  });
+
+  // Kills: an implementation that threads the state only through the
+  // rows/columns branch and leaves `clear` reading the snapshot, so a freeze
+  // after a clear would resurrect the axis the clear removed.
+  it('a freeze op after clear starts from nothing frozen, not from the snapshot', async () => {
+    state.frozenRows = 3;
+    state.frozenColumns = 2;
+    const result = await format({
+      ops: [
+        { op: 'freeze', clear: true },
+        { op: 'freeze', frozenColumns: 1 },
+      ],
+    });
+    assert({ given: 'clear then freeze columns', should: 'accept', actual: result.success, expected: true });
+    assert({
+      given: 'a tab with three rows and two columns frozen',
+      should: 'clear both, then freeze one column with no rows',
+      actual: applied[0],
+      expected: [
+        { type: 'setFrozen', rows: null, columns: null },
+        { type: 'setFrozen', rows: null, columns: 1 },
+      ],
+    });
+  });
+
   it('a store-side refusal is relabelled with the index the model used', async () => {
     // Column E is outside A1:C — a cross-field problem only the store's
     // planner checks. Its "Op 0 (upsertRegion)" must come back as regions[0].
