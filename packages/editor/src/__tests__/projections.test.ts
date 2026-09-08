@@ -231,6 +231,44 @@ describe('markdown projection', () => {
     },
   );
 
+  it.each([
+    [9, '######'],
+    [7, '######'],
+    [0, '#'],
+    [-3, '#'],
+  ])('clamps a client-written heading level %i into GFM range', (level, hashes) => {
+    // Same class as the `align` defect: `level` has no validator and a CRDT
+    // client can write anything. `######### H` is not a heading in GFM — the
+    // projection silently demoted a heading to paragraph text.
+    const schema = corpusDoc.type.schema;
+    const doc = schema.topNodeType.create(null, [
+      schema.nodes.heading.create({ level }, schema.text('H')),
+    ]);
+    expect(pmDocToMarkdown(doc).trim()).toBe(`${hashes} H`);
+  });
+
+  it.each(['js```\n# not code', 'a\nb', 'has space', '`tick`'])(
+    'drops an unsafe code-block language rather than writing it into the fence (%j)',
+    (language) => {
+      // The worst of the client-attribute family: the fence closed on the
+      // attribute's own backticks and the remainder escaped INTO the document
+      // as markdown. Content injection into the AI-context projection.
+      const schema = corpusDoc.type.schema;
+      const doc = schema.topNodeType.create(null, [
+        schema.nodes.codeBlock.create({ language }, schema.text('payload')),
+      ]);
+      expect(pmDocToMarkdown(doc).trim()).toBe('```\npayload\n```');
+    },
+  );
+
+  it('keeps a language that is safe', () => {
+    const schema = corpusDoc.type.schema;
+    const doc = schema.topNodeType.create(null, [
+      schema.nodes.codeBlock.create({ language: 'c++' }, schema.text('x')),
+    ]);
+    expect(pmDocToMarkdown(doc).trim()).toBe('```c++\nx\n```');
+  });
+
   it('pads every row to the widest row, so a short row cannot shift columns', () => {
     // A ragged table is legal in the schema. Sizing the table from the FIRST
     // row instead of the widest silently truncates every wider row's cells —
@@ -284,6 +322,28 @@ describe('markdown projection', () => {
       '<table><tbody><tr><th><p>head</p></th></tr><tr><td><p>cell</p></td></tr></tbody></table>',
     ).child(0);
     expect(pmDocToMarkdown(table).trim()).toBe('head\n\ncell');
+  });
+
+  it('closes the image block, so the next block is still its own block', () => {
+    // `image` is a BLOCK node. Without `closeBlock` the next block ran straight
+    // into it — `![pic](...)## Heading` — and the heading stopped being a
+    // heading in the projection the AI reads. Containment assertions cannot see
+    // this; only the structure can.
+    expect(
+      pmDocToMarkdown(
+        htmlToPmDoc('<img data-file-id="f1" alt="pic"><h2>Heading</h2><p>after</p>'),
+      ).trim(),
+    ).toBe('![pic](pagespace-file:f1)\n\n## Heading\n\nafter');
+  });
+
+  it('widens the inline-code delimiter around embedded backticks', () => {
+    // Fixed single backticks with `escape: false` closed the span early:
+    // text ``a`b`` serialized as `` `a`b` ``, leaving an unmatched delimiter and
+    // mis-parsed code.
+    expect(pmDocToMarkdown(htmlToPmDoc('<p><code>a`b</code></p>')).trim()).toBe('`` a`b ``');
+    expect(pmDocToMarkdown(htmlToPmDoc('<p><code>x``y</code></p>')).trim()).toBe('``` x``y ```');
+    // The ordinary case must not gain padding.
+    expect(pmDocToMarkdown(htmlToPmDoc('<p><code>plain</code></p>')).trim()).toBe('`plain`');
   });
 
   it('renders an image as its file reference, never a URL', () => {

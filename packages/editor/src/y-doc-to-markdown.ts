@@ -71,6 +71,10 @@ function imageMarkdown(state: MarkdownSerializerState, node: PmNode): void {
   state.write(
     `![${state.esc(stringAttr(node.attrs, 'alt'))}](pagespace-file:${fileId.replace(/[()]/gu, '\\$&')})`,
   );
+  // `image` is a BLOCK node in this schema, so the block must be closed or the
+  // next one runs straight into it — an image followed by a heading serialized
+  // as `![...](...)## Heading`, and the heading stopped being a heading.
+  state.closeBlock(node);
 }
 
 /**
@@ -110,6 +114,59 @@ const ALIGNMENT_DELIMITERS: ReadonlyMap<string, string> = new Map([
   ['center', ':---:'],
   ['right', '---:'],
 ]);
+
+/**
+ * Heading levels the schema declares (`STARTER_KIT_SCHEMA_OPTIONS.heading`).
+ *
+ * Clamped rather than trusted, for the same reason `align` is looked up through
+ * a `Map`: attributes on a live document are written by CLIENTS into the Y.Doc
+ * and `level` has no validator. `level: 9` emitted `######### H`, which GFM does
+ * not parse as a heading at all — the projection silently demotes a heading to
+ * paragraph text in the context the AI reads.
+ */
+function headingHashes(node: PmNode): string {
+  const level = Math.round(Number(node.attrs.level));
+  return '#'.repeat(Number.isFinite(level) ? Math.min(6, Math.max(1, level)) : 1);
+}
+
+/**
+ * A fence info string is only safe if it cannot terminate or reshape the fence.
+ *
+ * `language` has no validator either, and it is written verbatim after the
+ * opening backticks. A value of ``js```\n# not code`` produced
+ * ``` ```js```\n# not code ``` — the fence closed on its own first line and the
+ * rest of the attribute escaped INTO the document as a heading. That is content
+ * injection into the AI-context projection from a client-writable attribute, so
+ * an unsafe value is dropped rather than sanitised: the code block's own text is
+ * never at risk, and a missing language annotation costs nothing.
+ */
+const SAFE_LANGUAGE = /^[A-Za-z0-9_+#.-]{1,32}$/u;
+
+function fenceLanguage(node: PmNode): string {
+  const language = stringAttr(node.attrs, 'language');
+  return SAFE_LANGUAGE.test(language) ? language : '';
+}
+
+/**
+ * `prosemirror-markdown`'s own `backticksFor`, which this serializer's fixed
+ * single-backtick delimiters had replaced. Code text containing a backtick
+ * closed the span early — `` `a`b` `` for the text ``a`b`` — leaving an
+ * unmatched delimiter and mis-parsed code. The delimiter must be longer than
+ * the longest backtick run inside, with padding spaces when it starts or ends
+ * with one.
+ */
+function backticksFor(node: PmNode, side: number): string {
+  const ticks = /`+/gu;
+  let longest = 0;
+  if (node.isText && node.text !== undefined) {
+    for (let match = ticks.exec(node.text); match !== null; match = ticks.exec(node.text)) {
+      longest = Math.max(longest, match[0].length);
+    }
+  }
+  let result = longest > 0 && side > 0 ? ' `' : '`';
+  result += '`'.repeat(longest);
+  return longest > 0 && side < 0 ? `${result} ` : result;
+}
 
 /** A node's children as an array — ProseMirror only offers `forEach`. */
 function childrenOf(node: PmNode): PmNode[] {
@@ -174,7 +231,7 @@ function markdownSerializer(): MarkdownSerializer {
       },
 
       heading(state, node) {
-        state.write(`${state.repeat('#', Number(node.attrs.level) || 1)} `);
+        state.write(`${headingHashes(node)} `);
         state.renderInline(node, false);
         state.closeBlock(node);
       },
@@ -189,7 +246,7 @@ function markdownSerializer(): MarkdownSerializer {
         // is swallowed into it.
         const runs = node.textContent.match(/`{3,}/gmu);
         const fence = runs ? `${runs.sort().slice(-1)[0]}\`` : '```';
-        state.write(`${fence}${stringAttr(node.attrs, 'language')}\n`);
+        state.write(`${fence}${fenceLanguage(node)}\n`);
         state.text(node.textContent, false);
         state.write('\n');
         state.write(fence);
@@ -277,7 +334,15 @@ function markdownSerializer(): MarkdownSerializer {
       bold: { open: '**', close: '**', mixable: true, expelEnclosingWhitespace: true },
       italic: { open: '*', close: '*', mixable: true, expelEnclosingWhitespace: true },
       strike: { open: '~~', close: '~~', mixable: true, expelEnclosingWhitespace: true },
-      code: { open: '`', close: '`', escape: false },
+      code: {
+        open: (_state, _mark, parent, index) => backticksFor(parent.child(index), -1),
+        // `index - 1`, matching upstream: `close` is invoked with `index + 1`
+        // (`prosemirror-markdown/dist/index.js:775`), so `index` itself is
+        // one past the marked node and throws `RangeError` at the end of a
+        // paragraph.
+        close: (_state, _mark, parent, index) => backticksFor(parent.child(index - 1), 1),
+        escape: false,
+      },
       link: {
         open: '[',
         close(_state, mark) {

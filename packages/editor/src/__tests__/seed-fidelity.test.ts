@@ -35,8 +35,13 @@ import {
  * - `a@data-type`, `span@data-type` — TipTap's node-name marker on a mention.
  * - `a@contenteditable`, `a@data-drive-id` — the AI mention dialect omits
  *   them; the node's own `renderHTML` always writes them.
- * - `ul@class`, `ul@data-tight` — `MarkdownTightLists` makes the tightness it
- *   INFERRED from the source (`!element.querySelector('p')`) explicit.
+ * - `ul@class`, `ul@data-tight` (`=true`) — `MarkdownTightLists` makes the
+ *   tightness it INFERRED from the source (`!element.querySelector('p')`)
+ *   explicit.
+ * - `a@data-drive-id=` — the AI mention dialect carries no drive, and the
+ *   node's `renderHTML` always writes the attribute, so it appears empty. The
+ *   EMPTY value is the allowlisted one; a mention gaining a real drive id would
+ *   produce a different key and fail.
  * - `p` — a bare `<li>text</li>` becomes `<li><p>text</p></li>`, because the
  *   schema's `listItem` content is `paragraph block*`.
  * - `label`, `input`, `input@type`, `input@checked`, `span`, `div` —
@@ -58,6 +63,7 @@ import {
 const ALLOWED_COSMETIC_ADDITIONS: ReadonlySet<string> = new Set([
   'attr:a@contenteditable',
   'attr:a@data-drive-id',
+  'attr:a@data-drive-id=',
   'attr:a@data-type',
   'attr:a@data-type=pageMention',
   'attr:a@rel',
@@ -73,6 +79,7 @@ const ALLOWED_COSMETIC_ADDITIONS: ReadonlySet<string> = new Set([
   'attr:table@style:min-width',
   'attr:ul@class',
   'attr:ul@data-tight',
+  'attr:ul@data-tight=true',
   'el:col',
   'el:colgroup',
   'el:div',
@@ -88,12 +95,36 @@ const ALLOWED_COSMETIC_ADDITIONS: ReadonlySet<string> = new Set([
  * Deliberately not the markup string: a set difference names WHICH construct
  * moved, where a string diff only says "changed".
  *
- * `style` is split per CSS property and `data-type` carries its value, because
- * a bare `attr:p@style` merges the question with the answer. `text-align:center`
- * becoming `text-align:left`, or `data-type="taskList"` becoming `taskItem`,
- * would otherwise be invisible to a gate whose entire job is naming the
- * construct that moved — and the corpus has fixtures for both.
+ * `style` is split per CSS property, and the attributes in
+ * `VALUE_BEARING_ATTRIBUTES` carry their value, because a bare `attr:p@style`
+ * merges the question with the answer. `text-align:center` becoming
+ * `text-align:left`, `data-type="taskList"` becoming `taskItem`, a rewritten
+ * `href`, a `data-page-id` pointing at a different page, or `start="7"` becoming
+ * `start="1"` would otherwise all be invisible to a gate whose entire job is
+ * naming the construct that moved — and the corpus has fixtures for every one
+ * of them.
+ *
+ * Presence-only keys are kept alongside the value keys, so a DROPPED attribute
+ * and a CHANGED one are distinguishable in the diff.
  */
+const VALUE_BEARING_ATTRIBUTES: ReadonlySet<string> = new Set([
+  'data-type',
+  'href',
+  'data-page-id',
+  'data-user-id',
+  'data-role-id',
+  'data-drive-id',
+  'data-file-id',
+  'data-block-id',
+  'data-change-id',
+  'data-change-type',
+  'data-checked',
+  'data-tight',
+  'start',
+  'colspan',
+  'rowspan',
+  'alt',
+]);
 function constructsOf(html: string): Set<string> {
   return withDomWorkspace((workspace) => {
     const keys = new Set<string>();
@@ -102,8 +133,8 @@ function constructsOf(html: string): Set<string> {
       keys.add(`el:${tag}`);
       for (const name of element.getAttributeNames()) {
         keys.add(`attr:${tag}@${name}`);
-        if (name === 'data-type') {
-          keys.add(`attr:${tag}@data-type=${element.getAttribute(name) ?? ''}`);
+        if (VALUE_BEARING_ATTRIBUTES.has(name)) {
+          keys.add(`attr:${tag}@${name}=${element.getAttribute(name) ?? ''}`);
         }
         if (name === 'style') {
           for (const declaration of (element.getAttribute(name) ?? '').split(';')) {
