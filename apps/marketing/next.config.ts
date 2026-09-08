@@ -12,6 +12,18 @@ const nextConfig: NextConfig = {
     // backdrop; 75 stays the default for everything else.
     qualities: [75, 90],
   },
+  // Apple requires the AASA file be served as application/json. It is
+  // deliberately extensionless, so Next's static handler would otherwise send
+  // application/octet-stream and Apple's CDN would reject the file — which is
+  // exactly how universal links silently never activated.
+  async headers() {
+    return [
+      {
+        source: '/.well-known/apple-app-site-association',
+        headers: [{ key: 'Content-Type', value: 'application/json' }],
+      },
+    ];
+  },
   async redirects() {
     return [
       { source: '/docs/mcp', destination: '/docs/integrations/mcp', permanent: true },

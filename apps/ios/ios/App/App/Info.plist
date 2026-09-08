@@ -43,8 +43,12 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>GIDClientID</key>
 	<string>636969838408-0jbv7gq9793m0uchdrjlr8v1k6m5lh59.apps.googleusercontent.com</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>PageSpace uses your camera when you attach a photo or scan a document.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>PageSpace uses your microphone for speech-to-text in AI chat.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

@@ -232,8 +232,10 @@ succeed — which is prerequisite 1.
 
 ### The filter to add, once both prerequisites are met
 
-Paths mirror `apps/web/public/.well-known/apple-app-site-association` so the two platforms capture
-the same links. Widening beyond these paths should still wait on prerequisite 2 — whole-host
+iOS is deferred for the same reason and claims no paths either — see
+`apps/marketing/public/.well-known/apple-app-site-association` (the copy Caddy actually
+serves) and the "Universal links" section of `apps/ios/README.md`. Whenever the two
+platforms do start capturing links, they should capture the same ones. Widening beyond these paths should still wait on prerequisite 2 — whole-host
 capture would strand users on `/dashboard` from every marketing, blog, or docs link.
 
 A third prerequisite applies to the auth-callback paths specifically: `/api/auth/desktop/exchange`

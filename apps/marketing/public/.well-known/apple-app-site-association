@@ -1,19 +1,11 @@
 {
   "applinks": {
     "apps": [],
-    "details": [
-      {
-        "appID": "TEAM_ID.ai.pagespace.app",
-        "paths": [
-          "/open/*",
-          "/invite/*"
-        ]
-      }
-    ]
+    "details": []
   },
   "webcredentials": {
     "apps": [
-      "TEAM_ID.ai.pagespace.app"
+      "M96WTV3CKX.ai.pagespace.ios"
     ]
   }
 }
