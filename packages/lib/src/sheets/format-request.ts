@@ -1312,7 +1312,7 @@ function validateRuleInput(
       index,
       type,
       `"${sanitized}" is not something this sheet can store, and would be dropped or changed on the ` +
-        'way in. Nothing about a stored rule may differ from what was asked for.'
+        `way in. Nothing about a stored rule may differ from what was asked for.${conditionValueHint(raw, sanitized)}`
     );
   }
 
@@ -1497,6 +1497,41 @@ function regionRenderProblem(region: SheetRegion, label: string): string | null 
   }
 
   return null;
+}
+
+/**
+ * The one sanitized path worth explaining, because it is the one a caller will
+ * actually hit.
+ *
+ * `ConditionalCondition.value` is a STRING — the panel's input is text, and a
+ * date or a status name has to fit in the same field as a number. So
+ * "highlight cells greater than 5", the most ordinary rule there is, is
+ * naturally written `{ operator: 'greaterThan', value: 5 }`, the parser drops
+ * the number, and the comparator refuses with a path and no remedy. Naming the
+ * type is the whole repair, and quoting the caller's own number shows it.
+ *
+ * Deliberately not a coercion. Storing "5" for 5 would be this module doing
+ * the one thing it exists to prevent — writing something other than what was
+ * asked for — and it is the same call as refusing rather than clamping a width.
+ */
+function conditionValueHint(raw: Record<string, unknown>, path: string): string {
+  // The path names the field, so it selects the field. A path this cannot
+  // explain yields no key, reads nothing, and falls out at the number check
+  // below — one exit rather than a second guard that could never fire on its
+  // own. Slicing the prefix off instead would make the choice of paths above
+  // decorative, true only by the accident that no other path's tail happens to
+  // be a condition key.
+  const key = path === 'condition.value' ? 'value' : path === 'condition.value2' ? 'value2' : '';
+
+  // Read without a guard on purpose. `raw` is already an object — the check at
+  // the top of `validateRuleInput` saw to that — and a path spelled
+  // `condition.value` exists only because the comparator walked a condition
+  // object to build it, so a guard here would have a side that cannot run.
+  // `Object()` never throws, which keeps that true even if the comparator's
+  // path vocabulary ever changes.
+  const value = (Object(raw.condition) as Record<string, unknown>)[key];
+  if (typeof value !== 'number') return '';
+  return ` A condition's value is text, not a number — write "${value}", not ${value}.`;
 }
 
 /** The same contract as {@link validateRuleInput}, for a declared region. */

@@ -1965,6 +1965,72 @@ describe('planFormatOps — never something other than what was asked for', () =
     expect([...plan([{ type: 'clearCellFormat', range: '  A1:F1  ' }]).rows]).toEqual([0]);
   });
 
+  it('says a condition value is text when a caller sends the number', () => {
+    // Kills: dropping `conditionValueHint`, or widening it past the two paths
+    // it can actually explain.
+    //
+    // `ConditionalCondition.value` is a string — the panel's input is text, and
+    // a date or a status name shares the field with a number. So the most
+    // ordinary rule anyone writes, "highlight cells greater than 5", arrives as
+    // `value: 5`, the parser drops it, and the comparator names
+    // `condition.value` with no remedy attached. The type IS the repair.
+    const message = refusalOf([
+      {
+        type: 'addConditionalRule',
+        rule: {
+          id: 'cf_1',
+          kind: 'cell',
+          ranges: ['A1:A9'],
+          condition: { operator: 'greaterThan', value: 5 as unknown as string },
+          format: { bold: true },
+        },
+      },
+    ]);
+    expect(message).toContain('condition.value');
+    expect(message).toContain('write "5", not 5');
+
+    // The upper bound of a `between` is the same field with the same trap.
+    expect(
+      refusalOf([
+        {
+          type: 'addConditionalRule',
+          rule: {
+            id: 'cf_1',
+            kind: 'cell',
+            ranges: ['A1:A9'],
+            condition: { operator: 'between', value: '1', value2: 9 as unknown as string },
+            format: { bold: true },
+          },
+        },
+      ])
+    ).toContain('write "9", not 9');
+
+    // And it stays silent where it cannot be sure. A sanitized path that is not
+    // a condition value gets the plain message — a hint about numbers on, say,
+    // a dropped column declaration would send the caller the wrong way.
+    const elsewhere = refusalOf([
+      { type: 'upsertRegion', region: { id: 'r1', range: 'A1:F', headerRows: 999 } },
+    ]);
+    expect(elsewhere).toContain('is not something this sheet can store');
+    expect(elsewhere).not.toContain('is text, not a number');
+
+    // Nor does it fire when the value was dropped for some reason other than
+    // being a number — here `condition` itself is not an object to read from.
+    const notANumber = refusalOf([
+      {
+        type: 'addConditionalRule',
+        rule: {
+          id: 'cf_1',
+          kind: 'cell',
+          ranges: ['A1:A9'],
+          condition: { operator: 'greaterThan', value: { n: 5 } as unknown as string },
+          format: { bold: true },
+        },
+      },
+    ]);
+    expect(notANumber).not.toContain('is text, not a number');
+  });
+
   it('still lets a rule written by a NEWER build be updated', () => {
     // The pre-parse checks are stricter than the parser, so applying them to a
     // whole merged rule — mostly the STORED one — would refuse any update to a
