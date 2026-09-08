@@ -349,9 +349,11 @@ export class AndroidStorage implements PlatformStorage {
    * This whole chain exists because the caller asks for the two halves of an
    * atomic pair in two separate reads: `refreshBearerSession` reads the session
    * itself and then asks for the device id through `getDeviceInfo()`. Send the
-   * id from the same read as the token — one line at `auth-fetch.ts`, recorded
-   * on Phase B's auth session gate sweep — and the record, the race and the
-   * `answered` flag all collapse. Collapse them there; do not extend them here.
+   * id from the same read as the token — `session.deviceId || info.deviceId` at
+   * both `auth-fetch.ts:645` (the request body) and `:662` (the `storeSession`
+   * call), which must move together or the id sent and the id stored diverge —
+   * and the record, the race and the `answered` flag all collapse. Recorded on
+   * Phase B's auth session gate sweep. Collapse them there, not here.
    *
    * A store fault is not fatal here — the fallbacks below still name a binding
    * — so unlike `getStoredSession` this swallows it. Losing the binding
@@ -386,7 +388,9 @@ export class AndroidStorage implements PlatformStorage {
     // the mismatch that gets a refresh rejected as a stolen token.
     return {
       answered: false,
-      deviceId: this.lastKnownDeviceId ?? this.readLegacySession()?.deviceId ?? null,
+      // `|| null`, not `??`: a legacy session names an empty `deviceId` when no
+      // id was ever recorded, and this method promises `string | null`.
+      deviceId: this.lastKnownDeviceId ?? (this.readLegacySession()?.deviceId || null),
     };
   }
 

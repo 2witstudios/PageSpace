@@ -609,6 +609,17 @@ describe('AndroidStorage', () => {
       expect(await storage.getDeviceId()).toBe('preferences-id');
     });
 
+    it('never answers with an empty id when the legacy session names none', async () => {
+      // readLegacySession yields deviceId '' when a token was stored without an
+      // id; `??` would let that through where the contract says string | null.
+      preferencesStore.set('pagespace_device_id', 'preferences-id');
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      keychainMock.get.mockRejectedValue(new Error(INIT_FAILURE));
+      const storage = await importAndroidStorage();
+
+      expect(await storage.getDeviceId()).toBe('preferences-id');
+    });
+
     it('still reports the legacy binding when the keychain refuses', async () => {
       // A keystore that refuses is no reason to report the *wrong* id: the
       // legacy binding needs no bridge to read, and answering with the
