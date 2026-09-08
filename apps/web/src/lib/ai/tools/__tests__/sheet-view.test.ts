@@ -565,6 +565,37 @@ describe('a region-derived format is part of what a cell reads as', () => {
     });
   });
 
+  it('lets a conditional rule beat a format someone set on the cell by hand', async () => {
+    // `sheets/conditional` documents this order as a deliberate reversal of what
+    // shipped first: a rule wins over a manually applied format, matching Excel
+    // and Google Sheets, because a workbook imported from Excel rendering
+    // differently here — and a rule visibly failing to fire on exactly the cells
+    // someone had touched — reads as a bug rather than as deference. The read
+    // path has to honour that or it shows something the grid does not.
+    mockGetTab.mockResolvedValue({
+      ...tab,
+      conditionalFormats: [{
+        id: 'flag', kind: 'cell', ranges: ['A1:A9'],
+        condition: { operator: 'greaterThan', value: '100' },
+        format: { number: { kind: 'percent', decimals: 0 } },
+      }],
+    });
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: '1200', value: 1200, format: { number: { kind: 'currency', currency: 'USD', decimals: 2 } } } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    assert({
+      given: 'a hand-set currency format on a cell a percent rule fires on',
+      should: "show the rule's format, not the one set by hand",
+      actual: window.rows[0].cells.A,
+      expected: '120,000%',
+    });
+    // Still recoverable: making the display richer must not make the read lossy.
+    expect(window.rows[0].unformatted).toEqual({ A: 1200 });
+  });
+
   it('still hands back the number underneath it', async () => {
     // The whole point of resolving the layer: having made the display richer,
     // the machine value has to stay recoverable or the read is lossy again.
