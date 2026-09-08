@@ -109,7 +109,7 @@ export interface WorkspaceNodeRow {
 }
 
 const nodeAxisSchema = z.enum(['row', 'column']);
-const paneTargetKindSchema = z.enum(['chat', 'terminal', 'page']);
+const paneTargetKindSchema = z.enum(['chat', 'terminal', 'page', 'ports']);
 
 /**
  * An id, as the ALGEBRA defines one — non-blank after trimming, not merely

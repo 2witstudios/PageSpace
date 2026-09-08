@@ -763,6 +763,17 @@ export function openPage(nodes: readonly WorkspaceNode[], input: OpenPageInput):
   return open(nodes, input);
 }
 
+export type OpenPortsInput = OpenInput<'ports'>;
+
+/**
+ * Place a PORTS pane — the sandbox's listening ports and a preview of the one
+ * picked. Same policy; the fourth caller. Nothing is minted for it, so like a
+ * page it is placed by whoever binds it, never parked.
+ */
+export function openPorts(nodes: readonly WorkspaceNode[], input: OpenPortsInput): CommandResult {
+  return open(nodes, input);
+}
+
 /**
  * Place a SHELL — reattaching one this workspace already has, or seating one the
  * caller just spawned.

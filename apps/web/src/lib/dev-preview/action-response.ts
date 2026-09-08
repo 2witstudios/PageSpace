@@ -8,6 +8,16 @@ import { NextResponse } from 'next/server';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import type { DevPreviewHolderRef } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 import type { DevPreviewUserAction, DevPreviewUserActionResult } from '@pagespace/lib/services/sandbox/preview/dev-preview-status';
+import type { PortProbeFailure } from '@pagespace/lib/services/sandbox/preview/port-probe';
+
+/** The one sentence for each way a probe can fail — shared by the select and ports responses so they cannot drift. */
+export function describeProbeFailure(detail: PortProbeFailure): string {
+  return detail === 'timed-out'
+    ? 'The sandbox did not answer in time when asked which ports are listening.'
+    : detail === 'unparsable'
+      ? 'The sandbox answered, but its port listing could not be read.'
+      : 'The sandbox could not be asked which ports are listening.';
+}
 
 export function respondToDevPreviewUserAction({
   request,
@@ -48,12 +58,7 @@ export function respondToDevPreviewUserAction({
       return NextResponse.json({ error: 'This sandbox is not running right now, so there is nothing to preview. Open a shell to start it, then pick the port again.', reason: result.reason }, { status: 409 });
     }
     if (result.reason === 'probe-failed') {
-      const detail = result.detail === 'timed-out'
-        ? 'The sandbox did not answer in time when asked which ports are listening.'
-        : result.detail === 'unparsable'
-          ? 'The sandbox answered, but its port listing could not be read.'
-          : 'The sandbox could not be asked which ports are listening.';
-      return NextResponse.json({ error: `${detail} Try Scan again.`, reason: result.reason, detail: result.detail }, { status: 503 });
+      return NextResponse.json({ error: `${describeProbeFailure(result.detail)} Try Scan again.`, reason: result.reason, detail: result.detail }, { status: 503 });
     }
     if (result.reason === 'port-not-listening') {
       return NextResponse.json({ error: `Nothing is listening on port ${result.port} any more. Scan again to see what is running now.`, reason: result.reason, port: result.port }, { status: 409 });

@@ -27,7 +27,9 @@ export type PaneSurface =
   | { surface: 'loading' }
   | { surface: 'terminal'; shellId: string }
   | { surface: 'chat'; conversationId: string }
-  | { surface: 'page'; pageId: string };
+  | { surface: 'page'; pageId: string }
+  /** The ports pane addresses the workspace's one sandbox; the id IS the workspace. */
+  | { surface: 'ports'; workspaceId: string };
 
 export function resolvePaneSurface(node: PaneNode, isMinting: boolean): PaneSurface {
   if (node.target === null) {
@@ -42,6 +44,10 @@ export function resolvePaneSurface(node: PaneNode, isMinting: boolean): PaneSurf
   // A page binding addresses an existing page directly — there is no mint to
   // wait on, so this is reachable the very first render after the bind.
   if (node.target.kind === 'page') return { surface: 'page', pageId: node.target.id };
+  // Like a page, a ports pane binds synchronously — nothing is minted — and
+  // its surface NEVER probes on mount (see PortsPane), so reaching it on the
+  // first render costs nothing.
+  if (node.target.kind === 'ports') return { surface: 'ports', workspaceId: node.target.id };
 
   // A `kind` this module has never heard of — a row that predates a schema
   // change, or a payload slipping past the wire schema — must never fall through

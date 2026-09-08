@@ -972,6 +972,11 @@ async function resolveTargetsByWorkspace(
         case 'page':
           pageIds.add(node.target.id);
           break;
+        case 'ports':
+          // Nothing to look up: the title is constant and the target is the
+          // workspace itself. Spelled out so the `never` guard below stays a
+          // build failure for the NEXT kind, not a silent hole for this one.
+          break;
         default: {
           const _exhaustive: never = node.target.kind;
           void _exhaustive;

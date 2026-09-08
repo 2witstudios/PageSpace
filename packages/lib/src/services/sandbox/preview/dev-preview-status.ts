@@ -547,6 +547,74 @@ export async function applyDevPreviewUserAction({
  * intent, or the approval. Returns the row AS WRITTEN so the plan can be made
  * from it without a second read, or the refusal to hand straight back.
  */
+/** One row of the ports pane's list: a probed port, classified, with whether it is the current preview. */
+export type DevPreviewProbedPort =
+  | { port: number; pid: number | null; kind: 'dev-server'; likelihood: Extract<DevServerClassification, { kind: 'dev-server' }>['likelihood']; current: boolean }
+  | { port: number; pid: number | null; kind: 'ignored'; reason: Extract<DevServerClassification, { kind: 'ignored' }>['reason']; current: boolean };
+
+export type DevPreviewPortsResult =
+  | { ok: true; spriteInstanceId: string; ports: DevPreviewProbedPort[]; currentPort: number | null }
+  | { ok: false; reason: 'wake-not-allowed'; detail: string }
+  | { ok: false; reason: 'sandbox-unavailable' }
+  | { ok: false; reason: 'probe-failed'; detail: PortProbeFailure };
+
+/**
+ * THE PORTS LIST: what is actually listening, classified, on an explicit
+ * user gesture. Never called from a render or a poll — the pane has a Scan
+ * button precisely so a persisted, multi-viewer pane cannot bill a wake on
+ * every reload. Wake-gated like every other exec, before the attach.
+ *
+ * Classification runs here, server-side, so the list can render a database
+ * port DISABLED with a reason rather than offer it. The select action refuses
+ * the same ports independently: the list is copy, the action is the gate.
+ * `current` marks the row's target on the live instance so the radio group
+ * can show which port is previewed — and so a second pick reads as "replace",
+ * which is what it does.
+ *
+ * This is a LIST, not a plan: it writes nothing, holds no lock, and returns
+ * `spriteInstanceId` so the pick that follows can echo the instance it was
+ * shown against.
+ */
+export async function probeDevPreviewPorts({
+  holder,
+  userId,
+  wakeSubject,
+  sandboxId,
+  deps,
+}: {
+  holder: DevPreviewHolderRef;
+  userId: string;
+  wakeSubject: { driveId: string | null; ownerId: string };
+  sandboxId: string | null;
+  deps: DevPreviewUserActionDeps;
+}): Promise<DevPreviewPortsResult> {
+  const wake = await deps.canRunCode({ userId, ...wakeSubject });
+  if (!wake.ok) return { ok: false, reason: 'wake-not-allowed', detail: wake.reason };
+  const row = await deps.previewStore.findByHolder(holder);
+  const target = row?.sandboxId ?? sandboxId;
+  if (target === null) return { ok: false, reason: 'sandbox-unavailable' };
+  const handle = await deps.attach(target);
+  // No instance means no live sprite VM behind this handle (a local
+  // substrate, or a sprite the platform no longer has) — nothing to exec on.
+  if (handle === null || handle.spriteInstanceId === null) return { ok: false, reason: 'sandbox-unavailable' };
+  const spriteInstanceId = handle.spriteInstanceId;
+  const probe = deps.probe ?? probeListeningPorts;
+  const [probed, relay] = await Promise.all([probe(handle.exec), handle.services.get(PREVIEW_RELAY_SERVICE_NAME)]);
+  if (!probed.ok) return { ok: false, reason: 'probe-failed', detail: probed.reason };
+  // Only a row on THIS instance can say what is current; a stale row's target
+  // is a dead VM's fact.
+  const currentPort = row !== null && row.spriteInstanceId === spriteInstanceId ? row.targetPort : null;
+  const ports = probed.ports.map((entry): DevPreviewProbedPort => {
+    const classified = classifyDetectedDevServer({ event: { type: 'port_opened', port: entry.port, ...(entry.pid !== undefined ? { pid: entry.pid } : {}) }, relay });
+    const pid = entry.pid ?? null;
+    const current = entry.port === currentPort;
+    return classified.kind === 'dev-server'
+      ? { port: entry.port, pid, kind: 'dev-server', likelihood: classified.likelihood, current }
+      : { port: entry.port, pid, kind: 'ignored', reason: classified.reason, current };
+  });
+  return { ok: true, spriteInstanceId, ports, currentPort };
+}
+
 /**
  * SELECT: probe → refuse-or-write → plan from the probe. Its own function
  * because it is the one action whose plan is made from AUTHORITATIVE

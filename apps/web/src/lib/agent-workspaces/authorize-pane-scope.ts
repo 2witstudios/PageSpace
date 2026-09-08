@@ -154,6 +154,12 @@ export async function authorizePaneScope(
     case 'terminal':
       return (await deps.findShellWorkspace(scope.targetId)) === workspaceId;
 
+    case 'ports':
+      // The target IS the workspace, so the only authority question is
+      // containment: a ports pane may not point at some other session's
+      // sandbox. Session access itself was gated before this ran.
+      return scope.targetId === workspaceId;
+
     case 'chat': {
       const row = await deps.findConversation(scope.targetId);
       if (!row) return false;
