@@ -18,6 +18,8 @@ import {
   type ConditionalRule,
 } from '../sheets/conditional';
 import { MAX_REGIONS, parseRegion, type SheetRegion } from '../sheets/regions';
+import { MAX_ADDRESSABLE_ROW } from '../sheets/address';
+import { MAX_CONDITIONAL_RANGES_PER_RULE } from '../sheets/conditional';
 
 const tabWith = (overrides: Partial<SheetFormatTarget> = {}): SheetFormatTarget => ({
   rowCount: 100,
@@ -277,9 +279,27 @@ describe('planFormatOps — columns, rows and freezes', () => {
     ['zero', 0],
     ['fractional', 2.5],
     ['not a number', 'first' as unknown as number],
-    ['past the last row', 5_000_001],
+    ['past the last row', MAX_ADDRESSABLE_ROW + 2],
   ])('refuses a row height addressed at %s', (_label, row) => {
     expect(refusalOf([{ type: 'setRowHeight', row, height: 40 }])).toContain('1-based row number');
+  });
+
+  it('accepts a row height on the last addressable row, as the range path does', () => {
+    // `MAX_ADDRESSABLE_ROW` is a 0-based index everywhere it is compared, so a
+    // 1-based API row must be bounded by `row - 1`. Comparing `row` to it
+    // directly left the last row able to take a cell format but not a row
+    // height — a disagreement between two ops of the same request that no
+    // caller could see coming. Kills: restoring the `row > MAX_ADDRESSABLE_ROW`
+    // comparison.
+    const last = MAX_ADDRESSABLE_ROW + 1;
+    expect(plan([{ type: 'setRowHeight', row: last, height: 40 }]).steps).toEqual([
+      { type: 'setRowHeight', rowIndex: MAX_ADDRESSABLE_ROW, height: 40 },
+    ]);
+    // The range path already accepted this cell, which is what made the
+    // inconsistency observable.
+    expect(plan([{ type: 'clearCellFormat', range: `A${last}` }]).steps).toEqual([
+      { type: 'clearCellFormat', addresses: [`A${last}`] },
+    ]);
   });
 
   it('plans a freeze inside the sheet extent', () => {
@@ -324,7 +344,7 @@ describe('planFormatOps — conditional rules', () => {
       refusalOf([{ type: 'addConditionalRule', rule: { ...rule('cf_1'), ranges: ['A1:A600000'] } }])
     ).toContain('is not a range this sheet can format');
     expect(refusalOf([{ type: 'addConditionalRule', rule: { ...rule('cf_1'), ranges: [] } }])).toContain(
-      'not a rule this sheet can store'
+      'Enter at least one range'
     );
   });
 
@@ -394,7 +414,11 @@ describe('planFormatOps — conditional rules', () => {
     // A patch that empties the format leaves a rule the parser drops on load.
     expect(
       refusalOf([{ type: 'updateConditionalRule', id: 'a', patch: { format: {} } }], tab)
-    ).toContain('cannot store');
+    ).toContain('rule format has no fields');
+    // A patch is validated as a whole rule, so the kind's own requirements hold.
+    expect(
+      refusalOf([{ type: 'updateConditionalRule', id: 'a', patch: { condition: 'big' } }], tab)
+    ).toContain('not a rule this sheet can store');
   });
 
   it('refuses an id that is not a non-empty string', () => {
@@ -448,6 +472,212 @@ describe('planFormatOps — conditional rules', () => {
     );
     expect(message).toContain('would be dropped when the sheet is read back');
     expect(message).toContain('Nothing was applied');
+  });
+});
+
+describe('planFormatOps — nothing the parser would quietly rewrite', () => {
+  // `parseConditionalRule` and `parseRegion` are LOAD-path parsers: they
+  // sanitize field by field so one bad setting cannot cost a user the rest of a
+  // stored document. Reused as-is on a WRITE path that generosity is a lie —
+  // the sheet stores something other than what was asked for and reports
+  // success. Every case below was accepted before the readback comparator.
+
+  it('refuses a rule format that would lose one of its fields', () => {
+    // `parseCellFormat` keeps the bold and drops the too-small size, so the
+    // rule was stored, reported as added, and rendered without the size.
+    const message = refusalOf([
+      { type: 'addConditionalRule', rule: { ...rule('cf_1'), format: { bold: true, fontSize: 5 } } },
+    ]);
+    expect(message).toContain('rule format.fontSize');
+  });
+
+  it('refuses an unknown field inside a rule format', () => {
+    // Carried THROUGH by `parseCellFormat` rather than dropped, so nothing is
+    // lost and the comparator sees nothing wrong — it has to be named here.
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: { ...rule('cf_1'), format: { bolt: true } } }])
+    ).toContain('"bolt" is not a format field');
+  });
+
+  it('refuses a ranges array past the per-rule cap instead of truncating it', () => {
+    // The ordering bug this exists to prevent: `parseConditionalRule` slices
+    // `ranges` to the cap FIRST, so a `validateRanges` call afterwards is handed
+    // a list that fits, pronounces it fine, and every range past the cap is gone
+    // with no refusal anywhere. Kills: moving the check after the parse.
+    const ranges = Array.from({ length: MAX_CONDITIONAL_RANGES_PER_RULE + 1 }, () => 'A1:A2');
+    expect(refusalOf([{ type: 'addConditionalRule', rule: { ...rule('cf_1'), ranges } }])).toContain(
+      `at most ${MAX_CONDITIONAL_RANGES_PER_RULE} ranges`
+    );
+  });
+
+  it('refuses a ranges array holding anything but strings', () => {
+    // `readRanges` filters non-strings and blanks out silently.
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: { ...rule('cf_1'), ranges: ['A1:A9', 42] } }])
+    ).toContain('array of A1 ranges');
+    expect(refusalOf([{ type: 'addConditionalRule', rule: { ...rule('cf_1'), ranges: 'A1:A9' } }])).toContain(
+      'array of A1 ranges'
+    );
+    expect(refusalOf([{ type: 'addConditionalRule', rule: 'a rule' }])).toContain('rule must be an object');
+  });
+
+  it('refuses a condition value the parser would drop', () => {
+    // A numeric threshold is dropped by the parser's `typeof === "string"`
+    // check, leaving an operator with nothing to compare against.
+    expect(
+      refusalOf([
+        {
+          type: 'addConditionalRule',
+          rule: { ...rule('cf_1'), condition: { operator: 'greaterThan', value: 10 } },
+        },
+      ])
+    ).toContain('"condition.value"');
+  });
+
+  it('refuses a scale anchor whose colour the parser would drop', () => {
+    expect(
+      refusalOf([
+        {
+          type: 'addConditionalRule',
+          rule: {
+            id: 'cf_1',
+            kind: 'dataBar',
+            ranges: ['A1:A9'],
+            color: '#3b82f6',
+            min: { type: 'number', value: 0, color: 'blue' },
+          },
+        },
+      ])
+    ).toContain('"min.color"');
+  });
+
+  it('refuses a region option the parser would sanitize away', () => {
+    // `headerRows: 999` is dropped and silently becomes the default of one.
+    expect(refusalOf([{ type: 'upsertRegion', region: { ...region('r1'), headerRows: 999 } }])).toContain(
+      'region: "headerRows"'
+    );
+    // An unusable column declaration disappears from the list.
+    expect(
+      refusalOf([
+        { type: 'upsertRegion', region: { ...region('r1'), columns: [{ column: 'C', role: 'money' }] } },
+      ])
+    ).toContain('region: "columns"');
+    expect(
+      refusalOf([
+        {
+          type: 'upsertRegion',
+          region: { ...region('r1'), columns: [{ column: 'C', role: 'number', decimals: 99 }] },
+        },
+      ])
+    ).toContain('region: "columns"');
+    // A shorter list back is always a loss, whatever the surviving entries say.
+    expect(
+      refusalOf([
+        {
+          type: 'upsertRegion',
+          region: {
+            ...region('r1'),
+            columns: [
+              { column: 'C', role: 'currency' },
+              { column: 'D', role: 'money' },
+            ],
+          },
+        },
+      ])
+    ).toContain('region: "columns"');
+    // And the same check runs on every entry of a `setRegions` list.
+    expect(
+      refusalOf([{ type: 'setRegions', regions: [region('r1'), { ...region('r2'), theme: 'BLUE!' }] }])
+    ).toContain('regions[1]: "theme"');
+  });
+
+  it('does not mistake a genuine normalization for a loss', () => {
+    // The comparator has to allow exactly what the parsers are entitled to do,
+    // or every well-formed request starts being refused. Kills: comparing
+    // strings or list order strictly.
+    const result = plan([
+      {
+        type: 'upsertRegion',
+        region: {
+          id: 'r1',
+          range: 'a1:f',
+          name: '  Budget  ',
+          theme: 'Blue',
+          totalRows: [7, 3],
+          columns: [{ column: 'c', role: 'currency', currency: 'usd' }],
+        },
+      },
+    ]);
+
+    expect(result.regions[0]).toEqual({
+      id: 'r1',
+      range: 'A1:F',
+      name: 'Budget',
+      theme: 'blue',
+      totalRows: [3, 7],
+      columns: [{ column: 'C', role: 'currency', currency: 'USD' }],
+    });
+  });
+
+  it('refuses a field whose very SHAPE the parser would replace', () => {
+    // A list where a string belongs, or an object where a number belongs, is
+    // dropped whole — the comparator has to notice a type change, not only a
+    // missing key.
+    expect(refusalOf([{ type: 'upsertRegion', region: { ...region('r1'), name: ['Budget'] } }])).toContain(
+      'region: "name"'
+    );
+    expect(refusalOf([{ type: 'upsertRegion', region: { ...region('r1'), headerRows: {} } }])).toContain(
+      'region: "headerRows"'
+    );
+  });
+
+  it('carries an unknown field from a newer build through untouched', () => {
+    // Forward compatibility is the reason the parsers pass unknown fields
+    // through, and the comparator must not undo it.
+    const result = plan([
+      { type: 'addConditionalRule', rule: { ...rule('cf_1'), stripes: { every: 2 } } },
+      {
+        type: 'upsertRegion',
+        // Nested inside a list entry, which is where a naive comparison of
+        // canonical forms would trip over its own recursion.
+        region: { ...region('r1'), columns: [{ column: 'C', role: 'text', tags: ['wide', 'sticky'] }] },
+      },
+    ]);
+    expect(result.conditionalFormats[0]).toMatchObject({ stripes: { every: 2 } });
+    expect(result.regions[0].columns).toEqual([{ column: 'C', role: 'text', tags: ['wide', 'sticky'] }]);
+  });
+});
+
+describe('planFormatOps — rule identity', () => {
+  it('refuses adding a rule whose id is already on the sheet', () => {
+    // Two rules under one id: `update` and `move` reach the first by index
+    // while `remove` filters out both, so the new rule is not addressable at
+    // all. The region path already refused this.
+    const tab = tabWith({ conditionalFormats: [rule('a')] });
+    const message = refusalOf([{ type: 'addConditionalRule', rule: rule('a') }], tab);
+    expect(message).toContain('A rule "a" is already on this sheet');
+    expect(message).toContain('updateConditionalRule');
+  });
+
+  it('refuses an update that asks for nothing', () => {
+    // `id` and `kind` are pinned to the rule being edited, so a patch naming
+    // only those is applied, reports success and changes not one pixel.
+    const tab = tabWith({ conditionalFormats: [rule('a')] });
+    expect(refusalOf([{ type: 'updateConditionalRule', id: 'a', patch: {} }], tab)).toContain(
+      'patch changes nothing'
+    );
+    expect(
+      refusalOf([{ type: 'updateConditionalRule', id: 'a', patch: { id: 'b', kind: 'formula' } }], tab)
+    ).toContain('patch changes nothing');
+  });
+
+  it('keeps a rule’s identity when a patch tries to change it', () => {
+    const tab = tabWith({ conditionalFormats: [rule('a')] });
+    const result = plan(
+      [{ type: 'updateConditionalRule', id: 'a', patch: { id: 'b', format: { bold: true } } }],
+      tab
+    );
+    expect(result.conditionalFormats[0].id).toBe('a');
   });
 });
 

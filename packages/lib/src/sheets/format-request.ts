@@ -291,27 +291,32 @@ function conditionalCellsOfRange(range: string): number {
  * `bolt` a formatting request that quietly does nothing. Those are checked
  * first, by hand.
  */
-function validateCellFormatPatch(patch: unknown, index: number, type: string): CellFormat {
+function validateCellFormatPatch(
+  patch: unknown,
+  index: number,
+  type: string,
+  label = 'patch'
+): CellFormat {
   if (!isObject(patch)) {
-    return refuseOp(index, type, 'patch must be an object of format fields.');
+    return refuseOp(index, type, `${label} must be an object of format fields.`);
   }
 
   const keys = Object.keys(patch);
   if (keys.length === 0) {
     // Applying this would succeed and change nothing, which is the failure mode
     // hardest to notice from the outside.
-    return refuseOp(index, type, 'patch has no fields; name at least one, such as {"bold": true}.');
+    return refuseOp(index, type, `${label} has no fields; name at least one, such as {"bold": true}.`);
   }
 
   for (const key of keys) {
     if (FORBIDDEN_KEYS.has(key)) {
-      return refuseOp(index, type, `"${key}" is not a format field.`);
+      return refuseOp(index, type, `${label}: "${key}" is not a format field.`);
     }
     if (!CELL_FORMAT_FIELDS.has(key)) {
       return refuseOp(
         index,
         type,
-        `"${key}" is not a format field. Known fields: ${[...CELL_FORMAT_FIELDS].join(', ')}.`
+        `${label}: "${key}" is not a format field. Known fields: ${[...CELL_FORMAT_FIELDS].join(', ')}.`
       );
     }
   }
@@ -322,7 +327,7 @@ function validateCellFormatPatch(patch: unknown, index: number, type: string): C
     // Rooted at `patch` unconditionally: the path is never empty here — the
     // object and key checks above have already run — and a conditional root
     // would be a branch no input can take.
-    return refuseOp(index, type, `${['patch', ...issue.path].join('.')}: ${issue.message}`);
+    return refuseOp(index, type, `${[label, ...issue.path].join('.')}: ${issue.message}`);
   }
 
   // Deliberately `patch`, never `result.data`. See above.
@@ -403,6 +408,163 @@ function validateFreeze(
   }
 
   return value;
+}
+
+/**
+ * A stable string for a value, with the normalizations the parsers are allowed
+ * to perform already applied: whitespace and case on strings, key order on
+ * objects, and absent-vs-undefined.
+ */
+function canonical(value: unknown): string {
+  if (typeof value === 'string') return JSON.stringify(value.trim().toLowerCase());
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (isObject(value)) {
+    const entries = Object.keys(value)
+      .filter((key) => value[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`);
+    return `{${entries.join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/**
+ * The first path at which the parser altered or dropped something the caller
+ * supplied, or null when everything survived.
+ *
+ * This is the same argument as the round-trip detector, one level down.
+ * `parseConditionalRule` and `parseRegion` are LOAD-path parsers: they sanitize
+ * field by field so that one bad setting cannot cost a user the rest of a
+ * stored document. Reused as-is on the write path, that generosity becomes a
+ * lie — `format: {bold: true, fontSize: 5}` stores the bold, drops the size and
+ * reports success; `ranges` past `MAX_CONDITIONAL_RANGES_PER_RULE` is truncated
+ * to the cap and the caps that would have refused it then see a rule that fits;
+ * `headerRows: 999` silently becomes the default of one.
+ *
+ * Rather than restate every one of those rules here — a second copy of the
+ * parsers, free to drift from them — the parser stays the specification and
+ * this asks the only question that matters: is what we are about to store still
+ * what was asked for? Anything the parsers learn to sanitize later is covered
+ * without being taught.
+ *
+ * What it must NOT flag is a genuine normalization, so strings compare
+ * case- and whitespace-insensitively (a range is upper-cased, a colour
+ * lower-cased, a currency code upper-cased) and lists compare as multisets
+ * (`totalRows` comes back sorted). A shorter list is always a loss, which is
+ * what catches a truncated `ranges` array and a dropped column declaration.
+ */
+function firstSanitizedPath(raw: unknown, stored: unknown, path: string): string | null {
+  // Absent and explicitly-undefined are the same thing over the wire, and JSON
+  // cannot express the difference.
+  if (raw === undefined) return null;
+
+  if (Array.isArray(raw) || Array.isArray(stored)) {
+    if (!Array.isArray(raw) || !Array.isArray(stored)) return path;
+    const left = raw.map(canonical).sort();
+    const right = stored.map(canonical).sort();
+    // No separate length check: a list that comes back SHORTER shows up as a
+    // mismatch at the first position the parser dropped, and one that comes
+    // back longer is the parser filling something in, which is not a loss.
+    return left.every((entry, position) => entry === right[position]) ? null : path;
+  }
+
+  if (isObject(raw)) {
+    if (!isObject(stored)) return path;
+    for (const key of Object.keys(raw)) {
+      const found = firstSanitizedPath(raw[key], stored[key], path === '' ? key : `${path}.${key}`);
+      if (found) return found;
+    }
+    // A field the parser ADDS is not a loss — a default filled in is still the
+    // request being honoured.
+    return null;
+  }
+
+  return canonical(raw) === canonical(stored) ? null : path;
+}
+
+/**
+ * Parse a caller-supplied rule, refusing anything the parser would quietly
+ * rewrite on the way in.
+ *
+ * Order matters here and is the whole point: `validateRanges` runs against the
+ * caller's own `ranges`, before `parseConditionalRule` has had a chance to
+ * slice the array down to `MAX_CONDITIONAL_RANGES_PER_RULE`. Run afterwards it
+ * would be handed the truncated list, pronounce it fine, and the ranges past
+ * the cap would be gone with no refusal anywhere.
+ */
+function validateRuleInput(raw: unknown, index: number, type: string): ConditionalRule {
+  if (!isObject(raw)) {
+    return refuseOp(index, type, 'rule must be an object.');
+  }
+
+  if (raw.ranges !== undefined) {
+    if (!Array.isArray(raw.ranges) || raw.ranges.some((entry) => typeof entry !== 'string')) {
+      return refuseOp(index, type, 'ranges must be an array of A1 ranges, such as ["B2:B20"].');
+    }
+    // The caller's array, at its real length.
+    const ranges = validateRanges(raw.ranges as string[]);
+    if (!ranges.ok) return refuseOp(index, type, ranges.reason);
+  }
+
+  // Checked explicitly rather than left to the comparator below because
+  // `parseCellFormat` carries an unknown field THROUGH untouched — nothing is
+  // lost, so nothing would be flagged, and a typo like `bolt` would be stored
+  // as an inert field that formats nothing.
+  if (raw.format !== undefined) {
+    validateCellFormatPatch(raw.format, index, type, 'rule format');
+  }
+
+  const rule = parseConditionalRule(raw);
+  if (!rule) {
+    return refuseOp(
+      index,
+      type,
+      'That is not a rule this sheet can store. A rule needs an id, at least one range, and a ' +
+        'kind of cell, formula, colorScale or dataBar — a formula rule needs a non-empty formula, ' +
+        'and a cell rule a format with at least one valid field.'
+    );
+  }
+
+  const sanitized = firstSanitizedPath(raw, rule, '');
+  if (sanitized) {
+    return refuseOp(
+      index,
+      type,
+      `"${sanitized}" is not something this sheet can store, and would be dropped or changed on the ` +
+        'way in. Nothing about a stored rule may differ from what was asked for.'
+    );
+  }
+
+  return rule;
+}
+
+/** The same contract as {@link validateRuleInput}, for a declared region. */
+function validateRegionInput(raw: unknown, index: number, type: string, label: string): SheetRegion {
+  const region = parseRegion(raw);
+  if (!region) {
+    return refuseOp(
+      index,
+      type,
+      `${label} is not a region this sheet can store. A region needs an id and a range such as ` +
+        '"A1:F" (an omitted row end means "to the end of the sheet").'
+    );
+  }
+
+  const sanitized = firstSanitizedPath(raw, region, '');
+  if (sanitized) {
+    // `parseRegion` drops a bad optional setting and keeps the region, so
+    // `headerRows: 999` becomes the default of one and an unusable column
+    // declaration disappears — in both cases the sheet stores something the
+    // caller did not ask for and hears that it worked.
+    return refuseOp(
+      index,
+      type,
+      `${label}: "${sanitized}" is not something this sheet can store, and would be dropped or ` +
+        'changed on the way in.'
+    );
+  }
+
+  return region;
 }
 
 const ruleIdList = (rules: readonly ConditionalRule[]): string =>
@@ -546,8 +708,12 @@ export function planFormatOps(
 
       case 'setRowHeight': {
         const row = op.row;
-        // 1-based on the wire, as everywhere a row is named in A1 terms.
-        if (typeof row !== 'number' || !Number.isInteger(row) || row < 1 || row > MAX_ADDRESSABLE_ROW) {
+        // 1-based on the wire, as everywhere a row is named in A1 terms — so
+        // the bound is `row - 1`, since `MAX_ADDRESSABLE_ROW` is a 0-based
+        // index everywhere it is compared. Comparing `row` to it directly left
+        // the last addressable row able to take a cell format but not a row
+        // height, which is the kind of disagreement no caller can see coming.
+        if (typeof row !== 'number' || !Number.isInteger(row) || row < 1 || row - 1 > MAX_ADDRESSABLE_ROW) {
           refuseOp(index, op.type, `row must be a 1-based row number; got ${String(row)}.`);
         }
         const height = validateExtent(
@@ -584,24 +750,25 @@ export function planFormatOps(
       }
 
       case 'addConditionalRule': {
-        const rule = parseConditionalRule(op.rule);
-        if (!rule) {
-          // The parser is the only definition of a usable rule, and it drops
-          // what it cannot use. A blank custom formula is the canonical case:
-          // accepted by a naive writer, gone on the next load.
-          refuseOp(
-            index,
-            op.type,
-            'That is not a rule this sheet can store. A rule needs an id, at least one range, and a ' +
-              'kind of cell, formula, colorScale or dataBar — a formula rule needs a non-empty formula, ' +
-              'and a cell rule a format with at least one valid field.'
-          );
-        }
+        // The parser is the only definition of a usable rule, and on the load
+        // path it drops what it cannot use. A blank custom formula is the
+        // canonical case: accepted by a naive writer, gone on the next load.
+        const rule = validateRuleInput(op.rule, index, op.type);
+
         if (rules.length >= MAX_CONDITIONAL_RULES) {
           refuseOp(index, op.type, `This sheet already has the maximum of ${MAX_CONDITIONAL_RULES} rules.`);
         }
-        const ranges = validateRanges(rule.ranges);
-        if (!ranges.ok) refuseOp(index, op.type, ranges.reason);
+        if (rules.some((existing) => existing.id === rule.id)) {
+          // Two rules under one id: `update` and `move` reach the first by
+          // `findIndex` while `remove` filters out both, so the new rule is no
+          // longer addressable at all. `upsertRegion` refuses the same thing.
+          refuseOp(
+            index,
+            op.type,
+            `A rule "${rule.id}" is already on this sheet. Use updateConditionalRule to change it, ` +
+              'or give the new rule its own id.'
+          );
+        }
 
         rules = [...rules, rule];
         rulesTouched = true;
@@ -619,25 +786,29 @@ export function planFormatOps(
         }
 
         const patch = op.patch as Record<string, unknown>;
-        // A patch that widens the ranges has to clear the same bar as a new
-        // rule, or editing is the way around a limit that adding refuses.
-        if (Array.isArray(patch.ranges)) {
-          const ranges = validateRanges(patch.ranges.filter((r): r is string => typeof r === 'string'));
-          if (!ranges.ok) refuseOp(index, op.type, ranges.reason);
-        }
-
         // `id` and `kind` are identity, not settings — matching `updateRule`,
         // which pins both so a patch cannot silently detach a rule from the row
-        // being edited.
-        const merged = parseConditionalRule({
-          ...rules[at],
-          ...patch,
-          id: rules[at].id,
-          kind: rules[at].kind,
-        });
-        if (!merged) {
-          refuseOp(index, op.type, `That patch leaves rule "${id}" in a state this sheet cannot store.`);
+        // being edited. Which also means a patch naming ONLY those two asks for
+        // nothing: it would be applied, report success and change not one
+        // pixel.
+        const mutable = Object.keys(patch).filter((key) => key !== 'id' && key !== 'kind');
+        if (mutable.length === 0) {
+          refuseOp(
+            index,
+            op.type,
+            'patch changes nothing; id and kind are a rule’s identity and cannot be patched. Name a ' +
+              'field such as ranges, format, formula or condition.'
+          );
         }
+
+        // Validated as a whole rule, so a patch that widens the ranges clears
+        // exactly the same bar a new rule does — otherwise editing is the way
+        // around a limit that adding refuses.
+        const merged = validateRuleInput(
+          { ...rules[at], ...patch, id: rules[at].id, kind: rules[at].kind },
+          index,
+          op.type
+        );
 
         rules = rules.map((rule, position) => (position === at ? merged : rule));
         rulesTouched = true;
@@ -706,15 +877,7 @@ export function planFormatOps(
         const next: SheetRegion[] = [];
         const seen = new Set<string>();
         op.regions.forEach((value: unknown, position: number) => {
-          const region = parseRegion(value);
-          if (!region) {
-            refuseOp(
-              index,
-              op.type,
-              `regions[${position}] is not a region this sheet can store. A region needs an id and a ` +
-                'range such as "A1:F" (an omitted row end means "to the end of the sheet").'
-            );
-          }
+          const region = validateRegionInput(value, index, op.type, `regions[${position}]`);
           if (seen.has(region.id)) {
             // `parseRegions` keeps the first and drops the rest, so a duplicate
             // id is a region silently lost between write and read.
@@ -730,15 +893,7 @@ export function planFormatOps(
       }
 
       case 'upsertRegion': {
-        const region = parseRegion(op.region);
-        if (!region) {
-          refuseOp(
-            index,
-            op.type,
-            'That is not a region this sheet can store. A region needs an id and a range such as ' +
-              '"A1:F" (an omitted row end means "to the end of the sheet").'
-          );
-        }
+        const region = validateRegionInput(op.region, index, op.type, 'region');
 
         const at = regions.findIndex((existing) => existing.id === region.id);
         if (at === -1) {
