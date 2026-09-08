@@ -47,7 +47,7 @@ export interface PostNativeAuthRedirectInput {
 }
 
 /**
- * Decide where to land a user after a successful native (iOS) OAuth flow.
+ * Decide where to land a user after a successful native (iOS/Android) OAuth flow.
  *
  * Precedence: invite-consumed drive > returnUrl > new-user welcome > /dashboard.
  * Pure function — extracted so the redirect logic can be tested without
@@ -201,7 +201,7 @@ export function useOAuthSignIn({ onStart, onError, inviteToken, returnUrl }: Use
 
     try {
       const { isNativeGoogleAuthAvailable, signInWithGoogle: nativeSignIn } =
-        await import('@/lib/ios-google-auth');
+        await import('@/lib/native-google-auth');
 
       if (isNativeGoogleAuthAvailable()) {
         const result = await nativeSignIn({
@@ -232,7 +232,7 @@ export function useOAuthSignIn({ onStart, onError, inviteToken, returnUrl }: Use
 
     try {
       const { isNativeAppleAuthAvailable, signInWithApple: nativeSignIn } =
-        await import('@/lib/ios-apple-auth');
+        await import('@/lib/native-apple-auth');
 
       if (isNativeAppleAuthAvailable()) {
         const result = await nativeSignIn({

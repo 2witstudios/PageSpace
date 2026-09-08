@@ -257,9 +257,23 @@ export async function POST(req: Request) {
     headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
     headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
 
-    // Desktop needs a session cookie so Next.js middleware allows page route requests.
-    // Desktop primarily uses Bearer tokens for API calls, but middleware checks cookies.
-    if (deviceRecord.platform === 'desktop' || deviceRecord.platform === 'ios') {
+    // Desktop and the native shells need a session cookie so Next.js middleware
+    // allows page route requests. They primarily use Bearer tokens for API
+    // calls, but middleware checks cookies.
+    //
+    // 'android' belongs here for the same reason 'ios' does: a device row is
+    // only stamped 'android' by the native sign-in routes, which append a
+    // session cookie themselves. Omitting it here would leave the WebView
+    // holding the cookie of the session this refresh just replaced, so page
+    // navigation would start failing on the first rotation while API calls kept
+    // working — a split-brain that only appears once native sign-in exists.
+    // (Devices registered by the in-WebView *web* flow are stamped 'web' and
+    // return from the branch above, which sets its own cookie.)
+    if (
+      deviceRecord.platform === 'desktop' ||
+      deviceRecord.platform === 'ios' ||
+      deviceRecord.platform === 'android'
+    ) {
       appendSessionCookie(headers, sessionToken);
     }
 

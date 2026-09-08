@@ -20,9 +20,10 @@ export interface PlatformStorage {
    * where a rejection is retryable. Flattening the two signs users out over a
    * transient keystore failure.
    *
-   * `AndroidStorage` honours this. `IOSStorage` does not yet — it delegates to
-   * `ios-google-auth.ts`, whose `catch { return null; }` collapses a Keychain
-   * fault into "no session"; aligning it is Phase B's auth session gate sweep.
+   * Every implementation honours this. `IOSStorage` delegates to
+   * `native-google-auth.ts`, which used to collapse a Keychain fault into "no
+   * session" with a blanket `catch { return null; }`; it now throws on a store
+   * fault and reserves `null` for bytes the store actually answered with.
    */
   getStoredSession(): Promise<StoredSession | null>;
   storeSession(session: StoredSession): Promise<void>;

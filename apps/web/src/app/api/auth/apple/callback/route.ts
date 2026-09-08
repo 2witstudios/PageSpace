@@ -339,6 +339,13 @@ export async function POST(req: Request) {
     }
 
     // iOS PLATFORM: Same as desktop - use secure exchange code flow
+    // Deliberately iOS only, though the state schema now also accepts 'android'.
+    // Android's web OAuth runs *inside* the Capacitor WebView, so the browser
+    // that completes the flow is the app itself and a `pagespace://` handoff
+    // would bounce it out of the very context that needs the session. It falls
+    // through to the web branch below, which sets the session cookie the WebView
+    // reads directly. Widening this to Android is a deliberate design decision
+    // (and needs a device to verify), not a missing case.
     if (platform === 'ios') {
       const iosDeviceId = deviceId || createId();
 

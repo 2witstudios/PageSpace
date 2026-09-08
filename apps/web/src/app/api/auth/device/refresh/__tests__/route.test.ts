@@ -580,8 +580,16 @@ describe('POST /api/auth/device/refresh', () => {
     });
   });
 
-  describe('mobile platform (no cookie)', () => {
-    it('does not set session cookie for mobile platform', async () => {
+  describe('android platform', () => {
+    // Reversed in Phase B of the Android parity epic. A device row is only
+    // stamped 'android' by the NATIVE sign-in routes, which append a session
+    // cookie themselves; withholding one here left the Capacitor WebView holding
+    // the cookie of the session this refresh just replaced, so Next.js
+    // middleware would start refusing page routes on the first rotation while
+    // Bearer API calls kept working. (Devices registered by the in-WebView web
+    // flow are stamped 'web' and return from the web branch, which sets its own
+    // cookie.)
+    it('sets a session cookie as well as returning the bearer token', async () => {
       vi.mocked(validateDeviceToken).mockResolvedValue({
         ...mockDeviceRecord,
         platform: 'android',
@@ -593,7 +601,8 @@ describe('POST /api/auth/device/refresh', () => {
 
       expect(response.status).toBe(200);
       expect(body.sessionToken).toBe('ps_sess_mock_session_token');
-      expect(appendSessionCookie).not.toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][1]).toBe('ps_sess_mock_session_token');
     });
   });
 

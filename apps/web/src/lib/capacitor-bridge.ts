@@ -184,8 +184,8 @@ export function isNativeApp(): boolean {
  * prefer `useCapacitor().capabilities`.
  *
  * @public Published API of the capability bridge. `platform-storage` selects
- * its implementation through this; the remaining call sites (push
- * registration, badge sync) land in later leaves of the Android parity epic.
+ * its implementation through this, `useAuth` gates its logout cleanup on it,
+ * and `native-google-auth` gates its secure-store reads on it.
  */
 export function hasNativeCapability(capability: NativeCapability): boolean {
   return PLATFORM_CAPABILITIES[getPlatform()][capability];
@@ -209,9 +209,9 @@ export function getNativeCapabilities(): Readonly<
  * Note this is finer-grained than `hasNativeCapability('nativeAuth')`: Android
  * has nativeAuth but cannot drive Apple.
  *
- * @public Published API of the capability bridge. Its consumer is the native
- * auth module generalization leaf of the Android parity epic, so knip cannot
- * see a consumer yet.
+ * @public Published API of the capability bridge. Consumed by
+ * `native-google-auth.ts` and `native-apple-auth.ts`, which is where the
+ * Google/Apple asymmetry actually matters.
  */
 export function supportsNativeAuthProvider(
   provider: NativeAuthProvider

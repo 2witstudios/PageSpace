@@ -13,7 +13,11 @@ const INVITE_TOKEN_MAX_LENGTH = 128;
 
 const oauthStateDataSchema = z.object({
   returnUrl: z.string().max(2048).optional(),
-  platform: z.enum(['web', 'desktop', 'ios']).optional(),
+  // 'android' is accepted so a signed state can name the platform that started
+  // the flow. Without it the enum rejected the value outright, which is why no
+  // server path could ever emit the `pagespace://` handoff for Android and the
+  // Android custom-scheme intent filter shipped inert.
+  platform: z.enum(['web', 'desktop', 'ios', 'android']).optional(),
   // Which desktop app started the flow. One Electron codebase ships two, each
   // with its own protocol scheme, and the callback has to deep-link back into
   // the one the user actually signed in from. Absent for web, iOS and older
