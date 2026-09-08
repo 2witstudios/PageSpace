@@ -1,14 +1,7 @@
 {
   "applinks": {
     "apps": [],
-    "details": [
-      {
-        "appID": "M96WTV3CKX.ai.pagespace.ios",
-        "paths": [
-          "/invite/*"
-        ]
-      }
-    ]
+    "details": []
   },
   "webcredentials": {
     "apps": [

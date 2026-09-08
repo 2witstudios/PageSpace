@@ -20,8 +20,11 @@ This is a **remote-loading** app. The WebView loads the live site directly:
 
 > **App Review note (Guideline 4.2):** Apple scrutinizes thin WebView wrappers. Our native
 > value — push notifications, Sign in with Apple, native social login, the keychain plugin,
-> app-icon badge sync, and universal links — is what clears this bar. Always submit with
-> reviewer notes calling these out plus a working demo account (see "Submitting", below).
+> and app-icon badge sync — is what clears this bar. Always submit with reviewer notes calling
+> these out plus a working demo account (see "Submitting", below).
+>
+> Universal links are **not** on that list: the entitlement is declared but the AASA claims no
+> paths, because nothing routes an incoming link yet. See below.
 
 ## Native capabilities (entitlements)
 
@@ -31,21 +34,32 @@ This is a **remote-loading** app. The WebView loads the live site directly:
 - Associated domains: `applinks:pagespace.ai`, `webcredentials:pagespace.ai`
 - Sign in with Apple
 
-### Universal links (associated domains)
+### Universal links (associated domains) — claimed paths deferred
 
-The entitlement is only half of it — Apple also fetches
-`https://pagespace.ai/.well-known/apple-app-site-association`. Caddy routes `/.well-known/*` to
-**marketing** (only `oauth-*` reaches web), so the single source of truth is
-`apps/marketing/public/.well-known/apple-app-site-association`. It must carry
-`M96WTV3CKX.ai.pagespace.ios` — team plus bundle id — and be served as `application/json`
-(the file is deliberately extensionless, so `apps/marketing/next.config.ts` sets the header).
+The entitlement declares `applinks:pagespace.ai`, but the served AASA claims **no paths**, on
+purpose. Claiming a path without routing it is worse than not claiming it: the link stops opening
+in Safari, where it works, and instead launches the app at `server.url` (`/dashboard`) — silently
+dropping the invite token. `apps/android/README.md` ("Prerequisite 2") documents the same trap,
+which is why Android has not claimed App Links either.
 
-`paths` claims `/invite/*` only, because that is the only link route that exists. Do **not** add
-the OAuth callback paths: native sign-in returns through the `pagespace://auth-exchange` custom
-scheme, and claiming those paths would hijack the web fallback.
+**The prerequisite:** nothing consumes the `@capacitor/app` plugin's `appUrlOpen` event or
+`getLaunchUrl()` on either platform. Both are needed — `getLaunchUrl` for a cold start, `appUrlOpen`
+for a warm one — before any path goes into `paths`.
 
-Apple's CDN caches this file, so after any change: redeploy marketing, curl the live URL, then
-reinstall the app before testing on device.
+What the file does carry is `webcredentials`, which needs no routing: it enables associated-domain
+password autofill for `pagespace.ai`.
+
+Mechanics, for whoever picks this up: Caddy routes `/.well-known/*` to **marketing** (only
+`oauth-*` reaches web), so the single source of truth is
+`apps/marketing/public/.well-known/apple-app-site-association`. `appID` is team plus bundle id —
+`M96WTV3CKX.ai.pagespace.ios` — and it must be served as `application/json` (the file is
+deliberately extensionless, so `apps/marketing/next.config.ts` sets the header). Apple's CDN caches
+it, so after any change: redeploy marketing, curl the live URL, then reinstall the app before
+testing on device.
+
+When paths are eventually claimed, do **not** add the OAuth callbacks: native sign-in returns
+through the `pagespace://auth-exchange` custom scheme, and claiming those paths would hijack the
+web fallback.
 
 Push is driven from the web layer (`apps/web/src/hooks/usePushNotifications.ts`), device tokens
 POST to `/api/notifications/push-tokens`, and the server sends via
@@ -133,8 +147,8 @@ bundle exec fastlane release   # deliver: push metadata + submit the App Store v
 - [ ] `cap sync` run immediately before archiving; `capacitor.config.json` matches `capacitor.config.ts`
 - [ ] Archive signed with an **Apple Distribution** identity (check Xcode Organizer before uploading)
 - [ ] AASA verified live: `curl https://pagespace.ai/.well-known/apple-app-site-association`
-      returns `M96WTV3CKX.ai.pagespace.ios` as `application/json`, and an `/invite/` link opens the
-      app on a device
+      returns `M96WTV3CKX.ai.pagespace.ios` as `application/json` with **no** claimed `applinks`
+      paths (see "Universal links", above)
 - [ ] Build uploaded and finished **Processing** in App Store Connect
 - [ ] App privacy answers match `ios/App/PrivacyInfo.xcprivacy` (Email + User ID linked / App
       Functionality; Device ID / Analytics and Crash + Performance Data, not linked; Product
@@ -149,7 +163,9 @@ bundle exec fastlane release   # deliver: push metadata + submit the App Store v
       production `pagespace-web` runs `NODE_ENV=production` (otherwise every push is rejected)
 - [ ] No purchase surface reachable on iOS — walk `/settings/billing`, `/settings/usage`, and any
       in-app link that reaches marketing pricing (Guideline 3.1.1)
-- [ ] Reviewer notes emphasize native features + a working demo account with seeded content
+- [ ] Reviewer notes emphasize native features — push, Sign in with Apple, native Google sign-in,
+      keychain session persistence, app-icon badge — and **not** universal links, plus a working
+      demo account with seeded content
 - [ ] Submit for review
 
 ## Privacy manifest

@@ -70,7 +70,7 @@ interface HeadlineProps {
  * -0.02em tracking — rather than the bold sans this used to be, so the store
  * listing and the site do not look like two different products.
  */
-export function Headline({ children, className }: HeadlineProps) {
+export function Headline({ children, className, style }: HeadlineProps) {
   return (
     <h1
       className={cn("text-[132px] leading-[0.98] text-white", className)}
@@ -80,6 +80,7 @@ export function Headline({ children, className }: HeadlineProps) {
         fontWeight: 500,
         letterSpacing: "-0.02em",
         textWrap: "balance",
+        ...style,
       }}
     >
       {children}
