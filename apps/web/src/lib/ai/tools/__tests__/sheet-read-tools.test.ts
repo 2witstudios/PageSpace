@@ -1155,6 +1155,32 @@ describe('read_sheet — includeFormatting', () => {
     expect('formatting' in notAsked).toBe(false);
   });
 
+  it('still describes the structure when the window itself is empty', async () => {
+    // Reading past the end is how an agent discovers a sheet's shape before it
+    // writes. The tab-level design — regions, freezes, column formats — does not
+    // depend on which rows came back, so withholding it here would make an agent
+    // that landed past the last row conclude the sheet has no structure, and
+    // build one over the top of the structure that is already there.
+    mockGetTab.mockResolvedValue(formattedTab);
+    mockReadRows.mockResolvedValue([]); // nothing at this position
+
+    const result = await run({ pageId: 'page-1', startRow: 900, includeFormatting: true });
+    const formatting = result.formatting as Record<string, unknown>;
+
+    expect(result.rows).toEqual([]);
+    expect(String(result.emptyReason)).toContain('past the last row');
+    assert({
+      given: 'a formatting read that landed past the last row',
+      should: 'still report the structure, with no per-cell entries to report',
+      actual: {
+        regions: (formatting.regions as unknown[]).length,
+        frozenRows: (formatting.layout as Record<string, unknown>).frozenRows,
+        cellFormats: formatting.cellFormats,
+      },
+      expected: { regions: 1, frozenRows: 1, cellFormats: undefined },
+    });
+  });
+
   it('advertises includeFormatting so an agent can discover it', async () => {
     expect(sheetReadTools.read_sheet.description ?? '').toContain('includeFormatting');
     expect(
