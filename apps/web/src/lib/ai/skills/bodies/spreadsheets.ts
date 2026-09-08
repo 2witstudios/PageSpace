@@ -146,7 +146,7 @@ Sheets are stored as rows in the database, not as text, and they are read as row
 - **Projection:** \`select: ["A", "C", "D"]\` returns only those columns, on range reads and filtered reads alike — use it on any wide sheet you only need a few columns of. \`orderBy: [{ column, direction, numeric }]\` sorts (set \`numeric\` or "10" sorts before "9"). \`offset\` pages through matches.
 - **Tabs:** \`tabIndex\` picks a tab, and every response lists the tabs the sheet has. A tab index that does not exist is refused, never answered with tab 0's rows.
 - Filters and sorts run in the database against each cell's **computed, unformatted** value, so a formula column matches on its result. \`cells\` gives you the DISPLAY text, so a cell shown as \`$1,200.00\` is matched by \`1200\` and \`85%\` by \`0.85\` — never build a filter by parsing the displayed string; take the number from \`unformatted\` (below).
-- \`includeFormatting: true\` adds a \`formatting\` block: the tab's \`regions\` (its declared structure, re-writable exactly as read), \`layout\` (freezes, widths, heights), \`columnFormats\`, the explicit \`cellFormats\` within the rows returned, and each conditional rule as \`{ id, kind, ranges, summary }\`. Ask for it before you restyle a sheet. \`regions\` can be handed straight back to \`format_sheet\`; a rule entry is a DESCRIPTION, not a rule you can write — to change one, rebuild it and remove the old \`id\`. \`cellFormats\` is capped and reports \`formattingTruncated\` when it drops cells. Works on unmigrated sheets too.
+- \`includeFormatting: true\` adds a \`formatting\` block: the tab's \`regions\` (its declared structure), \`layout\` (freezes, widths, heights), \`columnFormats\`, the explicit \`cellFormats\` within the rows returned, and each conditional rule as \`{ id, kind, ranges, summary }\`. Ask for it before you restyle a sheet. \`regions\` can be handed straight back to \`format_sheet\`; a rule entry is a DESCRIPTION, not a rule you can write — to change one, rebuild it and remove the old \`id\`. \`cellFormats\` is capped and reports \`formattingTruncated\` when it drops cells. Works on unmigrated sheets too.
 - \`startRow\` and \`where\`/\`orderBy\`/\`offset\` are different coordinate systems and cannot be combined — the call is rejected rather than quietly ignoring one.
 - Returns at most 500 rows per call, with \`dimensions\`, \`hasMore\`, and each row as \`{ rowNumber, cells, formulas?, errors?, unformatted? }\` plus a rendered \`table\`. \`cells\` holds display values keyed by column letter; \`formulas\` holds the authored formula for the cells that have one.
 
@@ -156,7 +156,7 @@ Reading either way:
 
 - Only non-empty cells appear. A row's \`rowNumber\` is its A1 row, so a row read at 417 is written with \`C417\`.
 - Formula cells report both the computed value (in \`cells\`) and the formula (in \`formulas\`) — you never need to re-derive results, and you never lose the formula.
-- Formatted cells report both the display text and the number underneath. \`read_sheet\` puts the machine value on the row as \`unformatted\` (keyed by column letter: \`unformatted: { "C": 1200 }\` beside \`cells: { "C": "$1,200.00" }\`); \`read_page\` keys it by A1 address, like \`formulas\` and \`errors\`. Only cells whose display differs from their value appear. Always filter, compute and write back from that number, never from the rendered string.
+- Formatted cells report both the display text and the number underneath. \`read_sheet\` puts the machine value on the row as \`unformatted\` (keyed by column letter: \`unformatted: { "C": 1200 }\` beside \`cells: { "C": "$1,200.00" }\`); \`read_page\` keys it by A1 address, like \`formulas\` and \`errors\`. Only cells whose display differs from their value appear — unless the cell is also in \`formulas\` and was never computed, in which case \`cells\` holds the formula text. Always filter, compute and write back from that number, never from the rendered string.
 - Errored cells show \`#ERROR\` as their value and carry the message in \`errors\`, keyed by A1 address in \`read_page\` and by column letter within the row in \`read_sheet\`.
 - Everything except the raw inputs (formula text and literal values) is **derived and regenerated on every save**. Never try to write values, types, errors or dependencies yourself; \`edit_sheet_cells\` recomputes them.
 - Cell values are truncated at 120 characters in the rendered \`table\` only, and the response says how many were cut (\`tableTruncatedCells\`); the structured \`rows\` always carry the full text. Never write a value back that you read from the table if that count is non-zero.
@@ -171,7 +171,7 @@ Reading either way:
 - One record per row, one field per column; keep a column consistently numeric or consistently text.
 - Put totals/aggregates in a clearly labeled row below the data (e.g. \`A11\` = "Total", \`B11\` = \`=SUM(B2:B10)\`) or a summary block to the right — and leave a blank row so the data range can grow.
 - Since blank cells coerce to 0, make aggregate ranges slightly generous (\`=SUM(B2:B20)\` over 10 data rows is safe for SUM/AVERAGE).
-- Store numbers as bare numbers (\`1200\`, not \`"$1,200"\` — currency symbols and thousands separators make the value text and break math) — set the display format instead, with a region column role.
+- Store numbers as bare numbers (\`1200\`, not \`"$1,200"\` — currency symbols and thousands separators make the value text and break math) — set the display format instead (pitfall 7).
 - Store dates as \`YYYY-MM-DD\` strings so YEAR/MONTH/DAY can parse them.
 - Send the whole initial population — headers, data, formulas — as one \`edit_sheet_cells\` batch, then one \`format_sheet\` call declaring the table.
 
@@ -186,7 +186,7 @@ format_sheet({ regions: [{ name: "Budget", range: "A1:D", headerRows: 1,
 \`\`\`
 
 - Column roles: \`text number currency percent date datetime id\`; \`currency\` and \`decimals\` refine one. A range with no end row (\`"A1:D"\`) runs to the bottom of the sheet. Themes are named hues (\`slate blue cyan teal green amber orange red pink purple violet indigo\`).
-- **Ops applied to a range do NOT cover rows added later; regions do.** That is the difference that matters.
+- **Ops applied to a range do NOT cover rows added later; regions do.**
 - A region costs nothing per row. \`A2:A5000\` as ops costs 4,999 against the cell budget (100 ops, 20,000 cells per range op, 50,000 per call); a \`columnFormat\` op for a whole column is free too.
 - \`ops\` is the escape hatch for what a region cannot say: \`setFormat\` (range + format) for one emphasised cell, \`clearFormat\`, \`columnFormat\`, \`columnWidth\`, \`rowHeight\`, \`freeze\`. A \`format\` is \`{ number: { kind, decimals, currency }, bold, italic, align, wrap, color, background, … }\`.
 - Precedence: column default < region < the cell's own format < conditional rule.
@@ -200,7 +200,7 @@ format_sheet({ regions: [{ name: "Budget", range: "A1:D", headerRows: 1,
 - \`cell\` — \`operator\` (\`greaterThan lessThan between equal contains isEmpty isError\` …) + \`value\` (\`value2\` for between) + \`format\`. Values compare against the **computed, unformatted** value: \`"1200"\`, never \`"$1,200.00"\`.
 - \`formula\` — \`formula\` anchored at the range's top-left, e.g. \`"=C2>AVERAGE(C2:C40)"\`, + \`format\`.
 - \`colorScale\` — \`min\`/\`mid\`/\`max\` anchors \`{ type: min|max|number|percent|percentile, value, color }\`.
-- \`dataBar\` — an in-cell bar; optional \`color\`.
+- \`dataBar\` — an in-cell bar; \`color\` is required.
 
 \`mode: "append"\` (default) adds; \`removeRuleIds\` drops rules by id. \`mode: "replaceAll"\` keeps only the rules in the call — read the sheet with \`includeFormatting: true\` first, or you discard rules you never saw.
 
@@ -210,12 +210,12 @@ format_sheet({ regions: [{ name: "Budget", range: "A1:D", headerRows: 1,
 2. **Unbounded ranges.** \`=SUM(A:A)\` is a parse error. Always use bounded ranges like \`A2:A50\`.
 3. **Newlines in cell values.** A line break inside a cell value is stored correctly and survives a round trip. The grid renders it on one line unless the cell is set to wrap, so prefer single-line values for readability — but a multi-line value is safe, not destructive.
 4. **Leading \`=\` on literal text.** Any value starting with \`=\` becomes a formula; there is no apostrophe-escape. Don't start plain-text values with \`=\`.
-5. **Text in numeric ranges.** One non-numeric string inside \`SUM\`'s range errors the whole formula (AVERAGE skips it instead). Keep data columns clean; don't mix "N/A" into number columns — leave the cell empty.
+5. **Text in numeric ranges.** One non-numeric string inside a \`SUM\`/\`MIN\`/\`MAX\` range errors the whole formula (AVERAGE skips it instead). Keep data columns clean; don't mix "N/A" into number columns — leave the cell empty.
 6. **FIND/SEARCH on a miss is an error**, not -1 or blank. Wrap in \`IFERROR\` if absence is expected.
 7. **Formatted numbers.** \`"$1,200"\` or \`"85%"\` are text. Enter \`1200\` and \`0.85\`, THEN make them *display* as currency or percent with a \`format_sheet\` column role. Formatting changes display only, so \`SUM\` still works and a \`read_sheet\` \`where\` still matches \`"1200"\`.
 8. **Cross-sheet error right after writing** ("Cross-page references are not supported in this context") is expected on save — see Cross-sheet references above.
 9. **Editing the sheet as text.** Never write SheetDoc TOML via any text tool — hand-built TOML that parses incorrectly resets the sheet to empty. All writes go through the sheet tools.
 10. **Reading a sheet to search it.** Paging a whole sheet through \`read_page\` to find one row wastes the context the sheet was supposed to save you. Ask \`read_sheet\` with a \`where\` instead.
-11. **Colouring cells instead of writing a rule.** Forty cells hand-filled green go stale the moment a number changes; a \`set_conditional_format\` rule follows the values.
-12. **Formatting a table cell-by-cell instead of declaring a region.** Range ops cover only the cells that existed when applied; a region covers the rows added next week.
+11. **Colouring cells instead of writing a rule.** Hand-filled colour goes stale the moment a number changes; a \`set_conditional_format\` rule follows the values.
+12. **Formatting a table cell-by-cell instead of declaring a region.** Range ops stop at today's last row; a region does not.
 `;

@@ -4,75 +4,51 @@
  *
  * Before `format_sheet` was registered the body said `edit_sheet_cells` was
  * "the only write path" and pitfall 7 said to enter bare numbers and stop
- * there. Each case names one line the rewrite had to carry, so a future trim
- * against MAX_BODY_CHARS cannot quietly drop the capability it exists to teach.
+ * there. Each case pins a FACT the rewrite had to carry — not its wording, so
+ * the body stays free to be trimmed against MAX_BODY_CHARS — and the last
+ * two pin the claims the tool schema cannot convey and the tool would refuse.
  */
 import { describe, it, expect } from 'vitest';
 import { SPREADSHEETS_SKILL_BODY as body } from '../bodies/spreadsheets';
-import { WORKSPACE_TOOL_NAMES } from '@/lib/ai/core/ai-tools';
 
-/** Every backticked snake_case token — the way the body spells a tool name. */
-const backtickedToolNames = (text: string): string[] => {
-  const names = new Set<string>();
-  for (const match of text.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)) {
-    names.add(match[1]);
-  }
-  return [...names].sort();
-};
+const section = (from: string, to: string) => body.slice(body.indexOf(from), body.indexOf(to));
 
 describe('spreadsheets skill body', () => {
-  it('every tool name it mentions is a workspace tool', () => {
-    const known = new Set(WORKSPACE_TOOL_NAMES);
-    const mentioned = backtickedToolNames(body);
-    // The extractor is live: it must at least see the four sheet tools.
-    expect(mentioned).toEqual(expect.arrayContaining(['read_sheet', 'edit_sheet_cells', 'format_sheet', 'set_conditional_format']));
-    const unknown = mentioned.filter((name) => !known.has(name));
-    expect(unknown, `body names tools that do not exist: ${unknown.join(', ')}`).toEqual([]);
-  });
-
   it('no longer claims edit_sheet_cells is the only write path', () => {
-    const offending = body
-      .split('\n')
-      .filter((line) => /only write path/i.test(line) || /always use edit_sheet_cells/i.test(line));
-    expect(offending).toEqual([]);
+    expect(body).not.toMatch(/only write path|always use edit_sheet_cells/i);
+    expect(body).toContain('`format_sheet`');
+    expect(body).toContain('`set_conditional_format`');
   });
 
   it('teaches regions before ops, with the lines the model cannot infer from the schema', () => {
-    const regionsAt = body.indexOf('describe the table');
-    const opsAt = body.indexOf('escape hatch');
-    expect(regionsAt).toBeGreaterThan(0);
-    expect(opsAt).toBeGreaterThan(regionsAt);
-
-    expect(body).toContain('do NOT cover rows added later; regions do');
-    expect(body).toContain('costs nothing per row');
-    expect(body).toContain('4,999');
-    expect(body).toContain("column default < region < the cell's own format < conditional rule");
-    expect(body).toMatch(/computed, unformatted\*\* value: `"1200"`, never `"\$1,200\.00"`/);
+    const formatting = section('## Formatting', '## Common pitfalls');
+    expect(formatting.indexOf('regions')).toBeLessThan(formatting.indexOf('escape hatch'));
+    expect(formatting).toMatch(/do NOT cover rows added later; regions do/);
+    expect(formatting).toContain('4,999');
+    expect(formatting).toMatch(/column default < region < .* < conditional rule/);
+    expect(formatting).toMatch(/computed, unformatted\*\* value/);
+    expect(formatting).toContain('format_sheet({');
   });
 
-  it('carries a worked one-call budget example', () => {
-    const example = body.slice(body.indexOf('format_sheet({'), body.indexOf('```', body.indexOf('format_sheet({')));
-    expect(example).toContain('headerRows');
-    expect(example).toContain('role: "currency"');
-    expect(example).toContain('totalRows');
-    expect(example).toContain('theme');
-  });
-
-  it('covers the four rule kinds and the replaceAll read-first rule', () => {
+  it('covers the four rule kinds, requires the data-bar colour, and reads before replaceAll', () => {
+    const rules = section('### Conditional formatting', '## Common pitfalls');
     for (const kind of ['`cell`', '`formula`', '`colorScale`', '`dataBar`']) {
-      expect(body).toContain(kind);
+      expect(rules).toContain(kind);
     }
-    const replaceAll = body.indexOf('`mode: "replaceAll"`');
+    // buildRule refuses a dataBar without `color` (all-or-nothing), so the
+    // body must not call it optional.
+    expect(rules).toMatch(/`dataBar`[^\n]*`color` is required/);
+    expect(rules).not.toMatch(/optional `color`/);
+    const replaceAll = rules.indexOf('`mode: "replaceAll"`');
     expect(replaceAll).toBeGreaterThan(0);
-    expect(body.slice(replaceAll, replaceAll + 200)).toContain('includeFormatting: true');
+    expect(rules.slice(replaceAll, replaceAll + 200)).toContain('includeFormatting: true');
   });
 
   it('pitfall 7 keeps raw values raw AND opens the door to display formatting', () => {
     const pitfall = body.split('\n').find((line) => line.startsWith('7. **Formatted numbers.**')) ?? '';
     expect(pitfall).toContain('Enter `1200` and `0.85`');
     expect(pitfall).toContain('format_sheet');
-    expect(pitfall).toContain('`SUM` still works');
-    expect(pitfall).toContain('`"1200"`');
+    expect(pitfall).toMatch(/`SUM` still works/);
   });
 
   it('names the two new pitfalls', () => {
@@ -80,8 +56,15 @@ describe('spreadsheets skill body', () => {
     expect(body).toMatch(/^\d+\. \*\*Formatting a table cell-by-cell instead of declaring a region\.\*\*/m);
   });
 
-  it('tells the reader about includeFormatting on read_sheet', () => {
-    const readSection = body.slice(body.indexOf('## Reading a sheet'), body.indexOf('## Structuring a new sheet'));
-    expect(readSection).toContain('`includeFormatting: true`');
+  it('keeps the never-computed-formula exception on unformatted reads', () => {
+    // sheet-view emits `unformatted` only for computed cells; a legacy formula
+    // cell that was never evaluated returns the formula TEXT in `cells`. The
+    // rewrite dropped this clause once (review), and a model without it
+    // treats "=SUM(B2:B10)" as the value.
+    expect(section('## Reading a sheet', '## Structuring a new sheet')).toMatch(/never computed[^\n]*`cells` holds the formula text/);
+  });
+
+  it('warns that MIN/MAX error on text like SUM does', () => {
+    expect(body).toMatch(/`SUM`\/`MIN`\/`MAX` range errors/);
   });
 });

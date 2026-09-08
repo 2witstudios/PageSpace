@@ -1,9 +1,11 @@
 'use client';
 
-import React, { memo, useMemo } from 'react';
+import React, { memo } from 'react';
 import { usePageNavigation } from '@/hooks/usePageNavigation';
 import { Table2, ExternalLink, Paintbrush } from 'lucide-react';
-import { PALETTE, normalizeHex } from '@pagespace/lib/sheets/sheet';
+import { normalizeHex, regionTheme } from '@pagespace/lib/sheets/sheet';
+import { describeCondition } from '@/components/layout/middle-content/page-views/sheet/core/rule-presets';
+import type { FormatOpInput, RegionInput, RuleInput } from '@/lib/ai/tools/sheet-format-tools';
 import { cn } from '@/lib/utils';
 
 /**
@@ -16,61 +18,22 @@ import { cn } from '@/lib/utils';
  * per distinct colour so a "make it green" request is visibly green without
  * opening the sheet. Reads the tool INPUT for the structure (the result only
  * carries counts and ids) and the OUTPUT for what actually landed.
+ *
+ * The input is the model's, validated by the tool only on the success path
+ * the registry guards for; every deref below tolerates a missing field so a
+ * malformed call can never take the message list down.
  */
-
-export interface SheetFormatRegionInput {
-  id?: string;
-  name?: string;
-  range: string;
-  headerRows?: number;
-  totalRows?: number[];
-  columns?: Array<{ column: string; role: string; currency?: string }>;
-  theme?: string;
-  freezeHeader?: boolean;
-}
-
-interface FormatLike {
-  color?: string;
-  background?: string;
-}
-
-export interface SheetFormatOpInput {
-  op: string;
-  range?: string;
-  column?: string;
-  row?: number;
-  format?: FormatLike;
-  width?: number;
-  height?: number;
-  frozenRows?: number;
-  frozenColumns?: number;
-  clear?: true;
-}
-
-export interface SheetRuleInput {
-  kind: string;
-  ranges: string[];
-  operator?: string;
-  value?: string | number;
-  value2?: string | number;
-  formula?: string;
-  format?: FormatLike;
-  min?: { color?: string };
-  mid?: { color?: string };
-  max?: { color?: string };
-  color?: string;
-}
 
 interface SheetFormatRendererProps {
   title?: string;
   pageId?: string;
-  driveId?: string;
-  regions?: SheetFormatRegionInput[];
-  ops?: SheetFormatOpInput[];
-  rules?: SheetRuleInput[];
+  regions?: RegionInput[];
+  ops?: FormatOpInput[];
+  rules?: RuleInput[];
+  removedRuleIds?: string[];
   /** From the result: what landed, when it differs from what was asked. */
-  opsApplied?: number;
   regionsApplied?: number;
+  opsApplied?: number;
   cellsFormatted?: number;
   rulesAdded?: number;
   rulesRemoved?: number;
@@ -79,26 +42,40 @@ interface SheetFormatRendererProps {
    * into `rules`. A retried append reports every rule here with `added: 0`;
    * without this the card would present them as changes that never landed.
    */
-  skippedDuplicates?: Array<{ index: number; existingRuleId: string }>;
-  removedRuleIds?: string[];
+  skippedDuplicates?: Array<{ index: number }>;
   message?: string;
-  maxHeight?: number;
-  className?: string;
 }
 
-const themeSwatch = (theme: string | undefined): string | null => {
-  if (!theme) return null;
-  const hue = PALETTE.find((entry) => entry.name === theme);
-  return hue ? hue.mid : null;
+const NONE: never[] = [];
+const ROW = 'flex items-center gap-3 px-3 py-1.5 text-sm';
+
+const count = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? '' : 's'}`;
+
+/**
+ * The colour the sheet actually paints for this region's header band — the
+ * same resolution `region-format` uses, slate fallback included — so the
+ * swatch can never drift from the sheet.
+ */
+const regionSwatch = (theme: string | undefined): { colour: string; name: string } => {
+  const { hue, header } = regionTheme(theme);
+  return { colour: header.background ?? hue.deep, name: hue.name };
 };
 
+const isColour = (value: string | undefined): value is string => Boolean(value);
+
+const opColours = (op: FormatOpInput): string[] =>
+  [op.format?.background, op.format?.color].filter(isColour);
+
+const ruleColours = (rule: RuleInput): string[] =>
+  [rule.format?.background, rule.format?.color, rule.min?.color, rule.mid?.color, rule.max?.color, rule.color].filter(isColour);
+
 /** The target an op touched, in the words the op used. */
-const describeOpTarget = (op: SheetFormatOpInput): string => {
+const describeOpTarget = (op: FormatOpInput): string => {
   if (op.op === 'freeze') {
     if (op.clear) return 'unfreeze';
     const parts: string[] = [];
-    if (op.frozenRows !== undefined) parts.push(`${op.frozenRows} row${op.frozenRows === 1 ? '' : 's'}`);
-    if (op.frozenColumns !== undefined) parts.push(`${op.frozenColumns} col${op.frozenColumns === 1 ? '' : 's'}`);
+    if (op.frozenRows !== undefined) parts.push(count(op.frozenRows, 'row'));
+    if (op.frozenColumns !== undefined) parts.push(count(op.frozenColumns, 'col'));
     return parts.join(', ') || 'freeze';
   }
   if (op.range) return op.range.toUpperCase();
@@ -113,14 +90,22 @@ const describeOpTarget = (op: SheetFormatOpInput): string => {
   return '';
 };
 
-const describeRule = (rule: SheetRuleInput): string => {
-  const ranges = rule.ranges.map((r) => r.toUpperCase()).join(', ');
+const operand = (value: string | number | undefined): string | undefined =>
+  value === undefined ? undefined : String(value);
+
+/**
+ * One line per rule, in the sheet's own words. `describeCondition` is what the
+ * rule panel uses, and it already omits the operands the executor drops — none
+ * for isEmpty/isNotEmpty/isError, no `value2` outside between/notBetween — so
+ * the card describes the rule that was stored, not the raw input.
+ */
+const describeRule = (rule: RuleInput): string => {
+  const ranges = (rule.ranges ?? []).map((r) => r.toUpperCase()).join(', ');
   switch (rule.kind) {
-    case 'cell': {
-      const operand = rule.value !== undefined ? ` ${String(rule.value)}` : '';
-      const upper = rule.value2 !== undefined ? ` and ${String(rule.value2)}` : '';
-      return `${ranges} · ${rule.operator ?? 'cell'}${operand}${upper}`;
-    }
+    case 'cell':
+      return rule.operator
+        ? `${ranges} · ${describeCondition({ operator: rule.operator, value: operand(rule.value), value2: operand(rule.value2) })}`
+        : ranges;
     case 'formula':
       return `${ranges} · ${rule.formula ?? 'formula'}`;
     case 'colorScale':
@@ -133,27 +118,13 @@ const describeRule = (rule: SheetRuleInput): string => {
 };
 
 /** Every distinct colour the call named, normalised so `#FFF` and `#ffffff` are one swatch. */
-const collectColours = (ops: SheetFormatOpInput[], rules: SheetRuleInput[], regions: SheetFormatRegionInput[]): string[] => {
-  const seen = new Set<string>();
-  const add = (value: string | undefined | null) => {
-    if (!value) return;
-    const hex = normalizeHex(value) ?? value;
-    seen.add(hex);
-  };
-  for (const region of regions) add(themeSwatch(region.theme));
-  for (const op of ops) {
-    add(op.format?.color);
-    add(op.format?.background);
-  }
-  for (const rule of rules) {
-    add(rule.format?.color);
-    add(rule.format?.background);
-    add(rule.min?.color);
-    add(rule.mid?.color);
-    add(rule.max?.color);
-    add(rule.color);
-  }
-  return [...seen];
+const collectColours = (regions: RegionInput[], ops: FormatOpInput[], rules: RuleInput[]): string[] => {
+  const named = [
+    ...regions.map((region) => regionSwatch(region.theme).colour),
+    ...ops.flatMap(opColours),
+    ...rules.flatMap(ruleColours),
+  ];
+  return [...new Set(named.map((value) => normalizeHex(value) ?? value))];
 };
 
 const Swatch: React.FC<{ colour: string; label?: string }> = ({ colour, label }) => (
@@ -165,50 +136,53 @@ const Swatch: React.FC<{ colour: string; label?: string }> = ({ colour, label })
   />
 );
 
+const Swatches: React.FC<{ colours: string[] }> = ({ colours }) => (
+  <span className="flex items-center gap-1 shrink-0">
+    {colours.map((colour, i) => (
+      <Swatch key={`${colour}-${i}`} colour={colour} />
+    ))}
+  </span>
+);
+
 export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(function SheetFormatRenderer({
   title = 'Sheet',
   pageId,
-  driveId,
-  regions = [],
-  ops = [],
-  rules = [],
-  opsApplied,
+  regions = NONE,
+  ops = NONE,
+  rules = NONE,
+  removedRuleIds = NONE,
   regionsApplied,
+  opsApplied,
   cellsFormatted,
   rulesAdded,
   rulesRemoved,
-  skippedDuplicates = [],
-  removedRuleIds = [],
+  skippedDuplicates = NONE,
   message,
-  maxHeight = 280,
-  className,
 }) {
   const { navigateToPage } = usePageNavigation();
-  const colours = useMemo(() => collectColours(ops, rules, regions), [ops, rules, regions]);
-  const duplicateIndexes = useMemo(() => new Set(skippedDuplicates.map((entry) => entry.index)), [skippedDuplicates]);
+  const colours = collectColours(regions, ops, rules);
+  const duplicateIndexes = new Set(skippedDuplicates.map((entry) => entry.index));
 
-  const summary = useMemo(() => {
-    const parts: string[] = [];
-    const regionCount = regionsApplied ?? regions.length;
-    const opCount = opsApplied ?? ops.length;
-    const added = rulesAdded ?? rules.length - duplicateIndexes.size;
-    const removed = rulesRemoved ?? removedRuleIds.length;
-    if (regionCount > 0) parts.push(`${regionCount} ${regionCount === 1 ? 'region' : 'regions'}`);
-    if (opCount > 0) parts.push(`${opCount} ${opCount === 1 ? 'op' : 'ops'}`);
-    if (cellsFormatted) parts.push(`${cellsFormatted} ${cellsFormatted === 1 ? 'cell' : 'cells'}`);
-    if (added > 0) parts.push(`${added} ${added === 1 ? 'rule' : 'rules'} added`);
-    if (duplicateIndexes.size > 0) parts.push(`${duplicateIndexes.size} already present`);
-    if (removed > 0) parts.push(`${removed} removed`);
-    return parts.join(' · ');
-  }, [regionsApplied, regions.length, opsApplied, ops.length, cellsFormatted, rulesAdded, rules.length, duplicateIndexes, rulesRemoved, removedRuleIds.length]);
+  const regionCount = regionsApplied ?? regions.length;
+  const opCount = opsApplied ?? ops.length;
+  const added = rulesAdded ?? 0;
+  const removed = rulesRemoved ?? removedRuleIds.length;
+  const summary = [
+    ...(regionCount > 0 ? [count(regionCount, 'region')] : []),
+    ...(opCount > 0 ? [count(opCount, 'op')] : []),
+    ...(cellsFormatted ? [count(cellsFormatted, 'cell')] : []),
+    ...(added > 0 ? [`${count(added, 'rule')} added`] : []),
+    ...(duplicateIndexes.size > 0 ? [`${duplicateIndexes.size} already present`] : []),
+    ...(removed > 0 ? [`${removed} removed`] : []),
+  ].join(' · ');
 
   const empty = regions.length === 0 && ops.length === 0 && rules.length === 0 && removedRuleIds.length === 0;
 
   return (
-    <div className={cn('rounded-lg border bg-card overflow-hidden my-2 shadow-sm', className)}>
+    <div className="rounded-lg border bg-card overflow-hidden my-2 shadow-sm">
       <button
         type="button"
-        onClick={() => pageId && navigateToPage(pageId, driveId)}
+        onClick={() => pageId && navigateToPage(pageId)}
         disabled={!pageId}
         className={cn(
           'w-full flex items-center justify-between px-3 py-2 bg-muted/30 border-b text-left',
@@ -224,10 +198,8 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
         </div>
         <span className="flex items-center gap-2 shrink-0">
           {colours.length > 0 && (
-            <span className="flex items-center gap-1" data-testid="sheet-format-swatches">
-              {colours.map((colour) => (
-                <Swatch key={colour} colour={colour} />
-              ))}
+            <span data-testid="sheet-format-swatches">
+              <Swatches colours={colours} />
             </span>
           )}
           {summary && <span className="text-xs text-muted-foreground">{summary}</span>}
@@ -235,42 +207,40 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
         </span>
       </button>
 
-      <div className="bg-background overflow-auto divide-y divide-border" style={{ maxHeight: `${maxHeight}px` }}>
+      <div className="bg-background overflow-auto divide-y divide-border max-h-[280px]">
         {empty ? (
           <div className="text-sm text-muted-foreground text-center py-4">{message ?? 'Nothing changed'}</div>
         ) : (
           <>
             {regions.map((region, i) => {
-              const swatch = themeSwatch(region.theme);
-              const details: string[] = [];
-              if (region.headerRows !== undefined && region.headerRows !== 1) details.push(`${region.headerRows} header rows`);
-              for (const column of region.columns ?? []) {
-                details.push(`${column.column.toUpperCase()} ${column.role}${column.currency ? ` ${column.currency}` : ''}`);
-              }
-              if (region.totalRows && region.totalRows.length > 0) details.push(`total ${region.totalRows.join(', ')}`);
-              if (region.freezeHeader) details.push('frozen header');
+              const swatch = regionSwatch(region.theme);
+              const details = [
+                ...(region.headerRows !== undefined && region.headerRows !== 1 ? [count(region.headerRows, 'header row')] : []),
+                ...(region.columns ?? []).map(
+                  (column) => `${column.column.toUpperCase()} ${column.role}${column.currency ? ` ${column.currency}` : ''}`
+                ),
+                ...(region.totalRows && region.totalRows.length > 0 ? [`total ${region.totalRows.join(', ')}`] : []),
+                ...(region.freezeHeader ? ['frozen header'] : []),
+              ];
               return (
-                <div key={`region-${i}`} className="flex items-center gap-3 px-3 py-1.5 text-sm" data-testid="sheet-format-region">
-                  <code className="w-14 shrink-0 font-mono text-xs text-muted-foreground">{region.range.toUpperCase()}</code>
+                <div key={`region-${i}`} className={ROW} data-testid="sheet-format-region">
+                  <code className="w-14 shrink-0 font-mono text-xs text-muted-foreground">{(region.range ?? '').toUpperCase()}</code>
                   <span className="flex-1 min-w-0 truncate text-xs">
                     <span className="font-medium">{region.name ?? 'Table'}</span>
                     {details.length > 0 && <span className="text-muted-foreground"> · {details.join(' · ')}</span>}
                   </span>
                   <span className="flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded shrink-0 bg-muted text-muted-foreground">
-                    {swatch && <Swatch colour={swatch} label={region.theme} />}
+                    <Swatch colour={swatch.colour} label={swatch.name} />
                     region
                   </span>
                 </div>
               );
             })}
             {ops.map((op, i) => (
-              <div key={`op-${i}`} className="flex items-center gap-3 px-3 py-1.5 text-sm" data-testid="sheet-format-op">
+              <div key={`op-${i}`} className={ROW} data-testid="sheet-format-op">
                 <code className="w-14 shrink-0 font-mono text-xs text-muted-foreground truncate">{describeOpTarget(op)}</code>
                 <span className="flex-1 min-w-0 truncate font-mono text-xs">{op.op}</span>
-                <span className="flex items-center gap-1 shrink-0">
-                  {op.format?.background && <Swatch colour={op.format.background} />}
-                  {op.format?.color && <Swatch colour={op.format.color} />}
-                </span>
+                <Swatches colours={opColours(op)} />
               </div>
             ))}
             {rules.map((rule, i) => {
@@ -278,22 +248,18 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
               return (
                 <div
                   key={`rule-${i}`}
-                  className={cn('flex items-center gap-3 px-3 py-1.5 text-sm', duplicate && 'text-muted-foreground')}
+                  className={cn(ROW, duplicate && 'text-muted-foreground')}
                   data-testid={duplicate ? 'sheet-format-rule-duplicate' : 'sheet-format-rule'}
                 >
                   <Paintbrush className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                   <span className="flex-1 min-w-0 truncate font-mono text-xs">{describeRule(rule)}</span>
-                  <span className="flex items-center gap-1 shrink-0">
-                    {[rule.format?.background, rule.format?.color, rule.min?.color, rule.mid?.color, rule.max?.color, rule.color]
-                      .filter((c): c is string => Boolean(c))
-                      .map((c, j) => <Swatch key={`${c}-${j}`} colour={c} />)}
-                    {duplicate && <span className="text-[11px] px-1.5 py-0.5 rounded bg-muted">already present</span>}
-                  </span>
+                  <Swatches colours={ruleColours(rule)} />
+                  {duplicate && <span className="text-[11px] px-1.5 py-0.5 rounded bg-muted shrink-0">already present</span>}
                 </div>
               );
             })}
             {removedRuleIds.map((id) => (
-              <div key={`removed-${id}`} className="flex items-center gap-3 px-3 py-1.5 text-sm text-muted-foreground" data-testid="sheet-format-removed">
+              <div key={`removed-${id}`} className={cn(ROW, 'text-muted-foreground')} data-testid="sheet-format-removed">
                 <Paintbrush className="h-3.5 w-3.5 shrink-0" />
                 <span className="flex-1 min-w-0 truncate font-mono text-xs line-through">{id}</span>
                 <span className="text-[11px] shrink-0">removed</span>

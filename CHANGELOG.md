@@ -7,6 +7,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **AI agents can format spreadsheets** — two new workspace tools, **Format Sheet** and
+  **Conditional Formatting**, let an agent make a SHEET page presentable instead of leaving a grid
+  of bare numbers. An agent declares what a table *is* (its range, header rows, which columns are
+  money, percentages or dates, which rows are totals, an accent colour) and the sheet derives the
+  header band, number formats and total emphasis from that — so rows added later inherit the
+  formatting, and the agent never hand-picks colours. Conditional rules (highlight when a value
+  crosses a threshold, colour scales, data bars) follow the values as they change. Both tools are
+  write tools: a read-only agent does not get them. The chat shows a card for each call listing the
+  tables declared, ranges touched and rules added, with a swatch per colour, so you can see what
+  changed without opening the sheet. The spreadsheets skill now teaches all of this; the
+  workspace-tool count in the docs goes from 81 to 83.
 - **Dev-server preview: see the app you're building, live, from inside its session (ships dark)** —
   when a dev server (Vite, Next, anything that binds a port) starts inside an agent session or a
   drive Environment, PageSpace notices and shows one quiet line in that session's header or beneath

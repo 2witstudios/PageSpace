@@ -179,7 +179,7 @@ vi.mock('../../tools/sandbox-tools-runtime', () => ({
   }),
 }));
 
-import { pageSpaceTools, corePageSpaceTools, buildPageSpaceTools } from '../ai-tools';
+import { pageSpaceTools, corePageSpaceTools, buildPageSpaceTools, TOOL_REGISTRY } from '../ai-tools';
 import { CORE_TOOL_NAMES } from '../stub-tools';
 import { memberTools } from '../../tools/member-tools';
 import { roleManagementTools } from '../../tools/role-management-tools';
@@ -266,30 +266,13 @@ describe('ai-tools', () => {
     });
 
     it('has no key collisions between tool modules', () => {
-      const moduleKeysets = [
-        Object.keys(memberTools),
-        Object.keys(roleManagementTools),
-        Object.keys(driveTools),
-        Object.keys(pageReadTools),
-        Object.keys(pageWriteTools),
-        Object.keys(searchTools),
-        Object.keys(taskManagementTools),
-        Object.keys(agentTools),
-        Object.keys(agentCommunicationTools),
-        Object.keys(webSearchTools),
-        Object.keys(activityTools),
-        Object.keys(calendarReadTools),
-        Object.keys(calendarWriteTools),
-        Object.keys(channelTools),
-        Object.keys(workflowTools),
-        Object.keys(triggerTools),
-        Object.keys(modelTools),
-        Object.keys(commandTools),
-        Object.keys(formTools),
-        Object.keys(imageGenerationTools),
-        Object.keys(pagePaneTools),
-        Object.keys(planTools),
-      ];
+      // Derived from the registry's own per-category projection rather than a
+      // second hand-written module list: the hand list had drifted (it omitted
+      // copyContent, sheetsRead and skills), so a collision involving those
+      // modules was invisible while this case stayed green.
+      const moduleKeysets = Object.values(TOOL_REGISTRY).map((names) => [...names]);
+      expect(moduleKeysets.length).toBe(Object.keys(TOOL_REGISTRY).length);
+      expect(moduleKeysets.flat()).toEqual(expect.arrayContaining(['read_sheet', 'format_sheet', 'copy_content', 'load_skill']));
 
       const allKeys = moduleKeysets.flat();
       const uniqueKeys = new Set(allKeys);

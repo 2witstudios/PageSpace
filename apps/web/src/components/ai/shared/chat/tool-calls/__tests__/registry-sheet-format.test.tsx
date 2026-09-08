@@ -1,16 +1,13 @@
 /**
- * `format_sheet` / `set_conditional_format` render as a formatting card, not
- * as the address→value table `edit_sheet_cells` uses (formatting has no
- * values). The card carries the op/region/rule count, the ranges touched, and
- * one swatch per distinct colour, so a person sees what changed without
- * opening the sheet.
+ * `format_sheet` / `set_conditional_format` render as a formatting card: the
+ * op/region/rule counts, the ranges touched, and one swatch per distinct
+ * colour, so a person sees what changed without opening the sheet.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { isValidElement } from 'react';
 import { render } from '@testing-library/react';
-import { toolRenderers } from '../registry';
+import { toolRenderers, type ToolRenderContext } from '../registry';
 import { SheetFormatRenderer } from '../SheetFormatRenderer';
-import { SheetEditRenderer } from '../SheetEditRenderer';
 
 vi.mock('@/hooks/usePageNavigation', () => ({
   usePageNavigation: () => ({ navigateToPage: vi.fn() }),
@@ -20,13 +17,9 @@ const renderTool = (
   toolName: 'format_sheet' | 'set_conditional_format',
   parsedInput: Record<string, unknown> | null,
   parsedOutput: Record<string, unknown>,
-) =>
-  toolRenderers[toolName]({
-    toolName,
-    parsedInput,
-    parsedOutput,
-    output: parsedOutput,
-  } as Parameters<(typeof toolRenderers)[typeof toolName]>[0]);
+) => toolRenderers[toolName]({ toolName, parsedInput, parsedOutput, output: parsedOutput } as ToolRenderContext);
+
+const swatchCount = (root: HTMLElement) => root.querySelectorAll('[data-testid="sheet-format-swatches"] span span').length;
 
 describe('format_sheet renderer', () => {
   const input = {
@@ -56,14 +49,13 @@ describe('format_sheet renderer', () => {
     message: 'Formatted "Q3 Budget": 1 region(s) declared, 3 op(s) applied, 9 cell(s) restyled.',
   };
 
-  it('uses the formatting card, not the cell-value table', () => {
+  it('uses the formatting card', () => {
     const element = renderTool('format_sheet', input, output);
     expect(isValidElement(element) && element.type).toBe(SheetFormatRenderer);
-    expect(isValidElement(element) && element.type).not.toBe(SheetEditRenderer);
   });
 
   it('shows the counts, the ranges touched, and a swatch per DISTINCT colour', () => {
-    const { getByText, getAllByTestId, getByTestId } = render(<>{renderTool('format_sheet', input, output)}</>);
+    const { container, getByText, getAllByTestId } = render(<>{renderTool('format_sheet', input, output)}</>);
     expect(getByText('Q3 Budget')).toBeTruthy();
     expect(getByText('1 region · 3 ops · 9 cells')).toBeTruthy();
 
@@ -75,14 +67,35 @@ describe('format_sheet renderer', () => {
     expect(getByText(/C currency USD/)).toBeTruthy();
     expect(getByText(/total 40/)).toBeTruthy();
 
-    // `#FFF` and `#ffffff` are ONE colour; the theme hue and the red text are
-    // the other two. Four colour mentions, three swatches.
-    expect(getByTestId('sheet-format-swatches').querySelectorAll('span')).toHaveLength(3);
+    // `#FFF` and `#ffffff` are ONE colour; the theme's header band and the
+    // red text are the other two. Four colour mentions, three swatches.
+    expect(swatchCount(container)).toBe(3);
   });
 
-  it('falls through to the generic envelope on a refusal', () => {
+  it('paints the region swatch with the header colour the sheet itself uses, slate when no theme is named', () => {
+    // region-format derives the header band from the theme (deep strength)
+    // and falls back to slate; the card must show that colour, not a hue the
+    // sheet never paints and not nothing.
+    const { container } = render(
+      <>{renderTool('format_sheet', { regions: [{ range: 'A1:B', theme: 'blue' }, { range: 'D1:E' }] }, { success: true, title: 'S' })}</>,
+    );
+    const swatches = [...container.querySelectorAll('[data-testid="sheet-format-region"] span[aria-label]')];
+    expect(swatches.map((s) => s.getAttribute('aria-label'))).toEqual(['blue', 'slate']);
+    expect(swatches.map((s) => (s as HTMLElement).style.backgroundColor)).toEqual(['rgb(29, 78, 216)', 'rgb(51, 65, 85)']);
+  });
+
+  it("falls through to the generic envelope on the tool's own refusal", () => {
     const refusal = { success: false, error: 'invalid_range', message: 'Nothing was applied.', suggestion: 'Fix op 0.' };
     expect(renderTool('format_sheet', input, refusal)).toBeNull();
+  });
+
+  it('falls through on the execute_tool error envelope, which has no success key and unvalidated input', () => {
+    // In search exposure the wrapper returns `{ error }` as a normal output
+    // with the model's raw parameters as the input. Rendering that as a
+    // success card would show a change that never landed — and a region
+    // without a range would crash the card.
+    const envelope = { error: 'Invalid parameters for "format_sheet": regions[0].range is required.' };
+    expect(renderTool('format_sheet', { regions: [{ name: 'no range' }] }, envelope)).toBeNull();
   });
 });
 
@@ -110,23 +123,48 @@ describe('set_conditional_format renderer', () => {
     expect(isValidElement(element) && element.type).toBe(SheetFormatRenderer);
   });
 
-  it('lists every rule with its range, the removed id, and the distinct colours', () => {
-    const { getAllByTestId, getByText, getByTestId } = render(<>{renderTool('set_conditional_format', input, output)}</>);
+  it("lists every rule in the sheet's own words, the removed id, and the distinct colours", () => {
+    const { container, getAllByTestId, getByText } = render(<>{renderTool('set_conditional_format', input, output)}</>);
     expect(getAllByTestId('sheet-format-rule')).toHaveLength(4);
     expect(getAllByTestId('sheet-format-removed')).toHaveLength(1);
     expect(getByText('4 rules added · 1 removed')).toBeTruthy();
-    expect(getByText('C2:C40 · greaterThan 1000')).toBeTruthy();
+    // The same wording the sheet's rule panel uses.
+    expect(getByText('C2:C40 · is greater than 1000')).toBeTruthy();
     expect(getByText('A2:A40 · =C2>AVERAGE(C2:C40)')).toBeTruthy();
     expect(getByText('rule-old')).toBeTruthy();
     // #dcfce7 appears twice (cell rule + scale max) — one swatch.
-    expect(getByTestId('sheet-format-swatches').querySelectorAll('span')).toHaveLength(4);
+    expect(swatchCount(container)).toBe(4);
+  });
+
+  it('omits the operands the executor drops, so the card describes the stored rule', () => {
+    // isEmpty/isNotEmpty/isError store no operand; only between/notBetween
+    // keep value2. The tool warns and drops the rest; the card must not
+    // print what was dropped.
+    const { getByText, queryByText } = render(
+      <>{renderTool(
+        'set_conditional_format',
+        {
+          rules: [
+            { kind: 'cell', ranges: ['A1:A9'], operator: 'isEmpty', value: 'stray' },
+            { kind: 'cell', ranges: ['B1:B9'], operator: 'lessThan', value: 5, value2: 99 },
+            { kind: 'cell', ranges: ['C1:C9'], operator: 'between', value: 1, value2: 10 },
+          ],
+        },
+        { success: true, title: 'S', added: 3, removed: 0 },
+      )}</>,
+    );
+    expect(getByText('A1:A9 · is empty')).toBeTruthy();
+    expect(getByText('B1:B9 · is less than 5')).toBeTruthy();
+    expect(getByText('C1:C9 · is between 1 and 10')).toBeTruthy();
+    expect(queryByText(/stray/)).toBeNull();
+    expect(queryByText(/99/)).toBeNull();
   });
 
   it('labels rules the result reports as already present, instead of showing them as changes', () => {
     // An append that overlaps what is already on the tab lands only the new
     // rules; the result names the rest by index in `skippedDuplicates`. The
     // card must not present those rows as changes.
-    const retried = {
+    const overlapping = {
       success: true,
       title: 'Q3 Budget',
       added: 2,
@@ -137,13 +175,19 @@ describe('set_conditional_format renderer', () => {
       ],
     };
     const { getAllByTestId, getByText, queryByTestId } = render(
-      <>{renderTool('set_conditional_format', { rules: input.rules }, retried)}</>,
+      <>{renderTool('set_conditional_format', { rules: input.rules }, overlapping)}</>,
     );
     expect(getAllByTestId('sheet-format-rule-duplicate')).toHaveLength(2);
     expect(getAllByTestId('sheet-format-rule')).toHaveLength(2);
     expect(getAllByTestId('sheet-format-rule-duplicate')[0].textContent).toContain('already present');
     expect(getByText('2 rules added · 2 already present')).toBeTruthy();
     expect(queryByTestId('sheet-format-removed')).toBeNull();
+  });
+
+  it('falls through on the execute_tool error envelope even when the input looks well-formed', () => {
+    // A read-only agent in search mode gets `{ error: 'not permitted' }` with
+    // valid-looking rules as the input; nothing landed, so no card.
+    expect(renderTool('set_conditional_format', input, { error: 'Tool "set_conditional_format" is not permitted for this agent.' })).toBeNull();
   });
 
   it('given nothing to show, says so instead of an empty card', () => {

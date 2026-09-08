@@ -100,7 +100,7 @@ const PAGE_TYPE_BULLETS: ReadonlyArray<{
         parts.push('Use edit_sheet_cells for cell-level edits.');
       }
       if (has('format_sheet')) {
-        parts.push('Use format_sheet to declare a table (header rows, column roles, totals, theme) so its presentation is derived; edit_sheet_cells never formats.');
+        parts.push('Use format_sheet to declare a table (header rows, column roles, totals, theme) so its presentation is derived; cell edits never format.');
       }
       return parts.join(' ');
     },

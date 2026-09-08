@@ -68,8 +68,10 @@
  * `sheet-read-is-read-only.guard.test.ts` against every mutating store export,
  * and this one imports the write path on purpose.
  *
- * Not registered anywhere yet: wiring into `ai-tools.ts`, `WRITE_TOOLS`,
- * `tool-labels.ts` and the sheet skill is a separate change.
+ * Registered through `TOOL_MODULES.sheetsFormat` in `core/ai-tools.ts`, gated
+ * in `WRITE_TOOLS`, labelled in `tool-labels.ts`, taught by the spreadsheets
+ * skill, and rendered by `SheetFormatRenderer` — which imports the input
+ * types below (type-only, so nothing here reaches the client bundle).
  */
 import { randomUUID } from 'node:crypto';
 import { tool } from 'ai';
@@ -267,7 +269,7 @@ const regionSchema = z
   })
   .strict();
 
-type RegionInput = z.infer<typeof regionSchema>;
+export type RegionInput = z.infer<typeof regionSchema>;
 
 const FORMAT_OPS = ['setFormat', 'clearFormat', 'columnFormat', 'columnWidth', 'rowHeight', 'freeze'] as const;
 type FormatOpName = (typeof FORMAT_OPS)[number];
@@ -299,7 +301,7 @@ const formatOpSchema = z
   })
   .strict();
 
-type FormatOpInput = z.infer<typeof formatOpSchema>;
+export type FormatOpInput = z.infer<typeof formatOpSchema>;
 
 const formatSheetInputSchema = z.object({
   pageId: z.string().optional().describe('Defaults to the page in view.'),
@@ -384,7 +386,7 @@ const ruleSchema = z
   })
   .strict();
 
-type RuleInput = z.infer<typeof ruleSchema>;
+export type RuleInput = z.infer<typeof ruleSchema>;
 
 const setConditionalFormatInputSchema = z.object({
   pageId: z.string().optional().describe('Defaults to the page in view.'),

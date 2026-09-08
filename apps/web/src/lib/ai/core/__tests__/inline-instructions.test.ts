@@ -405,8 +405,8 @@ describe('SHEET bullet vs the agent allowlist', () => {
   });
 
   it('names no tool the agent lacks, whichever subset it holds', () => {
-    // The bullet can name three tools. Gating only read_sheet left the other
-    // two able to do exactly what the gate exists to prevent: an agent holding
+    // The bullet can name four tools. Gating only read_sheet left the others
+    // able to do exactly what the gate exists to prevent: an agent holding
     // only read_sheet was still told about edit_sheet_cells.
     const sheetLine = (tools: string[]) =>
       buildInlineInstructions(tools).split('\n').find(l => l.startsWith('• SHEET')) ?? '';
@@ -414,16 +414,26 @@ describe('SHEET bullet vs the agent allowlist', () => {
     const readOnly = sheetLine(['read_sheet']);
     expect(readOnly).toContain('read_sheet');
     expect(readOnly).not.toContain('edit_sheet_cells');
+    expect(readOnly).not.toContain('format_sheet');
 
     const writeOnly = sheetLine(['edit_sheet_cells']);
     expect(writeOnly).toContain('edit_sheet_cells');
     expect(writeOnly).not.toContain('read_sheet');
     expect(writeOnly).not.toContain('read_page');
+    expect(writeOnly).not.toContain('format_sheet');
+
+    // The formatting fragment must not smuggle in the cell editor's name
+    // either: an agent holding only format_sheet cannot call edit_sheet_cells.
+    const formatOnly = sheetLine(['format_sheet']);
+    expect(formatOnly).toContain('format_sheet');
+    expect(formatOnly).not.toContain('edit_sheet_cells');
+    expect(formatOnly).not.toContain('read_sheet');
 
     const nothing = sheetLine([]);
     expect(nothing).not.toContain('read_sheet');
     expect(nothing).not.toContain('read_page');
     expect(nothing).not.toContain('edit_sheet_cells');
+    expect(nothing).not.toContain('format_sheet');
   });
 
   it('points at read_page instead when the agent does not', () => {

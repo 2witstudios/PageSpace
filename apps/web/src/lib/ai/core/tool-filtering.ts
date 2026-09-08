@@ -19,8 +19,9 @@ export const WRITE_TOOLS = new Set([
   'move_page',
   'edit_sheet_cells',
   // Presentation writes. They never touch a value, but a read-only agent must
-  // not restyle a sheet either — and membership here is what makes
-  // cap-step-tool-payloads keep their results intact.
+  // not restyle a sheet either. Membership here also keeps their results out
+  // of elision (tool-result-eliding.ts) and makes cap-step-tool-payloads' stub
+  // say the write already happened rather than "call it again".
   'format_sheet',
   'set_conditional_format',
   // Mutates a page or a sandbox file, so a read-only agent must not get it.

@@ -13,12 +13,8 @@ import { ActivityRenderer, type ActivityItem } from './ActivityRenderer';
 import { WebSearchRenderer, type WebSearchResult } from './WebSearchRenderer';
 import { MemberListRenderer, type MemberInfo } from './MemberListRenderer';
 import { SheetEditRenderer } from './SheetEditRenderer';
-import {
-  SheetFormatRenderer,
-  type SheetFormatRegionInput,
-  type SheetFormatOpInput,
-  type SheetRuleInput,
-} from './SheetFormatRenderer';
+import { SheetFormatRenderer } from './SheetFormatRenderer';
+import type { FormatOpInput, RegionInput, RuleInput } from '@/lib/ai/tools/sheet-format-tools';
 import { AgentConfigRenderer, type AgentConfigData } from './AgentConfigRenderer';
 import { ModelListRenderer, type ModelListProvider } from './ModelListRenderer';
 import { WebFetchRenderer } from './WebFetchRenderer';
@@ -214,6 +210,13 @@ const parsePathsToTree = (paths: string[]): TreeItem[] => {
 
   return buildTreeFromParsed(parsedPages, 1, []);
 };
+
+/** The card chrome both sheet-formatting tools share. */
+const sheetFormatCard = (output: Record<string, unknown>) => ({
+  title: (output.title as string | undefined) || 'Sheet',
+  pageId: output.pageId as string | undefined,
+  message: output.message as string | undefined,
+});
 
 /**
  * Tools handled outside this registry as full-width cards in the wrapper
@@ -610,37 +613,34 @@ export const toolRenderers: Record<string, ToolRenderer> = {
       />
     );
   },
-  // Formatting has no values to tabulate, so it does not share SheetEditRenderer:
-  // the card shows the declared regions, the escape-hatch ops and the rules,
-  // with a swatch per distinct colour. A refusal falls through to the generic
-  // envelope, which already prints the error + suggestion.
+  // Formatting card, not the value table — see SheetFormatRenderer. Two shapes
+  // mean "nothing landed": the tool's own refusal (`success: false`) and the
+  // execute_tool wrapper's `{ error }` envelope, which carries no `success`
+  // key and arrives with the model's UNVALIDATED parameters as the input.
+  // Both fall through to the generic envelope, which prints the error.
   format_sheet: ({ parsedInput, parsedOutput }) => {
-    if (parsedOutput.success === false) return null;
+    if (parsedOutput.success === false || parsedOutput.error) return null;
     return (
       <SheetFormatRenderer
-        title={(parsedOutput.title as string | undefined) || 'Sheet'}
-        pageId={parsedOutput.pageId as string | undefined}
-        regions={parsedInput?.regions as SheetFormatRegionInput[] | undefined}
-        ops={parsedInput?.ops as SheetFormatOpInput[] | undefined}
+        {...sheetFormatCard(parsedOutput)}
+        regions={parsedInput?.regions as RegionInput[] | undefined}
+        ops={parsedInput?.ops as FormatOpInput[] | undefined}
         regionsApplied={parsedOutput.regionsApplied as number | undefined}
         opsApplied={parsedOutput.opsApplied as number | undefined}
         cellsFormatted={parsedOutput.cellsFormatted as number | undefined}
-        message={parsedOutput.message as string | undefined}
       />
     );
   },
   set_conditional_format: ({ parsedInput, parsedOutput }) => {
-    if (parsedOutput.success === false) return null;
+    if (parsedOutput.success === false || parsedOutput.error) return null;
     return (
       <SheetFormatRenderer
-        title={(parsedOutput.title as string | undefined) || 'Sheet'}
-        pageId={parsedOutput.pageId as string | undefined}
-        rules={parsedInput?.rules as SheetRuleInput[] | undefined}
+        {...sheetFormatCard(parsedOutput)}
+        rules={parsedInput?.rules as RuleInput[] | undefined}
         removedRuleIds={parsedInput?.removeRuleIds as string[] | undefined}
         rulesAdded={parsedOutput.added as number | undefined}
         rulesRemoved={parsedOutput.removed as number | undefined}
-        skippedDuplicates={parsedOutput.skippedDuplicates as Array<{ index: number; existingRuleId: string }> | undefined}
-        message={parsedOutput.message as string | undefined}
+        skippedDuplicates={parsedOutput.skippedDuplicates as Array<{ index: number }> | undefined}
       />
     );
   },

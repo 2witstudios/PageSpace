@@ -194,6 +194,16 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).toContain('write meaningful output back into the drive (a Sheet)');
   });
 
+  it('given only the sheet FORMATTING tools, does NOT claim a Sheet as a destination', () => {
+    // SHEET_WRITE_TOOL_NAMES answers "can this agent put sandbox OUTPUT into
+    // a Sheet". format_sheet / set_conditional_format restyle a sheet but
+    // cannot put data into one, so an agent holding only them must not be
+    // told a Sheet is a valid destination.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'bash', 'format_sheet', 'set_conditional_format']);
+    expect(result).not.toContain('write meaningful output back into the drive');
+    expect(result).not.toContain('(a Sheet)');
+  });
+
   it('given both a Document-writer and the Sheet-writer, claims a Sheet or Document', () => {
     const result = buildSystemPrompt(false, undefined, true, ['read_page', 'bash', 'replace_lines', 'edit_sheet_cells']);
     expect(result).toContain('write meaningful output back into the drive (a Sheet or a Document)');
