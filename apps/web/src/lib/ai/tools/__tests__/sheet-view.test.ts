@@ -326,6 +326,66 @@ describe('the two paths render one cell one way', () => {
     // Guard the guard again: an all-undefined comparison would pass vacuously.
     expect(fromDocument.rows[0].unformatted).toEqual({ B: 1200 });
   });
+
+  it('agrees on a REGION-formatted column, which is where they used to diverge', async () => {
+    // The sharpest form of the property. A region's presentation is derived at
+    // evaluation time, so the document path always had it (via
+    // `evaluated.format`) while the row store — which stores only the explicit
+    // cell format — did not. One cell, two renderings, decided by whether
+    // anyone had migrated the sheet.
+    const regional = {
+      version: 1,
+      rowCount: 4,
+      columnCount: 3,
+      sheetName: 'Budget',
+      cells: { A1: 'Item', C1: 'Cost', A2: 'Rent', C2: '1200', A3: 'Total', C3: '=C2' },
+      // No cell formats and no column formats anywhere: the ONLY source of
+      // presentation is the region, so if either path ignores it the comparison
+      // fails rather than passing on some other layer.
+      regions: [{
+        id: 'r1', range: 'A1:C', headerRows: 1, totalRows: [3],
+        columns: [{ column: 'C', role: 'currency' as const, currency: 'USD' }],
+      }],
+    };
+
+    mockListTabs.mockResolvedValue([]);
+    const fromDocument = await loadSheetWindow('page-1', {
+      limit: 10,
+      documentContent: serializeSheetContent(regional, { pageId: 'page-1' }),
+    });
+
+    mockListTabs.mockResolvedValue([tab]);
+    mockGetTab.mockResolvedValue({
+      ...tab,
+      rowCount: regional.rowCount,
+      columnCount: regional.columnCount,
+      regions: regional.regions,
+    });
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'Item', value: 'Item' }, C: { raw: 'Cost', value: 'Cost' } } },
+      { rowIndex: 1, cells: { A: { raw: 'Rent', value: 'Rent' }, C: { raw: '1200', value: 1200 } } },
+      { rowIndex: 2, cells: { A: { raw: 'Total', value: 'Total' }, C: { raw: '=C2', value: 1200 } } },
+    ]);
+    const fromStore = await loadSheetWindow('page-1', { limit: 10 });
+
+    // Guard the guard: the region must actually be formatting something.
+    expect(fromDocument.rows[1].cells.C).toBe('$1,200.00');
+    // A header cell holds a label, not data — the role format must not reach it.
+    expect(fromDocument.rows[0].cells.C).toBe('Cost');
+
+    assert({
+      given: 'a region-formatted sheet before and after migration',
+      should: 'render identical values on both paths',
+      actual: fromStore.rows.map((row) => row.cells),
+      expected: fromDocument.rows.map((row) => row.cells),
+    });
+    assert({
+      given: 'a region-formatted sheet before and after migration',
+      should: 'recover identical machine values on both paths',
+      actual: fromStore.rows.map((row) => row.unformatted),
+      expected: fromDocument.rows.map((row) => row.unformatted),
+    });
+  });
 });
 
 describe('a region-derived format is part of what a cell reads as', () => {
