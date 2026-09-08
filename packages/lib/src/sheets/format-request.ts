@@ -527,6 +527,14 @@ function validateRuleInput(
   // `parseCellFormat` carries an unknown field THROUGH untouched — nothing is
   // lost, so nothing would be flagged, and a typo like `bolt` would be stored
   // as an inert field that formats nothing.
+  //
+  // Which is why an unknown field is refused inside a `format` and accepted at
+  // the top of a rule, an asymmetry worth stating: a format has an
+  // authoritative list of known fields to measure a typo against, and `bolt`
+  // for `bold` is a near miss an agent will really make. A rule's own shape has
+  // no such list — it is a union of four kinds the parser deliberately spreads
+  // over — so there is nothing to be confident a stray field is a mistake
+  // against. The line is drawn where the certainty is.
   if (supplied.format !== undefined) {
     validateCellFormatPatch(supplied.format, index, type, 'rule format');
   }
@@ -683,12 +691,11 @@ export function planFormatOps(
 
     switch (op.type) {
       case 'setCellFormat': {
-        const addresses = resolveRange(op.range, index, op.type);
-        steps.push({
-          type: 'setCellFormat',
-          addresses,
-          patch: validateCellFormatPatch(op.patch, index, op.type),
-        });
+        // Patch first: it is a handful of key lookups, while resolving the
+        // range expands up to `MAX_FORMAT_CELLS` addresses. A request that was
+        // always going to be refused for a typo should not pay for that.
+        const patch = validateCellFormatPatch(op.patch, index, op.type);
+        steps.push({ type: 'setCellFormat', addresses: resolveRange(op.range, index, op.type), patch });
         break;
       }
 
