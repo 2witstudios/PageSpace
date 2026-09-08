@@ -913,6 +913,32 @@ describe('read_sheet — includeFormatting', () => {
     expect(formatting.regions).toEqual([formattedTab.regions[0]]);
   });
 
+  it('carries a region field this build does not know about', async () => {
+    // `parseRegion` deliberately passes unknown FIELDS through, so a region
+    // written by a newer build survives a load/save cycle instead of being
+    // silently downgraded. That guarantee only holds end-to-end if this read
+    // preserves them too: an agent reads the region list, changes one thing and
+    // writes it back, so anything dropped here is dropped from the sheet on the
+    // next write. A "tidy-up" that picked only the known fields would look
+    // harmless and quietly strip a newer build's settings.
+    const withFutureField = {
+      ...formattedTab,
+      regions: [{ ...formattedTab.regions[0], stripeEveryNthRow: 2 }],
+    };
+    mockGetTab.mockResolvedValue(withFutureField);
+
+    const result = await run({ pageId: 'page-1', includeFormatting: true });
+    const regions = (result.formatting as { regions: Array<Record<string, unknown>> }).regions;
+
+    assert({
+      given: 'a region carrying a field this build has no meaning for',
+      should: 'hand it back untouched, so a read-modify-write does not strip it',
+      actual: regions[0].stripeEveryNthRow,
+      expected: 2,
+    });
+    expect(regions).toEqual(withFutureField.regions);
+  });
+
   it('describes layout, column formats and conditional rules without the raw rule JSON', async () => {
     mockGetTab.mockResolvedValue(formattedTab);
     mockReadRows.mockResolvedValue([
