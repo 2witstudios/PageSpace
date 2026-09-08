@@ -1603,6 +1603,28 @@ export function planFormatOps(
     refuse(`A format request can carry at most ${MAX_FORMAT_OPS} ops; got ${ops.length}.`);
   }
 
+  // The tab is trusted differently from the ops, and the difference is worth
+  // being explicit about. Ops arrive as JSON from a caller, so every shape of
+  // garbage in them is a `SheetFormatError` — a 400 the caller can act on. The
+  // tab arrives from the store's own parser, so a non-object sitting in one of
+  // its lists is not a bad request but corrupt storage or a caller that skipped
+  // the parser, and calling that a 400 would blame the wrong party.
+  //
+  // It still must not surface as `null is not an object (evaluating 'rule.id')`
+  // twenty frames deep. Checked here, where the message can name the field.
+  for (const [field, list] of [
+    ['conditionalFormats', tab.conditionalFormats],
+    ['regions', tab.regions],
+  ] as const) {
+    if (list === undefined) continue;
+    if (!Array.isArray(list) || list.some((entry) => !isObject(entry))) {
+      throw new Error(
+        `planFormatOps: tab.${field} must be an array of objects from the store's parser. ` +
+          'This is not a caller error — the tab itself is malformed.'
+      );
+    }
+  }
+
   const steps: PlannedFormatStep[] = [];
   const rows = new Set<number>();
   let touchesTabFields = false;

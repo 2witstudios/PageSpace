@@ -2686,6 +2686,54 @@ describe('planFormatOps — everything accepted survives the parsers (#7)', () =
   });
 });
 
+describe('planFormatOps — a malformed tab is not a caller error', () => {
+  it('names the field instead of dying twenty frames deep', () => {
+    // The fuzz below covers every shape of garbage in the OPS, because those
+    // arrive as JSON from a caller and every one of them is a 400. It never
+    // covered the tab — which arrives from the store's own parser, so a
+    // non-object in one of its lists is corrupt storage or a caller that
+    // skipped the parser, not a bad request.
+    //
+    // That distinction is why these throw a plain Error rather than a
+    // `SheetFormatError`: answering 400 would blame the caller for something
+    // that is not their doing. What it must not do is surface as
+    // "null is not an object (evaluating 'rule.id')".
+    for (const [field, list] of [
+      ['conditionalFormats', [null]],
+      ['conditionalFormats', [undefined]],
+      ['conditionalFormats', ['not a rule']],
+      ['conditionalFormats', 'not an array'],
+      ['regions', [null]],
+    ] as const) {
+      let thrown: unknown;
+      try {
+        planFormatOps([{ type: 'removeConditionalRule', id: 'x' }], {
+          rowCount: 100,
+          columnCount: 26,
+          [field]: list,
+        } as unknown as SheetFormatTarget);
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect(thrown).not.toBeInstanceOf(SheetFormatError);
+      expect((thrown as Error).message).toContain(`tab.${field} must be an array of objects`);
+    }
+
+    // A tab whose entries are objects but poor ones is a different matter —
+    // those are the stored shapes the rest of this module already survives, and
+    // they stay the caller's ordinary business.
+    expect(
+      refusalOf([{ type: 'removeConditionalRule', id: 'x' }], {
+        rowCount: 100,
+        columnCount: 26,
+        conditionalFormats: [{ id: 'a', kind: 'cell' }] as unknown as ConditionalRule[],
+      })
+    ).toContain('No rule "x" on this sheet');
+  });
+});
+
 describe('planFormatOps — refuses, never crashes', () => {
   // The point of `SheetFormatError` is that a caller can answer 400 to it. A
   // TypeError escaping this module answers 500 instead, and a validation layer
