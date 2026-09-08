@@ -200,6 +200,11 @@ export type ConditionalResolver = (
  * percent RULE read back as `0.85` while the grid showed `85%`.
  *
  * Ranges are parsed once here, so a per-cell resolve is a bounds test per range.
+ * The ceiling is worth stating, since this runs on every read: `MAX_CONDITIONAL_RULES`
+ * (200) and `MAX_CONDITIONAL_RANGES_PER_RULE` bound the prepared list at the parse
+ * boundary, and a window is at most `MAX_SHEET_READ_ROWS` x its columns — so the
+ * worst case is integer comparisons on a sheet nobody authored by hand, and the
+ * ordinary case (a handful of rules over one range each) is a few per cell.
  * That is also why this needs no equivalent of the evaluator's
  * `MAX_CONDITIONAL_TOTAL_CELLS` budget: nothing here expands a range, so the
  * work is bounded by the window rather than by how much the rules cover.
