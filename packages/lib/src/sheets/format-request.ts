@@ -208,6 +208,21 @@ function referencedCells(start: string, end: string): number | null {
  * and moves on, and the missing formatting surfaces days later as a dashboard
  * nobody trusts. The feedback loop is the difference, so the refusals are too.
  *
+ * One consequence of "never a silent no-op" that a caller has to know before it
+ * retries anything. Most ops are idempotent — planning `setCellFormat`,
+ * `setFrozen`, `updateConditionalRule`, `clearConditionalRules`, `setRegions` or
+ * `upsertRegion` against a tab where they already landed produces the same plan
+ * again. Four are not: `addConditionalRule`, `removeConditionalRule`,
+ * `moveConditionalRule` and `removeRegion` refuse the second time, because the
+ * second time they genuinely are being asked for something that is not true of
+ * the sheet.
+ *
+ * That is deliberate rather than an oversight, and it is not hostile to a
+ * retry: the refusal says which, so a caller replaying a request after an I/O
+ * failure can read "A rule \"x\" is already on this sheet" as "the first
+ * attempt landed" rather than as a fault. What it must not do is treat those
+ * four as safe to replay blindly.
+ *
  * Pure: no database, no I/O, no clock. The refusals are the contract, and they
  * have to be testable without any of that.
  */

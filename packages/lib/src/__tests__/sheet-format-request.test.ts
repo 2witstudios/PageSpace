@@ -2008,6 +2008,80 @@ describe('planFormatOps — regions', () => {
   });
 });
 
+describe('planFormatOps — what happens on a retry', () => {
+  it('says which ops are safe to replay and which are not', () => {
+    // A caller replaying a request after an I/O failure needs to know this, and
+    // it falls straight out of "never a silent no-op": an op asking for
+    // something already true of the sheet is refused. Pinned as one table
+    // because the answer is a contract, and because discovering it from a retry
+    // storm in production is the expensive way to learn it.
+    const cell = (id: string) =>
+      ({
+        id,
+        kind: 'cell',
+        ranges: ['A1:A9'],
+        condition: { operator: 'greaterThan', value: '1' },
+        format: { bold: true },
+      }) as unknown as ConditionalRule;
+
+    // Each op paired with the tab as it looks AFTER that op already landed.
+    const replays: Array<[string, SheetFormatOp, Partial<SheetFormatTarget>]> = [
+      ['setCellFormat', { type: 'setCellFormat', range: 'A1', patch: { bold: true } }, {}],
+      ['setFrozen', { type: 'setFrozen', rows: 1, columns: null }, {}],
+      [
+        'addConditionalRule',
+        { type: 'addConditionalRule', rule: cell('a') },
+        { conditionalFormats: [cell('a')] },
+      ],
+      [
+        'updateConditionalRule',
+        { type: 'updateConditionalRule', id: 'a', patch: { format: { bold: true } } },
+        { conditionalFormats: [cell('a')] },
+      ],
+      [
+        'removeConditionalRule',
+        { type: 'removeConditionalRule', id: 'a' },
+        { conditionalFormats: [] },
+      ],
+      [
+        'moveConditionalRule',
+        { type: 'moveConditionalRule', id: 'a', direction: 1 },
+        { conditionalFormats: [cell('b'), cell('a')] },
+      ],
+      ['clearConditionalRules', { type: 'clearConditionalRules' }, { conditionalFormats: [] }],
+      ['upsertRegion', { type: 'upsertRegion', region: region('r') }, { regions: [region('r')] }],
+      ['setRegions', { type: 'setRegions', regions: [region('r')] }, { regions: [region('r')] }],
+      ['removeRegion', { type: 'removeRegion', id: 'r' }, { regions: [] }],
+    ];
+
+    const replayable = replays
+      .filter(([, op, after]) => {
+        try {
+          planFormatOps([op], tabWith(after));
+          return true;
+        } catch {
+          return false;
+        }
+      })
+      .map(([label]) => label);
+
+    expect(replayable).toEqual([
+      'setCellFormat',
+      'setFrozen',
+      'updateConditionalRule',
+      'clearConditionalRules',
+      'upsertRegion',
+      'setRegions',
+    ]);
+
+    // And the four that refuse say so in a way a retry can read as "it landed",
+    // rather than as a fault to escalate.
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: cell('a') }], tabWith({ conditionalFormats: [cell('a')] }))
+    ).toContain('is already on this sheet');
+  });
+});
+
 describe('planFormatOps — the boundaries themselves', () => {
   // Every other test in this file establishes that a limit exists. None of them
   // establishes that it is in the right PLACE, and a limit off by one is a
