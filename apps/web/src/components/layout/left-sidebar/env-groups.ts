@@ -37,6 +37,14 @@ export interface EnvGroup<T> {
    * null for an orphan.
    */
   substrate: DriveEnvDTO['substrate'] | null;
+  /** A LOCAL env's machine label ("jono-macstudio"); null for a Sprite env or an orphan. */
+  machineLabel: string | null;
+  /**
+   * A LOCAL env's enrollment fact: `false` is AWAITING ENROLLMENT — the one
+   * state the row offers "Show a new code" in. Null for a Sprite env or an
+   * orphan (the question does not apply).
+   */
+  enrolled: boolean | null;
   sessions: T[];
 }
 
@@ -80,6 +88,8 @@ export function partitionSessionsByEnv<T extends { envId: string | null }>(
       envName: env.name,
       status: env.status,
       substrate: env.substrate,
+      machineLabel: env.substrate === 'local' ? env.label : null,
+      enrolled: env.substrate === 'local' ? env.enrolled : null,
       sessions: sessionsByEnv.get(env.id) ?? [],
     }))
     .sort(byEnvDisplayName);
@@ -91,6 +101,8 @@ export function partitionSessionsByEnv<T extends { envId: string | null }>(
       envName: null,
       status: null,
       substrate: null,
+      machineLabel: null,
+      enrolled: null,
       sessions: sessionsByEnv.get(envId) ?? [],
     }))
     .sort(byEnvDisplayName);

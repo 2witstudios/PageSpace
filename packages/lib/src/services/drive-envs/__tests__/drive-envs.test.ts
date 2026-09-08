@@ -179,13 +179,13 @@ describe('listDriveEnvs / the DTO', () => {
     });
 
     it('given a local row WITH its drive_env_local facts, should project substrate local, the machine label, and the CONNECTION status — never a Sprite status', () => {
-      const dto = toDriveEnvDTO(makeEnvRecord({ substrate: 'local' }), { label: 'jono-macstudio', status: 'connected' });
-      expect(dto).toEqual({ id: ENV_ID, driveId: DRIVE_ID, name: 'staging', substrate: 'local', status: 'connected', label: 'jono-macstudio', createdAt: NOW.toISOString() });
+      const dto = toDriveEnvDTO(makeEnvRecord({ substrate: 'local' }), { label: 'jono-macstudio', status: 'connected', enrolled: true });
+      expect(dto).toEqual({ id: ENV_ID, driveId: DRIVE_ID, name: 'staging', substrate: 'local', status: 'connected', label: 'jono-macstudio', enrolled: true, createdAt: NOW.toISOString() });
       expect(driveEnvDtoSchema.safeParse(dto).success).toBe(true);
     });
 
     it('given a local row, should ignore the Sprite pointer columns for status (they are CHECK-forbidden anyway)', () => {
-      const dto = toDriveEnvDTO(makeEnvRecord({ substrate: 'local' }), { label: 'm', status: 'disconnected' });
+      const dto = toDriveEnvDTO(makeEnvRecord({ substrate: 'local' }), { label: 'm', status: 'disconnected', enrolled: false });
       expect(dto.status).toBe('disconnected');
     });
 
@@ -194,7 +194,7 @@ describe('listDriveEnvs / the DTO', () => {
     });
 
     it('given a Sprite row WITH stray local facts, should ignore them (facts do not change the substrate)', () => {
-      const dto = toDriveEnvDTO(makeEnvRecord({ sandboxId: SANDBOX_ID }), { label: 'x', status: 'connected' });
+      const dto = toDriveEnvDTO(makeEnvRecord({ sandboxId: SANDBOX_ID }), { label: 'x', status: 'connected', enrolled: true });
       expect(dto.substrate).toBe('sprite');
       expect(dto.status).toBe('running');
       expect('label' in dto).toBe(false);
@@ -212,6 +212,14 @@ describe('listDriveEnvs / the DTO', () => {
       ]);
       const local = dtos[1];
       expect(local?.substrate === 'local' && local.label).toBe('jono-macstudio');
+      expect(local?.substrate === 'local' && local.enrolled).toBe(true);
+    });
+
+    it('given a local env whose machine has NOT enrolled yet, should project enrolled: false and disconnected — the awaiting-enrollment row the sidebar offers a new code for', async () => {
+      const fake = makeDriveEnvStore([makeEnvRecord({ id: 'env-l', name: 'mac', substrate: 'local' })]);
+      fake.local.set('env-l', makeLocalRecord({ envId: 'env-l', enrolledAt: null, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(NOW.getTime() + 600_000) }));
+      const [dto] = await listDriveEnvs({ driveId: DRIVE_ID, deps: { store: fake.store, now: () => NOW, liveConnection: () => null } });
+      expect(dto?.substrate === 'local' && { status: dto.status, enrolled: dto.enrolled }).toEqual({ status: 'disconnected', enrolled: false });
     });
 
     it('given a local env whose sibling is GONE (owner erased under Art 17), should still list it as disconnected with the env name as its label rather than throw for the whole drive', async () => {

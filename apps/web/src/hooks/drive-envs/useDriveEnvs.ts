@@ -30,6 +30,19 @@ import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
 export const driveEnvsKey = (driveId: string | null | undefined): string | null =>
   driveId ? `/api/drives/${encodeURIComponent(driveId)}/envs` : null;
 
+/**
+ * How often to re-read a drive's listing WHILE one of its local envs is
+ * awaiting enrollment. That is the one change to an env that happens outside
+ * every write path this app has — `enrolledAt` is stamped by `pagespace env
+ * enroll` on the machine — so without this the row would say "Awaiting
+ * enrollment" until a full reload. Bounded: the moment nothing awaits, the
+ * interval is 0 and the listing is back to never polling.
+ */
+export const LOCAL_ENV_ENROLLMENT_POLL_MS = 5_000;
+
+const awaitsEnrollment = (data: { envs: DriveEnvDTO[] } | undefined): boolean =>
+  (data?.envs ?? []).some((env) => env.substrate === 'local' && !env.enrolled);
+
 async function envsFetcher(url: string): Promise<{ envs: DriveEnvDTO[] }> {
   const response = await fetchWithAuth(url);
   if (!response.ok) throw new Error(`Failed to list environments (${response.status})`);
@@ -54,8 +67,10 @@ export function useDriveEnvs(
       // An environment is created and destroyed deliberately, by a person, and
       // its derived status only moves when a machine is provisioned or torn
       // down. Nothing here changes on its own often enough to poll for — the
-      // acts that DO change it all run through this hook's own `mutate`.
-      refreshInterval: 0,
+      // acts that DO change it all run through this hook's own `mutate` — with
+      // ONE exception: a local env's enrollment lands from the CLI, so while
+      // any local env awaits one the listing polls, and stops when none does.
+      refreshInterval: (latest) => (awaitsEnrollment(latest) ? LOCAL_ENV_ENROLLMENT_POLL_MS : 0),
     },
   );
 

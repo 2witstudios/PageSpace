@@ -42,6 +42,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { MAX_DRIVE_ENV_NAME_LENGTH } from '@pagespace/lib/drive-envs/env-contract';
 import { useEditingSession } from '@/stores/useEditingSession';
+import { LocalEnvEnrollmentPanel, type LocalEnvEnrollmentIssue } from '@/components/agents/LocalEnvEnrollment';
 
 /**
  * Rename — the only edit an environment has (it has exactly one editable
@@ -280,5 +281,83 @@ export function RebuildDriveEnvDialog({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+/**
+ * "Show a new code" — a fresh one-time enrollment code for a LOCAL environment
+ * whose machine has not enrolled (Local Environments epic, M3).
+ *
+ * The create step shows the code once; this is the recovery for a closed
+ * dialog, a lost clipboard or the ten-minute expiry. It ISSUES on open (the
+ * server replaces the code — there is no endpoint that returns an existing
+ * one) and renders the same handoff the create step did. A refusal — the
+ * machine enrolled meanwhile, the enrollment was revoked — is the caller's to
+ * toast; this dialog just closes without a code.
+ */
+export function EnrollmentCodeDialog({
+  open,
+  onOpenChange,
+  envName,
+  machineLabel,
+  onIssue,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  envName: string;
+  machineLabel: string;
+  /** Ask the server for a new code. `null` means it refused (already reported); the dialog closes. */
+  onIssue: () => Promise<LocalEnvEnrollmentIssue | null>;
+}) {
+  const [issue, setIssue] = useState<LocalEnvEnrollmentIssue | null>(null);
+  const dialogId = useId();
+  const wasOpen = useRef(false);
+
+  // The dialog is the one rendering of a credential; a refresh landing under
+  // it must not tear it down, exactly as for typed text.
+  useEditingSession(`drive-env-enrollment-${dialogId}`, open, 'form', { componentName: 'EnrollmentCodeDialog' });
+
+  // Issue ONCE per opening, on the open transition — never on a re-render.
+  useEffect(() => {
+    if (open && !wasOpen.current) {
+      setIssue(null);
+      let cancelled = false;
+      void onIssue().then((result) => {
+        if (cancelled) return;
+        if (result === null) onOpenChange(false);
+        else setIssue(result);
+      });
+      wasOpen.current = open;
+      return () => {
+        cancelled = true;
+      };
+    }
+    wasOpen.current = open;
+    return undefined;
+  }, [open, onIssue, onOpenChange]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[560px]">
+        <DialogHeader>
+          <DialogTitle>Enrol {machineLabel}</DialogTitle>
+          <DialogDescription>
+            A new code replaces the previous one, which stops working now. Run these on the computer to connect it.
+          </DialogDescription>
+        </DialogHeader>
+        {issue ? (
+          <LocalEnvEnrollmentPanel envName={envName} machineLabel={machineLabel} enrollment={issue} />
+        ) : (
+          <p className="text-sm text-muted-foreground" role="status">
+            Issuing a new code…
+          </p>
+        )}
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            Done
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

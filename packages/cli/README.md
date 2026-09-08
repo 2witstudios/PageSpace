@@ -294,8 +294,11 @@ one was considered for this release and not adopted, because a list of program n
 walk around (`sh -c …`, an interpreter, a script inside a root) and would suggest a guarantee the
 daemon cannot keep. If you want per-command review, use `ask` and leave `exec` out of `ops`.
 
-A drive owner or admin can create an Environment with `substrate: "local"` and is shown a
-**one-time enrollment code** (valid ten minutes, single use). On the machine:
+A drive owner or admin creates a local Environment from the ordinary "New environment" step (choose
+**This computer** and name the machine) and is shown a **one-time enrollment code** (valid ten
+minutes, single use) beside these exact commands. Losing the code is not fatal: until a machine has
+enrolled, the Environment's menu in the sidebar offers **Show a new code**, which replaces the old
+one. Once a machine has enrolled, no new code can ever be issued for that Environment. On the machine:
 
 ```text
 pagespace env enroll <enrollmentId> <code> [--host <url>]

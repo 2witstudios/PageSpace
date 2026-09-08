@@ -8,6 +8,8 @@ import {
   ChevronRight,
   FileText,
   Folder,
+  KeyRound,
+  Laptop,
   Pencil,
   Plus,
   RefreshCw,
@@ -64,7 +66,8 @@ import { decideClosePane } from '@/components/agents/panes/close-pane';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
 import { partitionSessionsByEnv, type EnvGroup } from './env-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
-import { DeleteDriveEnvDialog, DriveEnvNameDialog, RebuildDriveEnvDialog } from './DriveEnvDialogs';
+import { DeleteDriveEnvDialog, DriveEnvNameDialog, EnrollmentCodeDialog, RebuildDriveEnvDialog } from './DriveEnvDialogs';
+import type { LocalEnvEnrollmentIssue } from '@/components/agents/LocalEnvEnrollment';
 import { DriveEnvAppPane } from './DriveEnvAppPane';
 import { DevPreviewAffordance } from '@/components/dev-preview/DevPreviewAffordance';
 import { envDevPreviewPath } from '@/hooks/dev-preview/useDevPreviewStatus';
@@ -798,9 +801,14 @@ function DriveGroupRows({
  * the environment had, so `'none'` gets a dimmed dot and a name for the state
  * rather than nothing at all.
  */
-function EnvStatusDot({ status }: { status: DriveEnvStatus | null }) {
+function EnvStatusDot({ status, enrolled }: { status: DriveEnvStatus | null; enrolled: boolean | null }) {
   const { className, label } =
-    status === 'running'
+    // A LOCAL env whose machine has never enrolled is not "disconnected" the
+    // way a sleeping machine is: nothing has ever been there. The derived
+    // status cannot tell the two apart; the DTO's `enrolled` fact can.
+    enrolled === false
+      ? { className: 'bg-amber-500', label: 'Awaiting enrollment' }
+      : status === 'running'
       ? { className: 'bg-emerald-500', label: 'Environment running' }
       : status === 'stopped'
         ? { className: 'bg-amber-500', label: 'Environment stopped' }
@@ -812,7 +820,7 @@ function EnvStatusDot({ status }: { status: DriveEnvStatus | null }) {
             : status === 'connecting'
               ? { className: 'bg-amber-500', label: 'Machine connecting' }
               : status === 'disconnected'
-                ? { className: 'bg-muted-foreground/40', label: 'Machine disconnected' }
+                ? { className: 'bg-muted-foreground/40', label: 'Machine not connected' }
                 : { className: 'bg-muted-foreground/40', label: 'Environment status unknown' };
   // `role="img"` so the label is announced — aria-label on a bare span is not.
   return <span role="img" aria-label={label} className={cn('size-1.5 shrink-0 rounded-full', className)} />;
@@ -859,6 +867,7 @@ function DriveEnvRow({
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
+  const [showingCode, setShowingCode] = useState(false);
 
   const isOrphan = group.envName === null;
   // A LOCAL env is the user's own machine reached through the bridge. Until
@@ -937,13 +946,38 @@ function DriveEnvRow({
     toast.success(`“${displayName}” was rebuilt`, { description: 'It came back blank.' });
   }, [envPath, onEnvsChanged, mutate, displayName]);
 
+  /**
+   * A fresh one-time enrollment code (M3). The server re-issues only while no
+   * machine has enrolled — its compare-and-set, not this row, is what refuses
+   * an enrolled env — so a refusal here is reported and the dialog closes.
+   */
+  const reissueCode = useCallback(async (): Promise<LocalEnvEnrollmentIssue | null> => {
+    try {
+      const { enrollment } = await post<{ enrollment: LocalEnvEnrollmentIssue }>(`${envPath}/enrollment-code`);
+      return enrollment;
+    } catch (error) {
+      toast.error('Could not issue a new code', {
+        description: error instanceof Error ? error.message : 'Please try again.',
+      });
+      // `already_enrolled` means this row is STALE — a machine enrolled and the
+      // listing has not caught up. Re-read it so the row heals itself.
+      if (error instanceof ApiRequestError && error.status === 409) onEnvsChanged();
+      return null;
+    }
+  }, [envPath, onEnvsChanged]);
+
+  // Only an AWAITING-ENROLLMENT local env offers a new code: once a machine
+  // has enrolled the server would refuse, and offering a refusal is noise.
+  const awaitingEnrollment = isLocal && group.enrolled === false;
+
   const menuItems: RowMenuItem[] = useMemo(
     () => [
+      ...(awaitingEnrollment ? [{ label: 'Show a new code', icon: KeyRound, onSelect: () => setShowingCode(true) }] : []),
       { label: 'Rename', icon: Pencil, onSelect: () => setRenaming(true) },
       ...(isLocal ? [] : [{ label: 'Rebuild to blank', icon: RefreshCw, onSelect: () => setRebuilding(true), destructive: true }]),
       { label: 'Delete environment', icon: Trash2, onSelect: () => setDeleting(true), destructive: true },
     ],
-    [isLocal],
+    [isLocal, awaitingEnrollment],
   );
 
   const rowInner = (
@@ -957,9 +991,21 @@ function DriveEnvRow({
         {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
       </button>
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
-        <Boxes className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <EnvStatusDot status={group.status} />
+        {/* A LOCAL env is somebody's computer, not a cloud sandbox, and the row
+            says so twice: the laptop instead of the boxes, and the machine's
+            own label after the environment's name. */}
+        {isLocal ? (
+          <Laptop role="img" aria-label="Local environment" className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <Boxes className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        )}
+        <EnvStatusDot status={group.status} enrolled={group.enrolled} />
         <span className="truncate font-medium text-foreground">{displayName}</span>
+        {group.machineLabel !== null && (
+          <span className="truncate text-muted-foreground" title={`On ${group.machineLabel}`}>
+            {group.machineLabel}
+          </span>
+        )}
       </span>
       {/* Every other level of this tree offers one; the level that IS a place to
           come back to was the only one that did not. Not gated on `canManage`:
@@ -1023,6 +1069,15 @@ function DriveEnvRow({
         envName={displayName}
         onRebuild={rebuildEnv}
       />
+      {awaitingEnrollment && (
+        <EnrollmentCodeDialog
+          open={showingCode}
+          onOpenChange={setShowingCode}
+          envName={displayName}
+          machineLabel={group.machineLabel ?? displayName}
+          onIssue={reissueCode}
+        />
+      )}
 
       {expanded && (
         <div className="ml-4 space-y-0.5 border-l border-border pl-1.5">

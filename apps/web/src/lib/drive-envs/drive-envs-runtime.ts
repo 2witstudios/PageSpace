@@ -57,11 +57,13 @@ import {
   enrollLocalDriveEnv,
   issueLocalEnvChallenge,
   redeemLocalEnvChallenge,
+  reissueLocalEnvEnrollmentCode,
   type LocalEnvIdentityDeps,
   type LocalEnvIdentityServiceDeps,
   type EnrollLocalDriveEnvResult,
   type IssueLocalEnvChallengeResult,
   type RedeemLocalEnvChallengeResult,
+  type ReissueLocalEnvEnrollmentCodeResult,
 } from '@pagespace/lib/services/drive-envs/drive-envs';
 
 export { toDriveEnvDTO };
@@ -219,6 +221,16 @@ export async function createEnvInDrive(input: {
       identity: input.local ? envBridgeIdentity() : undefined,
     },
   });
+}
+
+/**
+ * A fresh one-time code for a local env whose machine has not enrolled (M3).
+ * Same identity primitives as the create path; the store's compare-and-set on
+ * `enrolledAt IS NULL AND revokedAt IS NULL` is what makes it safe.
+ */
+export async function reissueEnvEnrollmentCode(input: { envId: string }): Promise<ReissueLocalEnvEnrollmentCodeResult> {
+  const store = await getDriveEnvStore();
+  return reissueLocalEnvEnrollmentCode({ envId: input.envId, deps: { store, now: () => new Date(), identity: envBridgeIdentity() } });
 }
 
 export async function enrollLocalEnv(input: { enrollmentId: string; code: unknown; machinePublicKey: unknown }): Promise<EnrollLocalDriveEnvResult> {
