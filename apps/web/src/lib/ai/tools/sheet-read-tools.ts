@@ -33,7 +33,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { isSheetType, createRegionResolver, parseRegions } from '@pagespace/lib/sheets/sheet';
 import { queryRows, listTabs, getTab } from '@pagespace/lib/sheets/store';
 import { SHEET_FILTER_OPS, SheetQueryError, type SheetWhere } from '@pagespace/lib/sheets/query';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
@@ -411,7 +411,15 @@ export const sheetReadTools = {
         // it: column formats are never denormalised onto a cell, so omitting
         // them made ONE cell render two ways depending on which branch reached
         // it — `$1,200.00` from a range read, `1200` from a filtered one.
-        const rows = result.rows.map((row) => toSheetViewRow(row.rowIndex, row.cells, undefined, tab.columnFormats));
+        // The same presentation the positional path resolves — column defaults
+        // AND region-derived formats. A filtered read that resolved fewer
+        // layers would render one cell two ways depending on how it was found,
+        // which is the divergence this module exists to remove.
+        const presentation = {
+          columnFormats: tab.columnFormats,
+          regionAt: createRegionResolver(parseRegions(tab.regions), tab.rowCount),
+        };
+        const rows = result.rows.map((row) => toSheetViewRow(row.rowIndex, row.cells, undefined, presentation));
 
         return buildResult({
           page,

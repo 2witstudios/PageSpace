@@ -1039,6 +1039,41 @@ describe('read_sheet — includeFormatting', () => {
     });
   });
 
+  it('resolves region-derived formats on the filtered path too', async () => {
+    // A filtered read is how an agent finds the rows it is about to restyle, so
+    // it must render them exactly as the positional path does. Resolving fewer
+    // presentation layers on one path renders one cell two ways depending on
+    // how it was found.
+    const regionTab = {
+      ...tab,
+      rowCount: 10,
+      regions: [{
+        id: 'r1', range: 'A1:D', headerRows: 1,
+        columns: [{ column: 'C', role: 'currency', currency: 'USD' }],
+      }],
+    };
+    mockListTabs.mockResolvedValue([regionTab]);
+    mockGetTab.mockResolvedValue(regionTab);
+    mockQueryRows.mockResolvedValue({
+      rows: [{ rowIndex: 1, cells: { C: { raw: '1200', value: 1200 } } }],
+      total: 1,
+      hasMore: false,
+    });
+
+    const result = await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'C', op: 'gt', value: 100 }] },
+    });
+    const row = (result.rows as { cells: Record<string, string>; unformatted?: Record<string, unknown> }[])[0];
+
+    assert({
+      given: 'a region-formatted column found by a filter',
+      should: 'display it as the grid does and keep the number recoverable',
+      actual: { display: row.cells.C, unformatted: row.unformatted },
+      expected: { display: '$1,200.00', unformatted: { C: 1200 } },
+    });
+  });
+
   it('advertises includeFormatting so an agent can discover it', async () => {
     expect(sheetReadTools.read_sheet.description ?? '').toContain('includeFormatting');
     expect(

@@ -29,16 +29,19 @@ import {
   resolveCellFormat,
   isSheetDocString,
   decodeCellAddress,
+  decodeColumnLabel,
   encodeColumnLabel,
   evaluateSheetSparse,
   parseSheetContentSafe,
   sheetDataFromSheetDoc,
+  createRegionResolver,
   parseConditionalRules,
   parseRegions,
   type SheetData,
   type ConditionalCondition,
   type ConditionalOperator,
   type ConditionalRule,
+  type RegionResolver,
   type SheetRegion,
 } from '@pagespace/lib/sheets/sheet';
 
@@ -120,6 +123,49 @@ export interface SheetTabSummary {
   name: string;
   rowCount: number;
   columnCount: number;
+}
+
+/**
+ * The region-derived format at one cell, or `undefined` where no region covers
+ * it — and also where the column key is not a column label at all.
+ *
+ * `cells` is jsonb: a hand-edited or externally-imported row can carry a key
+ * like `C0` that `decodeColumnLabel` refuses. Letting that throw would make one
+ * junk key fail the whole read, which is the failure this module exists to
+ * remove and which the document path's address walk already guards against.
+ * A cell whose column cannot be located simply gets no region format.
+ */
+function regionFormatAt(
+  presentation: CellPresentation | undefined,
+  label: string,
+  rowIndex: number,
+): CellFormat | undefined {
+  if (!presentation?.regionAt) return undefined;
+  try {
+    return presentation.regionAt(rowIndex, decodeColumnLabel(label));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The presentation layers a stored cell is rendered against.
+ *
+ * Both are cheap and derived from the tab the caller already has: the column
+ * defaults are a map lookup, and `regionAt` is the closure
+ * `createRegionResolver` prepares once per window so a per-cell resolve is a
+ * bounds test and at most three spreads.
+ *
+ * Conditional formatting is deliberately NOT here. A rule's format depends on
+ * the value of cells the window may not hold, and on evaluating its formula
+ * against the whole sheet — which a bounded read cannot do without becoming
+ * O(sheet). The document path picks it up for free (the evaluator has already
+ * run there); the row-store path does not, and that asymmetry predates this
+ * change rather than arriving with it.
+ */
+export interface CellPresentation {
+  columnFormats?: Record<string, CellFormat> | null;
+  regionAt?: RegionResolver;
 }
 
 /** One row of a sheet, projected for a model. */
@@ -231,7 +277,7 @@ export function columnsInRows(rows: readonly SheetViewRow[]): string[] {
  * user sees on screen — or filtering on a value it read pre-migration — gets no
  * matches from that.
  */
-function cellText(cell: StoredCell, columnFormat?: CellFormat): string {
+function cellText(cell: StoredCell, columnFormat?: CellFormat, regionFormat?: CellFormat): string {
   if (cell.error) return '#ERROR';
   // `undefined` means never materialised; `''` means it materialised AS blank.
   // Conflating them rendered `=IF(A2>0,"ok","")` as its own source text where
@@ -248,7 +294,15 @@ function cellText(cell: StoredCell, columnFormat?: CellFormat): string {
     // still diverged for the common case — a column formatted as currency read
     // `$1,200.00` from the document path and the UI, and `1200` from the row
     // store. Same precedence the evaluator uses: cell overrides column.
-    const format = resolveCellFormat(cell.format, columnFormat);
+    // All three layers, in the evaluator's own precedence: column default under
+    // region-derived under the cell's own format. Resolving only two of them
+    // was the row store's remaining divergence — a column declared `currency`
+    // by a REGION renders `$1,200.00` in the grid and read back as `1200` here,
+    // so an agent that had just declared the region saw none of it and could
+    // not tell its own formatting had applied. Region-derived presentation is
+    // the mechanism this epic makes primary, so a read that ignores it is
+    // reading a different sheet than the one on screen.
+    const format = resolveCellFormat(cell.format, columnFormat, regionFormat);
     const formatted = applyNumberFormat(cell.value, format?.number);
     return formatted !== null ? formatted : formatDisplayValue(cell.value);
   }
@@ -276,8 +330,15 @@ export function toSheetViewRow(
    * a bigger response that merely looks smaller.
    */
   only?: ReadonlySet<string>,
-  /** Per-column defaults from the tab, applied under each cell's own format. */
-  columnFormats?: Record<string, CellFormat> | null,
+  /**
+   * The presentation layers that sit UNDER a cell's own format.
+   *
+   * One object rather than a parameter each: they are resolved together, in a
+   * fixed precedence, and a caller that supplies one and forgets the other
+   * renders the cell differently from every other surface — which is the
+   * failure this module exists to remove.
+   */
+  presentation?: CellPresentation,
 ): SheetViewRow {
   const values: Record<string, string> = {};
   const formulas: Record<string, string> = {};
@@ -288,7 +349,7 @@ export function toSheetViewRow(
     if (only && !only.has(label)) continue;
     const cell = cells[label];
     if (!cell) continue;
-    const text = cellText(cell, columnFormats?.[label]);
+    const text = cellText(cell, presentation?.columnFormats?.[label], regionFormatAt(presentation, label, rowIndex));
     // An empty cell is absent, not blank: a 500x16 sheet is mostly empty, and
     // emitting every empty cell would put the payload straight back where it was.
     if (text === '' && !cell.error && !(cell.raw ?? '').startsWith('=')) continue;
@@ -546,6 +607,20 @@ function documentCellFormats(
   if (!formats) return [];
 
   const wanted = new Set(rowIndexes);
+  // A format-only row is a real shape and a legacy sheet's most likely one: a
+  // blank input row someone pre-styled. `windowed` is built from `sheet.cells`,
+  // so such a row is not in it — while `rowsFromSheetData` materialises the
+  // UNION of cells and formats, which means the same read reports that styling
+  // after migration and dropped it before. Silently losing formatting across a
+  // migration is exactly the drift this module exists to remove.
+  //
+  // Bounded by the window's SPAN rather than admitted from anywhere in the
+  // document: a styled row between the first and last row returned is inside
+  // what the reader is looking at, while one a thousand rows further down is
+  // not, and letting those in would spend the budget on rows the agent cannot
+  // see. An empty window spans nothing and admits nothing.
+  const spanStart = rowIndexes.length > 0 ? rowIndexes[0] : -1;
+  const spanEnd = rowIndexes.length > 0 ? rowIndexes[rowIndexes.length - 1] : -2;
   const entries: { row: number; label: string; address: string; format: CellFormat }[] = [];
 
   for (const [address, format] of Object.entries(formats)) {
@@ -558,7 +633,7 @@ function documentCellFormats(
     } catch {
       continue;
     }
-    if (!wanted.has(decoded.row)) continue;
+    if (!wanted.has(decoded.row) && !(decoded.row >= spanStart && decoded.row <= spanEnd)) continue;
     const label = encodeColumnLabel(decoded.column);
     if (only && !only.has(label)) continue;
     // Re-encoded from the decoded position rather than passed through, so this
@@ -646,7 +721,14 @@ export async function loadSheetWindow(
   }
 
   const stored = await readRows(tab.id, { fromRow, limit });
-  const rows = stored.map((row) => toSheetViewRow(row.rowIndex, row.cells, only, tab.columnFormats));
+  // Prepared once for the whole window, not per cell: `createRegionResolver`
+  // resolves every region's bounds, column roles and theme up front so the
+  // closure it returns costs a bounds test per cell.
+  const presentation: CellPresentation = {
+    columnFormats: tab.columnFormats,
+    regionAt: createRegionResolver(parseRegions(tab.regions), tab.rowCount),
+  };
+  const rows = stored.map((row) => toSheetViewRow(row.rowIndex, row.cells, only, presentation));
   const nextFromRow = stored.length > 0 ? stored[stored.length - 1].rowIndex + 1 : null;
 
   return {

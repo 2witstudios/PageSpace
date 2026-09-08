@@ -328,6 +328,75 @@ describe('the two paths render one cell one way', () => {
   });
 });
 
+describe('a region-derived format is part of what a cell reads as', () => {
+  // The row store keeps only the EXPLICIT cell format; a column declared
+  // `currency` by a region is presentation the evaluator derives. Resolving
+  // just cell-over-column therefore rendered `1200` here while the grid, the
+  // export and the published page all showed `$1,200.00` — so an agent that had
+  // just declared the region read the sheet back and saw no sign its formatting
+  // had applied. Region-derived presentation is the mechanism this epic makes
+  // primary; a read that ignores it is reading a different sheet.
+  const regionTab = {
+    ...tab,
+    rowCount: 10,
+    columnCount: 4,
+    regions: [{
+      id: 'r1', range: 'A1:D', headerRows: 1,
+      columns: [{ column: 'C', role: 'currency', currency: 'USD' }],
+    }],
+  };
+
+  beforeEach(() => {
+    mockListTabs.mockResolvedValue([regionTab]);
+    mockGetTab.mockResolvedValue(regionTab);
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'Item', value: 'Item' }, C: { raw: 'Cost', value: 'Cost' } } },
+      { rowIndex: 1, cells: { A: { raw: 'Rent', value: 'Rent' }, C: { raw: '1200', value: 1200 } } },
+    ]);
+  });
+
+  it('renders a region-formatted column the way the grid does', async () => {
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    assert({
+      given: 'a column a region declares as currency, with no cell or column format',
+      should: 'display it as currency and keep the header label untouched',
+      actual: { header: window.rows[0].cells.C, data: window.rows[1].cells.C },
+      expected: { header: 'Cost', data: '$1,200.00' },
+    });
+  });
+
+  it('does not fail the whole read on a column key that is not a column label', async () => {
+    // `cells` is jsonb. A hand-edited or externally-imported row can carry a key
+    // like `C0`, which `decodeColumnLabel` refuses — and locating the region
+    // needs that decode. Letting it throw would make one junk key fail the
+    // entire read, which is the failure this module exists to remove and which
+    // the document path's address walk already guards against.
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 1, cells: { C: { raw: '1200', value: 1200 }, C0: { raw: 'junk', value: 'junk' } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    assert({
+      given: 'a junk column key beside a region-formatted one',
+      should: 'read both — the junk one simply gets no region format',
+      actual: window.rows[0].cells,
+      expected: { C: '$1,200.00', C0: 'junk' },
+    });
+  });
+
+  it('still hands back the number underneath it', async () => {
+    // The whole point of resolving the layer: having made the display richer,
+    // the machine value has to stay recoverable or the read is lossy again.
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    expect(window.rows[1].unformatted).toEqual({ C: 1200 });
+    // The header cell is a label, not data — no number format, nothing to recover.
+    expect(window.rows[0].unformatted).toBeUndefined();
+  });
+});
+
 describe('the document path re-derives exactly what the evaluator displayed', () => {
   /**
    * The document path no longer stores `evaluated.display` — it stores the
@@ -1114,6 +1183,70 @@ describe('loadSheetWindow describes formatting only when asked', () => {
       expected: { A1: { bold: true } },
     });
     // Guard the guard: the window really did stop short of row 5.
+    expect(window.rows.map((row) => row.rowNumber)).toEqual([1, 2]);
+  });
+
+  it('keeps a format-only row that the document styled but never filled', async () => {
+    // The likeliest shape on a legacy sheet: a blank input row someone
+    // pre-styled. `windowed` comes from `sheet.cells`, so that row is not in it
+    // — while `rowsFromSheetData` materialises the UNION of cells and formats,
+    // which means the same read reports the styling after migration and dropped
+    // it before. Losing formatting across a migration is the drift this module
+    // exists to remove.
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', {
+      limit: 10,
+      includeFormatting: true,
+      documentContent: serializeSheetContent(
+        {
+          version: 1,
+          rowCount: 4,
+          columnCount: 2,
+          cells: { A1: 'Item', A3: 'Rent' },
+          // A2 carries a format and no value at all.
+          formats: { A1: { bold: true }, A2: { background: '#eef2ff' } },
+        },
+        { pageId: 'page-1' },
+      ),
+    });
+
+    assert({
+      given: 'a styled blank row between two rows that have values',
+      should: 'report its formatting alongside theirs',
+      actual: window.formatting?.cellFormats,
+      expected: { A1: { bold: true }, A2: { background: '#eef2ff' } },
+    });
+    // The row itself still does not appear — it holds nothing to show. Pinning
+    // that so the next reader knows the formatting entry is deliberate and not
+    // a row that went missing.
+    expect(window.rows.map((row) => row.rowNumber)).toEqual([1, 3]);
+  });
+
+  it('does not admit a styled row from outside the window it returned', async () => {
+    // The span rule, in the direction that bounds the cost: a legacy sheet
+    // styled a thousand rows down must not spend this window's budget.
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', {
+      limit: 2,
+      includeFormatting: true,
+      documentContent: serializeSheetContent(
+        {
+          version: 1,
+          rowCount: 60,
+          columnCount: 2,
+          cells: { A1: 'one', A2: 'two', A50: 'far' },
+          formats: { A1: { bold: true }, A9: { italic: true }, A40: { strike: true } },
+        },
+        { pageId: 'page-1' },
+      ),
+    });
+
+    assert({
+      given: 'styled rows past the last row returned',
+      should: 'report only the ones the window spans',
+      actual: window.formatting?.cellFormats,
+      expected: { A1: { bold: true } },
+    });
     expect(window.rows.map((row) => row.rowNumber)).toEqual([1, 2]);
   });
 
