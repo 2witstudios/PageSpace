@@ -33,7 +33,7 @@ vi.mock('@pagespace/lib/sheets/store', () => ({
 }));
 
 import { serializeSheetContent } from '@pagespace/lib/sheets/io';
-import type { ConditionalRule } from '@pagespace/lib/sheets/sheet';
+import { evaluateSheetSparse, type ConditionalRule, type SheetData } from '@pagespace/lib/sheets/sheet';
 import { describeRule } from '@/components/layout/middle-content/page-views/sheet/core/rule-presets';
 import {
   SheetDocumentUnreadableError,
@@ -325,6 +325,113 @@ describe('the two paths render one cell one way', () => {
     });
     // Guard the guard again: an all-undefined comparison would pass vacuously.
     expect(fromDocument.rows[0].unformatted).toEqual({ B: 1200 });
+  });
+});
+
+describe('the document path re-derives exactly what the evaluator displayed', () => {
+  /**
+   * The document path no longer stores `evaluated.display` — it stores the
+   * machine value and the format the evaluator applied, and `cellText` derives
+   * the text again. That is only safe if the derivation is EQUIVALENT, so this
+   * asserts it against the evaluator itself rather than against a string
+   * somebody typed: any branch where `display` is produced differently from
+   * `applyNumberFormat(value, format.number) ?? formatDisplayValue(value)`
+   * shows up here as a mismatch.
+   *
+   * Conditional rules are the branch worth pinning. `applyConditionalFormats`
+   * rewrites BOTH `format` and `display` after the fact, so a rule carrying its
+   * own number format is the case where the two could most easily part company.
+   */
+  const cases: Array<[string, SheetData]> = [
+    ['a plain string, a number and a formula', {
+      version: 1, rowCount: 3, columnCount: 3,
+      cells: { A1: 'label', B1: '1200', C1: '=B1/4', C2: '0.30000000000000004' },
+    }],
+    ['a column format over a formula result', {
+      version: 1, rowCount: 2, columnCount: 3,
+      cells: { A1: 'x', B1: '1200', C1: '=B1*2' },
+      columnFormats: { B: { number: { kind: 'currency', currency: 'USD', decimals: 2 } }, C: { number: { kind: 'percent', decimals: 1 } } },
+    }],
+    ['a per-cell format beating the column default', {
+      version: 1, rowCount: 2, columnCount: 2,
+      cells: { A1: '1200', A2: '3.7' },
+      columnFormats: { A: { number: { kind: 'currency', currency: 'USD' } } },
+      formats: { A2: { number: { kind: 'plain' } } },
+    }],
+    ['a conditional rule carrying its own number format', {
+      version: 1, rowCount: 2, columnCount: 2,
+      cells: { A1: '0.85', A2: '0.1' },
+      columnFormats: { A: { number: { kind: 'currency', currency: 'USD', decimals: 2 } } },
+      conditionalFormats: [{
+        id: 'r', kind: 'cell', ranges: ['A1:A2'],
+        condition: { operator: 'greaterThan', value: '0.5' },
+        format: { background: '#dcfce7', number: { kind: 'percent', decimals: 0 } },
+      }],
+    }],
+    ['an errored cell and an empty one', {
+      version: 1, rowCount: 3, columnCount: 2,
+      cells: { A1: '=1/0', A2: '', A3: '=NOPE(1)' },
+      columnFormats: { A: { number: { kind: 'currency', currency: 'USD' } } },
+    }],
+  ];
+
+  it('is not comparing two nothings — the conditional rule really does beat the column format', async () => {
+    // Every case above compares the window against the evaluator, which agrees
+    // trivially if the fixture exercises nothing. This pins the one that is
+    // hardest to get right: a rule's own number format overriding the column's
+    // currency, on the cell it matched and not on the cell it did not.
+    mockListTabs.mockResolvedValue([]);
+    const sheet = cases[3][1];
+    const window = await loadSheetWindow('page-1', {
+      limit: 10,
+      documentContent: serializeSheetContent(sheet, { pageId: 'page-1' }),
+    });
+
+    assert({
+      given: 'a percent rule matching A1 but not A2, over a currency column',
+      should: 'render A1 as the rule says and A2 as the column says',
+      actual: { A1: window.rows[0].cells.A, A2: window.rows[1].cells.A },
+      expected: { A1: '85%', A2: '$0.10' },
+    });
+    // And the machine value is recoverable from both, which is the point.
+    assert({
+      given: 'both cells displayed through a number format',
+      should: 'carry the underlying numbers',
+      actual: [window.rows[0].unformatted, window.rows[1].unformatted],
+      expected: [{ A: 0.85 }, { A: 0.1 }],
+    });
+  });
+
+  it.each(cases)('agrees with evaluateSheetSparse on %s', async (_label, sheet) => {
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', {
+      limit: 50,
+      documentContent: serializeSheetContent(sheet, { pageId: 'page-1' }),
+    });
+
+    const evaluation = evaluateSheetSparse(sheet, { pageId: 'page-1' });
+
+    const fromWindow: Record<string, string> = {};
+    for (const row of window.rows) {
+      for (const [column, text] of Object.entries(row.cells)) fromWindow[`${column}${row.rowNumber}`] = text;
+    }
+
+    // The evaluator's own answer for every address the window reported, through
+    // the same `#ERROR` substitution every surface applies.
+    const fromEvaluator: Record<string, string> = {};
+    for (const address of Object.keys(fromWindow)) {
+      const cell = evaluation.byAddress[address];
+      fromEvaluator[address] = cell ? (cell.error ? '#ERROR' : cell.display) : '';
+    }
+
+    assert({
+      given: 'a stored document read through the window',
+      should: 'display every cell exactly as the evaluator displayed it',
+      actual: fromWindow,
+      expected: fromEvaluator,
+    });
+    // Guard the guard: a window that reported nothing would pass vacuously.
+    expect(Object.keys(fromWindow).length).toBeGreaterThan(0);
   });
 });
 
