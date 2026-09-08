@@ -318,7 +318,13 @@ export interface SheetViewRow {
    * one-way trip.
    *
    * Emitted only on divergence, so an unformatted sheet pays nothing for it and
-   * a formatted one recovers exactly the cells that need recovering. A column
+   * a formatted one recovers exactly the cells that need recovering. The cost
+   * where it applies is real and worth knowing rather than discovering:
+   * measured at +52% on the structured rows of a 500x8 window whose numeric
+   * columns are all currency-formatted, and 0% on the same window unformatted.
+   * That is the deliberate trade — the alternative is a read an agent has to
+   * parse `$1,200.00` back out of, which is what this replaces — and `select`
+   * is the lever when a caller wants the columns without the duplication. A column
    * letter absent here means `cells[label]` is already the value — with one
    * exception worth stating precisely, because a contract that is *nearly* true
    * is the kind an agent gets caught by: a cell that was never materialised has
