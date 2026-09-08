@@ -100,16 +100,27 @@ export function useAuth(): {
         clearSessionCache();
       }
 
-      // iOS: Clear session from Keychain
+      // Native shells: clear the secure-storage session through the platform
+      // adapter. Asking the capability, not the platform, is what makes this
+      // cover Android — which writes to the same `PageSpaceKeychain` under the
+      // same key as iOS, so an iOS-only branch would leave a revoked session on
+      // the device for `fetchWithAuth` to keep presenting until a 401.
+      //
+      // The capability lookup is inside the try, not before it: this runs in
+      // logout's `finally`, so anything that escapes here skips the rest of the
+      // cleanup — the localStorage token, the store reset, the redirect to
+      // sign-in. A dynamic import can reject on its own (a chunk that will not
+      // load), and no failure to *read* a capability is worth stranding a user
+      // in a half-logged-out shell.
       if (typeof window !== 'undefined') {
-        const { isCapacitorApp, getPlatform } = await import('@/lib/capacitor-bridge');
-        if (isCapacitorApp() && getPlatform() === 'ios') {
-          try {
-            const { clearStoredSession } = await import('@/lib/ios-google-auth');
-            await clearStoredSession();
-          } catch (err) {
-            console.error('Failed to clear iOS Keychain session', err);
+        try {
+          const { hasNativeCapability } = await import('@/lib/capacitor-bridge');
+          if (hasNativeCapability('secureStore')) {
+            const { getPlatformStorage } = await import('@/lib/auth/platform-storage');
+            await getPlatformStorage().clearSession();
           }
+        } catch (err) {
+          console.error('Failed to clear native secure-storage session', err);
         }
       }
 
