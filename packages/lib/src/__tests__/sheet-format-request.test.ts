@@ -10,6 +10,7 @@ import {
   SheetDuplicateRuleError,
   SheetFormatError,
   conditionalRuleContentKey,
+  regionContentKey,
   planFormatOps,
   type SheetFormatOp,
   type SheetFormatPlan,
@@ -749,6 +750,25 @@ describe('planFormatOps — conditional rules', () => {
     expect(result.conditionalFormats.map((entry) => entry.id)).toEqual(['b', 'a']);
     expect(result.touchesTabFields).toBe(true);
     expect(plan([{ type: 'setConditionalRules', rules: [] }], tab).conditionalFormats).toEqual([]);
+  });
+
+  it('setConditionalRules refuses a non-array and a list over the limit', () => {
+    expect(refusalOf([{ type: 'setConditionalRules', rules: 'nope' } as never])).toContain('rules must be an array');
+    // A non-object entry is validated as an empty rule and refused by name.
+    expect(() => plan([{ type: 'setConditionalRules', rules: ['nope'] }])).toThrow(SheetFormatError);
+    const tooMany = Array.from({ length: MAX_CONDITIONAL_RULES + 1 }, (_, i) => rule(`cf_${i}`, String(i)));
+    expect(refusalOf([{ type: 'setConditionalRules', rules: tooMany }])).toContain(
+      `at most ${MAX_CONDITIONAL_RULES} rules; got ${MAX_CONDITIONAL_RULES + 1}`
+    );
+  });
+
+  it('regionContentKey identifies a region by everything but its id', () => {
+    // The tool reuses an existing region's id when a new declaration
+    // matches it by content, and derives a stable id from the same key.
+    const base = region('r1');
+    expect(regionContentKey({ ...base, id: 'other' })).toBe(regionContentKey(base));
+    expect(regionContentKey({ ...base, name: undefined })).toBe(regionContentKey(base));
+    expect(regionContentKey({ ...base, theme: 'red' })).not.toBe(regionContentKey(base));
   });
 
   it('setConditionalRules refuses a duplicate id or duplicate content within the list', () => {
