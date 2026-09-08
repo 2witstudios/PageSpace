@@ -1631,6 +1631,8 @@ describe('sheet store (integration)', () => {
         expect(result.tabFieldsChanged.sort()).toEqual(
           ['columnWidths', 'conditionalFormats', 'frozenRows', 'regions'].sort()
         );
+        expect(result.regionIdsAdded).toEqual([REGION.id]);
+        expect(result.regionIdsRemoved).toEqual([]);
         expect(await audit.count()).toBe(1);
       } finally {
         await audit.drop();

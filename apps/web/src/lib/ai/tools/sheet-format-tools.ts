@@ -91,7 +91,6 @@ import {
   MIN_ROW_HEIGHT,
   PALETTE,
   RANGE_OPERATORS,
-  SheetDuplicateRuleError,
   SheetFormatError,
   VALUELESS_OPERATORS,
   conditionalRuleContentKey,
@@ -861,8 +860,19 @@ function validateRegions(
       refuse(INVALID_FORMAT_REQUEST, `${label} declares the same region as ${earlier}.`, NOTHING_APPLIED);
     }
     declaredByContent.set(key, label);
+    const existingTwin = existingByContent.get(key);
     if (input.id === undefined) {
-      region.id = existingByContent.get(key) ?? contentId('region', region, taken);
+      region.id = existingTwin ?? contentId('region', region, taken);
+    } else if (existingTwin !== undefined && existingTwin !== input.id) {
+      // An explicit id that is NOT the existing region's, over identical
+      // content: a stale or invented id. Upserting it would land an
+      // overlapping twin under a second id.
+      refuse(
+        INVALID_FORMAT_REQUEST,
+        `${label}: a region with exactly this content already exists as "${existingTwin}". Pass that id to ` +
+          'restyle it, omit the id, or change the region.',
+        NOTHING_APPLIED
+      );
     }
     taken.add(region.id);
 
@@ -1264,6 +1274,8 @@ async function applyPlanned(
     return result;
   }
 
+  // What the write DID, from under the lock — not what the caller planned
+  // from its snapshot. The workflow trigger reads this.
   await logSheetCellActivity({
     pageId: page.id,
     driveId: page.driveId,
@@ -1273,7 +1285,17 @@ async function applyPlanned(
     actorDisplayName: mutationContext.actorDisplayName,
     changeGroupId: mutationContext.changeGroupId,
     isAiGenerated: true,
-    metadata: { source: 'ai-tool', tool: toolName, ...metadata },
+    metadata: {
+      source: 'ai-tool',
+      tool: toolName,
+      ...metadata,
+      cellsFormatted: result.cellsFormatted,
+      tabFieldsChanged: result.tabFieldsChanged,
+      rulesAdded: result.ruleIdsAdded.length,
+      rulesRemoved: result.ruleIdsRemoved.length,
+      regionsAdded: result.regionIdsAdded.length,
+      regionsRemoved: result.regionIdsRemoved.length,
+    },
   });
 
   await broadcastPageEvent(createPageEventPayload(page.driveId, page.id, 'content-updated', { title: page.title }));
@@ -1375,7 +1397,7 @@ export const sheetFormatTools = {
           page,
           'format_sheet',
           INVALID_FORMAT_REQUEST,
-          { regions: declared.regions.length, ops: ops?.length ?? 0, regionMode: regionMode ?? 'merge' }
+          { regionsDeclared: declared.regions.length, ops: ops?.length ?? 0, regionMode: regionMode ?? 'merge' }
         );
         if (isRefusal(outcome)) return outcome;
 
@@ -1388,6 +1410,9 @@ export const sheetFormatTools = {
           regionsApplied: declared.regions.length,
           regionMode: regionMode ?? 'merge',
           regionIds,
+          // From under the lock: what a replaceAll actually removed.
+          regionIdsAdded: outcome.regionIdsAdded,
+          removedRegionIds: outcome.regionIdsRemoved,
           opsApplied: ops?.length ?? 0,
           cellsFormatted: outcome.cellsFormatted,
           tabFieldsChanged: outcome.tabFieldsChanged,
@@ -1402,7 +1427,7 @@ export const sheetFormatTools = {
               ? `"${page.title}" already had this formatting; nothing changed. `
               : '') +
             `Formatted "${page.title}": ${declared.regions.length} region(s) declared` +
-            (regionMode === 'replaceAll' ? ' (every other region on the tab removed)' : '') +
+            (outcome.regionIdsRemoved.length > 0 ? ` (${outcome.regionIdsRemoved.length} other region(s) removed)` : '') +
             `, ${ops?.length ?? 0} op(s) applied` +
             (outcome.cellsFormatted > 0 ? `, ${outcome.cellsFormatted} cell(s) restyled` : '') +
             '.',
@@ -1493,7 +1518,6 @@ export const sheetFormatTools = {
           const final: ConditionalRule[] = [];
           const ruleIds: string[] = [];
           const skippedDuplicates: { index: number; existingRuleId: string }[] = [];
-          let addedCount = 0;
           for (const [index, entry] of built.entries()) {
             const key = contentKey(entry.rule);
             const earlier = seen.get(key);
@@ -1509,7 +1533,6 @@ export const sheetFormatTools = {
             const id = existingId ?? ruleContentId(key, takenIds);
             takenIds.add(id);
             if (existingId !== undefined) skippedDuplicates.push({ index, existingRuleId: existingId });
-            else addedCount += 1;
             ruleIds.push(id);
             final.push({ ...entry.rule, id } as ConditionalRule);
           }
@@ -1523,7 +1546,7 @@ export const sheetFormatTools = {
             page,
             'set_conditional_format',
             INVALID_RULE_REQUEST,
-            { mode, rulesAdded: addedCount, rulesRemoved: existing.length - skippedDuplicates.length }
+            { mode }
           );
           if (isRefusal(outcome)) return outcome;
           // Counts from what the store found under its lock, not from the
@@ -1652,7 +1675,7 @@ export const sheetFormatTools = {
             page,
             'set_conditional_format',
             INVALID_RULE_REQUEST,
-            { mode, rulesAdded: toAdd.length, rulesRemoved: existing.length - remaining.length },
+            { mode },
             'throw'
           );
         } catch (cause) {

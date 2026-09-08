@@ -1076,6 +1076,9 @@ export interface ApplyFormatOpsResult {
    */
   ruleIdsAdded: string[];
   ruleIdsRemoved: string[];
+  /** Region ids the write added and removed, computed the same way. */
+  regionIdsAdded: string[];
+  regionIdsRemoved: string[];
   /** Regions on the tab after the write. */
   regions: number;
   rowCount: number;
@@ -1191,6 +1194,8 @@ export async function applyFormatOps(
         ruleIdsAdded: [],
         ruleIdsRemoved: [],
         regions: preview.regions.length,
+        regionIdsAdded: [],
+        regionIdsRemoved: [],
         rowCount: tab.rowCount,
         columnCount: tab.columnCount,
         recomputed: [],
@@ -1251,6 +1256,8 @@ export async function applyFormatOps(
     const plan = planFormatOps(ops, lockedTarget);
     const ruleIdsBefore = new Set((lockedTarget.conditionalFormats ?? []).map((rule) => rule.id));
     const ruleIdsAfter = new Set(plan.conditionalFormats.map((rule) => rule.id));
+    const regionIdsBefore = new Set((lockedTarget.regions ?? []).map((region) => region.id));
+    const regionIdsAfter = new Set(plan.regions.map((region) => region.id));
 
     // Growth is re-derived from the locked extent, and only if the snapshot
     // said so: if it did not, no tab lock is held and the recompute seeds were
@@ -1406,6 +1413,8 @@ export async function applyFormatOps(
       ruleIdsAdded: [...ruleIdsAfter].filter((id) => !ruleIdsBefore.has(id)),
       ruleIdsRemoved: [...ruleIdsBefore].filter((id) => !ruleIdsAfter.has(id)),
       regions: plan.regions.length,
+      regionIdsAdded: [...regionIdsAfter].filter((id) => !regionIdsBefore.has(id)),
+      regionIdsRemoved: [...regionIdsBefore].filter((id) => !regionIdsAfter.has(id)),
       rowCount: extent.rowCount,
       columnCount: extent.columnCount,
       recomputed,

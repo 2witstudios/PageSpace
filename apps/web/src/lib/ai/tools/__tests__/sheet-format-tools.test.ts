@@ -65,8 +65,10 @@ const mockApplyFormatOps = vi.fn(async (_ref: unknown, ops: readonly SheetFormat
   // would store differs from what it holds, compared as JSON.
   const tabBefore = JSON.stringify([state.conditionalFormats, state.regions, state.frozenRows, state.frozenColumns]);
   const ruleIdsBefore = new Set(state.conditionalFormats.map((rule) => rule.id));
+  const regionIdsBefore = new Set(state.regions.map((region) => region.id));
   state = { ...state, conditionalFormats: [...plan.conditionalFormats], regions: [...plan.regions] };
   const ruleIdsAfter = new Set(state.conditionalFormats.map((rule) => rule.id));
+  const regionIdsAfter = new Set(state.regions.map((region) => region.id));
   for (const step of plan.steps) {
     if (step.type === 'setFrozen') {
       state.frozenRows = step.rows ?? null;
@@ -81,6 +83,8 @@ const mockApplyFormatOps = vi.fn(async (_ref: unknown, ops: readonly SheetFormat
     tabFieldsChanged: tabChanged ? ['tab'] : [],
     ruleIdsAdded: [...ruleIdsAfter].filter((id) => !ruleIdsBefore.has(id)),
     ruleIdsRemoved: [...ruleIdsBefore].filter((id) => !ruleIdsAfter.has(id)),
+    regionIdsAdded: [...regionIdsAfter].filter((id) => !regionIdsBefore.has(id)),
+    regionIdsRemoved: [...regionIdsBefore].filter((id) => !regionIdsAfter.has(id)),
     conditionalRules: plan.conditionalFormats.length,
     regions: plan.regions.length,
     rowCount: state.rowCount,
@@ -700,6 +704,8 @@ describe('set_conditional_format', () => {
       ruleIdsAdded: [],
       ruleIdsRemoved: [],
       regions: 0,
+      regionIdsAdded: [],
+      regionIdsRemoved: [],
       rowCount: 500,
       columnCount: 16,
       recomputed: [],
@@ -722,10 +728,16 @@ describe('set_conditional_format', () => {
     // Mirrors the rule case below. The nothing-given guard used to fire
     // first, so the documented "keep only these" could not express "none".
     state.regions = [{ id: 'orders', range: 'A1:D', headerRows: 1 } as SheetRegion];
-    const result = await format({ regionMode: 'replaceAll', regions: [] });
+    const result = (await format({ regionMode: 'replaceAll', regions: [] })) as Result & { removedRegionIds?: string[] };
     assert({ given: 'replaceAll with nothing', should: 'accept', actual: result.success, expected: true });
     assert({ given: 'the tab after', should: 'hold no regions', actual: state.regions.length, expected: 0 });
-    expect(message(result)).toContain('every other region on the tab removed');
+    assert({ given: 'the result', should: 'name the region the store removed', actual: result.removedRegionIds, expected: ['orders'] });
+    expect(message(result)).toContain('1 other region(s) removed');
+    // Restyling the only region under its own id removes nothing, and says so.
+    state.regions = [{ id: 'orders', range: 'A1:D', headerRows: 1 } as SheetRegion];
+    const restyled = (await format({ regionMode: 'replaceAll', regions: [{ id: 'orders', range: 'A1:D', headerRows: 1, theme: 'blue' }] })) as Result & { removedRegionIds?: string[] };
+    assert({ given: 'a replaceAll that restyles the sole region', should: 'remove nothing', actual: restyled.removedRegionIds, expected: [] });
+    expect(message(restyled)).not.toContain('removed');
     const bare = await format({});
     assert({ given: 'no regions, no ops, no mode', should: 'still refuse', actual: bare.success, expected: false });
   });
@@ -832,6 +844,9 @@ describe('set_conditional_format', () => {
     const result = (await conditional({ mode: 'replaceAll', rules: [a] })) as { removed?: number; removedRuleIds?: string[] };
     assert({ given: 'a rule added between read and write', should: 'be counted as removed', actual: result.removed, expected: 1 });
     assert({ given: 'a rule added between read and write', should: 'be named as removed', actual: result.removedRuleIds, expected: ['concurrent'] });
+    // The activity entry (what the workflow trigger sees) carries the locked delta too.
+    const activity = vi.mocked(logSheetCellActivity).mock.calls.at(-1)?.[0] as { metadata?: Record<string, unknown> } | undefined;
+    expect(activity?.metadata).toMatchObject({ tool: 'set_conditional_format', rulesRemoved: 1, rulesAdded: 1 });
   });
 
   it('replaceAll refuses the same rule twice in one call', async () => {
@@ -839,6 +854,15 @@ describe('set_conditional_format', () => {
     const result = await conditional({ mode: 'replaceAll', rules: [a, { ...a }] });
     assert({ given: 'a duplicated rule', should: 'refuse', actual: result.success, expected: false });
     expect(message(result)).toContain('rules[1] is identical to rules[0]');
+  });
+
+  it('an explicit id that is not the existing twin\'s id is refused, not landed beside it', async () => {
+    state.regions = [{ id: 'orders', range: 'A1:D', headerRows: 1, name: 'Orders' } as SheetRegion];
+    const result = await format({ regions: [{ id: 'invented', range: 'A1:D', headerRows: 1, name: 'Orders' }] });
+    assert({ given: 'identical content under a different explicit id', should: 'refuse', actual: result.success, expected: false });
+    expect(message(result)).toContain('already exists as "orders"');
+    const restyle = await format({ regions: [{ id: 'orders', range: 'A1:D', headerRows: 1, name: 'Orders' }] });
+    assert({ given: 'the existing id itself', should: 'still be accepted', actual: restyle.success, expected: true });
   });
 
   it('a same-call duplicate region is refused however the ids were supplied', async () => {

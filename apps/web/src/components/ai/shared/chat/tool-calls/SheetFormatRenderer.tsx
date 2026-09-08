@@ -28,8 +28,8 @@ interface SheetFormatRendererProps {
   title?: string;
   pageId?: string;
   regions?: RegionInput[];
-  /** `replaceAll` removed every region on the tab that is not in `regions`. */
-  regionMode?: 'merge' | 'replaceAll';
+  /** From the result: region ids the store confirmed it removed under its lock (a replaceAll). */
+  removedRegionIds?: string[];
   ops?: FormatOpInput[];
   rules?: RuleInput[];
   /** From the result: rule ids the store confirmed it removed under its lock. */
@@ -158,7 +158,7 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
   title = 'Sheet',
   pageId,
   regions = NONE,
-  regionMode,
+  removedRegionIds = NONE,
   ops = NONE,
   rules = NONE,
   removedRuleIds = NONE,
@@ -188,10 +188,10 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
   // rules — a real, precedence-changing change with no row to show for it.
   const reordered = ruleMode === 'replaceAll' && changed === true && added === 0 && removed === 0 && rules.length > 0;
   const addedIds = new Set(ruleIdsAdded);
-  const replacedAll = regionMode === 'replaceAll';
+  const regionsRemoved = removedRegionIds.length;
   const summary = [
     ...(regionCount > 0 ? [count(regionCount, 'region')] : []),
-    ...(replacedAll ? ['other regions removed'] : []),
+    ...(regionsRemoved > 0 ? [`${count(regionsRemoved, 'other region')} removed`] : []),
     ...(opCount > 0 ? [count(opCount, 'op')] : []),
     ...(cellsFormatted ? [count(cellsFormatted, 'cell')] : []),
     ...(added > 0 ? [`${count(added, 'rule')} added`] : []),
@@ -204,7 +204,7 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
   // A call the store reports as a no-op is shown as one, not as the list of
   // formatting it would have applied — that formatting was already there.
   const unchanged = changed === false;
-  const empty = unchanged || (regions.length === 0 && ops.length === 0 && rules.length === 0 && removedIds.length === 0 && !replacedAll);
+  const empty = unchanged || (regions.length === 0 && ops.length === 0 && rules.length === 0 && removedIds.length === 0 && regionsRemoved === 0);
 
   return (
     <div className="rounded-lg border bg-card overflow-hidden my-2 shadow-sm">
@@ -270,11 +270,13 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
                 </div>
               );
             })}
-            {replacedAll && (
+            {regionsRemoved > 0 && (
               <div className={cn(ROW, 'text-muted-foreground')} data-testid="sheet-format-regions-replaced">
                 <Table2 className="h-3.5 w-3.5 shrink-0" />
                 <span className="flex-1 min-w-0 truncate text-xs">
-                  {regions.length === 0 ? 'Every region on the tab removed' : 'Every other region on the tab removed'}
+                  {regions.length === 0
+                    ? `Every region on the tab removed (${regionsRemoved})`
+                    : `${count(regionsRemoved, 'other region')} on the tab removed`}
                 </span>
                 <span className="text-[11px] shrink-0">replaceAll</span>
               </div>

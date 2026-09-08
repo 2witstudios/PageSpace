@@ -84,23 +84,29 @@ describe('format_sheet renderer', () => {
     expect(swatches.map((s) => (s as HTMLElement).style.backgroundColor)).toEqual(['rgb(29, 78, 216)', 'rgb(51, 65, 85)']);
   });
 
-  it('shows the destructive half of a replaceAll: the regions it removed', () => {
-    // A replaceAll keeps only the regions in the call and deletes the rest.
-    // The result reports the mode; the card must say so instead of "1 region"
-    // as though nothing was taken away — and an EMPTY replaceAll is not an
-    // empty card, it is "every region removed".
+  it('shows the destructive half of a replaceAll — the regions the store confirmed it removed — and only then', () => {
+    // The result names what was removed under the lock. A replaceAll that
+    // removed nothing (restyling the sole region) must not claim otherwise,
+    // and an EMPTY replaceAll that cleared the tab is not an empty card.
     const one = render(
-      <>{renderTool('format_sheet', { regionMode: 'replaceAll', regions: [{ range: 'A1:B' }] }, { success: true, title: 'S', regionsApplied: 1, regionMode: 'replaceAll' })}</>,
+      <>{renderTool('format_sheet', { regionMode: 'replaceAll', regions: [{ range: 'A1:B' }] }, { success: true, title: 'S', regionsApplied: 1, regionMode: 'replaceAll', removedRegionIds: ['old-1', 'old-2'] })}</>,
     );
-    expect(one.getByText('1 region · other regions removed')).toBeTruthy();
-    expect(one.container.querySelector('[data-testid="sheet-format-regions-replaced"]')?.textContent).toContain('Every other region on the tab removed');
+    expect(one.getByText('1 region · 2 other regions removed')).toBeTruthy();
+    expect(one.container.querySelector('[data-testid="sheet-format-regions-replaced"]')?.textContent).toContain('2 other regions on the tab removed');
     one.unmount();
 
     const none = render(
-      <>{renderTool('format_sheet', { regionMode: 'replaceAll', regions: [] }, { success: true, title: 'S', regionsApplied: 0, regionMode: 'replaceAll' })}</>,
+      <>{renderTool('format_sheet', { regionMode: 'replaceAll', regions: [] }, { success: true, title: 'S', regionsApplied: 0, regionMode: 'replaceAll', removedRegionIds: ['old-1'] })}</>,
     );
-    expect(none.container.querySelector('[data-testid="sheet-format-regions-replaced"]')?.textContent).toContain('Every region on the tab removed');
+    expect(none.container.querySelector('[data-testid="sheet-format-regions-replaced"]')?.textContent).toContain('Every region on the tab removed (1)');
     expect(none.queryByText('Nothing changed')).toBeNull();
+    none.unmount();
+
+    const restyle = render(
+      <>{renderTool('format_sheet', { regionMode: 'replaceAll', regions: [{ id: 'only', range: 'A1:B', theme: 'blue' }] }, { success: true, title: 'S', regionsApplied: 1, regionMode: 'replaceAll', removedRegionIds: [] })}</>,
+    );
+    expect(restyle.queryByText(/removed/)).toBeNull();
+    expect(restyle.container.querySelector('[data-testid="sheet-format-regions-replaced"]')).toBeNull();
   });
 
   it('shows a no-op result as unchanged, not as the formatting it would have applied', () => {
