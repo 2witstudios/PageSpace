@@ -1659,7 +1659,11 @@ describe('sheet store (integration)', () => {
       // held just before its `UPDATE sheet_tabs`, with the tab lock already
       // taken, until the second call is observed waiting on that lock.
       const { pageId, ownerId } = await makeSheet({ rowCount: 20 });
-      const second = { ...FORMAT_RULE, id: 'second' };
+      // A different RANGE, not just a different id: the store refuses a rule
+      // whose content matches one already on the tab (SheetDuplicateRuleError,
+      // keyed by everything but `id`), and this case is about the lock, not
+      // the dedup — two distinct rules must both land.
+      const second = { ...FORMAT_RULE, id: 'second', ranges: ['B1:B9'] };
 
       let other: Promise<unknown> | null = null;
       await db.transaction(async (tx) =>
