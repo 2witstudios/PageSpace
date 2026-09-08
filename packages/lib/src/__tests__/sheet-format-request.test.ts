@@ -1982,6 +1982,36 @@ describe('planFormatOps — never something other than what was asked for', () =
     ).toContain('is not a range this sheet can address');
   });
 
+  it('blames the region range when the range is what failed, not the id', () => {
+    // Kills: removing the range branch, so every unparseable region goes back
+    // to the catch-all.
+    //
+    // `parseRegion` fails as a whole, so the generic message lists every
+    // requirement — which told a caller holding `{id: 'r1', range: '$A$1:$F'}`
+    // that a region needs an id. It sent one. That is the same defect as
+    // blaming a legal row number for arriving quoted: the message accuses the
+    // part that was right.
+    const badRange = refusalOf([
+      { type: 'upsertRegion', region: { id: 'r1', range: '$A$1:$F' } },
+    ]);
+    expect(badRange).toContain('region range "$A$1:$F"');
+    expect(badRange).toContain('drop the $');
+    expect(badRange).not.toContain('needs an id');
+
+    // And the catch-all still answers everything it is actually for — a region
+    // whose range parses but which fails for some other reason, and one that is
+    // not an object to read a range off at all.
+    expect(refusalOf([{ type: 'upsertRegion', region: { range: 'A1:F' } }])).toContain(
+      'needs an id and a range'
+    );
+    expect(refusalOf([{ type: 'upsertRegion', region: { id: 'r1' } }])).toContain(
+      'needs an id and a range'
+    );
+    expect(refusalOf([{ type: 'upsertRegion', region: 42 as never }])).toContain(
+      'needs an id and a range'
+    );
+  });
+
   it('tells a caller writing spreadsheet notation what to change, not just that it failed', () => {
     // Kills: deleting any arm of `rangeHint`, or making it return a constant.
     //
@@ -2244,8 +2274,10 @@ describe('planFormatOps — regions', () => {
   });
 
   it('refuses an unusable region and an upsert past the cap', () => {
+    // A single cell is not a region's range, and the refusal now says which
+    // part failed rather than restating every requirement.
     expect(refusalOf([{ type: 'upsertRegion', region: { id: 'r1', range: 'A1' } }])).toContain(
-      'not a region this sheet can store'
+      'region range "A1" is not a range this sheet can address'
     );
     const full = Array.from({ length: MAX_REGIONS }, (_, i) => region(`r${i}`));
     expect(refusalOf([{ type: 'upsertRegion', region: region('new') }], tabWith({ regions: full }))).toContain(

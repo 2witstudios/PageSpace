@@ -1543,6 +1543,18 @@ function conditionValueHint(raw: Record<string, unknown>, path: string): string 
 function validateRegionInput(raw: unknown, index: number, type: string, label: string): SheetRegion {
   const region = parseRegion(raw);
   if (!region) {
+    // `parseRegion` fails as a whole, so the generic message has to list every
+    // requirement — and then tells a caller that DID send an id that a region
+    // needs one. When the range is the part that will not parse, say that
+    // instead: it is the same repair the cell-range ops get, and it is the
+    // difference between one more attempt and a guess.
+    if (isObject(raw) && typeof raw.range === 'string' && !parseRegionRange(raw.range)) {
+      return refuseOp(
+        index,
+        type,
+        `${label} range "${raw.range}" is not a range this sheet can address.${rangeHint(raw.range)}`
+      );
+    }
     return refuseOp(
       index,
       type,
