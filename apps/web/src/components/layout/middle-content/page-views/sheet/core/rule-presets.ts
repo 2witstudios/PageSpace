@@ -33,15 +33,18 @@ export const OPERATOR_LABELS: ReadonlyArray<{ value: ConditionalOperator; label:
   { value: 'isError', label: 'is an error' },
 ];
 
-/** Operators that compare against nothing — the value field is hidden for these. */
-export const VALUELESS_OPERATORS: ReadonlySet<ConditionalOperator> = new Set([
-  'isEmpty',
-  'isNotEmpty',
-  'isError',
-]);
-
-/** Operators needing a second bound. */
-export const RANGE_OPERATORS: ReadonlySet<ConditionalOperator> = new Set(['between', 'notBetween']);
+/**
+ * Re-exported, not defined here any more.
+ *
+ * The server-side write path has to refuse a `greaterThan` rule with no value
+ * for the same reason the panel hides the field for `isEmpty` — it is part of
+ * what a valid rule IS, not a rendering detail. Two copies of that answer is
+ * how the API comes to accept a rule this panel would never offer, so the
+ * definition moved to `@pagespace/lib/sheets` and both sides read it from
+ * there. Kept as re-exports so every existing importer of this module is
+ * untouched.
+ */
+export { VALUELESS_OPERATORS, RANGE_OPERATORS } from '@pagespace/lib/sheets/sheet';
 
 export type RuleKind = ConditionalRule['kind'];
 

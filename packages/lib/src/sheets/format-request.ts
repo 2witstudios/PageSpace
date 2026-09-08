@@ -28,6 +28,16 @@
  *    "success" from the underlying setter while changing nothing. To a person
  *    that is a puzzling non-event; to a model it is a signal to move on, and
  *    the missing formatting surfaces much later as a bad dashboard.
+ *  - **Never something OTHER than what was asked for.** The hardest of the
+ *    four, because it does not look like a failure from anywhere. The stored
+ *    parsers sanitize field by field — a too-small font size vanishes from a
+ *    format that keeps its bold, a `ranges` array is truncated to its cap, a
+ *    `headerRows` of 999 becomes the default of one — and the write reports
+ *    success either way. Three mechanisms cover it: `validateRanges` on the
+ *    caller's own array before the parser can shorten it, `firstSanitizedPath`
+ *    comparing what would be stored against what was sent, and a handful of
+ *    checks for the cases that survive storage intact and only mean something
+ *    else at RENDER time (`anchorProblem`, the palette hue).
  *
  * Pure: no database, no I/O, no clock. The refusals are the contract, and they
  * have to be testable without any of that.
@@ -43,7 +53,10 @@ import {
   MAX_CONDITIONAL_RANGE_CELLS,
   MAX_CONDITIONAL_RULES,
   MAX_CONDITIONAL_TOTAL_CELLS,
+  RANGE_OPERATORS,
   SCALE_ANCHOR_TYPES,
+  VALUED_ANCHOR_TYPES,
+  VALUELESS_OPERATORS,
   addressesOfRange,
   parseConditionalRule,
   parseConditionalRules,
@@ -58,7 +71,14 @@ import {
   MIN_ROW_HEIGHT,
 } from './format-ops';
 import { PALETTE } from './palette';
-import { MAX_REGIONS, parseRegion, parseRegions, type SheetRegion } from './regions';
+import { FormulaParser, tokenize } from './parser';
+import {
+  MAX_REGIONS,
+  parseRegion,
+  parseRegionRange,
+  parseRegions,
+  type SheetRegion,
+} from './regions';
 import type { CellFormat } from './types';
 
 /**
@@ -525,6 +545,19 @@ const anchorProblem = (anchor: unknown, needsColor: boolean): string | null => {
     return 'needs a #rrggbb colour';
   }
 
+  // `min` and `max` read the data's own extremes and ignore any value. The
+  // other three ARE their value — and `anchorValue` quietly substitutes an
+  // extreme for a missing one and clamps an out-of-range percent, so both are
+  // stored intact and mean something else.
+  if (VALUED_ANCHOR_TYPES.has(anchor.type)) {
+    if (typeof anchor.value !== 'number' || !Number.isFinite(anchor.value)) {
+      return `of type ${anchor.type} needs a numeric value`;
+    }
+    if (anchor.type !== 'number' && (anchor.value < 0 || anchor.value > 100)) {
+      return `of type ${anchor.type} needs a value from 0 to 100, not ${anchor.value}`;
+    }
+  }
+
   return null;
 };
 
@@ -618,6 +651,54 @@ function validateRuleInput(
     );
   }
 
+  // A condition whose operator needs an operand it does not have. The parser
+  // accepts any recognized operator on its own and the comparator sees nothing
+  // dropped, but `matchesCondition` then compares against nothing: a
+  // `greaterThan` with no value matches NO cell, and a `notContains` with no
+  // value matches EVERY non-error one. Which set of operators needs a value is
+  // the panel's answer, now shared rather than restated.
+  if (rule.kind === 'cell' && !VALUELESS_OPERATORS.has(rule.condition.operator)) {
+    const { operator, value, value2 } = rule.condition;
+    if (typeof value !== 'string' || value.trim() === '') {
+      return refuseOp(
+        index,
+        type,
+        `A "${operator}" rule needs a value to compare against. Without one it matches nothing — or, ` +
+          'for a negative operator, everything.'
+      );
+    }
+    if (RANGE_OPERATORS.has(operator) && (typeof value2 !== 'string' || value2.trim() === '')) {
+      return refuseOp(index, type, `A "${operator}" rule needs both bounds: value and value2.`);
+    }
+  }
+
+  // A formula that does not parse. `parseConditionalRule` asks only that it be
+  // non-blank, and the evaluator then throws while tokenizing it once per
+  // covered cell, catches, and applies nothing — the silent render-time no-op
+  // in its purest form. Checked with the engine's own tokenizer and parser, so
+  // "valid" means the same thing here as where it runs.
+  if (rule.kind === 'formula') {
+    const body = rule.formula.trim().replace(/^=/, '');
+    let parsed = false;
+    try {
+      const tokens = tokenize(body);
+      if (tokens.length > 0) {
+        new FormulaParser(tokens).parse();
+        parsed = true;
+      }
+    } catch {
+      parsed = false;
+    }
+    if (!parsed) {
+      return refuseOp(
+        index,
+        type,
+        `"${rule.formula}" is not a formula this sheet can evaluate. Stored as written it throws once ` +
+          'per covered cell and formats none of them.'
+      );
+    }
+  }
+
   // Anchors, which the comparator cannot speak for — see `anchorProblem`.
   if (rule.kind === 'colorScale') {
     for (const [name, value] of [['min', rule.min], ['mid', rule.mid], ['max', rule.max]] as const) {
@@ -671,6 +752,55 @@ function validateRegionInput(raw: unknown, index: number, type: string, label: s
       type,
       `${label}: "${sanitized}" is not something this sheet can store, and would be dropped or ` +
         'changed on the way in.'
+    );
+  }
+
+  // A declaration that names something outside the region it belongs to.
+  // `createRegionResolver` excludes cells outside the bounds before it consults
+  // either list, so a column or total row beyond them can never render — stored
+  // faithfully, and inert. Cross-field, so the comparator cannot see it: each
+  // value survives on its own.
+  const bounds = parseRegionRange(region.range);
+  if (bounds) {
+    for (const column of region.columns ?? []) {
+      const columnIndex = decodeColumnLabel(column.column);
+      if (columnIndex < bounds.colStart || columnIndex > bounds.colEnd) {
+        return refuseOp(
+          index,
+          type,
+          `${label}: column "${column.column}" is outside the region ${region.range}, so nothing it ` +
+            'declares can ever apply.'
+        );
+      }
+    }
+
+    // Only for a closed range: an open one ("A1:F") reaches the end of the
+    // sheet, so a total row past today's extent is a row the sheet will grow
+    // into — which is the entire point of leaving the end off.
+    if (bounds.rowEnd !== null) {
+      for (const row of region.totalRows ?? []) {
+        if (row - 1 < bounds.rowStart || row - 1 > bounds.rowEnd) {
+          return refuseOp(
+            index,
+            type,
+            `${label}: total row ${row} is outside the region ${region.range}, so it can never render.`
+          );
+        }
+      }
+    }
+  }
+
+  // A setting nothing acts on yet. `freezeHeader` is parsed and stored, and a
+  // repo-wide search finds no consumer: `createRegionResolver` does not read it
+  // and the `setRegions` step only stores the region. Accepting it would be the
+  // module's own contract broken in its own output — a request that succeeds
+  // and pins nothing. `setFrozen` does work today, so the refusal names it.
+  if (region.freezeHeader === true) {
+    return refuseOp(
+      index,
+      type,
+      `${label}: freezeHeader is not applied by anything yet, so setting it would pin no rows. Use a ` +
+        'setFrozen op for now.'
     );
   }
 

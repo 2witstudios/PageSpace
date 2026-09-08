@@ -26,7 +26,7 @@ import {
 } from '../sheets/regions';
 import { PALETTE } from '../sheets/palette';
 import { MAX_ADDRESSABLE_ROW, encodeColumnLabel } from '../sheets/address';
-import { MAX_CONDITIONAL_RANGES_PER_RULE } from '../sheets/conditional';
+import { MAX_CONDITIONAL_RANGES_PER_RULE, VALUELESS_OPERATORS } from '../sheets/conditional';
 
 const tabWith = (overrides: Partial<SheetFormatTarget> = {}): SheetFormatTarget => ({
   rowCount: 100,
@@ -680,6 +680,134 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
     expect(refusalOf([{ type: 'upsertRegion', region: { ...region('r1'), totalRows } }])).toContain(
       'region: "totalRows"'
     );
+  });
+
+  it('refuses a cell rule missing the operand its operator needs', () => {
+    // `matchesCondition` compares against nothing: a `greaterThan` with no
+    // value matches NO cell, and a `notContains` with no value matches EVERY
+    // non-error one — opposite failures, equally silent. The parser accepts
+    // both and the comparator sees nothing dropped.
+    const cell = (condition: unknown) => ({ ...rule('cf_1'), condition });
+
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: cell({ operator: 'greaterThan' }) }])
+    ).toContain('needs a value to compare against');
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: cell({ operator: 'notContains', value: '  ' }) }])
+    ).toContain('needs a value to compare against');
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: cell({ operator: 'between', value: '1' }) }])
+    ).toContain('needs both bounds');
+
+    // The operators that legitimately compare against nothing still pass, and
+    // that list is the panel's own — imported, not restated.
+    for (const operator of VALUELESS_OPERATORS) {
+      expect(
+        plan([{ type: 'addConditionalRule', rule: cell({ operator }) }]).conditionalFormats
+      ).toHaveLength(1);
+    }
+    expect(
+      plan([{ type: 'addConditionalRule', rule: cell({ operator: 'between', value: '1', value2: '9' }) }])
+        .conditionalFormats
+    ).toHaveLength(1);
+  });
+
+  it('refuses a formula that does not parse', () => {
+    // The parser asks only that a formula be non-blank. The evaluator then
+    // throws while tokenizing it once per covered cell, catches, and formats
+    // none of them — checked here with the engine's own tokenizer and parser so
+    // "valid" means the same thing in both places.
+    const formula = (body: string) => ({
+      id: 'cf_1',
+      kind: 'formula',
+      ranges: ['A1:A9'],
+      formula: body,
+      format: { bold: true },
+    });
+
+    expect(refusalOf([{ type: 'addConditionalRule', rule: formula('=BROKEN(') }])).toContain(
+      'is not a formula this sheet can evaluate'
+    );
+    expect(refusalOf([{ type: 'addConditionalRule', rule: formula('=A1 >') }])).toContain(
+      'is not a formula this sheet can evaluate'
+    );
+    expect(refusalOf([{ type: 'addConditionalRule', rule: formula('=') }])).toContain(
+      'is not a formula this sheet can evaluate'
+    );
+    // With or without the leading `=`, as the evaluator reads it.
+    expect(plan([{ type: 'addConditionalRule', rule: formula('=A1>1') }]).conditionalFormats).toHaveLength(1);
+    expect(plan([{ type: 'addConditionalRule', rule: formula('SUM(A1:A9)>0') }]).conditionalFormats)
+      .toHaveLength(1);
+  });
+
+  it('refuses a scale anchor whose value the evaluator would substitute or clamp', () => {
+    const bar = (min: unknown) => ({
+      id: 'db',
+      kind: 'dataBar',
+      ranges: ['A1:A9'],
+      color: '#3b82f6',
+      min,
+    });
+
+    // `anchorValue` substitutes the data's own extreme for a missing value...
+    expect(refusalOf([{ type: 'addConditionalRule', rule: bar({ type: 'number' }) }])).toContain(
+      'of type number needs a numeric value'
+    );
+    // ...and clamps a percent that is out of range.
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: bar({ type: 'percent', value: 150 }) }])
+    ).toContain('needs a value from 0 to 100, not 150');
+    // `min` and `max` read the data and ignore any value, so they need none.
+    expect(plan([{ type: 'addConditionalRule', rule: bar({ type: 'min' }) }]).conditionalFormats)
+      .toHaveLength(1);
+    expect(
+      plan([{ type: 'addConditionalRule', rule: bar({ type: 'percentile', value: 90 }) }])
+        .conditionalFormats
+    ).toHaveLength(1);
+  });
+
+  it('refuses a region declaration that names something outside the region', () => {
+    // `createRegionResolver` excludes cells outside the bounds before consulting
+    // either list, so these are stored faithfully and can never render.
+    // Cross-field, so the comparator cannot see them: each value is fine alone.
+    expect(
+      refusalOf([
+        {
+          type: 'upsertRegion',
+          region: { id: 'r1', range: 'A1:B10', columns: [{ column: 'Z', role: 'currency' }] },
+        },
+      ])
+    ).toContain('column "Z" is outside the region A1:B10');
+    expect(
+      refusalOf([{ type: 'upsertRegion', region: { id: 'r1', range: 'A1:B10', totalRows: [20] } }])
+    ).toContain('total row 20 is outside the region A1:B10');
+
+    // An OPEN region reaches the end of the sheet, so a total row past today's
+    // extent is a row it will grow into — which is the point of leaving the end
+    // off, and must not be refused.
+    expect(
+      plan([{ type: 'upsertRegion', region: { id: 'r1', range: 'A1:F', totalRows: [4000] } }]).regions[0]
+        .totalRows
+    ).toEqual([4000]);
+    expect(
+      plan([{ type: 'upsertRegion', region: { id: 'r1', range: 'A1:B10', totalRows: [10] } }]).regions
+    ).toHaveLength(1);
+  });
+
+  it('refuses freezeHeader while nothing acts on it', () => {
+    // Parsed and stored, with no consumer anywhere: `createRegionResolver` does
+    // not read it and the `setRegions` step only stores the region. Accepting
+    // it would be this module's own contract broken in its own output.
+    expect(
+      refusalOf([{ type: 'upsertRegion', region: { ...region('r1'), freezeHeader: true } }])
+    ).toContain('freezeHeader is not applied by anything yet');
+    expect(
+      refusalOf([{ type: 'upsertRegion', region: { ...region('r1'), freezeHeader: true } }])
+    ).toContain('setFrozen');
+    // An explicit false asks for nothing and gets nothing, which is honest.
+    expect(
+      plan([{ type: 'upsertRegion', region: { ...region('r1'), freezeHeader: false } }]).regions
+    ).toHaveLength(1);
   });
 
   it('refuses a theme the palette does not have, which would render as another colour', () => {

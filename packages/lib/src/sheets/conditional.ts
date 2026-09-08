@@ -693,6 +693,35 @@ const ANCHOR_TYPES = new Set(['min', 'max', 'number', 'percent', 'percentile']);
  */
 export const SCALE_ANCHOR_TYPES: ReadonlySet<string> = ANCHOR_TYPES;
 
+/**
+ * Anchor types whose `value` is the whole point. `min` and `max` read the
+ * data's own extremes and ignore any value; these three mean nothing without
+ * one, and `anchorValue` quietly substitutes an extreme when it is missing.
+ */
+export const VALUED_ANCHOR_TYPES: ReadonlySet<string> = new Set([
+  'number',
+  'percent',
+  'percentile',
+]);
+
+/**
+ * Operators that compare against nothing — the panel hides the value field for
+ * these, and every other operator needs one.
+ *
+ * Here rather than beside the panel for the reason `conditional-ops` gives at
+ * length: this is part of what a valid rule IS, and a server that writes rules
+ * has to agree with the UI that edits them. A second copy is how the API comes
+ * to accept a rule the panel would not offer.
+ */
+export const VALUELESS_OPERATORS: ReadonlySet<ConditionalOperator> = new Set([
+  'isEmpty',
+  'isNotEmpty',
+  'isError',
+]);
+
+/** Operators needing a second bound. */
+export const RANGE_OPERATORS: ReadonlySet<ConditionalOperator> = new Set(['between', 'notBetween']);
+
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
