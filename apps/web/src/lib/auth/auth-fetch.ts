@@ -243,7 +243,10 @@ class AuthFetch {
           this.logger.info('[Native] Long background period detected, refreshing session', {
             durationMin: Math.round(duration / 60000),
           });
-          const result = await this.refreshAuthSession();
+          // `allowSignOut: false` is the whole point — see the note above, and
+          // the parameter's own doc. Removing the dispatch from THIS function
+          // alone achieved nothing: `refreshAuthSession` dispatches internally.
+          const result = await this.refreshAuthSession({ allowSignOut: false });
           if (!result.success) {
             this.logger.info('[Native] Proactive refresh did not renew the session; leaving it to the next request', {
               shouldLogout: result.shouldLogout,
@@ -1025,7 +1028,18 @@ class AuthFetch {
     return { kind: 'result', result: { success: true, shouldLogout: false } };
   }
 
-  async refreshAuthSession(): Promise<SessionRefreshResult> {
+  /**
+   * @param options.allowSignOut Whether a `shouldLogout` result may dispatch
+   *   `auth:expired` — which tears the user out of the app and back to sign-in.
+   *   Defaults true, which is right for every *reactive* caller: they run after a
+   *   request has been refused, so the server has already said the session is
+   *   over. A **proactive** caller (a timer, an app-foreground handler) must pass
+   *   false. Nothing has been refused there, and `refreshBearerSession` reports
+   *   `shouldLogout: true` merely for want of a device token — the ordinary state
+   *   of a live cookie session on Android.
+   */
+  async refreshAuthSession(options?: { allowSignOut?: boolean }): Promise<SessionRefreshResult> {
+    const { allowSignOut = true } = options ?? {};
     // CRITICAL FIX: Use the same deduplication as refreshToken() to prevent race conditions
     // Previously this called doRefresh() directly, allowing concurrent refreshes when:
     // 1. auth-fetch's internal refreshToken() is triggered by 401
@@ -1101,7 +1115,11 @@ class AuthFetch {
         });
       }
 
-      if (result.shouldLogout && typeof window !== 'undefined') {
+      // `allowSignOut` gates this, and the `isAuthenticated` check does not
+      // substitute for it: that guard exists to stop a *new* user looping, and a
+      // proactive refresh's false positive lands on a user who is very much
+      // authenticated.
+      if (allowSignOut && result.shouldLogout && typeof window !== 'undefined') {
         // Only dispatch auth:expired if user WAS authenticated (prevents loop for new users)
         const { useAuthStore } = await import('@/stores/useAuthStore');
         if (useAuthStore.getState().isAuthenticated) {

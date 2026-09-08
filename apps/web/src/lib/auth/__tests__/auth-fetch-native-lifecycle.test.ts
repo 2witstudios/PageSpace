@@ -33,6 +33,15 @@ vi.mock('@capacitor/app', () => ({ App: { addListener } }));
 
 const dispatchEvent = vi.fn();
 
+// The defect only bites a signed-IN user — `refreshAuthSession` guards its
+// dispatch on `isAuthenticated`, and the whole point is that an Android
+// magic-link user IS authenticated while having no device token. Without this
+// mock the store reports false, the dispatch is suppressed for the wrong reason,
+// and the test passes even when the fix is absent.
+vi.mock('@/stores/useAuthStore', () => ({
+  useAuthStore: { getState: () => ({ isAuthenticated: true }) },
+}));
+
 const isNativeApp = vi.fn();
 vi.mock('@/lib/capacitor-bridge', () => ({
   isNativeApp: () => isNativeApp(),
@@ -85,14 +94,19 @@ describe('AuthFetch native lifecycle registration', () => {
   // session is over. Only the next request can establish that, and its 401 runs
   // the reactive path, which dispatches behind its own `isAuthenticated` guard.
   describe('a failed proactive refresh does not sign the user out', () => {
-    async function foregroundAfter(minutes: number, refreshResult: { success: boolean; shouldLogout: boolean }) {
+    // Deliberately does NOT stub `refreshAuthSession`. An earlier version of this
+    // test did, and so proved nothing: `refreshAuthSession` dispatches
+    // `auth:expired` *itself*, so stubbing it hid the very code path under test
+    // and a broken fix passed. The real method runs here — the storage mock
+    // returns no device token, which is what drives `refreshBearerSession` to
+    // `shouldLogout: true`, exactly as a magic-link Android session would.
+    async function foregroundAfter(minutes: number) {
       isNativeApp.mockReturnValue(true);
       const { AuthFetch } = await import('../auth-fetch');
       const instance = new AuthFetch() as unknown as {
-        refreshAuthSession: () => Promise<{ success: boolean; shouldLogout: boolean }>;
-        clearSessionCache: () => void;
+        refreshAuthSession: (o?: { allowSignOut?: boolean }) => Promise<{ success: boolean; shouldLogout: boolean }>;
       };
-      instance.refreshAuthSession = vi.fn().mockResolvedValue(refreshResult);
+      const refreshSpy = vi.spyOn(instance, 'refreshAuthSession');
 
       await vi.waitFor(() => expect(addListener).toHaveBeenCalled());
       const handler = addListener.mock.calls[0][1] as (s: { isActive: boolean }) => Promise<void>;
@@ -107,15 +121,20 @@ describe('AuthFetch native lifecycle registration', () => {
       } finally {
         Date.now = realNow;
       }
-      return instance;
+      return refreshSpy;
     }
 
-    it('given a long background and a refresh that reports shouldLogout, should NOT dispatch auth:expired', async () => {
-      const instance = await foregroundAfter(10, { success: false, shouldLogout: true });
+    it('given a long background and no device token, should NOT dispatch auth:expired', async () => {
+      const refreshSpy = await foregroundAfter(10);
 
-      // Positive control: the branch under test really ran. Without this the
-      // assertion below passes just as well when the handler never fired.
-      expect(instance.refreshAuthSession).toHaveBeenCalledTimes(1);
+      // Positive controls: the branch really ran, the real refresh really
+      // concluded shouldLogout, and it was asked not to act on it.
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+      expect(refreshSpy).toHaveBeenCalledWith({ allowSignOut: false });
+      await expect(refreshSpy.mock.results[0].value).resolves.toEqual({
+        success: false,
+        shouldLogout: true,
+      });
 
       const expired = dispatchEvent.mock.calls.filter(
         ([e]) => (e as CustomEvent).type === 'auth:expired'
@@ -124,9 +143,9 @@ describe('AuthFetch native lifecycle registration', () => {
     });
 
     it('given a short background, should not refresh at all', async () => {
-      const instance = await foregroundAfter(1, { success: false, shouldLogout: true });
+      const refreshSpy = await foregroundAfter(1);
 
-      expect(instance.refreshAuthSession).not.toHaveBeenCalled();
+      expect(refreshSpy).not.toHaveBeenCalled();
       expect(dispatchEvent).not.toHaveBeenCalled();
     });
   });
