@@ -196,7 +196,12 @@ export interface SheetViewRow {
    *
    * Emitted only on divergence, so an unformatted sheet pays nothing for it and
    * a formatted one recovers exactly the cells that need recovering. A column
-   * letter absent here means `cells[label]` IS the machine value.
+   * letter absent here means `cells[label]` is already the value — with one
+   * exception worth stating precisely, because a contract that is *nearly* true
+   * is the kind an agent gets caught by: a cell that was never materialised has
+   * no machine value at all, and `cells` carries the text it was authored with.
+   * That cell appears in `formulas` when it holds one, which is how it is told
+   * apart.
    */
   unformatted?: Record<string, StoredCellValue>;
 }

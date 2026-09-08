@@ -426,6 +426,34 @@ describe('a region-derived format is part of what a cell reads as', () => {
     });
   });
 
+  it('reports no machine value for a cell that was never materialised', async () => {
+    // The one exception in `unformatted`'s contract, pinned so the wording stays
+    // honest. A cell with no `value` has no machine value to hand back — `cells`
+    // carries the text it was authored with, and `formulas` is what tells the
+    // two apart. Reporting the authored formula text as a machine value would
+    // be worse than reporting nothing.
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 1, cells: { C: { raw: '=A1+B1' }, A: { raw: 'plain' } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    assert({
+      given: 'an unmaterialised formula cell and an unmaterialised literal',
+      should: 'show the authored text, name the formula, and claim no machine value',
+      actual: {
+        cells: window.rows[0].cells,
+        formulas: window.rows[0].formulas,
+        unformatted: window.rows[0].unformatted,
+      },
+      expected: {
+        cells: { A: 'plain', C: '=A1+B1' },
+        formulas: { C: '=A1+B1' },
+        unformatted: undefined,
+      },
+    });
+  });
+
   it('does not fail the whole read on a column key that is not a column label', async () => {
     // `cells` is jsonb. A hand-edited or externally-imported row can carry a key
     // like `C0`, which `decodeColumnLabel` refuses — and locating the region
