@@ -88,6 +88,20 @@ jobs:
       # turning that silent skip into a hard failure — which is exactly what it
       # was added to do. If you add another variable to a step below and the
       # tests still cannot see it, this is why.
+      # packages/editor's cross-DOM parse-equality suite drives a REAL Chromium
+      # and compares its ProseMirror parse against happy-dom's, over the
+      # construct corpus. Several `parseHTML` functions in the frozen collab
+      # schema read the DOM rather than the source string, so two processes can
+      # agree on SCHEMA_HASH and still disagree about what a document IS — and
+      # nothing else in the suite can catch that. The test deliberately does not
+      # skip when the browser is missing, so this step is required, not
+      # optional. Installed from apps/e2e, the workspace that owns Playwright;
+      # the browser cache is shared, and packages/editor's playwright-core
+      # resolves the same build.
+      - name: Install Chromium (cross-DOM parse-equality suite)
+        run: bunx playwright install --with-deps chromium
+        working-directory: apps/e2e
+
       - name: Run tests with coverage (Node 24)
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
