@@ -217,7 +217,7 @@ describe('applyDevServerServicePlan — obeys the plan, adds nothing', () => {
       liveInstanceId: ROW.spriteInstanceId,
       sandboxId: ROW.sandboxId,
       holder: ROW.holder,
-      row: { spriteInstanceId: ROW.spriteInstanceId, sandboxId: ROW.sandboxId, targetPort: ROW.targetPort, relayServiceName: ROW.relayServiceName, detectedAt: ROW.detectedAt, stoppedByUserAt: null, approvedPort: null, approvedAt: null },
+      row: { spriteInstanceId: ROW.spriteInstanceId, sandboxId: ROW.sandboxId, targetPort: ROW.targetPort, relayServiceName: ROW.relayServiceName, detectedAt: ROW.detectedAt, stoppedByUserAt: null, approvedPort: null, approvedAt: null, selectedByUserAt: null },
       detected: null,
       relay: null,
       listeners: [{ port: 5173, pid: 3 }],

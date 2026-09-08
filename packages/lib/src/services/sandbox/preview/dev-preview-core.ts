@@ -125,6 +125,12 @@ export interface DevPreviewRow {
   approvedPort: number | null;
   /** When that consent was given; `null` exactly when `approvedPort` is. */
   approvedAt: Date | null;
+  /**
+   * When a person PICKED this port out of the ports pane, or `null` if the
+   * target was found by detection. A pinned target is not a guess for the
+   * detector to revise — see the guard in {@link planDevServerService}.
+   */
+  selectedByUserAt: Date | null;
 }
 
 /**
@@ -498,7 +504,8 @@ export type DevServerServicePlan =
          * unlisted port is offered again the moment the current target stops
          * listening, or if the user re-points explicitly.
          */
-        | 'current-target-preferred';
+        | 'current-target-preferred'
+        | 'user-selected-target';
       /** True when a row for a DIFFERENT instance was present and ignored — the UI's "needs re-creating" signal. */
       staleRowIgnored: boolean;
     }
@@ -543,6 +550,23 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
   // working, explicitly-shared preview back into needs-approval and make the
   // user agree to it all over again. Everything else — a known port, or any
   // port once the current target is gone — replaces freely.
+  // A port the USER PICKED is not a guess to be revised. The thrash guard
+  // below only shields against UNLISTED newcomers, which is right for a
+  // detected target — a known dev port appearing is usually the real one. A
+  // pinned target is different: the person already answered the question the
+  // detector is trying to answer, so ANY newcomer yields to it, whatever its
+  // likelihood. It releases on exactly one condition — a PROBE proving the
+  // pinned port is gone — because only a probe can establish that, and the
+  // channel that would otherwise "prove" it cannot see the very servers
+  // people pick by hand.
+  if (
+    detected !== null && row !== null && detected.port !== row.targetPort
+    && row.selectedByUserAt !== null
+    && isPortListening(listeners, row.targetPort, input.listenerSource) !== false
+  ) {
+    return { action: 'none', reason: 'user-selected-target', staleRowIgnored };
+  }
+
   //
   // The presence clause asks "is the current target STILL listening", and it
   // must accept "cannot say" as a yes. It used to require a positive sighting

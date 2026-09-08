@@ -136,8 +136,34 @@ describe('createDbDevPreviewStore', () => {
     // And a REBUILD carries nothing: a new instance replaces the row wholesale.
     await store.upsert({ holder, spriteInstanceId: 'inst-new', sandboxId: 'sbx', targetPort: 9000, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     const [rebuilt] = await db.select().from(devPreviewServices).where(eq(devPreviewServices.envId, envId));
-    expect(rebuilt).toMatchObject({ approvedPort: null, approvedAt: null });
+    expect(rebuilt).toMatchObject({ approvedPort: null, approvedAt: null, selectedByUserAt: null });
     expect(await store.approvePort({ kind: 'workspace', id: createId() }, { port: 9000, spriteInstanceId: 'inst-ap', at, byUserId: userId })).toBeNull();
+  });
+
+  it('THE PIN SURVIVES ONLY ITS OWN PORT: a planner upsert keeps it on the same target and clears it on a move', async () => {
+    // The pin is what stops the detector walking off a port a person picked.
+    // It is expressed as SQL over the stored row (like the approval columns)
+    // so there is no read-modify-write window, and this is the only place
+    // that behaviour is real — the fakes elsewhere merely model it.
+    await store.upsert({ holder, spriteInstanceId: 'inst-pin', sandboxId: 'sbx', targetPort: 9000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
+    await db.update(devPreviewServices).set({ selectedByUserAt: NOW }).where(eq(devPreviewServices.envId, envId));
+
+    // A reconcile of the SAME port must not quietly unpin it.
+    await store.upsert({ holder, spriteInstanceId: 'inst-pin', sandboxId: 'sbx', targetPort: 9000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
+    const same = await store.findByHolder(holder);
+    expect(same?.selectedByUserAt, 'a same-port reconcile keeps the pin').toEqual(NOW);
+
+    // Detection moving the target is exactly when the pin must go: it vouched
+    // for the port a person named, never for whatever replaced it.
+    await store.upsert({ holder, spriteInstanceId: 'inst-pin', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
+    const moved = await store.findByHolder(holder);
+    expect(moved?.selectedByUserAt, 'a moved target clears the pin').toBeNull();
+
+    // And a REBUILD clears it too — a replacement VM inherits nothing.
+    await db.update(devPreviewServices).set({ selectedByUserAt: NOW }).where(eq(devPreviewServices.envId, envId));
+    await store.upsert({ holder, spriteInstanceId: 'inst-new', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
+    const rebuilt = await store.findByHolder(holder);
+    expect(rebuilt?.selectedByUserAt, 'a rebuild clears the pin with the rest of the instance state').toBeNull();
   });
 
   it('findStoppedWithRelay lists ONLY aged rows that are switched off with a relay still recorded', async () => {

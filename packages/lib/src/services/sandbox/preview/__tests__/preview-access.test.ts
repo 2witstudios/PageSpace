@@ -17,7 +17,7 @@ const env = (over: Partial<PreviewEnvRow> = {}): PreviewEnvRow => ({
   id: 'env1', driveId: 'd1', substrate: 'sprite', sandboxId: 'sbx-env', spriteTornDownAt: null, ...over,
 });
 const liveRow = (targetPort = 5173): DevPreviewRecord => ({
-  id: 'r', spriteInstanceId: 'inst-1', sandboxId: 'sbx-env', targetPort, relayServiceName: targetPort === 8080 ? null : PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, approvedAt: null,
+  id: 'r', spriteInstanceId: 'inst-1', sandboxId: 'sbx-env', targetPort, relayServiceName: targetPort === 8080 ? null : PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, approvedAt: null, selectedByUserAt: null,
 });
 const runningRelay = (targetPort = 5173): SandboxServiceInfo => {
   const spec = buildPreviewRelaySpec({ targetPort });

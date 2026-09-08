@@ -127,6 +127,7 @@ const rowColumns = {
   stoppedByUserAt: devPreviewServices.stoppedByUserAt,
   approvedPort: devPreviewServices.approvedPort,
   approvedAt: devPreviewServices.approvedAt,
+  selectedByUserAt: devPreviewServices.selectedByUserAt,
 } as const;
 
 function holderColumn(holder: DevPreviewHolderRef) {
@@ -159,6 +160,8 @@ export function createDbDevPreviewStore(): DevPreviewStore {
         // on it yet, and a detection is not consent.
         approvedPort: null,
         approvedAt: null,
+        // Nor is a detection a PICK: only the ports pane pins a target.
+        selectedByUserAt: null,
       };
       const written = await db
         .insert(devPreviewServices)
@@ -206,6 +209,16 @@ export function createDbDevPreviewStore(): DevPreviewStore {
             approvedPort: sql`CASE WHEN ${devPreviewServices.spriteInstanceId} = ${sql.param(intent.spriteInstanceId, devPreviewServices.spriteInstanceId)} THEN ${devPreviewServices.approvedPort} ELSE NULL END`,
             approvedAt: sql`CASE WHEN ${devPreviewServices.spriteInstanceId} = ${sql.param(intent.spriteInstanceId, devPreviewServices.spriteInstanceId)} THEN ${devPreviewServices.approvedAt} ELSE NULL END`,
             approvedByUserId: sql`CASE WHEN ${devPreviewServices.spriteInstanceId} = ${sql.param(intent.spriteInstanceId, devPreviewServices.spriteInstanceId)} THEN ${devPreviewServices.approvedByUserId} ELSE NULL END`,
+            // THE PIN SURVIVES ONLY ITS OWN PORT. A planner upsert that lands
+            // here is detection moving the target, and a pin vouches for the
+            // port a person named — never for whatever replaced it. So it is
+            // kept when the stored target is the one being written (a
+            // reconcile of the same port, which must not quietly unpin it)
+            // and cleared otherwise, including on a rebuild. Same
+            // SQL-over-the-stored-row shape as the approval columns, for the
+            // same reason: no read-modify-write window a user's pick could
+            // fall into.
+            selectedByUserAt: sql`CASE WHEN ${devPreviewServices.spriteInstanceId} = ${sql.param(intent.spriteInstanceId, devPreviewServices.spriteInstanceId)} AND ${devPreviewServices.targetPort} = ${sql.param(intent.targetPort, devPreviewServices.targetPort)} THEN ${devPreviewServices.selectedByUserAt} ELSE NULL END`,
             // Not `now()`: `updatedAt` is a UTC wall-clock timestamp column and
             // `now()` resolves through the session TZ (see the SQL-now rule).
             updatedAt: sql`(now() at time zone 'utc')`,

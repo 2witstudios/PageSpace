@@ -230,6 +230,23 @@ export const devPreviewServices = pgTable(
      */
     approvedByUserId: text('approvedByUserId').references(() => users.id, { onDelete: 'set null' }),
 
+    /**
+     * When a user PICKED this port by hand, out of the ports pane's list.
+     *
+     * Separate from `approvedPort` because they answer different questions.
+     * Approval says "this port may be exposed"; this says "a person chose
+     * THIS one, do not wander off it". Detection must never displace a
+     * pinned target: the `ports/watch` channel cannot see every dev server
+     * (a Next.js bind is invisible to it), so a pinned port is routinely
+     * absent from every snapshot, and without this the next unlisted bind
+     * would quietly take the preview away from the port the user asked for.
+     *
+     * Cleared whenever the target moves for any other reason, so it always
+     * describes the CURRENT `targetPort` and can never vouch for a port the
+     * row no longer names.
+     */
+    selectedByUserAt: timestamp('selectedByUserAt', { mode: 'date' }),
+
     createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   },

@@ -33,7 +33,7 @@ const row = (over: Partial<DevPreviewRecord> = {}): DevPreviewRecord => ({
   detectedAt: NOW,
   stoppedByUserAt: NOW,
   approvedPort: null,
-  approvedAt: null,
+  approvedAt: null, selectedByUserAt: null,
   ...over,
 });
 

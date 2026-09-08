@@ -36,7 +36,7 @@ function relayRow(targetPort: number, overrides: Partial<DevPreviewRow> = {}): D
     detectedAt: new Date('2026-09-05T11:00:00.000Z'),
     stoppedByUserAt: null,
     approvedPort: null,
-    approvedAt: null,
+    approvedAt: null, selectedByUserAt: null,
     ...overrides,
   };
 }
@@ -398,7 +398,7 @@ describe('resolveDevPreviewHolder — the holder is whoever OWNS the sprite poin
   it('has two sessions in one env converge on ONE row intent', () => {
     const envHolder = resolveDevPreviewHolder({ id: 'ws-1', envId: 'env-1' });
     const first = planDevServerService(planInput({ holder: envHolder, detected: detected(5173) }));
-    const second = planDevServerService(planInput({ holder: resolveDevPreviewHolder({ id: 'ws-2', envId: 'env-1' }), row: first.action === 'start-relay' ? { ...first.row, stoppedByUserAt: null, approvedPort: null, approvedAt: null } : null, relay: relayService(5173), detected: detected(5173) }));
+    const second = planDevServerService(planInput({ holder: resolveDevPreviewHolder({ id: 'ws-2', envId: 'env-1' }), row: first.action === 'start-relay' ? { ...first.row, stoppedByUserAt: null, approvedPort: null, approvedAt: null, selectedByUserAt: null } : null, relay: relayService(5173), detected: detected(5173) }));
     assert({ given: 'session ws-1 detecting 5173 in env-1', should: 'write an env-keyed row', actual: first.action === 'start-relay' ? first.row.holder : first.action, expected: { kind: 'env', id: 'env-1' } });
     assert({ given: 'session ws-2 then detecting the same server', should: 'find the env row already relaying and write nothing new', actual: second, expected: { action: 'none', reason: 'already-relaying', staleRowIgnored: false } });
   });
@@ -587,6 +587,55 @@ describe('describeServiceState', () => {
       should: 'be down — here the absence really was observed',
       actual: probed.status,
       expected: 'down',
+    });
+  });
+
+  it('a USER-PINNED target outranks any detection, however likely-looking', () => {
+    // The thrash guard only shields against UNLISTED newcomers, which is
+    // right for a target detection chose. A pinned target is different: the
+    // person already answered the question, so even a textbook dev port
+    // yields to it. Without this, a user who picked 9000 in the ports pane
+    // would lose it the moment vite came up on 5173.
+    const known = planDevServerService(planInput({
+      row: relayRow(9000, { approvedPort: 9000, selectedByUserAt: NOW }),
+      relay: relayService(9000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+      detected: { kind: 'dev-server', port: 5173, likelihood: 'known-dev-port' },
+    }));
+    assert({
+      given: 'a pinned 9000 when a KNOWN dev port opens',
+      should: 'keep the pinned target',
+      actual: [known.action, known.action === 'none' && known.reason],
+      expected: ['none', 'user-selected-target'],
+    });
+
+    // It yields to exactly one thing: a probe proving the pinned port is gone.
+    const gone = planDevServerService(planInput({
+      row: relayRow(9000, { approvedPort: 9000, selectedByUserAt: NOW }),
+      relay: relayService(9000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+      listenerSource: 'probe',
+      detected: { kind: 'dev-server', port: 5173, likelihood: 'known-dev-port' },
+    }));
+    assert({
+      given: 'a PROBE proving the pinned port stopped listening',
+      should: 'release the pin and take the newcomer',
+      actual: gone.action,
+      expected: 'replace-relay',
+    });
+
+    // And an UNPINNED row behaves as before — the pin is not a blanket freeze.
+    const unpinned = planDevServerService(planInput({
+      row: relayRow(9000, { approvedPort: 9000 }),
+      relay: relayService(9000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+      detected: { kind: 'dev-server', port: 5173, likelihood: 'known-dev-port' },
+    }));
+    assert({
+      given: 'the same case with no pin',
+      should: 'let the known dev port take over',
+      actual: unpinned.action,
+      expected: 'replace-relay',
     });
   });
 

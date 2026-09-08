@@ -39,7 +39,7 @@ function row(targetPort: number, overrides: Partial<DevPreviewRecord> = {}): Dev
     detectedAt: new Date('2026-09-06T11:00:00.000Z'),
     stoppedByUserAt: null,
     approvedPort: null,
-    approvedAt: null,
+    approvedAt: null, selectedByUserAt: null,
     ...overrides,
   };
 }
@@ -82,7 +82,14 @@ function fakeStore(initial: DevPreviewRecord | null, calls: string[] = []): DevP
       if (current !== null && (current.stoppedByUserAt?.getTime() ?? null) !== (intent.basedOnStoppedByUserAt?.getTime() ?? null)) return false;
       const { basedOnStoppedByUserAt: _guard, ...row } = intent;
       // The real store never lets a planner write the approval columns.
-      current = { id: 'r1', ...row, stoppedByUserAt: null, approvedPort: current?.approvedPort ?? null, approvedAt: current?.approvedAt ?? null };
+      // …and the pin survives only its own port, exactly as the SQL does.
+      const keepsPin = current !== null && current.targetPort === row.targetPort;
+      current = {
+        id: 'r1', ...row, stoppedByUserAt: null,
+        approvedPort: current?.approvedPort ?? null,
+        approvedAt: current?.approvedAt ?? null,
+        selectedByUserAt: keepsPin ? current!.selectedByUserAt : null,
+      };
       return true;
     },
     findStoppedWithRelay: async () => [],
