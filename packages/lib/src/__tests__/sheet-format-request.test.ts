@@ -12,6 +12,7 @@ import {
 } from '../sheets/format-request';
 import { setColumnWidth, setRowHeight } from '../sheets/format-ops';
 import { createEmptySheet } from '../sheets/io';
+import type { SheetData } from '../sheets/types';
 import {
   MAX_CONDITIONAL_RULES,
   MAX_CONDITIONAL_TOTAL_CELLS,
@@ -63,6 +64,28 @@ const refusalOf = (ops: SheetFormatOp[], tab: SheetFormatTarget = tabWith()): st
   }
   throw new Error('Expected a SheetFormatError, but planning succeeded.');
 };
+
+describe('planFormatOps — the shape the store already has', () => {
+  it('takes a SheetData as its target without adaptation', () => {
+    // `SheetFormatTarget` says it is satisfied structurally by `SheetData`, and
+    // that claim is the whole reason the caller can hand over what it already
+    // loaded instead of building something. It was prose until now; this makes
+    // the compiler check it, and a test that only ran would not — the
+    // assignment below is the assertion, and `tsc` is what evaluates it.
+    const sheet: SheetData = {
+      ...createEmptySheet(),
+      conditionalFormats: [rule('a')],
+      regions: [region('r1')],
+    };
+    const target: SheetFormatTarget = sheet;
+
+    const result = planFormatOps([{ type: 'removeConditionalRule', id: 'a' }], target);
+    expect(result.conditionalFormats).toEqual([]);
+    // The regions it was not asked about come back untouched, which is what
+    // lets a caller write both lists from one plan.
+    expect(result.regions).toEqual([region('r1')]);
+  });
+});
 
 describe('planFormatOps — the request envelope', () => {
   it('plans nothing for an empty batch, rather than inventing work', () => {
