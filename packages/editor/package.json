@@ -63,6 +63,11 @@
       "import": "./dist/page-mention-node.js",
       "default": "./dist/page-mention-node.js"
     },
+    "./pm-attrs": {
+      "types": "./dist/pm-attrs.d.ts",
+      "import": "./dist/pm-attrs.js",
+      "default": "./dist/pm-attrs.js"
+    },
     "./projection-errors": {
       "types": "./dist/projection-errors.d.ts",
       "import": "./dist/projection-errors.js",
@@ -125,6 +130,9 @@
       ],
       "page-mention-node": [
         "./dist/page-mention-node.d.ts"
+      ],
+      "pm-attrs": [
+        "./dist/pm-attrs.d.ts"
       ],
       "projection-errors": [
         "./dist/projection-errors.d.ts"

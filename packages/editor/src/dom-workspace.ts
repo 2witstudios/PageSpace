@@ -28,6 +28,15 @@ import { Window } from 'happy-dom';
  * *is*. `__tests__/cross-dom-parse-equality.test.ts` holds this shim against
  * a real browser DOM over the construct corpus for that reason.
  *
+ * TWO OLDER TWINS EXIST, both in `apps/web` and both predating this module:
+ * `src/lib/editor/document-content-format.ts` and
+ * `src/lib/editor/census/constructs.ts` each build the same happy-dom `Window`
+ * with the same five `disable*` settings. They are not collapsed into this one
+ * yet — `apps/web` already depends on `@pagespace/editor`, so the direction is
+ * legal and this is the right home — because the census is documented as
+ * temporary and deleting it is its own change. If you are fixing a happy-dom
+ * lifetime or settings bug here, fix it there too, or finish the consolidation.
+ *
  * Deliberately NOT installed as `globalThis.window`/`globalThis.document`.
  * `@tiptap/html`'s `generateJSON`/`generateHTML` reach for those globals;
  * this package drives `prosemirror-model`'s `DOMParser`/`DOMSerializer`

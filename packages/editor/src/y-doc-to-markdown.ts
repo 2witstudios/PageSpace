@@ -4,8 +4,10 @@ import {
 } from 'prosemirror-markdown';
 import type { Node as PmNode } from 'prosemirror-model';
 import type * as Y from 'yjs';
-import { yDocToPmDoc } from './collab-document.js';
-import { UnknownNodeError } from './projection-errors.js';
+import { collabSchema, yDocToPmDoc } from './collab-document.js';
+import { mentionLabelText } from './page-mention-node.js';
+import { stringAttr } from './pm-attrs.js';
+import { assertProjectable } from './projection-errors.js';
 
 /**
  * The markdown projection — the AI-context format.
@@ -65,9 +67,10 @@ export function pmDocToMarkdown(doc: PmNode): string {
  * `image` serializer reads `node.attrs.src` and would throw here.
  */
 function imageMarkdown(state: MarkdownSerializerState, node: PmNode): void {
-  const alt = typeof node.attrs.alt === 'string' ? node.attrs.alt : '';
-  const fileId = typeof node.attrs.fileId === 'string' ? node.attrs.fileId : '';
-  state.write(`![${state.esc(alt)}](pagespace-file:${fileId.replace(/[()]/gu, '\\$&')})`);
+  const fileId = stringAttr(node.attrs, 'fileId');
+  state.write(
+    `![${state.esc(stringAttr(node.attrs, 'alt'))}](pagespace-file:${fileId.replace(/[()]/gu, '\\$&')})`,
+  );
 }
 
 /**
@@ -90,50 +93,47 @@ const ALIGNMENT_DELIMITERS: Readonly<Record<string, string>> = {
   right: '---:',
 };
 
+/** A node's children as an array — ProseMirror only offers `forEach`. */
+function childrenOf(node: PmNode): PmNode[] {
+  const children: PmNode[] = [];
+  node.forEach((child) => children.push(child));
+  return children;
+}
+
 function alignmentDelimiter(cell: PmNode | undefined): string {
-  const align = cell?.attrs.align;
-  return (typeof align === 'string' && ALIGNMENT_DELIMITERS[align]) || '---';
+  return ALIGNMENT_DELIMITERS[cell === undefined ? '' : stringAttr(cell.attrs, 'align')] ?? '---';
 }
 
 function tableMarkdown(state: MarkdownSerializerState, node: PmNode): void {
-  const rows: PmNode[] = [];
-  node.forEach((row) => rows.push(row));
-
-  const cellsOf = (row: PmNode): PmNode[] => {
-    const cells: PmNode[] = [];
-    row.forEach((cell) => cells.push(cell));
-    return cells;
-  };
-
+  const rows = childrenOf(node);
   const columnCount = rows.reduce((max, row) => Math.max(max, row.childCount), 0);
-  const pad = (cells: string[]): string[] =>
-    Array.from({ length: columnCount }, (_unused, index) => cells[index] ?? '');
+
+  // Every row is padded to the widest row's width, so a short row cannot shift
+  // the columns after it — one rule, applied by one function, to all three
+  // kinds of line below.
+  const line = (cell: (index: number) => string): string =>
+    `| ${Array.from({ length: columnCount }, (_unused, index) => cell(index)).join(' | ')} |`;
 
   // GFM has no table without a header row. When the first row is not one (a
   // table of plain cells is perfectly legal in the schema), an empty header is
   // emitted rather than promoting a data row — promoting one would silently
   // change what the table says.
-  const firstRow = rows[0];
+  const firstCells = rows.length > 0 ? childrenOf(rows[0]) : [];
   const firstIsHeader =
-    firstRow !== undefined &&
-    firstRow.childCount > 0 &&
-    cellsOf(firstRow).every((cell) => cell.type.name === 'tableHeader');
+    firstCells.length > 0 && firstCells.every((cell) => cell.type.name === 'tableHeader');
 
-  const headerCells = firstIsHeader ? cellsOf(firstRow).map(cellMarkdown) : [];
+  const headerCells = firstIsHeader ? firstCells.map(cellMarkdown) : [];
   const bodyRows = (firstIsHeader ? rows.slice(1) : rows).map((row) =>
-    cellsOf(row).map(cellMarkdown),
+    childrenOf(row).map(cellMarkdown),
   );
-  const alignmentSource = cellsOf(firstRow ?? node);
 
-  const lines = [
-    `| ${pad(headerCells).join(' | ')} |`,
-    `| ${pad([])
-      .map((_unused, index) => alignmentDelimiter(alignmentSource[index]))
-      .join(' | ')} |`,
-    ...bodyRows.map((cells) => `| ${pad(cells).join(' | ')} |`),
-  ];
-
-  state.write(lines.join('\n'));
+  state.write(
+    [
+      line((index) => headerCells[index] ?? ''),
+      line((index) => alignmentDelimiter(firstCells[index])),
+      ...bodyRows.map((cells) => line((index) => cells[index] ?? '')),
+    ].join('\n'),
+  );
   state.closeBlock(node);
 }
 
@@ -168,8 +168,7 @@ function markdownSerializer(): MarkdownSerializer {
         // is swallowed into it.
         const runs = node.textContent.match(/`{3,}/gmu);
         const fence = runs ? `${runs.sort().slice(-1)[0]}\`` : '```';
-        const language = typeof node.attrs.language === 'string' ? node.attrs.language : '';
-        state.write(`${fence}${language}\n`);
+        state.write(`${fence}${stringAttr(node.attrs, 'language')}\n`);
         state.text(node.textContent, false);
         state.write('\n');
         state.write(fence);
@@ -230,9 +229,11 @@ function markdownSerializer(): MarkdownSerializer {
       image: imageMarkdown,
 
       pageMention(state, node) {
-        const label = node.attrs.label;
-        if (typeof label === 'string' && label.length > 0) {
-          state.text(`@${label}`);
+        // Shared with the text projection — `projections.test.ts` asserts the
+        // two agree, so the rule cannot live in both.
+        const label = mentionLabelText(node);
+        if (label.length > 0) {
+          state.text(label);
         }
       },
 
@@ -259,8 +260,7 @@ function markdownSerializer(): MarkdownSerializer {
       link: {
         open: '[',
         close(_state, mark) {
-          const href = typeof mark.attrs.href === 'string' ? mark.attrs.href : '';
-          return `](${href.replace(/[()"]/gu, '\\$&')})`;
+          return `](${stringAttr(mark.attrs, 'href').replace(/[()"]/gu, '\\$&')})`;
         },
       },
 
@@ -278,25 +278,36 @@ function markdownSerializer(): MarkdownSerializer {
 }
 
 /**
+ * The names the markdown projection can represent.
+ *
+ * Deliberately NOT the schema's set: the serializer's node map has no `doc`
+ * entry, because `MarkdownSerializer.serialize` renders the root's CHILDREN.
+ * The root is still a node the guard must accept, so the schema's top node is
+ * added back explicitly rather than the guard being taught to skip roots.
+ *
+ * Built once. `pmDocToBlocks` projects each block separately, so building these
+ * per call meant 400 throwaway `Set`s on a 200-block document — measured at
+ * ~40% of its runtime.
+ */
+let cachedNames: { nodes: ReadonlySet<string>; marks: ReadonlySet<string> } | undefined;
+
+function projectableNames(): { nodes: ReadonlySet<string>; marks: ReadonlySet<string> } {
+  const serializer = markdownSerializer();
+  cachedNames ??= {
+    nodes: new Set([...Object.keys(serializer.nodes), collabSchema().topNodeType.name]),
+    marks: new Set(Object.keys(serializer.marks)),
+  };
+  return cachedNames;
+}
+
+/**
  * `MarkdownSerializer` throws its own `RangeError` for an unregistered node,
  * but the message ("Token type `x` not supported by Markdown renderer") reads
  * as a renderer gap rather than as this package's fail-closed contract, and it
- * carries no projection name. Rethrowing as `UnknownNodeError` keeps a single
- * error type across all four projections, which is what a caller catches on.
+ * carries no projection name. Checking up front keeps a single error type
+ * across all four projections, which is what a caller catches on.
  */
 function assertMarkdownProjectable(doc: PmNode): void {
-  const serializer = markdownSerializer();
-  const knownNodes = new Set(Object.keys(serializer.nodes));
-  const knownMarks = new Set(Object.keys(serializer.marks));
-  doc.descendants((node) => {
-    if (!knownNodes.has(node.type.name)) {
-      throw new UnknownNodeError(node.type.name, 'markdown');
-    }
-    for (const mark of node.marks) {
-      if (!knownMarks.has(mark.type.name)) {
-        throw new UnknownNodeError(mark.type.name, 'markdown');
-      }
-    }
-    return true;
-  });
+  const known = projectableNames();
+  assertProjectable(doc, 'markdown', known.nodes, known.marks);
 }

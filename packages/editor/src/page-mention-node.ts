@@ -1,5 +1,6 @@
 import { Mention, type MentionOptions } from '@tiptap/extension-mention';
-import type { DOMOutputSpec } from '@tiptap/pm/model';
+import type { DOMOutputSpec, Node as PmNode } from '@tiptap/pm/model';
+import { nonEmptyStringAttr } from './pm-attrs.js';
 
 /**
  * The `pageMention` node's schema-affecting shape only: attributes and the
@@ -289,5 +290,24 @@ export const PageMentionNode = PageMentionExtension.configure({
   },
   renderHTML: pageMentionRenderHTML,
 });
+
+/**
+ * What a reader SEES for a mention: `@label`, or nothing when there is no
+ * label.
+ *
+ * Lives here, on the node that owns this attribute's contract, because the
+ * text and markdown projections must agree on it — `projections.test.ts`
+ * asserts they do — and two copies of the rule would let a change to mention
+ * rendering land in one projection only.
+ *
+ * A label-less mention contributes NOTHING rather than a bare `@`: the id is a
+ * CUID, and emitting it (or an empty sigil) would put identifiers into the
+ * search corpus, where a query of the right shape would match documents that
+ * merely link to a page.
+ */
+export function mentionLabelText(node: PmNode): string {
+  const label = nonEmptyStringAttr(node.attrs, 'label');
+  return label === null ? '' : `@${label}`;
+}
 
 export { getMentionAttrs };

@@ -181,6 +181,15 @@ export const CONSTRUCT_CORPUS: readonly ConstructFixture[] = [
   },
 ] as const;
 
+/**
+ * The corpus as `it.each` rows. Exported because three suites parametrise over
+ * it and each was writing this same `.map` inline — the kind of line that
+ * drifts when one file adds a filter and the others do not.
+ */
+export const CORPUS_CASES = CONSTRUCT_CORPUS.map(
+  (fixture) => [fixture.key, fixture] as const,
+);
+
 /** Every fixture concatenated — one document exercising the whole corpus. */
 export function corpusDocumentHtml(): string {
   return CONSTRUCT_CORPUS.map((fixture) => fixture.html).join('');

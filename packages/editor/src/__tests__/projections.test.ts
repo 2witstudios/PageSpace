@@ -16,7 +16,7 @@ import { pmDocToText, yDocToText } from '../y-doc-to-text.js';
 import { pmDocToMarkdown, yDocToMarkdown } from '../y-doc-to-markdown.js';
 import { pmDocToBlocks, yDocToBlocks } from '../y-doc-to-blocks.js';
 import { UnknownNodeError } from '../projection-errors.js';
-import { CONSTRUCT_CORPUS, corpusDocumentHtml } from './support/construct-corpus.js';
+import { CORPUS_CASES, corpusDocumentHtml } from './support/construct-corpus.js';
 
 const corpusHtml = corpusDocumentHtml();
 const corpusDoc = htmlToPmDoc(corpusHtml);
@@ -52,7 +52,7 @@ describe('text projection', () => {
     },
   );
 
-  it.each(CONSTRUCT_CORPUS.map((fixture) => [fixture.key, fixture] as const))(
+  it.each(CORPUS_CASES)(
     'keeps every visible string of %s',
     (_key, fixture) => {
       for (const expected of fixture.text) {
@@ -93,6 +93,19 @@ describe('text projection', () => {
     expect(projected).not.toContain('pg_secret');
   });
 
+  it('contributes nothing for a mention with no label — never the word "null"', () => {
+    // `label` defaults to `null` in the frozen schema. Stringifying it without
+    // narrowing puts the literal `@null` into the search corpus, and emitting
+    // the id instead would let a CUID-shaped query match every document that
+    // merely links to a page.
+    const doc = corpusDoc.type.schema;
+    const mention = doc.node('doc', null, [
+      doc.node('paragraph', null, [doc.node('pageMention', { id: 'pg_1', label: null })]),
+    ]);
+    expect(pmDocToText(mention)).toBe('');
+    expect(pmDocToMarkdown(mention).trim()).toBe('');
+  });
+
   it('contributes nothing for an image, so alt text cannot answer a prose query', () => {
     expect(pmDocToText(htmlToPmDoc('<img data-file-id="f1" alt="a diagram">'))).toBe('');
   });
@@ -119,7 +132,7 @@ describe('markdown projection', () => {
     expect(tokens(markdown)).toBeLessThan(tokens(html) * 0.6);
   });
 
-  it.each(CONSTRUCT_CORPUS.map((fixture) => [fixture.key, fixture] as const))(
+  it.each(CORPUS_CASES)(
     'keeps every visible string of %s',
     (_key, fixture) => {
       for (const expected of fixture.text) {
@@ -191,6 +204,20 @@ describe('markdown projection', () => {
       htmlToPmDoc('<table><tbody><tr><td><p>a|b</p></td></tr></tbody></table>'),
     );
     expect(projected).toContain('a\\|b');
+  });
+
+  it('pads every row to the widest row, so a short row cannot shift columns', () => {
+    // A ragged table is legal in the schema. Sizing the table from the FIRST
+    // row instead of the widest silently truncates every wider row's cells —
+    // content loss that reads as a well-formed table.
+    expect(
+      pmDocToMarkdown(
+        htmlToPmDoc(
+          '<table><tbody><tr><td><p>a</p></td></tr>' +
+            '<tr><td><p>b</p></td><td><p>c</p></td></tr></tbody></table>',
+        ),
+      ).trim(),
+    ).toBe('|  |  |\n| --- | --- |\n| a |  |\n| b | c |');
   });
 
   it('emits an empty header when the table has no header row', () => {
@@ -277,6 +304,17 @@ describe('blocks projection', () => {
     expect(pmDocToBlocks(htmlToPmDoc('<p>no id</p>'))[0].blockId).toBeNull();
   });
 
+  it('treats an EMPTY blockId as no id, not as an id', () => {
+    // An empty string is not an addressable identity: returned as a string it
+    // would let a caller treat "no id" as an id and address the wrong block.
+    // (HTML parsing folds `data-block-id=""` to null on its own, so this can
+    // only be reached by constructing the node directly — which is exactly why
+    // the narrowing has to live in one named place.)
+    const schema = htmlToPmDoc('<p>x</p>').type.schema;
+    const doc = schema.node('doc', null, [schema.node('paragraph', { blockId: '' })]);
+    expect(pmDocToBlocks(doc)[0].blockId).toBeNull();
+  });
+
   it('keeps a list as ONE block rather than flattening it to its items', () => {
     const blocks = pmDocToBlocks(htmlToPmDoc('<ul><li>a</li><li>b</li></ul>'));
     expect(blocks).toHaveLength(1);
@@ -333,6 +371,26 @@ describe('fail closed', () => {
       expect((error as UnknownNodeError).nodeName).toBe('mystery');
       expect((error as UnknownNodeError).projection).toBe('markdown');
     }
+  });
+
+  it('throws on an unrecognised ROOT node, which `descendants` never visits', () => {
+    // `Node.descendants` does not visit the node it is called on, so a guard
+    // built only from it accepts ANY root. A document whose top node the
+    // projection cannot represent is not projectable, and this is the only
+    // assertion that says so.
+    const rootSchema = new Schema({
+      topNode: 'article',
+      nodes: {
+        article: { content: 'block+' },
+        paragraph: { content: 'text*', group: 'block' },
+        text: { group: 'inline' },
+      },
+      marks: {},
+    });
+    const doc = rootSchema.node('article', null, [rootSchema.node('paragraph')]);
+    expect(() => pmDocToHtml(doc)).toThrow(UnknownNodeError);
+    expect(() => pmDocToHtml(doc)).toThrow(/article/u);
+    expect(() => pmDocToMarkdown(doc)).toThrow(UnknownNodeError);
   });
 
   it('throws on an unknown INLINE node, not only an unknown block', () => {

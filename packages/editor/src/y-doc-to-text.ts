@@ -1,6 +1,7 @@
 import type { Node as PmNode } from 'prosemirror-model';
 import type * as Y from 'yjs';
 import { yDocToPmDoc } from './collab-document.js';
+import { mentionLabelText } from './page-mention-node.js';
 import { UnknownNodeError } from './projection-errors.js';
 
 /**
@@ -23,6 +24,13 @@ import { UnknownNodeError } from './projection-errors.js';
  * Blocks are separated by `\n` so a phrase can never be formed by two
  * paragraphs abutting — the failure mode that makes `Element.textContent` the
  * wrong tool here. Table cells are separated by tabs within their row.
+ *
+ * NOT the same thing as `projectContent`
+ * (`packages/lib/src/content/anchoring/text-projection.ts`), which looks
+ * similar and is not interchangeable: that one collapses whitespace and trims
+ * because it defines an ANCHOR COORDINATE SYSTEM that tag offsets are stored
+ * against. This one keeps text verbatim, tab-joins table cells and throws on an
+ * unknown node. Do not wire anchors to this projection.
  */
 export function yDocToText(yDoc: Y.Doc): string {
   return pmDocToText(yDocToPmDoc(yDoc));
@@ -30,20 +38,18 @@ export function yDocToText(yDoc: Y.Doc): string {
 
 /** `yDocToText` over an already-materialised ProseMirror document. */
 export function pmDocToText(doc: PmNode): string {
-  const lines: string[] = [];
-  collectLines(doc, lines);
-  return lines.filter((line) => line.length > 0).join('\n');
+  return flatten(doc, '\n');
 }
 
 /**
- * `@label`, matching what a reader sees. A mention with no label contributes
- * nothing rather than a bare `@`: the id is a CUID, and putting CUIDs in the
- * search corpus means a query of the right shape matches documents that
- * merely link to a page.
+ * The projection's core join rule, in one place: collect the node's lines, drop
+ * the empty ones, join. Only the separator differs between a document (`\n`,
+ * block boundaries) and a table cell (`' '`, which cannot contain a newline).
  */
-function mentionText(node: PmNode): string {
-  const label = node.attrs.label;
-  return typeof label === 'string' && label.length > 0 ? `@${label}` : '';
+function flatten(node: PmNode, separator: string): string {
+  const lines: string[] = [];
+  collectLines(node, lines);
+  return lines.filter((line) => line.length > 0).join(separator);
 }
 
 function inlineText(node: PmNode): string {
@@ -53,7 +59,9 @@ function inlineText(node: PmNode): string {
     case 'hardBreak':
       return '\n';
     case 'pageMention':
-      return mentionText(node);
+      // Shared with the markdown projection, which must render mentions
+      // identically — see `mentionLabelText`.
+      return mentionLabelText(node);
     default:
       throw new UnknownNodeError(node.type.name, 'text');
   }
@@ -69,13 +77,14 @@ function inlineChildren(node: PmNode): string {
 
 /** A table cell's blocks flattened onto one line, so a row stays a row. */
 function cellText(cell: PmNode): string {
-  const lines: string[] = [];
-  collectLines(cell, lines);
-  return lines.filter((line) => line.length > 0).join(' ');
+  return flatten(cell, ' ');
 }
 
 function collectLines(node: PmNode, lines: string[]): void {
   switch (node.type.name) {
+    // Pure containers: recurse, contribute nothing of their own. `table` is
+    // here too — its rows are what carry structure, and `tableRow` below is
+    // where a row becomes a line.
     case 'doc':
     case 'blockquote':
     case 'bulletList':
@@ -83,6 +92,7 @@ function collectLines(node: PmNode, lines: string[]): void {
     case 'listItem':
     case 'taskList':
     case 'taskItem':
+    case 'table':
     case 'tableCell':
     case 'tableHeader':
       node.forEach((child) => collectLines(child, lines));
@@ -98,10 +108,6 @@ function collectLines(node: PmNode, lines: string[]): void {
       // newlines are real and must survive as line breaks rather than being
       // flattened into one line.
       lines.push(...inlineChildren(node).split('\n'));
-      return;
-
-    case 'table':
-      node.forEach((row) => collectLines(row, lines));
       return;
 
     case 'tableRow': {

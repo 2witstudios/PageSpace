@@ -1,6 +1,7 @@
 import type { Node as PmNode } from 'prosemirror-model';
 import type * as Y from 'yjs';
 import { yDocToPmDoc } from './collab-document.js';
+import { nonEmptyStringAttr } from './pm-attrs.js';
 import { pmDocToMarkdown } from './y-doc-to-markdown.js';
 import { pmDocToText } from './y-doc-to-text.js';
 
@@ -56,9 +57,8 @@ export function yDocToBlocks(yDoc: Y.Doc): DocumentBlock[] {
 export function pmDocToBlocks(doc: PmNode): DocumentBlock[] {
   const blocks: DocumentBlock[] = [];
   doc.forEach((node, _offset, index) => {
-    const blockId = node.attrs.blockId;
     blocks.push({
-      blockId: typeof blockId === 'string' && blockId.length > 0 ? blockId : null,
+      blockId: nonEmptyStringAttr(node.attrs, 'blockId'),
       type: node.type.name,
       index,
       text: pmDocToText(node),

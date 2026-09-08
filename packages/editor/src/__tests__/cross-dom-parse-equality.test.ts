@@ -34,7 +34,7 @@ import * as esbuild from 'esbuild';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { fileURLToPath } from 'node:url';
 import { htmlToPmDoc } from '../html-to-ydoc.js';
-import { CONSTRUCT_CORPUS, corpusDocumentHtml } from './support/construct-corpus.js';
+import { CORPUS_CASES, corpusDocumentHtml } from './support/construct-corpus.js';
 
 let browser: Browser;
 let page: Page;
@@ -81,7 +81,7 @@ describe('cross-DOM parse equality', () => {
     expect(await page.evaluate(() => typeof window.__parseHtmlToPmJson)).toBe('function');
   });
 
-  it.each(CONSTRUCT_CORPUS.map((fixture) => [fixture.key, fixture] as const))(
+  it.each(CORPUS_CASES)(
     'agrees with Chromium on %s',
     async (_key, fixture) => {
       expect(await parseInBrowser(fixture.html)).toEqual(htmlToPmDoc(fixture.html).toJSON());

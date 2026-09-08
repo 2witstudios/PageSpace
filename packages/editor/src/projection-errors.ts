@@ -1,3 +1,5 @@
+import type { Node as PmNode } from 'prosemirror-model';
+
 /**
  * Thrown when a projector meets a node or mark the frozen schema does not
  * describe.
@@ -52,4 +54,48 @@ export class UnrepresentableContentError extends Error {
     this.name = 'UnrepresentableContentError';
     this.reasons = reasons;
   }
+}
+
+/**
+ * The fail-closed walk itself, shared by every projector that renders through
+ * a node/mark map rather than through an exhaustive `switch`.
+ *
+ * The mechanism is shared; the SETS deliberately are not. Each projection
+ * decides for itself what it can represent — the markdown serializer's node map
+ * legitimately differs from the schema (it has no `doc` entry, because
+ * `MarkdownSerializer.serialize` renders the root's children rather than the
+ * root) — and forcing one set on both would either add meaningless entries or
+ * turn a design decision into the wrong compile error. What must NOT differ is
+ * the walk: before this was one function, the HTML guard checked the root node
+ * and the markdown guard did not, silently applying two different rules to the
+ * same document. A future third guard also cannot now forget the marks half.
+ *
+ * Callers pass PRE-BUILT sets. Building them here would allocate two `Set`s per
+ * call, and `pmDocToBlocks` calls a projection once per block — measured at 400
+ * throwaway sets and ~40% of its total runtime for a 200-block document.
+ */
+export function assertProjectable(
+  doc: PmNode,
+  projection: string,
+  knownNodes: ReadonlySet<string>,
+  knownMarks: ReadonlySet<string>,
+): void {
+  const check = (node: PmNode): void => {
+    if (!knownNodes.has(node.type.name)) {
+      throw new UnknownNodeError(node.type.name, projection);
+    }
+    for (const mark of node.marks) {
+      if (!knownMarks.has(mark.type.name)) {
+        throw new UnknownNodeError(mark.type.name, projection);
+      }
+    }
+  };
+  // `descendants` does not visit the root, and the root is a node like any
+  // other — a document whose top node the projection cannot represent is not
+  // projectable.
+  check(doc);
+  doc.descendants((node) => {
+    check(node);
+    return true;
+  });
 }

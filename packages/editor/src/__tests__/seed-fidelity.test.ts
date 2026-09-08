@@ -19,9 +19,12 @@
 import { describe, it, expect } from 'vitest';
 import { htmlToPmDoc, describeHtmlLoss } from '../html-to-ydoc.js';
 import { pmDocToHtml } from '../y-doc-to-html.js';
-import { pmDocToText } from '../y-doc-to-text.js';
-import { createDomWorkspace } from '../dom-workspace.js';
-import { CONSTRUCT_CORPUS, corpusDocumentHtml } from './support/construct-corpus.js';
+import { withDomWorkspace } from '../dom-workspace.js';
+import {
+  CONSTRUCT_CORPUS,
+  CORPUS_CASES,
+  corpusDocumentHtml,
+} from './support/construct-corpus.js';
 
 /**
  * Every markup construct one pass through the schema is allowed to ADD.
@@ -40,8 +43,14 @@ import { CONSTRUCT_CORPUS, corpusDocumentHtml } from './support/construct-corpus
  *   `TaskItem`'s rendered checkbox. The state itself lives in
  *   `li@data-checked`, which the source already carried.
  * - `pre@class` — `CodeBlockNode` mirrors `language-x` onto the `<pre>`.
- * - `table@style`, `colgroup`, `col`, `col@style` — TipTap's table column
- *   model, emitted as `min-width` from the schema's own defaults.
+ * - `table@style`, `colgroup`, `col`, `col@style` (and their `style:min-width`
+ *   forms) — TipTap's table column model, emitted as `min-width` from the
+ *   schema's own defaults.
+ *
+ * The `=pageMention` entries are the VALUE-bearing form of the `data-type`
+ * marker above. They are listed separately, and deliberately: it is the value
+ * that carries the meaning, so `data-type` changing from `taskList` to
+ * `taskItem` must fail rather than be absorbed by a bare `attr@data-type`.
  *
  * Nothing here changes what the document SAYS. An addition outside this set is
  * a change to the stored dialect and must be looked at, not tolerated.
@@ -50,14 +59,18 @@ const ALLOWED_COSMETIC_ADDITIONS: ReadonlySet<string> = new Set([
   'attr:a@contenteditable',
   'attr:a@data-drive-id',
   'attr:a@data-type',
+  'attr:a@data-type=pageMention',
   'attr:a@rel',
   'attr:a@target',
   'attr:col@style',
+  'attr:col@style:min-width',
   'attr:input@checked',
   'attr:input@type',
   'attr:pre@class',
   'attr:span@data-type',
+  'attr:span@data-type=pageMention',
   'attr:table@style',
+  'attr:table@style:min-width',
   'attr:ul@class',
   'attr:ul@data-tight',
   'el:col',
@@ -70,19 +83,36 @@ const ALLOWED_COSMETIC_ADDITIONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Markup constructs as comparable keys: `el:<tag>` and `attr:<tag>@<name>`.
- * Deliberately not the markup string — a set difference names WHICH construct
+ * Markup constructs as comparable keys: `el:<tag>`, `attr:<tag>@<name>`, and —
+ * for the two attributes whose VALUE is the construct — `attr:<tag>@<name>=<value>`.
+ * Deliberately not the markup string: a set difference names WHICH construct
  * moved, where a string diff only says "changed".
+ *
+ * `style` is split per CSS property and `data-type` carries its value, because
+ * a bare `attr:p@style` merges the question with the answer. `text-align:center`
+ * becoming `text-align:left`, or `data-type="taskList"` becoming `taskItem`,
+ * would otherwise be invisible to a gate whose entire job is naming the
+ * construct that moved — and the corpus has fixtures for both.
  */
 function constructsOf(html: string): Set<string> {
-  const workspace = createDomWorkspace();
-  try {
+  return withDomWorkspace((workspace) => {
     const keys = new Set<string>();
     const walk = (element: Element): void => {
       const tag = element.tagName.toLowerCase();
       keys.add(`el:${tag}`);
       for (const name of element.getAttributeNames()) {
         keys.add(`attr:${tag}@${name}`);
+        if (name === 'data-type') {
+          keys.add(`attr:${tag}@data-type=${element.getAttribute(name) ?? ''}`);
+        }
+        if (name === 'style') {
+          for (const declaration of (element.getAttribute(name) ?? '').split(';')) {
+            const property = declaration.split(':')[0]?.trim().toLowerCase();
+            if (property) {
+              keys.add(`attr:${tag}@style:${property}`);
+            }
+          }
+        }
       }
       for (const child of Array.from(element.children)) {
         walk(child);
@@ -92,15 +122,13 @@ function constructsOf(html: string): Set<string> {
       walk(child);
     }
     return keys;
-  } finally {
-    workspace.close();
-  }
+  });
 }
 
 const difference = (a: Set<string>, b: Set<string>): string[] =>
   [...a].filter((key) => !b.has(key)).sort();
 
-describe.each(CONSTRUCT_CORPUS.map((fixture) => [fixture.key, fixture] as const))(
+describe.each(CORPUS_CASES)(
   'seed fidelity: %s',
   (_key, fixture) => {
     const rendered = pmDocToHtml(htmlToPmDoc(fixture.html));
@@ -118,18 +146,14 @@ describe.each(CONSTRUCT_CORPUS.map((fixture) => [fixture.key, fixture] as const)
       expect(added.filter((key) => !ALLOWED_COSMETIC_ADDITIONS.has(key))).toEqual([]);
     });
 
-    it('preserves every visible character', () => {
-      const strip = (text: string): string => text.replace(/\s+/gu, '');
-      const workspace = createDomWorkspace();
-      try {
-        expect(strip(pmDocToText(htmlToPmDoc(fixture.html)))).toBe(
-          strip(workspace.parse(fixture.html).textContent ?? ''),
-        );
-      } finally {
-        workspace.close();
-      }
-    });
-
+    // No "preserves every visible character" test here. It would recompute
+    // `visibleCharacters(source.textContent) === visibleCharacters(pmDocToText(...))`,
+    // which is exactly what `describeHtmlLoss` does below — a mirror that
+    // cannot fail unless the next test fails first, and whose duplicated
+    // whitespace rule would silently drift from the implementation's. The
+    // independent check on the same property is in `projections.test.ts`,
+    // where each fixture's expected visible strings are hand-written rather
+    // than derived from the code under test.
     it('reports no loss', () => {
       expect(describeHtmlLoss(fixture.html)).toEqual([]);
     });
