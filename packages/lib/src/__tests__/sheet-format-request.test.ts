@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   MAX_FORMAT_CELLS,
@@ -25,6 +26,7 @@ import {
   type SheetRegion,
 } from '../sheets/regions';
 import { PALETTE } from '../sheets/palette';
+import { isSupportedFunction } from '../sheets/functions';
 import { MAX_ADDRESSABLE_ROW, encodeColumnLabel } from '../sheets/address';
 import { MAX_CONDITIONAL_RANGES_PER_RULE, VALUELESS_OPERATORS } from '../sheets/conditional';
 
@@ -894,6 +896,27 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
       expect(plan([{ type: 'addConditionalRule', rule: formula(body) }]).conditionalFormats)
         .toHaveLength(1);
     }
+  });
+
+  it('recognises every function the dispatch actually implements', () => {
+    // `isSupportedFunction` probes the switch instead of listing its names, and
+    // this is the assertion that the probe is sound in the direction that
+    // matters: a FALSE negative would refuse a formula that works perfectly.
+    //
+    // The names are read out of the source rather than written here, because a
+    // list in this file is the second copy the probe exists to avoid — it would
+    // drift the first time someone adds a function, and the test would keep
+    // passing while saying nothing.
+    const source = readFileSync(new URL('../sheets/functions.ts', import.meta.url), 'utf8');
+    const names = [...new Set([...source.matchAll(/case '([A-Z0-9_.]+)'/g)].map((m) => m[1]))];
+
+    // A regex that stops matching would leave an empty list and a test that
+    // passes vacuously, which is the failure mode this whole suite is built
+    // against.
+    expect(names.length).toBeGreaterThan(40);
+
+    expect(names.filter((name) => !isSupportedFunction(name))).toEqual([]);
+    expect(isSupportedFunction('BROKEN')).toBe(false);
   });
 
   it('refuses a value nested past what it will verify, rather than dying on it', () => {
