@@ -86,12 +86,14 @@ import {
 } from './format-ops';
 import { isSupportedFunction } from './functions';
 import { PALETTE } from './palette';
+import { columnRoleFormat } from './region-format';
 import { FormulaParser, tokenize } from './parser';
 import {
   MAX_REGIONS,
   parseRegion,
   parseRegionRange,
   parseRegions,
+  type RegionColumn,
   type SheetRegion,
 } from './regions';
 import type { ASTNode, CellFormat } from './types';
@@ -903,6 +905,31 @@ function validateRuleInput(
 }
 
 /**
+ * Whether a column setting has any effect on what that column renders, asked of
+ * the deriver rather than assumed.
+ *
+ * `columnRoleFormat` reads `currency` only for `role: 'currency'` and `decimals`
+ * only for the three numeric roles, so `{role: 'number', currency: 'EUR'}` is
+ * stored, ignored, and looks from the outside like money that lost its symbol.
+ *
+ * Answered by deriving the format twice with two ARBITRARY, different values
+ * for the field: identical output means the field was not read, whatever the
+ * caller happened to send. The tempting shortcut — derive once with the
+ * caller's value and once without it — asks a different question and gets
+ * `currency: 'USD'` on a currency column wrong, because the role defaults to
+ * USD anyway, so the two derivations match and a redundant declaration is
+ * reported as an ignored one. Redundant is not a mistake.
+ */
+const columnFieldIsIgnored = (
+  column: RegionColumn,
+  field: 'currency' | 'decimals',
+  a: string | number,
+  b: string | number
+): boolean =>
+  canonical(columnRoleFormat({ ...column, [field]: a })) ===
+  canonical(columnRoleFormat({ ...column, [field]: b }));
+
+/**
  * The same question as {@link ruleRenderProblem}, for a region: what would be
  * stored exactly as asked and still not do it?
  */
@@ -933,6 +960,20 @@ function regionRenderProblem(region: SheetRegion, label: string): string | null 
           return `${label}: total row ${row} is outside the region ${region.range}, so it can never render.`;
         }
       }
+    }
+  }
+
+  for (const column of region.columns ?? []) {
+    for (const [field, a, b] of [
+      ['currency', 'AAA', 'BBB'],
+      ['decimals', 1, 2],
+    ] as const) {
+      if (column[field] === undefined) continue;
+      if (!columnFieldIsIgnored(column, field, a, b)) continue;
+      return (
+        `${label}: column ${column.column} declares ${field}, which a "${column.role}" column does ` +
+        'not use — it would be stored and never rendered.'
+      );
     }
   }
 

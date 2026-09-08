@@ -796,6 +796,38 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
     ).toHaveLength(1);
   });
 
+  it('refuses a column setting the column’s own role does not use', () => {
+    // `columnRoleFormat` reads `currency` only for `role: 'currency'` and
+    // `decimals` only for the numeric roles, so `{role: 'number', currency:
+    // 'EUR'}` is stored, ignored, and looks from the outside like money that
+    // lost its symbol.
+    const withColumn = (column: unknown) => ({ id: 'r1', range: 'A1:F', columns: [column] });
+
+    expect(
+      refusalOf([
+        { type: 'upsertRegion', region: withColumn({ column: 'C', role: 'number', currency: 'EUR' }) },
+      ])
+    ).toContain('declares currency, which a "number" column does not use');
+    expect(
+      refusalOf([
+        { type: 'upsertRegion', region: withColumn({ column: 'C', role: 'date', decimals: 2 }) },
+      ])
+    ).toContain('declares decimals, which a "date" column does not use');
+
+    // The roles that DO read them still work, including the case that a naive
+    // "does removing it change anything?" check would get wrong: `USD` on a
+    // currency column matches the default, so it is redundant — not a mistake.
+    for (const column of [
+      { column: 'C', role: 'currency', currency: 'EUR' },
+      { column: 'C', role: 'currency', currency: 'USD' },
+      { column: 'C', role: 'number', decimals: 0 },
+      { column: 'C', role: 'percent', decimals: 1 },
+    ]) {
+      expect(plan([{ type: 'upsertRegion', region: withColumn(column) }]).regions[0].columns)
+        .toHaveLength(1);
+    }
+  });
+
   it('refuses freezeHeader while nothing acts on it', () => {
     // Parsed and stored, with no consumer anywhere: `createRegionResolver` does
     // not read it and the `setRegions` step only stores the region. Accepting
