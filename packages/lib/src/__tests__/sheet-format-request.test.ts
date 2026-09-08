@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_FORMULA_DEPTH,
   MAX_FORMAT_CELLS,
   MAX_FORMAT_CELLS_PER_REQUEST,
   MAX_FORMAT_OPS,
@@ -1206,6 +1207,138 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
       expect(plan([{ type: 'addConditionalRule', rule: formula(body) }]).conditionalFormats)
         .toHaveLength(1);
     }
+  });
+
+  it('refuses formula work that only adds up across rules', () => {
+    // The per-rule ceiling bounds one rule and says nothing about two hundred
+    // of them. Each of these covers 10,000 cells and references 2,000 — legal
+    // alone, and the covered-cell aggregate is satisfied — while together they
+    // ask for a billion expansions in one render.
+    const heavy = (id: string) => ({
+      id,
+      kind: 'formula',
+      ranges: ['A1:A10000'],
+      formula: '=SUM(B1:B2000)>0',
+      format: { bold: true },
+    });
+    const tab = tabWith({ rowCount: 20000 });
+
+    // One alone is fine, which is what makes the sum the finding.
+    expect(
+      plan([{ type: 'addConditionalRule', rule: heavy('one') }], tab).conditionalFormats
+    ).toHaveLength(1);
+
+    expect(
+      refusalOf(
+        Array.from({ length: 50 }, (_, i) => ({
+          type: 'addConditionalRule' as const,
+          rule: heavy(`r${i}`),
+        })),
+        tab
+      )
+    ).toContain('address expansions to render once');
+
+    // And the repair exception, as for the cell aggregate: a sheet already past
+    // this can still be reduced.
+    const over = tabWith({
+      rowCount: 20000,
+      conditionalFormats: Array.from({ length: 50 }, (_, i) => heavy(`r${i}`)) as never,
+    });
+    expect(
+      plan([{ type: 'removeConditionalRule', id: 'r0' }], over).conditionalFormats
+    ).toHaveLength(49);
+  });
+
+  it('costs stored formula rules honestly, whatever they contain', () => {
+    // The work total is computed over the RESULTING list, which includes rules
+    // that were already there — and those did not come through this validator.
+    // A stored formula may not parse at all, may be blank, may reference
+    // something unaddressable, or may nest under a unary operator. None of
+    // those may throw here, and none may be counted as costing something it
+    // cannot cost: a formula that will not parse never expands anything,
+    // because it throws first.
+    const stored = (id: string, formula: string) =>
+      ({
+        id,
+        kind: 'formula',
+        ranges: ['A1:A9'],
+        formula,
+        format: { bold: true },
+      }) as unknown as ConditionalRule;
+
+    const tab = tabWith({
+      conditionalFormats: [
+        stored('unparseable', '=BROKEN('),
+        stored('blank', '   '),
+        stored('unaddressable', '=SUM(A1:ZZZZ5)>0'),
+        stored('unary', '=-SUM(A1:A9)>0'),
+      ],
+    });
+
+    // Any op that touches the rule list walks all of them.
+    const result = plan([{ type: 'removeConditionalRule', id: 'blank' }], tab);
+    expect(result.conditionalFormats.map((rule) => rule.id)).toEqual([
+      'unparseable',
+      'unaddressable',
+      'unary',
+    ]);
+  });
+
+  it('refuses a formula the recursive evaluator cannot walk', () => {
+    // The parser is iterative and so is the walk that checks a formula, but
+    // `evaluation.ts` evaluates `BinaryExpression.left` by recursion — so a long
+    // left-associative chain parses cleanly here and overflows the stack there,
+    // once per covered cell.
+    const chain = (terms: number) =>
+      `=${Array.from({ length: terms }, (_, i) => `A${(i % 90) + 1}`).join('+')}>0`;
+    const formula = (body: string) => ({
+      id: 'cf_1',
+      kind: 'formula',
+      ranges: ['A1'],
+      formula: body,
+      format: { bold: true },
+    });
+
+    const message = refusalOf([{ type: 'addConditionalRule', rule: formula(chain(5000)) }]);
+    expect(message).toContain(`nests more than ${MAX_FORMULA_DEPTH} levels deep`);
+    // The formula is quoted back abbreviated — echoing five thousand terms
+    // would make a thirty-kilobyte message out of a one-line complaint.
+    expect(message.length).toBeLessThan(300);
+
+    // A chain of a length someone might actually write still plans.
+    expect(
+      plan([{ type: 'addConditionalRule', rule: formula(chain(100)) }]).conditionalFormats
+    ).toHaveLength(1);
+  });
+
+  it('counts a range argument by the cells it really covers', () => {
+    // Probing with one extra argument models `ABS(A1:A2)` and not
+    // `LEFT(A1:A3)`, since LEFT accepts both one argument and two. The count
+    // has to be the range's real cardinality.
+    const formula = (body: string) => ({
+      id: 'cf_1',
+      kind: 'formula',
+      ranges: ['A1:A9'],
+      formula: body,
+      format: { bold: true },
+    });
+
+    expect(refusalOf([{ type: 'addConditionalRule', rule: formula('=LEFT(A1:A3)="x"') }])).toContain(
+      'arrive as 3 values'
+    );
+    expect(
+      plan([{ type: 'addConditionalRule', rule: formula('=LEFT(A1, 2)="x"') }]).conditionalFormats
+    ).toHaveLength(1);
+  });
+
+  it('refuses a region range that starts before the first cell', () => {
+    // `parseRegionRange` bounds the bottom of the sheet and not the top:
+    // `decodeCellAddress` reads `A0` as row -1, so this parses, stores, and
+    // prepares as rows -1 to -1 — a region no cell can fall inside.
+    expect(refusalOf([{ type: 'upsertRegion', region: { id: 'r', range: 'A0:B0' } }])).toContain(
+      'starts before the first cell'
+    );
+    expect(plan([{ type: 'upsertRegion', region: { id: 'r', range: 'A1:B9' } }]).regions).toHaveLength(1);
   });
 
   it('refuses a colour on a data-bar anchor, which takes its colour from the rule', () => {

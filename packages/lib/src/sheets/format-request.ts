@@ -1,4 +1,13 @@
 /**
+ * A caller's string, short enough to put in a message.
+ *
+ * Refusals quote the thing they are refusing, which is right up until the thing
+ * is a five-thousand-term formula and the message is thirty kilobytes of it.
+ */
+const abbreviate = (value: string, limit = 60): string =>
+  value.length <= limit ? value : `${value.slice(0, limit)}…`;
+
+/**
  * What a parsed formula would do wrong at evaluation time, or null.
  *
  * Parsing proves the grammar and nothing else, so three things are checked
@@ -21,11 +30,21 @@
  * a bound.)
  */
 function formulaProblem(root: ASTNode, coveredCells: number): string | null {
-  const stack: ASTNode[] = [root];
+  const stack: Array<{ node: ASTNode; depth: number }> = [{ node: root, depth: 0 }];
   let referenced = 0;
 
   while (stack.length > 0) {
-    const node = stack.pop() as ASTNode;
+    const { node, depth } = stack.pop() as { node: ASTNode; depth: number };
+
+    // This walk is iterative, and so is the parser — but `evaluation.ts`
+    // evaluates `BinaryExpression.left` by recursion. A long left-associative
+    // chain (`=A1+A2+A3+…`, one level per term) therefore parses here and
+    // overflows the stack there, caught once per covered cell with nothing to
+    // show for it. 256 is past any formula a person would write and far short
+    // of what the evaluator's frames can take.
+    if (depth > MAX_FORMULA_DEPTH) {
+      return `nests more than ${MAX_FORMULA_DEPTH} levels deep, which the evaluator cannot walk`;
+    }
 
     switch (node.type) {
       case 'FunctionCall': {
@@ -41,22 +60,30 @@ function formulaProblem(root: ASTNode, coveredCells: number): string | null {
         }
 
         // Arity is checked against FLATTENED values, not argument nodes:
-        // `evaluateFunction` does `args.flatMap(flattenValue)` first, so
-        // `ABS(A1:A2)` arrives as two values and throws, once per covered cell.
-        // Whether a function can survive that is derivable rather than listed —
-        // if it would reject one more value than this call supplies, it has a
-        // fixed arity and a range in any slot breaks it.
-        const spreads = node.args.some(
-          (argument) => argument.type === 'Range' || argument.type === 'ExternalRange'
-        );
-        if (spreads && !isValidCall(name, node.args.length + 1)) {
+        // `evaluateFunction` does `args.flatMap(flattenValue)` first, so a range
+        // argument arrives as one value per cell it covers. Counted exactly
+        // rather than approximated — an earlier version probed with one extra
+        // argument, which models `ABS(A1:A2)` and not `LEFT(A1:A3)`, since LEFT
+        // accepts both one and two.
+        //
+        // The probe count is capped because it builds that many argument nodes,
+        // and a 500,000-cell range would build 500,000 of them for no gain: no
+        // function in the dispatch has an arity anywhere near sixteen, so
+        // anything above it is rejected or accepted for the same reason a
+        // million would be.
+        const flattened = node.args.reduce((count, argument) => {
+          if (argument.type !== 'Range' && argument.type !== 'ExternalRange') return count + 1;
+          return count + (referencedCells(argument.start.reference, argument.end.reference) ?? 1);
+        }, 0);
+
+        if (flattened !== node.args.length && !isValidCall(name, Math.min(flattened, 16))) {
           return (
-            `passes a range to ${name}(), which takes a fixed number of values — a range arrives as ` +
-            'one value per cell it covers'
+            `passes a range to ${name}(), which takes a fixed number of values — the ranges here ` +
+            `arrive as ${flattened.toLocaleString()} values`
           );
         }
 
-        for (const argument of node.args) stack.push(argument);
+        for (const argument of node.args) stack.push({ node: argument, depth: depth + 1 });
         break;
       }
 
@@ -78,11 +105,11 @@ function formulaProblem(root: ASTNode, coveredCells: number): string | null {
       }
 
       case 'UnaryExpression':
-        stack.push(node.argument);
+        stack.push({ node: node.argument, depth: depth + 1 });
         break;
 
       case 'BinaryExpression':
-        stack.push(node.left, node.right);
+        stack.push({ node: node.left, depth: depth + 1 }, { node: node.right, depth: depth + 1 });
         break;
 
       default:
@@ -394,6 +421,18 @@ export const MAX_FORMAT_OPS = 200;
  * starts being a mistake.
  */
 export const MAX_FORMULA_EXPANSION = 20_000_000;
+
+/**
+ * How deeply a conditional formula may nest.
+ *
+ * The parser is iterative and so is the walk that checks a formula here, but
+ * `evaluation.ts` evaluates `BinaryExpression.left` by recursion — so a long
+ * left-associative chain parses cleanly and then overflows the stack at render
+ * time, once per covered cell. 256 is past any formula a person would write
+ * (`=A1+A2+…` nests one level per term) and far short of what the evaluator's
+ * frames can survive.
+ */
+export const MAX_FORMULA_DEPTH = 256;
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -983,8 +1022,8 @@ function ruleRenderProblem(
     }
     if (!ast) {
       return (
-        `"${rule.formula}" is not a formula this sheet can evaluate. Stored as written it throws once ` +
-        'per covered cell and formats none of them.'
+        `"${abbreviate(rule.formula)}" is not a formula this sheet can evaluate. Stored as written it ` +
+        'throws once per covered cell and formats none of them.'
       );
     }
 
@@ -992,7 +1031,10 @@ function ruleRenderProblem(
     // the three things the engine will object to that a parse cannot see.
     const covered = rule.ranges.reduce((cells, range) => cells + conditionalCellsOfRange(range), 0);
     const problem = formulaProblem(ast, covered);
-    if (problem) return `"${rule.formula}" ${problem}.`;
+    // Quoted back so the caller can see which formula, but not in full: the
+    // cases refused here include a five-thousand-term chain, and echoing that
+    // makes a thirty-kilobyte error message out of a one-line complaint.
+    if (problem) return `"${abbreviate(rule.formula)}" ${problem}.`;
   }
 
   // Anchors, which the comparator cannot speak for — see `anchorProblem`.
@@ -1202,6 +1244,13 @@ function regionRenderProblem(region: SheetRegion, label: string): string | null 
   // value survives on its own.
   const bounds = parseRegionRange(region.range);
   if (bounds) {
+    // `parseRegionRange` bounds the top of the sheet and not the bottom:
+    // `decodeCellAddress` reads `A0` as row -1, so `A0:B0` parses, stores, and
+    // prepares as rows -1 to -1 — a region no cell can ever fall inside.
+    if (bounds.rowStart < 0 || bounds.colStart < 0) {
+      return `${label}: ${region.range} starts before the first cell, so no cell can be inside it.`;
+    }
+
     for (const column of region.columns ?? []) {
       const columnIndex = decodeColumnLabel(column.column);
       if (columnIndex < bounds.colStart || columnIndex > bounds.colEnd) {
@@ -1329,6 +1378,66 @@ function validateRegionInput(raw: unknown, index: number, type: string, label: s
 /** The id an op names, which must be there to name anything at all. */
 const requireId = (id: unknown, index: number, type: string): string =>
   typeof id === 'string' && id !== '' ? id : refuseOp(index, type, 'id must be a non-empty string.');
+
+/**
+ * What a rule list costs to render once, in address expansions.
+ *
+ * Only formula rules cost anything here: the other kinds walk their ranges once,
+ * while a formula is evaluated per covered cell and expands every range it
+ * references on each pass. Rules whose formula does not parse contribute
+ * nothing, which is right — they are refused on the way in, and a stored one
+ * throws rather than expanding.
+ */
+function formulaWork(rules: readonly ConditionalRule[]): number {
+  let total = 0;
+
+  for (const rule of rules) {
+    if (rule.kind !== 'formula') continue;
+
+    let ast: ASTNode | null = null;
+    try {
+      const tokens = tokenize(rule.formula.trim().replace(/^=/, ''));
+      if (tokens.length > 0) ast = new FormulaParser(tokens).parse();
+    } catch {
+      continue;
+    }
+    if (!ast) continue;
+
+    const covered = rule.ranges.reduce((cells, range) => cells + conditionalCellsOfRange(range), 0);
+    total += covered * referencedCellTotal(ast);
+  }
+
+  return total;
+}
+
+/** Cells every range in a formula refers to, added up. Iterative, as ever. */
+function referencedCellTotal(root: ASTNode): number {
+  const stack: ASTNode[] = [root];
+  let total = 0;
+
+  while (stack.length > 0) {
+    const node = stack.pop() as ASTNode;
+    switch (node.type) {
+      case 'Range':
+      case 'ExternalRange':
+        total += referencedCells(node.start.reference, node.end.reference) ?? 0;
+        break;
+      case 'FunctionCall':
+        for (const argument of node.args) stack.push(argument);
+        break;
+      case 'UnaryExpression':
+        stack.push(node.argument);
+        break;
+      case 'BinaryExpression':
+        stack.push(node.left, node.right);
+        break;
+      default:
+        break;
+    }
+  }
+
+  return total;
+}
 
 const ruleIdList = (rules: readonly ConditionalRule[]): string =>
   rules.length === 0 ? 'none' : rules.map((rule) => `"${rule.id}"`).join(', ');
@@ -1728,6 +1837,27 @@ export function planFormatOps(
 
     const before = totalCells(tab.conditionalFormats ?? []);
     const after = totalCells(rules);
+
+    // Formula work summed across the whole rule list, not just the one being
+    // written. The per-rule ceiling bounds one rule at twenty million and says
+    // nothing about two hundred of them — each legal, each covering 10,000
+    // cells and referencing 2,000, with the covered-cell aggregate satisfied
+    // and four billion expansions in one render. Same shape as every other
+    // per-op bound on this branch, and the same fix.
+    //
+    // Carries the repair exception for the same reason the cell aggregate does:
+    // a sheet can already be past this, and refusing the writes that would
+    // reduce it is how a sheet becomes unfixable.
+    const formulaWorkBefore = formulaWork(tab.conditionalFormats ?? []);
+    const formulaWorkAfter = formulaWork(rules);
+    if (formulaWorkAfter > MAX_FORMULA_EXPANSION && formulaWorkAfter > formulaWorkBefore) {
+      refuse(
+        `Those rules ask for ${formulaWorkAfter.toLocaleString()} address expansions to render once, ` +
+          `over the limit of ${MAX_FORMULA_EXPANSION.toLocaleString()}. A formula rule costs the cells ` +
+          'it covers times the cells it references, and they add up across rules. (A write that ' +
+          'lowers the total is accepted even while it is still over.)'
+      );
+    }
 
     // Over the ceiling AND worse than it was. A sheet can already be past this
     // limit — the panel's `addRule` enforces the per-rule and rule-count caps
