@@ -256,9 +256,6 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((entry) => typeof entry === 'string');
 
-/** Keys that would reach a prototype rather than a property once merged. */
-const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
-
 const COLUMN_ONLY = /^[A-Z]{1,7}$/;
 
 // Annotated rather than inferred: TypeScript only treats a call as
@@ -371,10 +368,14 @@ function validateCellFormatPatch(
     return refuseOp(index, type, `${label} has no fields; name at least one, such as {"bold": true}.`);
   }
 
+  // No separate prototype-key branch. `__proto__`, `constructor` and
+  // `prototype` are not format fields, so the check below already refuses them
+  // by name — a mutation probe showed the extra branch changed no outcome, and
+  // it is the fourth line on this branch to be removed for that reason. Nor is
+  // one needed for safety here: this module hands the caller's object onward
+  // untouched and never copies keys onto one of its own. `parseCellFormat`
+  // keeps its own guard because it does exactly that, key by key.
   for (const key of keys) {
-    if (FORBIDDEN_KEYS.has(key)) {
-      return refuseOp(index, type, `${label}: "${key}" is not a format field.`);
-    }
     if (!CELL_FORMAT_FIELDS.has(key)) {
       return refuseOp(
         index,
