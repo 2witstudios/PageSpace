@@ -33,11 +33,25 @@
  *    parsers sanitize field by field — a too-small font size vanishes from a
  *    format that keeps its bold, a `ranges` array is truncated to its cap, a
  *    `headerRows` of 999 becomes the default of one — and the write reports
- *    success either way. Three mechanisms cover it: `validateRanges` on the
- *    caller's own array before the parser can shorten it, `firstSanitizedPath`
- *    comparing what would be stored against what was sent, and a handful of
- *    checks for the cases that survive storage intact and only mean something
- *    else at RENDER time (`anchorProblem`, the palette hue).
+ *    success either way. It splits into two questions, and they need different
+ *    machinery:
+ *
+ *    1. *Would what we store differ from what was sent?* `firstSanitizedPath`
+ *       compares the two and names the first field that would not survive, so
+ *       a cap the parsers learn later is covered without this module being
+ *       told. `validateRanges` runs ahead of it on the caller's own array,
+ *       because a check applied after the parser has already truncated that
+ *       array is handed one that fits.
+ *    2. *Would the thing we store do what was asked?* `ruleRenderProblem` and
+ *       `regionRenderProblem`. Everything here is kept byte for byte — a
+ *       formula that will not parse, a function that does not exist, an
+ *       operand that compares against nothing, an anchor with no value, a hue
+ *       the palette lost — so the comparison above has nothing to say about
+ *       any of it, and only knowledge of what the renderer does can catch it.
+ *
+ *    Both are bounded by `nestsTooDeep`, because the value being checked is
+ *    caller-supplied and a walk that follows it is a crash rather than a
+ *    refusal.
  *
  * A word on why this is STRICTER than the panel, since the two are meant to
  * agree. They do agree about what a rule IS — the caps, the operators that need
