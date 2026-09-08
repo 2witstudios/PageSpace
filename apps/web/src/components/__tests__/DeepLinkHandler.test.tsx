@@ -97,6 +97,32 @@ describe('DeepLinkHandler', () => {
     expect(mockAddListener).not.toHaveBeenCalled();
   });
 
+  it('registers the warm-start listener before awaiting the launch URL', async () => {
+    // An appUrlOpen that fires while getLaunchUrl() is pending would otherwise
+    // land with nothing listening.
+    const order: string[] = [];
+    mockAddListener.mockImplementation(async () => {
+      order.push('addListener');
+      return { remove: mockRemove };
+    });
+    mockGetLaunchUrl.mockImplementation(async () => {
+      order.push('getLaunchUrl');
+      return null;
+    });
+    render(<DeepLinkHandler />);
+    await waitFor(() => expect(order).toEqual(['addListener', 'getLaunchUrl']));
+  });
+
+  it('acts once when a launching link arrives through both paths', async () => {
+    // A link that launches the app can surface as both the launch URL and an
+    // appUrlOpen event; pushing twice would leave a duplicate history entry.
+    mockGetLaunchUrl.mockResolvedValue({ url: 'https://pagespace.ai/invite/dup' });
+    render(<DeepLinkHandler />);
+    await waitFor(() => expect(mockPush).toHaveBeenCalledTimes(1));
+    warmStartHandler()({ url: 'https://pagespace.ai/invite/dup' });
+    expect(mockPush).toHaveBeenCalledTimes(1);
+  });
+
   it('removes the listener on unmount', async () => {
     const { unmount } = render(<DeepLinkHandler />);
     await waitFor(() => expect(mockAddListener).toHaveBeenCalled());

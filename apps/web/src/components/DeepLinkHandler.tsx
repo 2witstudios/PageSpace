@@ -33,9 +33,14 @@ export function DeepLinkHandler() {
 
     let mounted = true;
     let cleanup: (() => void) | undefined;
+    let lastHandled: string | undefined;
 
     const handle = (url: string | undefined | null) => {
       if (!mounted || !url) return;
+      // A link that launches the app can surface through both paths. Acting
+      // twice would push a duplicate history entry, so the first one wins.
+      if (url === lastHandled) return;
+      lastHandled = url;
       const target = resolveDeepLink(url);
       if (!target) return;
       if (target.kind === 'route') {
@@ -53,17 +58,19 @@ export function DeepLinkHandler() {
         const { App } = await import('@capacitor/app');
         if (!mounted) return;
 
-        // Cold start: the launch URL is already spent by the time we mount, so
-        // read it before wiring the listener that only covers warm starts.
-        const launch = await App.getLaunchUrl();
-        handle(launch?.url);
-
+        // Listener first: an `appUrlOpen` that fires while `getLaunchUrl()` is
+        // still pending would otherwise land with nothing listening and be lost.
         const listener = await App.addListener('appUrlOpen', ({ url }) => handle(url));
         if (!mounted) {
           listener.remove();
           return;
         }
         cleanup = () => listener.remove();
+
+        // Cold start: the launch URL is already spent by the time we mount, so
+        // it is only recoverable here — the listener never sees it.
+        const launch = await App.getLaunchUrl();
+        handle(launch?.url);
       } catch {
         // Plugin unavailable — expected on web, and never fatal.
       }

@@ -232,11 +232,14 @@ succeed — which is prerequisite 1.
 
 ### The filter to add, once both prerequisites are met
 
-iOS now routes these links — `apps/web/src/components/DeepLinkHandler.tsx` consumes
-`appUrlOpen` and `getLaunchUrl`, so **Prerequisite 2 above is met for both platforms**;
-what remains for Android is the signing cert and `assetlinks.json`. Paths mirror
-`apps/marketing/public/.well-known/apple-app-site-association` (the copy Caddy actually
-serves), currently `/invite/*` only, so the two platforms capture the same links. Widening beyond these paths should still wait on prerequisite 2 — whole-host
+**Prerequisite 2 is now met** — `apps/web/src/components/DeepLinkHandler.tsx` consumes
+`appUrlOpen` and `getLaunchUrl`, and it lives in the shared web layer, so the routing is
+already there for Android the moment it starts receiving links. What remains for Android is
+prerequisite 1: the release signing certificate and a real `assetlinks.json`. Until those
+exist **Android captures nothing** — no https intent-filter is registered.
+
+When it does, mirror `apps/marketing/public/.well-known/apple-app-site-association` (the copy
+Caddy actually serves), currently `/invite/*` only, so both platforms capture the same links. Widening beyond these paths should still wait on prerequisite 2 — whole-host
 capture would strand users on `/dashboard` from every marketing, blog, or docs link.
 
 A third prerequisite applies to the auth-callback paths specifically: `/api/auth/desktop/exchange`

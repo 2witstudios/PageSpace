@@ -62,6 +62,17 @@ describe('resolveDeepLink', () => {
     expect(resolveDeepLink(url)).toBeNull();
   });
 
+  it('does not throw on a malformed escape sequence', () => {
+    // `decodeURIComponent('%')` raises URIError. This runs during listener
+    // setup, so a throw here would abort it and leave the app with no
+    // warm-start listener for the rest of the session.
+    expect(() => resolveDeepLink('https://pagespace.ai/invite/%')).not.toThrow();
+    expect(resolveDeepLink('https://pagespace.ai/invite/%')).toEqual({
+      kind: 'external',
+      url: 'https://pagespace.ai/invite/%',
+    });
+  });
+
   it('ignores the auth-exchange custom scheme', () => {
     // /api/auth/desktop/exchange redeems its code with no PKCE binding, so
     // whichever app receives the code can take a session. Routing it from here

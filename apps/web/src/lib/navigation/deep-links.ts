@@ -50,7 +50,15 @@ export function resolveDeepLink(rawUrl: string): DeepLinkTarget | null {
   const invite = INVITE_PATH.exec(url.pathname);
   if (invite) {
     // Re-encode: the token came off the wire and goes back into a path.
-    return { kind: 'route', path: `/invite/${encodeURIComponent(decodeURIComponent(invite[1]))}` };
+    // `decodeURIComponent` throws URIError on a malformed escape (`/invite/%`),
+    // and this runs during listener setup — an escaping throw would abort it and
+    // leave the app with no warm-start listener for the rest of the session.
+    try {
+      return { kind: 'route', path: `/invite/${encodeURIComponent(decodeURIComponent(invite[1]))}` };
+    } catch {
+      // Not a token we could have issued. Let the browser render the error.
+      return { kind: 'external', url: url.toString() };
+    }
   }
 
   // On the claimed host but not a route we know. Never swallow it — a link the

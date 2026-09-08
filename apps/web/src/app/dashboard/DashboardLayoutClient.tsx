@@ -4,7 +4,6 @@ import { usePathname } from "next/navigation";
 import Layout from "@/components/layout/Layout";
 import { PushNotificationManager } from "@/components/PushNotificationManager";
 import { PushActionHandler } from "@/components/PushActionHandler";
-import { DeepLinkHandler } from "@/components/DeepLinkHandler";
 import QuickCreatePalette from "@/components/create/QuickCreatePalette";
 import { OnboardingGate } from "@/components/onboarding/OnboardingGate";
 import { useHotkeyPreferences } from "@/hooks/useHotkeyPreferences";
@@ -41,7 +40,6 @@ export default function DashboardLayoutClient({ children }: { children: React.Re
     <>
       <PushNotificationManager />
       <PushActionHandler />
-      <DeepLinkHandler />
       <QuickCreatePalette />
       <OnboardingGate />
       {isFullPageRoute ? <Layout>{children}</Layout> : <Layout />}
