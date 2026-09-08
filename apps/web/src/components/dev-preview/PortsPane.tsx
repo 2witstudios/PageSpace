@@ -1,25 +1,29 @@
 /**
- * The ports pane: what is actually listening in this session's sandbox, and a
- * preview of the port you pick.
+ * The preview pane: the dev server the session is previewing, framed — and,
+ * behind one header control, what is actually listening in the sandbox.
  *
- * It exists because passive detection cannot see everything — Fly Sprites'
- * `ports/watch` never reports a Next.js dev server's bind — and because a
- * preview that fails should SAY so. Three rules shape it:
+ * A pane is bound to this surface by picking a port in the pane picker (the
+ * select already happened there), so the body is the FRAME, first and by
+ * default; until the relay is up it shows the server's status sentence.
+ * The ports list stays reachable from the header because passive detection
+ * cannot see everything — Fly Sprites' `ports/watch` never reports a Next.js
+ * dev server's bind — and a preview that fails should SAY so. Three rules:
  *
  *  1. NEVER PROBE ON MOUNT. This pane is a persisted grid node: it comes back
  *     on every reload, on every device, for every viewer of the session. A
  *     probe is an exec, an exec wakes a paused sprite, and a wake is billed.
- *     So the list appears only behind an explicit Scan, and the status it
- *     shows before that is the cheap, already-cached one.
+ *     So the list appears only behind an explicit click, and the status it
+ *     shows before that is the cheap, already-cached one. (The PICKER probes
+ *     when it opens — that is a user gesture, not a persisted node.)
  *  2. PICKING IS CONSENT. Choosing a port from the list is the deliberate act
  *     the Share step was invented to require, so there is no second click —
  *     but the audience is stated right beside the choice, before it is made.
  *  3. THE SENTENCE COMES FROM THE SERVER. Every failure renders the route's
  *     own message inline. The client chooses loudness, never wording.
  *
- * One sandbox has exactly one preview, so several ports panes are several
- * views of the same state; the radio group marks which port is current and
- * a second pick reads as "Preview this instead" — which is what it does.
+ * One sandbox has exactly one preview, so several of these panes are several
+ * views of the same state; the list marks which port is current and a second
+ * pick reads as "Preview this instead" — which is what it does.
  */
 
 'use client';
@@ -27,7 +31,7 @@
 import { useCallback, useState } from 'react';
 import { AlertCircle, Loader2, RefreshCw, ScanSearch } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { post, ApiRequestError } from '@/lib/auth/auth-fetch';
+import { post } from '@/lib/auth/auth-fetch';
 import { useDevPreviewCapability } from '@/hooks/dev-preview/useDevPreviewCapability';
 import {
   devPreviewActionsPath,
@@ -35,15 +39,9 @@ import {
   sessionDevPreviewPath,
   useDevPreviewStatus,
 } from '@/hooks/dev-preview/useDevPreviewStatus';
-import { DEV_PREVIEW_FRAME_SANDBOX, buildFrameSrc } from './DevPreviewPane';
-import { devPreviewApprovalAudience } from './dev-preview-copy';
-import type { DevPreviewProbedPort } from '@pagespace/lib/services/sandbox/preview/dev-preview-status';
-
-interface PortsListing {
-  spriteInstanceId: string;
-  ports: DevPreviewProbedPort[];
-  currentPort: number | null;
-}
+import { DEV_PREVIEW_FRAME_SANDBOX, PANE_POLL_MS, buildFrameSrc } from './DevPreviewPane';
+import { CANNOT_MANAGE_PORTS, PICK_REFUSED, PICK_REFUSED_HTTP_PORT_BUSY, devPreviewApprovalAudience } from './dev-preview-copy';
+import { PortsList, messageOf, type PortsListing } from './PortsList';
 
 type Scan =
   | { state: 'idle' }
@@ -51,19 +49,12 @@ type Scan =
   | { state: 'listed'; listing: PortsListing }
   | { state: 'failed'; message: string };
 
-/** The server's sentence, or a neutral one — never a stack trace, never silence. */
-function messageOf(error: unknown, fallback: string): string {
-  if (error instanceof ApiRequestError && error.message.trim() !== '') return error.message;
-  if (error instanceof Error && error.message.trim() !== '') return error.message;
-  return fallback;
-}
-
 export function PortsPane({ workspaceId }: { workspaceId: string }) {
   const enabled = useDevPreviewCapability();
   const statusPath = sessionDevPreviewPath(workspaceId);
-  // The cheap, cached status — polled slowly, never an exec. This is all the
-  // pane shows until Scan is pressed.
-  const { preview, mutate } = useDevPreviewStatus(statusPath, { enabled: enabled === true, pauseWhenIdle: false });
+  // The cheap, cached status — polled at the open pane's cadence so the frame
+  // appears as soon as the relay the pick started is up. Never an exec.
+  const { preview, mutate } = useDevPreviewStatus(statusPath, { enabled: enabled === true, pauseWhenIdle: false, intervalMs: PANE_POLL_MS });
   const [scan, setScan] = useState<Scan>({ state: 'idle' });
   const [picking, setPicking] = useState<number | null>(null);
   const [pickError, setPickError] = useState<string | null>(null);
@@ -80,6 +71,11 @@ export function PortsPane({ workspaceId }: { workspaceId: string }) {
     }
   }, [statusPath]);
 
+  const toggleList = useCallback(() => {
+    if (scan.state === 'idle') void runScan();
+    else setScan({ state: 'idle' });
+  }, [scan.state, runScan]);
+
   const pick = useCallback(
     async (port: number, spriteInstanceId: string) => {
       setPicking(port);
@@ -91,29 +87,18 @@ export function PortsPane({ workspaceId }: { workspaceId: string }) {
           // sandbox that was rebuilt in between is refused, not applied.
           { action: 'select', port, spriteInstanceId },
         );
-        // A refused plan is a 200 with the refusal inside — `http-port-busy`
-        // when something else holds 8080. Say so; the pick was recorded.
-        if (answer.applied?.action === 'refuse') {
-          setPickError(
-            answer.applied.reason === 'http-port-busy'
-              ? 'Port 8080 is held by another process in the sandbox, so the preview relay cannot start. Stop that process and pick again.'
-              : 'The preview could not be started right now.',
-          );
-        }
         mutate();
+        // A refused plan is a 200 with the refusal inside — `http-port-busy`
+        // when something else holds 8080. Say so, and keep the list open; the
+        // pick was recorded.
+        if (answer.applied?.action === 'refuse') {
+          setPickError(answer.applied.reason === 'http-port-busy' ? PICK_REFUSED_HTTP_PORT_BUSY : PICK_REFUSED);
+          return;
+        }
+        // The pick took: the pane is the preview again, the list folds away.
+        setScan({ state: 'idle' });
       } catch (error) {
         setPickError(messageOf(error, 'Could not start the preview.'));
-        setPicking(null);
-        return;
-      }
-      // The pick is PERSISTED by now; re-listing is a separate act so that a
-      // failed rescan reports as a scan problem and cannot masquerade as
-      // "could not start the preview" over a selection that took effect.
-      try {
-        const listing = await post<PortsListing>(devPreviewPortsPath(statusPath), {});
-        setScan({ state: 'listed', listing });
-      } catch (error) {
-        setScan({ state: 'failed', message: messageOf(error, 'The port list could not be refreshed. Scan again.') });
       } finally {
         setPicking(null);
       }
@@ -130,23 +115,24 @@ export function PortsPane({ workspaceId }: { workspaceId: string }) {
     );
   }
 
-  // `openPath` is null until the holder has something to open; narrow at the
-  // use site so the frame cannot be built from a null.
   // Listing ports is the first half of exposing one, so it takes the same
   // authority as sharing — and the route enforces that with a 403. Gate the
-  // button on the SERVER's verdict rather than let a viewer who cannot manage
-  // the preview press Scan and be refused every time; and hold it until the
-  // status has loaded at all, because a pick is the consent gesture and the
-  // audience it consents to is not on screen until then.
+  // control on the SERVER's verdict rather than let a viewer who cannot
+  // manage the preview open the list and be refused every time; and hold it
+  // until the status has loaded at all, because a pick is the consent
+  // gesture and the audience it consents to is not on screen until then.
   const canManage = preview?.canManage === true;
+  // `openPath` is null until the holder has something to open; narrow at the
+  // use site so the frame cannot be built from a null.
   const openPath = preview?.canOpen === true && typeof preview.openPath === 'string' ? preview.openPath : null;
-  const canOpen = openPath !== null;
   const frameSrc = openPath !== null ? buildFrameSrc(openPath, nonce) : null;
   const audience = preview ? devPreviewApprovalAudience(preview.holder) : null;
+  const targetPort = preview && 'targetPort' in preview.state ? preview.state.targetPort : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="ports-pane">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1.5 text-xs">
+        {targetPort !== null && <span className="shrink-0 font-mono" data-testid="ports-pane-port">:{targetPort}</span>}
         <span className="min-w-0 flex-1 truncate text-muted-foreground" title={preview?.state.message} data-testid="ports-pane-status">
           {preview ? preview.state.message : 'Loading preview status…'}
         </span>
@@ -154,15 +140,16 @@ export function PortsPane({ workspaceId }: { workspaceId: string }) {
           variant="ghost"
           size="sm"
           className="h-7 gap-1.5 px-2"
-          onClick={() => void runScan()}
+          onClick={toggleList}
           disabled={scan.state === 'scanning' || !canManage}
-          title={preview === undefined ? 'Loading preview status…' : canManage ? 'Ask the sandbox which ports are listening' : 'Only the session owner, or a drive owner or admin, can share a port from this sandbox'}
+          aria-pressed={scan.state !== 'idle'}
+          title={preview === undefined ? 'Loading preview status…' : canManage ? 'Ask the sandbox which ports are listening' : CANNOT_MANAGE_PORTS}
           data-testid="ports-scan"
         >
           {scan.state === 'scanning' ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <ScanSearch className="size-3.5" aria-hidden="true" />}
-          Scan ports
+          Ports
         </Button>
-        {canOpen && (
+        {frameSrc !== null && (
           <Button variant="ghost" size="sm" className="h-7 px-2" onClick={() => setNonce((n) => n + 1)} title="Reload the preview" data-testid="ports-reload">
             <RefreshCw className="size-3.5" aria-hidden="true" />
           </Button>
@@ -177,46 +164,8 @@ export function PortsPane({ workspaceId }: { workspaceId: string }) {
       )}
 
       {scan.state === 'listed' && (
-        <div className="shrink-0 border-b border-border px-3 py-2 text-xs" data-testid="ports-list">
-          {scan.listing.ports.length === 0 ? (
-            <p className="text-muted-foreground">Nothing is listening in the sandbox. Start your dev server, then Scan again.</p>
-          ) : (
-            <div role="radiogroup" aria-label="Listening ports" className="flex flex-col gap-1">
-              {audience && <p className="pb-1 text-muted-foreground">{audience}</p>}
-              {scan.listing.ports.map((entry) => {
-                const disabled = entry.kind === 'ignored' || picking !== null || !canManage;
-                const why = entry.kind === 'ignored'
-                  ? entry.reason === 'non-http-service-port' ? 'Looks like a database or service port, not a web server'
-                    : entry.reason === 'relay-own-listener' ? 'The preview relay itself'
-                    : 'Cannot be previewed'
-                  : entry.likelihood === 'known-dev-port' ? 'Looks like a dev server' : 'Unlisted port';
-                return (
-                  <button
-                    key={entry.port}
-                    type="button"
-                    role="radio"
-                    aria-checked={entry.current}
-                    disabled={disabled}
-                    onClick={() => void pick(entry.port, scan.listing.spriteInstanceId)}
-                    className="flex items-center justify-between rounded px-2 py-1 text-left hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
-                    title={why}
-                    data-testid={`ports-pick-${entry.port}`}
-                  >
-                    <span className="font-mono">:{entry.port}{entry.pid !== null ? <span className="ml-2 text-muted-foreground">pid {entry.pid}</span> : null}</span>
-                    <span className="text-muted-foreground">
-                      {picking === entry.port ? 'Starting…'
-                        // `current` is the persisted TARGET; whether it is actually
-                        // serving is the status's `canOpen`. A pick whose relay could
-                        // not start (a stranger on 8080) is selected, not previewing.
-                        : entry.current ? (canOpen ? 'Previewing' : 'Selected')
-                        : entry.kind === 'ignored' ? why
-                        : 'Preview this' + (scan.listing.currentPort !== null ? ' instead' : '')}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+        <div className="shrink-0 border-b border-border px-3 py-2">
+          <PortsList listing={scan.listing} audience={audience} canOpen={frameSrc !== null} picking={picking} disabled={!canManage} onPick={(port, instance) => void pick(port, instance)} />
         </div>
       )}
 
@@ -232,7 +181,11 @@ export function PortsPane({ workspaceId }: { workspaceId: string }) {
         />
       ) : (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground" data-testid="ports-placeholder">
-          <p className="max-w-sm">{scan.state === 'idle' ? 'Scan to see what is listening in the sandbox, then pick a port to preview it.' : preview?.state.message ?? ''}</p>
+          {preview === undefined || preview.state.status === 'starting' ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
+          <p className="max-w-sm">{preview ? preview.state.message : 'Loading preview status…'}</p>
+          {preview && preview.state.status === 'none' && canManage && (
+            <p className="max-w-sm">Open <span className="font-medium">Ports</span> above to choose what to preview.</p>
+          )}
         </div>
       )}
     </div>

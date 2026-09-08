@@ -1,8 +1,9 @@
 /**
- * The ports pane against real hooks: it NEVER probes on mount (a persisted,
+ * The preview pane against real hooks: it NEVER probes on mount (a persisted,
  * multi-viewer pane must not bill a wake per reload), the list appears only
- * behind Scan, a pick echoes the listing's instance, and every failure is the
- * server's own sentence, inline — never silence.
+ * behind the header's Ports control, a pick echoes the listing's instance and
+ * folds the list away, and every failure is the server's own sentence,
+ * inline — never silence.
  */
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
@@ -112,18 +113,22 @@ describe('PortsPane', () => {
     expect(db).toHaveAttribute('title', expect.stringContaining('database'));
   });
 
-  test('a pick posts SELECT with the port and the instance the list was shown against, then re-lists', async () => {
+  test('a pick posts SELECT with the port and the instance the list was shown against, refetches the status, and folds the list away', async () => {
     mockPost
       .mockResolvedValueOnce(LISTING) // scan
-      .mockResolvedValueOnce({ ok: true, applied: { action: 'start-relay' } }) // select
-      .mockResolvedValueOnce({ ...LISTING, currentPort: 3000, ports: LISTING.ports.map((p) => ({ ...p, current: p.port === 3000 })) }); // re-list
+      .mockResolvedValueOnce({ ok: true, applied: { action: 'start-relay' } }); // select
     renderPane();
     await waitFor(() => expect(screen.getByTestId('ports-scan')).toBeEnabled());
     fireEvent.click(screen.getByTestId('ports-scan'));
     await screen.findByTestId('ports-pick-3000');
+    const statusReads = mockFetchJSON.mock.calls.length;
     fireEvent.click(screen.getByTestId('ports-pick-3000'));
     await waitFor(() => expect(mockPost).toHaveBeenCalledWith(ACTIONS_PATH, { action: 'select', port: 3000, spriteInstanceId: 'inst-live' }));
-    await waitFor(() => expect(screen.getByTestId('ports-pick-3000')).toHaveAttribute('aria-checked', 'true'));
+    // The pane is the preview again: no list, no re-probe (the status poll
+    // is what surfaces the relay coming up), and the status was re-asked.
+    await waitFor(() => expect(screen.queryByTestId('ports-list')).toBeNull());
+    expect(mockPost).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(mockFetchJSON.mock.calls.length).toBeGreaterThan(statusReads));
     expect(screen.queryByTestId('ports-pick-error')).toBeNull();
   });
 
@@ -143,8 +148,7 @@ describe('PortsPane', () => {
   test('a plan the server REFUSED inside a 200 (a stranger on 8080) is explained, not swallowed', async () => {
     mockPost
       .mockResolvedValueOnce(LISTING)
-      .mockResolvedValueOnce({ ok: true, applied: { action: 'refuse', reason: 'http-port-busy', targetPort: 3000 } })
-      .mockResolvedValueOnce(LISTING);
+      .mockResolvedValueOnce({ ok: true, applied: { action: 'refuse', reason: 'http-port-busy', targetPort: 3000 } });
     renderPane();
     await waitFor(() => expect(screen.getByTestId('ports-scan')).toBeEnabled());
     fireEvent.click(screen.getByTestId('ports-scan'));
@@ -152,20 +156,8 @@ describe('PortsPane', () => {
     fireEvent.click(screen.getByTestId('ports-pick-3000'));
     const error = await screen.findByTestId('ports-pick-error');
     expect(error).toHaveTextContent('8080');
-  });
-
-  test('a rescan that fails AFTER a persisted pick reports as a scan problem, not a failed pick', async () => {
-    mockPost
-      .mockResolvedValueOnce(LISTING)
-      .mockResolvedValueOnce({ ok: true, applied: { action: 'start-relay' } })
-      .mockRejectedValueOnce(new Error('The sandbox did not answer in time when asked which ports are listening. Try Scan again.'));
-    renderPane();
-    await waitFor(() => expect(screen.getByTestId('ports-scan')).toBeEnabled());
-    fireEvent.click(screen.getByTestId('ports-scan'));
-    await screen.findByTestId('ports-pick-3000');
-    fireEvent.click(screen.getByTestId('ports-pick-3000'));
-    expect(await screen.findByTestId('ports-scan-error')).toHaveTextContent('did not answer');
-    expect(screen.queryByTestId('ports-pick-error')).toBeNull();
+    // The list stays open so the user can act on the sentence.
+    expect(screen.getByTestId('ports-list')).toBeInTheDocument();
   });
 
   test('a current port that is NOT serving reads "Selected", not "Previewing"', async () => {
@@ -193,6 +185,8 @@ describe('PortsPane', () => {
     renderPane();
     const frame = await screen.findByTestId('ports-frame');
     expect(frame).toHaveAttribute('src', '/api/agent-workspaces/ws1/preview/open');
+    expect(screen.getByTestId('ports-pane-port')).toHaveTextContent(':3000');
+    expect(screen.queryByTestId('ports-list')).toBeNull();
     expect(frame).toHaveAttribute('sandbox', expect.stringContaining('allow-scripts'));
     // Reload bumps the nonce, forcing a fresh navigation through the handshake.
     await act(async () => { fireEvent.click(screen.getByTestId('ports-reload')); });
