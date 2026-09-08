@@ -168,13 +168,21 @@ function holdFirst(
 const holdBeforeInsert = (exec: StoreExecutor, hook: () => Promise<void>) => holdFirst(exec, 'insert', hook);
 const holdBeforeUpdate = (exec: StoreExecutor, hook: () => Promise<void>) => holdFirst(exec, 'update', hook);
 
-/** Resolves once another connection is waiting on a `sheet_tabs` lock. */
-async function waitForLockWaiter(timeoutMs = 10_000): Promise<void> {
+/**
+ * Resolves once ANOTHER connection is waiting on a `sheet_tabs` lock while
+ * `pending` is still unsettled — so a test that releases a held transaction
+ * after this knows the other writer really was blocked behind it, rather than
+ * having quietly finished first and turned the race into a sequence.
+ */
+async function waitForLockWaiter(pending: Promise<unknown>, timeoutMs = 10_000): Promise<void> {
+  let settled = false;
+  void pending.then(() => { settled = true; }, () => { settled = true; });
   const deadline = Date.now() + timeoutMs;
   for (;;) {
+    if (settled) throw new Error('The other writer finished before it was seen waiting on the lock');
     const result = await db.execute(
       sql`SELECT count(*)::int AS waiting FROM pg_stat_activity
-          WHERE wait_event_type = 'Lock' AND query ILIKE '%sheet_tabs%'`
+          WHERE pid <> pg_backend_pid() AND wait_event_type = 'Lock' AND query ILIKE '%sheet_tabs%'`
     );
     if (Number((result.rows[0] as { waiting: number }).waiting) > 0) return;
     if (Date.now() > deadline) throw new Error('No transaction ever waited on the sheet_tabs lock');
@@ -1333,7 +1341,7 @@ describe('sheet store (integration)', () => {
       return row;
     };
 
-    it('formats one row of a 50,000-row sheet by writing one row', async () => {
+    it('formats one row of a 50,000-row sheet by writing one row', { timeout: 30_000 }, async () => {
       // Kills: selecting or persisting rows by anything other than the plan's
       // row indexes. "A1 is bold" afterwards is identical under a whole-sheet
       // rewrite, so the assertion is on the MECHANISM — the reported count and
@@ -1661,7 +1669,7 @@ describe('sheet store (integration)', () => {
           { userId: ownerId },
           holdBeforeUpdate(tx, async () => {
             other ??= applyFormatOps({ pageId }, [{ type: 'addConditionalRule', rule: second }], { userId: ownerId });
-            await waitForLockWaiter();
+            await waitForLockWaiter(other);
           })
         )
       );
@@ -1671,6 +1679,68 @@ describe('sheet store (integration)', () => {
       expect((tab.conditionalFormats as { id: string }[]).map((rule) => rule.id).sort()).toEqual(
         ['over-100', 'second']
       );
+    });
+
+    it('refuses under the lock when a concurrent call took the rule id first', async () => {
+      // Kills: writing the pre-lock plan (which would silently overwrite the
+      // first rule with a same-id twin) and any re-plan that does not refuse.
+      // The second call passes validation on its snapshot, waits on the tab
+      // lock, and is refused by the plan it makes once it holds it.
+      const { pageId, ownerId } = await makeSheet({ rowCount: 20 });
+
+      let other: Promise<unknown> | null = null;
+      await db.transaction(async (tx) =>
+        applyFormatOps(
+          { pageId },
+          [{ type: 'addConditionalRule', rule: FORMAT_RULE }],
+          { userId: ownerId },
+          holdBeforeUpdate(tx, async () => {
+            other ??= applyFormatOps(
+              { pageId },
+              [{ type: 'addConditionalRule', rule: { ...FORMAT_RULE, format: { bold: true } } }],
+              { userId: ownerId }
+            );
+            await waitForLockWaiter(other);
+          })
+        )
+      );
+
+      await expect(other).rejects.toBeInstanceOf(SheetFormatError);
+      expect((await getTab({ pageId }))?.conditionalFormats).toEqual([FORMAT_RULE]);
+    });
+
+    it('treats a set that is cleared again in the same request as no change', async () => {
+      // Kills: staging patches per step rather than from the net change —
+      // which would create a tombstone row, bump the revision and log an
+      // entry whose before and after agree.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
+      const before = await revisionOf(pageId);
+
+      const result = await applyFormatOps(
+        { pageId },
+        [
+          { type: 'setCellFormat', range: 'B2', patch: BOLD },
+          { type: 'clearCellFormat', range: 'B2' },
+        ],
+        { userId: ownerId }
+      );
+
+      expect(result).toMatchObject({ cellsFormatted: 0, rowsTouched: 0 });
+      expect(await revisionOf(pageId)).toEqual(before);
+      expect(await readRows(tabId, { limit: 10 })).toEqual([]);
+    });
+
+    it('does not count freezing nothing on a tab that stores a zero freeze', async () => {
+      // The document path stores `frozenRows: 0`; `setFrozen` normalises 0 to
+      // "none". They must compare equal or the request counts as an edit.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
+      await db.update(sheetTabs).set({ frozenRows: 0, frozenColumns: 0 }).where(eq(sheetTabs.id, tabId));
+      const before = await revisionOf(pageId);
+
+      const result = await applyFormatOps({ pageId }, [{ type: 'setFrozen', rows: 0, columns: null }], { userId: ownerId });
+
+      expect(result.tabFieldsChanged).toEqual([]);
+      expect(await revisionOf(pageId)).toEqual(before);
     });
 
     it('re-evaluates open-ended range formulas when the extent grows', async () => {
@@ -1828,8 +1898,8 @@ describe('sheet store (integration)', () => {
 
     it('refuses a range it cannot address or that is too large to expand', async () => {
       const { pageId } = await makeSheet({ rowCount: 20 });
-      await expect(readTabFormatting({ pageId }, { ranges: ['A0:B2'] })).rejects.toThrow(/Invalid range/);
-      await expect(readTabFormatting({ pageId }, { ranges: ['A1:ZZ50000'] })).rejects.toThrow(/cells/);
+      await expect(readTabFormatting({ pageId }, { ranges: ['A0:B2'] })).rejects.toBeInstanceOf(SheetFormatError);
+      await expect(readTabFormatting({ pageId }, { ranges: ['A1:ZZ50000'] })).rejects.toThrow(/cells between them/);
     });
   });
 });

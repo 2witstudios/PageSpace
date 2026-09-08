@@ -50,6 +50,7 @@ import { evaluateAddresses } from './evaluation';
 import {
   planFormatOps,
   parseRangeSpan,
+  SheetFormatError,
   MAX_FORMAT_OPS,
   MAX_FORMAT_CELLS_PER_REQUEST,
   type SheetFormatOp,
@@ -1121,9 +1122,11 @@ interface TabFieldValues {
  * The write path for everything `format-ops` can express, which until now had
  * only browser callers: an agent could set a cell's value and not one thing
  * about how it looked. Validation is `planFormatOps`'s job and every refusal
- * is a `SheetFormatError` thrown before any lock is taken; this function is the
- * persistence that plan describes, and it deliberately second-guesses none of
- * it.
+ * is a `SheetFormatError`; this function is the persistence that plan
+ * describes, and it deliberately second-guesses none of it. The plan runs once
+ * on a snapshot, so a bad request costs no lock, and again under the lock, so
+ * a request the tab has moved out from under — a rule id another writer just
+ * took — is refused and rolled back rather than written over.
  *
  * Persistence is split. A cell's own format lives on its row in
  * `sheet_rows.cells`, so a per-cell op is a row write scoped to the rows the
@@ -1135,12 +1138,18 @@ interface TabFieldValues {
  * Ops may address past the declared extent, and the sheet GROWS to cover them
  * — the decision `edit_sheet_cells` already made for values, applied to
  * formats. Growth carries an obligation the write would otherwise skip:
- * `evaluateClosure` resolves an open range's end from `rowCount`, so
- * `=SUM(A:A)` means something different once the sheet is taller, and a format
+ * `evaluateClosure` resolves an open range's end from `rowCount`, so a formula
+ * over `A:A` means something different once the sheet is taller, and a format
  * write does no recompute of its own. On growth, every formula holding an
- * open-ended range is re-evaluated along with its dependents. When the extent
- * does not grow no value can change — the evaluator's sheet carries no
- * formats and `StoredCell` has no rendered form — so no recompute runs.
+ * open-ended range edge is re-evaluated along with its dependents.
+ *
+ * Today that set is always empty: `FormulaParser.parseRange` rejects `A:A`,
+ * so no storable formula reads the extent (see the `deps.ts` module doc) and
+ * `sheet_range_deps` never holds a NULL bound through any write path. The
+ * recompute is kept as the contract growth owes, so the day open ranges parse
+ * this path does not start presenting stale totals as correct. When the extent
+ * does not grow no value can change — the evaluator's sheet carries no formats
+ * and `StoredCell` has no rendered form — so no recompute runs.
  */
 export async function applyFormatOps(
   ref: TabRef,
@@ -1153,11 +1162,13 @@ export async function applyFormatOps(
 
     // 1. Validate and plan, before any lock.
     //
-    // `planFormatOps` refuses everything it is going to refuse here, on the
-    // pre-lock snapshot, so a bad request costs no transaction time. The plan
-    // is also what the locks are derived from: `plan.rows` is exactly the set
-    // of `sheet_rows` a per-cell op will write, and the tab-field flag and the
-    // extent decision below settle whether the tab record is written at all.
+    // Everything a request can be refused for on its own is refused here, on
+    // the pre-lock snapshot, so a bad request costs no transaction time. (The
+    // re-plan in step 4 can still refuse, when the tab moved in between.) The
+    // plan is also what the locks are derived from: `plan.rows` is exactly the
+    // set of `sheet_rows` a per-cell op will write, and the tab-field flag and
+    // the extent decision below settle whether the tab record is written at
+    // all.
     const preview = planFormatOps(ops, formatTarget(tab));
     const rowIndexes = Array.from(preview.rows);
     const growth = formatGrowth(tab, preview);
@@ -1300,8 +1311,23 @@ export async function applyFormatOps(
 
         if (!before.has(address)) before.set(address, existing?.format ?? null);
         stage(working, rowIndex, label, cell);
-        stage(patches, rowIndex, label, { raw: cell.raw, format: next ?? null });
       }
+    }
+
+    // Patches are staged from the NET change, after every step has run: a
+    // bold set and cleared again in one request ends where it began, and
+    // writing that would create a tombstone row, bump the revision and log an
+    // entry whose before and after agree.
+    for (const [address, previous] of before) {
+      const { row: rowIndex, column } = decodeCellAddress(address);
+      const label = encodeColumnLabel(column);
+      const cell = working.get(rowIndex)?.cells[label];
+      const final = cell?.format ?? null;
+      if (sameJson(previous, final)) {
+        before.delete(address);
+        continue;
+      }
+      stage(patches, rowIndex, label, { raw: cell?.raw ?? '', format: final });
     }
 
     // 6. Re-evaluate what growth changed the meaning of. `evaluateClosure`
@@ -1492,8 +1518,11 @@ export async function readTabFormatting(
 
   const cellFormats: Record<string, CellFormat> = {};
   const ranges = options.ranges ?? [];
+  // `SheetFormatError`, as on the write side: a route maps one class to 400
+  // for the whole formatting surface, and the same bad range must not be a
+  // 400 when written and a 500 when read.
   if (ranges.length > MAX_FORMAT_OPS) {
-    throw new SheetAddressError(`At most ${MAX_FORMAT_OPS} ranges can be read at once; got ${ranges.length}`);
+    throw new SheetFormatError(`At most ${MAX_FORMAT_OPS} ranges can be read at once; got ${ranges.length}.`);
   }
 
   if (ranges.length > 0) {
@@ -1501,13 +1530,13 @@ export async function readTabFormatting(
     let cells = 0;
     for (const range of ranges) {
       const span = parseRangeSpan(range);
-      if (!span) throw new SheetAddressError(`Invalid range: ${range}`);
+      if (!span) throw new SheetFormatError(`"${range}" is not a range this sheet can address.`);
       // Counted before anything is read, so the cap bounds the read and not
       // just the result. A one-column range still costs a row per cell.
       cells += (span.rowEnd - span.rowStart + 1) * (span.colEnd - span.colStart + 1);
       if (cells > MAX_FORMAT_CELLS_PER_REQUEST) {
-        throw new SheetAddressError(
-          `Ranges cover more than ${MAX_FORMAT_CELLS_PER_REQUEST.toLocaleString()} cells; narrow them`
+        throw new SheetFormatError(
+          `The ranges cover more than ${MAX_FORMAT_CELLS_PER_REQUEST.toLocaleString()} cells between them; narrow them.`
         );
       }
       spans.push(span);
@@ -1609,7 +1638,8 @@ function formatGrowth(
 
 /**
  * Every formula on the tab that reads an open-ended range — `A:A`, `3:3` —
- * whose meaning depends on the declared extent.
+ * whose meaning depends on the declared extent. Always empty today; see the
+ * growth note on `applyFormatOps`.
  */
 async function openRangeFormulas(tabId: string, exec: Executor): Promise<string[]> {
   const found = await exec
@@ -1711,6 +1741,12 @@ function currentTabField(tab: StoredTab, field: TabFormatField): unknown {
       return parseConditionalRules(tab.conditionalFormats ?? undefined) ?? null;
     case 'regions':
       return parseRegions(tab.regions ?? undefined) ?? null;
+    case 'frozenRows':
+    case 'frozenColumns':
+      // The document path stores a freeze of 0; `setFrozen` normalises 0 to
+      // "none". They mean the same thing, so they compare the same, or a
+      // request to freeze nothing on such a tab would count as a change.
+      return tab[field] || null;
     default:
       return tab[field] ?? null;
   }
@@ -2653,16 +2689,29 @@ interface FormatPatchRow {
  * value with `raw: ''`. So the merge goes one level deeper — per cell, keyed by
  * what each kind of writer OWNS — and the two commits compose in either order.
  *
+ * What this does NOT do is arbitrate two writers of the same KIND on the same
+ * empty cell: two format writes there are last-writer-wins on `format`, as two
+ * value writes are on `raw` — the same-key semantics every writer already has.
+ *
  * `jsonb_each` over `excluded.cells` visits exactly the columns the caller
  * carried, so a merge cannot resurrect a cell legitimately removed within the
- * same call. `jsonb_object_agg` of no rows is NULL, hence the coalesce.
+ * same call. `jsonb_object_agg` of no rows is NULL, hence the coalesce. A
+ * stored cell that is somehow not an object (`storedObject`) is treated as
+ * absent rather than raising "cannot delete from scalar" on every later write
+ * to its row until a rebuild — the old column-level merge replaced it, and a
+ * write to a damaged row should stay possible.
  */
+
+/** `stored -> key` when it is an object, else `fallback`. */
+const storedObject = (key: ReturnType<typeof sql>, fallback: string) =>
+  sql`coalesce(CASE WHEN jsonb_typeof(${sheetRows.cells} -> ${key}) = 'object' THEN ${sheetRows.cells} -> ${key} END, ${sql.raw(fallback)}::jsonb)`;
+
 const CELL_MERGE_SQL: Record<PersistMode, ReturnType<typeof sql>> = {
   replace: sql`excluded."cells"`,
   merge: sql`${sheetRows.cells} || (
     SELECT coalesce(jsonb_object_agg(
       patch.key,
-      (coalesce(${sheetRows.cells} -> patch.key, '{}'::jsonb) - '{raw,value,type,error}'::text[]) || patch.value
+      (${storedObject(sql`patch.key`, "'{}'")} - '{raw,value,type,error}'::text[]) || patch.value
     ), '{}'::jsonb)
     FROM jsonb_each(excluded."cells") AS patch
   )`,
@@ -2675,7 +2724,7 @@ const CELL_MERGE_SQL: Record<PersistMode, ReturnType<typeof sql>> = {
   format: sql`${sheetRows.cells} || (
     SELECT coalesce(jsonb_object_agg(
       patch.key,
-      jsonb_strip_nulls(coalesce(${sheetRows.cells} -> patch.key, '{"raw": ""}'::jsonb) || (patch.value - 'raw'))
+      jsonb_strip_nulls(${storedObject(sql`patch.key`, `'{"raw": ""}'`)} || (patch.value - 'raw'))
     ), '{}'::jsonb)
     FROM jsonb_each(excluded."cells") AS patch
   )`,
@@ -2702,15 +2751,21 @@ async function persistRows(
   exec: Executor,
   mode: PersistMode = 'merge'
 ): Promise<void> {
-  const values = Array.from(rows.values()).map((row) => ({
-    tabId,
-    pageId,
-    rowIndex: row.rowIndex,
-    // A format patch is a wire shape the column type does not describe; the
-    // overloads above pin which shape each mode accepts, and the `'format'`
-    // expression consumes it before anything of that shape is stored.
-    cells: row.cells as Record<string, StoredCell>,
-  }));
+  // Ascending by row, for the same reason `lockRows` is: rows that do not
+  // exist yet cannot be locked ahead of time, so a multi-row insert takes its
+  // speculative locks in statement order, and two writers creating the same
+  // new rows in opposite orders would deadlock mid-statement.
+  const values = Array.from(rows.values())
+    .sort((a, b) => a.rowIndex - b.rowIndex)
+    .map((row) => ({
+      tabId,
+      pageId,
+      rowIndex: row.rowIndex,
+      // A format patch is a wire shape the column type does not describe; the
+      // overloads above pin which shape each mode accepts, and the `'format'`
+      // expression consumes it before anything of that shape is stored.
+      cells: row.cells as Record<string, StoredCell>,
+    }));
   if (values.length === 0) return;
 
   // One statement per batch, upserting on the tab/row identity so an append and
