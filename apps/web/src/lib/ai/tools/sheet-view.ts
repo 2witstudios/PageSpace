@@ -20,7 +20,7 @@
  * SQL against the materialised cell value; `read_sheet` passes its arguments
  * through and formats what comes back.
  */
-import type { CellFormat, StoredCell } from '@pagespace/db/schema/sheets-types';
+import type { CellFormat, StoredCell, StoredCellValue } from '@pagespace/db/schema/sheets-types';
 import { getTab, listTabs, readRows } from '@pagespace/lib/sheets/store';
 import {
   SHEETDOC_VERSION,
@@ -33,7 +33,13 @@ import {
   evaluateSheetSparse,
   parseSheetContentSafe,
   sheetDataFromSheetDoc,
+  parseConditionalRules,
+  parseRegions,
   type SheetData,
+  type ConditionalCondition,
+  type ConditionalOperator,
+  type ConditionalRule,
+  type SheetRegion,
 } from '@pagespace/lib/sheets/sheet';
 
 /**
@@ -130,6 +136,23 @@ export interface SheetViewRow {
   formulas?: Record<string, string>;
   /** Column letter → evaluation error message, present only for errored cells. */
   errors?: Record<string, string>;
+  /**
+   * Column letter → the typed machine value, present only for cells whose
+   * display string is not already it.
+   *
+   * `cells` carries the DISPLAY text, because that is what a person sees and
+   * what an agent has to reconcile against. But it is lossy in exactly one
+   * direction that matters: a cell displayed as `$1,200.00` cannot be turned
+   * back into the `1200` that `where` compares against, or into the number a
+   * formula would have to add up. The value was already in hand — `StoredCell`
+   * carries both halves — and throwing it away made every formatted read a
+   * one-way trip.
+   *
+   * Emitted only on divergence, so an unformatted sheet pays nothing for it and
+   * a formatted one recovers exactly the cells that need recovering. A column
+   * letter absent here means `cells[label]` IS the machine value.
+   */
+  unformatted?: Record<string, StoredCellValue>;
 }
 
 export interface SheetWindow {
@@ -164,6 +187,16 @@ export interface SheetWindow {
    * surface used to display. Callers use this to fall back to the text instead.
    */
   documentIsNotASheet: boolean;
+  /**
+   * The tab's presentation, when the caller asked for it. `null` means it was
+   * asked for and cannot be answered — see `formattingUnavailable`.
+   *
+   * Absent (rather than empty) when it was not asked for, so a caller cannot
+   * read "no formatting was requested" as "this sheet has no formatting".
+   */
+  formatting?: SheetFormatting | null;
+  /** Why `formatting` is null, when it is. */
+  formattingUnavailable?: string;
 }
 
 /**
@@ -250,6 +283,7 @@ export function toSheetViewRow(
   const values: Record<string, string> = {};
   const formulas: Record<string, string> = {};
   const errors: Record<string, string> = {};
+  const unformatted: Record<string, StoredCellValue> = {};
 
   for (const label of Object.keys(cells).sort(compareColumnLabels)) {
     if (only && !only.has(label)) continue;
@@ -262,11 +296,22 @@ export function toSheetViewRow(
     values[label] = text;
     if ((cell.raw ?? '').startsWith('=')) formulas[label] = cell.raw;
     if (cell.error) errors[label] = cell.error.message ?? cell.error.type;
+    // Only where the display is not already the value. `String(value)` is the
+    // right comparison and not an approximation of one: it is exactly what
+    // `formatDisplayValue` produces for the unformatted case, so equality here
+    // means the display text already IS the machine value and a second copy of
+    // it would be pure payload. An errored cell is excluded because its display
+    // is `#ERROR`, not a rendering of the value — reporting a value beside an
+    // error invites an agent to use it.
+    if (cell.value !== undefined && !cell.error && String(cell.value) !== text) {
+      unformatted[label] = cell.value;
+    }
   }
 
   const row: SheetViewRow = { rowNumber: rowIndex + 1, cells: values };
   if (Object.keys(formulas).length > 0) row.formulas = formulas;
   if (Object.keys(errors).length > 0) row.errors = errors;
+  if (Object.keys(unformatted).length > 0) row.unformatted = unformatted;
   return row;
 }
 
@@ -454,6 +499,13 @@ interface LoadSheetWindowOptions {
    * an empty spreadsheet.
    */
   documentContent?: unknown;
+  /**
+   * Also describe the tab's presentation — regions, layout, column and cell
+   * formats, conditional rules. Off by default: an agent reading data does not
+   * need the styling, and this is the only part of the response whose size is
+   * driven by how much someone has formatted rather than by what was asked for.
+   */
+  includeFormatting?: boolean;
 }
 
 /**
@@ -478,7 +530,25 @@ export async function loadSheetWindow(
 
   const storedTabs = await listTabs(pageId);
   if (storedTabs.length === 0) {
-    return windowFromDocument(options.documentContent, pageId, tabIndex, fromRow, limit, only);
+    const window = windowFromDocument(options.documentContent, pageId, tabIndex, fromRow, limit, only);
+    // An unmigrated sheet has no `sheet_tabs` row, so there is nowhere for
+    // regions, freezes, column formats or rules to be read FROM — and the
+    // synthetic `StoredCell`s built above carry no format either. Answering
+    // with an empty formatting block would say "this sheet is unstyled", and an
+    // agent acting on that formats over a design someone already applied. Same
+    // refusal this module makes about an unparseable document: say what cannot
+    // be answered rather than answer it wrongly.
+    return options.includeFormatting
+      ? {
+          ...window,
+          formatting: null,
+          formattingUnavailable:
+            "This sheet's rows have not been migrated to row storage, so its formatting is not " +
+            'readable here — regions, freezes, column formats and conditional rules all live on ' +
+            'the stored tab, which does not exist yet. Do NOT treat the sheet as unformatted: it ' +
+            'may carry a design this read cannot see. One edit in the app migrates it.',
+        }
+      : window;
   }
 
   const tabs = toTabSummaries(storedTabs);
@@ -512,6 +582,11 @@ export async function loadSheetWindow(
     // be. Same reasoning the document path above already used.
     hasMore: stored.length === limit,
     documentIsNotASheet: false,
+    // `only` is passed for the same reason the rows are projected: `cellFormats`
+    // is per-cell, so a projected read must project it too or the response is
+    // bigger than the columns it claims to be about. The tab-level fields are
+    // not per-cell and are not projected.
+    ...(options.includeFormatting ? { formatting: buildSheetFormatting(tab, stored, only) } : {}),
   };
 }
 
@@ -655,3 +730,240 @@ export function renderSheetTable(
 
 /** The character budget one cell gets in a rendered table. */
 export const TABLE_CELL_CHAR_LIMIT = MAX_TABLE_CELL_CHARS;
+
+// ---------------------------------------------------------------------------
+// Formatting — what a sheet LOOKS like, for an agent that has to change it
+// ---------------------------------------------------------------------------
+
+/**
+ * Characters the per-cell formatting map may spend.
+ *
+ * Deliberately small against the 40,000-char table budget, and the ratio is the
+ * point: formatting is context to decide WITH, not the data that was asked for.
+ * A read that spends a third of its response describing fills has crowded out
+ * the rows the agent actually called for.
+ *
+ * It bounds only `cellFormats`, because that is the only unbounded part —
+ * regions are a handful of declarations, layout is O(columns), and the rule
+ * summaries are one line each under `MAX_CONDITIONAL_RULES`. Per-cell overrides
+ * are O(cells) and a sheet someone styled by hand can have thousands.
+ */
+export const MAX_FORMATTING_CHARS = 6_000;
+
+/** A conditional rule as an agent reads it: what it is and where, in one line. */
+export interface ConditionalRuleSummary {
+  id: string;
+  kind: ConditionalRule['kind'];
+  ranges: string[];
+  summary: string;
+}
+
+/** Grid-wide presentation, carrying only the keys the tab actually sets. */
+export interface SheetLayout {
+  frozenRows?: number;
+  frozenColumns?: number;
+  columnWidths?: Record<string, number>;
+  rowHeights?: Record<string, number>;
+}
+
+export interface SheetFormatting {
+  /**
+   * The tab's declared structure, verbatim.
+   *
+   * Verbatim is the whole value of it: these are re-writable AS the `regions`
+   * input that declares them, so an agent adjusting one table's theme reads the
+   * list, changes one field and writes it back — rather than inferring
+   * structure from derived fills and re-deriving something subtly different.
+   */
+  regions?: SheetRegion[];
+  layout?: SheetLayout;
+  /** Per-column defaults, keyed by column letter. */
+  columnFormats?: Record<string, CellFormat>;
+  /**
+   * Explicit per-cell overrides, keyed by A1 address — only cells that carry
+   * their own format. Derived presentation is NOT here: it comes from
+   * `regions`, and flattening it into per-cell entries would turn a rule back
+   * into the residue the region model exists to replace.
+   */
+  cellFormats?: Record<string, CellFormat>;
+  conditionalRules?: ConditionalRuleSummary[];
+  /**
+   * Present only when `cellFormats` was cut, with how many cells were left out.
+   *
+   * A silently partial map is worse than a bounded one: an agent reads "B7 has
+   * no override" and writes as though that were true. The count says the
+   * picture is incomplete and by how much.
+   */
+  formattingTruncated?: { droppedCells: number };
+}
+
+/**
+ * Operator wording, duplicated from the sheet panel's `rule-presets` on purpose.
+ *
+ * `apps/web/src/lib/ai/**` imports nothing from `components/**` today, and this
+ * is not the place to start that dependency — a tool module pulling in a UI
+ * module drags the component tree's imports into every AI request. The cost of
+ * the copy is drift, which is why a test asserts the two produce the same string
+ * for a rule of each kind.
+ */
+const OPERATOR_WORDING: Record<ConditionalOperator, string> = {
+  greaterThan: 'is greater than',
+  greaterThanOrEqual: 'is greater than or equal to',
+  lessThan: 'is less than',
+  lessThanOrEqual: 'is less than or equal to',
+  equal: 'is equal to',
+  notEqual: 'is not equal to',
+  between: 'is between',
+  notBetween: 'is not between',
+  contains: 'contains',
+  notContains: 'does not contain',
+  startsWith: 'starts with',
+  endsWith: 'ends with',
+  isEmpty: 'is empty',
+  isNotEmpty: 'is not empty',
+  isError: 'is an error',
+};
+
+const VALUELESS: ReadonlySet<ConditionalOperator> = new Set<ConditionalOperator>([
+  'isEmpty',
+  'isNotEmpty',
+  'isError',
+]);
+
+const TWO_BOUNDS: ReadonlySet<ConditionalOperator> = new Set<ConditionalOperator>([
+  'between',
+  'notBetween',
+]);
+
+function describeCondition(condition: ConditionalCondition): string {
+  const label = OPERATOR_WORDING[condition.operator] ?? condition.operator;
+  if (VALUELESS.has(condition.operator)) return label;
+  if (TWO_BOUNDS.has(condition.operator)) {
+    return `${label} ${condition.value || '?'} and ${condition.value2 || '?'}`;
+  }
+  return `${label} ${condition.value || '?'}`;
+}
+
+/**
+ * One line saying what a conditional rule does.
+ *
+ * A line, never the rule's JSON. A colour scale's anchors and a data bar's
+ * fill are render-layer detail an agent cannot act on without also owning the
+ * rendering, and four of them at full fidelity cost more context than the rows
+ * they describe. The `id` beside it is what identifies a rule to change it.
+ */
+export function describeConditionalRule(rule: ConditionalRule): string {
+  switch (rule.kind) {
+    case 'cell':
+      return `Cell ${describeCondition(rule.condition)}`;
+    case 'formula':
+      return rule.formula ? `Formula ${rule.formula}` : 'Formula (not set)';
+    case 'colorScale':
+      return rule.mid ? 'Colour scale (3 colours)' : 'Colour scale';
+    case 'dataBar':
+      return 'Data bar';
+  }
+}
+
+/** The tab fields formatting is read from — a subset of the store's `StoredTab`. */
+export interface SheetFormattingSource {
+  frozenRows?: number | null;
+  frozenColumns?: number | null;
+  columnFormats?: Record<string, CellFormat> | null;
+  columnWidths?: Record<string, number> | null;
+  rowHeights?: Record<string, number> | null;
+  conditionalFormats?: unknown[] | null;
+  regions?: unknown[] | null;
+}
+
+const hasKeys = (value: Record<string, unknown> | null | undefined): boolean =>
+  value !== null && value !== undefined && Object.keys(value).length > 0;
+
+/**
+ * The explicit per-cell overrides in a window of rows, within the budget.
+ *
+ * Deterministic order — rows as fetched, columns in sheet order — so the same
+ * window always drops the same cells, and a re-read to check a change does not
+ * silently swap which half of the sheet it describes.
+ */
+function collectCellFormats(
+  rows: readonly { rowIndex: number; cells: Record<string, StoredCell> }[],
+  only: ReadonlySet<string> | undefined,
+  budget: number,
+): { formats: Record<string, CellFormat>; dropped: number } {
+  const formats: Record<string, CellFormat> = {};
+  let spent = 0;
+  let dropped = 0;
+
+  for (const row of rows) {
+    for (const label of Object.keys(row.cells).sort(compareColumnLabels)) {
+      if (only && !only.has(label)) continue;
+      const format = row.cells[label]?.format;
+      if (!format || Object.keys(format).length === 0) continue;
+
+      const address = `${label}${row.rowIndex + 1}`;
+      // The cost of the entry as it will be serialised: the key, the value, the
+      // quotes and the comma. Measuring the value alone understated a map of
+      // thousands of tiny formats by more than the formats themselves.
+      const cost = address.length + JSON.stringify(format).length + 4;
+      // Counted, not stopped at: the caller is told how many cells it is NOT
+      // seeing, and a single oversized format must not make every later cell
+      // vanish uncounted.
+      if (spent + cost > budget) {
+        dropped++;
+        continue;
+      }
+      spent += cost;
+      formats[address] = format;
+    }
+  }
+
+  return { formats, dropped };
+}
+
+/**
+ * A tab's presentation, in the shape an agent can read and write back.
+ *
+ * Pure, and given the tab record rather than a page id, so `read_sheet`'s two
+ * paths — a positional window and a filtered query — describe the same tab
+ * identically. It reads nothing: every field is already on the `sheet_tabs` row
+ * the caller fetched and on the cells of the rows it returned.
+ */
+export function buildSheetFormatting(
+  tab: SheetFormattingSource,
+  rows: readonly { rowIndex: number; cells: Record<string, StoredCell> }[],
+  only?: ReadonlySet<string>,
+): SheetFormatting {
+  const formatting: SheetFormatting = {};
+
+  // Through the same parser the renderer uses, not straight off the column:
+  // `regions` is API-writable jsonb, and handing an agent an unvalidated blob
+  // as "the regions" would have it write back something the writer then drops.
+  const regions = parseRegions(tab.regions);
+  if (regions && regions.length > 0) formatting.regions = regions;
+
+  const layout: SheetLayout = {};
+  if (tab.frozenRows != null) layout.frozenRows = tab.frozenRows;
+  if (tab.frozenColumns != null) layout.frozenColumns = tab.frozenColumns;
+  if (hasKeys(tab.columnWidths)) layout.columnWidths = tab.columnWidths!;
+  if (hasKeys(tab.rowHeights)) layout.rowHeights = tab.rowHeights!;
+  if (Object.keys(layout).length > 0) formatting.layout = layout;
+
+  if (hasKeys(tab.columnFormats)) formatting.columnFormats = tab.columnFormats!;
+
+  const cells = collectCellFormats(rows, only, MAX_FORMATTING_CHARS);
+  if (Object.keys(cells.formats).length > 0) formatting.cellFormats = cells.formats;
+  if (cells.dropped > 0) formatting.formattingTruncated = { droppedCells: cells.dropped };
+
+  const rules = parseConditionalRules(tab.conditionalFormats);
+  if (rules && rules.length > 0) {
+    formatting.conditionalRules = rules.map((rule) => ({
+      id: rule.id,
+      kind: rule.kind,
+      ranges: rule.ranges,
+      summary: describeConditionalRule(rule),
+    }));
+  }
+
+  return formatting;
+}

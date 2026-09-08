@@ -33,6 +33,8 @@ vi.mock('@pagespace/lib/sheets/store', () => ({
 }));
 
 import { serializeSheetContent } from '@pagespace/lib/sheets/io';
+import type { ConditionalRule } from '@pagespace/lib/sheets/sheet';
+import { describeRule } from '@/components/layout/middle-content/page-views/sheet/core/rule-presets';
 import {
   SheetDocumentUnreadableError,
   SheetTabNotFoundError,
@@ -42,6 +44,7 @@ import {
   renderSheetTable,
   renderSheetTableWithinBudget,
   toSheetViewRow,
+  describeConditionalRule,
 } from '../sheet-view';
 
 const tab = {
@@ -846,5 +849,92 @@ describe('loadSheetWindow — refusals', () => {
 
     expect(window.rows).toEqual([]);
     expect(window.materialized).toBe(false);
+  });
+});
+
+describe('describeConditionalRule agrees with the panel it was copied from', () => {
+  /**
+   * `apps/web/src/lib/ai/**` imports nothing from `components/**`, so the AI
+   * surface has its own copy of the panel's rule wording. The copy is the whole
+   * risk: two descriptions of one rule, free to drift, with nothing to notice.
+   * One rule of each kind, both functions, same string.
+   */
+  const rules: ConditionalRule[] = [
+    {
+      id: 'a',
+      kind: 'cell',
+      ranges: ['A1:A9'],
+      condition: { operator: 'between', value: '10', value2: '20' },
+      format: { background: '#fee2e2' },
+    },
+    { id: 'b', kind: 'formula', ranges: ['B1:B9'], formula: '=B1>0', format: { bold: true } },
+    {
+      id: 'c',
+      kind: 'colorScale',
+      ranges: ['C1:C9'],
+      min: { type: 'min', color: '#ffffff' },
+      mid: { type: 'percentile', value: 50, color: '#fde68a' },
+      max: { type: 'max', color: '#22c55e' },
+    },
+    { id: 'd', kind: 'dataBar', ranges: ['D1:D9'], color: '#3b82f6' },
+  ];
+
+  it.each(rules)('describes a $kind rule the same way the panel does', (rule) => {
+    assert({
+      given: `a ${rule.kind} rule`,
+      should: 'produce the same one-line summary as the sheet panel',
+      actual: describeConditionalRule(rule),
+      expected: describeRule(rule),
+    });
+  });
+
+  it('covers every rule kind the union has, so a new kind cannot slip past', () => {
+    // Without this the case above passes forever on the four kinds someone
+    // thought to list, which is how the copy drifts in the first place.
+    const kinds: ReadonlyArray<ConditionalRule['kind']> = ['cell', 'formula', 'colorScale', 'dataBar'];
+    expect(rules.map((rule) => rule.kind).sort()).toEqual([...kinds].sort());
+  });
+});
+
+describe('loadSheetWindow describes formatting only when asked', () => {
+  const styledTab = {
+    ...tab,
+    frozenRows: 1,
+    regions: [{ id: 'r1', range: 'A1:C', headerRows: 1 }],
+  };
+
+  it('leaves the key off entirely by default, so no caller can read it as "unstyled"', async () => {
+    // `read_page` and `list_pages` share this window and never ask for
+    // formatting. Building it for them anyway would parse regions and walk every
+    // returned cell's format on a preview that shows none of it — and would put
+    // an empty block in front of a caller that never asked.
+    mockGetTab.mockResolvedValue(styledTab);
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'x', value: 'x', format: { bold: true } } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    expect('formatting' in window).toBe(false);
+  });
+
+  it('builds it when asked, from the tab already in hand', async () => {
+    mockGetTab.mockResolvedValue(styledTab);
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'x', value: 'x', format: { bold: true } } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10, includeFormatting: true });
+
+    assert({
+      given: 'a styled tab and includeFormatting',
+      should: 'describe the freeze, the region and the per-cell override',
+      actual: window.formatting,
+      expected: {
+        regions: [{ id: 'r1', range: 'A1:C', headerRows: 1 }],
+        layout: { frozenRows: 1 },
+        cellFormats: { A1: { bold: true } },
+      },
+    });
   });
 });
