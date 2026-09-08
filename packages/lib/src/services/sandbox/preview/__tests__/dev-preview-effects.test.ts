@@ -232,7 +232,10 @@ describe('probeRelayRuntime — socat is preferred only when the sprite proves i
     let seen: { cmd: string; args?: string[] } | undefined;
     const runtime = await probeRelayRuntime(async (args) => { seen = args; return { exitCode: 0, stdout: '/usr/bin/socat\n', stderr: '' }; });
     assert({ given: 'exit 0', should: 'socat', actual: runtime, expected: 'socat' });
-    assert({ given: 'the probe', should: 'ask sh for socat', actual: seen, expected: { cmd: 'sh', args: ['-c', 'command -v socat'], timeoutMs: 10_000 } });
+    // Ends with a sentinel and asks the driver to resolve on it: the runtime
+    // holds the exec socket open 5–10s after exit, so waiting for `exit`
+    // would spend the whole budget on a close (see `RunCommandArgs.stdoutSentinel`).
+    assert({ given: 'the probe', should: 'ask sh for socat, sentinel-terminated', actual: seen, expected: { cmd: 'sh', args: ['-c', 'command -v socat >/dev/null 2>&1; echo "__PS_RT_END__ $?"'], timeoutMs: 10_000, stdoutSentinel: '__PS_RT_END__' } });
   });
 
   it('falls back to the verified node default on a non-zero exit or a thrown probe', async () => {

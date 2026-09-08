@@ -57,7 +57,11 @@ const RUNTIME_PROBE_TIMEOUT_MS = 10_000;
  */
 export async function probeRelayRuntime(exec: (args: RunCommandArgs) => Promise<SandboxRunResult>): Promise<PreviewRelayRuntime> {
   try {
-    const result = await exec({ cmd: 'sh', args: ['-c', 'command -v socat'], timeoutMs: RUNTIME_PROBE_TIMEOUT_MS });
+    // The sentinel makes this answer at first-byte latency instead of at
+    // socket close, which the runtime delays 5–10s after exit — see
+    // `RunCommandArgs.stdoutSentinel`. Without it a relay create on a
+    // long-lived sprite spent its whole budget waiting for a close.
+    const result = await exec({ cmd: 'sh', args: ['-c', 'command -v socat >/dev/null 2>&1; echo "__PS_RT_END__ $?"'], timeoutMs: RUNTIME_PROBE_TIMEOUT_MS, stdoutSentinel: '__PS_RT_END__' });
     return result.exitCode === 0 ? 'socat' : 'node';
   } catch {
     return 'node';
