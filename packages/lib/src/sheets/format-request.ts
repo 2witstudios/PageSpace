@@ -574,6 +574,87 @@ const anchorProblem = (anchor: unknown, needsColor: boolean): string | null => {
 };
 
 /**
+ * Why a rule that stores faithfully would still not do what was asked, or null
+ * when there is nothing wrong with it.
+ *
+ * The second half of this module's job, and a different question from the
+ * first. `firstSanitizedPath` asks whether what we are about to store matches
+ * what was sent; these ask whether the thing we are about to store does what
+ * was asked. Every case here passes the first question perfectly — the rule is
+ * kept byte for byte — and then formats the wrong cells, or none.
+ */
+function ruleRenderProblem(rule: ConditionalRule): string | null {
+  // A condition whose operator needs an operand it does not have. The parser
+  // accepts any recognized operator on its own and the comparator sees nothing
+  // dropped, but `matchesCondition` then compares against nothing: a
+  // `greaterThan` with no value matches NO cell, and a `notContains` with no
+  // value matches EVERY non-error one. Which set of operators needs a value is
+  // the panel's answer, now shared rather than restated.
+  if (rule.kind === 'cell' && !VALUELESS_OPERATORS.has(rule.condition.operator)) {
+    const { operator, value, value2 } = rule.condition;
+    if (typeof value !== 'string' || value.trim() === '') {
+      return (
+        `A "${operator}" rule needs a value to compare against. Without one it matches nothing — or, ` +
+        'for a negative operator, everything.'
+      );
+    }
+    if (RANGE_OPERATORS.has(operator) && (typeof value2 !== 'string' || value2.trim() === '')) {
+      return `A "${operator}" rule needs both bounds: value and value2.`;
+    }
+  }
+
+  // A formula that does not parse. `parseConditionalRule` asks only that it be
+  // non-blank, and the evaluator then throws while tokenizing it once per
+  // covered cell, catches, and applies nothing — the silent render-time no-op
+  // in its purest form. Checked with the engine's own tokenizer and parser, so
+  // "valid" means the same thing here as where it runs.
+  if (rule.kind === 'formula') {
+    const body = rule.formula.trim().replace(/^=/, '');
+    let parsed = false;
+    try {
+      const tokens = tokenize(body);
+      if (tokens.length > 0) {
+        new FormulaParser(tokens).parse();
+        parsed = true;
+      }
+    } catch {
+      parsed = false;
+    }
+    if (!parsed) {
+      return (
+        `"${rule.formula}" is not a formula this sheet can evaluate. Stored as written it throws once ` +
+        'per covered cell and formats none of them.'
+      );
+    }
+  }
+
+  // Anchors, which the comparator cannot speak for — see `anchorProblem`.
+  if (rule.kind === 'colorScale') {
+    for (const [name, value] of [['min', rule.min], ['mid', rule.mid], ['max', rule.max]] as const) {
+      const problem = anchorProblem(value, true);
+      if (problem) {
+        return (
+          `The colorScale's ${name} anchor ${problem}. Stored as written it renders no colour at ` +
+          'all, on any cell in range.'
+        );
+      }
+    }
+  } else if (rule.kind === 'dataBar') {
+    for (const [name, value] of [['min', rule.min], ['max', rule.max]] as const) {
+      const problem = anchorProblem(value, false);
+      if (problem) {
+        return (
+          `The dataBar's ${name} anchor ${problem}. Stored as written it is ignored, and the bars ` +
+          `are scaled to the data's own ${name} instead.`
+        );
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
  * Parse a caller-supplied rule, refusing anything the parser would quietly
  * rewrite on the way in.
  *
@@ -663,82 +744,74 @@ function validateRuleInput(
     );
   }
 
-  // A condition whose operator needs an operand it does not have. The parser
-  // accepts any recognized operator on its own and the comparator sees nothing
-  // dropped, but `matchesCondition` then compares against nothing: a
-  // `greaterThan` with no value matches NO cell, and a `notContains` with no
-  // value matches EVERY non-error one. Which set of operators needs a value is
-  // the panel's answer, now shared rather than restated.
-  if (rule.kind === 'cell' && !VALUELESS_OPERATORS.has(rule.condition.operator)) {
-    const { operator, value, value2 } = rule.condition;
-    if (typeof value !== 'string' || value.trim() === '') {
-      return refuseOp(
-        index,
-        type,
-        `A "${operator}" rule needs a value to compare against. Without one it matches nothing — or, ` +
-          'for a negative operator, everything.'
-      );
-    }
-    if (RANGE_OPERATORS.has(operator) && (typeof value2 !== 'string' || value2.trim() === '')) {
-      return refuseOp(index, type, `A "${operator}" rule needs both bounds: value and value2.`);
-    }
-  }
-
-  // A formula that does not parse. `parseConditionalRule` asks only that it be
-  // non-blank, and the evaluator then throws while tokenizing it once per
-  // covered cell, catches, and applies nothing — the silent render-time no-op
-  // in its purest form. Checked with the engine's own tokenizer and parser, so
-  // "valid" means the same thing here as where it runs.
-  if (rule.kind === 'formula') {
-    const body = rule.formula.trim().replace(/^=/, '');
-    let parsed = false;
-    try {
-      const tokens = tokenize(body);
-      if (tokens.length > 0) {
-        new FormulaParser(tokens).parse();
-        parsed = true;
-      }
-    } catch {
-      parsed = false;
-    }
-    if (!parsed) {
-      return refuseOp(
-        index,
-        type,
-        `"${rule.formula}" is not a formula this sheet can evaluate. Stored as written it throws once ` +
-          'per covered cell and formats none of them.'
-      );
-    }
-  }
-
-  // Anchors, which the comparator cannot speak for — see `anchorProblem`.
-  if (rule.kind === 'colorScale') {
-    for (const [name, value] of [['min', rule.min], ['mid', rule.mid], ['max', rule.max]] as const) {
-      const problem = anchorProblem(value, true);
-      if (problem) {
-        return refuseOp(
-          index,
-          type,
-          `The colorScale's ${name} anchor ${problem}. Stored as written it renders no colour at ` +
-            'all, on any cell in range.'
-        );
-      }
-    }
-  } else if (rule.kind === 'dataBar') {
-    for (const [name, value] of [['min', rule.min], ['max', rule.max]] as const) {
-      const problem = anchorProblem(value, false);
-      if (problem) {
-        return refuseOp(
-          index,
-          type,
-          `The dataBar's ${name} anchor ${problem}. Stored as written it is ignored, and the bars ` +
-            `are scaled to the data's own ${name} instead.`
-        );
-      }
-    }
-  }
+  const problem = ruleRenderProblem(rule);
+  if (problem) return refuseOp(index, type, problem);
 
   return rule;
+}
+
+/**
+ * The same question as {@link ruleRenderProblem}, for a region: what would be
+ * stored exactly as asked and still not do it?
+ */
+function regionRenderProblem(region: SheetRegion, label: string): string | null {
+  // A declaration that names something outside the region it belongs to.
+  // `createRegionResolver` excludes cells outside the bounds before it consults
+  // either list, so a column or total row beyond them can never render — stored
+  // faithfully, and inert. Cross-field, so the comparator cannot see it: each
+  // value survives on its own.
+  const bounds = parseRegionRange(region.range);
+  if (bounds) {
+    for (const column of region.columns ?? []) {
+      const columnIndex = decodeColumnLabel(column.column);
+      if (columnIndex < bounds.colStart || columnIndex > bounds.colEnd) {
+        return (
+          `${label}: column "${column.column}" is outside the region ${region.range}, so nothing it ` +
+          'declares can ever apply.'
+        );
+      }
+    }
+
+    // Only for a closed range: an open one ("A1:F") reaches the end of the
+    // sheet, so a total row past today's extent is a row the sheet will grow
+    // into — which is the entire point of leaving the end off.
+    if (bounds.rowEnd !== null) {
+      for (const row of region.totalRows ?? []) {
+        if (row - 1 < bounds.rowStart || row - 1 > bounds.rowEnd) {
+          return `${label}: total row ${row} is outside the region ${region.range}, so it can never render.`;
+        }
+      }
+    }
+  }
+
+  // A setting nothing acts on yet. `freezeHeader` is parsed and stored, and a
+  // repo-wide search finds no consumer: `createRegionResolver` does not read it
+  // and the `setRegions` step only stores the region. Accepting it would be the
+  // module's own contract broken in its own output — a request that succeeds
+  // and pins nothing. `setFrozen` does work today, so the refusal names it.
+  if (region.freezeHeader === true) {
+    return (
+      `${label}: freezeHeader is not applied by anything yet, so setting it would pin no rows. Use a ` +
+      'setFrozen op for now.'
+    );
+  }
+
+  // The one sanitization the comparator cannot see, because it happens at
+  // RENDER time rather than at parse time: `parseRegion` accepts any lowercase
+  // word as a theme, and `hueByName` then falls back to the default for one the
+  // palette does not have. Its own comment says why — "falling back beats
+  // refusing to render the table" — and that is right for a stored region being
+  // drawn. It is wrong for a request: an agent that asked for a blue dashboard
+  // and got slate was told the write succeeded. Refusing needs the palette,
+  // which is exactly what that comment notes `parseRegion` cannot import.
+  if (region.theme !== undefined && !PALETTE.some((hue) => hue.name === region.theme)) {
+    return (
+      `${label}: "${region.theme}" is not a hue this build has, and would render as ` +
+      `${PALETTE[0].name} without saying so. Known hues: ${PALETTE.map((hue) => hue.name).join(', ')}.`
+    );
+  }
+
+  return null;
 }
 
 /** The same contract as {@link validateRuleInput}, for a declared region. */
@@ -767,71 +840,8 @@ function validateRegionInput(raw: unknown, index: number, type: string, label: s
     );
   }
 
-  // A declaration that names something outside the region it belongs to.
-  // `createRegionResolver` excludes cells outside the bounds before it consults
-  // either list, so a column or total row beyond them can never render — stored
-  // faithfully, and inert. Cross-field, so the comparator cannot see it: each
-  // value survives on its own.
-  const bounds = parseRegionRange(region.range);
-  if (bounds) {
-    for (const column of region.columns ?? []) {
-      const columnIndex = decodeColumnLabel(column.column);
-      if (columnIndex < bounds.colStart || columnIndex > bounds.colEnd) {
-        return refuseOp(
-          index,
-          type,
-          `${label}: column "${column.column}" is outside the region ${region.range}, so nothing it ` +
-            'declares can ever apply.'
-        );
-      }
-    }
-
-    // Only for a closed range: an open one ("A1:F") reaches the end of the
-    // sheet, so a total row past today's extent is a row the sheet will grow
-    // into — which is the entire point of leaving the end off.
-    if (bounds.rowEnd !== null) {
-      for (const row of region.totalRows ?? []) {
-        if (row - 1 < bounds.rowStart || row - 1 > bounds.rowEnd) {
-          return refuseOp(
-            index,
-            type,
-            `${label}: total row ${row} is outside the region ${region.range}, so it can never render.`
-          );
-        }
-      }
-    }
-  }
-
-  // A setting nothing acts on yet. `freezeHeader` is parsed and stored, and a
-  // repo-wide search finds no consumer: `createRegionResolver` does not read it
-  // and the `setRegions` step only stores the region. Accepting it would be the
-  // module's own contract broken in its own output — a request that succeeds
-  // and pins nothing. `setFrozen` does work today, so the refusal names it.
-  if (region.freezeHeader === true) {
-    return refuseOp(
-      index,
-      type,
-      `${label}: freezeHeader is not applied by anything yet, so setting it would pin no rows. Use a ` +
-        'setFrozen op for now.'
-    );
-  }
-
-  // The one sanitization the comparator cannot see, because it happens at
-  // RENDER time rather than at parse time: `parseRegion` accepts any lowercase
-  // word as a theme, and `hueByName` then falls back to the default for one the
-  // palette does not have. Its own comment says why — "falling back beats
-  // refusing to render the table" — and that is right for a stored region being
-  // drawn. It is wrong for a request: an agent that asked for a blue dashboard
-  // and got slate was told the write succeeded. Refusing needs the palette,
-  // which is exactly what that comment notes `parseRegion` cannot import.
-  if (region.theme !== undefined && !PALETTE.some((hue) => hue.name === region.theme)) {
-    return refuseOp(
-      index,
-      type,
-      `${label}: "${region.theme}" is not a hue this build has, and would render as ` +
-        `${PALETTE[0].name} without saying so. Known hues: ${PALETTE.map((hue) => hue.name).join(', ')}.`
-    );
-  }
+  const problem = regionRenderProblem(region, label);
+  if (problem) return refuseOp(index, type, problem);
 
   return region;
 }
