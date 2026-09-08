@@ -88,8 +88,10 @@ import {
   MIN_ROW_HEIGHT,
   PALETTE,
   RANGE_OPERATORS,
+  SheetDuplicateRuleError,
   SheetFormatError,
   VALUELESS_OPERATORS,
+  conditionalRuleContentKey,
   isSheetType,
   normalizeHex,
   parseRangeSpan,
@@ -1021,26 +1023,14 @@ function buildRule(input: RuleInput, label: string): BuiltRule {
 }
 
 /**
- * A rule's content, independent of its id, as a string that is equal for two
- * rules that would do the same thing. Key order is canonicalised because the
- * parser rebuilds a rule field by field and a stored rule's order need not
- * match a freshly built one's.
+ * The lib's content comparison, under the name this module has always used.
+ * Not a copy: the planner refuses a content twin under the store's lock with
+ * exactly this function, so the pre-flight dedupe here and that refusal agree
+ * on what "the same rule" means. A second definition would let the two drift
+ * — a rule this dedupe passes and the planner refuses is a retry the model
+ * is told failed.
  */
-function contentKey(rule: ConditionalRule | RuleContent): string {
-  const canonical = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(canonical);
-    if (typeof value === 'object' && value !== null) {
-      return Object.fromEntries(
-        Object.keys(value as Record<string, unknown>)
-          .filter((key) => key !== 'id' && (value as Record<string, unknown>)[key] !== undefined)
-          .sort()
-          .map((key) => [key, canonical((value as Record<string, unknown>)[key])])
-      );
-    }
-    return value;
-  };
-  return JSON.stringify(canonical(rule));
-}
+const contentKey = (rule: ConditionalRule | RuleContent): string => conditionalRuleContentKey(rule);
 
 // ---------------------------------------------------------------------------
 // Shared: locating the tab
@@ -1156,7 +1146,16 @@ async function locateTab(
   return { ok: true, page, ref, formatting, tabs };
 }
 
-/** The write, with the store's refusals turned into the envelope. */
+/**
+ * The write, with the store's refusals turned into the envelope.
+ *
+ * `onDuplicateRule: 'throw'` lets the store's content-twin refusal
+ * (`SheetDuplicateRuleError`) escape instead of becoming an envelope. Only
+ * `set_conditional_format` asks for it: that tool minted the ids, so a twin
+ * refused under the lock is its own retry racing it, and it has the rules in
+ * hand to check. `format_sheet` relays the model's ids and has no such
+ * standing, so for it the twin is a refusal like any other.
+ */
 async function applyPlanned(
   ref: TabRef,
   planned: readonly PlannedOp[],
@@ -1165,7 +1164,8 @@ async function applyPlanned(
   page: PageRecord,
   toolName: string,
   error: string,
-  metadata: Record<string, unknown>
+  metadata: Record<string, unknown>,
+  onDuplicateRule: 'refuse' | 'throw' = 'refuse'
 ) {
   const ops = planned.map((entry) => entry.op);
   const labels = planned.map((entry) => entry.label);
@@ -1201,6 +1201,9 @@ async function applyPlanned(
       metadata: { source: 'ai-tool', tool: toolName, ...metadata },
     });
   } catch (cause) {
+    if (cause instanceof SheetDuplicateRuleError && onDuplicateRule === 'throw') {
+      throw cause;
+    }
     if (cause instanceof SheetFormatError) {
       return refusal(error, relabel(cause, labels), NOTHING_APPLIED);
     }
@@ -1490,16 +1493,70 @@ export const sheetFormatTools = {
           };
         }
 
-        const outcome = await applyPlanned(
-          ref,
-          planned,
-          formatting,
-          toolContext,
-          page,
-          'set_conditional_format',
-          INVALID_RULE_REQUEST,
-          { mode, rulesAdded: toAdd.length, rulesRemoved: existing.length - remaining.length }
-        );
+        let outcome: Awaited<ReturnType<typeof applyPlanned>>;
+        try {
+          outcome = await applyPlanned(
+            ref,
+            planned,
+            formatting,
+            toolContext,
+            page,
+            'set_conditional_format',
+            INVALID_RULE_REQUEST,
+            { mode, rulesAdded: toAdd.length, rulesRemoved: existing.length - remaining.length },
+            'throw'
+          );
+        } catch (cause) {
+          if (!(cause instanceof SheetDuplicateRuleError)) throw cause;
+
+          // The store refused a content twin under its lock: a rule with this
+          // content landed between the read above and the write. The dedupe
+          // above cannot see that — it ran against a snapshot — and this is
+          // the one case it exists for: a timeout retry overlapping the call
+          // it retries. Both read no rule, both minted an id, and the lock
+          // let exactly one through. To the model that IS the landed retry,
+          // so the answer is the same success the dedupe gives when the
+          // snapshot already held every rule.
+          //
+          // Only if the fresh read accounts for the WHOLE call, though. The
+          // store refused every op atomically, so a twin that explains one
+          // rule and not the others (another writer added it) means nothing
+          // in this call was written, and reporting success would tell the
+          // model the rest landed too.
+          const fresh = await readTabFormatting(ref);
+          if (!fresh) {
+            throw new Error(`Sheet tab ${ref.tabIndex} could not be re-read after a refused write on page ${page.id}`);
+          }
+          const landedByContent = new Map<string, string>(
+            fresh.conditionalFormats.map((rule) => [contentKey(rule), rule.id])
+          );
+          const landedIds = built.map((entry) => landedByContent.get(contentKey(entry.rule)));
+          const removalsLanded = (removeRuleIds ?? []).every(
+            (id) => !fresh.conditionalFormats.some((rule) => rule.id === id)
+          );
+          if (!landedIds.every((id): id is string => id !== undefined) || !removalsLanded) {
+            return refusal(
+              INVALID_RULE_REQUEST,
+              relabel(cause, planned.map((entry) => entry.label)),
+              NOTHING_APPLIED
+            );
+          }
+
+          return {
+            success: true as const,
+            pageId: page.id,
+            title: page.title,
+            tabIndex: ref.tabIndex,
+            ruleIds: landedIds,
+            added: 0,
+            removed: 0,
+            skippedDuplicates: landedIds.map((existingRuleId, index) => ({ index, existingRuleId })),
+            conditionalRules: fresh.conditionalFormats.length,
+            ...(warnings.length > 0 ? { warnings } : {}),
+            message: `Every rule in this call is already on "${page.title}"; nothing was added.`,
+            nextSteps: ['Call read_sheet with includeFormatting to see the rules and their ids.'],
+          };
+        }
         if (isRefusal(outcome)) return outcome;
 
         return {

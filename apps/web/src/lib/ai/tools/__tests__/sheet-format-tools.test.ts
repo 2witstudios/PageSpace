@@ -559,6 +559,62 @@ describe('set_conditional_format', () => {
     assert({ given: 'the repeated call', should: 'not reach the mutator', actual: mockApplyFormatOps.mock.calls.length, expected: 1 });
   });
 
+  // Kills: deduping by content only BEFORE the call. A timeout retry that
+  // overlaps the original reads a snapshot without the rule, sees no
+  // duplicate, mints a fresh id, and the store — which replans under its tab
+  // lock — is the only place that can catch it. Also kills: the tool
+  // surfacing the store's content refusal as a failure, or re-adding after it;
+  // to the model this IS a landed retry, and the answer is the same success
+  // shape the pre-flight dedupe returns.
+  it('an in-flight retry whose rule landed between the read and the write reports it as already there', async () => {
+    const snapshotBeforeLanding = freshTab();
+    mockReadTabFormatting.mockResolvedValueOnce(snapshotBeforeLanding);
+    state.conditionalFormats = [
+      {
+        id: 'rule-landed',
+        kind: 'cell',
+        ranges: ['C2:C40'],
+        condition: { operator: 'greaterThan', value: '1000' },
+        format: { bold: true, color: '#b91c1c' },
+      },
+    ];
+    const result = await conditional({
+      rules: [{ kind: 'cell', ranges: ['C2:C40'], operator: 'greaterThan', value: '1000', format: { bold: true, color: '#b91c1c' } }],
+    });
+    assert({ given: 'a retry racing the original', should: 'succeed', actual: result.success, expected: true });
+    assert({ given: 'a retry racing the original', should: 'add nothing', actual: result.added, expected: 0 });
+    assert({ given: 'a retry racing the original', should: 'return the landed id', actual: result.ruleIds, expected: ['rule-landed'] });
+    assert({
+      given: 'a retry racing the original',
+      should: 'report the duplicate by index',
+      actual: result.skippedDuplicates,
+      expected: [{ index: 0, existingRuleId: 'rule-landed' }],
+    });
+    assert({ given: 'the tab after', should: 'hold exactly one rule', actual: state.conditionalFormats.length, expected: 1 });
+    // The mutator was reached once — that is the race — and refused under the
+    // lock rather than storing a twin.
+    assert({ given: 'the mutator', should: 'be called once', actual: mockApplyFormatOps.mock.calls.length, expected: 1 });
+  });
+
+  // Kills: treating EVERY content refusal from the store as "landed". A rule
+  // that some other writer added while this one was in flight explains one
+  // rule of the call, not the rest — reporting success would tell the model
+  // the second rule is on the tab when nothing was written.
+  it('a store content refusal that does not account for every rule in the call is a refusal', async () => {
+    mockReadTabFormatting.mockResolvedValueOnce(freshTab());
+    state.conditionalFormats = [{ id: 'rule-other', kind: 'dataBar', ranges: ['D2:D40'], color: '#3b82f6' }];
+    const result = await conditional({
+      rules: [
+        { kind: 'dataBar', ranges: ['D2:D40'], color: '#3b82f6' },
+        { kind: 'cell', ranges: ['C2:C40'], operator: 'greaterThan', value: '1000', format: { bold: true } },
+      ],
+    });
+    assert({ given: 'one twin and one new rule', should: 'refuse', actual: result.success, expected: false });
+    expect(message(result)).toContain('rules[0]');
+    expect(message(result)).toContain('"rule-other"');
+    assert({ given: 'the tab after', should: 'hold only the other writer’s rule', actual: state.conditionalFormats.length, expected: 1 });
+  });
+
   it('removeRuleIds naming an absent id lists the ids that exist', async () => {
     state.conditionalFormats = [
       { id: 'rule-a', kind: 'dataBar', ranges: ['A1'], color: '#3b82f6' },
