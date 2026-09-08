@@ -123,6 +123,43 @@ describe('planFormatOps — the request envelope', () => {
     expect(refusalOf([{ range: 'A1' } as unknown as SheetFormatOp])).toContain('must be an object');
   });
 
+  it('refuses a field that is not this op’s, naming the ones that are', () => {
+    // An op is a caller-specified object with a known shape, exactly like a
+    // format patch — so an unknown key gets the same answer `bolt` gets, for
+    // the same reason. A misspelled REQUIRED field already refused itself,
+    // because the field it should have been was missing. An extra one did not:
+    // `{type: 'setCellFormat', range, patch, format}` — a model reaching for the
+    // name a RULE uses — applied the bold and discarded the italic in silence.
+    expect(
+      refusalOf([
+        { type: 'setCellFormat', range: 'A1', patch: { bold: true }, format: { italic: true } } as never,
+      ])
+    ).toContain('"format" is not a field of this op');
+
+    // The message names what the op does take, which is the whole repair.
+    expect(refusalOf([{ type: 'setCellFormat', ranges: 'A1' } as never])).toContain(
+      'It takes "range" and "patch"'
+    );
+    expect(refusalOf([{ type: 'clearConditionalRules', rules: [] } as never])).toContain(
+      'It takes no fields'
+    );
+
+    // Ops are transient and versioned with the code that sends them, so unlike
+    // the stored shapes elsewhere there is no forward-compatibility case for
+    // letting a stray through — even a harmless-looking one.
+    expect(
+      refusalOf([{ type: 'setCellFormat', range: 'A1', patch: { bold: true }, requestId: 'x' } as never])
+    ).toContain('"requestId" is not a field of this op');
+
+    // And every op still accepts its own fields.
+    expect(
+      plan([
+        { type: 'setCellFormat', range: 'A1', patch: { bold: true } },
+        { type: 'moveConditionalRule', id: 'a', direction: 1 },
+      ], tabWith({ conditionalFormats: [rule('a'), rule('b')] })).steps
+    ).toHaveLength(2);
+  });
+
   it('refuses an unknown op type by name', () => {
     // Kills: a permissive default that would let a typo'd op type be planned as
     // a silent no-op — the failure mode this whole module exists to remove.

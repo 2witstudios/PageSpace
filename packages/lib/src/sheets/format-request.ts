@@ -486,6 +486,39 @@ export const MAX_FORMULA_EXPANSION = 20_000_000;
  */
 export const MAX_FORMULA_DEPTH = 256;
 
+/**
+ * The fields each op carries, beside its `type`.
+ *
+ * An op is a caller-specified object with a known shape, exactly like a
+ * `CellFormat` patch — so an unknown key on one gets the same answer a `bolt`
+ * gets in a patch, and for the same reason. A misspelled REQUIRED field already
+ * refuses itself (the field it should have been is missing), but a field that
+ * is simply extra was being dropped in silence, and the shape that matters is
+ * `{type: 'setCellFormat', range, patch, format}` — a model reaching for the
+ * name a rule uses. That applied the bold and discarded the italic without a
+ * word.
+ *
+ * Ops are transient and versioned with the code that sends them, so unlike the
+ * stored shapes elsewhere in this module there is no forward-compatibility
+ * argument for letting an unrecognised key through.
+ */
+const OP_FIELDS: Record<SheetFormatOp['type'], readonly string[]> = {
+  setCellFormat: ['range', 'patch'],
+  clearCellFormat: ['range'],
+  setColumnFormat: ['column', 'patch'],
+  setColumnWidth: ['column', 'width'],
+  setRowHeight: ['row', 'height'],
+  setFrozen: ['rows', 'columns'],
+  addConditionalRule: ['rule'],
+  updateConditionalRule: ['id', 'patch'],
+  removeConditionalRule: ['id'],
+  moveConditionalRule: ['id', 'direction'],
+  clearConditionalRules: [],
+  setRegions: ['regions'],
+  upsertRegion: ['region'],
+  removeRegion: ['id'],
+};
+
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -1726,6 +1759,21 @@ export function planFormatOps(
       typeof (op as { type?: unknown }).type === 'string';
     if (!shaped) {
       refuse(`Op ${index}: each op must be an object with a "type".`, index);
+    }
+
+    // Checked before the switch so every op gets it, and after `shaped` so
+    // `op.type` is known to be a string.
+    const allowed: readonly string[] | undefined = OP_FIELDS[op.type as SheetFormatOp['type']];
+    if (allowed !== undefined) {
+      const names = allowed.map((field) => `"${field}"`).join(' and ');
+      for (const key of Object.keys(op)) {
+        if (key === 'type' || allowed.includes(key)) continue;
+        refuseOp(
+          index,
+          op.type,
+          `"${key}" is not a field of this op. It takes ${allowed.length === 0 ? 'no fields' : names}.`
+        );
+      }
     }
 
     switch (op.type) {
