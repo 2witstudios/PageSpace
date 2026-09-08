@@ -188,6 +188,7 @@ import { pageReadTools } from '../../tools/page-read-tools';
 import { pageWriteTools } from '../../tools/page-write-tools';
 import { copyContentTools } from '../../tools/copy-content-tools-runtime';
 import { sheetReadTools } from '../../tools/sheet-read-tools';
+import { sheetFormatTools } from '../../tools/sheet-format-tools';
 import { searchTools } from '../../tools/search-tools';
 import { taskManagementTools } from '../../tools/task-management-tools';
 import { agentTools } from '../../tools/agent-tools';
@@ -242,6 +243,7 @@ describe('ai-tools', () => {
         ...pageWriteTools,
         ...copyContentTools,
         ...sheetReadTools,
+        ...sheetFormatTools,
         ...searchTools,
         ...taskManagementTools,
         ...agentTools,

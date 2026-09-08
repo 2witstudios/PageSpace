@@ -13,6 +13,12 @@ import { ActivityRenderer, type ActivityItem } from './ActivityRenderer';
 import { WebSearchRenderer, type WebSearchResult } from './WebSearchRenderer';
 import { MemberListRenderer, type MemberInfo } from './MemberListRenderer';
 import { SheetEditRenderer } from './SheetEditRenderer';
+import {
+  SheetFormatRenderer,
+  type SheetFormatRegionInput,
+  type SheetFormatOpInput,
+  type SheetRuleInput,
+} from './SheetFormatRenderer';
 import { AgentConfigRenderer, type AgentConfigData } from './AgentConfigRenderer';
 import { ModelListRenderer, type ModelListProvider } from './ModelListRenderer';
 import { WebFetchRenderer } from './WebFetchRenderer';
@@ -601,6 +607,39 @@ export const toolRenderers: Record<string, ToolRenderer> = {
         pageId={parsedOutput.pageId as string | undefined}
         driveId={parsedOutput.driveId as string | undefined}
         cellsUpdated={parsedOutput.cellsUpdated as number | undefined}
+      />
+    );
+  },
+  // Formatting has no values to tabulate, so it does not share SheetEditRenderer:
+  // the card shows the declared regions, the escape-hatch ops and the rules,
+  // with a swatch per distinct colour. A refusal falls through to the generic
+  // envelope, which already prints the error + suggestion.
+  format_sheet: ({ parsedInput, parsedOutput }) => {
+    if (parsedOutput.success === false) return null;
+    return (
+      <SheetFormatRenderer
+        title={(parsedOutput.title as string | undefined) || 'Sheet'}
+        pageId={parsedOutput.pageId as string | undefined}
+        regions={parsedInput?.regions as SheetFormatRegionInput[] | undefined}
+        ops={parsedInput?.ops as SheetFormatOpInput[] | undefined}
+        regionsApplied={parsedOutput.regionsApplied as number | undefined}
+        opsApplied={parsedOutput.opsApplied as number | undefined}
+        cellsFormatted={parsedOutput.cellsFormatted as number | undefined}
+        message={parsedOutput.message as string | undefined}
+      />
+    );
+  },
+  set_conditional_format: ({ parsedInput, parsedOutput }) => {
+    if (parsedOutput.success === false) return null;
+    return (
+      <SheetFormatRenderer
+        title={(parsedOutput.title as string | undefined) || 'Sheet'}
+        pageId={parsedOutput.pageId as string | undefined}
+        rules={parsedInput?.rules as SheetRuleInput[] | undefined}
+        removedRuleIds={parsedInput?.removeRuleIds as string[] | undefined}
+        rulesAdded={parsedOutput.added as number | undefined}
+        rulesRemoved={parsedOutput.removed as number | undefined}
+        message={parsedOutput.message as string | undefined}
       />
     );
   },

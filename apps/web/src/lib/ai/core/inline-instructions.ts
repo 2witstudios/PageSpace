@@ -85,9 +85,9 @@ const PAGE_TYPE_BULLETS: ReadonlyArray<{
   {
     // Composed rather than picked from fixed variants. A bullet naming a tool
     // the agent does not hold produces an unknown-tool call before the model
-    // recovers, and this bullet names up to three — read_sheet, read_page and
-    // edit_sheet_cells. Gating only one of them left the other two able to do
-    // exactly what the gate exists to prevent.
+    // recovers, and this bullet names up to four — read_sheet, read_page,
+    // edit_sheet_cells and format_sheet. Gating only one of them left the
+    // others able to do exactly what the gate exists to prevent.
     compose: (availableTools?: string[]) => {
       const has = (tool: string) => hasAny(availableTools, [tool]);
       const parts = ['• SHEET: Spreadsheet stored as rows.'];
@@ -98,6 +98,9 @@ const PAGE_TYPE_BULLETS: ReadonlyArray<{
       }
       if (has('edit_sheet_cells')) {
         parts.push('Use edit_sheet_cells for cell-level edits.');
+      }
+      if (has('format_sheet')) {
+        parts.push('Use format_sheet to declare a table (header rows, column roles, totals, theme) so its presentation is derived; edit_sheet_cells never formats.');
       }
       return parts.join(' ');
     },

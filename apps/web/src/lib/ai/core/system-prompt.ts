@@ -136,6 +136,10 @@ const DOCUMENT_WRITE_TOOL_NAMES = ['replace_lines', 'insert_content', 'copy_cont
  * document editing", page-write-tools.ts). Conversely an agent holding only
  * this can write a Sheet, never a Document.
  */
+// Deliberately NOT format_sheet / set_conditional_format: they restyle a Sheet
+// but cannot put sandbox OUTPUT into one, and this list answers only that
+// question (it feeds buildDriveDestinationPhrase). Listing them would tell an
+// agent holding only a formatting tool that a Sheet is a valid destination.
 const SHEET_WRITE_TOOL_NAMES = ['edit_sheet_cells'];
 
 function hasAnyToolName(availableTools: string[] | undefined, names: readonly string[]): boolean {

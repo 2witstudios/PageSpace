@@ -18,6 +18,11 @@ export const WRITE_TOOLS = new Set([
   'insert_content',
   'move_page',
   'edit_sheet_cells',
+  // Presentation writes. They never touch a value, but a read-only agent must
+  // not restyle a sheet either — and membership here is what makes
+  // cap-step-tool-payloads keep their results intact.
+  'format_sheet',
+  'set_conditional_format',
   // Mutates a page or a sandbox file, so a read-only agent must not get it.
   // Deliberately NOT in SANDBOX_TOOL_NAMES: that set is stripped wholesale when
   // an agent's sandbox switch is off, which would also remove the page->page
