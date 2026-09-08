@@ -2019,6 +2019,91 @@ describe('planFormatOps — regions', () => {
   });
 });
 
+describe('planFormatOps — what each op produces', () => {
+  it('maps every op to its step, its rows and whether the tab is touched', () => {
+    // The refusals have a table; the output did not. This is the other half of
+    // the contract, and the half task 2 folds over. Two facts in it are load
+    // bearing and are stated nowhere else:
+    //
+    //   - only `setCellFormat` and `clearCellFormat` put anything in `rows`.
+    //     Everything else lives on the tab record, so a caller that touches
+    //     none of the cell ops loads no rows at all.
+    //   - five rule ops collapse to ONE `setConditionalRules` step, and three
+    //     region ops to one `setRegions`. However many ops touched a list, the
+    //     caller writes that list once.
+    const cell = (id: string) =>
+      ({
+        id,
+        kind: 'cell',
+        ranges: ['A1:A9'],
+        condition: { operator: 'greaterThan', value: '1' },
+        format: { bold: true },
+      }) as unknown as ConditionalRule;
+
+    const tab = tabWith({
+      conditionalFormats: [cell('a'), cell('b')],
+      regions: [region('r')],
+    });
+
+    const outcome = (op: SheetFormatOp) => {
+      const result = planFormatOps([op], tab);
+      return {
+        steps: result.steps.map((step) => step.type),
+        rows: [...result.rows],
+        touchesTabFields: result.touchesTabFields,
+      };
+    };
+
+    expect(outcome({ type: 'setCellFormat', range: 'B2:C3', patch: { bold: true } })).toEqual({
+      steps: ['setCellFormat'],
+      rows: [1, 2],
+      touchesTabFields: false,
+    });
+    expect(outcome({ type: 'clearCellFormat', range: 'B2' })).toEqual({
+      steps: ['clearCellFormat'],
+      rows: [1],
+      touchesTabFields: false,
+    });
+
+    // Every tab-level op: its own step, no rows, and the tab flagged.
+    const tabLevel: Array<[string, SheetFormatOp]> = [
+      ['setColumnFormat', { type: 'setColumnFormat', column: 'C', patch: { italic: true } }],
+      ['setColumnWidth', { type: 'setColumnWidth', column: 'C', width: 140 }],
+      ['setRowHeight', { type: 'setRowHeight', row: 3, height: 40 }],
+      ['setFrozen', { type: 'setFrozen', rows: 1, columns: 2 }],
+    ];
+    for (const [step, op] of tabLevel) {
+      expect(outcome(op)).toEqual({ steps: [step], rows: [], touchesTabFields: true });
+    }
+
+    // Five ways to change the rule list, one step out of all of them.
+    const ruleOps: SheetFormatOp[] = [
+      { type: 'addConditionalRule', rule: cell('c') },
+      { type: 'updateConditionalRule', id: 'a', patch: { ranges: ['B1:B4'] } },
+      { type: 'removeConditionalRule', id: 'a' },
+      { type: 'moveConditionalRule', id: 'a', direction: 1 },
+      { type: 'clearConditionalRules' },
+    ];
+    for (const op of ruleOps) {
+      expect(outcome(op)).toEqual({
+        steps: ['setConditionalRules'],
+        rows: [],
+        touchesTabFields: true,
+      });
+    }
+
+    // And three ways to change the region list, likewise.
+    const regionOps: SheetFormatOp[] = [
+      { type: 'setRegions', regions: [{ id: 'x', range: 'A1:D' }] },
+      { type: 'upsertRegion', region: region('y', 'H1:J') },
+      { type: 'removeRegion', id: 'r' },
+    ];
+    for (const op of regionOps) {
+      expect(outcome(op)).toEqual({ steps: ['setRegions'], rows: [], touchesTabFields: true });
+    }
+  });
+});
+
 describe('planFormatOps — what happens on a retry', () => {
   it('says which ops are safe to replay and which are not', () => {
     // A caller replaying a request after an I/O failure needs to know this, and
