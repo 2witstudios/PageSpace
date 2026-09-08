@@ -2008,6 +2008,64 @@ describe('planFormatOps — regions', () => {
   });
 });
 
+describe('planFormatOps — the boundaries themselves', () => {
+  // Every other test in this file establishes that a limit exists. None of them
+  // establishes that it is in the right PLACE, and a limit off by one is a
+  // limit that refuses legitimate work or admits the thing it was written to
+  // stop. Each pair is the last value in and the first value out.
+  const accepts = (ops: SheetFormatOp[], target = tabWith()) => {
+    planFormatOps(ops, target);
+    return true;
+  };
+
+  const chain = (terms: number) =>
+    ({
+      id: 'f',
+      kind: 'formula',
+      ranges: ['A1'],
+      format: { bold: true },
+      formula: `=${Array.from({ length: terms }, (_, i) => `A${(i % 90) + 1}`).join('+')}>0`,
+    }) as unknown as SheetFormatOp['type'] extends never ? never : object;
+
+  const region = (i: number) => ({ id: `r${i}`, range: 'A1:F' });
+
+  it.each([
+    ['column width', { type: 'setColumnWidth', column: 'A', width: 24 }, { type: 'setColumnWidth', column: 'A', width: 23 }],
+    ['column width upper', { type: 'setColumnWidth', column: 'A', width: 2000 }, { type: 'setColumnWidth', column: 'A', width: 2001 }],
+    ['row height', { type: 'setRowHeight', row: 1, height: 16 }, { type: 'setRowHeight', row: 1, height: 15 }],
+    ['row height upper', { type: 'setRowHeight', row: 1, height: 1000 }, { type: 'setRowHeight', row: 1, height: 1001 }],
+    ['range cells', { type: 'clearCellFormat', range: `A1:A${MAX_FORMAT_CELLS}` }, { type: 'clearCellFormat', range: `A1:A${MAX_FORMAT_CELLS + 1}` }],
+    ['frozen rows', { type: 'setFrozen', rows: 100, columns: null }, { type: 'setFrozen', rows: 101, columns: null }],
+    ['frozen columns', { type: 'setFrozen', rows: null, columns: 26 }, { type: 'setFrozen', rows: null, columns: 27 }],
+    ['font size', { type: 'setCellFormat', range: 'A1', patch: { fontSize: 6 } }, { type: 'setCellFormat', range: 'A1', patch: { fontSize: 5 } }],
+    ['decimals', { type: 'setCellFormat', range: 'A1', patch: { number: { kind: 'number', decimals: 10 } } }, { type: 'setCellFormat', range: 'A1', patch: { number: { kind: 'number', decimals: 11 } } }],
+  ])('%s: the last value in is accepted and the first out is refused', (_label, inside, outside) => {
+    expect(accepts([inside as SheetFormatOp])).toBe(true);
+    expect(() => planFormatOps([outside as SheetFormatOp], tabWith())).toThrow(SheetFormatError);
+  });
+
+  it('holds the boundaries that need a built input', () => {
+    // Regions: the cap counts the list, so 50 in and 51 out.
+    expect(
+      accepts([
+        { type: 'setRegions', regions: Array.from({ length: MAX_REGIONS }, (_, i) => region(i)) },
+      ])
+    ).toBe(true);
+    expect(
+      refusalOf([
+        { type: 'setRegions', regions: Array.from({ length: MAX_REGIONS + 1 }, (_, i) => region(i)) },
+      ])
+    ).toContain(`at most ${MAX_REGIONS} regions`);
+
+    // Formula nesting: a left-associative chain of N terms nests N levels once
+    // the comparison on top is counted, so 256 terms is the last that fits.
+    expect(accepts([{ type: 'addConditionalRule', rule: chain(256) } as SheetFormatOp])).toBe(true);
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: chain(257) } as SheetFormatOp])
+    ).toContain(`nests more than ${MAX_FORMULA_DEPTH}`);
+  });
+});
+
 describe('planFormatOps — the dashboard this epic exists for', () => {
   // Everything else in this file is a refusal. A validator can pass every one
   // of those and still be useless, because each new rule is a chance to refuse
