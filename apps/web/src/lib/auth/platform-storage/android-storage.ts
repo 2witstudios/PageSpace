@@ -274,7 +274,10 @@ export class AndroidStorage implements PlatformStorage {
           console.error(storageError('write', error).message);
         }
       }
-      this.remember(session);
+      // The binding in force is whatever `browser_device_id` now holds: the
+      // write above declines to overwrite an existing one, so the session's own
+      // `deviceId` is not necessarily it.
+      this.lastKnownDeviceId = readLegacyDeviceId() ?? session.deviceId ?? null;
       return;
     }
 
@@ -348,16 +351,19 @@ export class AndroidStorage implements PlatformStorage {
    * degrades a refresh; failing to answer at all would break every caller of
    * `getDeviceInfo`.
    */
-  private async boundDeviceId(): Promise<string | null> {
+  private async boundDeviceId(): Promise<{ answered: boolean; deviceId: string | null }> {
+    const timeout = Symbol('timeout');
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      const session = await Promise.race([
+      const result = await Promise.race([
         this.getStoredSession(),
-        new Promise<null>((resolve) => {
-          timeoutId = setTimeout(() => resolve(null), BOUND_DEVICE_ID_TIMEOUT_MS);
+        new Promise<typeof timeout>((resolve) => {
+          timeoutId = setTimeout(() => resolve(timeout), BOUND_DEVICE_ID_TIMEOUT_MS);
         }),
       ]);
-      if (session?.deviceId) return session.deviceId;
+      // `null` is an answer — no session anywhere — and only the sentinel means
+      // the store never got back to us.
+      if (result !== timeout) return { answered: true, deviceId: result?.deviceId || null };
     } catch {
       // fall through
     } finally {
@@ -365,13 +371,16 @@ export class AndroidStorage implements PlatformStorage {
     }
 
     // A keystore that hangs or refuses is no reason to report the *wrong* id.
-    // What the last successful read said comes first — it is the only answer
-    // that stays consistent with a session already read through this same
-    // instance. Then the legacy binding, which lives in localStorage and needs
-    // no bridge to read. Only once neither names a binding does the caller fall
-    // through to preferences, and a minted id there is precisely the mismatch
-    // that gets a refresh rejected as a stolen token.
-    return this.lastKnownDeviceId ?? this.readLegacySession()?.deviceId ?? null;
+    // What the last successful read or write said comes first — it is the only
+    // answer that stays consistent with a session already seen through this
+    // same instance. Then the legacy binding, which lives in localStorage and
+    // needs no bridge to read. Only once neither names a binding does the
+    // caller fall through to preferences, and a minted id there is precisely
+    // the mismatch that gets a refresh rejected as a stolen token.
+    return {
+      answered: false,
+      deviceId: this.lastKnownDeviceId ?? this.readLegacySession()?.deviceId ?? null,
+    };
   }
 
   /**
@@ -408,7 +417,7 @@ export class AndroidStorage implements PlatformStorage {
     // `getDeviceInfo()` rather than from the session it just read. Deriving it
     // from that same session is what keeps the pair it sends consistent —
     // whichever store the session came from, and however many stores hold one.
-    const bound = await this.boundDeviceId();
+    const { answered, deviceId: bound } = await this.boundDeviceId();
 
     const { Preferences } = await import('@capacitor/preferences');
     const { value } = await Preferences.get({ key: DEVICE_ID_KEY });
@@ -430,7 +439,10 @@ export class AndroidStorage implements PlatformStorage {
     // mints straight into `browser_device_id`, so its two identities converge;
     // minting only into preferences — which no web sign-in path reads — would
     // leave them permanently divergent.
-    if (readLegacy(LEGACY_DEVICE_TOKEN_KEY) && !readLegacyDeviceId()) {
+    // Only on the strength of a read that actually answered. Publishing after a
+    // read that never completed would make the browser's identity a CUID2 no
+    // server token is bound to, on no evidence at all.
+    if (answered && readLegacy(LEGACY_DEVICE_TOKEN_KEY) && !readLegacyDeviceId()) {
       try {
         writeLegacy(LEGACY_DEVICE_ID_KEYS[0], id);
       } catch (error) {

@@ -678,6 +678,39 @@ describe('AndroidStorage', () => {
       expect(await storage.getDeviceId()).toBe('web_abc123');
     });
 
+    it('remembers the binding in force, not the one it declined to write', async () => {
+      // The bearer-less branch leaves an existing browser_device_id alone, so
+      // the session's own deviceId is not necessarily what ends up binding.
+      localStorage.setItem('browser_device_id', 'web_abc123');
+      const storage = await importAndroidStorage();
+
+      await storage.storeSession({
+        sessionToken: '',
+        csrfToken: null,
+        deviceId: 'a-minted-cuid',
+        deviceToken: 'rotated-device-token',
+      });
+
+      keychainMock.get.mockRejectedValue(new Error(INIT_FAILURE));
+      expect(await storage.getDeviceId()).toBe('web_abc123');
+    });
+
+    it('does not publish a minted id on the strength of a read that never answered', async () => {
+      // Rewriting the browser's identity to a CUID2 no server token is bound to
+      // needs better evidence than a keychain call that hung.
+      vi.useFakeTimers();
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      keychainMock.get.mockReturnValue(new Promise(() => {}));
+      const storage = await importAndroidStorage();
+
+      const pending = storage.getDeviceId();
+      await vi.advanceTimersByTimeAsync(3000);
+      await pending;
+
+      expect(localStorage.getItem('browser_device_id')).toBeNull();
+      vi.useRealTimers();
+    });
+
     it('publishes a minted id where the server binding will look for it', async () => {
       // A live token with no id recorded: minting only into preferences would
       // leave the native and web identities permanently divergent, where
