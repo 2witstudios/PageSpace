@@ -18,6 +18,7 @@ import {
   type ConditionalRule,
 } from '../sheets/conditional';
 import { MAX_REGIONS, parseRegion, type SheetRegion } from '../sheets/regions';
+import { PALETTE } from '../sheets/palette';
 import { MAX_ADDRESSABLE_ROW } from '../sheets/address';
 import { MAX_CONDITIONAL_RANGES_PER_RULE } from '../sheets/conditional';
 
@@ -599,6 +600,23 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
     expect(
       refusalOf([{ type: 'setRegions', regions: [region('r1'), { ...region('r2'), theme: 'BLUE!' }] }])
     ).toContain('regions[1]: "theme"');
+  });
+
+  it('refuses a theme the palette does not have, which would render as another colour', () => {
+    // `parseRegion` accepts any lowercase word and `hueByName` then falls back
+    // to the default at RENDER time — so this is a sanitization the comparator
+    // cannot see, and the one place the module has to know something the
+    // parsers do not. An agent that asked for a chartreuse dashboard and got
+    // slate was told the write succeeded.
+    const message = refusalOf([{ type: 'upsertRegion', region: { ...region('r1'), theme: 'chartreuse' } }]);
+    expect(message).toContain('is not a hue this build has');
+    expect(message).toContain('slate, blue');
+    // Every palette hue is still accepted, so the check cannot drift from the
+    // palette it is checking against.
+    for (const hue of PALETTE) {
+      expect(plan([{ type: 'upsertRegion', region: { ...region('r1'), theme: hue.name } }]).regions[0].theme)
+        .toBe(hue.name);
+    }
   });
 
   it('does not mistake a genuine normalization for a loss', () => {

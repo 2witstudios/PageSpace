@@ -56,6 +56,7 @@ import {
   MIN_COLUMN_WIDTH,
   MIN_ROW_HEIGHT,
 } from './format-ops';
+import { PALETTE } from './palette';
 import { MAX_REGIONS, parseRegion, parseRegions, type SheetRegion } from './regions';
 import type { CellFormat } from './types';
 
@@ -150,6 +151,13 @@ export interface SheetFormatPlan {
    * the row records, so this is exactly the set the caller must lock and load —
    * loading the whole tab to format six cells is the thing this exists to
    * avoid.
+   *
+   * A row here may lie beyond `tab.rowCount`, and deliberately is not refused:
+   * a column default and a region both cover rows that do not exist yet, so
+   * refusing the per-cell case alone would be an inconsistency dressed as a
+   * safeguard. Whether to create those rows or leave the formats unplaced is
+   * the writer's decision, not the validator's — compare against `rowCount` to
+   * find them.
    */
   rows: ReadonlySet<number>;
   /**
@@ -608,6 +616,23 @@ function validateRegionInput(raw: unknown, index: number, type: string, label: s
       type,
       `${label}: "${sanitized}" is not something this sheet can store, and would be dropped or ` +
         'changed on the way in.'
+    );
+  }
+
+  // The one sanitization the comparator cannot see, because it happens at
+  // RENDER time rather than at parse time: `parseRegion` accepts any lowercase
+  // word as a theme, and `hueByName` then falls back to the default for one the
+  // palette does not have. Its own comment says why — "falling back beats
+  // refusing to render the table" — and that is right for a stored region being
+  // drawn. It is wrong for a request: an agent that asked for a blue dashboard
+  // and got slate was told the write succeeded. Refusing needs the palette,
+  // which is exactly what that comment notes `parseRegion` cannot import.
+  if (region.theme !== undefined && !PALETTE.some((hue) => hue.name === region.theme)) {
+    return refuseOp(
+      index,
+      type,
+      `${label}: "${region.theme}" is not a hue this build has, and would render as ` +
+        `${PALETTE[0].name} without saying so. Known hues: ${PALETTE.map((hue) => hue.name).join(', ')}.`
     );
   }
 
