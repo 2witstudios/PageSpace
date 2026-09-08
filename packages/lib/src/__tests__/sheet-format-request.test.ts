@@ -1134,7 +1134,13 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
     // `A1e+21` — not a hang, but tens of megabytes of garbage allocated inside
     // what is supposed to be a cheap check, and every one of those entries
     // would then be stored and handed to the evaluator.
-    const started = Date.now();
+    //
+    // The assertion is the refusal itself, and deliberately nothing about how
+    // long it took. A wall-clock bound would be the only flaky line in this
+    // file, and it could not even tell the two paths apart — the bad one takes
+    // 18ms, so any threshold loose enough to survive a busy runner passes for
+    // both. What proves the work is skipped is the ORDER: the bounds check runs
+    // before `validateRanges`, and a mutation probe on that line turns red.
     expect(
       refusalOf([
         {
@@ -1146,7 +1152,6 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
         },
       ])
     ).toContain('is not a range this sheet can address');
-    expect(Date.now() - started).toBeLessThan(1_000);
   });
 
   it('still lets a rule written by a NEWER build be updated', () => {
