@@ -806,7 +806,23 @@ const anchorProblem = (anchor: unknown, needsColor: boolean): string | null => {
  * was asked. Every case here passes the first question perfectly — the rule is
  * kept byte for byte — and then formats the wrong cells, or none.
  */
-function ruleRenderProblem(rule: ConditionalRule): string | null {
+function ruleRenderProblem(
+  rule: ConditionalRule,
+  supplied: Record<string, unknown>
+): string | null {
+  // A format on a rule kind that has none. `ConditionalColorScaleRule` and
+  // `ConditionalDataBarRule` do not declare one, and the evaluator agrees: the
+  // colorScale branch contributes a background from the gradient and the
+  // dataBar branch contributes a bar, and neither reads `rule.format`.
+  // Verified by evaluating both kinds with and without one — byte-identical
+  // output. So a whole format is validated, stored, and never drawn.
+  //
+  // Read from what the CALLER sent, not the merged rule, so a stored stray does
+  // not make every later update to that rule impossible.
+  if ((rule.kind === 'colorScale' || rule.kind === 'dataBar') && supplied.format !== undefined) {
+    return `a ${rule.kind} rule draws from its anchors, not a format, so the format would never be drawn`;
+  }
+
   // A condition whose operator needs an operand it does not have. The parser
   // accepts any recognized operator on its own and the comparator sees nothing
   // dropped, but `matchesCondition` then compares against nothing: a
@@ -1012,7 +1028,7 @@ function validateRuleInput(
     );
   }
 
-  const problem = ruleRenderProblem(rule);
+  const problem = ruleRenderProblem(rule, supplied);
   if (problem) return refuseOp(index, type, problem);
 
   return rule;

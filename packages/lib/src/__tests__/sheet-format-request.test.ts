@@ -1154,6 +1154,47 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
     ).toHaveLength(1);
   });
 
+  it('refuses a format on a rule kind that draws from anchors', () => {
+    // `ConditionalColorScaleRule` and `ConditionalDataBarRule` declare no
+    // format, and the evaluator agrees — evaluating either kind with and
+    // without one produces byte-identical output. So a whole format is
+    // validated here, stored, and never drawn.
+    const scale = (extra: object) => ({
+      id: 'cs',
+      kind: 'colorScale',
+      ranges: ['A1:A9'],
+      min: { type: 'min', color: '#ffffff' },
+      max: { type: 'max', color: '#000000' },
+      ...extra,
+    });
+
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: scale({ format: { bold: true } }) }])
+    ).toContain('draws from its anchors, not a format');
+    expect(
+      refusalOf([
+        {
+          type: 'addConditionalRule',
+          rule: { id: 'db', kind: 'dataBar', ranges: ['A1:A9'], color: '#3b82f6', format: { bold: true } },
+        },
+      ])
+    ).toContain('draws from its anchors, not a format');
+
+    // Without one it is a perfectly good rule, and the kinds that DO draw a
+    // format still require it.
+    expect(plan([{ type: 'addConditionalRule', rule: scale({}) }]).conditionalFormats).toHaveLength(1);
+
+    // And a stored stray does not make the rule uneditable: only what the
+    // caller sends is held to this.
+    const stored = { ...scale({}), format: { bold: true } } as unknown as ConditionalRule;
+    expect(
+      plan(
+        [{ type: 'updateConditionalRule', id: 'cs', patch: { ranges: ['B1:B9'] } }],
+        tabWith({ conditionalFormats: [stored] })
+      ).conditionalFormats[0].ranges
+    ).toEqual(['B1:B9']);
+  });
+
   it('refuses a value on an anchor that reads the data instead', () => {
     // The mirror of the missing-value case: `anchorValue` never looks at a
     // value for `min`/`max`, so one supplied here is stored and silently
