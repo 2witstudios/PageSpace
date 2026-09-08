@@ -1395,13 +1395,12 @@ function withinFormattingBudget(
  */
 function rowHeightsForWindow(
   heights: Record<string, number> | null | undefined,
-  rowNumbers: readonly number[] | undefined,
+  rowNumbers: readonly number[],
 ): Record<string, number> | undefined {
   if (!heights) return undefined;
-  // No window given (a caller describing a tab rather than a read) keeps the
-  // old behaviour, bounded by the budget below.
-  if (!rowNumbers) return heights;
 
+  // Keyed by 1-based row number as a string — the shape `sheet_tabs.rowHeights`
+  // documents — so the window's row numbers are the keys to keep.
   const wanted = new Set(rowNumbers.map(String));
   const kept: Record<string, number> = {};
   for (const [row, height] of Object.entries(heights)) {
@@ -1413,8 +1412,15 @@ function rowHeightsForWindow(
 export function buildSheetFormatting(
   tab: SheetFormattingSource,
   cellFormats: readonly (readonly [string, CellFormat])[],
-  /** 1-based row numbers this read returned, used to project `rowHeights`. */
-  rowNumbers?: readonly number[],
+  /**
+   * 1-based row numbers this read returned, used to project `rowHeights`.
+   *
+   * Required rather than optional: every caller has the window in hand, and an
+   * optional parameter here would mean a caller that forgot it silently got the
+   * unbounded tab-wide map back — which is the bug this projection exists to
+   * prevent, reintroduced as a default.
+   */
+  rowNumbers: readonly number[],
 ): SheetFormatting {
   const formatting: SheetFormatting = {};
 
