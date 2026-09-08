@@ -154,6 +154,32 @@ describe('PortsPane', () => {
     expect(error).toHaveTextContent('8080');
   });
 
+  test('a rescan that fails AFTER a persisted pick reports as a scan problem, not a failed pick', async () => {
+    mockPost
+      .mockResolvedValueOnce(LISTING)
+      .mockResolvedValueOnce({ ok: true, applied: { action: 'start-relay' } })
+      .mockRejectedValueOnce(new Error('The sandbox did not answer in time when asked which ports are listening. Try Scan again.'));
+    renderPane();
+    await waitFor(() => expect(screen.getByTestId('ports-scan')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('ports-scan'));
+    await screen.findByTestId('ports-pick-3000');
+    fireEvent.click(screen.getByTestId('ports-pick-3000'));
+    expect(await screen.findByTestId('ports-scan-error')).toHaveTextContent('did not answer');
+    expect(screen.queryByTestId('ports-pick-error')).toBeNull();
+  });
+
+  test('a current port that is NOT serving reads "Selected", not "Previewing"', async () => {
+    // e.g. the pick landed but a stranger holds 8080: target persisted, relay not up.
+    preview = status({ canOpen: false, state: { status: 'down', targetPort: 3000, via: 'relay', error: null, repairable: true, message: 'The preview relay for port 3000 is not running.' } });
+    mockPost.mockResolvedValueOnce({ ...LISTING, currentPort: 3000, ports: LISTING.ports.map((p) => ({ ...p, current: p.port === 3000 })) });
+    renderPane();
+    await waitFor(() => expect(screen.getByTestId('ports-scan')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('ports-scan'));
+    const row = await screen.findByTestId('ports-pick-3000');
+    expect(row).toHaveTextContent('Selected');
+    expect(row).not.toHaveTextContent('Previewing');
+  });
+
   test('a failed Scan renders the server\'s sentence', async () => {
     mockPost.mockRejectedValueOnce(new Error('The sandbox did not answer in time when asked which ports are listening. Try Scan again.'));
     renderPane();

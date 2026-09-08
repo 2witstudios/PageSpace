@@ -101,11 +101,19 @@ export function PortsPane({ workspaceId }: { workspaceId: string }) {
           );
         }
         mutate();
-        // Re-list so the radio marks the new current port.
+      } catch (error) {
+        setPickError(messageOf(error, 'Could not start the preview.'));
+        setPicking(null);
+        return;
+      }
+      // The pick is PERSISTED by now; re-listing is a separate act so that a
+      // failed rescan reports as a scan problem and cannot masquerade as
+      // "could not start the preview" over a selection that took effect.
+      try {
         const listing = await post<PortsListing>(devPreviewPortsPath(statusPath), {});
         setScan({ state: 'listed', listing });
       } catch (error) {
-        setPickError(messageOf(error, 'Could not start the preview.'));
+        setScan({ state: 'failed', message: messageOf(error, 'The port list could not be refreshed. Scan again.') });
       } finally {
         setPicking(null);
       }
@@ -196,7 +204,13 @@ export function PortsPane({ workspaceId }: { workspaceId: string }) {
                   >
                     <span className="font-mono">:{entry.port}{entry.pid !== null ? <span className="ml-2 text-muted-foreground">pid {entry.pid}</span> : null}</span>
                     <span className="text-muted-foreground">
-                      {picking === entry.port ? 'Starting…' : entry.current ? 'Previewing' : entry.kind === 'ignored' ? why : 'Preview this' + (scan.listing.currentPort !== null ? ' instead' : '')}
+                      {picking === entry.port ? 'Starting…'
+                        // `current` is the persisted TARGET; whether it is actually
+                        // serving is the status's `canOpen`. A pick whose relay could
+                        // not start (a stranger on 8080) is selected, not previewing.
+                        : entry.current ? (canOpen ? 'Previewing' : 'Selected')
+                        : entry.kind === 'ignored' ? why
+                        : 'Preview this' + (scan.listing.currentPort !== null ? ' instead' : '')}
                     </span>
                   </button>
                 );

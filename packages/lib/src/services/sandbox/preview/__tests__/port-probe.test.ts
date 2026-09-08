@@ -101,6 +101,25 @@ describe('probeListeningPorts', () => {
     });
   });
 
+  it('output we did not understand, with a clean exit, is UNPARSABLE — not an empty sandbox', async () => {
+    // A future `ss` format, a wrapper printing a banner, a shell echoing an
+    // error to stdout with exit 0: none of these are "nothing is bound", and
+    // `[]` here would send the pane an empty list and the select a
+    // port-not-listening for a server that is plainly running.
+    assert({
+      given: 'exit 0 with lines that parse as no listening socket',
+      should: 'be unparsable',
+      actual: await probeListeningPorts(async () => ok({ stdout: 'something went wrong\nno such option: -p\n' })),
+      expected: { ok: false, reason: 'unparsable' },
+    });
+    assert({
+      given: 'exit 0 with ONLY the netstat headers',
+      should: 'still be an honest empty answer',
+      actual: await probeListeningPorts(async () => ok({ stdout: 'Active Internet connections (only servers)\nProto Recv-Q Send-Q Local Address Foreign Address State\n' })),
+      expected: { ok: true, ports: [] },
+    });
+  });
+
   it('a FAILED command is never spellable as "nothing is listening"', async () => {
     // This is the whole reason the result is not an array. `[]` here would
     // reach the core as "8080 is free" and start a relay blind.

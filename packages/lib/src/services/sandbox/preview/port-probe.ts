@@ -108,8 +108,19 @@ export async function probeListeningPorts(
   const ports = parseListeningPorts(result.stdout);
   if (ports.length > 0) return { ok: true, ports };
   // Nothing parsed. A sandbox with genuinely nothing listening is real and
-  // common, so distinguish it from a broken command by the exit code: `ss`
-  // succeeding with no rows is an honest empty answer.
-  if (result.exitCode === 0) return { ok: true, ports: [] };
-  return { ok: false, reason: 'unavailable' };
+  // common — but "nothing parsed" is only an honest empty answer when the
+  // output is nothing BUT the header. Output we did not understand, with a
+  // clean exit, is `unparsable`: returning `[]` there would read as "nothing
+  // is bound", which is the exact lie this result type exists to prevent.
+  if (result.exitCode !== 0) return { ok: false, reason: 'unavailable' };
+  return isHeaderOnly(result.stdout) ? { ok: true, ports: [] } : { ok: false, reason: 'unparsable' };
+}
+
+/** Pure: is this output just a listing header (or nothing at all)? The one shape an empty sandbox produces. */
+export function isHeaderOnly(stdout: string): boolean {
+  return stdout.split('\n').every((line) => {
+    const trimmed = line.trim();
+    // `ss` prints "State Recv-Q …"; `netstat` prints "Active Internet…" then "Proto …".
+    return trimmed === '' || /^(State|Active|Proto)\b/.test(trimmed);
+  });
 }
