@@ -558,7 +558,10 @@ describe('AndroidStorage', () => {
 
     it('dispatches auth:refreshed when the refresh path asks it to', async () => {
       // auth-fetch calls dispatchAuthEvent('auth:refreshed') after a successful
-      // bearer refresh; only 'auth:cleared' was ever exercised here.
+      // bearer refresh, and every auth-fetch suite stubs that seam, so nothing
+      // asserted this argument anywhere. This covers the dispatcher only — the
+      // caller side stays uncovered, unlike 'auth:cleared', which is driven
+      // through clearSession() above.
       const storage = await importAndroidStorage();
       const listener = vi.fn();
       window.addEventListener('auth:refreshed', listener);
@@ -880,7 +883,11 @@ describe('AndroidStorage', () => {
 
       await expect(storage.getDeviceId()).rejects.toThrow('preferences unavailable');
 
-      expect(await storage.getDeviceId()).toBe(preferencesStore.get('pagespace_device_id'));
+      // Both sides would be `undefined` if the retry minted nothing, so the
+      // shape check has to run first or this passes on the failure it guards.
+      const id = await storage.getDeviceId();
+      expect(id).toMatch(/^[a-z][a-z0-9]+$/);
+      expect(preferencesStore.get('pagespace_device_id')).toBe(id);
     });
 
     it('reads the legacy id from the backwards-compatible alias key', async () => {
