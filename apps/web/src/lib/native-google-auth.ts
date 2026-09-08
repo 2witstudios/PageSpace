@@ -103,11 +103,35 @@ const NATIVE_GOOGLE_CONFIG: Partial<Record<Platform, NativeGoogleConfig>> = {
 };
 
 /**
+ * Load and initialize the native Google SDK.
+ *
+ * `null` means the native path cannot run here at all — the plugin is not in the
+ * build, or its native side did not register. Separated from the sign-in itself
+ * so that case reports a named cause instead of a raw bridge exception. It is
+ * deliberately not a signal to try web OAuth instead; `useOAuthSignIn` explains
+ * why there is nothing to fall back to.
+ */
+async function loadGoogleSdk(init: GoogleInitOptions) {
+  try {
+    // Dynamic imports for Capacitor plugins (only available in native context)
+    const { SocialLogin } = await import('@capgo/capacitor-social-login');
+    const { Preferences } = await import('@capacitor/preferences');
+    const { PageSpaceKeychain } = await import('./keychain-plugin');
+
+    await SocialLogin.initialize({ google: init });
+
+    return { SocialLogin, Preferences, PageSpaceKeychain };
+  } catch (error) {
+    console.error('[Native Google Auth] Native plugin unavailable:', error);
+    return null;
+  }
+}
+
+/**
  * Perform native Google Sign-In and exchange tokens with the backend.
  *
- * Only runs where `supportsNativeAuthProvider('google')` holds; every other
- * caller gets `success: false` and is expected to fall back to web OAuth
- * (`useOAuthSignIn.handleGoogleSignIn`).
+ * Runs only where `isNativeGoogleAuthAvailable()` holds. A failure here is
+ * reported to the user, not retried through web OAuth — see `useOAuthSignIn`.
  */
 export async function signInWithGoogle(options: { inviteToken?: string; returnUrl?: string } = {}): Promise<GoogleAuthResult> {
   // Guard: only run where a native Google SDK exists.
@@ -123,36 +147,11 @@ export async function signInWithGoogle(options: { inviteToken?: string; returnUr
     return { success: false, error: config.misconfigured };
   }
 
-  // Loading and initializing the plugin is caught separately from signing in
-  // with it, so a shell built without the plugin — or one whose native side did
-  // not register — reports that rather than a raw bridge exception.
-  //
-  // It is NOT routed to web OAuth. There is no working web OAuth inside either
-  // native shell: iOS allowlists accounts.google.com so the flow stays in the
-  // WebView, where Google answers `disallowed_useragent`
-  // (`apps/ios/capacitor.config.ts`), and Android does not allowlist it, so the
-  // flow leaves for the external browser and the session cookie lands in the
-  // wrong jar. The `pagespace://auth-exchange` handoff that would close that gap
-  // has no consumer: nothing listens for `appUrlOpen` on either platform
-  // (`apps/android/README.md`, "Prerequisite 2"). Falling through would navigate
-  // the user out of a working app into a dead end.
-  let SocialLogin: typeof import('@capgo/capacitor-social-login').SocialLogin;
-  let Preferences: typeof import('@capacitor/preferences').Preferences;
-  let PageSpaceKeychain: typeof import('./keychain-plugin').PageSpaceKeychain;
-  try {
-    // Dynamic imports for Capacitor plugins (only available in native context)
-    ({ SocialLogin } = await import('@capgo/capacitor-social-login'));
-    ({ Preferences } = await import('@capacitor/preferences'));
-    ({ PageSpaceKeychain } = await import('./keychain-plugin'));
-
-    // Initialize the plugin with this platform's client ID
-    await SocialLogin.initialize({
-      google: init,
-    });
-  } catch (error) {
-    console.error('[Native Google Auth] Native plugin unavailable:', error);
+  const sdk = await loadGoogleSdk(init);
+  if (!sdk) {
     return { success: false, error: 'Native Google sign-in unavailable' };
   }
+  const { SocialLogin, Preferences, PageSpaceKeychain } = sdk;
 
   try {
     // Trigger native Google Sign-In (shows native account picker)

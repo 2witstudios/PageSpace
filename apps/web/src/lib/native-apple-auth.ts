@@ -45,6 +45,29 @@ type AppleNativeAuthResponse = {
 const APPLE_CLIENT_ID = 'ai.pagespace.ios';
 
 /**
+ * Load and initialize the native Apple SDK.
+ *
+ * `null` means the native path cannot run here at all. See the same helper in
+ * `native-google-auth.ts`, and `useOAuthSignIn` for why that is not a signal to
+ * try web OAuth instead.
+ */
+async function loadAppleSdk() {
+  try {
+    // Dynamic imports for Capacitor plugins (only available in native context)
+    const { SocialLogin } = await import('@capgo/capacitor-social-login');
+    const { Preferences } = await import('@capacitor/preferences');
+    const { PageSpaceKeychain } = await import('./keychain-plugin');
+
+    await SocialLogin.initialize({ apple: { clientId: APPLE_CLIENT_ID } });
+
+    return { SocialLogin, Preferences, PageSpaceKeychain };
+  } catch (error) {
+    console.error('[Native Apple Auth] Native plugin unavailable:', error);
+    return null;
+  }
+}
+
+/**
  * Perform native Apple Sign-In and exchange tokens with backend.
  *
  * Only runs where `supportsNativeAuthProvider('apple')` holds — iOS today; every
@@ -61,28 +84,11 @@ export async function signInWithApple(options: { inviteToken?: string; returnUrl
   // Android SDK and `capacitor-bridge` grants the capability.
   const platform = getPlatform();
 
-  // Caught separately from the sign-in itself so a shell built without the
-  // plugin reports that rather than a raw bridge exception. See the same block
-  // in `native-google-auth.ts` for why this is not routed to web OAuth.
-  let SocialLogin: typeof import('@capgo/capacitor-social-login').SocialLogin;
-  let Preferences: typeof import('@capacitor/preferences').Preferences;
-  let PageSpaceKeychain: typeof import('./keychain-plugin').PageSpaceKeychain;
-  try {
-    // Dynamic imports for Capacitor plugins (only available in native context)
-    ({ SocialLogin } = await import('@capgo/capacitor-social-login'));
-    ({ Preferences } = await import('@capacitor/preferences'));
-    ({ PageSpaceKeychain } = await import('./keychain-plugin'));
-
-    // Initialize the plugin with Apple client ID
-    await SocialLogin.initialize({
-      apple: {
-        clientId: APPLE_CLIENT_ID,
-      },
-    });
-  } catch (error) {
-    console.error('[Native Apple Auth] Native plugin unavailable:', error);
+  const sdk = await loadAppleSdk();
+  if (!sdk) {
     return { success: false, error: 'Native Apple sign-in unavailable' };
   }
+  const { SocialLogin, Preferences, PageSpaceKeychain } = sdk;
 
   try {
     // Trigger native Apple Sign-In
