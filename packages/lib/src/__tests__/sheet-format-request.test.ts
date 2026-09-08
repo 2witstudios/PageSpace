@@ -1062,4 +1062,65 @@ describe('planFormatOps — everything accepted survives the parsers (#7)', () =
     expect(accepted).toBeGreaterThanOrEqual(5);
     expect(refused).toBeGreaterThanOrEqual(regionCandidates.length / 2);
   });
+
+  // The other direction, and the one the read half of this epic depends on:
+  // #2560 hands an agent a tab's regions through `parseRegions` so it can
+  // change one field and write the list straight back. That loop only works if
+  // a value which has ALREADY been through the parser is accepted here — a
+  // parser fixed point must never trip the readback comparator, or reading a
+  // sheet and saving it unchanged becomes an error.
+  //
+  // A fixed point may still be REFUSED, and enumerating the reasons turned out
+  // to be the wrong way to say what matters — the list kept growing, because
+  // the parsers store several things they never validate:
+  //
+  //   - `readRanges` keeps `"A1:"`, a truncated range `addressesOfRange` then
+  //     formats nothing for, so `validateRanges` refuses it here (as it does in
+  //     the panel);
+  //   - `parseRegion` keeps a hue the palette lost, and the rule builders keep
+  //     an anchor `readAnchor` could not read;
+  //   - `parseCellFormat` keeps an unknown format field, which the by-name
+  //     check then refuses, so a rule written by a newer build can be edited
+  //     but not cloned.
+  //
+  // All of those are the module doing its job. The invariant is narrower and
+  // exact: a parser fixed point must never be refused for a FIDELITY reason.
+  // The comparator exists to catch what the parser would rewrite, and it cannot
+  // have anything to say about a value the parser itself produced — if it ever
+  // does, reading a sheet and saving it back unchanged becomes an error.
+  const fidelityRefusal = /would be dropped or changed on the way in/;
+
+  it('accepts anything that has already been through parseConditionalRule', () => {
+    let checked = 0;
+    for (const candidate of ruleCandidates) {
+      const parsed = parseConditionalRule(candidate);
+      if (!parsed) continue;
+
+      checked += 1;
+      try {
+        expect(plan([{ type: 'addConditionalRule', rule: parsed }]).conditionalFormats[0]).toEqual(parsed);
+      } catch (error) {
+        if (!(error instanceof SheetFormatError)) throw error;
+        expect(error.message).not.toMatch(fidelityRefusal);
+      }
+    }
+    expect(checked).toBeGreaterThanOrEqual(5);
+  });
+
+  it('accepts anything that has already been through parseRegion', () => {
+    let checked = 0;
+    for (const candidate of regionCandidates) {
+      const parsed = parseRegion(candidate);
+      if (!parsed) continue;
+
+      checked += 1;
+      try {
+        expect(plan([{ type: 'upsertRegion', region: parsed }]).regions[0]).toEqual(parsed);
+      } catch (error) {
+        if (!(error instanceof SheetFormatError)) throw error;
+        expect(error.message).not.toMatch(fidelityRefusal);
+      }
+    }
+    expect(checked).toBeGreaterThanOrEqual(5);
+  });
 });
