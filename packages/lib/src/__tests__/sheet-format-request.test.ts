@@ -1962,6 +1962,31 @@ describe('planFormatOps — the dashboard this epic exists for', () => {
     expect(
       refusalOf([{ type: 'upsertRegion', region: { ...documented, freezeHeader: true } }])
     ).toContain('freezeHeader is not applied by anything yet');
+
+    // The rest of that same sample, written back as the ops it corresponds to.
+    // The region is the interesting part, but the loop only works if the whole
+    // block round-trips: `layout.frozenRows`, `layout.columnWidths` and the one
+    // genuine `cellFormats` override.
+    expect(
+      plan([
+        { type: 'setFrozen', rows: 1, columns: null },
+        { type: 'setColumnWidth', column: 'A', width: 220 },
+        { type: 'setCellFormat', range: 'C3', patch: { italic: true } },
+      ]).steps.map((step) => step.type)
+    ).toEqual(['setFrozen', 'setColumnWidth', 'setCellFormat']);
+
+    // Rules come back from that read as `{id, kind, ranges, summary}` — a
+    // summary, not a rule — so they are deliberately NOT round-trippable, and
+    // an agent has to build a real rule to write one. Asserted so the asymmetry
+    // is recorded rather than discovered.
+    expect(
+      refusalOf([
+        {
+          type: 'addConditionalRule',
+          rule: { id: 'over', kind: 'cell', ranges: ['C2:C3'], summary: 'Cell is greater than 1000' },
+        },
+      ])
+    ).toContain('not a rule this sheet can store');
   });
 
   it('plans a whole budget dashboard in one request', () => {
