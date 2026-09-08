@@ -115,8 +115,19 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Resp
   const holder = hostHolder;
 
   const mount = `${DEV_PREVIEW_HOST_ROUTE_PREFIX}/${holder.kind}/${holder.id}`;
-  const path = extractPreviewPath(request.nextUrl.pathname, mount);
-  if (path === null) return notFound();
+  // After the middleware rewrite the handler's `nextUrl.pathname` is the
+  // browser's ORIGINAL path (`/`, `/_next/static/x.js`), not the mount-
+  // prefixed one it was rewritten onto — the mount only appears on a request
+  // that carried it itself (a test-built one, or a direct hit that the Host
+  // guard above has already ruled out of the app origin). The Host guard is
+  // what proves this request is for a preview, so the original path IS the
+  // preview path; strip the mount only when it is there.
+  const rawPath = request.nextUrl.pathname;
+  const path = rawPath.startsWith(mount) ? extractPreviewPath(rawPath, mount) : rawPath;
+  if (path === null) {
+    loggers.security.info('dev-preview.access', buildPreviewAccessLog({ userId: 'anonymous', holder, method: request.method, path: rawPath, outcome: 'refused', reason: 'path-outside-mount', status: 404, transport: 'http' }));
+    return notFound();
+  }
   const pathAndQuery = `${path}${request.nextUrl.search}`;
   const now = new Date();
 

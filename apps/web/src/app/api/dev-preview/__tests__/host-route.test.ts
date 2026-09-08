@@ -237,3 +237,40 @@ describe('authorize + decide, per request', () => {
     expect(vi.mocked(loggers.security.warn).mock.calls.map((c) => (c[1] as { outcome: string }).outcome)).toEqual(['limit-exceeded', 'upstream-error']);
   });
 });
+
+describe('after the middleware rewrite the handler sees the ORIGINAL pathname', () => {
+  // Production shape: the browser asked the preview host for `/`; the
+  // middleware rewrote it onto the mount, but `request.nextUrl.pathname`
+  // inside the handler is still `/` (Next 15.5, self-hosted). The route must
+  // not demand the mount — the first real preview 404'd on every path.
+  const rawReq = (path: string, headers: Record<string, string> = {}): NextRequest => {
+    const h = new Headers(headers);
+    h.set('host', HOST);
+    return new NextRequest(`https://${HOST}${path}`, { headers: h });
+  };
+  const forwardable = () => {
+    vi.mocked(resolvePreviewTargetForRequest).mockResolvedValue({ decision: { kind: 'forward', wake: false }, authorization: { allowed: true, driveId: 'd', wakeSubject: { driveId: 'd', ownerId: 'o' }, sandboxId: 's' }, spriteUrl: 'https://ps-x-org.sprites.app', handle: {} as never });
+    vi.mocked(forwardPreviewRequest).mockResolvedValue({ kind: 'response', response: new Response('ok'), upstreamStatus: 200 });
+  };
+
+  it('reaches the cookie stage for `/` with no mount in the path — 401 no-cookie, not 404', async () => {
+    const res = await GET(rawReq('/'), ctx());
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ reason: 'no-cookie' });
+  });
+
+  it('forwards the original path and query verbatim: `/` and a Next chunk', async () => {
+    forwardable();
+    expect((await GET(rawReq('/', { cookie: cookie() }), ctx())).status).toBe(200);
+    expect(forwardPreviewRequest).toHaveBeenLastCalledWith(expect.objectContaining({ pathAndQuery: '/' }));
+    expect((await GET(rawReq('/_next/static/a.js?v=1', { cookie: cookie() }), ctx())).status).toBe(200);
+    expect(forwardPreviewRequest).toHaveBeenLastCalledWith(expect.objectContaining({ pathAndQuery: '/_next/static/a.js?v=1' }));
+    expect(loggers.security.info).toHaveBeenLastCalledWith('dev-preview.access', expect.objectContaining({ outcome: 'forwarded', path: '/_next/static/a.js' }));
+  });
+
+  it('still strips the mount when the request carries it itself', async () => {
+    forwardable();
+    expect((await GET(req('/items?x=1', { headers: { cookie: cookie() } }), ctx())).status).toBe(200);
+    expect(forwardPreviewRequest).toHaveBeenLastCalledWith(expect.objectContaining({ pathAndQuery: '/items?x=1' }));
+  });
+});
