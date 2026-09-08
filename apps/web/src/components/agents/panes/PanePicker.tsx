@@ -13,8 +13,8 @@
  * the only thing that knows whether a pick should reuse an existing row.
  */
 
-import { useEffect, useRef, useState, type Ref } from 'react';
-import { Bot, Search, TerminalSquare } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, useState, type Ref } from 'react';
+import { Bot, Loader2, Search, TerminalSquare } from 'lucide-react';
 import useSWR from 'swr';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isPaneablePageType } from '@pagespace/lib/content/page-types.config';
@@ -24,6 +24,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useDebounce } from '@/hooks/useDebounce';
+import { post } from '@/lib/auth/auth-fetch';
+import { useDevPreviewCapability } from '@/hooks/dev-preview/useDevPreviewCapability';
+import { devPreviewActionsPath, devPreviewPortsPath, sessionDevPreviewPath, useDevPreviewStatus } from '@/hooks/dev-preview/useDevPreviewStatus';
+import { PortsList, messageOf, type PortsListing } from '@/components/dev-preview/PortsList';
+import { CANNOT_MANAGE_PORTS, devPreviewApprovalAudience } from '@/components/dev-preview/dev-preview-copy';
 
 /** The picker needs a label and an id — never the whole agent record. */
 export interface PickableAgent {
@@ -109,11 +114,16 @@ export interface PanePickerProps {
   /** Bind this pane to a page — `title` is a display label, never an address. */
   onPickPage?(pageId: string, title: string): void;
   /**
-   * Bind this pane to the sandbox's ports: what is listening, and a preview
-   * of the one you pick. Synchronous like a page — nothing is minted, and
-   * the pane probes nothing until Scan is pressed.
+   * The workspace whose sandbox the Ports section lists — the address the
+   * picker probes when it opens. Required for that section to render.
    */
-  onPickPorts?(): void;
+  sessionId?: string;
+  /**
+   * A port was picked: the SELECT has already been posted (the pick is the
+   * consent gesture, made here beside its audience), so the caller's only
+   * job is to turn this pane into the preview. Absent ⇒ no Ports section.
+   */
+  onPickPort?(port: number, spriteInstanceId: string): void;
 }
 
 export default function PanePicker({
@@ -123,7 +133,8 @@ export default function PanePicker({
   canRunSandbox,
   autoFocus = false,
   canPickAssistant = false,
-  onPickPorts,
+  sessionId,
+  onPickPort,
   existingShells = [],
   onPickAgent,
   onPickShell,
@@ -162,18 +173,6 @@ export default function PanePicker({
           testId="pick-shell"
         />
 
-        {/* Same sandbox as the shell, same gate: a tier that cannot run a
-            sandbox has no ports to list. Disabled rather than hidden, like
-            Shell, so the choice is visible and the reason is the tooltip. */}
-        {onPickPorts && (
-          <ShellPickButton
-            label="Ports"
-            disabled={!canRunSandbox}
-            onClick={onPickPorts}
-            testId="pick-ports"
-          />
-        )}
-
         {canPickAssistant && (
           <Button
             variant="ghost"
@@ -204,6 +203,12 @@ export default function PanePicker({
             />
           ))}
         </div>
+      )}
+
+      {/* What is listening in this session's sandbox — pick one and this pane
+          becomes its preview. Same sandbox as the shell, same tier gate. */}
+      {onPickPort && sessionId !== undefined && (
+        <PortsSection sessionId={sessionId} canRunSandbox={canRunSandbox} onPickPort={onPickPort} />
       )}
 
       {/* The agents of this drive. Listed BELOW the two fixed choices rather than
@@ -294,6 +299,113 @@ function ShellPickButton({
           all but the tier case (codex round 9). */}
       <TooltipContent>Sandbox terminals aren&apos;t available in this session — they need a Pro-plan workspace with edit access</TooltipContent>
     </Tooltip>
+  );
+}
+
+/**
+ * The "Ports" section: what is listening in the session's sandbox, probed
+ * when the picker opens. That probe is an exec and may wake a paused sprite —
+ * acceptable HERE because the picker is a user gesture (a split), not a
+ * persisted node that comes back on every reload; the ports PANE never
+ * probes on mount for exactly that reason. Gated on the server's `canManage`
+ * (listing is the first half of exposing) so a viewer who cannot pick is
+ * told so instead of being refused, and hidden on a dark deployment.
+ *
+ * A click IS the pick: the audience is stated beside the list, the SELECT is
+ * posted from here, and only a pick that took (including one the planner
+ * refused inside a 200 — the pick is recorded, and the pane will say why it
+ * is not serving) turns the pane into the preview. A thrown refusal stays
+ * here, as the server's sentence, so the pane is never bound to nothing.
+ */
+type PortsScan =
+  | { state: 'scanning' }
+  | { state: 'listed'; listing: PortsListing }
+  | { state: 'failed'; message: string };
+
+function PortsSection({
+  sessionId,
+  canRunSandbox,
+  onPickPort,
+}: {
+  sessionId: string;
+  canRunSandbox: boolean;
+  onPickPort(port: number, spriteInstanceId: string): void;
+}) {
+  const enabled = useDevPreviewCapability();
+  const statusPath = sessionDevPreviewPath(sessionId);
+  // One status read (no polling): it carries `canManage` and the holder the
+  // audience sentence is written for. The picker is short-lived.
+  const { preview } = useDevPreviewStatus(statusPath, { enabled: enabled === true && canRunSandbox, polling: false });
+  const canManage = preview?.canManage === true;
+  const [scan, setScan] = useState<PortsScan>({ state: 'scanning' });
+  const [picking, setPicking] = useState<number | null>(null);
+  const [pickError, setPickError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (!canManage) return;
+    let cancelled = false;
+    setScan({ state: 'scanning' });
+    post<PortsListing>(devPreviewPortsPath(statusPath), {})
+      .then((listing) => { if (!cancelled) setScan({ state: 'listed', listing }); })
+      .catch((error: unknown) => { if (!cancelled) setScan({ state: 'failed', message: messageOf(error, 'The sandbox could not be asked which ports are listening.') }); });
+    return () => { cancelled = true; };
+  }, [canManage, statusPath, attempt]);
+
+  const pick = useCallback(
+    async (port: number, spriteInstanceId: string) => {
+      setPicking(port);
+      setPickError(null);
+      try {
+        await post(devPreviewActionsPath(statusPath), { action: 'select', port, spriteInstanceId });
+      } catch (error) {
+        setPickError(messageOf(error, 'Could not start the preview.'));
+        setPicking(null);
+        return;
+      }
+      onPickPort(port, spriteInstanceId);
+    },
+    [statusPath, onPickPort],
+  );
+
+  if (enabled !== true) return null;
+
+  return (
+    <div className="flex shrink-0 flex-col gap-1" data-testid="pane-picker-ports">
+      <p className="shrink-0 pt-1 text-xs font-medium text-muted-foreground">Ports</p>
+      {!canRunSandbox ? (
+        <ShellPickButton label="Ports" disabled onClick={() => undefined} testId="pick-ports" />
+      ) : preview === undefined ? (
+        <p className="text-xs text-muted-foreground">Loading preview status…</p>
+      ) : !canManage ? (
+        <p className="text-xs text-muted-foreground" data-testid="ports-cannot-manage">{CANNOT_MANAGE_PORTS}.</p>
+      ) : scan.state === 'scanning' ? (
+        <p className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="ports-scanning">
+          <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+          Scanning the sandbox…
+        </p>
+      ) : scan.state === 'failed' ? (
+        <>
+          <p className="text-xs text-destructive" role="alert" data-testid="ports-scan-error">{scan.message}</p>
+          <Button variant="ghost" size="sm" className="h-8 justify-start px-2" onClick={() => setAttempt((n) => n + 1)} data-testid="ports-retry">Retry</Button>
+        </>
+      ) : (
+        <>
+          <PortsList
+            listing={scan.listing}
+            audience={devPreviewApprovalAudience(preview.holder)}
+            canOpen={preview.canOpen === true}
+            picking={picking}
+            disabled={false}
+            onPick={(port, instance) => void pick(port, instance)}
+          />
+          {scan.listing.ports.length === 0 && (
+            <Button variant="ghost" size="sm" className="h-8 justify-start px-2" onClick={() => setAttempt((n) => n + 1)} data-testid="ports-retry">Rescan</Button>
+          )}
+          {pickError && <p className="text-xs text-destructive" role="alert" data-testid="ports-pick-error">{pickError}</p>}
+        </>
+      )}
+    </div>
   );
 }
 

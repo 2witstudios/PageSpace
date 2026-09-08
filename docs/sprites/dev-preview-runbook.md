@@ -250,21 +250,27 @@ order matters: switch the feature off and CONFIRM it before rotating
 `SPRITES_API_TOKEN`. Rotating first while forwarding is still up simply hands
 the previewed dev server the new credential.
 
-## 8. The Ports pane — when detection cannot see your server
+## 8. Ports in the pane picker — when detection cannot see your server
 
 `ports/watch` does not report a Next.js dev server's bind at all (reproduced on
 a clean sprite; the platform docs say otherwise). For any server the channel
-misses, the affordance never appears and the user sees nothing. The Ports pane
-is the reliable path and the diagnostic:
+misses, the affordance never appears and the user sees nothing. The picker's
+Ports section is the reliable path and the diagnostic:
 
-- **Split a pane → Ports.** It binds like a page (nothing is minted) and
-  **never probes on mount** — a grid pane is persisted across reloads,
-  devices and viewers, and a probe is an exec that wakes a paused sprite,
-  which is billed. It shows the cached status until you press **Scan**.
-- **Scan** runs `ss -ltnp` in the sandbox (`POST …/preview/ports` — POST
-  because a GET that can wake is unsafe by HTTP semantics), classified
+- **Split a pane → the Ports section lists what is listening,** beside
+  Shell, Agents and Pages. The picker probes when it opens — that is a user
+  gesture, so the exec (and the wake it may cost) is one the user asked
+  for. The probe runs `ss -ltnp` in the sandbox (`POST …/preview/ports` —
+  POST because a GET that can wake is unsafe by HTTP semantics), classified
   server-side: database/broker ports and the relay's own 8080 come back
-  disabled with a reason.
+  disabled with a reason. A viewer the server says cannot manage the
+  preview is told so and nothing is probed.
+- **Click a port → that pane becomes the preview.** The select is posted
+  from the picker; only a pick that took binds the pane (`'ports'` kind, id
+  = the workspace). The pane itself **never probes on mount** — it is
+  persisted across reloads, devices and viewers, and a probe is an exec that
+  wakes a paused sprite, which is billed. Its header keeps a **Ports**
+  control that lists again on demand, for diagnosis and for switching.
 - **Picking a port is the consent.** The audience is stated beside the list.
   `POST …/preview/actions {action:'select', port, spriteInstanceId}` checks
   the instance against the live handle, re-probes under the holder's lock,

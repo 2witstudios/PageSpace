@@ -1480,10 +1480,11 @@ export default function AgentPanes({
     [bindPane, sessionId],
   );
 
-  // A ports pane addresses this workspace's one sandbox, so the target IS the
-  // workspace. Synchronous like a page: nothing is minted, and the pane
-  // probes nothing until its Scan button is pressed.
-  const handlePickPorts = useCallback(
+  // A port was picked in the picker — the SELECT is already posted there —
+  // so this pane becomes the preview. The target is the workspace itself:
+  // one sandbox has one preview, so the pane addresses the workspace, not the
+  // port. Synchronous like a page: nothing is minted here.
+  const handlePickPort = useCallback(
     (nodeId: string) => bindPane(sessionId, nodeId, { kind: 'ports', id: sessionId }),
     [bindPane, sessionId],
   );
@@ -1587,7 +1588,8 @@ export default function AgentPanes({
               onPickShell={() => void handlePickShell(node.id)}
               onReattachShell={(shellId) => handleReattachShell(node.id, shellId)}
               onPickPage={(pageId) => handlePickPage(node.id, pageId)}
-              onPickPorts={() => handlePickPorts(node.id)}
+              sessionId={sessionId}
+              onPickPort={() => handlePickPort(node.id)}
             />
           ) : surface.surface === 'loading' ? (
             <div className="flex h-full items-center justify-center">

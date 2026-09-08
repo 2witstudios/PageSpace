@@ -104,3 +104,13 @@ export function devPreviewApprovalAudience(holder: DevPreviewStatusDTO['holder']
     ? 'Everyone with access to this drive will be able to open it.'
     : 'Anyone who can open this session will be able to open it.';
 }
+
+/** The empty listing. A probe that found nothing is a fact, not a failure — so it reads as an instruction. */
+export const NOTHING_LISTENING = 'Nothing is listening in the sandbox. Start your dev server, then scan again.';
+
+/** The pick was RECORDED but the plan refused: something else holds 8080 so the relay cannot start. */
+export const PICK_REFUSED_HTTP_PORT_BUSY = 'Port 8080 is held by another process in the sandbox, so the preview relay cannot start. Stop that process and pick again.';
+export const PICK_REFUSED = 'The preview could not be started right now.';
+
+/** Why Scan/pick is withheld from a viewer the SERVER says cannot manage the preview. */
+export const CANNOT_MANAGE_PORTS = 'Only the session owner, or a drive owner or admin, can share a port from this sandbox';

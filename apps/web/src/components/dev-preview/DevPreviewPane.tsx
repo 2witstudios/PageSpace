@@ -72,7 +72,7 @@ import { DETECTION_UNAVAILABLE_MESSAGE } from '@pagespace/lib/services/sandbox/p
 import { devPreviewApprovalAudience, devPreviewBadge } from './dev-preview-copy';
 
 /** The open pane polls faster than the affordance: its chrome should notice a relay crash within a few seconds. */
-const PANE_POLL_MS = 5_000;
+export const PANE_POLL_MS = 5_000;
 
 /** A re-auth is a grant mint; one per this window is plenty for a cookie that lives ten minutes. */
 export const REAUTH_DEBOUNCE_MS = 5_000;
