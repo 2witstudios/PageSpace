@@ -143,9 +143,10 @@ export class AndroidStorage implements PlatformStorage {
    * what may be a transient keystore fault.
    *
    * A store fault deliberately does *not* fall through to the legacy session
-   * either. A device whose keystore will not initialize cannot persist a
-   * refreshed session, so recovering a token here would only buy a session that
-   * evaporates on the next launch while hiding the fault that caused it.
+   * either, even though a bearer-less refresh could persist without the
+   * keychain. Once a native session exists the legacy copy is spent, so the
+   * fallback would answer "nothing here" — forcing the very re-auth a
+   * transient fault should not cause, and hiding the fault that caused it.
    */
   async getStoredSession(): Promise<StoredSession | null> {
     let raw: string | null;
