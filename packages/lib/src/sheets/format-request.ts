@@ -416,6 +416,12 @@ function validateFreeze(
  * objects, and absent-vs-undefined.
  */
 function canonical(value: unknown): string {
+  // Distinct from `null` on purpose. A caller who means "not set" omits the
+  // key — JSON can say that — so an explicit null that comes back as nothing is
+  // a real sanitization, and often a damaging one: `condition.value: null` is
+  // dropped and leaves a `greaterThan` rule with no threshold, which matches no
+  // cell and looks like a rule that simply does not work.
+  if (value === undefined) return '<absent>';
   if (typeof value === 'string') return JSON.stringify(value.trim().toLowerCase());
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (isObject(value)) {
@@ -425,7 +431,7 @@ function canonical(value: unknown): string {
       .map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`);
     return `{${entries.join(',')}}`;
   }
-  return JSON.stringify(value ?? null);
+  return JSON.stringify(value);
 }
 
 /**
@@ -455,10 +461,8 @@ function canonical(value: unknown): string {
  */
 function firstSanitizedPath(raw: unknown, stored: unknown, path: string): string | null {
   // Absent and explicitly-undefined are the same thing over the wire, since
-  // JSON cannot express undefined. An explicit `null` needs no guard of its
-  // own: `canonical` maps both it and a missing field to the same string, so a
-  // nulled optional field compares equal to the one the parser dropped, which
-  // is what "not set" means for every optional field these parsers read.
+  // JSON cannot express undefined. An explicit `null` is NOT the same thing and
+  // deliberately falls through to the comparison below — see `canonical`.
   if (raw === undefined) return null;
 
   if (Array.isArray(raw) || Array.isArray(stored)) {
@@ -518,6 +522,20 @@ function validateRuleInput(
     if (!Array.isArray(supplied.ranges) || supplied.ranges.some((entry) => typeof entry !== 'string')) {
       return refuseOp(index, type, 'ranges must be an array of A1 ranges, such as ["B2:B20"].');
     }
+    // Bounds BEFORE `validateRanges`, because `validateRanges` expands each
+    // range and `addressesOfRange` bounds only the cell COUNT and negative
+    // coordinates — never the addressable extent. So `A5000002` sails through
+    // as one legal cell, and a row number large enough to lose float precision
+    // (`A1000000000000000000000`) is worse than merely out of range: `row++`
+    // stops advancing at that magnitude, so the expansion loop runs to its
+    // 500,000-address ceiling emitting the same malformed exponential-form
+    // address every time, inside what is supposed to be a cheap check.
+    for (const range of supplied.ranges as string[]) {
+      if (!parseRangeSpan(range)) {
+        return refuseOp(index, type, `"${range}" is not a range this sheet can address.`);
+      }
+    }
+
     // The caller's array, at its real length.
     const ranges = validateRanges(supplied.ranges as string[]);
     if (!ranges.ok) return refuseOp(index, type, ranges.reason);

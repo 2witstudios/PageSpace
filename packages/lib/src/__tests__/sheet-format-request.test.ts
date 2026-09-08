@@ -629,12 +629,61 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
     });
   });
 
-  it('reads a null optional field as "not set", not as a loss', () => {
-    // JSON cannot express undefined, and every optional field the parsers read
-    // treats a null the same way it treats a missing key.
-    expect(plan([{ type: 'upsertRegion', region: { ...region('r1'), theme: null } }]).regions).toEqual([
+  it('treats an explicit null as a value the parser dropped, not as an omission', () => {
+    // A caller who means "not set" omits the key — JSON can say that — so a
+    // null that comes back as nothing is a real sanitization, and often a
+    // damaging one: the parser deletes `condition.value` and leaves a
+    // `greaterThan` rule with no threshold, which matches no cell and reads as
+    // a rule that simply does not work.
+    // Kills: canonicalizing undefined and null to the same string.
+    expect(
+      refusalOf([
+        {
+          type: 'addConditionalRule',
+          rule: { ...rule('cf_1'), condition: { operator: 'greaterThan', value: null } },
+        },
+      ])
+    ).toContain('"condition.value"');
+    expect(refusalOf([{ type: 'upsertRegion', region: { ...region('r1'), headerRows: null } }])).toContain(
+      'region: "headerRows"'
+    );
+    // An OMITTED field is still not a loss, which is the distinction that has
+    // to survive: omitting `theme` is how you say you do not want one.
+    expect(plan([{ type: 'upsertRegion', region: region('r1') }]).regions).toEqual([
       { id: 'r1', range: 'A1:F' },
     ]);
+  });
+
+  it('refuses a rule range outside the addressable sheet, before anything expands it', () => {
+    // `addressesOfRange` bounds the cell COUNT and negative coordinates, never
+    // the extent, so `A5000002` passes as one legal cell.
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: { ...rule('cf_1'), ranges: ['A5000002'] } }])
+    ).toContain('is not a range this sheet can address');
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: { ...rule('cf_1'), ranges: ['ZZZZ1:ZZZZ9'] } }])
+    ).toContain('is not a range this sheet can address');
+
+    // The one that matters: past 2^53 a row number loses integer precision, so
+    // `row++` inside the expansion loop stops advancing and it runs to its
+    // 500,000-address ceiling. Measured against `addressesOfRange` directly,
+    // this range yields 500,000 copies of the single malformed address
+    // `A1e+21` — not a hang, but tens of megabytes of garbage allocated inside
+    // what is supposed to be a cheap check, and every one of those entries
+    // would then be stored and handed to the evaluator.
+    const started = Date.now();
+    expect(
+      refusalOf([
+        {
+          type: 'addConditionalRule',
+          rule: {
+            ...rule('cf_1'),
+            ranges: ['A1000000000000000000000:A1000000000000000200000'],
+          },
+        },
+      ])
+    ).toContain('is not a range this sheet can address');
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 
   it('still lets a rule written by a NEWER build be updated', () => {
