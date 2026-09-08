@@ -2027,8 +2027,13 @@ describe('planFormatOps — never something other than what was asked for', () =
     expect(refusalOf([{ type: 'clearCellFormat', range: 'Sheet1!A1:F1' }])).toContain(
       'drop the SheetName! prefix'
     );
+    // Echoes the caller's own string repaired, rather than a worked example
+    // that would change what a region range means.
     expect(refusalOf([{ type: 'clearCellFormat', range: 'A1 : F1' }])).toContain(
-      'Ranges carry no spaces'
+      'Ranges carry no spaces — write "A1:F1".'
+    );
+    expect(refusalOf([{ type: 'upsertRegion', region: { id: 'r1', range: 'A1 : F' } }])).toContain(
+      'write "A1:F".'
     );
 
     // The rule path is a separate call site; a hint added to only one of them

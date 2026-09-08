@@ -572,7 +572,12 @@ function rangeHint(range: string): string {
     return ' A range names cells on this tab only — drop the SheetName! prefix.';
   }
   if (/\s/.test(range.trim())) {
-    return ' Ranges carry no spaces — write A1:F1.';
+    // The caller's own string with the spaces taken out, not a worked example:
+    // `A1:F1` would be a fine repair for a cell range and a silent change of
+    // meaning for a region, where `A1:F` runs to the end of the sheet and
+    // `A1:F1` is one row. If what is left is wrong for some further reason,
+    // the next refusal names that reason — one repair at a time.
+    return ` Ranges carry no spaces — write "${range.replace(/\s+/g, '')}".`;
   }
   return '';
 }
