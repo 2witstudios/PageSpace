@@ -17,9 +17,15 @@ import {
   parseConditionalRule,
   type ConditionalRule,
 } from '../sheets/conditional';
-import { MAX_REGIONS, parseRegion, type SheetRegion } from '../sheets/regions';
+import {
+  MAX_REGIONS,
+  MAX_REGION_COLUMNS,
+  MAX_REGION_TOTAL_ROWS,
+  parseRegion,
+  type SheetRegion,
+} from '../sheets/regions';
 import { PALETTE } from '../sheets/palette';
-import { MAX_ADDRESSABLE_ROW } from '../sheets/address';
+import { MAX_ADDRESSABLE_ROW, encodeColumnLabel } from '../sheets/address';
 import { MAX_CONDITIONAL_RANGES_PER_RULE } from '../sheets/conditional';
 
 const tabWith = (overrides: Partial<SheetFormatTarget> = {}): SheetFormatTarget => ({
@@ -652,6 +658,28 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
         },
       ])
     ).toContain("dataBar's min anchor needs a type of");
+  });
+
+  it('covers the parsers’ own caps without being told about them', () => {
+    // The claim the comparator makes is that a cap added to a parser later is
+    // refused here without this module learning it. These two are already in
+    // `regions.ts` and nothing in this module mentions either — they are caught
+    // purely because a truncated list comes back shorter than it went in.
+    // Distinct labels, or this would demonstrate the parser's de-duplication
+    // rather than its cap — the refusal would look identical and mean something
+    // else.
+    const columns = Array.from({ length: MAX_REGION_COLUMNS + 1 }, (_, i) => ({
+      column: encodeColumnLabel(i),
+      role: 'text',
+    }));
+    expect(refusalOf([{ type: 'upsertRegion', region: { ...region('r1'), columns } }])).toContain(
+      'region: "columns"'
+    );
+
+    const totalRows = Array.from({ length: MAX_REGION_TOTAL_ROWS + 1 }, (_, i) => i + 2);
+    expect(refusalOf([{ type: 'upsertRegion', region: { ...region('r1'), totalRows } }])).toContain(
+      'region: "totalRows"'
+    );
   });
 
   it('refuses a theme the palette does not have, which would render as another colour', () => {
