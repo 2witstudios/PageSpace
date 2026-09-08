@@ -962,7 +962,11 @@ export interface SheetFormattingSource {
   regions?: unknown[] | null;
 }
 
-const hasKeys = (value: Record<string, unknown> | null | undefined): boolean =>
+/**
+ * A type guard rather than a boolean, so the caller does not need a non-null
+ * assertion to use the map it has just proved is there.
+ */
+const hasKeys = <T extends Record<string, unknown>>(value: T | null | undefined): value is T =>
   value !== null && value !== undefined && Object.keys(value).length > 0;
 
 /**
@@ -1048,11 +1052,11 @@ export function buildSheetFormatting(
   const layout: SheetLayout = {};
   if (tab.frozenRows != null) layout.frozenRows = tab.frozenRows;
   if (tab.frozenColumns != null) layout.frozenColumns = tab.frozenColumns;
-  if (hasKeys(tab.columnWidths)) layout.columnWidths = tab.columnWidths!;
-  if (hasKeys(tab.rowHeights)) layout.rowHeights = tab.rowHeights!;
+  if (hasKeys(tab.columnWidths)) layout.columnWidths = tab.columnWidths;
+  if (hasKeys(tab.rowHeights)) layout.rowHeights = tab.rowHeights;
   if (Object.keys(layout).length > 0) formatting.layout = layout;
 
-  if (hasKeys(tab.columnFormats)) formatting.columnFormats = tab.columnFormats!;
+  if (hasKeys(tab.columnFormats)) formatting.columnFormats = tab.columnFormats;
 
   const cells = withinFormattingBudget(cellFormats, MAX_FORMATTING_CHARS);
   if (Object.keys(cells.formats).length > 0) formatting.cellFormats = cells.formats;
