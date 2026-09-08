@@ -949,9 +949,11 @@ describe('planFormatOps — everything accepted survives the parsers (#7)', () =
     }
 
     // A property test over a generator that accepts everything, or nothing,
-    // proves nothing — so pin that both outcomes actually occur.
-    expect(accepted).toBeGreaterThan(0);
-    expect(refused).toBeGreaterThan(0);
+    // proves nothing — so pin that both outcomes occur in bulk. `> 0` would be
+    // satisfied by a single acceptance, which is four hand-picked examples
+    // wearing a generator's clothes.
+    expect(accepted).toBeGreaterThanOrEqual(5);
+    expect(refused).toBeGreaterThanOrEqual(ruleCandidates.length / 2);
   });
 
   const regionCandidates: unknown[] = [];
@@ -987,7 +989,7 @@ describe('planFormatOps — everything accepted survives the parsers (#7)', () =
       expect(parseRegion(stored)).toEqual(stored);
     }
 
-    expect(accepted).toBeGreaterThan(0);
-    expect(refused).toBeGreaterThan(0);
+    expect(accepted).toBeGreaterThanOrEqual(5);
+    expect(refused).toBeGreaterThanOrEqual(regionCandidates.length / 2);
   });
 });
