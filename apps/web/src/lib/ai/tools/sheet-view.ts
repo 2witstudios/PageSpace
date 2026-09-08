@@ -34,6 +34,7 @@ import {
   evaluateSheetSparse,
   parseSheetContentSafe,
   sheetDataFromSheetDoc,
+  MAX_CONDITIONAL_RANGE_CELLS,
   createRegionResolver,
   matchesCondition,
   parseConditionalRules,
@@ -135,10 +136,22 @@ interface RuleBounds {
 }
 
 /**
- * An A1 range as bounds, mirroring `addressesOfRange` exactly — including that a
- * bare address is a range of one and that `A1:` is refused rather than quietly
- * treated as `A1`. Bounds rather than an address list because a rule may cover
- * hundreds of thousands of cells and this only ever asks whether ONE is inside.
+ * An A1 range as bounds, refusing exactly what `addressesOfRange` refuses.
+ *
+ * Bounds rather than an address list because a rule may cover hundreds of
+ * thousands of cells and this only ever asks whether ONE is inside. But reading
+ * the range the same way is not enough — the evaluator also VALIDATES after
+ * decoding, and an earlier version of this mirrored only the parsing. Both
+ * checks below are load-bearing, and skipping them made this format cells the
+ * grid leaves alone:
+ *
+ *  - `decodeCellAddress` accepts `A0` and returns row -1, because rows are
+ *    1-based on the way in. `addressesOfRange` rejects any negative coordinate;
+ *    without that, `A0:A2` covered rows 0-1 here and nothing there.
+ *  - A rectangle larger than `MAX_CONDITIONAL_RANGE_CELLS` formats nothing at
+ *    all in the evaluator. Without the same test, `A1:A500001` formatted every
+ *    visible cell here while the grid, the export and the document path showed
+ *    none of it.
  */
 function rangeBounds(range: string): RuleBounds | null {
   const normalized = range.trim().toUpperCase();
@@ -155,19 +168,52 @@ function rangeBounds(range: string): RuleBounds | null {
     return null;
   }
 
-  return {
+  if (start.row < 0 || start.column < 0 || end.row < 0 || end.column < 0) return null;
+
+  const bounds = {
     rowStart: Math.min(start.row, end.row),
     rowEnd: Math.max(start.row, end.row),
     colStart: Math.min(start.column, end.column),
     colEnd: Math.max(start.column, end.column),
   };
+
+  const cells =
+    (bounds.rowEnd - bounds.rowStart + 1) * (bounds.colEnd - bounds.colStart + 1);
+  if (cells > MAX_CONDITIONAL_RANGE_CELLS) return null;
+
+  return bounds;
 }
 
 interface PreparedRule {
+  /** The union of `bounds`, tested first so a rule can be rejected in one go. */
+  extent: RuleBounds;
   bounds: RuleBounds[];
   condition: ConditionalCondition;
   format: CellFormat;
 }
+
+/**
+ * The most ranges this will hold across every rule combined.
+ *
+ * A per-cell resolve tests bounds, so lookup work is (cells x ranges) and the
+ * per-rule cap alone does not bound it: `parseConditionalRules` permits 200
+ * rules of `MAX_CONDITIONAL_RANGES_PER_RULE` (1,000) each, which is 200,000
+ * bounds per cell — a 500-row read then costs 100M+ comparisons and stalls.
+ * The evaluator has an aggregate ceiling (`MAX_CONDITIONAL_TOTAL_CELLS`) for
+ * the same reason its per-range cap was not enough; this is the analogous one
+ * for lookups rather than expansions.
+ *
+ * An earlier version of this comment claimed the per-rule caps already bounded
+ * the work "to integer comparisons on a sheet nobody authored by hand". That
+ * was wrong: it was written without looking up
+ * `MAX_CONDITIONAL_RANGES_PER_RULE`, which is a thousand, not a handful. The
+ * number is here now so the next reader does not have to take the claim on
+ * trust.
+ *
+ * Past this, later rules stop being prepared — the same way the evaluator stops
+ * contributing once its budget is spent.
+ */
+const MAX_CONDITIONAL_LOOKUP_RANGES = 1_000;
 
 /**
  * The conditional format at one cell, from the rules that can be decided by
@@ -199,12 +245,12 @@ export type ConditionalResolver = (
  * than skipping conditional presentation altogether — which made a cell with a
  * percent RULE read back as `0.85` while the grid showed `85%`.
  *
- * Ranges are parsed once here, so a per-cell resolve is a bounds test per range.
- * The ceiling is worth stating, since this runs on every read: `MAX_CONDITIONAL_RULES`
- * (200) and `MAX_CONDITIONAL_RANGES_PER_RULE` bound the prepared list at the parse
- * boundary, and a window is at most `MAX_SHEET_READ_ROWS` x its columns — so the
- * worst case is integer comparisons on a sheet nobody authored by hand, and the
- * ordinary case (a handful of rules over one range each) is a few per cell.
+ * Ranges are parsed once here, so a per-cell resolve is a bounds test — one
+ * against the rule's whole extent, and the individual ranges only for a rule
+ * that extent did not reject. `MAX_CONDITIONAL_LOOKUP_RANGES` bounds the
+ * prepared list across all rules, which is what keeps this from scaling with
+ * what a stored rule set is ALLOWED to contain rather than with what it
+ * plausibly holds.
  * That is also why this needs no equivalent of the evaluator's
  * `MAX_CONDITIONAL_TOTAL_CELLS` budget: nothing here expands a range, so the
  * work is bounded by the window rather than by how much the rules cover.
@@ -222,13 +268,29 @@ export function createConditionalResolver(
   if (!rules || rules.length === 0) return undefined;
 
   const prepared: PreparedRule[] = [];
+  let budget = MAX_CONDITIONAL_LOOKUP_RANGES;
   for (const rule of rules) {
+    if (budget <= 0) break;
     if (rule.kind !== 'cell') continue;
     const bounds = rule.ranges
+      .slice(0, budget)
       .map(rangeBounds)
       .filter((entry): entry is RuleBounds => entry !== null);
     if (bounds.length === 0) continue;
-    prepared.push({ bounds, condition: rule.condition, format: rule.format });
+    budget -= bounds.length;
+
+    // The union of the rule's ranges, so a cell outside all of them is rejected
+    // by one comparison instead of one per range. Rules with many scattered
+    // ranges are the shape that makes the per-cell cost visible, and they are
+    // also the shape this rejects fastest.
+    const extent = bounds.reduce((acc, b) => ({
+      rowStart: Math.min(acc.rowStart, b.rowStart),
+      rowEnd: Math.max(acc.rowEnd, b.rowEnd),
+      colStart: Math.min(acc.colStart, b.colStart),
+      colEnd: Math.max(acc.colEnd, b.colEnd),
+    }));
+
+    prepared.push({ extent, bounds, condition: rule.condition, format: rule.format });
   }
 
   if (prepared.length === 0) return undefined;
@@ -238,6 +300,9 @@ export function createConditionalResolver(
     // Declaration order is precedence order, the same way
     // `evaluateConditionalFormats` layers later rules over earlier ones.
     for (const rule of prepared) {
+      const { extent } = rule;
+      if (row < extent.rowStart || row > extent.rowEnd) continue;
+      if (column < extent.colStart || column > extent.colEnd) continue;
       const covers = rule.bounds.some(
         (b) => row >= b.rowStart && row <= b.rowEnd && column >= b.colStart && column <= b.colEnd,
       );

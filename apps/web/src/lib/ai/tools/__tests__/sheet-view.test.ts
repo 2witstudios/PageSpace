@@ -1312,6 +1312,45 @@ describe('the conditional resolver reads ranges the way the evaluator does', () 
     expect(fires(['C3:A1'], 1, 1)).toBe(true);
   });
 
+  it('refuses a negative coordinate, which decodeCellAddress happily produces', () => {
+    // `decodeCellAddress` accepts `A0` and returns row -1, because rows are
+    // 1-based on the way in. `addressesOfRange` rejects any negative coordinate
+    // for that reason; without the same test, `A0:A2` covered rows 0-1 here and
+    // nothing in the grid, so a read disagreed with the sheet it was reading.
+    expect(fires(['A0:A2'], 0, 0)).toBe(false);
+    expect(fires(['A0:A2'], 1, 0)).toBe(false);
+    // The same range written legitimately still works.
+    expect(fires(['A1:A2'], 0, 0)).toBe(true);
+  });
+
+  it('refuses a rectangle bigger than the evaluator will expand', () => {
+    // Past `MAX_CONDITIONAL_RANGE_CELLS` the evaluator formats nothing at all.
+    // Without the same ceiling this formatted every visible cell while the grid,
+    // the export and the document path showed none of it.
+    expect(fires(['A1:A500001'], 0, 0)).toBe(false);
+    expect(fires(['A1:A500000'], 0, 0)).toBe(true);
+  });
+
+  it('stops preparing rules once the lookup budget is spent', () => {
+    // A per-cell resolve tests bounds, so lookup work is cells x ranges, and the
+    // per-rule cap does not bound it: 200 rules of 1,000 ranges each is 200,000
+    // bounds per cell. The budget is what keeps this scaling with what a rule
+    // set plausibly holds rather than with what it is ALLOWED to hold.
+    const many: ConditionalRule[] = Array.from({ length: 4 }, (_, r) => ({
+      id: `r${r}`, kind: 'cell',
+      // 400 ranges each: the first rule alone nearly spends the 1,000 budget.
+      ranges: Array.from({ length: 400 }, (_, i) => `A${r * 1000 + i + 1}:A${r * 1000 + i + 1}`),
+      condition: { operator: 'isNotEmpty' },
+      format: { number: { kind: 'percent', decimals: 0 } },
+    }));
+    const resolve = createConditionalResolver(many)!;
+
+    // The first rule's ranges are inside the budget and still apply.
+    expect(resolve(0, 0, 1, false)).toBeDefined();
+    // A later rule's are past it and were never prepared, so it formats nothing.
+    expect(resolve(3000, 0, 1, false)).toBeUndefined();
+  });
+
   it('contributes nothing for a range neither side can read', () => {
     // A whole-column `A:A` is not an address pair; `decodeCellAddress` refuses
     // it on both sides, so the rule formats nothing rather than throwing.
