@@ -1,4 +1,4 @@
-import type { WebSocket, WebSocketServer } from 'ws';
+import type { RawData, WebSocket, WebSocketServer } from 'ws';
 import type { NextRequest } from 'next/server';
 import {
   registerEnvConnection,
@@ -84,8 +84,31 @@ const DRIVE_ENV_RESOURCE = 'drive_env';
  * that set (invariant 6). Refusals are audited and, where the protocol requires, the socket is
  * closed with a reason.
  */
+/** How many frames may arrive before the `hello` handler exists. One `hello` is all the protocol allows; the rest is slack for a retry, not a queue. */
+const MAX_EARLY_FRAMES = 4;
+
 export async function UPGRADE(client: WebSocket, server: WebSocketServer, request: NextRequest) {
   const requestUrl = request.url;
+
+  // The socket is already flowing when this function is entered, and the daemon
+  // sends its `hello` the instant `open` fires — but the real `message` listener
+  // cannot be attached until the token is validated and the enrollment row is
+  // read, two awaits later. Anything that arrives in between is emitted with no
+  // listener and dropped by the EventEmitter, and the handshake then times out
+  // 10 s later with the frame never having been seen. Route tests never caught
+  // it because they attach their listeners synchronously.
+  //
+  // So: buffer from the first synchronous instant, and drain into the real
+  // handler once it exists. The cap is small and pre-auth on purpose — one
+  // `hello` is all the protocol allows before authorization, and an unauthorized
+  // client that floods is closed rather than allowed to grow this array.
+  const earlyFrames: RawData[] = [];
+  let earlyOverflow = false;
+  const bufferEarly = (data: RawData) => {
+    if (earlyFrames.length >= MAX_EARLY_FRAMES) { earlyOverflow = true; return; }
+    earlyFrames.push(data);
+  };
+  client.on('message', bufferEarly);
 
   // SECURITY CHECK 0 (bridge): the cloud opt-in. Off ⇒ nothing here exists.
   if (!isLocalEnvsEnabled()) {
@@ -390,7 +413,7 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
   };
 
   // Handle incoming messages
-  client.on('message', (data) => {
+  const handleMessage = (data: RawData) => {
     try {
       // SECURITY CHECK 5: Validate message size
       const sizeValidation = validateMessageSize(data);
@@ -459,7 +482,25 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
         details: { originalEvent: 'ws_message_parse_error', error: error instanceof Error ? error.message : String(error) },
       });
     }
-  });
+  };
+
+  // The real listener exists now: stop buffering, hand over anything that
+  // arrived during the two awaits above, in order, then carry on live.
+  client.off('message', bufferEarly);
+  client.on('message', handleMessage);
+  if (earlyOverflow) {
+    auditRequest(request, {
+      eventType: 'authz.access.denied',
+      userId,
+      resourceType: RESOURCE_TYPE,
+      resourceId: envId,
+      riskScore: 0.4,
+      details: { originalEvent: 'env_bridge_preauth_flood', bufferedFrames: earlyFrames.length },
+    });
+    client.close(1008, 'Too many frames before hello');
+    return;
+  }
+  for (const buffered of earlyFrames.splice(0)) handleMessage(buffered);
 
   // Handle client disconnect
   client.on('close', (code, reason) => {
