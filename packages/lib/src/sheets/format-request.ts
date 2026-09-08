@@ -994,16 +994,22 @@ const anchorProblem = (anchor: unknown, needsColor: boolean): string | null => {
   if (anchor === undefined) return null;
 
   if (!isObject(anchor) || typeof anchor.type !== 'string' || !SCALE_ANCHOR_TYPES.has(anchor.type)) {
-    return `needs a type of ${[...SCALE_ANCHOR_TYPES].join(', ')}`;
+    return (
+      `needs a type of ${[...SCALE_ANCHOR_TYPES].join(', ')} — stored as written it is ignored, and ` +
+      "the scale falls back to the data's own extreme"
+    );
   }
   if (needsColor && !isValidHexColor(anchor.color)) {
-    return 'needs a #rrggbb colour';
+    return 'needs a #rrggbb colour — without one the whole scale renders no colour, on any cell in range';
   }
   if (!needsColor && anchor.color !== undefined) {
     // The other direction: a data bar takes its colour from `rule.color`, and
     // the evaluator reads only `type` and `value` off these anchors. A colour
-    // here is validated, stored, and never drawn.
-    return 'takes its colour from the rule, so the anchor cannot carry one';
+    // here is validated, stored, and never drawn — but the anchor itself still
+    // works, so this must NOT inherit the "the bars are scaled to the data's
+    // own extreme instead" consequence the other problems carry. It is not
+    // true here, and a false consequence sends a caller to fix the wrong thing.
+    return 'takes its colour from the rule, so the anchor cannot carry one — that colour is stored and never drawn';
   }
 
   // `min` and `max` read the data's own extremes and ignore any value. The
@@ -1012,10 +1018,10 @@ const anchorProblem = (anchor: unknown, needsColor: boolean): string | null => {
   // stored intact and mean something else.
   if (VALUED_ANCHOR_TYPES.has(anchor.type)) {
     if (typeof anchor.value !== 'number' || !Number.isFinite(anchor.value)) {
-      return `of type ${anchor.type} needs a numeric value`;
+      return `of type ${anchor.type} needs a numeric value — without one the data's own extreme is used`;
     }
     if (anchor.type !== 'number' && (anchor.value < 0 || anchor.value > 100)) {
-      return `of type ${anchor.type} needs a value from 0 to 100, not ${anchor.value}`;
+      return `of type ${anchor.type} needs a value from 0 to 100, not ${anchor.value}, which is clamped`;
     }
   } else if (anchor.value !== undefined) {
     // The other direction of the same mistake: `min` and `max` read the data's
@@ -1163,20 +1169,17 @@ function ruleRenderProblem(
     for (const [name, value] of [['min', rule.min], ['mid', rule.mid], ['max', rule.max]] as const) {
       const problem = anchorProblem(value, true);
       if (problem) {
-        return (
-          `The colorScale's ${name} anchor ${problem}. Stored as written it renders no colour at ` +
-          'all, on any cell in range.'
-        );
+        return `The colorScale's ${name} anchor ${problem}.`;
       }
     }
   } else if (rule.kind === 'dataBar') {
     for (const [name, value] of [['min', rule.min], ['max', rule.max]] as const) {
       const problem = anchorProblem(value, false);
       if (problem) {
-        return (
-          `The dataBar's ${name} anchor ${problem}. Stored as written it is ignored, and the bars ` +
-          `are scaled to the data's own ${name} instead.`
-        );
+        // The consequence lives with the problem, because they differ: an
+        // unreadable anchor makes the bars scale to the data's own extreme,
+        // while a stray colour changes nothing about the bars at all.
+        return `The dataBar's ${name} anchor ${problem}.`;
       }
     }
   }
@@ -1394,10 +1397,12 @@ function regionRenderProblem(region: SheetRegion, label: string): string | null 
     // resolver treats every covered row as a header and `continue`s before it
     // consults the column map. Column roles declared on it can never render,
     // and unlike an open region it cannot grow into a body later.
+    const height = bounds.rowEnd === null ? 0 : bounds.rowEnd - bounds.rowStart + 1;
     if (bounds.rowEnd !== null && firstBodyRow > bounds.rowEnd && (region.columns?.length ?? 0) > 0) {
       return (
-        `${label}: ${region.range} is ${bounds.rowEnd - bounds.rowStart + 1} rows tall and every one ` +
-        'of them is a header, so it has no body for a column role to apply to.'
+        `${label}: ${region.range} is ${height} ${height === 1 ? 'row' : 'rows'} tall and ` +
+        `${height === 1 ? 'that row is a header' : 'every one of them is a header'}, so it has no body ` +
+        'for a column role to apply to.'
       );
     }
 

@@ -1742,7 +1742,7 @@ describe('planFormatOps — never something other than what was asked for', () =
           region: { id: 'r1', range: 'A1:B1', columns: [{ column: 'A', role: 'currency' }] },
         },
       ])
-    ).toContain('every one of them is a header');
+    ).toContain('is 1 row tall and that row is a header');
 
     // A bodyless region that declares no columns is only a header strip, which
     // is a legitimate thing to want.
