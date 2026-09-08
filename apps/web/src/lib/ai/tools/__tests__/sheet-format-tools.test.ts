@@ -628,6 +628,18 @@ describe('set_conditional_format', () => {
     expect(mockApplyFormatOps).not.toHaveBeenCalled();
   });
 
+  it('format_sheet: replaceAll with an empty region list clears every region', async () => {
+    // Mirrors the rule case below. The nothing-given guard used to fire
+    // first, so the documented "keep only these" could not express "none".
+    state.regions = [{ id: 'orders', range: 'A1:D', headerRows: 1 } as SheetRegion];
+    const result = await format({ regionMode: 'replaceAll', regions: [] });
+    assert({ given: 'replaceAll with nothing', should: 'accept', actual: result.success, expected: true });
+    assert({ given: 'the tab after', should: 'hold no regions', actual: state.regions.length, expected: 0 });
+    expect(message(result)).toContain('every other region on the tab removed');
+    const bare = await format({});
+    assert({ given: 'no regions, no ops, no mode', should: 'still refuse', actual: bare.success, expected: false });
+  });
+
   it('replaceAll with an empty list clears every rule', async () => {
     state.conditionalFormats = [{ id: 'rule-a', kind: 'dataBar', ranges: ['A1'], color: '#3b82f6' }];
     const result = await conditional({ mode: 'replaceAll', rules: [] });

@@ -190,7 +190,7 @@ format_sheet({ regions: [{ name: "Budget", range: "A1:D", headerRows: 1,
 - A region costs nothing per row. \`A2:A5000\` as ops costs 4,999 against the cell budget (100 ops, 20,000 cells per range op, 50,000 per call); a \`columnFormat\` op for a whole column is free too.
 - \`ops\` is the escape hatch for what a region cannot say: \`setFormat\` (range + format) for one emphasised cell, \`clearFormat\`, \`columnFormat\`, \`columnWidth\`, \`rowHeight\`, \`freeze\`. A \`format\` is \`{ number: { kind, decimals, currency }, bold, italic, align, wrap, color, background, … }\`.
 - Precedence: column default < region < the cell's own format < conditional rule.
-- \`regionMode: "merge"\` (default) upserts by \`id\` — pass back the id from \`read_sheet\` to restyle an existing table; \`"replaceAll"\` keeps only the regions in the call.
+- \`regionMode: "merge"\` (default) upserts by \`id\` — pass back the id from \`read_sheet\` to restyle an existing table; \`"replaceAll"\` keeps only the regions in the call (an empty list clears them all).
 - All-or-nothing: one bad op refuses the whole call and nothing is applied. Verify with \`read_sheet\` and \`includeFormatting: true\`.
 
 ### Conditional formatting

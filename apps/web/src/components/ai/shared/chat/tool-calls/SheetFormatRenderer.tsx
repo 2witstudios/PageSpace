@@ -28,6 +28,8 @@ interface SheetFormatRendererProps {
   title?: string;
   pageId?: string;
   regions?: RegionInput[];
+  /** `replaceAll` removed every region on the tab that is not in `regions`. */
+  regionMode?: 'merge' | 'replaceAll';
   ops?: FormatOpInput[];
   rules?: RuleInput[];
   removedRuleIds?: string[];
@@ -148,6 +150,7 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
   title = 'Sheet',
   pageId,
   regions = NONE,
+  regionMode,
   ops = NONE,
   rules = NONE,
   removedRuleIds = NONE,
@@ -167,8 +170,10 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
   const opCount = opsApplied ?? ops.length;
   const added = rulesAdded ?? 0;
   const removed = rulesRemoved ?? removedRuleIds.length;
+  const replacedAll = regionMode === 'replaceAll';
   const summary = [
     ...(regionCount > 0 ? [count(regionCount, 'region')] : []),
+    ...(replacedAll ? ['other regions removed'] : []),
     ...(opCount > 0 ? [count(opCount, 'op')] : []),
     ...(cellsFormatted ? [count(cellsFormatted, 'cell')] : []),
     ...(added > 0 ? [`${count(added, 'rule')} added`] : []),
@@ -176,7 +181,7 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
     ...(removed > 0 ? [`${removed} removed`] : []),
   ].join(' · ');
 
-  const empty = regions.length === 0 && ops.length === 0 && rules.length === 0 && removedRuleIds.length === 0;
+  const empty = regions.length === 0 && ops.length === 0 && rules.length === 0 && removedRuleIds.length === 0 && !replacedAll;
 
   return (
     <div className="rounded-lg border bg-card overflow-hidden my-2 shadow-sm">
@@ -236,6 +241,15 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
                 </div>
               );
             })}
+            {replacedAll && (
+              <div className={cn(ROW, 'text-muted-foreground')} data-testid="sheet-format-regions-replaced">
+                <Table2 className="h-3.5 w-3.5 shrink-0" />
+                <span className="flex-1 min-w-0 truncate text-xs">
+                  {regions.length === 0 ? 'Every region on the tab removed' : 'Every other region on the tab removed'}
+                </span>
+                <span className="text-[11px] shrink-0">replaceAll</span>
+              </div>
+            )}
             {ops.map((op, i) => (
               <div key={`op-${i}`} className={ROW} data-testid="sheet-format-op">
                 <code className="w-14 shrink-0 font-mono text-xs text-muted-foreground truncate">{describeOpTarget(op)}</code>

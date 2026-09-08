@@ -84,6 +84,25 @@ describe('format_sheet renderer', () => {
     expect(swatches.map((s) => (s as HTMLElement).style.backgroundColor)).toEqual(['rgb(29, 78, 216)', 'rgb(51, 65, 85)']);
   });
 
+  it('shows the destructive half of a replaceAll: the regions it removed', () => {
+    // A replaceAll keeps only the regions in the call and deletes the rest.
+    // The result reports the mode; the card must say so instead of "1 region"
+    // as though nothing was taken away — and an EMPTY replaceAll is not an
+    // empty card, it is "every region removed".
+    const one = render(
+      <>{renderTool('format_sheet', { regionMode: 'replaceAll', regions: [{ range: 'A1:B' }] }, { success: true, title: 'S', regionsApplied: 1, regionMode: 'replaceAll' })}</>,
+    );
+    expect(one.getByText('1 region · other regions removed')).toBeTruthy();
+    expect(one.container.querySelector('[data-testid="sheet-format-regions-replaced"]')?.textContent).toContain('Every other region on the tab removed');
+    one.unmount();
+
+    const none = render(
+      <>{renderTool('format_sheet', { regionMode: 'replaceAll', regions: [] }, { success: true, title: 'S', regionsApplied: 0, regionMode: 'replaceAll' })}</>,
+    );
+    expect(none.container.querySelector('[data-testid="sheet-format-regions-replaced"]')?.textContent).toContain('Every region on the tab removed');
+    expect(none.queryByText('Nothing changed')).toBeNull();
+  });
+
   it("falls through to the generic envelope on the tool's own refusal", () => {
     const refusal = { success: false, error: 'invalid_range', message: 'Nothing was applied.', suggestion: 'Fix op 0.' };
     expect(renderTool('format_sheet', input, refusal)).toBeNull();

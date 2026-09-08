@@ -1263,7 +1263,11 @@ export const sheetFormatTools = {
       const pageId = resolveOrThrowPageId(pageIdArg, toolContext);
 
       try {
-        if ((regions?.length ?? 0) === 0 && (ops?.length ?? 0) === 0) {
+        // An empty `replaceAll` is a request in its own right — "keep only
+        // these" with nothing to keep clears every region, the way the
+        // conditional tool's replaceAll clears every rule — so it passes
+        // this guard and plans a `setRegions` of the empty list.
+        if ((regions?.length ?? 0) === 0 && (ops?.length ?? 0) === 0 && regionMode !== 'replaceAll') {
           return refusal(
             INVALID_FORMAT_REQUEST,
             'Neither regions nor ops were given, so there is nothing to apply.',
@@ -1335,6 +1339,7 @@ export const sheetFormatTools = {
           title: page.title,
           tabIndex: ref.tabIndex,
           regionsApplied: declared.regions.length,
+          regionMode: regionMode ?? 'merge',
           regionIds,
           opsApplied: ops?.length ?? 0,
           cellsFormatted: outcome.cellsFormatted,
@@ -1342,7 +1347,9 @@ export const sheetFormatTools = {
           regionsOnTab: outcome.regions,
           sheetDimensions: { rows: outcome.rowCount, columns: outcome.columnCount },
           message:
-            `Formatted "${page.title}": ${declared.regions.length} region(s) declared, ${ops?.length ?? 0} op(s) applied` +
+            `Formatted "${page.title}": ${declared.regions.length} region(s) declared` +
+            (regionMode === 'replaceAll' ? ' (every other region on the tab removed)' : '') +
+            `, ${ops?.length ?? 0} op(s) applied` +
             (outcome.cellsFormatted > 0 ? `, ${outcome.cellsFormatted} cell(s) restyled` : '') +
             '.',
           nextSteps: [

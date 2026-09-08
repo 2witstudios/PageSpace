@@ -624,6 +624,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
       <SheetFormatRenderer
         {...sheetFormatCard(parsedOutput)}
         regions={parsedInput?.regions as RegionInput[] | undefined}
+        regionMode={parsedOutput.regionMode as 'merge' | 'replaceAll' | undefined}
         ops={parsedInput?.ops as FormatOpInput[] | undefined}
         regionsApplied={parsedOutput.regionsApplied as number | undefined}
         opsApplied={parsedOutput.opsApplied as number | undefined}
