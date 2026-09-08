@@ -799,6 +799,7 @@ function validateRegions(
   const labels: string[] = [];
   const taken = new Set(existing.map((region) => region.id));
   const existingByContent = new Map(existing.map((region) => [regionContentKey(region), region.id]));
+  const declaredByContent = new Map<string, string>();
   let frozenRows: number | undefined;
 
   regions.forEach((input, index) => {
@@ -852,7 +853,16 @@ function validateRegions(
     // by id. Otherwise the id is derived from the content (see `contentId`),
     // so overlapping executions of the same call agree on it too.
     if (input.id === undefined) {
-      region.id = existingByContent.get(regionContentKey(region)) ?? contentId('region', region, taken);
+      const key = regionContentKey(region);
+      const earlier = declaredByContent.get(key);
+      if (earlier !== undefined) {
+        // The same declaration twice in one call is a mistake, not two
+        // regions: the content id would already be taken, and a random
+        // fallback would land an overlapping twin.
+        refuse(INVALID_FORMAT_REQUEST, `${label} declares the same region as ${earlier}.`, NOTHING_APPLIED);
+      }
+      declaredByContent.set(key, label);
+      region.id = existingByContent.get(key) ?? contentId('region', region, taken);
     }
     taken.add(region.id);
 
@@ -1059,6 +1069,12 @@ function buildRule(input: RuleInput, label: string): BuiltRule {
  * is told failed.
  */
 const contentKey = (rule: ConditionalRule | RuleContent): string => conditionalRuleContentKey(rule);
+
+/** A rule's id from its content — the same declaration mints the same id on every execution. */
+const ruleContentId = (key: string, taken: ReadonlySet<string>): string => {
+  const id = `rule-${createHash('sha256').update(key).digest('hex').slice(0, 8)}`;
+  return taken.has(id) ? mintId('rule', taken) : id;
+};
 
 // ---------------------------------------------------------------------------
 // Shared: locating the tab
@@ -1462,8 +1478,17 @@ export const sheetFormatTools = {
 
         let remaining: ConditionalRule[];
         if (mode === 'replaceAll') {
-          planned.push({ label: 'mode', op: { type: 'clearConditionalRules' } });
-          remaining = [];
+          // A diff, not a clear-and-rebuild: rules already on the tab that
+          // match one in the call keep their ids (a retried replaceAll then
+          // plans nothing, bumps no revision, and the ids an earlier attempt
+          // returned stay valid); only the rest are removed.
+          const wanted = new Set(built.map((entry) => contentKey(entry.rule)));
+          remaining = existing.filter((rule) => wanted.has(contentKey(rule)));
+          for (const rule of existing) {
+            if (!wanted.has(contentKey(rule))) {
+              planned.push({ label: 'mode', op: { type: 'removeConditionalRule', id: rule.id } });
+            }
+          }
         } else {
           const removals = new Set<string>();
           (removeRuleIds ?? []).forEach((id, index) => {
@@ -1500,7 +1525,7 @@ export const sheetFormatTools = {
             skippedDuplicates.push({ index, existingRuleId: duplicateOf });
             return;
           }
-          const id = mintId('rule', taken);
+          const id = ruleContentId(key, taken);
           taken.add(id);
           byContent.set(key, id);
           const rule = { ...entry.rule, id } as ConditionalRule;

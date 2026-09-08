@@ -665,6 +665,14 @@ describe('set_conditional_format', () => {
     expect(other.regionIds).not.toEqual(first.regionIds);
   });
 
+  it('the same region declared twice in one call is refused, not landed twice', async () => {
+    const region = { range: 'A1:D', headerRows: 1, name: 'Orders' };
+    const result = await format({ regions: [region, { ...region }] });
+    assert({ given: 'a duplicated declaration', should: 'refuse', actual: result.success, expected: false });
+    expect(message(result)).toContain('regions[1] declares the same region as regions[0]');
+    expect(mockApplyFormatOps).not.toHaveBeenCalled();
+  });
+
   it('a call that changed nothing logs no activity and broadcasts nothing', async () => {
     // The store reports a no-op (a bold that was already bold, a retry) with
     // rowsTouched 0 and no tab field changed, and bumps no revision. The tool
@@ -704,6 +712,35 @@ describe('set_conditional_format', () => {
     expect(message(result)).toContain('every other region on the tab removed');
     const bare = await format({});
     assert({ given: 'no regions, no ops, no mode', should: 'still refuse', actual: bare.success, expected: false });
+  });
+
+  it('a retried replaceAll plans nothing and keeps the ids the first attempt returned', async () => {
+    const rules = [
+      { kind: 'dataBar' as const, ranges: ['A1:A9'], color: '#3b82f6' },
+      { kind: 'cell' as const, ranges: ['B1:B9'], operator: 'greaterThan' as const, value: 5, format: { bold: true } },
+    ];
+    const first = (await conditional({ mode: 'replaceAll', rules })) as { ruleIds?: string[]; added?: number };
+    assert({ given: 'the first replaceAll', should: 'add both', actual: first.added, expected: 2 });
+    const calls = mockApplyFormatOps.mock.calls.length;
+
+    const retry = (await conditional({ mode: 'replaceAll', rules })) as { ruleIds?: string[]; added?: number; removed?: number };
+    assert({ given: 'the identical replaceAll again', should: 'add nothing', actual: retry.added, expected: 0 });
+    assert({ given: 'the identical replaceAll again', should: 'remove nothing', actual: retry.removed, expected: 0 });
+    assert({ given: 'the retry', should: 'return the same ids', actual: retry.ruleIds, expected: first.ruleIds });
+    assert({ given: 'the retry', should: 'reach the store zero times', actual: mockApplyFormatOps.mock.calls.length, expected: calls });
+
+    const changed = (await conditional({ mode: 'replaceAll', rules: [rules[0]] })) as { ruleIds?: string[]; added?: number; removed?: number };
+    assert({ given: 'a replaceAll that drops one rule', should: 'remove exactly that one', actual: changed.removed, expected: 1 });
+    assert({ given: 'a replaceAll that drops one rule', should: 'keep the other rule under its id', actual: changed.ruleIds, expected: [first.ruleIds![0]] });
+    assert({ given: 'the tab after', should: 'hold one rule', actual: state.conditionalFormats.map((rule) => rule.id), expected: [first.ruleIds![0]] });
+  });
+
+  it('a rule declared without an id gets the same content-derived id on every execution', async () => {
+    const rule = { kind: 'dataBar' as const, ranges: ['A1:A9'], color: '#3b82f6' };
+    const first = (await conditional({ rules: [rule] })) as { ruleIds?: string[] };
+    state = freshTab();
+    const again = (await conditional({ rules: [rule] })) as { ruleIds?: string[] };
+    assert({ given: 'the same rule on an empty snapshot', should: 'mint the same id', actual: again.ruleIds, expected: first.ruleIds });
   });
 
   it('replaceAll with an empty list clears every rule', async () => {
