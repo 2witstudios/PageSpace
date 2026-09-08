@@ -1239,26 +1239,31 @@ export async function applyFormatOps(
       columnCount: grown?.columnCount ?? current.columnCount,
     };
 
-    // 5. Rows. Read whole — a `StoredCell` cannot be fabricated, since `raw`,
-    // `value`, `type`, `error` and `notes` must all survive untouched — but
-    // written PARTIAL: `pending` carries only the column letters this call
-    // formats, so the jsonb merge in `persistRows` contributes those keys and
-    // leaves a concurrent `setCells` to column A of the same row alone. That
-    // is the lost-update guard `persistRows` was written for, not an
+    // 5. Rows. Read whole — the format each cell has now, and the content that
+    // has to survive, are both only knowable from the stored cell — but
+    // written as PATCHES: `patches` carries, per row, only the columns this
+    // call formats, and per column only the format. `persistRows` in
+    // `'format'` mode merges that under whatever content the cell holds when
+    // the statement runs, so a concurrent `setCells` to column A of the same
+    // row — or to this very cell, if the row did not exist to be locked —
+    // survives in either commit order. That is a lost-update guard, not an
     // optimisation.
     //
     // `lockRows` already holds the locks, so this read takes none.
     const working = await loadRowsByIndex(tab.id, allRowIndexes, tx, false);
-    const pending = new Map<number, StoredRow>();
-    const stage = (rowIndex: number, label: string, cell: StoredCell) => {
-      for (const map of [working, pending]) {
-        let row = map.get(rowIndex);
-        if (!row) {
-          row = { rowIndex, cells: {} };
-          map.set(rowIndex, row);
-        }
-        row.cells[label] = cell;
+    const patches = new Map<number, FormatPatchRow>();
+    const stage = <Cell,>(
+      map: Map<number, { rowIndex: number; cells: Record<string, Cell> }>,
+      rowIndex: number,
+      label: string,
+      cell: Cell
+    ) => {
+      let row = map.get(rowIndex);
+      if (!row) {
+        row = { rowIndex, cells: {} };
+        map.set(rowIndex, row);
       }
+      row.cells[label] = cell;
     };
 
     // The format each written cell had before this call, keyed by address in
@@ -1294,7 +1299,8 @@ export async function applyFormatOps(
         else delete cell.format;
 
         if (!before.has(address)) before.set(address, existing?.format ?? null);
-        stage(rowIndex, label, cell);
+        stage(working, rowIndex, label, cell);
+        stage(patches, rowIndex, label, { raw: cell.raw, format: next ?? null });
       }
     }
 
@@ -1302,6 +1308,10 @@ export async function applyFormatOps(
     // reads the extent from the tab it is handed, so it gets the GROWN one.
     // `applyEvaluation` writes into `working`, whose formula rows were loaded
     // whole; only the cells it re-evaluated are copied into `pending`.
+    // Re-evaluated cells are CONTENT, written through the content merge like
+    // any other materialised value; a format patch has no way to say "and the
+    // value is now 106".
+    const recomputedRows = new Map<number, StoredRow>();
     let recomputed: string[] = [];
     if (grown && recomputeTargets.length > 0) {
       const evaluated = await evaluateClosure({ ...current, ...extent }, recomputeTargets, working, tx);
@@ -1312,14 +1322,17 @@ export async function applyFormatOps(
         const cell = working.get(rowIndex)?.cells[label];
         // `applyEvaluation` fabricates neither rows nor cells; neither does this.
         if (!cell) continue;
-        stage(rowIndex, label, cell);
+        stage(recomputedRows, rowIndex, label, cell);
         recomputed.push(address);
       }
       recomputed = unique(recomputed);
     }
 
-    // 7. Persist — merge mode, which is the default and the point.
-    await persistRows(tab.id, ref.pageId, pending, tx);
+    // 7. Persist: formats through the per-cell format merge, re-evaluated
+    // values through the content merge.
+    await persistRows(tab.id, ref.pageId, patches, tx, 'format');
+    await persistRows(tab.id, ref.pageId, recomputedRows, tx);
+    const rowsTouched = unique([...patches.keys(), ...recomputedRows.keys()]).length;
 
     // 8. The tab record, in ONE statement.
     //
@@ -1345,6 +1358,25 @@ export async function applyFormatOps(
           .where(eq(sheetTabs.id, tab.id));
       }
     }
+
+    const result: ApplyFormatOpsResult = {
+      cellsFormatted: before.size,
+      rowsTouched,
+      tabFieldsChanged,
+      conditionalRules: plan.conditionalFormats.length,
+      regions: plan.regions.length,
+      rowCount: extent.rowCount,
+      columnCount: extent.columnCount,
+      recomputed,
+    };
+
+    // A request that changed nothing — a width the column already has, a bold
+    // that is already bold, a clear of a cell with nothing to clear — is not
+    // an edit. Bumping the revision for it would hand an open editor a
+    // conflict over a sheet that did not move, and log a change that is not
+    // one. Locks were taken for nothing, which is the honest cost of finding
+    // that out under them.
+    if (rowsTouched === 0 && tabFieldsChanged.length === 0) return result;
 
     // 9. Not optional. `replaceFromDocument` rewrites EVERY tab-level field
     // from the editor's document, and it is the only other writer of these
@@ -1398,16 +1430,7 @@ export async function applyFormatOps(
     }
     await appendChanges(ref.pageId, tab.id, actor, entries, tx);
 
-    return {
-      cellsFormatted: before.size,
-      rowsTouched: pending.size,
-      tabFieldsChanged,
-      conditionalRules: plan.conditionalFormats.length,
-      regions: plan.regions.length,
-      rowCount: extent.rowCount,
-      columnCount: extent.columnCount,
-      recomputed,
-    };
+    return result;
   };
 
   return exec ? run(exec) : db.transaction(run);
@@ -2581,24 +2604,112 @@ function applyEvaluation(
 }
 
 /**
- * @param mode `'merge'` contributes only the keys the caller touched, so a
- * concurrent write to a different column of the same row survives. `'replace'`
- * writes the row's cells verbatim — required by the repair path, which is the
- * only caller that legitimately needs a cell to DISAPPEAR, and which holds the
- * whole row anyway.
+/**
+ * How an upsert combines the cells it carries with the cells already stored.
+ *
+ * `'merge'` is for a CONTENT writer (`setCells`, materialisation): each cell
+ * it carries replaces the stored cell's `raw`, `value`, `type` and `error` —
+ * the keys a content write owns — and every other key the stored cell has
+ * (`format`, `notes`) survives underneath. `'format'` is the mirror image, for
+ * `applyFormatOps`: each carried cell contributes only its `format`, over
+ * whatever content the stored cell holds by the time the statement runs.
+ * `'replace'` writes the row's cells verbatim — required by the repair path,
+ * which is the only caller that legitimately needs a cell to DISAPPEAR, and
+ * which holds the whole row anyway.
  */
+type PersistMode = 'merge' | 'replace' | 'format';
+
+/**
+ * One cell as a `'format'`-mode upsert carries it: `raw` for the insert path
+ * only, and `format: null` as the wire form of a clear. Not a `StoredCell` —
+ * that type has no null format, and this shape never survives the statement
+ * that carries it (see `CELL_MERGE_SQL`).
+ */
+interface FormatPatchCell {
+  raw: string;
+  format: CellFormat | null;
+}
+
+interface FormatPatchRow {
+  rowIndex: number;
+  cells: Record<string, FormatPatchCell>;
+}
+
+/**
+ * The SET expression for `cells` in each mode, evaluated per stored row
+ * against `excluded` — the row this statement tried to insert.
+ *
+ * `excluded.cells` alone loses concurrent writes: two callers each set a
+ * different column of the same row, both read the row, both write back their
+ * own merged copy, and the second commit erases the first cell — with a
+ * success returned to both. A jsonb `||` of the two is a merge keyed by column
+ * letter, so each write contributes only the columns it touched.
+ *
+ * A column-level merge is not enough on its own, though, because a row that
+ * does not exist yet cannot be locked. A value write and a format write to the
+ * SAME empty cell can therefore both read nothing and both upsert, and with
+ * `||` the cell object under that column is replaced whole: whichever commits
+ * second wins, and it either drops the format or overwrites the just-entered
+ * value with `raw: ''`. So the merge goes one level deeper — per cell, keyed by
+ * what each kind of writer OWNS — and the two commits compose in either order.
+ *
+ * `jsonb_each` over `excluded.cells` visits exactly the columns the caller
+ * carried, so a merge cannot resurrect a cell legitimately removed within the
+ * same call. `jsonb_object_agg` of no rows is NULL, hence the coalesce.
+ */
+const CELL_MERGE_SQL: Record<PersistMode, ReturnType<typeof sql>> = {
+  replace: sql`excluded."cells"`,
+  merge: sql`${sheetRows.cells} || (
+    SELECT coalesce(jsonb_object_agg(
+      patch.key,
+      (coalesce(${sheetRows.cells} -> patch.key, '{}'::jsonb) - '{raw,value,type,error}'::text[]) || patch.value
+    ), '{}'::jsonb)
+    FROM jsonb_each(excluded."cells") AS patch
+  )`,
+  // A format cell arrives as `{ raw, format }` — `raw` so a brand-new row
+  // inserts a well-formed `StoredCell`, and dropped here because the stored
+  // cell's own content is the truth once one exists. `format: null` is how a
+  // clear travels (jsonb `||` cannot delete a key); `jsonb_strip_nulls` turns
+  // it into the deletion it means, and touches nothing else because no
+  // `StoredCell` field is ever legitimately null.
+  format: sql`${sheetRows.cells} || (
+    SELECT coalesce(jsonb_object_agg(
+      patch.key,
+      jsonb_strip_nulls(coalesce(${sheetRows.cells} -> patch.key, '{"raw": ""}'::jsonb) || (patch.value - 'raw'))
+    ), '{}'::jsonb)
+    FROM jsonb_each(excluded."cells") AS patch
+  )`,
+};
+
 async function persistRows(
   tabId: string,
   pageId: string,
   rows: Map<number, StoredRow>,
   exec: Executor,
-  mode: 'merge' | 'replace' = 'merge'
+  mode?: 'merge' | 'replace'
+): Promise<void>;
+async function persistRows(
+  tabId: string,
+  pageId: string,
+  rows: Map<number, FormatPatchRow>,
+  exec: Executor,
+  mode: 'format'
+): Promise<void>;
+async function persistRows(
+  tabId: string,
+  pageId: string,
+  rows: Map<number, StoredRow | FormatPatchRow>,
+  exec: Executor,
+  mode: PersistMode = 'merge'
 ): Promise<void> {
   const values = Array.from(rows.values()).map((row) => ({
     tabId,
     pageId,
     rowIndex: row.rowIndex,
-    cells: row.cells,
+    // A format patch is a wire shape the column type does not describe; the
+    // overloads above pin which shape each mode accepts, and the `'format'`
+    // expression consumes it before anything of that shape is stored.
+    cells: row.cells as Record<string, StoredCell>,
   }));
   if (values.length === 0) return;
 
@@ -2611,22 +2722,7 @@ async function persistRows(
       .onConflictDoUpdate({
         target: [sheetRows.tabId, sheetRows.rowIndex],
         set: {
-          // MERGE by default, not replace.
-          //
-          // `excluded.cells` alone loses concurrent writes: two callers each
-          // set a different column of the same row, both read the row, both
-          // write back their own merged copy, and the second commit erases the
-          // first cell — with a success returned to both. `||` is a jsonb
-          // shallow merge, so each write contributes only the keys it actually
-          // touched and columns it never saw survive.
-          //
-          // The keys this statement carries are exactly the cells the caller
-          // wrote plus those it recomputed, so a merge cannot resurrect a cell
-          // that was legitimately removed within the same call.
-          cells:
-            mode === 'replace'
-              ? sql`excluded."cells"`
-              : sql`${sheetRows.cells} || excluded."cells"`,
+          cells: CELL_MERGE_SQL[mode],
           updatedAt: new Date(),
         },
       });

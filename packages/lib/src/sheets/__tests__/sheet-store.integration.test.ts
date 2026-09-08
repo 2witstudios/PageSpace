@@ -1421,6 +1421,74 @@ describe('sheet store (integration)', () => {
       expect(cellAt(rows, 4, 'C')?.format).toEqual(BOLD);
     });
 
+    it('composes a value write and a format write to the SAME empty cell in either order', async () => {
+      // Kills: a column-level merge. An empty cell has no row to lock, so a
+      // value write and a format write to it can both read nothing and both
+      // upsert; if the cell object under the column is replaced whole, the
+      // second commit either drops the format or overwrites the just-entered
+      // value with `raw: ''`. Both orders are forced, the same way as above.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
+
+      // Format commits second.
+      let value: Promise<unknown> | null = null;
+      await db.transaction(async (tx) =>
+        applyFormatOps(
+          { pageId },
+          [{ type: 'setCellFormat', range: 'C5', patch: BOLD }],
+          { userId: ownerId },
+          holdBeforeInsert(tx, async () => {
+            value ??= setCells({ pageId }, [{ address: 'C5', value: '=1+1' }], { userId: ownerId });
+            await value;
+          })
+        )
+      );
+      await value;
+      let cell = cellAt(await readRows(tabId, { limit: 10 }), 4, 'C');
+      expect(cell).toMatchObject({ raw: '=1+1', value: 2, type: 'number', format: BOLD });
+
+      // Value commits second — `setCells`'s own merge must leave the format.
+      // A different row: row 5 now exists, so a write to it would take its
+      // lock and the held transaction would block the one it is waiting for.
+      let format: Promise<unknown> | null = null;
+      await db.transaction(async (tx) =>
+        setCells(
+          { pageId },
+          [{ address: 'D7', value: 'typed' }],
+          { userId: ownerId },
+          holdBeforeInsert(tx, async () => {
+            format ??= applyFormatOps({ pageId }, [{ type: 'setCellFormat', range: 'D7', patch: { italic: true } }], { userId: ownerId });
+            await format;
+          })
+        )
+      );
+      await format;
+      cell = cellAt(await readRows(tabId, { limit: 10 }), 6, 'D');
+      expect(cell).toMatchObject({ raw: 'typed', value: 'typed', format: { italic: true } });
+    });
+
+    it('does not bump the revision or log when a request changes nothing', async () => {
+      // Kills: an unconditional `touchPage`. A retried or redundant request —
+      // the width a column already has, a bold that is already bold — is not
+      // an edit, and bumping for it forces an open editor into a conflict over
+      // a sheet that did not move.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
+      const ops = [
+        { type: 'setCellFormat' as const, range: 'A1:B2', patch: BOLD },
+        { type: 'setColumnWidth' as const, column: 'B', width: 240 },
+      ];
+      await applyFormatOps({ pageId }, ops, { userId: ownerId });
+      const before = await revisionOf(pageId);
+      const logged = (await db.select({ id: sheetChanges.id }).from(sheetChanges).where(eq(sheetChanges.tabId, tabId))).length;
+
+      const again = await applyFormatOps({ pageId }, ops, { userId: ownerId });
+
+      expect(again.rowsTouched).toBe(0);
+      expect(again.cellsFormatted).toBe(0);
+      expect(again.tabFieldsChanged).toEqual([]);
+      expect(await revisionOf(pageId)).toEqual(before);
+      expect((await db.select({ id: sheetChanges.id }).from(sheetChanges).where(eq(sheetChanges.tabId, tabId))).length).toBe(logged);
+    });
+
     it('leaves a formula cell’s raw, value and type untouched', async () => {
       // Kills: fabricating a `StoredCell` instead of spreading the loaded one.
       const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
