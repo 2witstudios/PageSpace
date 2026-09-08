@@ -1152,3 +1152,111 @@ describe('planFormatOps — everything accepted survives the parsers (#7)', () =
     expect(checked).toBeGreaterThanOrEqual(5);
   });
 });
+
+describe('planFormatOps — refuses, never crashes', () => {
+  // The point of `SheetFormatError` is that a caller can answer 400 to it. A
+  // TypeError escaping this module answers 500 instead, and a validation layer
+  // that crashes on the input it exists to reject is worse than none: the
+  // caller learns nothing and the error looks like a server fault.
+  //
+  // Seeded rather than random so a failure is reproducible from the message
+  // alone — an intermittent fuzz failure nobody can re-run is a flake, not a
+  // finding.
+  const seeded = (seed: number) => () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+
+  const OP_TYPES = [
+    'setCellFormat',
+    'clearCellFormat',
+    'setColumnFormat',
+    'setColumnWidth',
+    'setRowHeight',
+    'setFrozen',
+    'addConditionalRule',
+    'updateConditionalRule',
+    'removeConditionalRule',
+    'moveConditionalRule',
+    'clearConditionalRules',
+    'setRegions',
+    'upsertRegion',
+    'removeRegion',
+    'setCellFromat',
+    '',
+  ];
+
+  // Deliberately includes prototype-reaching keys and the shapes the parsers
+  // treat specially: a blank string, a null, a lone `-1`.
+  const SCALARS: unknown[] = [
+    0, 1, -1, 1.5, NaN, Infinity, 5_000_002, '', '  ', 'A1', 'a1:f', 'A1:', 'B2:D40', '#ff0000',
+    'red', 'bold', 'cell', 'formula', 'colorScale', 'dataBar', 'min', 'text', 'currency', true,
+    false, null, undefined, '__proto__', 'constructor',
+  ];
+  const KEYS = [
+    'id', 'kind', 'ranges', 'range', 'format', 'formula', 'condition', 'operator', 'value', 'color',
+    'min', 'mid', 'max', 'column', 'columns', 'role', 'width', 'height', 'row', 'rows', 'patch',
+    'regions', 'region', 'rule', 'direction', 'theme', 'headerRows', 'totalRows', 'bold', 'bolt',
+    'fontSize', '__proto__', 'type',
+  ];
+
+  const value = (rand: () => number, depth: number): unknown => {
+    const roll = rand();
+    if (depth > 2 || roll < 0.55) return SCALARS[Math.floor(rand() * SCALARS.length)];
+    if (roll < 0.75) {
+      return Array.from({ length: Math.floor(rand() * 4) }, () => value(rand, depth + 1));
+    }
+    const object: Record<string, unknown> = {};
+    for (let i = Math.floor(rand() * 5); i > 0; i--) {
+      object[KEYS[Math.floor(rand() * KEYS.length)]] = value(rand, depth + 1);
+    }
+    return object;
+  };
+
+  it('answers every shape of garbage with a SheetFormatError or a valid plan', () => {
+    const tab = tabWith({ conditionalFormats: [rule('a')], regions: [region('r1')] });
+    let refusals = 0;
+    let plans = 0;
+
+    for (let seed = 0; seed < 600; seed++) {
+      const rand = seeded(seed);
+      const generated = value(rand, 1);
+      // Give roughly half the cases a real op type, so the generator spends its
+      // budget inside the handlers rather than bouncing off the type check.
+      // Spread rather than assigned: half of what the generator produces is a
+      // primitive, and writing a property onto one throws in strict mode — a
+      // crash in the test, indistinguishable in the output from the crash in
+      // the module this is looking for.
+      const typed =
+        rand() < 0.5
+          ? {
+              ...(typeof generated === 'object' && generated !== null && !Array.isArray(generated)
+                ? generated
+                : {}),
+              type: OP_TYPES[Math.floor(rand() * OP_TYPES.length)],
+            }
+          : generated;
+      const op = typed as SheetFormatOp;
+
+      try {
+        const result = planFormatOps([op], tab);
+        plans += 1;
+        expect(Array.isArray(result.steps)).toBe(true);
+        expect(result.rows).toBeInstanceOf(Set);
+      } catch (error) {
+        if (!(error instanceof SheetFormatError)) {
+          throw new Error(`seed ${seed} threw ${String(error)} for ${JSON.stringify(op)}`);
+        }
+        refusals += 1;
+        expect(error.message).not.toBe('');
+      }
+    }
+
+    // Both outcomes have to occur, or the generator is only exercising one
+    // door. Plans are the rarer one — most random shapes are not valid ops.
+    expect(refusals).toBeGreaterThan(100);
+    expect(plans).toBeGreaterThan(0);
+  });
+});
