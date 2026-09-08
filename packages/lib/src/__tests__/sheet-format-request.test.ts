@@ -5,6 +5,7 @@ import {
   MAX_FORMAT_CELLS,
   MAX_FORMAT_CELLS_PER_REQUEST,
   MAX_FORMAT_OPS,
+  FIELDS_BY_KIND,
   SheetFormatError,
   planFormatOps,
   type SheetFormatOp,
@@ -34,6 +35,7 @@ import {
   MAX_CONDITIONAL_RANGES_PER_RULE,
   MAX_CONDITIONAL_RANGE_CELLS,
   VALUELESS_OPERATORS,
+  evaluateConditionalFormats,
 } from '../sheets/conditional';
 
 const tabWith = (overrides: Partial<SheetFormatTarget> = {}): SheetFormatTarget => ({
@@ -1405,7 +1407,59 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
     ).toHaveLength(1);
   });
 
-  it('refuses a format on a rule kind that draws from anchors', () => {
+  it('derives the same read-what table the module encodes', () => {
+    // `FIELDS_BY_KIND` is the one place this module restates something the
+    // `ConditionalRule` types already say, so it is the one place that can
+    // silently lie. This asks the evaluator instead: run each kind with each
+    // foreign field set, and see whether the output moves. A field the output
+    // ignores is one that kind does not read.
+    const values: Record<string, number> = { A1: 1, A2: 2, A3: 3 };
+    const context = {
+      valueAt: (address: string) => values[address] ?? '',
+      isError: () => false,
+      evaluateFormula: () => true,
+    };
+    const render = (rule: object) =>
+      JSON.stringify(evaluateConditionalFormats([rule as ConditionalRule], context as never));
+
+    const base: Record<string, object> = {
+      cell: {
+        id: 'c',
+        kind: 'cell',
+        ranges: ['A1:A3'],
+        condition: { operator: 'greaterThan', value: '1' },
+        format: { bold: true },
+      },
+      formula: { id: 'f', kind: 'formula', ranges: ['A1:A3'], formula: '=TRUE', format: { bold: true } },
+      colorScale: {
+        id: 's',
+        kind: 'colorScale',
+        ranges: ['A1:A3'],
+        min: { type: 'min', color: '#ffffff' },
+        max: { type: 'max', color: '#000000' },
+      },
+      dataBar: { id: 'd', kind: 'dataBar', ranges: ['A1:A3'], color: '#3b82f6' },
+    };
+    const probes: Record<string, unknown> = {
+      condition: { operator: 'lessThan', value: '0' },
+      format: { italic: true },
+      formula: '=FALSE',
+      color: '#ff0000',
+      min: { type: 'number', value: 99, color: '#ff0000' },
+      mid: { type: 'percentile', value: 50, color: '#00ff00' },
+      max: { type: 'number', value: 1, color: '#0000ff' },
+    };
+
+    for (const [kind, rule] of Object.entries(base)) {
+      const read = Object.keys(probes).filter((field) => {
+        if (field in rule) return true;
+        return render(rule) !== render({ ...rule, [field]: probes[field] });
+      });
+      expect([...read].sort()).toEqual([...FIELDS_BY_KIND[kind as ConditionalRule['kind']]].sort());
+    }
+  });
+
+  it('refuses a field belonging to a different kind of rule', () => {
     // `ConditionalColorScaleRule` and `ConditionalDataBarRule` declare no
     // format, and the evaluator agrees — evaluating either kind with and
     // without one produces byte-identical output. So a whole format is
@@ -1421,7 +1475,7 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
 
     expect(
       refusalOf([{ type: 'addConditionalRule', rule: scale({ format: { bold: true } }) }])
-    ).toContain('draws from its anchors, not a format');
+    ).toContain('A colorScale rule does not read format');
     expect(
       refusalOf([
         {
@@ -1429,7 +1483,7 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
           rule: { id: 'db', kind: 'dataBar', ranges: ['A1:A9'], color: '#3b82f6', format: { bold: true } },
         },
       ])
-    ).toContain('draws from its anchors, not a format');
+    ).toContain('A dataBar rule does not read format');
 
     // Without one it is a perfectly good rule, and the kinds that DO draw a
     // format still require it.
@@ -2194,22 +2248,41 @@ describe('planFormatOps — everything accepted survives the parsers (#7)', () =
   const formulas: unknown[] = ['=A1>1', '', '   ', 42];
   const colors: unknown[] = ['#ff0000', 'red', undefined];
 
+  // Built per kind, with only the fields that kind reads. The first version put
+  // every field on every candidate, which no caller would send and which the
+  // foreign-field refusal now rejects outright — a generator that produces
+  // nothing valid tests nothing.
   const ruleCandidates: unknown[] = [];
-  for (const kind of kinds) {
-    for (const rangeValue of ranges) {
-      for (const format of formats) {
-        ruleCandidates.push({
-          id: 'cf_x',
-          kind,
-          ranges: rangeValue,
-          format,
-          condition: { operator: 'greaterThan', value: '10' },
-          formula: formulas[ruleCandidates.length % formulas.length],
-          color: colors[ruleCandidates.length % colors.length],
-          min: { type: 'min', color: colors[ruleCandidates.length % colors.length] },
-          max: { type: 'max', color: '#00ff00' },
-        });
+  for (const rangeValue of ranges) {
+    for (const format of formats) {
+      ruleCandidates.push({
+        id: 'cf_x',
+        kind: 'cell',
+        ranges: rangeValue,
+        format,
+        condition: { operator: 'greaterThan', value: '10' },
+      });
+      for (const body of formulas) {
+        ruleCandidates.push({ id: 'cf_x', kind: 'formula', ranges: rangeValue, format, formula: body });
       }
+    }
+
+    for (const color of colors) {
+      ruleCandidates.push({
+        id: 'cf_x',
+        kind: 'colorScale',
+        ranges: rangeValue,
+        min: { type: 'min', color },
+        max: { type: 'max', color: '#00ff00' },
+      });
+      ruleCandidates.push({
+        id: 'cf_x',
+        kind: 'dataBar',
+        ranges: rangeValue,
+        color,
+        min: { type: 'min' },
+        max: { type: 'max' },
+      });
     }
   }
 

@@ -943,6 +943,25 @@ const anchorProblem = (anchor: unknown, needsColor: boolean): string | null => {
 };
 
 /**
+ * Which fields each kind of rule actually reads.
+ *
+ * A mirror of the four `ConditionalRule` members, and the one place in this
+ * module that restates something the types already say — kept honest by a test
+ * that derives the same table from the evaluator itself, running each kind with
+ * each foreign field and comparing the output. If a kind starts reading a new
+ * field, that test fails rather than this table silently lying.
+ */
+export const FIELDS_BY_KIND: Record<ConditionalRule['kind'], readonly string[]> = {
+  cell: ['condition', 'format'],
+  formula: ['formula', 'format'],
+  colorScale: ['min', 'mid', 'max'],
+  dataBar: ['color', 'min', 'max'],
+};
+
+/** Every field that belongs to some kind, and so may be foreign to another. */
+const KIND_FIELDS: readonly string[] = [...new Set(Object.values(FIELDS_BY_KIND).flat())];
+
+/**
  * Why a rule that stores faithfully would still not do what was asked, or null
  * when there is nothing wrong with it.
  *
@@ -956,17 +975,20 @@ function ruleRenderProblem(
   rule: ConditionalRule,
   supplied: Record<string, unknown>
 ): string | null {
-  // A format on a rule kind that has none. `ConditionalColorScaleRule` and
-  // `ConditionalDataBarRule` do not declare one, and the evaluator agrees: the
-  // colorScale branch contributes a background from the gradient and the
-  // dataBar branch contributes a bar, and neither reads `rule.format`.
-  // Verified by evaluating both kinds with and without one — byte-identical
-  // output. So a whole format is validated, stored, and never drawn.
+  // A field belonging to a different kind of rule. Each kind reads its own
+  // handful and the parser carries the rest through untouched, so `format` on a
+  // colorScale, `condition` on a formula rule or `color` on anything but a data
+  // bar is validated, stored, and never read. Verified against the evaluator
+  // rather than inferred from the interfaces — the test derives this same table
+  // by running every kind with every foreign field and comparing output, so it
+  // cannot drift from what actually reads what.
   //
   // Read from what the CALLER sent, not the merged rule, so a stored stray does
   // not make every later update to that rule impossible.
-  if ((rule.kind === 'colorScale' || rule.kind === 'dataBar') && supplied.format !== undefined) {
-    return `A ${rule.kind} rule draws from its anchors, not a format, so the format would never be drawn.`;
+  for (const field of KIND_FIELDS) {
+    if (supplied[field] === undefined) continue;
+    if (FIELDS_BY_KIND[rule.kind].includes(field)) continue;
+    return `A ${rule.kind} rule does not read ${field}, so it would be stored and never used.`;
   }
 
   // A condition whose operator needs an operand it does not have. The parser
