@@ -837,7 +837,8 @@ function validateRuleInput(
   raw: unknown,
   supplied: Record<string, unknown>,
   index: number,
-  type: string
+  type: string,
+  charge: (cells: number) => void
 ): ConditionalRule {
   if (!isObject(raw)) {
     return refuseOp(index, type, 'rule must be an object.');
@@ -870,6 +871,14 @@ function validateRuleInput(
         return refuseOp(index, type, `"${range}" is not a range this sheet can address.`);
       }
     }
+
+    // Counted cheaply and charged to the request's budget BEFORE
+    // `validateRanges`, which expands every range to addresses. A per-rule cap
+    // bounds one rule at half a million cells and says nothing about a batch of
+    // two hundred of them — the same hole `MAX_FORMAT_CELLS_PER_REQUEST` closes
+    // on the cell path, and leaving it open here would make that bound the only
+    // one doing its job.
+    charge(suppliedRanges.reduce((cells, range) => cells + conditionalCellsOfRange(range), 0));
 
     // The caller's array, at its real length.
     const ranges = validateRanges(suppliedRanges);
@@ -1111,6 +1120,24 @@ export function planFormatOps(
   let rulesTouched = false;
   let regionsTouched = false;
 
+  // How many cells this request has asked us to EXPAND while checking rules,
+  // as opposed to how many the resulting sheet covers. Bounded by the same
+  // sheet-wide ceiling, because a request whose rules alone reach past it can
+  // never be the repair that ceiling makes an exception for.
+  let conditionalCellsInspected = 0;
+  const chargeInspection = (index: number, type: string) => (cells: number) => {
+    conditionalCellsInspected += cells;
+    if (conditionalCellsInspected > MAX_CONDITIONAL_TOTAL_CELLS) {
+      refuseOp(
+        index,
+        type,
+        `The rules in this request cover ${conditionalCellsInspected.toLocaleString()} cells between ` +
+          `them, past the sheet-wide limit of ${MAX_CONDITIONAL_TOTAL_CELLS.toLocaleString()} before ` +
+          'the sheet is even considered.'
+      );
+    }
+  };
+
   /** A range op's addresses, with both the per-op and per-request bounds applied. */
   const resolveRange = (range: unknown, index: number, type: string): readonly string[] => {
     if (typeof range !== 'string') {
@@ -1257,7 +1284,13 @@ export function planFormatOps(
         // The parser is the only definition of a usable rule, and on the load
         // path it drops what it cannot use. A blank custom formula is the
         // canonical case: accepted by a naive writer, gone on the next load.
-        const rule = validateRuleInput(op.rule, isObject(op.rule) ? op.rule : {}, index, op.type);
+        const rule = validateRuleInput(
+          op.rule,
+          isObject(op.rule) ? op.rule : {},
+          index,
+          op.type,
+          chargeInspection(index, op.type)
+        );
 
         if (rules.some((existing) => existing.id === rule.id)) {
           // Two rules under one id: `update` and `move` reach the first by
@@ -1309,7 +1342,8 @@ export function planFormatOps(
           { ...rules[at], ...patch, id: rules[at].id, kind: rules[at].kind },
           patch,
           index,
-          op.type
+          op.type,
+          chargeInspection(index, op.type)
         );
 
         rules = rules.map((rule, position) => (position === at ? merged : rule));

@@ -28,7 +28,10 @@ import {
 import { PALETTE } from '../sheets/palette';
 import { isSupportedFunction } from '../sheets/functions';
 import { MAX_ADDRESSABLE_ROW, encodeColumnLabel } from '../sheets/address';
-import { MAX_CONDITIONAL_RANGES_PER_RULE, VALUELESS_OPERATORS } from '../sheets/conditional';
+import {
+  MAX_CONDITIONAL_RANGES_PER_RULE,
+  VALUELESS_OPERATORS,
+} from '../sheets/conditional';
 
 const tabWith = (overrides: Partial<SheetFormatTarget> = {}): SheetFormatTarget => ({
   rowCount: 100,
@@ -391,6 +394,30 @@ describe('planFormatOps — conditional rules', () => {
     // and not the rule count.
     expect(plan([{ type: 'addConditionalRule', rule: big('e', 15_000) }], tab).conditionalFormats)
       .toHaveLength(5);
+  });
+
+  it('bounds how much a single request can ask it to expand', () => {
+    // `validateRanges` expands every range to addresses, and the per-rule cap
+    // stops one rule at half a million cells. A batch of two hundred such rules
+    // is two hundred times that work before anything refuses — the same hole
+    // `MAX_FORMAT_CELLS_PER_REQUEST` closes on the cell path, and each op here
+    // is individually legal.
+    const ops: SheetFormatOp[] = Array.from({ length: 6 }, (_, i) => ({
+      type: 'addConditionalRule',
+      rule: { ...rule(`cf_${i}`), ranges: ['A1:A490000'] },
+    }));
+
+    expect(490_000 * 6).toBeGreaterThan(MAX_CONDITIONAL_TOTAL_CELLS);
+    const message = refusalOf(ops);
+    expect(message).toContain('cells between them');
+    // Refused on the op that crosses the line, not at the end of the batch —
+    // which is what stops the work rather than merely reporting it.
+    expect(message).toContain('Op 4');
+
+    // A request that stays under it is unaffected.
+    expect(
+      plan(ops.slice(0, 4)).conditionalFormats
+    ).toHaveLength(4);
   });
 
   it('lets an already over-budget sheet be repaired one rule at a time', () => {
