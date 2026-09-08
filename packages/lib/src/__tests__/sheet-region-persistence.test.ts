@@ -19,7 +19,6 @@ const budget: SheetRegion = {
   headerRows: 1,
   totalRows: [8],
   theme: 'blue',
-  freezeHeader: true,
   columns: [{ column: 'B', role: 'currency', currency: 'EUR', decimals: 0 }],
 };
 

@@ -7,7 +7,9 @@ import {
   MAX_FORMAT_OPS,
   FIELDS_BY_KIND,
   OP_FIELDS,
+  SheetDuplicateRuleError,
   SheetFormatError,
+  conditionalRuleContentKey,
   planFormatOps,
   type SheetFormatOp,
   type SheetFormatPlan,
@@ -177,7 +179,9 @@ describe('planFormatOps — the request envelope', () => {
       setColumnWidth: { column: 'C', width: 120 },
       setRowHeight: { row: 3, height: 40 },
       setFrozen: { rows: 1, columns: 0 },
-      addConditionalRule: { rule: rule('cf_new') },
+      // A threshold the tab's rules do not use: an add is refused on content
+      // as well as id, and this sweep needs every sample valid to begin with.
+      addConditionalRule: { rule: rule('cf_new', '99') },
       updateConditionalRule: { id: 'a', patch: { format: { italic: true } } },
       removeConditionalRule: { id: 'a' },
       moveConditionalRule: { id: 'a', direction: 1 },
@@ -557,7 +561,7 @@ describe('planFormatOps — conditional rules', () => {
     // is individually legal.
     const ops: SheetFormatOp[] = Array.from({ length: 6 }, (_, i) => ({
       type: 'addConditionalRule',
-      rule: { ...rule(`cf_${i}`), ranges: ['A1:A490000'] },
+      rule: { ...rule(`cf_${i}`, String(i)), ranges: ['A1:A490000'] },
     }));
 
     expect(490_000 * 6).toBeGreaterThan(MAX_CONDITIONAL_TOTAL_CELLS);
@@ -579,7 +583,8 @@ describe('planFormatOps — conditional rules', () => {
     // write on such a sheet leaves it unrepairable — removing a rule strictly
     // reduces the skipped render work, and would have been rejected for not
     // fixing everything in one request.
-    const big = (id: string): ConditionalRule => ({ ...rule(id), ranges: ['A1:A400000'] });
+    // A threshold per id, so an add is not refused as a content twin of `a`.
+    const big = (id: string): ConditionalRule => ({ ...rule(id, String(id.charCodeAt(0))), ranges: ['A1:A400000'] });
     const over = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(big);
     const tab = tabWith({ conditionalFormats: over });
 
@@ -1083,20 +1088,14 @@ describe('planFormatOps — never something other than what was asked for', () =
     }
   });
 
-  it('refuses freezeHeader while nothing acts on it', () => {
-    // Parsed and stored, with no consumer anywhere: `createRegionResolver` does
-    // not read it and the `setRegions` step only stores the region. Accepting
-    // it would be this module's own contract broken in its own output.
+  it('carries freezeHeader through as an unknown field, since the region type has none', () => {
+    // Frozen panes are tab-level state, so `SheetRegion` does not declare it
+    // and nothing here reads it. It travels like any field a newer build
+    // wrote: stored untouched, never refused, never honoured. The AI tool
+    // accepts `freezeHeader` as an input and turns it into a `setFrozen` op.
     expect(
-      refusalOf([{ type: 'upsertRegion', region: { ...region('r1'), freezeHeader: true } }])
-    ).toContain('freezeHeader is not applied by anything yet');
-    expect(
-      refusalOf([{ type: 'upsertRegion', region: { ...region('r1'), freezeHeader: true } }])
-    ).toContain('setFrozen');
-    // An explicit false asks for nothing and gets nothing, which is honest.
-    expect(
-      plan([{ type: 'upsertRegion', region: { ...region('r1'), freezeHeader: false } }]).regions
-    ).toHaveLength(1);
+      plan([{ type: 'upsertRegion', region: { ...region('r1'), freezeHeader: true } }]).regions[0]
+    ).toMatchObject({ id: 'r1', freezeHeader: true });
   });
 
   it('refuses an unknown key NESTED inside a format', () => {
@@ -1373,11 +1372,13 @@ describe('planFormatOps — never something other than what was asked for', () =
     // of them. Each of these covers 10,000 cells and references 2,000 — legal
     // alone, and the covered-cell aggregate is satisfied — while together they
     // ask for a billion expansions in one render.
-    const heavy = (id: string) => ({
+    // The threshold differs per rule so each is its own content: the sum is
+    // what is being tested, not the content refusal a twin would trip.
+    const heavy = (id: string, above = 0) => ({
       id,
       kind: 'formula',
       ranges: ['A1:A10000'],
-      formula: '=SUM(B1:B2000)>0',
+      formula: `=SUM(B1:B2000)>${above}`,
       format: { bold: true },
     });
     const tab = tabWith({ rowCount: 20000 });
@@ -1391,7 +1392,7 @@ describe('planFormatOps — never something other than what was asked for', () =
       refusalOf(
         Array.from({ length: 50 }, (_, i) => ({
           type: 'addConditionalRule' as const,
-          rule: heavy(`r${i}`),
+          rule: heavy(`r${i}`, i),
         })),
         tab
       )
@@ -1401,7 +1402,7 @@ describe('planFormatOps — never something other than what was asked for', () =
     // this can still be reduced.
     const over = tabWith({
       rowCount: 20000,
-      conditionalFormats: Array.from({ length: 50 }, (_, i) => heavy(`r${i}`)) as never,
+      conditionalFormats: Array.from({ length: 50 }, (_, i) => heavy(`r${i}`, i)) as never,
     });
     expect(
       plan([{ type: 'removeConditionalRule', id: 'r0' }], over).conditionalFormats
@@ -2230,6 +2231,52 @@ describe('planFormatOps — rule identity', () => {
     expect(message).toContain('updateConditionalRule');
   });
 
+  // Kills: refusing on id alone. The tool dedupes by content BEFORE its call,
+  // but two in-flight calls (a timeout retry overlapping the original) each
+  // see no duplicate and mint different ids; the store replans under its lock,
+  // so a content check HERE is what refuses the second one atomically.
+  it('refuses adding a rule identical in content to one under another id, naming that id', () => {
+    const tab = tabWith({ conditionalFormats: [rule('a')] });
+    const incoming = { ...rule('b'), format: { background: '#fee2e2' } };
+    let caught: unknown;
+    try {
+      planFormatOps([{ type: 'addConditionalRule', rule: incoming }], tab);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(SheetDuplicateRuleError);
+    expect(caught).toBeInstanceOf(SheetFormatError);
+    const error = caught as SheetDuplicateRuleError;
+    expect(error.existingRuleId).toBe('a');
+    expect(error.opIndex).toBe(0);
+    expect(error.message).toContain('An identical rule is already on this sheet as "a"');
+  });
+
+  it('accepts a rule that differs from an existing one in a single field', () => {
+    // Kills: comparing by kind or by ranges alone — the content check has to
+    // read the whole rule, or a second threshold on the same column is lost.
+    const tab = tabWith({ conditionalFormats: [rule('a', '10')] });
+    const result = plan([{ type: 'addConditionalRule', rule: rule('b', '11') }], tab);
+    expect(result.conditionalFormats.map((r) => r.id)).toEqual(['a', 'b']);
+  });
+
+  it('compares content with the id stripped and the key order canonicalised', () => {
+    // Kills: keying on JSON.stringify of the rule as given. The parser rebuilds
+    // a stored rule field by field, so its key order need not match a freshly
+    // built one's, and the id is exactly the thing a retry cannot reproduce.
+    const stored = rule('a');
+    const rebuilt = {
+      format: { background: '#fee2e2' },
+      condition: { value: '10', operator: 'greaterThan' },
+      ranges: ['A1:A9'],
+      kind: 'cell',
+      id: 'zzz',
+    } as unknown as ConditionalRule;
+    expect(conditionalRuleContentKey(rebuilt)).toBe(conditionalRuleContentKey(stored));
+    expect(conditionalRuleContentKey(rule('a', '11'))).not.toBe(conditionalRuleContentKey(stored));
+    expect(conditionalRuleContentKey(stored)).not.toContain('"id"');
+  });
+
   it('refuses an update that asks for nothing', () => {
     // `id` and `kind` are pinned to the rule being edited, so a patch naming
     // only those is applied, reports success and changes not one pixel.
@@ -2338,17 +2385,17 @@ describe('planFormatOps — what each op produces', () => {
     //   - five rule ops collapse to ONE `setConditionalRules` step, and three
     //     region ops to one `setRegions`. However many ops touched a list, the
     //     caller writes that list once.
-    const cell = (id: string) =>
+    const cell = (id: string, above = '1') =>
       ({
         id,
         kind: 'cell',
         ranges: ['A1:A9'],
-        condition: { operator: 'greaterThan', value: '1' },
+        condition: { operator: 'greaterThan', value: above },
         format: { bold: true },
       }) as unknown as ConditionalRule;
 
     const tab = tabWith({
-      conditionalFormats: [cell('a'), cell('b')],
+      conditionalFormats: [cell('a'), cell('b', '2')],
       regions: [region('r')],
     });
 
@@ -2385,7 +2432,7 @@ describe('planFormatOps — what each op produces', () => {
 
     // Five ways to change the rule list, one step out of all of them.
     const ruleOps: SheetFormatOp[] = [
-      { type: 'addConditionalRule', rule: cell('c') },
+      { type: 'addConditionalRule', rule: cell('c', '3') },
       { type: 'updateConditionalRule', id: 'a', patch: { ranges: ['B1:B4'] } },
       { type: 'removeConditionalRule', id: 'a' },
       { type: 'moveConditionalRule', id: 'a', direction: 1 },
@@ -2482,6 +2529,11 @@ describe('planFormatOps — what happens on a retry', () => {
     expect(
       refusalOf([{ type: 'addConditionalRule', rule: cell('a') }], tabWith({ conditionalFormats: [cell('a')] }))
     ).toContain('is already on this sheet');
+    // A retry that minted a fresh id is still a retry: the content is what
+    // landed, and the refusal names the id it landed under.
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: cell('a2') }], tabWith({ conditionalFormats: [cell('a')] }))
+    ).toContain('already on this sheet as "a"');
   });
 
   it('moves a rule AGAIN when a landed move is replayed', () => {
@@ -2703,14 +2755,12 @@ describe('planFormatOps — the dashboard this epic exists for', () => {
       totalRows: [4],
     });
 
-    // With one exception, and it is deliberate: that sample also carries
-    // `freezeHeader: true`, which nothing reads. Refusing it is the flagged
-    // decision — see the PR discussion — and this assertion is here so that if
-    // someone makes the field work, or decides the loop matters more, the test
-    // that has to change is the one that documents the disagreement.
+    // That sample also carries `freezeHeader: true`. The region type has no
+    // such field — frozen panes are tab-level state — so it travels through as
+    // an unknown field would, and the loop round-trips it rather than refusing.
     expect(
-      refusalOf([{ type: 'upsertRegion', region: { ...documented, freezeHeader: true } }])
-    ).toContain('freezeHeader is not applied by anything yet');
+      plan([{ type: 'upsertRegion', region: { ...documented, freezeHeader: true } }]).regions[0]
+    ).toMatchObject({ id: 'budget', freezeHeader: true });
 
     // The rest of that same sample, written back as the ops it corresponds to.
     // The region is the interesting part, but the loop only works if the whole

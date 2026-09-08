@@ -225,6 +225,16 @@ function referencedCells(start: string, end: string): number | null {
  * failure can read "A rule \"x\" is already on this sheet" as "the first
  * attempt landed" rather than as a fault.
  *
+ * `addConditionalRule` refuses on CONTENT as well as on id, and the two
+ * refusals are distinct. A caller that mints ids (the AI tool does) cannot
+ * replay the id it minted, so a retry of its request arrives as a new id
+ * over the same content — and a store that replans under its lock is the
+ * only place that can tell the overlapping retry from a fresh request, since
+ * the caller's own pre-flight dedupe ran before either mutation committed.
+ * The content refusal is a `SheetDuplicateRuleError` carrying
+ * `existingRuleId`, so that caller can read it as "landed, under this id"
+ * by type rather than by parsing the message.
+ *
  * `moveConditionalRule` is the one to actually worry about, and it is worse
  * than either group. A move that landed leaves nothing behind that says so, so
  * replaying it moves the rule ANOTHER place — silently, and reported as
@@ -262,6 +272,10 @@ function referencedCells(start: string, end: string): number | null {
  *    `SheetFormatTarget` — the call and its shapes.
  *  - `SheetFormatError` — so a route can answer 400 to it by type rather than
  *    by guessing from a message.
+ *  - `SheetDuplicateRuleError`, `conditionalRuleContentKey` — the content
+ *    refusal above, and the comparison behind it, so a caller deduping before
+ *    its call and the planner refusing under the lock agree on what "the same
+ *    rule" means. Two copies of that answer would drift.
  *  - `MAX_FORMAT_CELLS`, `MAX_FORMAT_CELLS_PER_REQUEST`, `MAX_FORMAT_OPS`,
  *    `MAX_FORMULA_EXPANSION`, `MAX_FORMULA_DEPTH` — a tool describing this
  *    surface to a model should tell it the limits up front rather than let it
@@ -346,6 +360,54 @@ export class SheetFormatError extends Error {
     this.name = 'SheetFormatError';
     this.opIndex = opIndex;
   }
+}
+
+/**
+ * `addConditionalRule` refused because a rule with the same content is already
+ * on the sheet under `existingRuleId`.
+ *
+ * A subclass rather than a message, because the one caller that needs to tell
+ * this refusal apart — a tool that minted the id and is being retried — must
+ * not string-match a message written to be read by a model. A plain
+ * `SheetFormatError` on every other path still answers 400 to it by type.
+ */
+export class SheetDuplicateRuleError extends SheetFormatError {
+  /** The id the content-identical rule is already stored under. */
+  readonly existingRuleId: string;
+
+  constructor(message: string, opIndex: number, existingRuleId: string) {
+    super(message, opIndex);
+    this.name = 'SheetDuplicateRuleError';
+    this.existingRuleId = existingRuleId;
+  }
+}
+
+/**
+ * A rule's content, independent of its id, as a string that is equal for two
+ * rules that would do the same thing.
+ *
+ * Key order is canonicalised because the parser rebuilds a stored rule field
+ * by field and its order need not match a freshly built one's; `undefined`
+ * fields are dropped because `{mid: undefined}` and no `mid` are the same
+ * rule to the evaluator. `id` is excluded because it is exactly the thing a
+ * retry cannot reproduce. Exported so the planner's content refusal and a
+ * caller's pre-flight dedupe are one definition, not two that drift.
+ */
+export function conditionalRuleContentKey(rule: Omit<ConditionalRule, 'id'> | ConditionalRule): string {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (typeof value === 'object' && value !== null) {
+      const record = value as Record<string, unknown>;
+      return Object.fromEntries(
+        Object.keys(record)
+          .filter((key) => key !== 'id' && record[key] !== undefined)
+          .sort()
+          .map((key) => [key, canonical(record[key])])
+      );
+    }
+    return value;
+  };
+  return JSON.stringify(canonical(rule));
 }
 
 /**
@@ -1499,18 +1561,6 @@ function regionRenderProblem(region: SheetRegion, label: string): string | null 
     }
   }
 
-  // A setting nothing acts on yet. `freezeHeader` is parsed and stored, and a
-  // repo-wide search finds no consumer: `createRegionResolver` does not read it
-  // and the `setRegions` step only stores the region. Accepting it would be the
-  // module's own contract broken in its own output — a request that succeeds
-  // and pins nothing. `setFrozen` does work today, so the refusal names it.
-  if (region.freezeHeader === true) {
-    return (
-      `${label}: freezeHeader is not applied by anything yet, so setting it would pin no rows. Use a ` +
-      'setFrozen op for now.'
-    );
-  }
-
   // The one sanitization the comparator cannot see, because it happens at
   // RENDER time rather than at parse time: `parseRegion` accepts any lowercase
   // word as a theme, and `hueByName` then falls back to the default for one the
@@ -2017,6 +2067,25 @@ export function planFormatOps(
             op.type,
             `A rule "${rule.id}" is already on this sheet. Use updateConditionalRule to change it, ` +
               'or give the new rule its own id.'
+          );
+        }
+
+        // Content, not only id. A caller that mints ids dedupes by content
+        // before its call, but two overlapping calls (a timeout retry racing
+        // the original) both see no duplicate and mint different ids; the
+        // store replans HERE under its lock, so this is the one check that
+        // refuses the second one atomically. Without it the tab holds two
+        // rules that paint the same cells the same way and evaluates the
+        // formula twice per cell, and the "sending the same rules twice adds
+        // them once" promise is broken for precisely the retry it was made for.
+        const key = conditionalRuleContentKey(rule);
+        const twin = rules.find((existing) => conditionalRuleContentKey(existing) === key);
+        if (twin !== undefined) {
+          throw new SheetDuplicateRuleError(
+            `Op ${index} (${op.type}): An identical rule is already on this sheet as "${twin.id}". ` +
+              'Use updateConditionalRule to change it, or removeConditionalRule if it is no longer wanted.',
+            index,
+            twin.id
           );
         }
 

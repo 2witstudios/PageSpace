@@ -75,8 +75,11 @@ export interface SheetRegion {
   columns?: RegionColumn[];
   /** A hue name from the shared palette. */
   theme?: string;
-  /** Pin the header rows when the region starts at the top of the sheet. */
-  freezeHeader?: boolean;
+  // No `freezeHeader`. Frozen panes are tab-level state (`frozenRows` on the
+  // tab), not presentation derived per cell, so there is nothing for a region
+  // to carry: a field here would be parsed, stored and honoured by nothing. A
+  // caller that wants the header pinned asks for a freeze; `format_sheet`
+  // accepts `freezeHeader` as an INPUT and turns it into exactly that.
 }
 
 /**
@@ -311,9 +314,6 @@ export function parseRegion(value: unknown): SheetRegion | null {
   } else {
     delete region.theme;
   }
-
-  if (typeof value.freezeHeader === 'boolean') region.freezeHeader = value.freezeHeader;
-  else delete region.freezeHeader;
 
   return region;
 }
