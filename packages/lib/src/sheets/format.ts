@@ -112,6 +112,19 @@ const FIELD_SCHEMAS = new Map<string, z.ZodType>([
 ]);
 
 /**
+ * The field names a `CellFormat` may carry, derived from the schemas above so
+ * there is only ever one list.
+ *
+ * Exported for the write path: `cellFormatSchema` is a plain `z.object`, so it
+ * *strips* an unknown key and reports success — which makes a typo like `bolt`
+ * a request that validates and formats nothing. A caller that wants to refuse
+ * one instead has to check the keys itself, and it must check against this list
+ * rather than a hand-copied one, or adding a field here would silently start
+ * being rejected there.
+ */
+export const CELL_FORMAT_FIELDS: ReadonlySet<string> = new Set(FIELD_SCHEMAS.keys());
+
+/**
  * Keys never carried through, whatever a stored document says. Passing these
  * on would let a crafted sheet reach `Object.prototype` through the spreads in
  * `resolveCellFormat` and `setCellFormats`.
