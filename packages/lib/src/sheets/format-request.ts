@@ -559,7 +559,8 @@ const refuse: (message: string, opIndex?: number) => never = (message, opIndex) 
 const refuseOp: (index: number, type: string, message: string) => never = (index, type, message) =>
   refuse(`Op ${index} (${type}): ${message}`, index);
 
-interface RangeSpan {
+/** The 0-based, inclusive bounds of a cell range. */
+export interface RangeSpan {
   rowStart: number;
   rowEnd: number;
   colStart: number;
@@ -606,8 +607,12 @@ function rangeHint(range: string): string {
  * the bound exists to prevent. This walks the same acceptances it does,
  * including rejecting the truncated `A1:` and the row-0 addresses
  * `decodeCellAddress` will happily decode to -1.
+ *
+ * Exported for the store's read side, which accepts the same range notation
+ * this module accepts on the write side — one definition of "a cell range",
+ * so nothing a caller can format is unreadable and vice versa.
  */
-function parseRangeSpan(range: string): RangeSpan | null {
+export function parseRangeSpan(range: string): RangeSpan | null {
   const normalized = range.trim().toUpperCase();
   const [rawStart, rawEnd, ...extra] = normalized.split(':');
   if (!rawStart || extra.length > 0) return null;
