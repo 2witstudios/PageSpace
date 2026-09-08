@@ -232,8 +232,8 @@ succeed — which is prerequisite 1.
 
 ### The filter to add, once both prerequisites are met
 
-Paths mirror `apps/web/public/.well-known/apple-app-site-association` so the two platforms capture
-the same links. Widening beyond these paths should still wait on prerequisite 2 — whole-host
+Paths mirror `apps/marketing/public/.well-known/apple-app-site-association` (the copy Caddy
+actually serves) so the two platforms capture the same links. Widening beyond these paths should still wait on prerequisite 2 — whole-host
 capture would strand users on `/dashboard` from every marketing, blog, or docs link.
 
 A third prerequisite applies to the auth-callback paths specifically: `/api/auth/desktop/exchange`

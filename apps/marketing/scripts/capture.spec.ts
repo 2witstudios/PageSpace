@@ -1,123 +1,61 @@
-import { test } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import path from "path";
 import fs from "fs";
+import { CANVAS, DEVICES, SHOTS, capturePath } from "../src/lib/app-store-shots";
 
 const BASE_URL = "http://localhost:3004";
 const OUTPUT_DIR = path.join(__dirname, "..", "output");
-
-const screenshots = [
-  {
-    name: "hero",
-    path: "/screenshots/hero",
-    width: 1320,
-    height: 2868,
-    deviceScaleFactor: 1,
-  },
-  {
-    name: "feature-1",
-    path: "/screenshots/feature-1",
-    width: 1320,
-    height: 2868,
-    deviceScaleFactor: 1,
-  },
-  {
-    name: "feature-2",
-    path: "/screenshots/feature-2",
-    width: 1320,
-    height: 2868,
-    deviceScaleFactor: 1,
-  },
-  {
-    name: "dark-mode",
-    path: "/screenshots/dark-mode",
-    width: 1320,
-    height: 2868,
-    deviceScaleFactor: 1,
-  },
-  {
-    name: "collaboration",
-    path: "/screenshots/collaboration",
-    width: 1320,
-    height: 2868,
-    deviceScaleFactor: 1,
-  },
-];
+const PUBLIC_DIR = path.join(__dirname, "..", "public");
 
 test.beforeAll(async () => {
-  // Ensure output directory exists
-  if (!fs.existsSync(OUTPUT_DIR)) {
-    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-  }
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 });
 
-test.describe("App Store Screenshots", () => {
-  for (const screenshot of screenshots) {
-    test(`capture ${screenshot.name}`, async ({ browser }) => {
-      const context = await browser.newContext({
-        viewport: {
-          width: screenshot.width,
-          height: screenshot.height,
-        },
-        deviceScaleFactor: screenshot.deviceScaleFactor,
+/**
+ * The device frame must hold a real simulator capture — App Review guideline
+ * 2.3.3 wants the app shown in actual use. Missing captures fail here rather
+ * than rendering an empty frame that looks plausible in a thumbnail.
+ */
+test.describe("App Store screenshots", () => {
+  for (const device of DEVICES) {
+    const canvas = CANVAS[device];
+
+    for (const shot of SHOTS) {
+      test(`${device}/${shot.slug}`, async ({ browser }) => {
+        const source = path.join(PUBLIC_DIR, capturePath(device, shot.slug));
+        expect(
+          fs.existsSync(source),
+          `Missing simulator capture: ${path.relative(PUBLIC_DIR, source)}. ` +
+            `Record it with \`xcrun simctl io booted screenshot\` on a ${canvas.label} simulator ` +
+            `running the shipping build, then re-run.`,
+        ).toBe(true);
+
+        const context = await browser.newContext({
+          viewport: { width: canvas.width, height: canvas.height },
+          deviceScaleFactor: 1,
+        });
+        const page = await context.newPage();
+
+        await page.goto(`${BASE_URL}/screenshots/${device}/${shot.slug}`, { waitUntil: "networkidle" });
+        await page.waitForTimeout(500);
+
+        const outputPath = path.join(OUTPUT_DIR, `${device}-${shot.slug}.png`);
+        await page.locator('[data-screenshot="true"]').first().screenshot({
+          path: outputPath,
+          type: "png",
+        });
+
+        // App Store Connect rejects anything off the required size, and a
+        // silently mis-sized export is only discovered at upload.
+        const { width, height } = await page
+          .locator('[data-screenshot="true"]')
+          .first()
+          .evaluate((el) => ({ width: el.clientWidth, height: el.clientHeight }));
+        expect({ width, height }).toEqual({ width: canvas.width, height: canvas.height });
+
+        console.log(`Captured: ${outputPath}`);
+        await context.close();
       });
-
-      const page = await context.newPage();
-
-      // Navigate to the screenshot page
-      await page.goto(`${BASE_URL}${screenshot.path}`, {
-        waitUntil: "networkidle",
-      });
-
-      // Wait for any animations to complete
-      await page.waitForTimeout(500);
-
-      // Find the screenshot container
-      const screenshotElement = page.locator('[data-screenshot="true"]').first();
-
-      // Capture the screenshot
-      const outputPath = path.join(OUTPUT_DIR, `${screenshot.name}.png`);
-      await screenshotElement.screenshot({
-        path: outputPath,
-        type: "png",
-      });
-
-      console.log(`Captured: ${outputPath}`);
-
-      await context.close();
-    });
-  }
-});
-
-test.describe("High-DPI Screenshots (2x)", () => {
-  for (const screenshot of screenshots) {
-    test(`capture ${screenshot.name} @2x`, async ({ browser }) => {
-      const context = await browser.newContext({
-        viewport: {
-          width: screenshot.width,
-          height: screenshot.height,
-        },
-        deviceScaleFactor: 2,
-      });
-
-      const page = await context.newPage();
-
-      await page.goto(`${BASE_URL}${screenshot.path}`, {
-        waitUntil: "networkidle",
-      });
-
-      await page.waitForTimeout(500);
-
-      const screenshotElement = page.locator('[data-screenshot="true"]').first();
-
-      const outputPath = path.join(OUTPUT_DIR, `${screenshot.name}@2x.png`);
-      await screenshotElement.screenshot({
-        path: outputPath,
-        type: "png",
-      });
-
-      console.log(`Captured: ${outputPath}`);
-
-      await context.close();
-    });
+    }
   }
 });

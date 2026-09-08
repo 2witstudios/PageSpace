@@ -3,9 +3,8 @@
     "apps": [],
     "details": [
       {
-        "appID": "TEAM_ID.ai.pagespace.app",
+        "appID": "M96WTV3CKX.ai.pagespace.ios",
         "paths": [
-          "/open/*",
           "/invite/*"
         ]
       }
@@ -13,7 +12,7 @@
   },
   "webcredentials": {
     "apps": [
-      "TEAM_ID.ai.pagespace.app"
+      "M96WTV3CKX.ai.pagespace.ios"
     ]
   }
 }

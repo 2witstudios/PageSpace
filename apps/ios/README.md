@@ -31,6 +31,22 @@ This is a **remote-loading** app. The WebView loads the live site directly:
 - Associated domains: `applinks:pagespace.ai`, `webcredentials:pagespace.ai`
 - Sign in with Apple
 
+### Universal links (associated domains)
+
+The entitlement is only half of it — Apple also fetches
+`https://pagespace.ai/.well-known/apple-app-site-association`. Caddy routes `/.well-known/*` to
+**marketing** (only `oauth-*` reaches web), so the single source of truth is
+`apps/marketing/public/.well-known/apple-app-site-association`. It must carry
+`M96WTV3CKX.ai.pagespace.ios` — team plus bundle id — and be served as `application/json`
+(the file is deliberately extensionless, so `apps/marketing/next.config.ts` sets the header).
+
+`paths` claims `/invite/*` only, because that is the only link route that exists. Do **not** add
+the OAuth callback paths: native sign-in returns through the `pagespace://auth-exchange` custom
+scheme, and claiming those paths would hijack the web fallback.
+
+Apple's CDN caches this file, so after any change: redeploy marketing, curl the live URL, then
+reinstall the app before testing on device.
+
 Push is driven from the web layer (`apps/web/src/hooks/usePushNotifications.ts`), device tokens
 POST to `/api/notifications/push-tokens`, and the server sends via
 `packages/lib/src/notifications/push-notifications.ts` (ES256 JWT over HTTP/2 to APNs). The app
@@ -67,12 +83,17 @@ bun run --cwd apps/ios dev            # `cap open ios`
 `CapApp-SPM/Package.swift` plugin list. After a Capacitor or plugin upgrade, **commit** the
 resulting changes to `project.pbxproj` and `Package.resolved` so CI/TestFlight builds match source.
 
+> **Run `cap sync` immediately before every archive.** `capacitor.config.json` is gitignored, so a
+> stale copy on disk is invisible to review and ships whatever it last held — a theme change once
+> shipped the previous `#0B0B0B` for several builds. Confirm the synced colours match
+> `capacitor.config.ts` before you archive.
+
 ## Versioning
 
 Bump both, in `ios/App/App.xcodeproj/project.pbxproj` (Debug + Release configs):
 
-- `MARKETING_VERSION` — user-facing version (e.g. `1.3`)
-- `CURRENT_PROJECT_VERSION` — build number, must strictly increase per upload (e.g. `4`)
+- `MARKETING_VERSION` — user-facing version (currently `1.4`)
+- `CURRENT_PROJECT_VERSION` — build number, must strictly increase per upload (currently `5`)
 
 `Info.plist` reads these via `$(MARKETING_VERSION)` / `$(CURRENT_PROJECT_VERSION)`.
 
@@ -93,6 +114,11 @@ bundle exec fastlane release   # deliver: push metadata + submit the App Store v
 
 `ExportOptions.plist` pins `method = app-store`, the team, and automatic signing.
 
+> **Do not run `fastlane release` yet.** That lane calls `deliver` with `force: true`, and there is
+> no `fastlane/metadata/` directory in the repo — it would overwrite the App Store listing with
+> empty metadata. `beta` is safe. Use App Store Connect directly for metadata until a committed
+> `metadata/` exists.
+
 ### Manual fallback (Xcode GUI)
 
 1. Open `ios/App/App.xcodeproj`, select **Any iOS Device (arm64)**.
@@ -104,14 +130,26 @@ bundle exec fastlane release   # deliver: push metadata + submit the App Store v
 ## Submitting to the App Store — checklist
 
 - [ ] Version + build number bumped and committed
-- [ ] `cap sync` changes committed (pbxproj, Package.resolved)
+- [ ] `cap sync` run immediately before archiving; `capacitor.config.json` matches `capacitor.config.ts`
+- [ ] Archive signed with an **Apple Distribution** identity (check Xcode Organizer before uploading)
+- [ ] AASA verified live: `curl https://pagespace.ai/.well-known/apple-app-site-association`
+      returns `M96WTV3CKX.ai.pagespace.ios` as `application/json`, and an `/invite/` link opens the
+      app on a device
 - [ ] Build uploaded and finished **Processing** in App Store Connect
-- [ ] App privacy answers match `ios/App/PrivacyInfo.xcprivacy`
-      (Email + User ID linked / App Functionality; Device ID / Analytics, not linked; Tracking = No)
-- [ ] Screenshots uploaded (6.7" iPhone required; iPad sizes if iPad is offered)
-- [ ] Age rating, pricing, export compliance (standard HTTPS encryption → exempt) completed
-- [ ] APNs Auth Key (`MWV7BG9H8Q`) registered in Apple Developer and linked to the app
-- [ ] Reviewer notes emphasize native features + a working demo account is provided
+- [ ] App privacy answers match `ios/App/PrivacyInfo.xcprivacy` (Email + User ID linked / App
+      Functionality; Device ID / Analytics and Crash + Performance Data, not linked; Product
+      Interaction linked / Analytics for Sentry Session Replay; Tracking = No)
+- [ ] Screenshots uploaded for 6.9" iPhone **and** 13" iPad (`TARGETED_DEVICE_FAMILY = "1,2"`
+      claims iPad, so iPad shots are required). Generated from real simulator captures — see
+      `apps/marketing/public/screenshots/ios/README.md`
+- [ ] Support URL is `https://pagespace.ai/contact` — `/support` is not publicly reachable
+- [ ] Age rating, pricing, export compliance completed (`ITSAppUsesNonExemptEncryption = false`
+      ships in the plist, so no per-upload prompt)
+- [ ] APNs Auth Key (`MWV7BG9H8Q`) registered in Apple Developer and linked to the app, and
+      production `pagespace-web` runs `NODE_ENV=production` (otherwise every push is rejected)
+- [ ] No purchase surface reachable on iOS — walk `/settings/billing`, `/settings/usage`, and any
+      in-app link that reaches marketing pricing (Guideline 3.1.1)
+- [ ] Reviewer notes emphasize native features + a working demo account with seeded content
 - [ ] Submit for review
 
 ## Privacy manifest
