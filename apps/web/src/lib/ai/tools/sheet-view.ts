@@ -1072,6 +1072,14 @@ export const TABLE_CELL_CHAR_LIMIT = MAX_TABLE_CELL_CHARS;
  * A read that spends a third of its response describing fills has crowded out
  * the rows the agent actually called for.
  *
+ * Measured against real shapes rather than picked: a dashboard tab with two
+ * regions, three rules, freezes, widths, column formats and a dozen hand-set
+ * cell formats produces a whole block of ~1,100 characters, of which
+ * `cellFormats` is ~260 — about 4% of this budget, and under 3% of the table's
+ * 40,000. So the cap is generous for a sheet somebody designed, and bites only
+ * on one formatted cell by cell, which is exactly the case the truncation flag
+ * exists to report.
+ *
  * It bounds only `cellFormats`, because that is the only unbounded part —
  * regions are a handful of declarations, layout is O(columns), and the rule
  * summaries are one line each under `MAX_CONDITIONAL_RULES`. Per-cell overrides
