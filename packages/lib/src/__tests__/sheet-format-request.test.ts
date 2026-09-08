@@ -1677,6 +1677,70 @@ describe('planFormatOps — the dashboard this epic exists for', () => {
   //
   // "A1:F is a table, row 1 is headers, column C is money, row 40 is a total,
   // accent blue", plus the presentation that goes with it.
+  it('accepts everything the parsers allow, at their maximum', () => {
+    // The general form of a mistake this branch made once: a bound tuned
+    // against the attack and never against real work. Every limit here belongs
+    // to the parsers, not to this module, so anything sitting exactly at one of
+    // them is by definition legitimate — and if a bound added later is too
+    // tight, or two bounds interact, this is where it shows.
+    const tab = tabWith({ rowCount: 5000, columnCount: 1000 });
+
+    // A region using every allowance `regions.ts` grants at once.
+    expect(
+      plan(
+        [
+          {
+            type: 'upsertRegion',
+            region: {
+              id: 'r',
+              range: `A1:${encodeColumnLabel(MAX_REGION_COLUMNS - 1)}4000`,
+              headerRows: 1,
+              totalRows: Array.from({ length: MAX_REGION_TOTAL_ROWS }, (_, i) => i + 2),
+              columns: Array.from({ length: MAX_REGION_COLUMNS }, (_, i) => ({
+                column: encodeColumnLabel(i),
+                role: 'number',
+                decimals: 2,
+              })),
+              theme: 'blue',
+            },
+          },
+        ],
+        tab
+      ).regions[0].columns
+    ).toHaveLength(MAX_REGION_COLUMNS);
+
+    // A rule at the per-rule range cap.
+    expect(
+      plan(
+        [
+          {
+            type: 'addConditionalRule',
+            rule: {
+              id: 'cf',
+              kind: 'cell',
+              ranges: Array.from({ length: MAX_CONDITIONAL_RANGES_PER_RULE }, (_, i) => `A${i + 1}`),
+              condition: { operator: 'greaterThan', value: '1' },
+              format: { bold: true },
+            },
+          },
+        ],
+        tab
+      ).conditionalFormats
+    ).toHaveLength(1);
+
+    // And a formatting batch of a size someone might really send.
+    expect(
+      plan(
+        Array.from({ length: 20 }, (_, i) => ({
+          type: 'setCellFormat' as const,
+          range: `A${i * 250 + 1}:E${i * 250 + 1000}`,
+          patch: { bold: true },
+        })),
+        tab
+      ).steps
+    ).toHaveLength(20);
+  });
+
   it('accepts the region the read half of this epic documents', () => {
     // #2560 is the read half, and it publishes this exact region as the shape
     // an agent gets back — the point being that it can change one field and
