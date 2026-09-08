@@ -33,6 +33,8 @@ vi.mock('@pagespace/lib/sheets/store', () => ({
 }));
 
 import { serializeSheetContent } from '@pagespace/lib/sheets/io';
+import { evaluateSheetSparse, type ConditionalRule, type SheetData } from '@pagespace/lib/sheets/sheet';
+import { describeRule } from '@/components/layout/middle-content/page-views/sheet/core/rule-presets';
 import {
   SheetDocumentUnreadableError,
   SheetTabNotFoundError,
@@ -42,6 +44,8 @@ import {
   renderSheetTable,
   renderSheetTableWithinBudget,
   toSheetViewRow,
+  describeConditionalRule,
+  createConditionalResolver,
 } from '../sheet-view';
 
 const tab = {
@@ -310,6 +314,454 @@ describe('the two paths render one cell one way', () => {
       actual: fromStore.rows[0].formulas,
       expected: fromDocument.rows[0].formulas,
     });
+    // The machine value has to survive the fallback path too. The document path
+    // builds its own synthetic cells, so it once put the DISPLAY string in
+    // `value` — which made the two paths agree on `cells` while only one of them
+    // could hand back the 1200 behind `$1,200.00`.
+    assert({
+      given: 'a formatted cell before and after migration',
+      should: 'recover the same machine value on both paths',
+      actual: fromStore.rows.map((row) => row.unformatted),
+      expected: fromDocument.rows.map((row) => row.unformatted),
+    });
+    // Guard the guard again: an all-undefined comparison would pass vacuously.
+    expect(fromDocument.rows[0].unformatted).toEqual({ B: 1200 });
+  });
+
+  it('agrees on a CONDITIONALLY-formatted cell, the other place they diverged', async () => {
+    // A rule's number format changes the TEXT, and the row store keeps no trace
+    // of it: the format is derived when the rule fires. So the document path
+    // (where the evaluator has already run) said `85%` while the row store said
+    // `0.85` — and because the stored text WAS the machine value, `unformatted`
+    // was absent too, leaving an agent no signal that it was seeing something
+    // different from the grid.
+    const conditional = {
+      version: 1,
+      rowCount: 3,
+      columnCount: 2,
+      cells: { A1: '0.85', A2: '0.1' },
+      conditionalFormats: [{
+        id: 'hot', kind: 'cell' as const, ranges: ['A1:A2'],
+        condition: { operator: 'greaterThan' as const, value: '0.5' },
+        format: { background: '#dcfce7', number: { kind: 'percent' as const, decimals: 0 } },
+      }],
+    };
+
+    mockListTabs.mockResolvedValue([]);
+    const fromDocument = await loadSheetWindow('page-1', {
+      limit: 10,
+      documentContent: serializeSheetContent(conditional, { pageId: 'page-1' }),
+    });
+
+    mockListTabs.mockResolvedValue([tab]);
+    mockGetTab.mockResolvedValue({
+      ...tab,
+      rowCount: conditional.rowCount,
+      columnCount: conditional.columnCount,
+      conditionalFormats: conditional.conditionalFormats,
+    });
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: '0.85', value: 0.85 } } },
+      { rowIndex: 1, cells: { A: { raw: '0.1', value: 0.1 } } },
+    ]);
+    const fromStore = await loadSheetWindow('page-1', { limit: 10 });
+
+    // Guard the guard: the rule must fire on one cell and not the other, or
+    // this compares two unformatted sheets and proves nothing.
+    expect(fromDocument.rows[0].cells.A).toBe('85%');
+    expect(fromDocument.rows[1].cells.A).toBe('0.1');
+
+    assert({
+      given: 'a cell a conditional rule formats, before and after migration',
+      should: 'render identically on both paths',
+      actual: fromStore.rows.map((row) => row.cells),
+      expected: fromDocument.rows.map((row) => row.cells),
+    });
+    assert({
+      given: 'the same cell',
+      should: 'hand back the number underneath on both paths',
+      actual: fromStore.rows.map((row) => row.unformatted),
+      expected: fromDocument.rows.map((row) => row.unformatted),
+    });
+    // And that number is genuinely recoverable, not just equal-and-absent.
+    expect(fromStore.rows[0].unformatted).toEqual({ A: 0.85 });
+  });
+
+  it('agrees on a REGION-formatted column, which is where they used to diverge', async () => {
+    // The sharpest form of the property. A region's presentation is derived at
+    // evaluation time, so the document path always had it (via
+    // `evaluated.format`) while the row store — which stores only the explicit
+    // cell format — did not. One cell, two renderings, decided by whether
+    // anyone had migrated the sheet.
+    const regional = {
+      version: 1,
+      rowCount: 4,
+      columnCount: 3,
+      sheetName: 'Budget',
+      cells: { A1: 'Item', C1: 'Cost', A2: 'Rent', C2: '1200', A3: 'Total', C3: '=C2' },
+      // No cell formats and no column formats anywhere: the ONLY source of
+      // presentation is the region, so if either path ignores it the comparison
+      // fails rather than passing on some other layer.
+      regions: [{
+        id: 'r1', range: 'A1:C', headerRows: 1, totalRows: [3],
+        columns: [{ column: 'C', role: 'currency' as const, currency: 'USD' }],
+      }],
+    };
+
+    mockListTabs.mockResolvedValue([]);
+    const fromDocument = await loadSheetWindow('page-1', {
+      limit: 10,
+      documentContent: serializeSheetContent(regional, { pageId: 'page-1' }),
+    });
+
+    mockListTabs.mockResolvedValue([tab]);
+    mockGetTab.mockResolvedValue({
+      ...tab,
+      rowCount: regional.rowCount,
+      columnCount: regional.columnCount,
+      regions: regional.regions,
+    });
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'Item', value: 'Item' }, C: { raw: 'Cost', value: 'Cost' } } },
+      { rowIndex: 1, cells: { A: { raw: 'Rent', value: 'Rent' }, C: { raw: '1200', value: 1200 } } },
+      { rowIndex: 2, cells: { A: { raw: 'Total', value: 'Total' }, C: { raw: '=C2', value: 1200 } } },
+    ]);
+    const fromStore = await loadSheetWindow('page-1', { limit: 10 });
+
+    // Guard the guard: the region must actually be formatting something.
+    expect(fromDocument.rows[1].cells.C).toBe('$1,200.00');
+    // A header cell holds a label, not data — the role format must not reach it.
+    expect(fromDocument.rows[0].cells.C).toBe('Cost');
+
+    assert({
+      given: 'a region-formatted sheet before and after migration',
+      should: 'render identical values on both paths',
+      actual: fromStore.rows.map((row) => row.cells),
+      expected: fromDocument.rows.map((row) => row.cells),
+    });
+    assert({
+      given: 'a region-formatted sheet before and after migration',
+      should: 'recover identical machine values on both paths',
+      actual: fromStore.rows.map((row) => row.unformatted),
+      expected: fromDocument.rows.map((row) => row.unformatted),
+    });
+  });
+});
+
+describe('a region-derived format is part of what a cell reads as', () => {
+  // The row store keeps only the EXPLICIT cell format; a column declared
+  // `currency` by a region is presentation the evaluator derives. Resolving
+  // just cell-over-column therefore rendered `1200` here while the grid, the
+  // export and the published page all showed `$1,200.00` — so an agent that had
+  // just declared the region read the sheet back and saw no sign its formatting
+  // had applied. Region-derived presentation is the mechanism this epic makes
+  // primary; a read that ignores it is reading a different sheet.
+  const regionTab = {
+    ...tab,
+    rowCount: 10,
+    columnCount: 4,
+    regions: [{
+      id: 'r1', range: 'A1:D', headerRows: 1,
+      columns: [{ column: 'C', role: 'currency', currency: 'USD' }],
+    }],
+  };
+
+  beforeEach(() => {
+    mockListTabs.mockResolvedValue([regionTab]);
+    mockGetTab.mockResolvedValue(regionTab);
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'Item', value: 'Item' }, C: { raw: 'Cost', value: 'Cost' } } },
+      { rowIndex: 1, cells: { A: { raw: 'Rent', value: 'Rent' }, C: { raw: '1200', value: 1200 } } },
+    ]);
+  });
+
+  it('renders a region-formatted column the way the grid does', async () => {
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    assert({
+      given: 'a column a region declares as currency, with no cell or column format',
+      should: 'display it as currency and keep the header label untouched',
+      actual: { header: window.rows[0].cells.C, data: window.rows[1].cells.C },
+      expected: { header: 'Cost', data: '$1,200.00' },
+    });
+  });
+
+  it('recovers a number the display rounded away', async () => {
+    // The one case where `String(value)` and `formatDisplayValue` disagree, and
+    // the case that most needs `unformatted`: a number needing more than 12
+    // characters is displayed through `toPrecision(12)`, so `0.3000...04` shows
+    // as `0.3`. No format is involved at all — the DISPLAY ITSELF is lossy, and
+    // an agent adding up what it read would be adding up rounded numbers.
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: '=0.1+0.2', value: 0.30000000000000004 } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    assert({
+      given: 'a float the display rounds to 12 significant figures',
+      should: 'show the rounded display and hand back the exact value',
+      actual: { display: window.rows[0].cells.A, unformatted: window.rows[0].unformatted },
+      expected: { display: '0.3', unformatted: { A: 0.30000000000000004 } },
+    });
+  });
+
+  it('reports no machine value for a cell that was never materialised', async () => {
+    // The one exception in `unformatted`'s contract, pinned so the wording stays
+    // honest. A cell with no `value` has no machine value to hand back — `cells`
+    // carries the text it was authored with, and `formulas` is what tells the
+    // two apart. Reporting the authored formula text as a machine value would
+    // be worse than reporting nothing.
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 1, cells: { C: { raw: '=A1+B1' }, A: { raw: 'plain' } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    assert({
+      given: 'an unmaterialised formula cell and an unmaterialised literal',
+      should: 'show the authored text, name the formula, and claim no machine value',
+      actual: {
+        cells: window.rows[0].cells,
+        formulas: window.rows[0].formulas,
+        unformatted: window.rows[0].unformatted,
+      },
+      expected: {
+        cells: { A: 'plain', C: '=A1+B1' },
+        formulas: { C: '=A1+B1' },
+        unformatted: undefined,
+      },
+    });
+  });
+
+  it('does not fail the whole read on a column key that is not a column label', async () => {
+    // `cells` is jsonb. A hand-edited or externally-imported row can carry a key
+    // like `C0`, which `decodeColumnLabel` refuses — and locating the region
+    // needs that decode. Letting it throw would make one junk key fail the
+    // entire read, which is the failure this module exists to remove and which
+    // the document path's address walk already guards against.
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 1, cells: { C: { raw: '1200', value: 1200 }, C0: { raw: 'junk', value: 'junk' } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    assert({
+      given: 'a junk column key beside a region-formatted one',
+      should: 'read both — the junk one simply gets no region format',
+      actual: window.rows[0].cells,
+      expected: { C: '$1,200.00', C0: 'junk' },
+    });
+  });
+
+  it('lets a conditional rule beat the region that formats the same column', async () => {
+    // The layers compose, and the order matters: column < region < explicit
+    // cell < conditional. A rule that fires has to win over the region's role
+    // format, or a "flag this cell" rule would be invisible on exactly the
+    // columns a region already formats — which is most of them, in a sheet built
+    // the way this epic intends.
+    mockGetTab.mockResolvedValue({
+      ...regionTab,
+      conditionalFormats: [{
+        id: 'flag', kind: 'cell', ranges: ['C2:C2'],
+        condition: { operator: 'greaterThan', value: '1000' },
+        format: { number: { kind: 'percent', decimals: 0 } },
+      }],
+    });
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 1, cells: { C: { raw: '1200', value: 1200 } } },
+      { rowIndex: 2, cells: { C: { raw: '1500', value: 1500 } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    assert({
+      given: 'a currency region and a percent rule that fires on only one cell',
+      should: "render the rule's format there and the region's everywhere else",
+      actual: { flagged: window.rows[0].cells.C, plain: window.rows[1].cells.C },
+      // 1200 as a percent is 120,000% — the percent formatter groups thousands
+      // of its own accord, and the rule's `number` replaces the region's whole
+      // number format rather than merging into it.
+      expected: { flagged: '120,000%', plain: '$1,500.00' },
+    });
+  });
+
+  it('lets a conditional rule beat a format someone set on the cell by hand', async () => {
+    // `sheets/conditional` documents this order as a deliberate reversal of what
+    // shipped first: a rule wins over a manually applied format, matching Excel
+    // and Google Sheets, because a workbook imported from Excel rendering
+    // differently here — and a rule visibly failing to fire on exactly the cells
+    // someone had touched — reads as a bug rather than as deference. The read
+    // path has to honour that or it shows something the grid does not.
+    mockGetTab.mockResolvedValue({
+      ...tab,
+      conditionalFormats: [{
+        id: 'flag', kind: 'cell', ranges: ['A1:A9'],
+        condition: { operator: 'greaterThan', value: '100' },
+        format: { number: { kind: 'percent', decimals: 0 } },
+      }],
+    });
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: '1200', value: 1200, format: { number: { kind: 'currency', currency: 'USD', decimals: 2 } } } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    assert({
+      given: 'a hand-set currency format on a cell a percent rule fires on',
+      should: "show the rule's format, not the one set by hand",
+      actual: window.rows[0].cells.A,
+      expected: '120,000%',
+    });
+    // Still recoverable: making the display richer must not make the read lossy.
+    expect(window.rows[0].unformatted).toEqual({ A: 1200 });
+  });
+
+  it('leaves the region format alone when a rule fires carrying only a colour', async () => {
+    // The case a "conditional beats region" test does NOT cover, and the one a
+    // careless implementation gets wrong: a rule that fires but specifies no
+    // number format must not disturb the number format underneath it. Most real
+    // rules are exactly this — "shade this cell red" — so an implementation that
+    // replaced the whole format on a match would strip the currency or percent
+    // from every cell it highlighted.
+    mockGetTab.mockResolvedValue({
+      ...regionTab,
+      conditionalFormats: [{
+        id: 'shade', kind: 'cell', ranges: ['C1:C99'],
+        condition: { operator: 'greaterThan', value: '100' },
+        format: { background: '#fee2e2' },
+      }],
+    });
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 1, cells: { C: { raw: '1200', value: 1200 } } },
+      { rowIndex: 2, cells: { C: { raw: '5', value: 5 } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    assert({
+      given: 'a colour-only rule that fires on one cell in a currency region',
+      should: "keep the region's currency on both, fired or not",
+      actual: { fired: window.rows[0].cells.C, notFired: window.rows[1].cells.C },
+      expected: { fired: '$1,200.00', notFired: '$5.00' },
+    });
+  });
+
+  it('still hands back the number underneath it', async () => {
+    // The whole point of resolving the layer: having made the display richer,
+    // the machine value has to stay recoverable or the read is lossy again.
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    expect(window.rows[1].unformatted).toEqual({ C: 1200 });
+    // The header cell is a label, not data — no number format, nothing to recover.
+    expect(window.rows[0].unformatted).toBeUndefined();
+  });
+});
+
+describe('the document path re-derives exactly what the evaluator displayed', () => {
+  /**
+   * The document path no longer stores `evaluated.display` — it stores the
+   * machine value and the format the evaluator applied, and `cellText` derives
+   * the text again. That is only safe if the derivation is EQUIVALENT, so this
+   * asserts it against the evaluator itself rather than against a string
+   * somebody typed: any branch where `display` is produced differently from
+   * `applyNumberFormat(value, format.number) ?? formatDisplayValue(value)`
+   * shows up here as a mismatch.
+   *
+   * Conditional rules are the branch worth pinning. `applyConditionalFormats`
+   * rewrites BOTH `format` and `display` after the fact, so a rule carrying its
+   * own number format is the case where the two could most easily part company.
+   */
+  const cases: Array<[string, SheetData]> = [
+    ['a plain string, a number and a formula', {
+      version: 1, rowCount: 3, columnCount: 3,
+      cells: { A1: 'label', B1: '1200', C1: '=B1/4', C2: '0.30000000000000004' },
+    }],
+    ['a column format over a formula result', {
+      version: 1, rowCount: 2, columnCount: 3,
+      cells: { A1: 'x', B1: '1200', C1: '=B1*2' },
+      columnFormats: { B: { number: { kind: 'currency', currency: 'USD', decimals: 2 } }, C: { number: { kind: 'percent', decimals: 1 } } },
+    }],
+    ['a per-cell format beating the column default', {
+      version: 1, rowCount: 2, columnCount: 2,
+      cells: { A1: '1200', A2: '3.7' },
+      columnFormats: { A: { number: { kind: 'currency', currency: 'USD' } } },
+      formats: { A2: { number: { kind: 'plain' } } },
+    }],
+    ['a conditional rule carrying its own number format', {
+      version: 1, rowCount: 2, columnCount: 2,
+      cells: { A1: '0.85', A2: '0.1' },
+      columnFormats: { A: { number: { kind: 'currency', currency: 'USD', decimals: 2 } } },
+      conditionalFormats: [{
+        id: 'r', kind: 'cell', ranges: ['A1:A2'],
+        condition: { operator: 'greaterThan', value: '0.5' },
+        format: { background: '#dcfce7', number: { kind: 'percent', decimals: 0 } },
+      }],
+    }],
+    ['an errored cell and an empty one', {
+      version: 1, rowCount: 3, columnCount: 2,
+      cells: { A1: '=1/0', A2: '', A3: '=NOPE(1)' },
+      columnFormats: { A: { number: { kind: 'currency', currency: 'USD' } } },
+    }],
+  ];
+
+  it('is not comparing two nothings — the conditional rule really does beat the column format', async () => {
+    // Every case above compares the window against the evaluator, which agrees
+    // trivially if the fixture exercises nothing. This pins the one that is
+    // hardest to get right: a rule's own number format overriding the column's
+    // currency, on the cell it matched and not on the cell it did not.
+    mockListTabs.mockResolvedValue([]);
+    const sheet = cases[3][1];
+    const window = await loadSheetWindow('page-1', {
+      limit: 10,
+      documentContent: serializeSheetContent(sheet, { pageId: 'page-1' }),
+    });
+
+    assert({
+      given: 'a percent rule matching A1 but not A2, over a currency column',
+      should: 'render A1 as the rule says and A2 as the column says',
+      actual: { A1: window.rows[0].cells.A, A2: window.rows[1].cells.A },
+      expected: { A1: '85%', A2: '$0.10' },
+    });
+    // And the machine value is recoverable from both, which is the point.
+    assert({
+      given: 'both cells displayed through a number format',
+      should: 'carry the underlying numbers',
+      actual: [window.rows[0].unformatted, window.rows[1].unformatted],
+      expected: [{ A: 0.85 }, { A: 0.1 }],
+    });
+  });
+
+  it.each(cases)('agrees with evaluateSheetSparse on %s', async (_label, sheet) => {
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', {
+      limit: 50,
+      documentContent: serializeSheetContent(sheet, { pageId: 'page-1' }),
+    });
+
+    const evaluation = evaluateSheetSparse(sheet, { pageId: 'page-1' });
+
+    const fromWindow: Record<string, string> = {};
+    for (const row of window.rows) {
+      for (const [column, text] of Object.entries(row.cells)) fromWindow[`${column}${row.rowNumber}`] = text;
+    }
+
+    // The evaluator's own answer for every address the window reported, through
+    // the same `#ERROR` substitution every surface applies.
+    const fromEvaluator: Record<string, string> = {};
+    for (const address of Object.keys(fromWindow)) {
+      const cell = evaluation.byAddress[address];
+      fromEvaluator[address] = cell ? (cell.error ? '#ERROR' : cell.display) : '';
+    }
+
+    assert({
+      given: 'a stored document read through the window',
+      should: 'display every cell exactly as the evaluator displayed it',
+      actual: fromWindow,
+      expected: fromEvaluator,
+    });
+    // Guard the guard: a window that reported nothing would pass vacuously.
+    expect(Object.keys(fromWindow).length).toBeGreaterThan(0);
   });
 });
 
@@ -846,5 +1298,420 @@ describe('loadSheetWindow — refusals', () => {
 
     expect(window.rows).toEqual([]);
     expect(window.materialized).toBe(false);
+  });
+});
+
+describe('the conditional resolver reads ranges the way the evaluator does', () => {
+  // `createConditionalResolver` parses ranges to bounds instead of expanding
+  // them, and claims to mirror `addressesOfRange`'s reading exactly. That claim
+  // is only worth making if the edges match: a bare address is a range of one,
+  // a truncated `A1:` is refused rather than quietly treated as `A1`, and a
+  // whole-column `A:A` is not something either side accepts.
+  const ruleOver = (ranges: string[]): ConditionalRule[] => [{
+    id: 'r', kind: 'cell', ranges,
+    condition: { operator: 'isNotEmpty' },
+    format: { number: { kind: 'percent', decimals: 0 } },
+  }];
+  const fires = (ranges: string[], row: number, column: number): boolean =>
+    createConditionalResolver(ruleOver(ranges))?.(row, column, 1, false) !== undefined;
+
+  it('treats a bare address as a range of one', () => {
+    expect(fires(['B2'], 1, 1)).toBe(true);
+    expect(fires(['B2'], 1, 2)).toBe(false);
+    expect(fires(['B2'], 2, 1)).toBe(false);
+  });
+
+  it('refuses a truncated range rather than formatting its first cell', () => {
+    // `addressesOfRange`: "A colon means the author meant a range. `A1:` is a
+    // truncated one, and quietly formatting the single cell `A1` instead is
+    // worse than doing nothing — it looks like the rule works."
+    expect(fires(['A1:'], 0, 0)).toBe(false);
+  });
+
+  it('accepts corners given in either order, as every other range does', () => {
+    expect(fires(['C3:A1'], 1, 1)).toBe(true);
+  });
+
+  it('refuses a negative coordinate, which decodeCellAddress happily produces', () => {
+    // `decodeCellAddress` accepts `A0` and returns row -1, because rows are
+    // 1-based on the way in. `addressesOfRange` rejects any negative coordinate
+    // for that reason; without the same test, `A0:A2` covered rows 0-1 here and
+    // nothing in the grid, so a read disagreed with the sheet it was reading.
+    expect(fires(['A0:A2'], 0, 0)).toBe(false);
+    expect(fires(['A0:A2'], 1, 0)).toBe(false);
+    // The same range written legitimately still works.
+    expect(fires(['A1:A2'], 0, 0)).toBe(true);
+  });
+
+  it('refuses a rectangle bigger than the evaluator will expand', () => {
+    // Past `MAX_CONDITIONAL_RANGE_CELLS` the evaluator formats nothing at all.
+    // Without the same ceiling this formatted every visible cell while the grid,
+    // the export and the document path showed none of it.
+    expect(fires(['A1:A500001'], 0, 0)).toBe(false);
+    expect(fires(['A1:A500000'], 0, 0)).toBe(true);
+  });
+
+  it('does not let a thousand tiny ranges starve the rules after it', () => {
+    // The budget is charged by AREA, the way the evaluator charges. Charging by
+    // RANGE COUNT meant a rule holding a thousand single-cell ranges —
+    // "highlight these thousand cells", an ordinary shape — spent a whole
+    // budget that costs the evaluator 1,000 of 2,000,000. Later rules were then
+    // never prepared, so a materialised read showed raw text where the grid and
+    // the document path showed a formatted value.
+    const rules: ConditionalRule[] = [
+      {
+        id: 'many', kind: 'cell',
+        ranges: Array.from({ length: 1000 }, (_, i) => `A${i + 1}:A${i + 1}`),
+        condition: { operator: 'isNotEmpty' },
+        format: { bold: true },
+      },
+      {
+        id: 'later', kind: 'cell', ranges: ['C1:C1'],
+        condition: { operator: 'isNotEmpty' },
+        format: { number: { kind: 'percent', decimals: 0 } },
+      },
+    ];
+    const resolve = createConditionalResolver(rules)!;
+
+    assert({
+      given: 'a rule of 1,000 single-cell ranges followed by a number-format rule',
+      should: 'still apply the later rule, as the evaluator does',
+      actual: resolve(0, 2, 1, false),
+      expected: { number: { kind: 'percent', decimals: 0 } },
+    });
+    // And the thousand-range rule itself still works — the fix must not have
+    // dropped it in the other direction.
+    expect(resolve(0, 0, 1, false)).toEqual({ bold: true });
+  });
+
+  it('still stops once the area budget is genuinely spent', () => {
+    // The bound has to remain a bound. Each of these covers 500,000 cells — the
+    // per-range ceiling — so five of them reach the evaluator's own 2,000,000
+    // aggregate and the rule after them is not prepared.
+    const big = (id: string, col: string): ConditionalRule => ({
+      id, kind: 'cell', ranges: [`${col}1:${col}500000`],
+      condition: { operator: 'isNotEmpty' }, format: { bold: true },
+    });
+    const rules: ConditionalRule[] = [
+      big('a', 'A'), big('b', 'B'), big('c', 'C'), big('d', 'D'), big('e', 'E'),
+      { id: 'past', kind: 'cell', ranges: ['F1:F1'], condition: { operator: 'isNotEmpty' }, format: { italic: true } },
+    ];
+    const resolve = createConditionalResolver(rules)!;
+
+    expect(resolve(0, 0, 1, false)).toEqual({ bold: true });
+    expect(resolve(0, 5, 1, false)).toBeUndefined();
+  });
+
+  it('contributes nothing for a range neither side can read', () => {
+    // A whole-column `A:A` is not an address pair; `decodeCellAddress` refuses
+    // it on both sides, so the rule formats nothing rather than throwing.
+    expect(fires(['A:A'], 0, 0)).toBe(false);
+    // And a rule left with no usable range at all resolves to no resolver.
+    expect(createConditionalResolver(ruleOver(['A:A']))).toBeUndefined();
+  });
+});
+
+describe('describeConditionalRule agrees with the panel it was copied from', () => {
+  /**
+   * `apps/web/src/lib/ai/**` imports nothing from `components/**`, so the AI
+   * surface has its own copy of the panel's rule wording. The copy is the whole
+   * risk: two descriptions of one rule, free to drift, with nothing to notice.
+   * One rule of each kind, both functions, same string.
+   */
+  const rules: ConditionalRule[] = [
+    {
+      id: 'a',
+      kind: 'cell',
+      ranges: ['A1:A9'],
+      condition: { operator: 'between', value: '10', value2: '20' },
+      format: { background: '#fee2e2' },
+    },
+    { id: 'b', kind: 'formula', ranges: ['B1:B9'], formula: '=B1>0', format: { bold: true } },
+    {
+      id: 'c',
+      kind: 'colorScale',
+      ranges: ['C1:C9'],
+      min: { type: 'min', color: '#ffffff' },
+      mid: { type: 'percentile', value: 50, color: '#fde68a' },
+      max: { type: 'max', color: '#22c55e' },
+    },
+    { id: 'd', kind: 'dataBar', ranges: ['D1:D9'], color: '#3b82f6' },
+  ];
+
+  it.each(rules)('describes a $kind rule the same way the panel does', (rule) => {
+    assert({
+      given: `a ${rule.kind} rule`,
+      should: 'produce the same one-line summary as the sheet panel',
+      actual: describeConditionalRule(rule),
+      expected: describeRule(rule),
+    });
+  });
+
+  it('covers every rule kind the union has, so a new kind cannot slip past', () => {
+    // Without this the case above passes forever on the four kinds someone
+    // thought to list, which is how the copy drifts in the first place.
+    const kinds: ReadonlyArray<ConditionalRule['kind']> = ['cell', 'formula', 'colorScale', 'dataBar'];
+    expect(rules.map((rule) => rule.kind).sort()).toEqual([...kinds].sort());
+  });
+});
+
+describe('loadSheetWindow describes formatting only when asked', () => {
+  const styledTab = {
+    ...tab,
+    frozenRows: 1,
+    regions: [{ id: 'r1', range: 'A1:C', headerRows: 1 }],
+  };
+
+  it('leaves the key off entirely by default, so no caller can read it as "unstyled"', async () => {
+    // `read_page` and `list_pages` share this window and never ask for
+    // formatting. Building it for them anyway would parse regions and walk every
+    // returned cell's format on a preview that shows none of it — and would put
+    // an empty block in front of a caller that never asked.
+    mockGetTab.mockResolvedValue(styledTab);
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'x', value: 'x', format: { bold: true } } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    expect('formatting' in window).toBe(false);
+  });
+
+  it('builds it from the stored document when the sheet was never migrated', async () => {
+    // The document is where a pre-row-store sheet keeps its design. Refusing
+    // here hid it from the one caller that asked for it.
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', {
+      limit: 10,
+      includeFormatting: true,
+      documentContent: serializeSheetContent(
+        {
+          version: 1,
+          rowCount: 2,
+          columnCount: 2,
+          cells: { A1: 'Item', A2: 'Rent' },
+          formats: { A2: { italic: true } },
+          frozenRows: 1,
+          regions: [{ id: 'r2', range: 'A1:B', headerRows: 1 }],
+        },
+        { pageId: 'page-1' },
+      ),
+    });
+
+    assert({
+      given: 'an unmigrated sheet and includeFormatting',
+      should: 'describe the design the stored document carries',
+      actual: window.formatting,
+      expected: {
+        regions: [{ id: 'r2', range: 'A1:B', headerRows: 1 }],
+        layout: { frozenRows: 1 },
+        cellFormats: { A2: { italic: true } },
+      },
+    });
+  });
+
+  it('leaves the key off on the document path too', async () => {
+    // `read_page` and `list_pages` reach unmigrated sheets through this branch.
+    // Building the block for them would parse the document's rules and regions
+    // on every preview that shows none of it.
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', {
+      limit: 10,
+      documentContent: serializeSheetContent(
+        { version: 1, rowCount: 2, columnCount: 2, cells: { A1: 'x' }, frozenRows: 1 },
+        { pageId: 'page-1' },
+      ),
+    });
+
+    expect('formatting' in window).toBe(false);
+  });
+
+  it('describes only the rows it returned, not the whole document', async () => {
+    // `cellFormats` describes the rows in the response. A document's `formats`
+    // map covers the entire sheet, so without the window restriction a two-row
+    // read of a large legacy sheet would hand back every override it has —
+    // spending the whole budget on rows the agent cannot see.
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', {
+      limit: 2,
+      includeFormatting: true,
+      documentContent: serializeSheetContent(
+        {
+          version: 1,
+          rowCount: 5,
+          columnCount: 2,
+          cells: { A1: 'one', A2: 'two', A5: 'five' },
+          formats: { A1: { bold: true }, A5: { italic: true } },
+        },
+        { pageId: 'page-1' },
+      ),
+    });
+
+    assert({
+      given: 'a document with formats above and below the window',
+      should: 'report only the ones inside it',
+      actual: window.formatting?.cellFormats,
+      expected: { A1: { bold: true } },
+    });
+    // Guard the guard: the window really did stop short of row 5.
+    expect(window.rows.map((row) => row.rowNumber)).toEqual([1, 2]);
+  });
+
+  it('keeps a format-only row that the document styled but never filled', async () => {
+    // The likeliest shape on a legacy sheet: a blank input row someone
+    // pre-styled. `rowsFromSheetData` materialises the UNION of cells and
+    // formats, so migration creates that row — and a read that skipped it
+    // reported one thing before migration and another after, on identical data.
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', {
+      limit: 10,
+      includeFormatting: true,
+      documentContent: serializeSheetContent(
+        {
+          version: 1,
+          rowCount: 4,
+          columnCount: 2,
+          cells: { A1: 'Item', A3: 'Rent' },
+          // A2 carries a format and no value at all.
+          formats: { A1: { bold: true }, A2: { background: '#eef2ff' } },
+        },
+        { pageId: 'page-1' },
+      ),
+    });
+
+    assert({
+      given: 'a styled blank row between two rows that have values',
+      should: 'report its formatting alongside theirs',
+      actual: window.formatting?.cellFormats,
+      expected: { A1: { bold: true }, A2: { background: '#eef2ff' } },
+    });
+    // And the row itself is part of the window, exactly as it is after
+    // migration — it simply has no cells to show.
+    assert({
+      given: 'the same styled blank row',
+      should: 'appear in the window as a row with nothing in it',
+      actual: window.rows,
+      expected: [
+        { rowNumber: 1, cells: { A: 'Item' } },
+        { rowNumber: 2, cells: {} },
+        { rowNumber: 3, cells: { A: 'Rent' } },
+      ],
+    });
+  });
+
+  it.each([
+    ['above the first value row', { A5: 'only value' }, { A2: { bold: true } }, 'A2'],
+    ['below the last value row', { A1: 'only value' }, { A4: { bold: true } }, 'A4'],
+    ['on a sheet whose only content is formatting', {}, { B3: { bold: true } }, 'B3'],
+  ])('reports a format-only row %s', async (_label, cells, formats, address) => {
+    // The three endpoint cases a span between the first and last VALUE row
+    // cannot reach. Each one is a sheet where migration would report the
+    // styling and the pre-migration read did not.
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', {
+      limit: 10,
+      includeFormatting: true,
+      documentContent: serializeSheetContent(
+        { version: 1, rowCount: 6, columnCount: 3, cells, formats },
+        { pageId: 'page-1' },
+      ),
+    });
+
+    expect(window.formatting?.cellFormats).toEqual({ [address]: { bold: true } });
+  });
+
+  it('does not admit a styled row from outside the window it returned', async () => {
+    // The span rule, in the direction that bounds the cost: a legacy sheet
+    // styled a thousand rows down must not spend this window's budget.
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', {
+      limit: 2,
+      includeFormatting: true,
+      documentContent: serializeSheetContent(
+        {
+          version: 1,
+          rowCount: 60,
+          columnCount: 2,
+          cells: { A1: 'one', A2: 'two', A50: 'far' },
+          formats: { A1: { bold: true }, A9: { italic: true }, A40: { strike: true } },
+        },
+        { pageId: 'page-1' },
+      ),
+    });
+
+    assert({
+      given: 'styled rows past the last row returned',
+      should: 'report only the ones the window spans',
+      actual: window.formatting?.cellFormats,
+      expected: { A1: { bold: true } },
+    });
+    expect(window.rows.map((row) => row.rowNumber)).toEqual([1, 2]);
+  });
+
+  it('describes the tab that was ASKED for, not the first one', async () => {
+    // The document path selects its tab before evaluating, and the formatting
+    // has to come from that same selection. Answering tab 0's design for a read
+    // of tab 1 is the same class of wrong answer as answering tab 0's ROWS —
+    // which this module already refuses to do — except silent, because nothing
+    // in the response would look out of place.
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', {
+      limit: 10,
+      tabIndex: 1,
+      includeFormatting: true,
+      documentContent: serializeSheetContent(
+        {
+          version: 1,
+          rowCount: 2,
+          columnCount: 2,
+          sheetName: 'First',
+          cells: { A1: 'first' },
+          frozenRows: 1,
+          regions: [{ id: 'first-region', range: 'A1:B', headerRows: 1 }],
+          extraSheets: [{
+            name: 'Second',
+            order: 1,
+            meta: { rowCount: 3, columnCount: 3, frozenRows: 2 },
+            columns: {},
+            cells: { A1: { value: 'second' } },
+            // Regions ride inside `ranges.__regions` as a numerically keyed map.
+            ranges: { __regions: { '0': { id: 'second-region', range: 'A1:C', headerRows: 2 } } },
+            dependencies: {},
+          }],
+        },
+        { pageId: 'page-1' },
+      ),
+    });
+
+    expect(window.tabName).toBe('Second');
+    assert({
+      given: 'a formatting read of the second tab',
+      should: "describe that tab's design, not the first tab's",
+      actual: window.formatting,
+      expected: {
+        regions: [{ id: 'second-region', range: 'A1:C', headerRows: 2 }],
+        layout: { frozenRows: 2 },
+      },
+    });
+  });
+
+  it('builds it when asked, from the tab already in hand', async () => {
+    mockGetTab.mockResolvedValue(styledTab);
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'x', value: 'x', format: { bold: true } } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10, includeFormatting: true });
+
+    assert({
+      given: 'a styled tab and includeFormatting',
+      should: 'describe the freeze, the region and the per-cell override',
+      actual: window.formatting,
+      expected: {
+        regions: [{ id: 'r1', range: 'A1:C', headerRows: 1 }],
+        layout: { frozenRows: 1 },
+        cellFormats: { A1: { bold: true } },
+      },
+    });
   });
 });
