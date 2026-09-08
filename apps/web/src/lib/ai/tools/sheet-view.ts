@@ -200,6 +200,16 @@ export type ConditionalResolver = (
  * percent RULE read back as `0.85` while the grid showed `85%`.
  *
  * Ranges are parsed once here, so a per-cell resolve is a bounds test per range.
+ * That is also why this needs no equivalent of the evaluator's
+ * `MAX_CONDITIONAL_TOTAL_CELLS` budget: nothing here expands a range, so the
+ * work is bounded by the window rather than by how much the rules cover.
+ *
+ * The flip side, stated rather than glossed: on a sheet whose rules cover more
+ * than that budget in aggregate (2,000,000 cells), the evaluator stops applying
+ * partway through and this does not — so the two paths can disagree there. The
+ * evaluator's cutoff falls wherever range expansion happened to run out, which
+ * is not a boundary worth reproducing; matching it would mean expanding the
+ * ranges this deliberately does not expand.
  */
 export function createConditionalResolver(
   rules: readonly ConditionalRule[] | undefined,
