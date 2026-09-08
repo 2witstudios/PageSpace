@@ -2800,6 +2800,7 @@ describe('planFormatOps — refuses, never crashes', () => {
     const tab = tabWith({ conditionalFormats: [rule('a')], regions: [region('r1')] });
     let refusals = 0;
     let plans = 0;
+    let malformedTabs = 0;
 
     for (let seed = 0; seed < 600; seed++) {
       const rand = seeded(seed);
@@ -2821,17 +2822,40 @@ describe('planFormatOps — refuses, never crashes', () => {
           : generated;
       const op = typed as SheetFormatOp;
 
+      // The tab is generated too. It was not, until a null in
+      // `conditionalFormats` produced a TypeError twenty frames down — this
+      // test's whole purpose, missed because it only ever looked at one of the
+      // two inputs. A malformed tab is allowed to throw, but only the specific
+      // Error that names the field; anything else is the fault this catches.
+      const target: SheetFormatTarget =
+        rand() < 0.2
+          ? ({
+              rowCount: 100,
+              columnCount: 26,
+              conditionalFormats: value(rand, 2),
+              regions: value(rand, 2),
+            } as unknown as SheetFormatTarget)
+          : tab;
+
       try {
-        const result = planFormatOps([op], tab);
+        const result = planFormatOps([op], target);
         plans += 1;
         expect(Array.isArray(result.steps)).toBe(true);
         expect(result.rows).toBeInstanceOf(Set);
       } catch (error) {
-        if (!(error instanceof SheetFormatError)) {
-          throw new Error(`seed ${seed} threw ${String(error)} for ${JSON.stringify(op)}`);
+        if (error instanceof SheetFormatError) {
+          refusals += 1;
+          expect(error.message).not.toBe('');
+          continue;
         }
-        refusals += 1;
-        expect(error.message).not.toBe('');
+        if (error instanceof Error && /^planFormatOps: tab\./.test(error.message)) {
+          malformedTabs += 1;
+          continue;
+        }
+        throw new Error(
+          `seed ${seed} threw ${String(error)} for op ${JSON.stringify(op)} against ` +
+            `${JSON.stringify(target)}`
+        );
       }
     }
 
@@ -2839,5 +2863,8 @@ describe('planFormatOps — refuses, never crashes', () => {
     // door. Plans are the rarer one — most random shapes are not valid ops.
     expect(refusals).toBeGreaterThan(100);
     expect(plans).toBeGreaterThan(0);
+    // The generated tabs have to actually reach that guard, or this test has
+    // grown a second input it never exercises — the exact hole it just closed.
+    expect(malformedTabs).toBeGreaterThan(0);
   });
 });
