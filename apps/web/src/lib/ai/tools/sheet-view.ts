@@ -724,9 +724,15 @@ export async function loadSheetWindow(
   // Prepared once for the whole window, not per cell: `createRegionResolver`
   // resolves every region's bounds, column roles and theme up front so the
   // closure it returns costs a bounds test per cell.
+  //
+  // Left OFF entirely when the tab declares no regions, rather than handed the
+  // resolver's own no-op. Resolving a region needs the column INDEX, so a
+  // present-but-empty resolver would still decode a label per cell — thousands
+  // of decodes per read, on the sheets that have nothing to decode them for.
+  const regions = parseRegions(tab.regions);
   const presentation: CellPresentation = {
     columnFormats: tab.columnFormats,
-    regionAt: createRegionResolver(parseRegions(tab.regions), tab.rowCount),
+    ...(regions ? { regionAt: createRegionResolver(regions, tab.rowCount) } : {}),
   };
   const rows = stored.map((row) => toSheetViewRow(row.rowIndex, row.cells, only, presentation));
   const nextFromRow = stored.length > 0 ? stored[stored.length - 1].rowIndex + 1 : null;

@@ -415,9 +415,13 @@ export const sheetReadTools = {
         // AND region-derived formats. A filtered read that resolved fewer
         // layers would render one cell two ways depending on how it was found,
         // which is the divergence this module exists to remove.
+        // Omitted rather than a no-op resolver when there are no regions, for
+        // the reason `loadSheetWindow` gives: resolving one needs the column
+        // index, so an empty resolver still decodes a label per cell.
+        const regions = parseRegions(tab.regions);
         const presentation = {
           columnFormats: tab.columnFormats,
-          regionAt: createRegionResolver(parseRegions(tab.regions), tab.rowCount),
+          ...(regions ? { regionAt: createRegionResolver(regions, tab.rowCount) } : {}),
         };
         const rows = result.rows.map((row) => toSheetViewRow(row.rowIndex, row.cells, undefined, presentation));
 
