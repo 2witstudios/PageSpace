@@ -216,16 +216,26 @@ function referencedCells(start: string, end: string): number | null {
  * retries anything. Most ops are idempotent — planning `setCellFormat`,
  * `setFrozen`, `updateConditionalRule`, `clearConditionalRules`, `setRegions` or
  * `upsertRegion` against a tab where they already landed produces the same plan
- * again. Four are not: `addConditionalRule`, `removeConditionalRule`,
- * `moveConditionalRule` and `removeRegion` refuse the second time, because the
- * second time they genuinely are being asked for something that is not true of
- * the sheet.
+ * again. Three are not: `addConditionalRule`, `removeConditionalRule` and
+ * `removeRegion` refuse the second time, because the second time they genuinely
+ * are being asked for something that is not true of the sheet.
  *
  * That is deliberate rather than an oversight, and it is not hostile to a
  * retry: the refusal says which, so a caller replaying a request after an I/O
  * failure can read "A rule \"x\" is already on this sheet" as "the first
- * attempt landed" rather than as a fault. What it must not do is treat those
- * four as safe to replay blindly.
+ * attempt landed" rather than as a fault.
+ *
+ * `moveConditionalRule` is the one to actually worry about, and it is worse
+ * than either group. A move that landed leaves nothing behind that says so, so
+ * replaying it moves the rule ANOTHER place — silently, and reported as
+ * success. The refusal only arrives when the first move happened to reach an
+ * end ("already first", "already last"), which is a boundary accident and not
+ * a contract. Nothing here can fix that: an op that says "one place earlier"
+ * has no way to tell a fresh request from a repeat, and the position it should
+ * land on is not in the op. **A caller must not replay a move blindly.** Send
+ * the ordering it wants — `setRegions` for regions, or a move whose result is
+ * checked against a rule list read back — rather than a relative nudge it
+ * cannot make safe.
  *
  * The shape a caller is meant to use, since the ordering is the whole point:
  *

@@ -2394,21 +2394,21 @@ describe('planFormatOps — what each op produces', () => {
 });
 
 describe('planFormatOps — what happens on a retry', () => {
+  const cell = (id: string) =>
+    ({
+      id,
+      kind: 'cell',
+      ranges: ['A1:A9'],
+      condition: { operator: 'greaterThan', value: '1' },
+      format: { bold: true },
+    }) as unknown as ConditionalRule;
+
   it('says which ops are safe to replay and which are not', () => {
     // A caller replaying a request after an I/O failure needs to know this, and
     // it falls straight out of "never a silent no-op": an op asking for
     // something already true of the sheet is refused. Pinned as one table
     // because the answer is a contract, and because discovering it from a retry
     // storm in production is the expensive way to learn it.
-    const cell = (id: string) =>
-      ({
-        id,
-        kind: 'cell',
-        ranges: ['A1:A9'],
-        condition: { operator: 'greaterThan', value: '1' },
-        format: { bold: true },
-      }) as unknown as ConditionalRule;
-
     // Each op paired with the tab as it looks AFTER that op already landed.
     const replays: Array<[string, SheetFormatOp, Partial<SheetFormatTarget>]> = [
       ['setCellFormat', { type: 'setCellFormat', range: 'A1', patch: { bold: true } }, {}],
@@ -2459,11 +2459,42 @@ describe('planFormatOps — what happens on a retry', () => {
       'setRegions',
     ]);
 
-    // And the four that refuse say so in a way a retry can read as "it landed",
+    // And the three that refuse say so in a way a retry can read as "it landed",
     // rather than as a fault to escalate.
     expect(
       refusalOf([{ type: 'addConditionalRule', rule: cell('a') }], tabWith({ conditionalFormats: [cell('a')] }))
     ).toContain('is already on this sheet');
+  });
+
+  it('moves a rule AGAIN when a landed move is replayed', () => {
+    // Kills: restoring "four ops refuse the second time" to the header, which
+    // is what the table above looks like it says and does not.
+    //
+    // That table's move case puts the rule LAST and moves it later, so it
+    // refuses — but that is the boundary refusing, not the replay being caught.
+    // A move that landed in the middle leaves nothing behind to say so, and
+    // replaying it is not refused: the rule travels one more place and the
+    // caller is told it worked. This is the one op where a blind retry after an
+    // I/O failure silently changes the sheet, so it is pinned rather than
+    // described.
+    const order = (ids: string[]) =>
+      planFormatOps(
+        [{ type: 'moveConditionalRule', id: 'd', direction: -1 }],
+        tabWith({ conditionalFormats: ids.map(cell) })
+      ).conditionalFormats.map((r) => r.id);
+
+    const landed = order(['a', 'b', 'c', 'd']);
+    expect(landed).toEqual(['a', 'b', 'd', 'c']);
+    expect(order(landed)).toEqual(['a', 'd', 'b', 'c']);
+
+    // The boundary is the only place a replay is caught, and only by accident
+    // of where the rule happened to end up.
+    expect(
+      refusalOf(
+        [{ type: 'moveConditionalRule', id: 'd', direction: -1 }],
+        tabWith({ conditionalFormats: ['d', 'a', 'b', 'c'].map(cell) })
+      )
+    ).toContain('already first');
   });
 });
 
