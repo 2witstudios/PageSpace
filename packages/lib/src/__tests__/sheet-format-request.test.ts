@@ -1897,6 +1897,44 @@ describe('planFormatOps — never something other than what was asked for', () =
     ).toContain('is not a range this sheet can address');
   });
 
+  it('tells a caller writing spreadsheet notation what to change, not just that it failed', () => {
+    // Kills: deleting any arm of `rangeHint`, or making it return a constant.
+    //
+    // These three are what a model writing A1 notation actually produces —
+    // absolute refs copied from a formula bar, a sheet qualifier copied from
+    // another tool, spaces around the colon. Every one is a single-token
+    // repair, and without the hint they all read as the same dead end, so the
+    // caller's next attempt is a guess. The refusal message IS the feedback
+    // loop; that is the whole reason this is worth a test.
+    expect(refusalOf([{ type: 'clearCellFormat', range: '$A$1:$F$1' }])).toContain(
+      'drop the $'
+    );
+    expect(refusalOf([{ type: 'clearCellFormat', range: 'Sheet1!A1:F1' }])).toContain(
+      'drop the SheetName! prefix'
+    );
+    expect(refusalOf([{ type: 'clearCellFormat', range: 'A1 : F1' }])).toContain(
+      'Ranges carry no spaces'
+    );
+
+    // The rule path is a separate call site; a hint added to only one of them
+    // is the likelier mistake than a broken hint.
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: { ...rule('cf_1'), ranges: ['$A$1:$A$9'] } }])
+    ).toContain('drop the $');
+
+    // And a shape none of them explain gets the plain refusal rather than a
+    // wrong guess — a hint that misdiagnoses costs more than no hint.
+    const other = refusalOf([{ type: 'clearCellFormat', range: 'A1:F1:G9' }]);
+    expect(other).toContain('is not a range this sheet can address');
+    expect(other).not.toContain('drop the');
+    expect(other).not.toContain('no spaces');
+
+    // Surrounding whitespace alone is NOT a failure — `parseRangeSpan` trims,
+    // so it parses. Pinned because the hint's `.trim()` exists precisely so it
+    // does not claim credit for a case that never reaches it.
+    expect([...plan([{ type: 'clearCellFormat', range: '  A1:F1  ' }]).rows]).toEqual([0]);
+  });
+
   it('still lets a rule written by a NEWER build be updated', () => {
     // The pre-parse checks are stricter than the parser, so applying them to a
     // whole merged rule — mostly the STORED one — would refuse any update to a

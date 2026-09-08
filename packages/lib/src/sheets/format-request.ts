@@ -547,6 +547,32 @@ interface RangeSpan {
 }
 
 /**
+ * What is probably wrong with a range that would not parse.
+ *
+ * "Not a range this sheet can address" is true of everything here and useful
+ * for nothing: the three shapes below are what a model writing spreadsheet
+ * notation actually produces, each is a one-token repair, and without the hint
+ * the caller spends a round trip guessing. The module already answers this way
+ * elsewhere — the too-large range names `setColumnFormat`, the unknown hue
+ * lists the hues.
+ *
+ * Only a suffix: the range is quoted by the caller, and a shape none of these
+ * match still gets the plain refusal rather than a wrong guess.
+ */
+function rangeHint(range: string): string {
+  if (range.includes('$')) {
+    return ' Ranges here are plain A1 notation — drop the $ (A1:F1, not $A$1:$F$1).';
+  }
+  if (range.includes('!')) {
+    return ' A range names cells on this tab only — drop the SheetName! prefix.';
+  }
+  if (/\s/.test(range.trim())) {
+    return ' Ranges carry no spaces — write A1:F1.';
+  }
+  return '';
+}
+
+/**
  * The bounds of an A1 range, without expanding it.
  *
  * `addressesOfRange` is the shared expander and stays the only one — but a
@@ -1232,7 +1258,11 @@ function validateRuleInput(
     // address every time, inside what is supposed to be a cheap check.
     for (const range of suppliedRanges) {
       if (!parseRangeSpan(range)) {
-        return refuseOp(index, type, `"${range}" is not a range this sheet can address.`);
+        return refuseOp(
+          index,
+          type,
+          `"${range}" is not a range this sheet can address.${rangeHint(range)}`
+        );
       }
     }
 
@@ -1723,7 +1753,11 @@ export function planFormatOps(
 
     const span = parseRangeSpan(range);
     if (!span) {
-      return refuseOp(index, type, `"${range}" is not a range this sheet can address.`);
+      return refuseOp(
+        index,
+        type,
+        `"${range}" is not a range this sheet can address.${rangeHint(range)}`
+      );
     }
 
     const cells = cellsInSpan(span);
