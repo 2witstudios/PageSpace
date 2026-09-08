@@ -346,6 +346,13 @@ export class AndroidStorage implements PlatformStorage {
   /**
    * The device id the session currently in force is bound to, if any.
    *
+   * This whole chain exists because the caller asks for the two halves of an
+   * atomic pair in two separate reads: `refreshBearerSession` reads the session
+   * itself and then asks for the device id through `getDeviceInfo()`. Send the
+   * id from the same read as the token — one line at `auth-fetch.ts`, recorded
+   * on Phase B's auth session gate sweep — and the record, the race and the
+   * `answered` flag all collapse. Collapse them there; do not extend them here.
+   *
    * A store fault is not fatal here — the fallbacks below still name a binding
    * — so unlike `getStoredSession` this swallows it. Losing the binding
    * degrades a refresh; failing to answer at all would break every caller of

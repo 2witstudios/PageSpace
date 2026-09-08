@@ -681,8 +681,18 @@ describe('AndroidStorage', () => {
     it('remembers the binding in force, not the one it declined to write', async () => {
       // The bearer-less branch leaves an existing browser_device_id alone, so
       // the session's own deviceId is not necessarily what ends up binding.
+      // A prior read seeds the record with a different id, so this fails both
+      // when the branch records the wrong value and when it records nothing.
+      keychainMock.get.mockResolvedValueOnce({
+        value: JSON.stringify({
+          sessionToken: 'session-token',
+          deviceId: 'native-device-id',
+          deviceToken: 'native-device-token',
+        }),
+      });
       localStorage.setItem('browser_device_id', 'web_abc123');
       const storage = await importAndroidStorage();
+      await storage.getStoredSession();
 
       await storage.storeSession({
         sessionToken: '',
