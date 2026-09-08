@@ -308,6 +308,12 @@ describe('planFormatOps — columns, rows and freezes', () => {
     expect(result.touchesTabFields).toBe(true);
   });
 
+  it('accepts 0 as "unfreeze", which is what setFrozen already means by it', () => {
+    expect(plan([{ type: 'setFrozen', rows: 0, columns: 0 }]).steps).toEqual([
+      { type: 'setFrozen', rows: 0, columns: 0 },
+    ]);
+  });
+
   it.each([
     ['negative', { rows: -1, columns: null }, 'whole number of 0 or more'],
     ['fractional', { rows: 1.5, columns: null }, 'whole number of 0 or more'],
@@ -454,11 +460,15 @@ describe('planFormatOps — conditional rules', () => {
     ).toContain('direction must be -1');
   });
 
-  it('clears every rule', () => {
+  it('clears every rule, and clearing none is not an error', () => {
     const tab = tabWith({ conditionalFormats: [rule('a')] });
     const result = plan([{ type: 'clearConditionalRules' }], tab);
     expect(result.conditionalFormats).toEqual([]);
     expect(result.steps).toEqual([{ type: 'setConditionalRules', rules: [] }]);
+
+    // Unlike removing an id that is not there: a clear names no target and so
+    // cannot be wrong about one.
+    expect(plan([{ type: 'clearConditionalRules' }]).conditionalFormats).toEqual([]);
   });
 
   it('refuses a resulting rule list that would come back shorter', () => {

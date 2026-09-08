@@ -592,6 +592,10 @@ function validateRegionInput(raw: unknown, index: number, type: string, label: s
   return region;
 }
 
+/** The id an op names, which must be there to name anything at all. */
+const requireId = (id: unknown, index: number, type: string): string =>
+  typeof id === 'string' && id !== '' ? id : refuseOp(index, type, 'id must be a non-empty string.');
+
 const ruleIdList = (rules: readonly ConditionalRule[]): string =>
   rules.length === 0 ? 'none' : rules.map((rule) => `"${rule.id}"`).join(', ');
 
@@ -666,13 +670,6 @@ export function planFormatOps(
     for (let row = span.rowStart; row <= span.rowEnd; row++) rows.add(row);
 
     return addressesOfRange(range, MAX_FORMAT_CELLS);
-  };
-
-  const requireId = (id: unknown, index: number, type: string): string => {
-    if (typeof id !== 'string' || id === '') {
-      return refuseOp(index, type, 'id must be a non-empty string.');
-    }
-    return id;
   };
 
   ops.forEach((op, index) => {
@@ -886,6 +883,10 @@ export function planFormatOps(
       }
 
       case 'clearConditionalRules': {
+        // Allowed on a sheet that already has none, unlike removing an id that
+        // is not there. The difference is what the caller asserted: a clear
+        // names no target and so cannot be wrong about one, while a remove
+        // names an id and is telling us something false about the sheet.
         rules = [];
         rulesTouched = true;
         break;
