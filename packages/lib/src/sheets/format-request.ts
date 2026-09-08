@@ -724,8 +724,22 @@ const MAX_COMPARE_DEPTH = 12;
  *
  * The companion bound to the depth one, and needed for the same reason: an
  * extension field is preserved verbatim, so it can be a flat array of a million
- * entries as easily as a chain of a million objects. Ten thousand is orders of
- * magnitude past any region or rule and still cheap to walk.
+ * entries as easily as a chain of a million objects.
+ *
+ * Ten thousand is not arbitrary: a region declaring the maximum 256 columns is
+ * already about 1,300 values, so this is roughly eight times the largest
+ * legitimate input and cannot be lowered much without refusing real work.
+ *
+ * It is deliberately PER VALUE rather than per request, which makes it the one
+ * bound here that does not follow the rule the rest of this module learned the
+ * hard way — that a per-op ceiling says nothing about two hundred ops. The
+ * exception is measured rather than assumed: 50 ops each carrying a
+ * 9,000-value extension verify in 130ms, so the worst a full request can cost
+ * is about 0.6 seconds. That is three orders of magnitude below the cases the
+ * aggregate bounds exist for (a hundred million allocations, four billion
+ * expansions), and closing it would mean threading a budget through six
+ * signatures to save half a second. Written down rather than left for the next
+ * reader to rediscover.
  */
 const MAX_COMPARE_VALUES = 10_000;
 
