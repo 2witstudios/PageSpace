@@ -13,6 +13,7 @@ import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { getActorAccessiblePagesInDrive, canActorViewPage, canActorAccessDrive, canActorManageDrive } from './actor-permissions';
 import { getPageTypeEmoji, isFolderPage } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
+import type { StoredCellValue } from '@pagespace/db/schema/sheets-types';
 import type { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
 import { describeContentModeMismatch, serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
@@ -1112,19 +1113,32 @@ export const pageReadTools = {
           const rowCount = sheet.rowCount;
           const isRangeRequest = lineStart !== undefined || lineEnd !== undefined;
 
-          // Formulas and errors, keyed by A1 address across the window. A sheet
-          // read that shows only computed values cannot tell "5" from "=2+3",
-          // and the spreadsheets skill documents reading a page back to confirm
-          // a formula (and to see the expected cross-page-reference error).
-          // Both stay sparse — only cells that have one appear.
+          // Formulas, errors and machine values, keyed by A1 address across the
+          // window. A sheet read that shows only computed values cannot tell
+          // "5" from "=2+3", and the spreadsheets skill documents reading a page
+          // back to confirm a formula (and to see the expected cross-page-
+          // reference error). All three stay sparse — only cells that have one
+          // appear.
+          //
+          // `unformatted` is here for the same reason it is on the row: `cells`
+          // holds the DISPLAY string, so a currency cell reads back as
+          // `$1,200.00` with no way to recover the 1200 underneath. It is
+          // flattened alongside the other two rather than left only inside
+          // `rows`, because a caller reaching for `formulas.B4` and finding
+          // nothing equivalent for the value would reasonably conclude there is
+          // nothing to recover.
           const formulas: Record<string, string> = {};
           const errors: Record<string, string> = {};
+          const unformatted: Record<string, StoredCellValue> = {};
           for (const row of rows) {
             for (const [column, formula] of Object.entries(row.formulas ?? {})) {
               formulas[`${column}${row.rowNumber}`] = formula;
             }
             for (const [column, message] of Object.entries(row.errors ?? {})) {
               errors[`${column}${row.rowNumber}`] = message;
+            }
+            for (const [column, value] of Object.entries(row.unformatted ?? {})) {
+              unformatted[`${column}${row.rowNumber}`] = value;
             }
           }
 
@@ -1222,6 +1236,7 @@ export const pageReadTools = {
             rowsReturned: rows.length,
             ...(Object.keys(formulas).length > 0 && { formulas }),
             ...(Object.keys(errors).length > 0 && { errors }),
+            ...(Object.keys(unformatted).length > 0 && { unformatted }),
             ...(droppedForBudget > 0 && { rowsDroppedForSize: droppedForBudget }),
             // The table could not render rows that `rows` still carries.
             ...(tableOmittedRows > 0 && { tableRowsOmitted: tableOmittedRows }),

@@ -156,6 +156,7 @@ Reading either way:
 
 - Only non-empty cells appear. A row's \`rowNumber\` is its A1 row, so a row read at 417 is written with \`C417\`.
 - Formula cells report both the computed value (in \`cells\`) and the formula (in \`formulas\`) — you never need to re-derive results, and you never lose the formula.
+- Formatted cells report both the display text and the number underneath. \`read_sheet\` puts the machine value on the row as \`unformatted\` (keyed by column letter); \`read_page\` flattens it to \`unformatted\` keyed by A1 address, the same way it flattens \`formulas\` and \`errors\`. Only cells whose display differs from their value appear — everywhere else the displayed text already IS the value. Always compute, filter and write back from that number, never from the rendered string.
 - Errored cells show \`#ERROR\` as their value and carry the message in \`errors\`, keyed by A1 address in \`read_page\` and by column letter within the row in \`read_sheet\`.
 - Everything except the raw inputs (formula text and literal values) is **derived and regenerated on every save**. Never try to write values, types, errors or dependencies yourself; \`edit_sheet_cells\` recomputes them.
 - Cell values are truncated at 120 characters in the rendered \`table\` only, and the response says how many were cut (\`tableTruncatedCells\`); the structured \`rows\` always carry the full text. Never write a value back that you read from the table if that count is non-zero.
