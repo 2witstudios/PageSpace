@@ -454,6 +454,7 @@ export const sheetReadTools = {
                     result.rows,
                     selectColumns ? new Set(selectColumns.map((column) => column.toUpperCase())) : undefined,
                   ),
+                  result.rows.map((row) => row.rowIndex + 1),
                 ),
               }
             : {}),

@@ -948,11 +948,13 @@ describe('read_sheet — includeFormatting', () => {
     const result = await run({ pageId: 'page-1', includeFormatting: true });
     const formatting = result.formatting as Record<string, unknown>;
 
+    // `rowHeights` is projected to the rows returned. This read is of row 7 and
+    // the only stored height is for row 1, so it is correctly absent — see the
+    // dedicated test below for why the map is projected rather than copied.
     expect(formatting.layout).toEqual({
       frozenRows: 1,
       frozenColumns: 2,
       columnWidths: { A: 220 },
-      rowHeights: { '1': 32 },
     });
     expect(formatting.columnFormats).toEqual({ C: { number: { kind: 'currency', currency: 'USD' } } });
     // Keyed by A1 address, so the agent can write to exactly the cell it read.
@@ -1223,6 +1225,36 @@ describe('read_sheet — includeFormatting', () => {
         { display: '0.1', unformatted: undefined },
       ],
     });
+  });
+
+  it('returns row heights for the rows it returned, not the whole tab', async () => {
+    // `rowHeights` is tab-wide and nothing on the write or sanitisation path
+    // caps its entry count — row keys are valid up to MAX_ADDRESSABLE_ROW. So a
+    // sheet with many resized rows could hand back a map of thousands of entries
+    // for a ONE-ROW read, straight past MAX_FORMATTING_CHARS, which only ever
+    // bounded `cellFormats`. A height for a row the agent did not receive tells
+    // it nothing, so this projects rather than merely capping.
+    const tallTab = {
+      ...formattedTab,
+      rowHeights: Object.fromEntries(Array.from({ length: 5000 }, (_, i) => [String(i + 1), 20 + (i % 30)])),
+    };
+    mockGetTab.mockResolvedValue(tallTab);
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 2, cells: { A: { raw: 'x', value: 'x' } } },
+    ]);
+
+    const result = await run({ pageId: 'page-1', includeFormatting: true });
+    const layout = (result.formatting as { layout: { rowHeights?: Record<string, number> } }).layout;
+
+    assert({
+      given: 'a tab with 5,000 stored row heights and a one-row read',
+      should: 'return the height for that row alone',
+      actual: layout.rowHeights,
+      expected: { '3': tallTab.rowHeights['3'] },
+    });
+    // The guard that matters: the whole block stays small regardless of how many
+    // rows the tab has resized.
+    expect(JSON.stringify(result.formatting).length).toBeLessThan(MAX_FORMATTING_CHARS);
   });
 
   it('advertises includeFormatting so an agent can discover it', async () => {

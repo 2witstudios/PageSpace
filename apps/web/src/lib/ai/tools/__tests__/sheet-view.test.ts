@@ -1351,24 +1351,55 @@ describe('the conditional resolver reads ranges the way the evaluator does', () 
     expect(fires(['A1:A500000'], 0, 0)).toBe(true);
   });
 
-  it('stops preparing rules once the lookup budget is spent', () => {
-    // A per-cell resolve tests bounds, so lookup work is cells x ranges, and the
-    // per-rule cap does not bound it: 200 rules of 1,000 ranges each is 200,000
-    // bounds per cell. The budget is what keeps this scaling with what a rule
-    // set plausibly holds rather than with what it is ALLOWED to hold.
-    const many: ConditionalRule[] = Array.from({ length: 4 }, (_, r) => ({
-      id: `r${r}`, kind: 'cell',
-      // 400 ranges each: the first rule alone nearly spends the 1,000 budget.
-      ranges: Array.from({ length: 400 }, (_, i) => `A${r * 1000 + i + 1}:A${r * 1000 + i + 1}`),
-      condition: { operator: 'isNotEmpty' },
-      format: { number: { kind: 'percent', decimals: 0 } },
-    }));
-    const resolve = createConditionalResolver(many)!;
+  it('does not let a thousand tiny ranges starve the rules after it', () => {
+    // The budget is charged by AREA, the way the evaluator charges. Charging by
+    // RANGE COUNT meant a rule holding a thousand single-cell ranges —
+    // "highlight these thousand cells", an ordinary shape — spent a whole
+    // budget that costs the evaluator 1,000 of 2,000,000. Later rules were then
+    // never prepared, so a materialised read showed raw text where the grid and
+    // the document path showed a formatted value.
+    const rules: ConditionalRule[] = [
+      {
+        id: 'many', kind: 'cell',
+        ranges: Array.from({ length: 1000 }, (_, i) => `A${i + 1}:A${i + 1}`),
+        condition: { operator: 'isNotEmpty' },
+        format: { bold: true },
+      },
+      {
+        id: 'later', kind: 'cell', ranges: ['C1:C1'],
+        condition: { operator: 'isNotEmpty' },
+        format: { number: { kind: 'percent', decimals: 0 } },
+      },
+    ];
+    const resolve = createConditionalResolver(rules)!;
 
-    // The first rule's ranges are inside the budget and still apply.
-    expect(resolve(0, 0, 1, false)).toBeDefined();
-    // A later rule's are past it and were never prepared, so it formats nothing.
-    expect(resolve(3000, 0, 1, false)).toBeUndefined();
+    assert({
+      given: 'a rule of 1,000 single-cell ranges followed by a number-format rule',
+      should: 'still apply the later rule, as the evaluator does',
+      actual: resolve(0, 2, 1, false),
+      expected: { number: { kind: 'percent', decimals: 0 } },
+    });
+    // And the thousand-range rule itself still works — the fix must not have
+    // dropped it in the other direction.
+    expect(resolve(0, 0, 1, false)).toEqual({ bold: true });
+  });
+
+  it('still stops once the area budget is genuinely spent', () => {
+    // The bound has to remain a bound. Each of these covers 500,000 cells — the
+    // per-range ceiling — so five of them reach the evaluator's own 2,000,000
+    // aggregate and the rule after them is not prepared.
+    const big = (id: string, col: string): ConditionalRule => ({
+      id, kind: 'cell', ranges: [`${col}1:${col}500000`],
+      condition: { operator: 'isNotEmpty' }, format: { bold: true },
+    });
+    const rules: ConditionalRule[] = [
+      big('a', 'A'), big('b', 'B'), big('c', 'C'), big('d', 'D'), big('e', 'E'),
+      { id: 'past', kind: 'cell', ranges: ['F1:F1'], condition: { operator: 'isNotEmpty' }, format: { italic: true } },
+    ];
+    const resolve = createConditionalResolver(rules)!;
+
+    expect(resolve(0, 0, 1, false)).toEqual({ bold: true });
+    expect(resolve(0, 5, 1, false)).toBeUndefined();
   });
 
   it('contributes nothing for a range neither side can read', () => {

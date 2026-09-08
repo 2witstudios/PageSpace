@@ -35,6 +35,7 @@ import {
   parseSheetContentSafe,
   sheetDataFromSheetDoc,
   MAX_CONDITIONAL_RANGE_CELLS,
+  MAX_CONDITIONAL_TOTAL_CELLS,
   createRegionResolver,
   matchesCondition,
   parseConditionalRules,
@@ -193,27 +194,28 @@ interface PreparedRule {
 }
 
 /**
- * The most ranges this will hold across every rule combined.
+ * Two budgets, in two different units, because they bound two different things.
  *
- * A per-cell resolve tests bounds, so lookup work is (cells x ranges) and the
- * per-rule cap alone does not bound it: `parseConditionalRules` permits 200
- * rules of `MAX_CONDITIONAL_RANGES_PER_RULE` (1,000) each, which is 200,000
- * bounds per cell — a 500-row read then costs 100M+ comparisons and stalls.
- * The evaluator has an aggregate ceiling (`MAX_CONDITIONAL_TOTAL_CELLS`) for
- * the same reason its per-range cap was not enough; this is the analogous one
- * for lookups rather than expansions.
+ * `MAX_CONDITIONAL_LOOKUP_CELLS` is the evaluator's own ceiling and is charged
+ * the evaluator's own way: by the AREA a range covers. Matching the unit is the
+ * point. An earlier revision charged by RANGE COUNT, which meant a rule holding
+ * a thousand single-cell ranges — "highlight these thousand cells", a perfectly
+ * ordinary shape — spent an entire budget that costs the evaluator 1,000 of
+ * 2,000,000. Later rules were then never prepared, so a materialised read
+ * showed raw text where the grid and the document path showed a formatted
+ * value. A budget that disagrees with the evaluator about what is expensive
+ * produces exactly the divergence it was added to prevent.
  *
- * An earlier version of this comment claimed the per-rule caps already bounded
- * the work "to integer comparisons on a sheet nobody authored by hand". That
- * was wrong: it was written without looking up
- * `MAX_CONDITIONAL_RANGES_PER_RULE`, which is a thousand, not a handful. The
- * number is here now so the next reader does not have to take the claim on
- * trust.
- *
- * Past this, later rules stop being prepared — the same way the evaluator stops
- * contributing once its budget is spent.
+ * `MAX_CONDITIONAL_LOOKUP_RANGES` remains, but as a work guard rather than a
+ * fidelity rule, because per-cell lookup cost scales with RANGES while the
+ * evaluator's budget scales with cells: `parseConditionalRules` permits 200
+ * rules of `MAX_CONDITIONAL_RANGES_PER_RULE` (1,000) each, and 200,000 bounds
+ * per cell would stall a 500-row read. It is set far above any rule set anyone
+ * would author — a thousand small ranges no longer comes near it — so in
+ * practice the cell budget is the one that speaks.
  */
-const MAX_CONDITIONAL_LOOKUP_RANGES = 1_000;
+const MAX_CONDITIONAL_LOOKUP_CELLS = MAX_CONDITIONAL_TOTAL_CELLS;
+const MAX_CONDITIONAL_LOOKUP_RANGES = 5_000;
 
 /**
  * The conditional format at one cell, from the rules that can be decided by
@@ -268,16 +270,22 @@ export function createConditionalResolver(
   if (!rules || rules.length === 0) return undefined;
 
   const prepared: PreparedRule[] = [];
-  let budget = MAX_CONDITIONAL_LOOKUP_RANGES;
+  let rangeBudget = MAX_CONDITIONAL_LOOKUP_RANGES;
+  let cellBudget = MAX_CONDITIONAL_LOOKUP_CELLS;
   for (const rule of rules) {
-    if (budget <= 0) break;
+    if (rangeBudget <= 0 || cellBudget <= 0) break;
     if (rule.kind !== 'cell') continue;
     const bounds = rule.ranges
-      .slice(0, budget)
+      .slice(0, rangeBudget)
       .map(rangeBounds)
       .filter((entry): entry is RuleBounds => entry !== null);
     if (bounds.length === 0) continue;
-    budget -= bounds.length;
+    rangeBudget -= bounds.length;
+    // Charged by area, the way the evaluator charges: a thousand single-cell
+    // ranges costs a thousand, not a thousand ranges' worth of budget.
+    for (const b of bounds) {
+      cellBudget -= (b.rowEnd - b.rowStart + 1) * (b.colEnd - b.colStart + 1);
+    }
 
     // The union of the rule's ranges, so a cell outside all of them is rejected
     // by one comparison instead of one per range. Rules with many scattered
@@ -826,6 +834,7 @@ function windowFromDocument({
           formatting: buildSheetFormatting(
             sheet,
             documentCellFormats(sheet.formats, windowed, only),
+            windowed.map((index) => index + 1),
           ),
         }
       : {}),
@@ -991,7 +1000,13 @@ export async function loadSheetWindow(
     // bigger than the columns it claims to be about. The tab-level fields are
     // not per-cell and are not projected.
     ...(options.includeFormatting
-      ? { formatting: buildSheetFormatting(tab, explicitCellFormats(stored, only)) }
+      ? {
+          formatting: buildSheetFormatting(
+            tab,
+            explicitCellFormats(stored, only),
+            stored.map((row) => row.rowIndex + 1),
+          ),
+        }
       : {}),
   };
 }
@@ -1365,9 +1380,41 @@ function withinFormattingBudget(
  * per-cell entries are supplied by the caller that knows which of its cells
  * carry an EXPLICIT format rather than a resolved one.
  */
+/**
+ * Row heights for the rows this read actually returned.
+ *
+ * `rowHeights` is tab-wide and, unlike `cellFormats`, nothing on the write or
+ * sanitisation path caps its entry count — row keys are valid up to
+ * `MAX_ADDRESSABLE_ROW`, so a sheet with many resized rows could hand back a map
+ * of millions of entries for a ONE-ROW read, straight past
+ * `MAX_FORMATTING_CHARS`, which only ever bounded `cellFormats`.
+ *
+ * Projected rather than merely capped, because a height for a row the agent did
+ * not receive tells it nothing: this is the same rule `cellFormats` already
+ * follows, and it makes the common case cost nothing at all.
+ */
+function rowHeightsForWindow(
+  heights: Record<string, number> | null | undefined,
+  rowNumbers: readonly number[] | undefined,
+): Record<string, number> | undefined {
+  if (!heights) return undefined;
+  // No window given (a caller describing a tab rather than a read) keeps the
+  // old behaviour, bounded by the budget below.
+  if (!rowNumbers) return heights;
+
+  const wanted = new Set(rowNumbers.map(String));
+  const kept: Record<string, number> = {};
+  for (const [row, height] of Object.entries(heights)) {
+    if (wanted.has(row)) kept[row] = height;
+  }
+  return kept;
+}
+
 export function buildSheetFormatting(
   tab: SheetFormattingSource,
   cellFormats: readonly (readonly [string, CellFormat])[],
+  /** 1-based row numbers this read returned, used to project `rowHeights`. */
+  rowNumbers?: readonly number[],
 ): SheetFormatting {
   const formatting: SheetFormatting = {};
 
@@ -1381,7 +1428,8 @@ export function buildSheetFormatting(
   if (tab.frozenRows != null) layout.frozenRows = tab.frozenRows;
   if (tab.frozenColumns != null) layout.frozenColumns = tab.frozenColumns;
   if (hasKeys(tab.columnWidths)) layout.columnWidths = tab.columnWidths;
-  if (hasKeys(tab.rowHeights)) layout.rowHeights = tab.rowHeights;
+  const rowHeights = rowHeightsForWindow(tab.rowHeights, rowNumbers);
+  if (hasKeys(rowHeights)) layout.rowHeights = rowHeights;
   if (Object.keys(layout).length > 0) formatting.layout = layout;
 
   if (hasKeys(tab.columnFormats)) formatting.columnFormats = tab.columnFormats;
