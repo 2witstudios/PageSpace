@@ -377,6 +377,30 @@ class AuthFetch {
   }
 
   /**
+   * The bearer token to present, or `null` when this platform has none right now.
+   *
+   * The two stages read differently on purpose. On the initial attempt,
+   * `getSessionTokenWithTimeout` supplies the session cache and the 3s guard
+   * against a Keychain or IPC read that hangs on cold start. On the retry after a
+   * refresh, the cache has just been cleared by `refreshToken()` and the token is
+   * read straight through — the same call the pre-refactor post-refresh branch
+   * made, kept identical so a refreshed desktop or iOS session picks up its new
+   * token exactly as it did before.
+   */
+  private async readBearerToken(
+    storage: PlatformStorage,
+    url: string,
+    stage: 'initial' | 'refresh',
+  ): Promise<string | null> {
+    if (stage === 'initial') {
+      return this.getSessionTokenWithTimeout(storage, url);
+    }
+    return storage.platform === 'desktop'
+      ? this.getSessionFromElectron()
+      : storage.getSessionToken();
+  }
+
+  /**
    * The credentials this request should carry, and how it is authenticating.
    *
    * A platform's `usesBearer()` is a *preference*, not a guarantee that a bearer
@@ -406,15 +430,7 @@ class AuthFetch {
   ): Promise<{ headers: Record<string, string>; viaCookie: boolean }> {
     if (storage.usesBearer()) {
       try {
-        // On a retry the cache was already cleared by refreshToken(), and the
-        // token is read straight from storage — the same call the pre-existing
-        // post-refresh branch made, kept so a refreshed desktop/iOS session
-        // picks up its new token exactly as it did before.
-        const sessionToken = stage === 'initial'
-          ? await this.getSessionTokenWithTimeout(storage, url)
-          : storage.platform === 'desktop'
-            ? await this.getSessionFromElectron()
-            : await storage.getSessionToken();
+        const sessionToken = await this.readBearerToken(storage, url, stage);
 
         if (sessionToken) {
           this.logger.debug(`${storage.platform}: Using Bearer token authentication`, { url, stage });

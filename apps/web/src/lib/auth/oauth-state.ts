@@ -15,8 +15,14 @@ const oauthStateDataSchema = z.object({
   returnUrl: z.string().max(2048).optional(),
   // 'android' is accepted so a signed state can name the platform that started
   // the flow. Without it the enum rejected the value outright, which is why no
-  // server path could ever emit the `pagespace://` handoff for Android and the
-  // Android custom-scheme intent filter shipped inert.
+  // server path could emit the `pagespace://` handoff for Android and the
+  // custom-scheme intent filter Phase C shipped stayed inert.
+  //
+  // Accepting the value is the unblock, NOT permission to emit the handoff: the
+  // OAuth callbacks still deep-link for iOS only, and the two preconditions that
+  // gate widening them (binding the handoff to the app that started the flow, and
+  // having anything consume `appUrlOpen` at all) are set out at that branch in
+  // `api/auth/google/callback/route.ts`.
   platform: z.enum(['web', 'desktop', 'ios', 'android']).optional(),
   // Which desktop app started the flow. One Electron codebase ships two, each
   // with its own protocol scheme, and the callback has to deep-link back into
