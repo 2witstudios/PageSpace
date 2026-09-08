@@ -380,12 +380,22 @@ export async function GET(req: Request) {
 
     // iOS PLATFORM: Same as desktop - use secure exchange code flow
     // Deliberately iOS only, though the state schema now also accepts 'android'.
-    // Android's web OAuth runs *inside* the Capacitor WebView, so the browser
-    // that completes the flow is the app itself and a `pagespace://` handoff
-    // would bounce it out of the very context that needs the session. It falls
-    // through to the web branch below, which sets the session cookie the WebView
-    // reads directly. Widening this to Android is a deliberate design decision
-    // (and needs a device to verify), not a missing case.
+    //
+    // Android's web OAuth does NOT stay in the Capacitor WebView:
+    // `apps/android/capacitor.config.ts` allowlists only `pagespace.ai`, so the
+    // provider host is handed to `Bridge.launchIntent()` and opens in the
+    // external browser — where a successful sign-in drops the session cookie in
+    // the wrong jar and the app stays logged out. The `pagespace://auth-exchange`
+    // handoff below is exactly the fix for that, and Phase C shipped the Android
+    // intent filter for it.
+    //
+    // It is still not emitted for Android, because it would replace one dead end
+    // with another: nothing listens for the `@capacitor/app` `appUrlOpen` event
+    // on EITHER platform, so a captured code is silently dropped
+    // (`apps/android/README.md`, "Prerequisite 2 — link routing in the web app").
+    // Widening the state enum is what unblocks this; building the listener — and
+    // verifying it on a device — is the remaining work, and it is Android's only
+    // route to a working *web* OAuth sign-in.
     if (platform === 'ios') {
       // Generate deviceId if not provided
       const iosDeviceId = deviceId || createId();

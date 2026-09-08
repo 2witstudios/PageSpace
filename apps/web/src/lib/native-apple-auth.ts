@@ -19,13 +19,6 @@ import { createId } from '@paralleldrive/cuid2';
 export interface AppleAuthResult {
   success: boolean;
   error?: string;
-  /**
-   * The native path could not run here at all — no native SDK for this platform,
-   * or the plugin would not load or initialize. Distinct from a failed sign-in:
-   * the caller should fall back to Apple's web flow rather than leaving the user
-   * with no session and a toast. On Android this is the *normal* answer.
-   */
-  unavailable?: boolean;
   isNewUser?: boolean;
   invitedDriveId?: string | null;
   inviteError?: string;
@@ -60,7 +53,7 @@ const APPLE_CLIENT_ID = 'ai.pagespace.ios';
 export async function signInWithApple(options: { inviteToken?: string; returnUrl?: string } = {}): Promise<AppleAuthResult> {
   // Guard: only run where a native Apple SDK exists.
   if (!isNativeAppleAuthAvailable()) {
-    return { success: false, unavailable: true, error: 'Not in a native app with Apple sign-in' };
+    return { success: false, error: 'Not in a native app with Apple sign-in' };
   }
 
   // The real platform rather than a hardcoded 'ios'. The route already declares
@@ -68,10 +61,9 @@ export async function signInWithApple(options: { inviteToken?: string; returnUrl
   // Android SDK and `capacitor-bridge` grants the capability.
   const platform = getPlatform();
 
-  // Loading and initializing the plugin is a separate failure from signing in
-  // with it: a shell built without the plugin, or one whose native side did not
-  // register, fails here — and the right answer is Apple's web flow, not an
-  // error toast on a user who simply wanted to sign in.
+  // Caught separately from the sign-in itself so a shell built without the
+  // plugin reports that rather than a raw bridge exception. See the same block
+  // in `native-google-auth.ts` for why this is not routed to web OAuth.
   let SocialLogin: typeof import('@capgo/capacitor-social-login').SocialLogin;
   let Preferences: typeof import('@capacitor/preferences').Preferences;
   let PageSpaceKeychain: typeof import('./keychain-plugin').PageSpaceKeychain;
@@ -89,7 +81,7 @@ export async function signInWithApple(options: { inviteToken?: string; returnUrl
     });
   } catch (error) {
     console.error('[Native Apple Auth] Native plugin unavailable:', error);
-    return { success: false, unavailable: true, error: 'Native Apple sign-in unavailable' };
+    return { success: false, error: 'Native Apple sign-in unavailable' };
   }
 
   try {

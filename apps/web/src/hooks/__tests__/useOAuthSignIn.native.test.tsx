@@ -2,16 +2,23 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
 /**
- * Task-page requirement: "Given the native plugin is unavailable, should fall
- * back to web OAuth rather than leaving the caller with no session."
+ * The hook's native branches had no coverage at all. They decide whether a
+ * sign-in attempt goes to the native SDK or to web OAuth, and — the part worth
+ * pinning — that a *failed* native attempt is reported rather than silently
+ * retried through the web flow.
  *
- * The native modules cannot do that themselves — they report `unavailable` and
- * this hook decides. The distinction matters: a shell built without the
- * social-login plugin, or one whose native side did not register, would
- * otherwise leave the user staring at an error toast on a button that can never
- * work, while the web flow beside it works fine. Every *other* failure — a
- * cancel, a rejected token, an unconfigured client — is about this attempt and
- * must still be reported rather than silently retried through a second flow.
+ * That last point looks like a missing fallback and is not. The task page asks
+ * for one ("given the native plugin is unavailable, should fall back to web
+ * OAuth rather than leaving the caller with no session"), but there is no
+ * working web OAuth inside either native shell to fall back TO: iOS allowlists
+ * accounts.google.com so the flow stays in the WebView and Google answers
+ * `disallowed_useragent` (`apps/ios/capacitor.config.ts`); Android does not
+ * allowlist it, so the flow leaves for the external browser and the session
+ * cookie lands in the wrong jar; and the `pagespace://auth-exchange` handoff
+ * that would close the gap has no consumer, because nothing listens for
+ * `appUrlOpen` on either platform (`apps/android/README.md`, "Prerequisite 2").
+ * Falling through would trade a visible error inside a working app for a silent
+ * dead end outside it. These tests hold that line.
  */
 
 const toastError = vi.fn();
@@ -46,7 +53,7 @@ vi.mock('@/lib/native-apple-auth', () => ({
 
 import { useOAuthSignIn } from '../useOAuthSignIn';
 
-describe('useOAuthSignIn: falling back when the native path cannot run', () => {
+describe('useOAuthSignIn: native sign-in branches', () => {
   const originalFetch = global.fetch;
   let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -65,24 +72,24 @@ describe('useOAuthSignIn: falling back when the native path cannot run', () => {
     global.fetch = originalFetch;
   });
 
-  it('given the native Google plugin is unavailable, should start the web OAuth flow', async () => {
-    signInWithGoogle.mockResolvedValue({ success: false, unavailable: true, error: 'Native Google sign-in unavailable' });
+  it('given the native plugin could not load, should report it and NOT navigate out to a dead web flow', async () => {
+    signInWithGoogle.mockResolvedValue({ success: false, error: 'Native Google sign-in unavailable' });
 
     const { result } = renderHook(() => useOAuthSignIn());
     await act(async () => { await result.current.handleGoogleSignIn(); });
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/auth/google/signin', expect.anything());
-    expect(toastError).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith('Native Google sign-in unavailable');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('given the native Apple plugin is unavailable, should start the web OAuth flow', async () => {
-    signInWithApple.mockResolvedValue({ success: false, unavailable: true });
+  it('given a native Apple failure, should report it rather than starting the web flow', async () => {
+    signInWithApple.mockResolvedValue({ success: false, error: 'Native Apple sign-in unavailable' });
 
     const { result } = renderHook(() => useOAuthSignIn());
     await act(async () => { await result.current.handleAppleSignIn(); });
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/auth/apple/signin', expect.anything());
-    expect(toastError).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith('Native Apple sign-in unavailable');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('given a genuine native failure, should report it and NOT silently retry through the web flow', async () => {

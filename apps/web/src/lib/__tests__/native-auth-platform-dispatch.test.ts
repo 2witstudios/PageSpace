@@ -205,57 +205,49 @@ describe('native auth: platform dispatch', () => {
     });
   });
 
-  // Task-page requirement: "Given the native plugin is unavailable, should fall
-  // back to web OAuth rather than leaving the caller with no session." The
-  // module cannot do that itself — it reports `unavailable` and the hook falls
-  // back (see useOAuthSignIn.native-fallback.test.tsx).
-  describe('a plugin that cannot load or initialize reports itself unavailable', () => {
-    it('given the Google plugin will not initialize, should say unavailable rather than fail the sign-in', async () => {
+  // A shell built without `@capgo/capacitor-social-login`, or one whose native
+  // side did not register, fails at load/initialize rather than at sign-in. It is
+  // caught separately so the user gets a named cause instead of a raw bridge
+  // exception — but it is NOT routed to web OAuth: there is no working web OAuth
+  // inside either native shell to route to (see the hook's own test file).
+  describe('a plugin that cannot load or initialize', () => {
+    it('given the Google plugin will not initialize, should name that cause and never reach the server', async () => {
       setPlatform('android');
       socialLogin.initialize.mockRejectedValue(new Error('plugin not implemented on android'));
       const { signInWithGoogle } = await import('../native-google-auth');
 
       const result = await signInWithGoogle();
 
-      expect(result.success).toBe(false);
-      expect(result.unavailable).toBe(true);
+      expect(result).toEqual({ success: false, error: 'Native Google sign-in unavailable' });
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it('given the Apple plugin will not initialize, should say unavailable', async () => {
+    it('given the Apple plugin will not initialize, should name that cause', async () => {
       setPlatform('ios');
       socialLogin.initialize.mockRejectedValue(new Error('plugin not implemented'));
       const { signInWithApple } = await import('../native-apple-auth');
 
-      const result = await signInWithApple();
-
-      expect(result.unavailable).toBe(true);
+      expect(await signInWithApple()).toEqual({ success: false, error: 'Native Apple sign-in unavailable' });
     });
 
-    it('given Apple on Android, should say unavailable so the caller takes the web flow', async () => {
-      setPlatform('android');
-      const { signInWithApple } = await import('../native-apple-auth');
-
-      expect((await signInWithApple()).unavailable).toBe(true);
-    });
-
-    it('given a sign-in that genuinely fails, should NOT say unavailable', async () => {
+    it('given a sign-in that fails after the plugin loaded, should report the sign-in error instead', async () => {
       setPlatform('ios');
       socialLogin.login.mockRejectedValue(new Error('Google rejected the token'));
       const { signInWithGoogle } = await import('../native-google-auth');
 
-      const result = await signInWithGoogle();
-
-      expect(result.success).toBe(false);
-      expect(result.unavailable).toBeUndefined();
+      expect(await signInWithGoogle()).toEqual({ success: false, error: 'Google rejected the token' });
     });
+  });
 
-    it('given a missing client ID, should NOT say unavailable — it is a loud misconfiguration', async () => {
-      setPlatform('android');
-      vi.stubEnv('NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID', '');
-      const { signInWithGoogle } = await import('../native-google-auth');
-
-      expect((await signInWithGoogle()).unavailable).toBeUndefined();
+  describe('availability requires BOTH tables to agree', () => {
+    // `capacitor-bridge` says the platform has a native SDK; this module's own
+    // config table says it knows how to configure one. If they ever drift, the
+    // module must report unavailable rather than claim support and then refuse
+    // every attempt — the caller can at least render a different affordance.
+    it('given a platform with no config row, should report native Google unavailable', async () => {
+      setPlatform('web');
+      const { isNativeGoogleAuthAvailable } = await import('../native-google-auth');
+      expect(isNativeGoogleAuthAvailable()).toBe(false);
     });
   });
 

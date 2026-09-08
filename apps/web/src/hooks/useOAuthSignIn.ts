@@ -208,22 +208,19 @@ export function useOAuthSignIn({ onStart, onError, inviteToken, returnUrl }: Use
           ...(inviteToken && { inviteToken }),
           ...(returnUrl && { returnUrl }),
         });
+        // Deliberately no fall-through to web OAuth on a native failure. There
+        // is no working web OAuth inside either native shell — iOS ends on
+        // Google's `disallowed_useragent` page in the WebView, Android leaves for
+        // the external browser and drops the session in the wrong cookie jar, and
+        // the `pagespace://auth-exchange` handoff that would close the gap has no
+        // `appUrlOpen` consumer on either platform. Falling through would trade a
+        // visible error inside a working app for a silent dead end outside it.
         if (result.success) {
           await handleNativeSuccess(result);
-          return;
+        } else if (result.error !== 'Sign-in cancelled') {
+          reportError(result.error || 'Google sign-in failed');
         }
-        // `unavailable` means the native path could not run at all — the plugin
-        // would not load or initialize. Falling through to web OAuth is the only
-        // outcome that still ends with the user signed in; reporting an error
-        // would strand them on a dead button. Every other failure (a cancel, a
-        // rejected token, an unconfigured client) is about this attempt and is
-        // surfaced as-is.
-        if (!result.unavailable) {
-          if (result.error !== 'Sign-in cancelled') {
-            reportError(result.error || 'Google sign-in failed');
-          }
-          return;
-        }
+        return;
       }
 
       await initiateWebOAuth('/api/auth/google/signin', 'google');
@@ -249,18 +246,13 @@ export function useOAuthSignIn({ onStart, onError, inviteToken, returnUrl }: Use
           ...(inviteToken && { inviteToken }),
           ...(returnUrl && { returnUrl }),
         });
+        // See the Google branch: no fall-through on a native failure.
         if (result.success) {
           await handleNativeSuccess(result);
-          return;
+        } else if (result.error !== 'Sign-in cancelled') {
+          reportError(result.error || 'Apple sign-in failed');
         }
-        // See the Google branch: only a native path that could not run at all
-        // falls through to the web flow.
-        if (!result.unavailable) {
-          if (result.error !== 'Sign-in cancelled') {
-            reportError(result.error || 'Apple sign-in failed');
-          }
-          return;
-        }
+        return;
       }
 
       await initiateWebOAuth('/api/auth/apple/signin', 'apple');

@@ -24,16 +24,6 @@ import { createId } from '@paralleldrive/cuid2';
 export interface GoogleAuthResult {
   success: boolean;
   error?: string;
-  /**
-   * The native path could not run here at all — the plugin would not load, or
-   * would not initialize. Distinct from a failed sign-in: the caller should fall
-   * back to web OAuth rather than leaving the user with no session and a toast.
-   *
-   * Deliberately NOT set for a missing client id. That is a deployment
-   * misconfiguration with an actionable message, and it is the one refusal iOS
-   * already surfaces to the user today.
-   */
-  unavailable?: boolean;
   isNewUser?: boolean;
   invitedDriveId?: string | null;
   inviteError?: string;
@@ -124,7 +114,7 @@ export async function signInWithGoogle(options: { inviteToken?: string; returnUr
   const platform = getPlatform();
   const config = NATIVE_GOOGLE_CONFIG[platform];
   if (!isNativeGoogleAuthAvailable() || !config) {
-    return { success: false, unavailable: true, error: 'Not in a native app with Google sign-in' };
+    return { success: false, error: 'Not in a native app with Google sign-in' };
   }
 
   const init = config.init();
@@ -133,10 +123,19 @@ export async function signInWithGoogle(options: { inviteToken?: string; returnUr
     return { success: false, error: config.misconfigured };
   }
 
-  // Loading and initializing the plugin is a separate failure from signing in
-  // with it: a shell built without the plugin, or one whose native side did not
-  // register, fails here — and the right answer is the web flow, not an error
-  // toast on a user who simply wanted to sign in.
+  // Loading and initializing the plugin is caught separately from signing in
+  // with it, so a shell built without the plugin — or one whose native side did
+  // not register — reports that rather than a raw bridge exception.
+  //
+  // It is NOT routed to web OAuth. There is no working web OAuth inside either
+  // native shell: iOS allowlists accounts.google.com so the flow stays in the
+  // WebView, where Google answers `disallowed_useragent`
+  // (`apps/ios/capacitor.config.ts`), and Android does not allowlist it, so the
+  // flow leaves for the external browser and the session cookie lands in the
+  // wrong jar. The `pagespace://auth-exchange` handoff that would close that gap
+  // has no consumer: nothing listens for `appUrlOpen` on either platform
+  // (`apps/android/README.md`, "Prerequisite 2"). Falling through would navigate
+  // the user out of a working app into a dead end.
   let SocialLogin: typeof import('@capgo/capacitor-social-login').SocialLogin;
   let Preferences: typeof import('@capacitor/preferences').Preferences;
   let PageSpaceKeychain: typeof import('./keychain-plugin').PageSpaceKeychain;
@@ -152,7 +151,7 @@ export async function signInWithGoogle(options: { inviteToken?: string; returnUr
     });
   } catch (error) {
     console.error('[Native Google Auth] Native plugin unavailable:', error);
-    return { success: false, unavailable: true, error: 'Native Google sign-in unavailable' };
+    return { success: false, error: 'Native Google sign-in unavailable' };
   }
 
   try {
