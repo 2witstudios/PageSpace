@@ -440,6 +440,18 @@ class AuthFetch {
     // `AndroidStorage.getStoredSession` rejects on a broken keystore, and a
     // request that can still authenticate by cookie must not be turned into an
     // exception because the device *marker* was unreadable.
+    //
+    // On a bearer platform that reached here, this is the second store read of
+    // the request: the token attempt above already read the session, and
+    // `getSessionTokenWithTimeout` caches only a non-null token, so nothing
+    // memoizes the miss. Deliberately not optimized — the two reads share no
+    // path on desktop (its token comes from a different IPC call than its
+    // session, behind the session cache and the concurrent-IPC dedup), so
+    // collapsing them means restructuring the one branch this change most needs
+    // to leave alone. It costs one extra bridge round-trip per request, only in
+    // the transitional state where a native platform has no bearer token, and it
+    // disappears the moment native sign-in lands: the bearer branch then returns
+    // before this code, from a cache, on every request after the first.
     try {
       const session = await storage.getStoredSession();
       if (session?.deviceToken) {
