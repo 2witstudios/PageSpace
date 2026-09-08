@@ -274,6 +274,7 @@ export class AndroidStorage implements PlatformStorage {
           console.error(storageError('write', error).message);
         }
       }
+      this.remember(session);
       return;
     }
 
@@ -288,6 +289,9 @@ export class AndroidStorage implements PlatformStorage {
     // one-way: `readLegacySession` stops firing and the device identity settles
     // on the session in the keychain.
     clearLegacy(LEGACY_DEVICE_TOKEN_KEY);
+    // A write is as good a source of "what is in force" as a read, and a
+    // better one right after this branch supersedes what a read last saw.
+    this.remember(session);
   }
 
   /**

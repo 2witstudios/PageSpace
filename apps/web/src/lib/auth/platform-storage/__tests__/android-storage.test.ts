@@ -631,6 +631,31 @@ describe('AndroidStorage', () => {
       vi.useRealTimers();
     });
 
+    it('takes the id from a write that supersedes what a read last saw', async () => {
+      // The bearer-less branch removes the keychain session a read had just
+      // recorded; without updating the record, a later failed read would answer
+      // with an id belonging to a session that no longer exists.
+      keychainMock.get.mockResolvedValueOnce({
+        value: JSON.stringify({
+          sessionToken: 'session-token',
+          deviceId: 'native-device-id',
+          deviceToken: 'native-device-token',
+        }),
+      });
+      const storage = await importAndroidStorage();
+      await storage.getStoredSession();
+
+      await storage.storeSession({
+        sessionToken: '',
+        csrfToken: null,
+        deviceId: 'web_abc123',
+        deviceToken: 'rotated-device-token',
+      });
+
+      keychainMock.get.mockRejectedValue(new Error(INIT_FAILURE));
+      expect(await storage.getDeviceId()).toBe('web_abc123');
+    });
+
     it('publishes a minted id where the server binding will look for it', async () => {
       // A live token with no id recorded: minting only into preferences would
       // leave the native and web identities permanently divergent, where
