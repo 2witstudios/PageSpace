@@ -2702,16 +2702,23 @@ interface FormatPatchRow {
  * write to a damaged row should stay possible.
  */
 
-/** `stored -> key` when it is an object, else `fallback`. */
-const storedObject = (key: ReturnType<typeof sql>, fallback: string) =>
-  sql`coalesce(CASE WHEN jsonb_typeof(${sheetRows.cells} -> ${key}) = 'object' THEN ${sheetRows.cells} -> ${key} END, ${sql.raw(fallback)}::jsonb)`;
+/**
+ * `stored -> key` when it is an object, else `fallback`.
+ *
+ * Plain `sql` fragments throughout, never `sql.raw`: this runs at module load,
+ * and a legacy test that partially mocks the operators module has a `sql`
+ * without `raw` — the import of anything that pulls in this store would then
+ * throw before a single test ran.
+ */
+const storedObject = (key: ReturnType<typeof sql>, fallback: ReturnType<typeof sql>) =>
+  sql`coalesce(CASE WHEN jsonb_typeof(${sheetRows.cells} -> ${key}) = 'object' THEN ${sheetRows.cells} -> ${key} END, ${fallback})`;
 
 const CELL_MERGE_SQL: Record<PersistMode, ReturnType<typeof sql>> = {
   replace: sql`excluded."cells"`,
   merge: sql`${sheetRows.cells} || (
     SELECT coalesce(jsonb_object_agg(
       patch.key,
-      (${storedObject(sql`patch.key`, "'{}'")} - '{raw,value,type,error}'::text[]) || patch.value
+      (${storedObject(sql`patch.key`, sql`'{}'::jsonb`)} - '{raw,value,type,error}'::text[]) || patch.value
     ), '{}'::jsonb)
     FROM jsonb_each(excluded."cells") AS patch
   )`,
@@ -2724,7 +2731,7 @@ const CELL_MERGE_SQL: Record<PersistMode, ReturnType<typeof sql>> = {
   format: sql`${sheetRows.cells} || (
     SELECT coalesce(jsonb_object_agg(
       patch.key,
-      jsonb_strip_nulls(${storedObject(sql`patch.key`, `'{"raw": ""}'`)} || (patch.value - 'raw'))
+      jsonb_strip_nulls(${storedObject(sql`patch.key`, sql`'{"raw": ""}'::jsonb`)} || (patch.value - 'raw'))
     ), '{}'::jsonb)
     FROM jsonb_each(excluded."cells") AS patch
   )`,
