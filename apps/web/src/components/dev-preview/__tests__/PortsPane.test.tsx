@@ -82,6 +82,16 @@ describe('PortsPane', () => {
     expect(screen.getByTestId('ports-scan')).toBeInTheDocument();
   });
 
+  test('Scan is held until the status loads, and disabled when the SERVER says this viewer cannot manage the preview', async () => {
+    // Listing is the first half of exposing; the route answers 403 to a
+    // non-manager. Enabling the button anyway would refuse every click.
+    preview = status({ canManage: false });
+    renderPane();
+    await waitFor(() => expect(mockFetchJSON).toHaveBeenCalledWith(STATUS_PATH));
+    await waitFor(() => expect(screen.getByTestId('ports-scan')).toBeDisabled());
+    expect(screen.getByTestId('ports-scan')).toHaveAttribute('title', expect.stringContaining('owner'));
+  });
+
   test('a dark deployment says so instead of calling anything', async () => {
     capabilityEnabled = false;
     renderPane();
@@ -92,7 +102,7 @@ describe('PortsPane', () => {
   test('Scan lists what is listening: a dev port pickable, a database port disabled with its reason', async () => {
     mockPost.mockResolvedValueOnce(LISTING);
     renderPane();
-    await screen.findByTestId('ports-scan');
+    await waitFor(() => expect(screen.getByTestId('ports-scan')).toBeEnabled());
     fireEvent.click(screen.getByTestId('ports-scan'));
     await screen.findByTestId('ports-list');
     expect(mockPost).toHaveBeenCalledWith(PORTS_PATH, {});
@@ -108,7 +118,7 @@ describe('PortsPane', () => {
       .mockResolvedValueOnce({ ok: true, applied: { action: 'start-relay' } }) // select
       .mockResolvedValueOnce({ ...LISTING, currentPort: 3000, ports: LISTING.ports.map((p) => ({ ...p, current: p.port === 3000 })) }); // re-list
     renderPane();
-    await screen.findByTestId('ports-scan');
+    await waitFor(() => expect(screen.getByTestId('ports-scan')).toBeEnabled());
     fireEvent.click(screen.getByTestId('ports-scan'));
     await screen.findByTestId('ports-pick-3000');
     fireEvent.click(screen.getByTestId('ports-pick-3000'));
@@ -122,7 +132,7 @@ describe('PortsPane', () => {
       .mockResolvedValueOnce(LISTING)
       .mockRejectedValueOnce(new Error('Nothing is listening on port 3000 any more. Scan again to see what is running now.'));
     renderPane();
-    await screen.findByTestId('ports-scan');
+    await waitFor(() => expect(screen.getByTestId('ports-scan')).toBeEnabled());
     fireEvent.click(screen.getByTestId('ports-scan'));
     await screen.findByTestId('ports-pick-3000');
     fireEvent.click(screen.getByTestId('ports-pick-3000'));
@@ -136,7 +146,7 @@ describe('PortsPane', () => {
       .mockResolvedValueOnce({ ok: true, applied: { action: 'refuse', reason: 'http-port-busy', targetPort: 3000 } })
       .mockResolvedValueOnce(LISTING);
     renderPane();
-    await screen.findByTestId('ports-scan');
+    await waitFor(() => expect(screen.getByTestId('ports-scan')).toBeEnabled());
     fireEvent.click(screen.getByTestId('ports-scan'));
     await screen.findByTestId('ports-pick-3000');
     fireEvent.click(screen.getByTestId('ports-pick-3000'));
@@ -147,7 +157,7 @@ describe('PortsPane', () => {
   test('a failed Scan renders the server\'s sentence', async () => {
     mockPost.mockRejectedValueOnce(new Error('The sandbox did not answer in time when asked which ports are listening. Try Scan again.'));
     renderPane();
-    await screen.findByTestId('ports-scan');
+    await waitFor(() => expect(screen.getByTestId('ports-scan')).toBeEnabled());
     fireEvent.click(screen.getByTestId('ports-scan'));
     expect(await screen.findByTestId('ports-scan-error')).toHaveTextContent('did not answer in time');
   });

@@ -1066,6 +1066,12 @@ async function resolveTargetsByWorkspace(
       targets.push({ id, kind, title, lastMessageAt: lastMessageAt?.toISOString() ?? null, agentPageId });
     };
 
+    // A ports pane has no row to join: its target IS this workspace and its
+    // title is constant. It still goes through `push`, so it appears only when
+    // a node of THIS subject points at it — and without it `list_panes` reported
+    // the pane as unresolved (`name: ''`) while the grid labelled it "Ports".
+    push('ports', subject.workspaceId, 'Ports', null, null);
+
     for (const row of chatRows) {
       // CONTAINMENT, and it has moved from a column compare to the tree itself.
       // Every chat id in `wanted` is one THIS subject's nodes point at, and a

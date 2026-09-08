@@ -124,6 +124,13 @@ export function PortsPane({ workspaceId }: { workspaceId: string }) {
 
   // `openPath` is null until the holder has something to open; narrow at the
   // use site so the frame cannot be built from a null.
+  // Listing ports is the first half of exposing one, so it takes the same
+  // authority as sharing — and the route enforces that with a 403. Gate the
+  // button on the SERVER's verdict rather than let a viewer who cannot manage
+  // the preview press Scan and be refused every time; and hold it until the
+  // status has loaded at all, because a pick is the consent gesture and the
+  // audience it consents to is not on screen until then.
+  const canManage = preview?.canManage === true;
   const openPath = preview?.canOpen === true && typeof preview.openPath === 'string' ? preview.openPath : null;
   const canOpen = openPath !== null;
   const frameSrc = openPath !== null ? buildFrameSrc(openPath, nonce) : null;
@@ -135,7 +142,15 @@ export function PortsPane({ workspaceId }: { workspaceId: string }) {
         <span className="min-w-0 flex-1 truncate text-muted-foreground" title={preview?.state.message} data-testid="ports-pane-status">
           {preview ? preview.state.message : 'Loading preview status…'}
         </span>
-        <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2" onClick={() => void runScan()} disabled={scan.state === 'scanning'} data-testid="ports-scan">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1.5 px-2"
+          onClick={() => void runScan()}
+          disabled={scan.state === 'scanning' || !canManage}
+          title={preview === undefined ? 'Loading preview status…' : canManage ? 'Ask the sandbox which ports are listening' : 'Only the session owner, or a drive owner or admin, can share a port from this sandbox'}
+          data-testid="ports-scan"
+        >
           {scan.state === 'scanning' ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <ScanSearch className="size-3.5" aria-hidden="true" />}
           Scan ports
         </Button>
@@ -161,7 +176,7 @@ export function PortsPane({ workspaceId }: { workspaceId: string }) {
             <div role="radiogroup" aria-label="Listening ports" className="flex flex-col gap-1">
               {audience && <p className="pb-1 text-muted-foreground">{audience}</p>}
               {scan.listing.ports.map((entry) => {
-                const disabled = entry.kind === 'ignored' || picking !== null;
+                const disabled = entry.kind === 'ignored' || picking !== null || !canManage;
                 const why = entry.kind === 'ignored'
                   ? entry.reason === 'non-http-service-port' ? 'Looks like a database or service port, not a web server'
                     : entry.reason === 'relay-own-listener' ? 'The preview relay itself'
