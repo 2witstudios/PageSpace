@@ -71,6 +71,10 @@ function formulaProblem(root: ASTNode, coveredCells: number): string | null {
         // function in the dispatch has an arity anywhere near sixteen, so
         // anything above it is rejected or accepted for the same reason a
         // million would be.
+        // An unaddressable range counts as ONE, which makes `flattened` equal
+        // `args.length` and steps this check aside — so the Range case below
+        // reports what is actually wrong with `ABS(A1:ZZZZ5)` instead of
+        // complaining about arity for a reference that does not resolve.
         const flattened = node.args.reduce((count, argument) => {
           if (argument.type !== 'Range' && argument.type !== 'ExternalRange') return count + 1;
           return count + (referencedCells(argument.start.reference, argument.end.reference) ?? 1);

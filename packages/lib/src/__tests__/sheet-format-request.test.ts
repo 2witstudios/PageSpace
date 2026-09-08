@@ -1348,6 +1348,17 @@ describe('planFormatOps — never something other than what was asked for', () =
     expect(
       plan([{ type: 'addConditionalRule', rule: formula('=LEFT(A1, 2)="x"') }]).conditionalFormats
     ).toHaveLength(1);
+
+    // A range the sheet cannot address is reported as that, not as an arity
+    // problem. It counts as one value so this check steps aside and the range
+    // check below it says what is actually wrong — with a different fallback,
+    // `=ABS(A1:ZZZZ5)` would complain about how many values ABS takes, which is
+    // true of nothing and would send an agent to fix the wrong thing.
+    for (const body of ['=ABS(A1:ZZZZ5)>0', '=SUM(A1:ZZZZ5)>0', '=ABS(A0:A5)>0']) {
+      expect(refusalOf([{ type: 'addConditionalRule', rule: formula(body) }])).toContain(
+        'is not a range this sheet can address'
+      );
+    }
   });
 
   it('refuses a region range that starts before the first cell', () => {
