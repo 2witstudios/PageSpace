@@ -504,10 +504,6 @@ export class AndroidStorage implements PlatformStorage {
     return true;
   }
 
-  supportsCSRF() {
-    return false;
-  }
-
   dispatchAuthEvent(event: 'auth:cleared' | 'auth:refreshed' | 'auth:expired') {
     window.dispatchEvent(new CustomEvent(event));
     console.log(`[Android] Dispatched ${event}`);

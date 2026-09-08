@@ -220,14 +220,34 @@ class AuthFetch {
         this.clearSessionCache();
         this.logger.debug('[Native] App foregrounded', { backgroundDurationMs: duration });
 
-        // If backgrounded for more than 5 minutes, proactively refresh session
+        // If backgrounded for more than 5 minutes, proactively refresh session.
+        //
+        // Deliberately does NOT sign the user out when that refresh reports
+        // `shouldLogout`. This is the *proactive* path — no request has been
+        // refused — so a refresh that fails for want of a device token proves
+        // nothing about the session. `refreshBearerSession` returns
+        // `shouldLogout: true` the moment there is no device token to present,
+        // and on Android that is the ordinary state of a live cookie session:
+        // magic-link sign-in mints a device token only for desktop
+        // (`api/auth/magic-link/verify/route.ts`), the OAuth handoff cookie never
+        // reaches the WebView, and `useAuth`'s lazy device registration returns
+        // early for Capacitor. Acting on it here tore such a user off their page
+        // to /auth/signin on every foreground, where recovery immediately bounced
+        // them back — a remount and a lost editor buffer, on repeat.
+        //
+        // Only the server can say a session is over, and the next request asks:
+        // a 401 there runs the reactive path, which dispatches `auth:expired`
+        // behind its own `isAuthenticated` guard. The cache clear above is what
+        // makes that next request use fresh credentials, and it has already run.
         if (duration > 5 * 60 * 1000) {
           this.logger.info('[Native] Long background period detected, refreshing session', {
             durationMin: Math.round(duration / 60000),
           });
           const result = await this.refreshAuthSession();
-          if (!result.success && result.shouldLogout) {
-            window.dispatchEvent(new CustomEvent('auth:expired'));
+          if (!result.success) {
+            this.logger.info('[Native] Proactive refresh did not renew the session; leaving it to the next request', {
+              shouldLogout: result.shouldLogout,
+            });
           }
         }
       }
@@ -468,8 +488,17 @@ class AuthFetch {
     // the transitional state where a native platform has no bearer token, and it
     // disappears the moment native sign-in lands: the bearer branch then returns
     // before this code, from a cache, on every request after the first.
+    //
+    // Bounded, like every other native-store read in this class. Before this
+    // change the line was reachable only by `WebStorage`, where it is a
+    // synchronous localStorage read; it is now reachable by iOS, Android and
+    // desktop whenever no bearer token is available, and a Capacitor or Electron
+    // bridge call can hang rather than reject. Unbounded, a hung Keychain on iOS
+    // cold launch would leave every `fetchWithAuth` promise pending forever —
+    // with no 401 and so no recovery path — after the bearer read had already
+    // timed out on that same bridge.
     try {
-      const session = await storage.getStoredSession();
+      const { session } = await this.getStoredSessionWithTimeout(storage);
       if (session?.deviceToken) {
         headers['X-Device-Token'] = session.deviceToken;
         this.logger.debug(`${storage.platform}: Using device token for authentication`, { url });

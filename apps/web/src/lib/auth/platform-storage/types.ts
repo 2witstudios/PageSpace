@@ -32,8 +32,21 @@ export interface PlatformStorage {
   getDeviceId(): Promise<string>;
   getDeviceInfo(): Promise<{ deviceId: string; userAgent: string; appVersion?: string }>;
 
+  /**
+   * Whether this platform prefers to authenticate with a bearer token.
+   *
+   * A *preference*, not a guarantee that one exists — `auth-fetch` treats it as
+   * "try the bearer path first" and falls back to cookie credentials when the
+   * store has no token to give.
+   *
+   * There was a `supportsCSRF()` beside this. It was removed: nothing consulted
+   * it any more once the client started mirroring the server's actual rule
+   * (attach CSRF when no bearer was attached — `lib/auth/index.ts`), and leaving
+   * a method named for the CSRF decision that no longer takes part in it is how
+   * the next reader reintroduces the bug it caused. Every adapter reported
+   * `usesBearer() === !supportsCSRF()` anyway.
+   */
   usesBearer(): boolean;
-  supportsCSRF(): boolean;
 
   dispatchAuthEvent?(event: 'auth:cleared' | 'auth:refreshed' | 'auth:expired'): void;
 }

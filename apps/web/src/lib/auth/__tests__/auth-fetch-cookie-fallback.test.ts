@@ -148,6 +148,30 @@ describe('fetchWithAuth: credentials follow what the request can actually presen
     expect(mutation?.headers['X-Device-Token']).toBeUndefined();
   });
 
+  // The cookie path's store read is on the request hot path and crosses the same
+  // native bridge the bearer read just timed out on. Unbounded, a hung Keychain
+  // would leave every fetchWithAuth promise pending forever — no 401, so no
+  // recovery. Reachable only since this change: the line used to be WebStorage's
+  // synchronous localStorage read.
+  it('given the store hangs, should still send the request rather than hang forever', async () => {
+    vi.useFakeTimers();
+    try {
+      storageMock.getStoredSession.mockReturnValue(new Promise(() => {}));
+      const { fetchWithAuth } = await import('../auth-fetch');
+
+      const pending = fetchWithAuth('/api/pages', { method: 'POST', body: '{}' });
+      await vi.advanceTimersByTimeAsync(3500);
+      const response = await pending;
+
+      expect(response.status).toBe(200);
+      const mutation = sent.find((r) => r.url === '/api/pages');
+      expect(mutation?.headers['X-Device-Token']).toBeUndefined();
+      expect(mutation?.headers['X-CSRF-Token']).toBe('csrf-from-server');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   describe('the desktop Electron path is unchanged', () => {
     beforeEach(() => {
       storageMock.platform = 'desktop';

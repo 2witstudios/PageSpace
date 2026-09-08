@@ -239,6 +239,37 @@ describe('native auth: platform dispatch', () => {
     });
   });
 
+  describe('availability means "can actually sign in here"', () => {
+    // A tenant deployment legitimately omits NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID —
+    // `infrastructure/__tests__/tenant-compose.test.ts` asserts it is absent from
+    // the web service's env. If availability ignored that, such a build would
+    // report native Google as available and `useOAuthSignIn` would surface "not
+    // configured" as a terminal error on a platform that previously fell through
+    // to web OAuth.
+    it('given Android with no web client ID, should report unavailable so the caller keeps its web fallback', async () => {
+      setPlatform('android');
+      vi.stubEnv('NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID', '');
+      const { isNativeGoogleAuthAvailable } = await import('../native-google-auth');
+
+      expect(isNativeGoogleAuthAvailable()).toBe(false);
+    });
+
+    it('given iOS with no iOS client ID, should report unavailable', async () => {
+      setPlatform('ios');
+      vi.stubEnv('NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID', '');
+      const { isNativeGoogleAuthAvailable } = await import('../native-google-auth');
+
+      expect(isNativeGoogleAuthAvailable()).toBe(false);
+    });
+
+    it('given a configured platform, should report available', async () => {
+      setPlatform('android');
+      const { isNativeGoogleAuthAvailable } = await import('../native-google-auth');
+
+      expect(isNativeGoogleAuthAvailable()).toBe(true);
+    });
+  });
+
   describe('availability requires BOTH tables to agree', () => {
     // `capacitor-bridge` says the platform has a native SDK; this module's own
     // config table says it knows how to configure one. If they ever drift, the

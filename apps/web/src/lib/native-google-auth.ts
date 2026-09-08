@@ -134,10 +134,18 @@ async function loadGoogleSdk(init: GoogleInitOptions) {
  * reported to the user, not retried through web OAuth — see `useOAuthSignIn`.
  */
 export async function signInWithGoogle(options: { inviteToken?: string; returnUrl?: string } = {}): Promise<GoogleAuthResult> {
-  // Guard: only run where a native Google SDK exists.
+  // The same three questions `isNativeGoogleAuthAvailable()` asks, deliberately
+  // asked again here rather than delegated. That function answers "should the
+  // caller even try?" with a single boolean; this one has to answer "what went
+  // wrong?", and a caller that reached this far past a false gate — or called it
+  // directly — deserves the specific reason rather than the generic one.
   const platform = getPlatform();
+  if (!supportsNativeAuthProvider('google')) {
+    return { success: false, error: 'Not in a native app with Google sign-in' };
+  }
+
   const config = NATIVE_GOOGLE_CONFIG[platform];
-  if (!isNativeGoogleAuthAvailable() || !config) {
+  if (!config) {
     return { success: false, error: 'Not in a native app with Google sign-in' };
   }
 
@@ -248,18 +256,39 @@ export async function signInWithGoogle(options: { inviteToken?: string; returnUr
 }
 
 /**
- * Check if native Google Sign-In is available.
+ * Check if native Google Sign-In can actually be performed here.
  *
- * True wherever the platform ships a native Google SDK — iOS and Android today.
+ * All three halves are required, and the third is the one that used to be
+ * missing: the capability table says the platform *has* an SDK, the config table
+ * says this module knows how to configure it, and the environment says the
+ * client id that configuration needs is actually present.
  *
- * Both halves are required: the capability table says the platform *has* an SDK,
- * and the config table below says this module knows how to configure it. If the
- * two ever drift, the missing row makes the platform report unavailable and the
- * caller takes the web flow — rather than claiming native support and then
- * refusing every attempt.
+ * The third matters because a deployment can legitimately omit it. Tenant
+ * builds do — `infrastructure/__tests__/tenant-compose.test.ts` asserts that
+ * `NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID` is *not* in the web service's env. Left
+ * out of this check, such a build would report native Google as available, and
+ * `useOAuthSignIn` would surface "not configured" as a terminal error on a
+ * platform that used to fall through to web OAuth. Answering false keeps that
+ * fall-through, which is what the caller did before this phase.
+ *
+ * The refusal is still diagnosable: the reason is logged here, not swallowed.
  */
 export function isNativeGoogleAuthAvailable(): boolean {
-  return supportsNativeAuthProvider('google') && !!NATIVE_GOOGLE_CONFIG[getPlatform()];
+  if (!supportsNativeAuthProvider('google')) return false;
+
+  const config = NATIVE_GOOGLE_CONFIG[getPlatform()];
+  if (!config) {
+    // The capability table and this module's config table have drifted.
+    console.error(`[Native Google Auth] No native config for platform ${getPlatform()}`);
+    return false;
+  }
+
+  if (!config.init()) {
+    console.error(`[Native Google Auth] ${config.misconfigured}`);
+    return false;
+  }
+
+  return true;
 }
 
 /**
