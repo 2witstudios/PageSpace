@@ -1310,6 +1310,53 @@ describe('loadSheetWindow describes formatting only when asked', () => {
     expect(window.rows.map((row) => row.rowNumber)).toEqual([1, 2]);
   });
 
+  it('describes the tab that was ASKED for, not the first one', async () => {
+    // The document path selects its tab before evaluating, and the formatting
+    // has to come from that same selection. Answering tab 0's design for a read
+    // of tab 1 is the same class of wrong answer as answering tab 0's ROWS —
+    // which this module already refuses to do — except silent, because nothing
+    // in the response would look out of place.
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', {
+      limit: 10,
+      tabIndex: 1,
+      includeFormatting: true,
+      documentContent: serializeSheetContent(
+        {
+          version: 1,
+          rowCount: 2,
+          columnCount: 2,
+          sheetName: 'First',
+          cells: { A1: 'first' },
+          frozenRows: 1,
+          regions: [{ id: 'first-region', range: 'A1:B', headerRows: 1 }],
+          extraSheets: [{
+            name: 'Second',
+            order: 1,
+            meta: { rowCount: 3, columnCount: 3, frozenRows: 2 },
+            columns: {},
+            cells: { A1: { value: 'second' } },
+            // Regions ride inside `ranges.__regions` as a numerically keyed map.
+            ranges: { __regions: { '0': { id: 'second-region', range: 'A1:C', headerRows: 2 } } },
+            dependencies: {},
+          }],
+        },
+        { pageId: 'page-1' },
+      ),
+    });
+
+    expect(window.tabName).toBe('Second');
+    assert({
+      given: 'a formatting read of the second tab',
+      should: "describe that tab's design, not the first tab's",
+      actual: window.formatting,
+      expected: {
+        regions: [{ id: 'second-region', range: 'A1:C', headerRows: 2 }],
+        layout: { frozenRows: 2 },
+      },
+    });
+  });
+
   it('builds it when asked, from the tab already in hand', async () => {
     mockGetTab.mockResolvedValue(styledTab);
     mockReadRows.mockResolvedValue([
