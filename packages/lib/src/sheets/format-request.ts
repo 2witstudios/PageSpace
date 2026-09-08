@@ -43,13 +43,14 @@ import {
   MAX_CONDITIONAL_RANGE_CELLS,
   MAX_CONDITIONAL_RULES,
   MAX_CONDITIONAL_TOTAL_CELLS,
+  SCALE_ANCHOR_TYPES,
   addressesOfRange,
   parseConditionalRule,
   parseConditionalRules,
   type ConditionalRule,
 } from './conditional';
 import { validateRanges } from './conditional-ops';
-import { CELL_FORMAT_FIELDS, cellFormatSchema } from './format';
+import { CELL_FORMAT_FIELDS, cellFormatSchema, isValidHexColor } from './format';
 import {
   MAX_COLUMN_WIDTH,
   MAX_ROW_HEIGHT,
@@ -501,6 +502,33 @@ function firstSanitizedPath(raw: unknown, stored: unknown, path: string): string
 }
 
 /**
+ * Why a scale anchor is unusable, in words, or null when it is fine.
+ *
+ * The one class of damage the readback comparator is blind to, because nothing
+ * is dropped: when `readAnchor` cannot read an anchor it returns null, and the
+ * rule builders then keep the caller's original through their `...value`
+ * spread. The anchor is stored EXACTLY as written — and quietly means something
+ * else. `anchorValue` substitutes the data's own minimum or maximum for an
+ * unreadable type, and a `colorScale` whose `mid` has no usable colour renders
+ * nothing at all: `mixColors` returns null for both halves of the gradient, so
+ * every cell in range comes back unpainted. Measured, not assumed — swapping
+ * that one `mid.color` for a valid hex takes the same rule from zero formatted
+ * cells to every cell painted.
+ */
+const anchorProblem = (anchor: unknown, needsColor: boolean): string | null => {
+  if (anchor === undefined) return null;
+
+  if (!isObject(anchor) || typeof anchor.type !== 'string' || !SCALE_ANCHOR_TYPES.has(anchor.type)) {
+    return `needs a type of ${[...SCALE_ANCHOR_TYPES].join(', ')}`;
+  }
+  if (needsColor && !isValidHexColor(anchor.color)) {
+    return 'needs a #rrggbb colour';
+  }
+
+  return null;
+};
+
+/**
  * Parse a caller-supplied rule, refusing anything the parser would quietly
  * rewrite on the way in.
  *
@@ -588,6 +616,33 @@ function validateRuleInput(
       `"${sanitized}" is not something this sheet can store, and would be dropped or changed on the ` +
         'way in. Nothing about a stored rule may differ from what was asked for.'
     );
+  }
+
+  // Anchors, which the comparator cannot speak for — see `anchorProblem`.
+  if (rule.kind === 'colorScale') {
+    for (const [name, value] of [['min', rule.min], ['mid', rule.mid], ['max', rule.max]] as const) {
+      const problem = anchorProblem(value, true);
+      if (problem) {
+        return refuseOp(
+          index,
+          type,
+          `The colorScale's ${name} anchor ${problem}. Stored as written it renders no colour at ` +
+            'all, on any cell in range.'
+        );
+      }
+    }
+  } else if (rule.kind === 'dataBar') {
+    for (const [name, value] of [['min', rule.min], ['max', rule.max]] as const) {
+      const problem = anchorProblem(value, false);
+      if (problem) {
+        return refuseOp(
+          index,
+          type,
+          `The dataBar's ${name} anchor ${problem}. Stored as written it is ignored, and the bars ` +
+            `are scaled to the data's own ${name} instead.`
+        );
+      }
+    }
   }
 
   return rule;

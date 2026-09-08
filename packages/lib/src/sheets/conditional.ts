@@ -680,6 +680,19 @@ const OPERATORS = new Set<ConditionalOperator>([
 
 const ANCHOR_TYPES = new Set(['min', 'max', 'number', 'percent', 'percentile']);
 
+/**
+ * The anchor types `readAnchor` accepts, exported so a write path can refuse
+ * what this one merely declines to read.
+ *
+ * An anchor whose type this set does not hold makes `readAnchor` return null —
+ * and the rule builders below then fall back to the ORIGINAL value through
+ * their `...value` spread, so the unusable anchor is stored verbatim and
+ * `anchorValue` silently substitutes the data's own minimum or maximum for it.
+ * A validator has no way to notice that by re-reading what it stored, because
+ * nothing was dropped; it has to know the list.
+ */
+export const SCALE_ANCHOR_TYPES: ReadonlySet<string> = ANCHOR_TYPES;
+
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 

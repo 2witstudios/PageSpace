@@ -602,6 +602,58 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
     ).toContain('regions[1]: "theme"');
   });
 
+  it('refuses a scale anchor that would be stored verbatim and mean something else', () => {
+    // The comparator is blind here on purpose: `readAnchor` returns null for an
+    // anchor it cannot read, and the rule builder then keeps the caller's
+    // original through its `...value` spread. Nothing is dropped — the anchor
+    // is stored EXACTLY as written and quietly means something different.
+    //
+    // Measured against the evaluator, a colorScale whose `mid` colour is
+    // unusable produces `{}` — not a two-stop gradient, no formatting at all —
+    // while the identical rule with `#ff0000` paints every cell in range.
+    const scale = (mid: unknown) => ({
+      id: 'cs',
+      kind: 'colorScale',
+      ranges: ['A1:A9'],
+      min: { type: 'min', color: '#ffffff' },
+      mid,
+      max: { type: 'max', color: '#000000' },
+    });
+
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: scale({ type: 'percentile', value: 50, color: 'redd' }) }])
+    ).toContain("colorScale's mid anchor needs a #rrggbb colour");
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: scale({ type: 'midpoint', color: '#ff0000' }) }])
+    ).toContain("colorScale's mid anchor needs a type of");
+    // A valid mid still goes through, and an omitted one is a two-stop scale.
+    expect(
+      plan([{ type: 'addConditionalRule', rule: scale({ type: 'percentile', value: 50, color: '#ff0000' }) }])
+        .conditionalFormats
+    ).toHaveLength(1);
+    expect(
+      plan([{ type: 'addConditionalRule', rule: scale(undefined) }]).conditionalFormats
+    ).toHaveLength(1);
+
+    // A dataBar anchor the parser cannot read is not blank, but it is not what
+    // was asked for either: `anchorValue` falls back to the data's own extreme,
+    // so `{type: 'nubmer', value: 50}` silently becomes "the smallest value".
+    expect(
+      refusalOf([
+        {
+          type: 'addConditionalRule',
+          rule: {
+            id: 'db',
+            kind: 'dataBar',
+            ranges: ['A1:A9'],
+            color: '#3b82f6',
+            min: { type: 'nubmer', value: 50 },
+          },
+        },
+      ])
+    ).toContain("dataBar's min anchor needs a type of");
+  });
+
   it('refuses a theme the palette does not have, which would render as another colour', () => {
     // `parseRegion` accepts any lowercase word and `hueByName` then falls back
     // to the default at RENDER time — so this is a sanitization the comparator
