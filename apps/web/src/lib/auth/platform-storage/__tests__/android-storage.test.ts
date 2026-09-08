@@ -487,6 +487,28 @@ describe('AndroidStorage', () => {
       expect(localStorage.getItem('browser_device_id')).toBe('web_abc123');
     });
 
+    it('forgets the revoked session id, so a later sign-in is not shadowed', async () => {
+      keychainMock.get.mockResolvedValueOnce({
+        value: JSON.stringify({
+          sessionToken: 'session-token',
+          deviceId: 'native-device-id',
+          deviceToken: 'native-device-token',
+        }),
+      });
+      const storage = await importAndroidStorage();
+      await storage.getStoredSession();
+
+      await storage.clearSession();
+
+      // A fresh web sign-in, then a keystore that refuses: the answer must come
+      // from the new binding, not the session logout just revoked.
+      localStorage.setItem('deviceToken', 'new-device-token');
+      localStorage.setItem('browser_device_id', 'web_abc123');
+      keychainMock.get.mockRejectedValue(new Error(INIT_FAILURE));
+
+      expect(await storage.getDeviceId()).toBe('web_abc123');
+    });
+
     it('still completes the logout when the store rejects', async () => {
       keychainMock.remove.mockRejectedValue(new Error(INIT_FAILURE));
       vi.spyOn(console, 'error').mockImplementation(() => {});

@@ -318,6 +318,12 @@ export class AndroidStorage implements PlatformStorage {
     // refresh. The device *id* stays, as it does on web and in preferences —
     // logout ends a session, not a device's identity.
     clearLegacy(LEGACY_DEVICE_TOKEN_KEY);
+    // Nothing is in force any more, so the record of what was must go too.
+    // Otherwise a sign-in that writes a new legacy binding, followed by a read
+    // the keystore refuses, would be answered with the id of the session this
+    // call just revoked. The durable identity survives in preferences, which is
+    // where the no-binding case reads from.
+    this.lastKnownDeviceId = null;
     this.dispatchAuthEvent('auth:cleared');
   }
 
