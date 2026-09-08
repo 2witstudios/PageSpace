@@ -1762,6 +1762,38 @@ describe('planFormatOps — the dashboard this epic exists for', () => {
         tab
       ).steps
     ).toHaveLength(20);
+
+    // The two limits this module invents rather than inherits, exercised right
+    // up against their stated ceilings — because a ceiling nothing reaches in a
+    // test is a number nobody has checked. Halving either of these used to
+    // break nothing.
+    // A literal 150, not `MAX_FORMAT_OPS` — a batch sized from the constant
+    // shrinks with it, so it would pass at any ceiling and pin nothing. This is
+    // a claim about how many ops a caller may send, and it has to be written
+    // down as a number to be one.
+    expect(MAX_FORMAT_OPS).toBeGreaterThanOrEqual(150);
+    expect(
+      plan(
+        Array.from({ length: 150 }, (_, i) => ({
+          type: 'setCellFormat' as const,
+          range: `A${i + 1}`,
+          patch: { bold: true },
+        })),
+        tab
+      ).steps
+    ).toHaveLength(150);
+
+    // ~190,000 cells across 19 ops: inside the per-request budget, and past
+    // half of it.
+    expect(
+      plan(
+        Array.from({ length: 19 }, (_, i) => ({
+          type: 'clearCellFormat' as const,
+          range: `A${i * 10 + 1}:B${i * 10 + 5000}`,
+        })),
+        tab
+      ).steps
+    ).toHaveLength(19);
   });
 
   it('accepts the region the read half of this epic documents', () => {

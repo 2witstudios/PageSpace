@@ -668,6 +668,15 @@ function validateFreeze(
  * `SheetFormatError` exists to prevent. Twelve is far past anything the rule
  * and region shapes reach on their own; the deepest is `borders.top.color`, at
  * three.
+ *
+ * Which is also why no test pins this number, or `MAX_COMPARE_VALUES` — halving
+ * either breaks nothing, because there is no legitimate input anywhere near
+ * them to break. That is the honest state of a bound set purely to stop an
+ * attack: the justification lives in this comment, because there is nothing
+ * real to measure it against. The bounds a caller CAN reach are a different
+ * matter, and each is exercised right up against its ceiling by a test —
+ * halving `MAX_FORMAT_OPS`, `MAX_FORMAT_CELLS`, `MAX_FORMAT_CELLS_PER_REQUEST`
+ * or `MAX_FORMULA_EXPANSION` does break something.
  */
 const MAX_COMPARE_DEPTH = 12;
 
