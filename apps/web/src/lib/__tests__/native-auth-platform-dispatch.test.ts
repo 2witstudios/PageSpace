@@ -57,6 +57,11 @@ describe('native auth: platform dispatch', () => {
       )
     );
     global.fetch = fetchMock as unknown as typeof global.fetch;
+    // `clearAllMocks` clears calls but not implementations, so a test that makes
+    // `initialize` reject would leak that into the next one. Reset both.
+    socialLogin.initialize.mockReset();
+    socialLogin.initialize.mockResolvedValue(undefined);
+    socialLogin.login.mockReset();
     socialLogin.login.mockResolvedValue({
       result: { responseType: 'online', idToken: 'google-id-token' },
     });
@@ -197,6 +202,60 @@ describe('native auth: platform dispatch', () => {
       expect(result.success).toBe(false);
       expect(socialLogin.initialize).not.toHaveBeenCalled();
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // Task-page requirement: "Given the native plugin is unavailable, should fall
+  // back to web OAuth rather than leaving the caller with no session." The
+  // module cannot do that itself — it reports `unavailable` and the hook falls
+  // back (see useOAuthSignIn.native-fallback.test.tsx).
+  describe('a plugin that cannot load or initialize reports itself unavailable', () => {
+    it('given the Google plugin will not initialize, should say unavailable rather than fail the sign-in', async () => {
+      setPlatform('android');
+      socialLogin.initialize.mockRejectedValue(new Error('plugin not implemented on android'));
+      const { signInWithGoogle } = await import('../native-google-auth');
+
+      const result = await signInWithGoogle();
+
+      expect(result.success).toBe(false);
+      expect(result.unavailable).toBe(true);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('given the Apple plugin will not initialize, should say unavailable', async () => {
+      setPlatform('ios');
+      socialLogin.initialize.mockRejectedValue(new Error('plugin not implemented'));
+      const { signInWithApple } = await import('../native-apple-auth');
+
+      const result = await signInWithApple();
+
+      expect(result.unavailable).toBe(true);
+    });
+
+    it('given Apple on Android, should say unavailable so the caller takes the web flow', async () => {
+      setPlatform('android');
+      const { signInWithApple } = await import('../native-apple-auth');
+
+      expect((await signInWithApple()).unavailable).toBe(true);
+    });
+
+    it('given a sign-in that genuinely fails, should NOT say unavailable', async () => {
+      setPlatform('ios');
+      socialLogin.login.mockRejectedValue(new Error('Google rejected the token'));
+      const { signInWithGoogle } = await import('../native-google-auth');
+
+      const result = await signInWithGoogle();
+
+      expect(result.success).toBe(false);
+      expect(result.unavailable).toBeUndefined();
+    });
+
+    it('given a missing client ID, should NOT say unavailable — it is a loud misconfiguration', async () => {
+      setPlatform('android');
+      vi.stubEnv('NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID', '');
+      const { signInWithGoogle } = await import('../native-google-auth');
+
+      expect((await signInWithGoogle()).unavailable).toBeUndefined();
     });
   });
 

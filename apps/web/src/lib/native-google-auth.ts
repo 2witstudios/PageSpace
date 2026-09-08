@@ -24,6 +24,16 @@ import { createId } from '@paralleldrive/cuid2';
 export interface GoogleAuthResult {
   success: boolean;
   error?: string;
+  /**
+   * The native path could not run here at all — the plugin would not load, or
+   * would not initialize. Distinct from a failed sign-in: the caller should fall
+   * back to web OAuth rather than leaving the user with no session and a toast.
+   *
+   * Deliberately NOT set for a missing client id. That is a deployment
+   * misconfiguration with an actionable message, and it is the one refusal iOS
+   * already surfaces to the user today.
+   */
+  unavailable?: boolean;
   isNewUser?: boolean;
   invitedDriveId?: string | null;
   inviteError?: string;
@@ -111,16 +121,10 @@ const NATIVE_GOOGLE_CONFIG: Partial<Record<Platform, NativeGoogleConfig>> = {
  */
 export async function signInWithGoogle(options: { inviteToken?: string; returnUrl?: string } = {}): Promise<GoogleAuthResult> {
   // Guard: only run where a native Google SDK exists.
-  if (!isNativeGoogleAuthAvailable()) {
-    return { success: false, error: 'Not in a native app with Google sign-in' };
-  }
-
   const platform = getPlatform();
   const config = NATIVE_GOOGLE_CONFIG[platform];
-  // `supportsNativeAuthProvider` already implies a row here; this narrows the
-  // Partial<> for the compiler and cannot be reached at runtime.
-  if (!config) {
-    return { success: false, error: 'Not in a native app with Google sign-in' };
+  if (!isNativeGoogleAuthAvailable() || !config) {
+    return { success: false, unavailable: true, error: 'Not in a native app with Google sign-in' };
   }
 
   const init = config.init();
@@ -129,17 +133,29 @@ export async function signInWithGoogle(options: { inviteToken?: string; returnUr
     return { success: false, error: config.misconfigured };
   }
 
+  // Loading and initializing the plugin is a separate failure from signing in
+  // with it: a shell built without the plugin, or one whose native side did not
+  // register, fails here — and the right answer is the web flow, not an error
+  // toast on a user who simply wanted to sign in.
+  let SocialLogin: typeof import('@capgo/capacitor-social-login').SocialLogin;
+  let Preferences: typeof import('@capacitor/preferences').Preferences;
+  let PageSpaceKeychain: typeof import('./keychain-plugin').PageSpaceKeychain;
   try {
     // Dynamic imports for Capacitor plugins (only available in native context)
-    const { SocialLogin } = await import('@capgo/capacitor-social-login');
-    const { Preferences } = await import('@capacitor/preferences');
-    const { PageSpaceKeychain } = await import('./keychain-plugin');
+    ({ SocialLogin } = await import('@capgo/capacitor-social-login'));
+    ({ Preferences } = await import('@capacitor/preferences'));
+    ({ PageSpaceKeychain } = await import('./keychain-plugin'));
 
     // Initialize the plugin with this platform's client ID
     await SocialLogin.initialize({
       google: init,
     });
+  } catch (error) {
+    console.error('[Native Google Auth] Native plugin unavailable:', error);
+    return { success: false, unavailable: true, error: 'Native Google sign-in unavailable' };
+  }
 
+  try {
     // Trigger native Google Sign-In (shows native account picker)
     const result = await SocialLogin.login({
       provider: 'google',
@@ -237,9 +253,15 @@ export async function signInWithGoogle(options: { inviteToken?: string; returnUr
  * Check if native Google Sign-In is available.
  *
  * True wherever the platform ships a native Google SDK — iOS and Android today.
+ *
+ * Both halves are required: the capability table says the platform *has* an SDK,
+ * and the config table below says this module knows how to configure it. If the
+ * two ever drift, the missing row makes the platform report unavailable and the
+ * caller takes the web flow — rather than claiming native support and then
+ * refusing every attempt.
  */
 export function isNativeGoogleAuthAvailable(): boolean {
-  return supportsNativeAuthProvider('google');
+  return supportsNativeAuthProvider('google') && !!NATIVE_GOOGLE_CONFIG[getPlatform()];
 }
 
 /**

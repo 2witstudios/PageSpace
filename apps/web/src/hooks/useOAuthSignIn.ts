@@ -210,10 +210,20 @@ export function useOAuthSignIn({ onStart, onError, inviteToken, returnUrl }: Use
         });
         if (result.success) {
           await handleNativeSuccess(result);
-        } else if (result.error !== 'Sign-in cancelled') {
-          reportError(result.error || 'Google sign-in failed');
+          return;
         }
-        return;
+        // `unavailable` means the native path could not run at all — the plugin
+        // would not load or initialize. Falling through to web OAuth is the only
+        // outcome that still ends with the user signed in; reporting an error
+        // would strand them on a dead button. Every other failure (a cancel, a
+        // rejected token, an unconfigured client) is about this attempt and is
+        // surfaced as-is.
+        if (!result.unavailable) {
+          if (result.error !== 'Sign-in cancelled') {
+            reportError(result.error || 'Google sign-in failed');
+          }
+          return;
+        }
       }
 
       await initiateWebOAuth('/api/auth/google/signin', 'google');
@@ -241,10 +251,16 @@ export function useOAuthSignIn({ onStart, onError, inviteToken, returnUrl }: Use
         });
         if (result.success) {
           await handleNativeSuccess(result);
-        } else if (result.error !== 'Sign-in cancelled') {
-          reportError(result.error || 'Apple sign-in failed');
+          return;
         }
-        return;
+        // See the Google branch: only a native path that could not run at all
+        // falls through to the web flow.
+        if (!result.unavailable) {
+          if (result.error !== 'Sign-in cancelled') {
+            reportError(result.error || 'Apple sign-in failed');
+          }
+          return;
+        }
       }
 
       await initiateWebOAuth('/api/auth/apple/signin', 'apple');
