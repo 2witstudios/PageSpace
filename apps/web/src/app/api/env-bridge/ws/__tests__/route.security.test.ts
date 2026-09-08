@@ -168,6 +168,54 @@ describe('env-bridge ws route', () => {
     return ws;
   }
 
+  // ---- the pre-listener race (found by the first real enrollment) -----------------
+  describe('a hello that beats the message listener', () => {
+    it('should still authorize when the hello arrives DURING the awaits, not after them', async () => {
+      // The socket is already flowing when UPGRADE is entered and the daemon
+      // sends its hello the instant `open` fires — but the real handler cannot
+      // exist until validateSession and findLocalByEnvId have both resolved.
+      // Every other test in this file emits AFTER awaiting UPGRADE, so none of
+      // them can see this window. Here the store read is held open and the
+      // hello is delivered while it is pending: without the early buffer the
+      // frame is emitted with no listener, dropped by the EventEmitter, and the
+      // socket dies on the hello timeout having never seen it.
+      let releaseRead: () => void = () => {};
+      const held = new Promise<void>((resolve) => { releaseRead = resolve; });
+      const realFind = store.findLocalByEnvId;
+      store.findLocalByEnvId = vi.fn(async (envId: string) => { await held; return realFind(envId); });
+
+      const ws = socket();
+      const upgrading = UPGRADE(ws, server, request({ url: `wss://example.com/api/env-bridge/ws?envId=${ENV}` }));
+      await flush();
+      ws.emit('message', Buffer.from(signedHello(ENV, machine)));   // arrives mid-await
+      releaseRead();
+      await upgrading;
+      await flush();
+
+      expect(store.recordHello).toHaveBeenCalledWith(expect.objectContaining({ envId: ENV }));
+      expect(ws.close).not.toHaveBeenCalled();
+      store.findLocalByEnvId = realFind;
+    });
+
+    it('should close 1008 when an unauthorized client floods frames before the handler exists', async () => {
+      let releaseRead: () => void = () => {};
+      const held = new Promise<void>((resolve) => { releaseRead = resolve; });
+      const realFind = store.findLocalByEnvId;
+      store.findLocalByEnvId = vi.fn(async (envId: string) => { await held; return realFind(envId); });
+
+      const ws = socket();
+      const upgrading = UPGRADE(ws, server, request({ url: `wss://example.com/api/env-bridge/ws?envId=${ENV}` }));
+      await flush();
+      for (let i = 0; i < 12; i += 1) ws.emit('message', Buffer.from(signedHello(ENV, machine)));
+      releaseRead();
+      await upgrading;
+      await flush();
+
+      expect(ws.close).toHaveBeenCalledWith(1008, 'Too many frames before hello');
+      store.findLocalByEnvId = realFind;
+    });
+  });
+
   // ---- mirrored from mcp-ws ------------------------------------------------------
   describe('checks mirrored one-for-one from mcp-ws/route.ts', () => {
     it('SECURITY CHECK 1: given an insecure connection, should close 1008 "Secure connection required" and audit', async () => {

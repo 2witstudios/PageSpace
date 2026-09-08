@@ -104,11 +104,16 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
   // client that floods is closed rather than allowed to grow this array.
   const earlyFrames: RawData[] = [];
   let earlyOverflow = false;
-  const bufferEarly = (data: RawData) => {
+  let ready = false;
+  // Assigned once the real handler below exists. ONE listener, installed here
+  // and never swapped: `off`/`removeListener` are not part of the socket
+  // surface this route is written against.
+  let handleMessage: (data: RawData) => void = () => {};
+  client.on('message', (data: RawData) => {
+    if (ready) { handleMessage(data); return; }
     if (earlyFrames.length >= MAX_EARLY_FRAMES) { earlyOverflow = true; return; }
     earlyFrames.push(data);
-  };
-  client.on('message', bufferEarly);
+  });
 
   // SECURITY CHECK 0 (bridge): the cloud opt-in. Off ⇒ nothing here exists.
   if (!isLocalEnvsEnabled()) {
@@ -413,7 +418,7 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
   };
 
   // Handle incoming messages
-  const handleMessage = (data: RawData) => {
+  handleMessage = (data: RawData) => {
     try {
       // SECURITY CHECK 5: Validate message size
       const sizeValidation = validateMessageSize(data);
@@ -484,10 +489,9 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
     }
   };
 
-  // The real listener exists now: stop buffering, hand over anything that
-  // arrived during the two awaits above, in order, then carry on live.
-  client.off('message', bufferEarly);
-  client.on('message', handleMessage);
+  // The real handler exists now: go live, then hand over anything that arrived
+  // during the two awaits above, in order.
+  ready = true;
   if (earlyOverflow) {
     auditRequest(request, {
       eventType: 'authz.access.denied',
