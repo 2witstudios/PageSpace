@@ -44,6 +44,7 @@ import {
   type DevPreviewServiceState,
   type HttpPortSlotHolder,
   type ListeningPort,
+  type ListenerSource,
 } from './dev-preview-core';
 import { applyDevServerServicePlan, type AppliedDevServerServicePlan } from './dev-preview-effects';
 import { unlocked, type DevPreviewLock } from './dev-preview-lock';
@@ -196,19 +197,26 @@ export interface BuildDevPreviewStatusInput {
   relay: SandboxServiceInfo | null;
   /** The realtime tier's `ports/watch` snapshot, or null when none is in hand. */
   listeners: readonly ListeningPort[] | null;
+  /**
+   * Where `listeners` came from. Defaults to `'watch'` — the realtime tier's
+   * `ports/watch` snapshot, whose silence is not evidence (see
+   * {@link ListenerSource}). Only a caller holding an authoritative probe may
+   * say `'probe'` and let a missing target render as `down`.
+   */
+  listenerSource?: ListenerSource;
   detection: DevPreviewDetection;
   openPath: string | null;
 }
 
 /** Pure: the whole read model from what the gather collected. */
-export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, relay, listeners, detection, openPath }: BuildDevPreviewStatusInput): DevPreviewStatus {
+export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, relay, listeners, listenerSource, detection, openPath }: BuildDevPreviewStatusInput): DevPreviewStatus {
   // Absent is the one reach the core cannot describe (it is asked about a
   // sprite); unreachable IS the core's `instance-unknown` (no live instance
   // id can be proven), so it is worded there and nowhere else.
   const state: DevPreviewServiceState =
     sandbox === 'absent'
       ? { status: 'none', message: SANDBOX_ABSENT_MESSAGE }
-      : describeServiceState({ liveInstanceId: sandbox === 'attached' ? liveInstanceId : null, row, relay, listeners });
+      : describeServiceState({ liveInstanceId: sandbox === 'attached' ? liveInstanceId : null, row, relay, listeners, listenerSource });
 
   let slot: DevPreviewSlotReport = { known: false };
   if (sandbox === 'attached' && listeners !== null) {

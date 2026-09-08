@@ -200,7 +200,11 @@ describe('buildDevPreviewStatus — pure fold', () => {
       assert({ given: name, should: 'be a repairable down that offers Restart', actual: [s.state.status, s.state.status === 'down' && s.state.repairable, s.canResume], expected: ['down', true, true] });
     }
     for (const [name, r, relay, listeners] of notRepairable) {
-      const s = buildDevPreviewStatus({ ...base, row: r, relay, listeners });
+      // These cases assert the server is GONE, and only a probe can establish
+      // that: a `ports/watch` snapshot missing a port has not observed its
+      // absence, and reading it as absence is what told users a working
+      // preview was down.
+      const s = buildDevPreviewStatus({ ...base, row: r, relay, listeners, listenerSource: 'probe' });
       assert({ given: name, should: 'be down with NO Restart — a reconcile would change nothing', actual: [s.state.status, s.state.status === 'down' && s.state.repairable, s.canResume], expected: ['down', false, false] });
     }
     // …but an explicit user stop is always resumable, whatever the state says.
