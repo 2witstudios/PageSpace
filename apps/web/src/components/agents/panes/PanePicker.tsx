@@ -124,6 +124,14 @@ export interface PanePickerProps {
    * job is to turn this pane into the preview. Absent ⇒ no Ports section.
    */
   onPickPort?(port: number, spriteInstanceId: string): void;
+  /**
+   * Probe the sandbox's ports as soon as the picker opens. TRUE only for a
+   * picker born of a split gesture in THIS client (`pendingPickerNodeId`) —
+   * an unbound pane is persisted, so a reload or another viewer mounts this
+   * same picker, and a probe is an exec that can wake a billed sprite. Those
+   * get an explicit Scan instead.
+   */
+  probePortsOnOpen?: boolean;
 }
 
 export default function PanePicker({
@@ -135,6 +143,7 @@ export default function PanePicker({
   canPickAssistant = false,
   sessionId,
   onPickPort,
+  probePortsOnOpen = false,
   existingShells = [],
   onPickAgent,
   onPickShell,
@@ -208,7 +217,7 @@ export default function PanePicker({
       {/* What is listening in this session's sandbox — pick one and this pane
           becomes its preview. Same sandbox as the shell, same tier gate. */}
       {onPickPort && sessionId !== undefined && (
-        <PortsSection sessionId={sessionId} canRunSandbox={canRunSandbox} onPickPort={onPickPort} />
+        <PortsSection sessionId={sessionId} canRunSandbox={canRunSandbox} probeOnOpen={probePortsOnOpen} onPickPort={onPickPort} />
       )}
 
       {/* The agents of this drive. Listed BELOW the two fixed choices rather than
@@ -303,13 +312,15 @@ function ShellPickButton({
 }
 
 /**
- * The "Ports" section: what is listening in the session's sandbox, probed
- * when the picker opens. That probe is an exec and may wake a paused sprite —
- * acceptable HERE because the picker is a user gesture (a split), not a
- * persisted node that comes back on every reload; the ports PANE never
- * probes on mount for exactly that reason. Gated on the server's `canManage`
- * (listing is the first half of exposing) so a viewer who cannot pick is
- * told so instead of being refused, and hidden on a dark deployment.
+ * The "Ports" section: what is listening in the session's sandbox. The
+ * probe is an exec and may wake a paused sprite, so it runs on open ONLY for
+ * a picker a split gesture just created in this client (`probeOnOpen`); an
+ * unbound pane is persisted, and the picker a reload or another viewer
+ * mounts offers an explicit Scan instead — the same rule the ports PANE
+ * follows. Gated on the server's `canManage` (listing is the first half of
+ * exposing) so a viewer who cannot pick is told so instead of being refused,
+ * and hidden on a dark deployment. A status read that fails is shown with
+ * a retry rather than left as "Loading…" forever.
  *
  * A click IS the pick: the audience is stated beside the list, the SELECT is
  * posted from here, and only a pick that took (including one the planner
@@ -318,6 +329,7 @@ function ShellPickButton({
  * here, as the server's sentence, so the pane is never bound to nothing.
  */
 type PortsScan =
+  | { state: 'idle' }
   | { state: 'scanning' }
   | { state: 'listed'; listing: PortsListing }
   | { state: 'failed'; message: string };
@@ -325,32 +337,35 @@ type PortsScan =
 function PortsSection({
   sessionId,
   canRunSandbox,
+  probeOnOpen,
   onPickPort,
 }: {
   sessionId: string;
   canRunSandbox: boolean;
+  probeOnOpen: boolean;
   onPickPort(port: number, spriteInstanceId: string): void;
 }) {
   const enabled = useDevPreviewCapability();
   const statusPath = sessionDevPreviewPath(sessionId);
   // One status read (no polling): it carries `canManage` and the holder the
   // audience sentence is written for. The picker is short-lived.
-  const { preview } = useDevPreviewStatus(statusPath, { enabled: enabled === true && canRunSandbox, polling: false });
+  const { preview, error: statusError, mutate: retryStatus } = useDevPreviewStatus(statusPath, { enabled: enabled === true && canRunSandbox, polling: false });
   const canManage = preview?.canManage === true;
-  const [scan, setScan] = useState<PortsScan>({ state: 'scanning' });
+  const [scan, setScan] = useState<PortsScan>({ state: 'idle' });
   const [picking, setPicking] = useState<number | null>(null);
   const [pickError, setPickError] = useState<string | null>(null);
+  // 0 = no explicit Scan yet; the open-probe counts only when `probeOnOpen`.
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    if (!canManage) return;
+    if (!canManage || (attempt === 0 && !probeOnOpen)) return;
     let cancelled = false;
     setScan({ state: 'scanning' });
     post<PortsListing>(devPreviewPortsPath(statusPath), {})
       .then((listing) => { if (!cancelled) setScan({ state: 'listed', listing }); })
       .catch((error: unknown) => { if (!cancelled) setScan({ state: 'failed', message: messageOf(error, 'The sandbox could not be asked which ports are listening.') }); });
     return () => { cancelled = true; };
-  }, [canManage, statusPath, attempt]);
+  }, [canManage, statusPath, attempt, probeOnOpen]);
 
   const pick = useCallback(
     async (port: number, spriteInstanceId: string) => {
@@ -376,9 +391,18 @@ function PortsSection({
       {!canRunSandbox ? (
         <ShellPickButton label="Ports" disabled onClick={() => undefined} testId="pick-ports" />
       ) : preview === undefined ? (
-        <p className="text-xs text-muted-foreground">Loading preview status…</p>
+        statusError ? (
+          <>
+            <p className="text-xs text-destructive" role="alert" data-testid="ports-status-error">{messageOf(statusError, 'The preview status could not be read.')}</p>
+            <Button variant="ghost" size="sm" className="h-8 justify-start px-2" onClick={() => retryStatus()} data-testid="ports-status-retry">Retry</Button>
+          </>
+        ) : (
+          <p className="text-xs text-muted-foreground">Loading preview status…</p>
+        )
       ) : !canManage ? (
         <p className="text-xs text-muted-foreground" data-testid="ports-cannot-manage">{CANNOT_MANAGE_PORTS}.</p>
+      ) : scan.state === 'idle' ? (
+        <ShellPickButton label="Scan ports" disabled={false} onClick={() => setAttempt((n) => n + 1)} testId="ports-scan" />
       ) : scan.state === 'scanning' ? (
         <p className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="ports-scanning">
           <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />

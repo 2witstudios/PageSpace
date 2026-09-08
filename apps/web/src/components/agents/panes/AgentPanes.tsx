@@ -1590,6 +1590,9 @@ export default function AgentPanes({
               onPickPage={(pageId) => handlePickPage(node.id, pageId)}
               sessionId={sessionId}
               onPickPort={() => handlePickPort(node.id)}
+              // The same signal as `autoFocus`: a picker THIS client just
+              // split into probes on open; a persisted one waits for Scan.
+              probePortsOnOpen={tree?.pendingPickerNodeId === node.id}
             />
           ) : surface.surface === 'loading' ? (
             <div className="flex h-full items-center justify-center">

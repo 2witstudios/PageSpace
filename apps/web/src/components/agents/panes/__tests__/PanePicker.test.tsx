@@ -236,17 +236,37 @@ describe('ports', () => {
     mockPost.mockReset();
   });
 
-  const renderPicker = (over: { canRunSandbox?: boolean; onPickPort?: (port: number, instance: string) => void; sessionId?: string } = {}) =>
+  const renderPicker = (over: { canRunSandbox?: boolean; onPickPort?: (port: number, instance: string) => void; sessionId?: string; probePortsOnOpen?: boolean } = {}) =>
     render(
-      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-        <PanePicker agents={agents} canRunSandbox={over.canRunSandbox ?? true} sessionId={'sessionId' in over ? over.sessionId : 'ws1'} onPickAgent={vi.fn()} onPickShell={vi.fn()} onPickPort={'onPickPort' in over ? over.onPickPort : vi.fn()} />
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0, shouldRetryOnError: false }}>
+        <PanePicker agents={agents} canRunSandbox={over.canRunSandbox ?? true} sessionId={'sessionId' in over ? over.sessionId : 'ws1'} probePortsOnOpen={over.probePortsOnOpen ?? true} onPickAgent={vi.fn()} onPickShell={vi.fn()} onPickPort={'onPickPort' in over ? over.onPickPort : vi.fn()} />
       </SWRConfig>,
     );
+
+  it('a PERSISTED picker (a reload, another viewer) never probes on mount — it offers Scan, and only Scan probes', async () => {
+    mockPost.mockResolvedValueOnce(LISTING);
+    renderPicker({ probePortsOnOpen: false });
+    const scanButton = await screen.findByTestId('ports-scan');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mockPost).not.toHaveBeenCalled();
+    await userEvent.click(scanButton);
+    await screen.findByTestId('ports-pick-3000');
+    expect(mockPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('a status read that fails shows the sentence with Retry — never "Loading…" forever — and Retry re-reads', async () => {
+    mockFetchJSON.mockRejectedValueOnce(new Error('Service unavailable'));
+    mockPost.mockResolvedValueOnce(LISTING);
+    renderPicker();
+    expect(await screen.findByTestId('ports-status-error')).toHaveTextContent('Service unavailable');
+    expect(mockPost).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId('ports-status-retry'));
+    await screen.findByTestId('ports-pick-3000');
+  });
 
   it('probes the session\'s sandbox ONCE when the picker opens and lists what is listening beside Shell and Agents', async () => {
     mockPost.mockResolvedValueOnce(LISTING);
     renderPicker();
-    await screen.findByTestId('ports-scanning');
     await screen.findByTestId('ports-pick-3000');
     expect(mockPost).toHaveBeenCalledTimes(1);
     expect(mockPost).toHaveBeenCalledWith(PORTS_PATH, {});
