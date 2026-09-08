@@ -597,6 +597,36 @@ describe('a region-derived format is part of what a cell reads as', () => {
     expect(window.rows[0].unformatted).toEqual({ A: 1200 });
   });
 
+  it('leaves the region format alone when a rule fires carrying only a colour', async () => {
+    // The case a "conditional beats region" test does NOT cover, and the one a
+    // careless implementation gets wrong: a rule that fires but specifies no
+    // number format must not disturb the number format underneath it. Most real
+    // rules are exactly this — "shade this cell red" — so an implementation that
+    // replaced the whole format on a match would strip the currency or percent
+    // from every cell it highlighted.
+    mockGetTab.mockResolvedValue({
+      ...regionTab,
+      conditionalFormats: [{
+        id: 'shade', kind: 'cell', ranges: ['C1:C99'],
+        condition: { operator: 'greaterThan', value: '100' },
+        format: { background: '#fee2e2' },
+      }],
+    });
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 1, cells: { C: { raw: '1200', value: 1200 } } },
+      { rowIndex: 2, cells: { C: { raw: '5', value: 5 } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    assert({
+      given: 'a colour-only rule that fires on one cell in a currency region',
+      should: "keep the region's currency on both, fired or not",
+      actual: { fired: window.rows[0].cells.C, notFired: window.rows[1].cells.C },
+      expected: { fired: '$1,200.00', notFired: '$5.00' },
+    });
+  });
+
   it('still hands back the number underneath it', async () => {
     // The whole point of resolving the layer: having made the display richer,
     // the machine value has to stay recoverable or the read is lossy again.
