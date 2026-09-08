@@ -232,10 +232,11 @@ succeed — which is prerequisite 1.
 
 ### The filter to add, once both prerequisites are met
 
-iOS is deferred for the same reason and claims no paths either — see
+iOS now routes these links — `apps/web/src/components/DeepLinkHandler.tsx` consumes
+`appUrlOpen` and `getLaunchUrl`, so **Prerequisite 2 above is met for both platforms**;
+what remains for Android is the signing cert and `assetlinks.json`. Paths mirror
 `apps/marketing/public/.well-known/apple-app-site-association` (the copy Caddy actually
-serves) and the "Universal links" section of `apps/ios/README.md`. Whenever the two
-platforms do start capturing links, they should capture the same ones. Widening beyond these paths should still wait on prerequisite 2 — whole-host
+serves), currently `/invite/*` only, so the two platforms capture the same links. Widening beyond these paths should still wait on prerequisite 2 — whole-host
 capture would strand users on `/dashboard` from every marketing, blog, or docs link.
 
 A third prerequisite applies to the auth-callback paths specifically: `/api/auth/desktop/exchange`
