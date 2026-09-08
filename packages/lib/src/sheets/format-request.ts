@@ -34,7 +34,10 @@ function formulaProblem(root: ASTNode, coveredCells: number): string | null {
           return `calls ${name}(), which this sheet does not implement`;
         }
         if (!isValidCall(name, node.args.length)) {
-          return `calls ${name}() with ${node.args.length} argument(s), which it does not accept`;
+          return (
+            `calls ${name}() with ${node.args.length} ` +
+            `${node.args.length === 1 ? 'argument' : 'arguments'}, which it does not accept`
+          );
         }
 
         // Arity is checked against FLATTENED values, not argument nodes:
@@ -920,7 +923,7 @@ function ruleRenderProblem(
     // stored and thrown away. Neither shape is reachable through the panel,
     // which hides the fields it does not use.
     if (VALUELESS_OPERATORS.has(operator) && (value !== undefined || value2 !== undefined)) {
-      return `A "${operator}" rule compares against nothing, so it cannot take a value.`;
+      return `"${operator}" compares against nothing, so it cannot take a value.`;
     }
     if (!RANGE_OPERATORS.has(operator) && value2 !== undefined) {
       return `Only a between/notBetween rule has a second bound; "${operator}" ignores value2.`;
@@ -934,12 +937,12 @@ function ruleRenderProblem(
     if (!VALUELESS_OPERATORS.has(operator)) {
       if (typeof value !== 'string' || value.trim() === '') {
         return (
-          `A "${operator}" rule needs a value to compare against. Without one it matches nothing — or, ` +
-          'for a negative operator, everything.'
+          `"${operator}" needs a value to compare against. Without one it matches nothing — or, for a ` +
+          'negative operator, everything.'
         );
       }
       if (RANGE_OPERATORS.has(operator) && (typeof value2 !== 'string' || value2.trim() === '')) {
-        return `A "${operator}" rule needs both bounds: value and value2.`;
+        return `"${operator}" needs both bounds: value and value2.`;
       }
 
       // Present, non-blank, and still nothing to compare against: the operand
@@ -951,8 +954,8 @@ function ruleRenderProblem(
           if (operand === undefined) continue;
           if (asComparableNumber(operand) === null) {
             return (
-              `A "${operator}" rule compares numbers, and ${field} is "${operand}". It would match no ` +
-              'cell at all.'
+              `"${operator}" compares numbers, and ${field} is "${operand}". It would match no cell ` +
+              'at all.'
             );
           }
         }
@@ -1214,8 +1217,8 @@ function regionRenderProblem(region: SheetRegion, label: string): string | null 
     // and unlike an open region it cannot grow into a body later.
     if (bounds.rowEnd !== null && firstBodyRow > bounds.rowEnd && (region.columns?.length ?? 0) > 0) {
       return (
-        `${label}: ${region.range} is ${bounds.rowEnd - bounds.rowStart + 1} row(s) tall and all of ` +
-        `them are headers, so it has no body for a column role to apply to.`
+        `${label}: ${region.range} is ${bounds.rowEnd - bounds.rowStart + 1} rows tall and every one ` +
+        'of them is a header, so it has no body for a column role to apply to.'
       );
     }
 
@@ -1223,8 +1226,9 @@ function regionRenderProblem(region: SheetRegion, label: string): string | null 
       if (row - 1 < firstBodyRow) {
         return (
           `${label}: total row ${row} is not in the body of ${region.range}. That region starts at ` +
-          `row ${bounds.rowStart + 1} and its first ${headerRows} row(s) are headers, so its totals ` +
-          `start at row ${firstBodyRow + 1}.`
+          `row ${bounds.rowStart + 1} and its first ${headerRows} ` +
+          `${headerRows === 1 ? 'row is a header' : 'rows are headers'}, so its totals start at row ` +
+          `${firstBodyRow + 1}.`
         );
       }
 

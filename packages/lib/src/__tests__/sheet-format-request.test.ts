@@ -1215,10 +1215,10 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
     });
 
     expect(refusalOf([{ type: 'addConditionalRule', rule: formula('=ABS()') }])).toContain(
-      'calls ABS() with 0 argument(s)'
+      'calls ABS() with 0 arguments'
     );
     expect(refusalOf([{ type: 'addConditionalRule', rule: formula('=IFERROR(1)') }])).toContain(
-      'calls IFERROR() with 1 argument(s)'
+      'calls IFERROR() with 1 argument'
     );
     for (const body of ['=ABS(A1)>0', '=IFERROR(A1, 0)>0', '=SUM(A1:A9)>0', '=ROUND(A1, 2)>0']) {
       expect(plan([{ type: 'addConditionalRule', rule: formula(body) }]).conditionalFormats)
@@ -1355,7 +1355,7 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
           region: { id: 'r1', range: 'A1:B1', columns: [{ column: 'A', role: 'currency' }] },
         },
       ])
-    ).toContain('all of them are headers');
+    ).toContain('every one of them is a header');
 
     // A bodyless region that declares no columns is only a header strip, which
     // is a legitimate thing to want.
