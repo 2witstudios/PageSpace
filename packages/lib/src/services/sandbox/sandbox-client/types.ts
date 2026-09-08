@@ -36,6 +36,24 @@ export interface RunCommandArgs {
    * command and fails the run, bounding host memory against an output flood.
    */
   maxBytes?: number;
+  /**
+   * OPT-IN: resolve as soon as a stdout LINE begins with this token, instead
+   * of waiting for the exec socket to close.
+   *
+   * Why this exists (measured 2026-09-08 against real sprites): the Sprites
+   * runtime holds an exec WebSocket open for ~5s on a fresh sprite and ~10s
+   * on a long-lived one AFTER the process has exited — even for `true` — and
+   * the SDK delivers `exit` only when the socket closes. So every run through
+   * this driver carries a 5–10s tail the command did not spend, and any cap
+   * under that can never succeed. A caller whose command prints
+   * `<sentinel> <exit-code>` as its last line gets its answer at first-byte
+   * latency (~200ms); the driver reads the code from that line, stops
+   * collecting, and SIGKILLs the lingering socket itself.
+   *
+   * Inert unless set. Callers that need the process's own exit (a long build,
+   * a shell) keep the close-based contract untouched.
+   */
+  stdoutSentinel?: string;
 }
 
 export interface WriteFileEntry {

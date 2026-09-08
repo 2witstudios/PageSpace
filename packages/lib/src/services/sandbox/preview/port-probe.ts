@@ -26,8 +26,18 @@
 import type { ListeningPort } from './dev-preview-core';
 import type { RunCommandArgs, SandboxRunResult } from '../sandbox-client/types';
 
-/** Bounded: this runs inside the holder's advisory lock on the select path. */
-export const PORT_PROBE_TIMEOUT_MS = 5_000;
+/**
+ * The BACKSTOP, not the expected duration. With the sentinel below the answer
+ * arrives at first-byte latency (~200ms measured); this cap only fires if the
+ * socket never opens or the command never prints. 20s matches
+ * `sandbox-storage-measure`'s bound for the same kind of user-gesture exec —
+ * 5s was the shortest exec cap in the codebase and could never succeed, because
+ * the runtime holds the exec socket open 5–10s after the process ends and the
+ * SDK's `exit` only arrives on close (see `RunCommandArgs.stdoutSentinel`).
+ */
+export const PORT_PROBE_TIMEOUT_MS = 20_000;
+/** Ends the probe's output; the driver resolves on it instead of on socket close. */
+export const PORT_PROBE_SENTINEL = '__PS_PORTS_END__';
 /** `ss` output for a sandbox is a few KB; anything past this is not output we understand. */
 export const PORT_PROBE_MAX_BYTES = 256 * 1024;
 
@@ -49,7 +59,7 @@ export type PortProbeResult =
  * `DevPreviewSlotReport.pid` would be permanently null. `-n` keeps ports
  * numeric so nothing has to un-resolve a service name.
  */
-const PROBE_COMMAND = 'ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null';
+const PROBE_COMMAND = `(ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null); echo "${PORT_PROBE_SENTINEL} $?"`;
 
 /**
  * Pure: parse `ss -ltnp` / `netstat -ltnp` output into listening ports.
@@ -98,6 +108,7 @@ export async function probeListeningPorts(
       args: ['-c', PROBE_COMMAND],
       timeoutMs: PORT_PROBE_TIMEOUT_MS,
       maxBytes: PORT_PROBE_MAX_BYTES,
+      stdoutSentinel: PORT_PROBE_SENTINEL,
     });
   } catch (error) {
     // The driver SIGKILLs at the cap and surfaces it as a throw; anything else
@@ -121,6 +132,8 @@ export function isHeaderOnly(stdout: string): boolean {
   return stdout.split('\n').every((line) => {
     const trimmed = line.trim();
     // `ss` prints "State Recv-Q …"; `netstat` prints "Active Internet…" then "Proto …".
-    return trimmed === '' || /^(State|Active|Proto)\b/.test(trimmed);
+    // The sentinel line is ours and the driver strips it — but tolerate it
+    // here too, so a driver that did not is still an honest empty.
+    return trimmed === '' || /^(State|Active|Proto)\b/.test(trimmed) || trimmed.startsWith(PORT_PROBE_SENTINEL);
   });
 }

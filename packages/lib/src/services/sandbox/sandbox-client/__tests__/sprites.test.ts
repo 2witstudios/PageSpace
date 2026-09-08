@@ -18,6 +18,8 @@ import {
   type SpriteCommandLike,
   type SpriteFsLike,
   type SpriteCheckpointStreamLike,
+  runSpawned,
+  findSentinel,
 } from '../sprites';
 import { SandboxProvisionError } from '../../sandbox-options';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
@@ -1696,5 +1698,42 @@ describe('withKillSession', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('runSpawned — the stdout sentinel short-circuit', () => {
+  // Measured 2026-09-08: the Sprites runtime holds an exec socket open ~5s on a
+  // fresh sprite and ~10s on a long-lived one AFTER the process exits, and the
+  // SDK emits `exit` only on close. A command that ends with `<sentinel> <code>`
+  // must therefore resolve on that LINE, without waiting for a close that a
+  // 5s cap can never see.
+  it('resolves on the sentinel line for a command whose socket never closes, strips the line, reports the code, and kills the socket', async () => {
+    const command = fakeCommand({ stdout: ['LISTEN 0 511 *:3000 *:*\n', '__END__ 0\n'], hang: true });
+    const result = await runSpawned(command, 0, 2_000, '__END__');
+    expect(result).toEqual({ exitCode: 0, stdout: 'LISTEN 0 511 *:3000 *:*', stderr: '' });
+    expect(command.killed).toEqual(['SIGKILL']);
+  });
+
+  it('carries a non-zero code through the sentinel', async () => {
+    const command = fakeCommand({ stdout: ['__END__ 127\n'], hang: true });
+    expect((await runSpawned(command, 0, 2_000, '__END__')).exitCode).toBe(127);
+  });
+
+  it('is inert without a sentinel: the same hanging command still runs to the timeout', async () => {
+    const command = fakeCommand({ stdout: ['__END__ 0\n'], hang: true });
+    await expect(runSpawned(command, 0, 50)).rejects.toThrow(/timed out/);
+  });
+});
+
+describe('findSentinel', () => {
+  it('needs a COMPLETE line — a sentinel at the end of a chunk with no newline is not yet an answer', () => {
+    // `12` might be the first two bytes of `127`.
+    expect(findSentinel('out\n__END__ 12', '__END__')).toBeNull();
+    expect(findSentinel('out\n__END__ 127\n', '__END__')).toEqual({ stdout: 'out', exitCode: 127 });
+  });
+
+  it('ignores a sentinel with no numeric code, and returns the stdout BEFORE the line', () => {
+    expect(findSentinel('__END__ nope\n', '__END__')).toBeNull();
+    expect(findSentinel('a\nb\n__END__ 0\ntrailing\n', '__END__')).toEqual({ stdout: 'a\nb', exitCode: 0 });
   });
 });

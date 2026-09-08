@@ -9,7 +9,7 @@
  */
 import { describe, it } from 'vitest';
 import { assert } from '../../__tests__/riteway';
-import { parseListeningPorts, probeListeningPorts, PORT_PROBE_TIMEOUT_MS } from '../port-probe';
+import { parseListeningPorts, probeListeningPorts, PORT_PROBE_TIMEOUT_MS, PORT_PROBE_SENTINEL } from '../port-probe';
 import type { RunCommandArgs, SandboxRunResult } from '../../sandbox-client/types';
 
 // Captured verbatim from the sandbox running `next dev` — the case that
@@ -75,6 +75,32 @@ describe('parseListeningPorts', () => {
       should: 'report it once, carrying the pid',
       actual: parseListeningPorts(dual),
       expected: [{ port: 3000, pid: 7 }],
+    });
+  });
+});
+
+describe('the sentinel', () => {
+  it('is what the command ends with, and the probe asks the driver to resolve on it', async () => {
+    // The runtime holds the exec socket open 5–10s after exit and `exit`
+    // only arrives on close; the sentinel is how the probe answers in ~200ms
+    // instead of never inside its cap.
+    let seen: RunCommandArgs | null = null;
+    await probeListeningPorts(async (args) => { seen = args; return ok({ stdout: NEXT_OUTPUT }); });
+    const args = seen as unknown as RunCommandArgs;
+    assert({
+      given: 'the probe run',
+      should: 'end its command with the sentinel and pass it to the driver',
+      actual: [args.args?.[1]?.includes(`echo "${PORT_PROBE_SENTINEL} $?"`), args.stdoutSentinel],
+      expected: [true, PORT_PROBE_SENTINEL],
+    });
+  });
+
+  it('a sentinel line that reaches the parser anyway is neither a port nor a reason to call the output unparsable', async () => {
+    assert({
+      given: 'header + sentinel only (a driver that did not strip it)',
+      should: 'still be an honest empty answer',
+      actual: await probeListeningPorts(async () => ok({ stdout: `State Recv-Q Send-Q Local Address:Port\n${PORT_PROBE_SENTINEL} 0\n` })),
+      expected: { ok: true, ports: [] },
     });
   });
 });

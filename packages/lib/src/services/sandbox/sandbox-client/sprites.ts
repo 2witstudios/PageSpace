@@ -611,6 +611,27 @@ function toBuffer(chunk: Buffer | string): Buffer {
 }
 
 /**
+ * Pure: locate a `<sentinel> <exit-code>` line in collected stdout. Returns the
+ * stdout BEFORE that line and the parsed code, or null when the sentinel has not
+ * arrived yet (or arrived without a numeric code — treated as not-yet, so a
+ * partial chunk boundary cannot fake a result).
+ */
+export function findSentinel(stdout: string, sentinel: string): { stdout: string; exitCode: number } | null {
+  const lines = stdout.split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!line.startsWith(sentinel)) continue;
+    const code = Number(line.slice(sentinel.length).trim());
+    if (!Number.isInteger(code)) return null;
+    // Only a COMPLETE line counts: a sentinel at the very end with no newline
+    // may still be mid-chunk (the code could be `12` of `127`).
+    if (i === lines.length - 1) return null;
+    return { stdout: lines.slice(0, i).join('\n'), exitCode: code };
+  }
+  return null;
+}
+
+/**
  * Run a command through the SDK's `spawn` (structured `file` + `args[]`, never a
  * host-side shell string) and buffer its output. Faithfully replicates the SDK's
  * own `execFile` collection — stdout/stderr `data` listeners with a `maxBuffer`
@@ -631,6 +652,7 @@ export function runSpawned(
   command: SpriteCommandLike,
   maxBytes: number,
   timeoutMs: number | undefined,
+  stdoutSentinel?: string,
 ): Promise<SandboxRunResult> {
   const maxBuffer = maxBytes > 0 ? maxBytes : DEFAULT_MAX_OUTPUT_BYTES;
   return new Promise<SandboxRunResult>((resolve, reject) => {
@@ -688,6 +710,20 @@ export function runSpawned(
       // Output proves the connection opened, even if the 'spawn' event was missed.
       opened = true;
       stdoutLen = collect(stdoutChunks, chunk, stdoutLen);
+      if (stdoutSentinel === undefined || settled) return;
+      // THE SENTINEL SHORT-CIRCUIT (see `RunCommandArgs.stdoutSentinel`): the
+      // runtime holds the socket open 5–10s after exit, and `exit` arrives only
+      // on close. A caller that ends its command with `<sentinel> <code>` has
+      // told us everything the close would; take it now and kill the lingering
+      // socket ourselves. The sentinel line is stripped from the result.
+      const found = findSentinel(Buffer.concat(stdoutChunks).toString('utf8'), stdoutSentinel);
+      if (found === null) return;
+      try {
+        command.kill('SIGKILL');
+      } catch {
+        // Best-effort: the socket closes on its own within the runtime's grace.
+      }
+      succeed({ exitCode: found.exitCode, stdout: found.stdout, stderr: Buffer.concat(stderrChunks).toString('utf8') });
     });
     command.stderr.on('data', (chunk) => {
       opened = true;
@@ -867,8 +903,9 @@ function runSpawnedWithWakeRetry(
   spawnFn: () => SpriteCommandLike,
   maxBytes: number,
   timeoutMs: number | undefined,
+  stdoutSentinel?: string,
 ): Promise<SandboxRunResult> {
-  return withWakeRetry(() => runSpawned(spawnFn(), maxBytes, timeoutMs));
+  return withWakeRetry(() => runSpawned(spawnFn(), maxBytes, timeoutMs, stdoutSentinel));
 }
 
 /** Reject if `p` has not settled within `ms` — the Sprite filesystem API uses a
@@ -1179,7 +1216,7 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
     // identity is unknown — both of which the caller must treat as "unproven".
     egressPolicyToken,
 
-    async runCommand({ cmd, args = [], cwd, env, timeoutMs, maxBytes }: RunCommandArgs): Promise<SandboxRunResult> {
+    async runCommand({ cmd, args = [], cwd, env, timeoutMs, maxBytes, stdoutSentinel }: RunCommandArgs): Promise<SandboxRunResult> {
       // spawn (arg array), never a host-side shell string. The untrusted command
       // runs under the Sprite's own `sh -c`, contained by the VM. Re-spawned per
       // attempt so a cold-start wake drop reconnects on a fresh WebSocket.
@@ -1190,7 +1227,7 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
       const spawnFn = cwd === undefined
         ? () => sprite.spawn(cmd, args, { env })
         : () => sprite.spawn(...spawnWithSelfHealingCwd({ command: cmd, args, cwd }), { env });
-      return runSpawnedWithWakeRetry(spawnFn, maxBytes ?? 0, timeoutMs);
+      return runSpawnedWithWakeRetry(spawnFn, maxBytes ?? 0, timeoutMs, stdoutSentinel);
     },
 
     async writeFiles(files: WriteFileEntry[]): Promise<void> {
