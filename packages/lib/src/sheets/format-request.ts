@@ -441,7 +441,11 @@ export type SheetFormatOp =
   | { type: 'setColumnFormat'; column: string; patch: CellFormat }
   | { type: 'setColumnWidth'; column: string; width: number | null }
   | { type: 'setRowHeight'; row: number; height: number | null }
-  | { type: 'setFrozen'; rows: number | null; columns: number | null }
+  // An OMITTED axis keeps what the tab has at plan time — under the store's
+  // lock, so a caller that means "freeze one row" never has to send a value
+  // for the columns it read a moment ago and cannot know still holds.
+  // `null` clears.
+  | { type: 'setFrozen'; rows?: number | null; columns?: number | null }
   | { type: 'addConditionalRule'; rule: unknown }
   | { type: 'updateConditionalRule'; id: string; patch: Record<string, unknown> }
   | { type: 'removeConditionalRule'; id: string }
@@ -486,6 +490,9 @@ export interface SheetFormatTarget {
   columnCount: number;
   conditionalFormats?: readonly ConditionalRule[];
   regions?: readonly SheetRegion[];
+  /** The freeze in force; a `setFrozen` that omits an axis keeps it. */
+  frozenRows?: number | null;
+  frozenColumns?: number | null;
 }
 
 export interface SheetFormatPlan {
@@ -1869,6 +1876,9 @@ export function planFormatOps(
   let regions: SheetRegion[] = [...(tab.regions ?? [])];
   let rulesTouched = false;
   let regionsTouched = false;
+  // Running, so a second freeze op in the same plan resolves its omitted
+  // axis against the first, not the tab.
+  let frozen = { rows: tab.frozenRows ?? null, columns: tab.frozenColumns ?? null };
 
   // How many cells this request has asked us to EXPAND while checking rules,
   // as opposed to how many the resulting sheet covers. Bounded by the same
@@ -2036,20 +2046,24 @@ export function planFormatOps(
       }
 
       case 'setFrozen': {
+        if (op.rows === undefined && op.columns === undefined) {
+          refuseOp(index, op.type, 'setFrozen needs "rows" and/or "columns" (a count, or null to clear).');
+        }
         const frozenRows = validateFreeze(
-          op.rows,
+          op.rows === undefined ? frozen.rows : op.rows,
           tab.rowCount,
           'frozen rows',
           index,
           op.type
         );
         const frozenColumns = validateFreeze(
-          op.columns,
+          op.columns === undefined ? frozen.columns : op.columns,
           tab.columnCount,
           'frozen columns',
           index,
           op.type
         );
+        frozen = { rows: frozenRows ?? null, columns: frozenColumns ?? null };
         steps.push({ type: 'setFrozen', rows: frozenRows, columns: frozenColumns });
         touchesTabFields = true;
         break;

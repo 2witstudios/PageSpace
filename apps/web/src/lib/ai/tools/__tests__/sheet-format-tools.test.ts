@@ -324,17 +324,19 @@ describe('format_sheet refuses an op that is wrong across its fields, before any
     state.frozenColumns = 2;
     const result = await format({ ops: [{ op: 'freeze', frozenRows: 1 }] });
     assert({ given: 'frozenRows only', should: 'accept', actual: result.success, expected: true });
+    // Only the axis named goes to the store; it keeps the other one as it
+    // finds it under its lock (see the lock-race case below).
     assert({
       given: 'a tab with two frozen columns',
-      should: 'freeze one row and keep the two columns',
-      actual: applied[0][0],
-      expected: { type: 'setFrozen', rows: 1, columns: 2 },
+      should: 'send the row and leave the columns to the store',
+      actual: [applied[0][0], state.frozenRows, state.frozenColumns],
+      expected: [{ type: 'setFrozen', rows: 1 }, 1, 2],
     });
   });
 
-  // Kills: resolving an omitted axis from the tab snapshot instead of the
-  // running state — the second op would then emit {rows: null, columns: 1}
-  // and unfreeze the row the first op had just frozen.
+  // Kills: the store resolving an omitted axis from the tab instead of its
+  // running plan — the second op would then unfreeze the row the first had
+  // just frozen.
   it('two freeze ops naming one axis each compose, the second keeping the first', async () => {
     const result = await format({
       ops: [
@@ -345,12 +347,9 @@ describe('format_sheet refuses an op that is wrong across its fields, before any
     assert({ given: 'freeze rows then freeze columns', should: 'accept', actual: result.success, expected: true });
     assert({
       given: 'a tab with nothing frozen',
-      should: 'freeze one row and, in the second op, keep it while freezing one column',
-      actual: applied[0],
-      expected: [
-        { type: 'setFrozen', rows: 1, columns: null },
-        { type: 'setFrozen', rows: 1, columns: 1 },
-      ],
+      should: 'send each axis on its own and end with both frozen',
+      actual: [applied[0], state.frozenRows, state.frozenColumns],
+      expected: [[{ type: 'setFrozen', rows: 1 }, { type: 'setFrozen', columns: 1 }], 1, 1],
     });
   });
 
@@ -367,11 +366,8 @@ describe('format_sheet refuses an op that is wrong across its fields, before any
     assert({
       given: 'two header rows pinned by the region',
       should: 'keep those two rows when the op names only columns',
-      actual: ops.filter((op) => op.type === 'setFrozen'),
-      expected: [
-        { type: 'setFrozen', rows: 2, columns: null },
-        { type: 'setFrozen', rows: 2, columns: 1 },
-      ],
+      actual: [ops.filter((op) => op.type === 'setFrozen'), state.frozenRows, state.frozenColumns],
+      expected: [[{ type: 'setFrozen', rows: 2 }, { type: 'setFrozen', columns: 1 }], 2, 1],
     });
   });
 
@@ -391,11 +387,11 @@ describe('format_sheet refuses an op that is wrong across its fields, before any
     assert({
       given: 'a tab with three rows and two columns frozen',
       should: 'clear both, then freeze one column with no rows',
-      actual: applied[0],
-      expected: [
+      actual: [applied[0], state.frozenRows, state.frozenColumns],
+      expected: [[
         { type: 'setFrozen', rows: null, columns: null },
-        { type: 'setFrozen', rows: null, columns: 1 },
-      ],
+        { type: 'setFrozen', columns: 1 },
+      ], null, 1],
     });
   });
 
@@ -417,7 +413,7 @@ describe('format_sheet refuses an op that is wrong across its fields, before any
     const ops = applied[0];
     expect(ops[0].type).toBe('upsertRegion');
     expect((ops[0] as { region: SheetRegion }).region).not.toHaveProperty('freezeHeader');
-    assert({ given: 'two header rows', should: 'freeze two rows', actual: ops[1], expected: { type: 'setFrozen', rows: 2, columns: null } });
+    assert({ given: 'two header rows', should: 'freeze two rows', actual: ops[1], expected: { type: 'setFrozen', rows: 2 } });
   });
 
   it('freezeHeader on a region that does not start at row 1 is refused', async () => {
@@ -821,6 +817,29 @@ describe('set_conditional_format', () => {
     assert({ given: 'the overlapping retry', should: 'report the landed id', actual: retry.ruleIds, expected: ['rule-first'] });
     assert({ given: 'the overlapping retry', should: 'add and remove nothing itself', actual: [retry.added, retry.removed], expected: [0, 0] });
     assert({ given: 'the tab after', should: 'hold exactly what the first execution landed', actual: state.conditionalFormats.map((rule) => rule.id), expected: ['rule-first'] });
+  });
+
+  it('a one-axis freeze keeps the other axis as the store finds it under the lock, not as the snapshot had it', async () => {
+    // The tool read frozenColumns 2; another writer sets 3 before the store
+    // takes its lock. Freezing one row must leave 3, not write back 2.
+    state.frozenColumns = 2;
+    const real = mockApplyFormatOps.getMockImplementation()!;
+    mockApplyFormatOps.mockImplementationOnce(async (ref, ops) => {
+      state.frozenColumns = 3;
+      return real(ref, ops);
+    });
+    const result = await format({ ops: [{ op: 'freeze', frozenRows: 1 }] });
+    assert({ given: 'a rows-only freeze', should: 'succeed', actual: result.success, expected: true });
+    assert({ given: 'the tab after', should: 'keep the columns the store found', actual: [state.frozenRows, state.frozenColumns], expected: [1, 3] });
+    assert({ given: 'the op sent', should: 'name only rows', actual: applied.at(-1), expected: [{ type: 'setFrozen', rows: 1 }] });
+  });
+
+  it('two one-axis freezes in one call, and a freezeHeader followed by a columns freeze, compose', async () => {
+    const both = await format({ ops: [{ op: 'freeze', frozenRows: 1 }, { op: 'freeze', frozenColumns: 1 }] });
+    assert({ given: 'rows then columns', should: 'pin both', actual: [both.success, state.frozenRows, state.frozenColumns], expected: [true, 1, 1] });
+    state = freshTab();
+    const region = await format({ regions: [{ range: 'A1:F', headerRows: 2, freezeHeader: true }], ops: [{ op: 'freeze', frozenColumns: 1 }] });
+    assert({ given: 'freezeHeader then a columns freeze', should: 'keep the header rows the region pinned', actual: [region.success, state.frozenRows, state.frozenColumns], expected: [true, 2, 1] });
   });
 
   it('the formula examples the model sees use bounded ranges', () => {

@@ -1615,6 +1615,8 @@ function formatTarget(tab: StoredTab): SheetFormatTarget {
     columnCount: tab.columnCount,
     conditionalFormats: parseConditionalRules(tab.conditionalFormats ?? undefined) ?? [],
     regions: parseRegions(tab.regions ?? undefined) ?? [],
+    frozenRows: tab.frozenRows ?? null,
+    frozenColumns: tab.frozenColumns ?? null,
   };
 }
 

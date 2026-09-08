@@ -598,35 +598,15 @@ function chargeRange(range: string, label: string, budget: { used: number }): vo
   }
 }
 
-/**
- * The freeze in force, for a `freeze` op that names only one axis.
- *
- * The store's `setFrozen` sets both axes at once and reads `null` as "clear",
- * so a freeze op that mentioned only `frozenRows` would have cleared the
- * frozen columns as a side effect. An omitted axis keeps what is frozen at
- * that point in the call — the tab's snapshot, as updated by every earlier
- * op that froze or cleared. Resolving from the snapshot alone would make
- * `[freeze rows 1, freeze columns 1]` emit `{rows: null, columns: 1}` second
- * and unfreeze the row the first op had just pinned.
- */
-interface CurrentFreeze {
-  frozenRows: number | null;
-  frozenColumns: number | null;
-}
-
 /** Validated, resolved to the store's op, and labelled for the refusal path. */
 interface PlannedOp {
   op: SheetFormatOp;
   label: string;
 }
 
-function validateFormatOps(ops: readonly FormatOpInput[], initial: CurrentFreeze): PlannedOp[] {
+function validateFormatOps(ops: readonly FormatOpInput[]): PlannedOp[] {
   const planned: PlannedOp[] = [];
   const budget = { used: 0 };
-  // Running, not the snapshot: each freeze op is resolved against what the
-  // ops before it left frozen (see CurrentFreeze). The caller's copy is not
-  // mutated, so a refusal mid-list leaves no trace.
-  let current: CurrentFreeze = { ...initial };
 
   ops.forEach((input, index) => {
     const label = `ops[${index}]`;
@@ -723,10 +703,6 @@ function validateFormatOps(ops: readonly FormatOpInput[], initial: CurrentFreeze
             );
           }
           planned.push({ label, op: { type: 'setFrozen', rows: null, columns: null } });
-          // Later ops in this call resolve their omitted axis against the
-          // clear, not the snapshot — otherwise a freeze after a clear would
-          // resurrect the axis the clear removed.
-          current = { frozenRows: null, frozenColumns: null };
           break;
         }
         if (input.frozenRows === undefined && input.frozenColumns === undefined) {
@@ -736,15 +712,17 @@ function validateFormatOps(ops: readonly FormatOpInput[], initial: CurrentFreeze
             NOTHING_APPLIED
           );
         }
-        const frozen: CurrentFreeze = {
-          frozenRows: input.frozenRows ?? current.frozenRows,
-          frozenColumns: input.frozenColumns ?? current.frozenColumns,
-        };
+        // Only the axis the model named. The store keeps the other one as
+        // it finds it UNDER ITS LOCK — resolving it here, from the snapshot,
+        // would write back a value another writer may have changed since.
         planned.push({
           label,
-          op: { type: 'setFrozen', rows: frozen.frozenRows, columns: frozen.frozenColumns },
+          op: {
+            type: 'setFrozen',
+            ...(input.frozenRows !== undefined ? { rows: input.frozenRows } : {}),
+            ...(input.frozenColumns !== undefined ? { columns: input.frozenColumns } : {}),
+          },
         });
-        current = frozen;
         break;
       }
     }
@@ -1371,23 +1349,15 @@ export const sheetFormatTools = {
             planned.push({ label: declared.labels[index], op: { type: 'upsertRegion', region } });
           });
         }
-        // The freeze the model's ops start from. A region's freezeHeader
-        // lands in it, so a later `{op: 'freeze', frozenColumns: 1}` keeps
-        // the header rows the region pinned instead of resolving its omitted
-        // rows from the snapshot and erasing them.
-        const current: CurrentFreeze = {
-          frozenRows: formatting.frozenRows,
-          frozenColumns: formatting.frozenColumns,
-        };
+        // A region's freezeHeader pins rows only; the columns axis is left
+        // to the store, which keeps what it finds under its lock. A later
+        // `{op: 'freeze', frozenColumns: 1}` in the same call resolves its
+        // omitted rows against this op, in the store's running plan.
         if (declared.frozenRows !== undefined) {
-          current.frozenRows = declared.frozenRows;
-          planned.push({
-            label: 'regions (freezeHeader)',
-            op: { type: 'setFrozen', rows: current.frozenRows, columns: current.frozenColumns },
-          });
+          planned.push({ label: 'regions (freezeHeader)', op: { type: 'setFrozen', rows: declared.frozenRows } });
         }
 
-        planned.push(...validateFormatOps(ops ?? [], current));
+        planned.push(...validateFormatOps(ops ?? []));
 
         const outcome = await applyPlanned(
           ref,

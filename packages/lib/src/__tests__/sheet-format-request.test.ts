@@ -212,10 +212,20 @@ describe('planFormatOps — the request envelope', () => {
           ...samples[type as SheetFormatOp['type']],
         };
         delete op[field];
+        if (type === 'setFrozen') {
+          // The one op whose fields are each optional BY DESIGN: an omitted
+          // axis keeps the current freeze (resolved under the lock). Only
+          // both missing is a no-op that must refuse — asserted separately.
+          expect(() => plan([op as never], target)).not.toThrow();
+          continue;
+        }
         const message = refusalOf([op as never], target);
         // Naming the field is what makes the refusal repairable in one step;
         // "invalid op" would satisfy the throw and help nobody.
         expect(message, `${type} without ${field}`).toContain(field);
+      }
+      if (type === 'setFrozen') {
+        expect(refusalOf([{ type } as never], target)).toContain('rows');
       }
     }
   });
@@ -476,6 +486,26 @@ describe('planFormatOps — columns, rows and freezes', () => {
     const result = plan([{ type: 'setFrozen', rows: 1, columns: null }]);
     expect(result.steps).toEqual([{ type: 'setFrozen', rows: 1, columns: undefined }]);
     expect(result.touchesTabFields).toBe(true);
+  });
+
+  it('an omitted freeze axis keeps what the target holds, resolved at plan time', () => {
+    // The caller that means "freeze one row" must not have to send the
+    // columns it read a moment ago: the store plans under its lock, so the
+    // value it keeps is the current one, not a stale snapshot's.
+    const tab = tabWith({ frozenRows: null, frozenColumns: 2 });
+    expect(plan([{ type: 'setFrozen', rows: 1 }], tab).steps).toEqual([{ type: 'setFrozen', rows: 1, columns: 2 }]);
+    expect(plan([{ type: 'setFrozen', columns: null }], tab).steps).toEqual([{ type: 'setFrozen', rows: undefined, columns: undefined }]);
+    // A second freeze in the same plan resolves against the first.
+    expect(plan([{ type: 'setFrozen', rows: 1 }, { type: 'setFrozen', columns: 1 }], tab).steps).toEqual([
+      { type: 'setFrozen', rows: 1, columns: 2 },
+      { type: 'setFrozen', rows: 1, columns: 1 },
+    ]);
+    expect(plan([{ type: 'setFrozen', rows: null, columns: null }, { type: 'setFrozen', columns: 1 }], tab).steps[1]).toEqual({
+      type: 'setFrozen',
+      rows: undefined,
+      columns: 1,
+    });
+    expect(refusalOf([{ type: 'setFrozen' }])).toContain('needs "rows" and/or "columns"');
   });
 
   it('accepts 0 as "unfreeze", which is what setFrozen already means by it', () => {
