@@ -212,6 +212,14 @@ describe('env-bridge ws route', () => {
       await flush();
 
       expect(ws.close).toHaveBeenCalledWith(1008, 'Too many frames before hello');
+      // The refusal returns BEFORE the `close` listener is installed, so this
+      // path has to undo the registration and the hello timer itself. Leaving
+      // them means `isConnected(envId)` answers true for a socket nobody is on
+      // until the five-minute sweep, and a real exec is routed into nothing.
+      expect(getEnvConnection(ENV)).toBeUndefined();
+      const closesAfterRefusal = ws.close.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(ENV_BRIDGE_HELLO_TIMEOUT_MS + 1_000);
+      expect(ws.close.mock.calls.length).toBe(closesAfterRefusal);
       store.findLocalByEnvId = realFind;
     });
   });

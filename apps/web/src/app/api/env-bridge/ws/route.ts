@@ -501,6 +501,14 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
       riskScore: 0.4,
       details: { originalEvent: 'env_bridge_preauth_flood', bufferedFrames: earlyFrames.length },
     });
+    // Clean up HERE: `registerEnvConnection` and `helloTimer` have both already
+    // run, and the `close` listener that would normally undo them is installed
+    // below this return. Without this the dead socket sits in the env registry
+    // until the five-minute stale sweep — so `isConnected(envId)` answers true
+    // for a socket nobody is on, and a real exec is routed into nothing — and
+    // the hello timer later fires a second refusal against a closed client.
+    clearTimeout(helloTimer);
+    unregisterEnvConnection(envId, client);
     client.close(1008, 'Too many frames before hello');
     return;
   }
