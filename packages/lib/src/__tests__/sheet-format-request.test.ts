@@ -1062,6 +1062,14 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
       expect(refusalOf([{ type: 'upsertRegion', region }])).toContain('nested more than');
     }
 
+    // Depth is only half of it: the same field can be shallow and arbitrarily
+    // WIDE, and the comparison builds and sorts a canonical array out of every
+    // list it meets.
+    const wide = Array.from({ length: 20_000 }, (_, i) => i);
+    expect(
+      refusalOf([{ type: 'upsertRegion', region: { id: 'r1', range: 'A1:F', extra: wide } }])
+    ).toContain('made of more than');
+
     // Twelve levels is far past anything these shapes reach on their own — the
     // deepest is `borders.top.color`, at three — so nothing real is caught.
     expect(
@@ -1104,6 +1112,74 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
     expect(
       plan([{ type: 'addConditionalRule', rule: formula('=SUM(A1:A1000)>0') }]).conditionalFormats
     ).toHaveLength(1);
+  });
+
+  it('refuses a formula whose cost is the covered cells TIMES what it references', () => {
+    // Neither per-range cap can see this one: a formula rule is evaluated once
+    // per covered cell and each evaluation expands every range it references,
+    // so 500,000 covered and 500,000 referenced clears both 500,000 checks and
+    // asks for 250 billion expansions to render once.
+    const formula = (ranges: string[], body: string) => ({
+      id: 'cf_1',
+      kind: 'formula',
+      ranges,
+      formula: body,
+      format: { bold: true },
+    });
+
+    const message = refusalOf([
+      { type: 'addConditionalRule', rule: formula(['A1:A500000'], '=SUM(B1:B500000)>0') },
+    ]);
+    expect(message).toContain('250,000,000,000 expansions');
+
+    // A rule whose product is ordinary is untouched — the bound is on the
+    // multiplication, not on either factor.
+    expect(
+      plan([{ type: 'addConditionalRule', rule: formula(['A1:A100'], '=SUM(B1:B1000)>0') }])
+        .conditionalFormats
+    ).toHaveLength(1);
+  });
+
+  it('refuses a range passed to a function that counts flattened values', () => {
+    // `evaluateFunction` flattens arguments before checking arity —
+    // `args.flatMap(flattenValue)` — so `ABS(A1:A2)` arrives as two values and
+    // throws once per covered cell, while an AST-node count sees one argument
+    // and is satisfied. Whether a function survives that is derived, not
+    // listed: if it would reject one more value than the call supplies, its
+    // arity is fixed and a range in any slot breaks it.
+    const formula = (body: string) => ({
+      id: 'cf_1',
+      kind: 'formula',
+      ranges: ['A1:A9'],
+      formula: body,
+      format: { bold: true },
+    });
+
+    expect(refusalOf([{ type: 'addConditionalRule', rule: formula('=ABS(A1:A2)>0') }])).toContain(
+      'passes a range to ABS(), which takes a fixed number of values'
+    );
+    // A variadic function takes a range happily, and a fixed-arity one takes a
+    // single cell.
+    for (const body of ['=SUM(A1:A9)>0', '=ABS(A1)>0']) {
+      expect(plan([{ type: 'addConditionalRule', rule: formula(body) }]).conditionalFormats)
+        .toHaveLength(1);
+    }
+  });
+
+  it('refuses a colour on a data-bar anchor, which takes its colour from the rule', () => {
+    const bar = (min: unknown) => ({
+      id: 'db',
+      kind: 'dataBar',
+      ranges: ['A1:A9'],
+      color: '#3b82f6',
+      min,
+    });
+
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: bar({ type: 'min', color: '#ff0000' }) }])
+    ).toContain('takes its colour from the rule, so the anchor cannot carry one');
+    expect(plan([{ type: 'addConditionalRule', rule: bar({ type: 'min' }) }]).conditionalFormats)
+      .toHaveLength(1);
   });
 
   it('refuses a call with a number of arguments the function will not take', () => {
@@ -1582,6 +1658,41 @@ describe('planFormatOps — the dashboard this epic exists for', () => {
   //
   // "A1:F is a table, row 1 is headers, column C is money, row 40 is a total,
   // accent blue", plus the presentation that goes with it.
+  it('accepts the region the read half of this epic documents', () => {
+    // #2560 is the read half, and it publishes this exact region as the shape
+    // an agent gets back — the point being that it can change one field and
+    // write the list straight here. Copied verbatim from that PR so the two
+    // halves cannot drift apart quietly.
+    const documented: Record<string, unknown> = {
+      id: 'budget',
+      name: 'Q3 Budget',
+      range: 'A1:D',
+      headerRows: 1,
+      totalRows: [4],
+      columns: [
+        { column: 'C', role: 'currency', currency: 'USD' },
+        { column: 'D', role: 'percent' },
+      ],
+      theme: 'indigo',
+    };
+
+    expect(plan([{ type: 'upsertRegion', region: documented }]).regions[0]).toMatchObject({
+      id: 'budget',
+      range: 'A1:D',
+      theme: 'indigo',
+      totalRows: [4],
+    });
+
+    // With one exception, and it is deliberate: that sample also carries
+    // `freezeHeader: true`, which nothing reads. Refusing it is the flagged
+    // decision — see the PR discussion — and this assertion is here so that if
+    // someone makes the field work, or decides the loop matters more, the test
+    // that has to change is the one that documents the disagreement.
+    expect(
+      refusalOf([{ type: 'upsertRegion', region: { ...documented, freezeHeader: true } }])
+    ).toContain('freezeHeader is not applied by anything yet');
+  });
+
   it('plans a whole budget dashboard in one request', () => {
     const ops: SheetFormatOp[] = [
       { type: 'setFrozen', rows: 1, columns: null },

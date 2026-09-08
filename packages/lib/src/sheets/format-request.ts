@@ -20,8 +20,9 @@
  * parser would usually blow up first and be caught above, but "usually" is not
  * a bound.)
  */
-function formulaProblem(root: ASTNode): string | null {
+function formulaProblem(root: ASTNode, coveredCells: number): string | null {
   const stack: ASTNode[] = [root];
+  let referenced = 0;
 
   while (stack.length > 0) {
     const node = stack.pop() as ASTNode;
@@ -35,6 +36,23 @@ function formulaProblem(root: ASTNode): string | null {
         if (!isValidCall(name, node.args.length)) {
           return `calls ${name}() with ${node.args.length} argument(s), which it does not accept`;
         }
+
+        // Arity is checked against FLATTENED values, not argument nodes:
+        // `evaluateFunction` does `args.flatMap(flattenValue)` first, so
+        // `ABS(A1:A2)` arrives as two values and throws, once per covered cell.
+        // Whether a function can survive that is derivable rather than listed —
+        // if it would reject one more value than this call supplies, it has a
+        // fixed arity and a range in any slot breaks it.
+        const spreads = node.args.some(
+          (argument) => argument.type === 'Range' || argument.type === 'ExternalRange'
+        );
+        if (spreads && !isValidCall(name, node.args.length + 1)) {
+          return (
+            `passes a range to ${name}(), which takes a fixed number of values — a range arrives as ` +
+            'one value per cell it covers'
+          );
+        }
+
         for (const argument of node.args) stack.push(argument);
         break;
       }
@@ -52,6 +70,7 @@ function formulaProblem(root: ASTNode): string | null {
             `${MAX_CONDITIONAL_RANGE_CELLS.toLocaleString()}`
           );
         }
+        referenced += cells;
         break;
       }
 
@@ -66,6 +85,21 @@ function formulaProblem(root: ASTNode): string | null {
       default:
         break;
     }
+  }
+
+  // The multiplication, which neither cap above can see. A formula rule is
+  // evaluated ONCE PER COVERED CELL, and each evaluation expands every range it
+  // references — so a rule covering 500,000 cells whose formula sums 500,000
+  // more asks for 250 billion address materialisations while clearing both
+  // 500,000-cell checks. Bounded by the same ceiling that bounds conditional
+  // work generally, because that is what this is: work.
+  const work = coveredCells * referenced;
+  if (work > MAX_CONDITIONAL_TOTAL_CELLS) {
+    return (
+      `covers ${coveredCells.toLocaleString()} cells and references ${referenced.toLocaleString()} ` +
+      `per cell, which is ${work.toLocaleString()} expansions to render once — the limit is ` +
+      `${MAX_CONDITIONAL_TOTAL_CELLS.toLocaleString()}`
+    );
   }
 
   return null;
@@ -612,6 +646,16 @@ function validateFreeze(
 const MAX_COMPARE_DEPTH = 12;
 
 /**
+ * How many values the comparison will look at in total, across the whole shape.
+ *
+ * The companion bound to the depth one, and needed for the same reason: an
+ * extension field is preserved verbatim, so it can be a flat array of a million
+ * entries as easily as a chain of a million objects. Ten thousand is orders of
+ * magnitude past any region or rule and still cheap to walk.
+ */
+const MAX_COMPARE_VALUES = 10_000;
+
+/**
  * Whether a value nests deeper than the comparison will follow.
  *
  * Checked BEFORE comparing rather than guarded during it, which is what lets
@@ -619,12 +663,19 @@ const MAX_COMPARE_DEPTH = 12;
  * depth. Iterative, with its own stack: a recursive depth probe on a
  * caller-supplied value is the very stack overflow it exists to prevent.
  */
-function nestsTooDeep(value: unknown): boolean {
+function tooLargeToVerify(value: unknown): string | null {
   const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+  let seen = 0;
 
   while (stack.length > 0) {
     const current = stack.pop() as { value: unknown; depth: number };
-    if (current.depth > MAX_COMPARE_DEPTH) return true;
+    if (current.depth > MAX_COMPARE_DEPTH) return `nested more than ${MAX_COMPARE_DEPTH} levels deep`;
+
+    // Depth is only half of it. A shallow value can be arbitrarily WIDE, and
+    // the comparison does more than walk it — `firstSanitizedPath` builds and
+    // sorts two canonical arrays out of every list it meets. A million-element
+    // extension array is bounded by neither the depth cap nor anything else.
+    if (++seen > MAX_COMPARE_VALUES) return `made of more than ${MAX_COMPARE_VALUES.toLocaleString()} values`;
 
     if (Array.isArray(current.value)) {
       for (const entry of current.value) stack.push({ value: entry, depth: current.depth + 1 });
@@ -635,7 +686,7 @@ function nestsTooDeep(value: unknown): boolean {
     }
   }
 
-  return false;
+  return null;
 }
 
 /**
@@ -739,12 +790,13 @@ function sanitizedPathOrRefuse(
   type: string,
   label: string
 ): string | null {
-  if (nestsTooDeep(raw)) {
+  const tooLarge = tooLargeToVerify(raw);
+  if (tooLarge) {
     return refuseOp(
       index,
       type,
-      `${label} is nested more than ${MAX_COMPARE_DEPTH} levels deep, which is past what this sheet ` +
-        'will check for silent changes. Flatten it.'
+      `${label} is ${tooLarge}, which is past what this sheet will check for silent changes. ` +
+        'Simplify it.'
     );
   }
 
@@ -773,6 +825,12 @@ const anchorProblem = (anchor: unknown, needsColor: boolean): string | null => {
   }
   if (needsColor && !isValidHexColor(anchor.color)) {
     return 'needs a #rrggbb colour';
+  }
+  if (!needsColor && anchor.color !== undefined) {
+    // The other direction: a data bar takes its colour from `rule.color`, and
+    // the evaluator reads only `type` and `value` off these anchors. A colour
+    // here is validated, stored, and never drawn.
+    return 'takes its colour from the rule, so the anchor cannot carry one';
   }
 
   // `min` and `max` read the data's own extremes and ignore any value. The
@@ -897,7 +955,8 @@ function ruleRenderProblem(
 
     // Parsing proves the grammar and nothing else — see `formulaProblem` for
     // the three things the engine will object to that a parse cannot see.
-    const problem = formulaProblem(ast);
+    const covered = rule.ranges.reduce((cells, range) => cells + conditionalCellsOfRange(range), 0);
+    const problem = formulaProblem(ast, covered);
     if (problem) return `"${rule.formula}" ${problem}.`;
   }
 
