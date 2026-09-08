@@ -1908,6 +1908,77 @@ describe('planFormatOps — all or nothing', () => {
     expect(applied).toEqual([]);
   });
 
+  it('lets a batch see its own earlier ops', () => {
+    // The rules and regions are folded into one running list each, so an op can
+    // act on what an earlier op in the SAME request did. Nothing pinned this,
+    // and it is what a caller composing a batch depends on — including the
+    // subtle case at the end: the duplicate-id check reads the running list, so
+    // an id an earlier op removed is free again. Checking the STORED list
+    // instead would refuse that, and every other assertion here would still
+    // pass.
+    const cell = (id: string, value: string) => ({
+      id,
+      kind: 'cell',
+      ranges: ['A1:A9'],
+      condition: { operator: 'greaterThan', value },
+      format: { bold: true },
+    });
+
+    // An update sees the rule an earlier op added.
+    const updated = plan([
+      { type: 'addConditionalRule', rule: cell('new', '1') },
+      {
+        type: 'updateConditionalRule',
+        id: 'new',
+        patch: { condition: { operator: 'greaterThan', value: '99' } },
+      },
+    ]).conditionalFormats;
+    expect(updated).toHaveLength(1);
+    expect(updated[0]).toMatchObject({ id: 'new', condition: { value: '99' } });
+
+    // A removal sees it too, and cancels it out.
+    expect(
+      plan([
+        { type: 'addConditionalRule', rule: cell('new', '1') },
+        { type: 'removeConditionalRule', id: 'new' },
+      ]).conditionalFormats
+    ).toEqual([]);
+
+    // Regions the same way, in both directions.
+    expect(
+      plan([
+        { type: 'upsertRegion', region: region('r') },
+        { type: 'removeRegion', id: 'r' },
+      ]).regions
+    ).toEqual([]);
+    expect(
+      plan([
+        { type: 'setRegions', regions: [region('a')] },
+        { type: 'upsertRegion', region: region('b', 'H1:J') },
+      ]).regions.map((entry) => entry.id)
+    ).toEqual(['a', 'b']);
+
+    // And an id an earlier op freed can be used again...
+    expect(
+      plan([
+        { type: 'addConditionalRule', rule: cell('x', '1') },
+        { type: 'removeConditionalRule', id: 'x' },
+        { type: 'addConditionalRule', rule: cell('x', '2') },
+      ]).conditionalFormats[0]
+    ).toMatchObject({ id: 'x', condition: { value: '2' } });
+
+    // ...while one an earlier op TOOK is not. This pair is what actually pins
+    // the running list: on an empty sheet a stored-list check would accept both
+    // of these and store two rules under one id, and every other assertion in
+    // this test would still pass. A mutation probe is how that came out.
+    expect(
+      refusalOf([
+        { type: 'addConditionalRule', rule: cell('dup', '1') },
+        { type: 'addConditionalRule', rule: cell('dup', '2') },
+      ])
+    ).toContain('Op 1');
+  });
+
   it('folds a mixed batch into one plan, in request order', () => {
     const result = plan([
       { type: 'setCellFormat', range: 'A1', patch: { bold: true } },
