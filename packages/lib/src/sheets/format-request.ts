@@ -966,14 +966,28 @@ function regionRenderProblem(region: SheetRegion, label: string): string | null 
       }
     }
 
-    // Only for a closed range: an open one ("A1:F") reaches the end of the
-    // sheet, so a total row past today's extent is a row the sheet will grow
-    // into — which is the entire point of leaving the end off.
-    if (bounds.rowEnd !== null) {
-      for (const row of region.totalRows ?? []) {
-        if (row - 1 < bounds.rowStart || row - 1 > bounds.rowEnd) {
-          return `${label}: total row ${row} is outside the region ${region.range}, so it can never render.`;
-        }
+    // Totals are checked against the region's BODY, not its bounds. The
+    // resolver applies the header treatment and `continue`s, so a total row
+    // inside the header band never reaches the total treatment at all — and a
+    // region that starts below row 1 has rows above it that are simply not
+    // part of it. Both store cleanly and render as something else.
+    const headerRows = region.headerRows ?? 1;
+    const firstBodyRow = bounds.rowStart + headerRows;
+
+    for (const row of region.totalRows ?? []) {
+      if (row - 1 < firstBodyRow) {
+        return (
+          `${label}: total row ${row} is not in the body of ${region.range}. That region starts at ` +
+          `row ${bounds.rowStart + 1} and its first ${headerRows} row(s) are headers, so its totals ` +
+          `start at row ${firstBodyRow + 1}.`
+        );
+      }
+
+      // The upper bound is skipped for an open range only ("A1:F" reaches the
+      // end of the sheet), so a total row past today's extent is a row the
+      // sheet will grow into — the entire point of leaving the end off.
+      if (bounds.rowEnd !== null && row - 1 > bounds.rowEnd) {
+        return `${label}: total row ${row} is outside the region ${region.range}, so it can never render.`;
       }
     }
   }
@@ -1421,15 +1435,29 @@ export function planFormatOps(
     // the budget simply stop contributing at render time. Individually legal
     // rules can sum past it, so a write that would land there is refused while
     // there is still someone to tell.
-    let total = 0;
-    for (const rule of rules) {
-      for (const range of rule.ranges) total += conditionalCellsOfRange(range);
-    }
-    if (total > MAX_CONDITIONAL_TOTAL_CELLS) {
+    const totalCells = (list: readonly ConditionalRule[]): number => {
+      let cells = 0;
+      for (const rule of list) {
+        for (const range of rule.ranges) cells += conditionalCellsOfRange(range);
+      }
+      return cells;
+    };
+
+    const before = totalCells(tab.conditionalFormats ?? []);
+    const after = totalCells(rules);
+
+    // Over the ceiling AND worse than it was. A sheet can already be past this
+    // limit — the panel's `addRule` enforces the per-rule and rule-count caps
+    // but not the aggregate — and refusing every write on such a sheet would
+    // leave it unrepairable: removing a rule from it reduces the skipped render
+    // work and would still have been rejected for not fixing everything at
+    // once. A write that does not make matters worse is always allowed.
+    if (after > MAX_CONDITIONAL_TOTAL_CELLS && after > before) {
       refuse(
-        `Those rules cover ${total.toLocaleString()} cells in total, over the sheet-wide limit of ` +
+        `Those rules cover ${after.toLocaleString()} cells in total, over the sheet-wide limit of ` +
           `${MAX_CONDITIONAL_TOTAL_CELLS.toLocaleString()}. Rules past the limit are silently skipped when ` +
-          'the sheet renders, so narrow the ranges rather than adding more.'
+          'the sheet renders, so narrow the ranges rather than adding more. (A write that lowers the ' +
+          'total is accepted even while it is still over.)'
       );
     }
 

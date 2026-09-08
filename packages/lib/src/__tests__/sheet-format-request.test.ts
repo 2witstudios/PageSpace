@@ -393,6 +393,35 @@ describe('planFormatOps — conditional rules', () => {
       .toHaveLength(5);
   });
 
+  it('lets an already over-budget sheet be repaired one rule at a time', () => {
+    // A sheet can already be past the aggregate ceiling: the panel's `addRule`
+    // enforces the per-rule and rule-count caps but not this one. Refusing every
+    // write on such a sheet leaves it unrepairable — removing a rule strictly
+    // reduces the skipped render work, and would have been rejected for not
+    // fixing everything in one request.
+    const big = (id: string): ConditionalRule => ({ ...rule(id), ranges: ['A1:A400000'] });
+    const over = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(big);
+    const tab = tabWith({ conditionalFormats: over });
+
+    expect(400_000 * 7).toBeGreaterThan(MAX_CONDITIONAL_TOTAL_CELLS);
+
+    // Still over afterwards, and still accepted, because it is lower.
+    const repaired = plan([{ type: 'removeConditionalRule', id: 'g' }], tab);
+    expect(repaired.conditionalFormats).toHaveLength(6);
+
+    // Making it worse is still refused.
+    expect(refusalOf([{ type: 'addConditionalRule', rule: big('h') }], tab)).toContain(
+      'over the sheet-wide limit'
+    );
+    // As is a swap that raises the total without adding a rule.
+    expect(
+      refusalOf(
+        [{ type: 'updateConditionalRule', id: 'g', patch: { ranges: ['A1:A490000'] } }],
+        tab
+      )
+    ).toContain('over the sheet-wide limit');
+  });
+
   it('does not charge the aggregate for ranges the evaluator would skip', () => {
     // A range past the per-range cap contributes nothing to evaluation, so
     // counting it toward the aggregate would refuse a sheet for work it was
@@ -783,6 +812,39 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
     expect(
       refusalOf([{ type: 'upsertRegion', region: { id: 'r1', range: 'A1:B10', totalRows: [20] } }])
     ).toContain('total row 20 is outside the region A1:B10');
+
+    // Totals are checked against the region's BODY, not its bounds. The
+    // resolver applies the header treatment and `continue`s, so a total inside
+    // the header band never reaches the total treatment — and a region starting
+    // below row 1 has rows above it that are not part of it at all. Neither is
+    // visible to a bounds-only check, and an OPEN region skipped the check
+    // entirely.
+    expect(
+      refusalOf([
+        { type: 'upsertRegion', region: { id: 'r1', range: 'A10:F', totalRows: [1] } },
+      ])
+    ).toContain('total row 1 is not in the body of A10:F');
+    expect(
+      refusalOf([
+        {
+          type: 'upsertRegion',
+          region: { id: 'r1', range: 'A1:F20', headerRows: 2, totalRows: [2] },
+        },
+      ])
+    ).toContain('its totals start at row 3');
+
+    // The first body row itself is fine, and so is a default single header row.
+    expect(
+      plan([
+        {
+          type: 'upsertRegion',
+          region: { id: 'r1', range: 'A1:F20', headerRows: 2, totalRows: [3, 20] },
+        },
+      ]).regions[0].totalRows
+    ).toEqual([3, 20]);
+    expect(
+      plan([{ type: 'upsertRegion', region: { id: 'r1', range: 'A10:F', totalRows: [11] } }]).regions
+    ).toHaveLength(1);
 
     // An OPEN region reaches the end of the sheet, so a total row past today's
     // extent is a row it will grow into — which is the point of leaving the end
