@@ -35,7 +35,7 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     if (isAuthError(auth)) return auth.error;
 
     const action = readDevPreviewUserAction(await request.json().catch(() => null));
-    if (action === null) return NextResponse.json({ error: 'action must be "stop", "resume", or "approve" with the port shown' }, { status: 400 });
+    if (action === null) return NextResponse.json({ error: 'action must be "stop", "resume", "approve" with the port shown, or "select" with a port from the list' }, { status: 400 });
 
     const holder = { kind: 'env', id: envId } as const;
     // The ONE manage rule (`canManageDevPreview`), asked before any row is
@@ -55,7 +55,7 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `env:${envId}`, details: { route: ROUTE, action, reason: authorization.reason } });
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
-    const result = await applyDevPreviewUserActionForHolder({ holder, action, userId: auth.userId, wakeSubject: authorization.wakeSubject });
+    const result = await applyDevPreviewUserActionForHolder({ holder, action, userId: auth.userId, wakeSubject: authorization.wakeSubject, sandboxId: authorization.sandboxId });
     return respondToDevPreviewUserAction({ request, userId: auth.userId, route: ROUTE, holder, action, result });
   } catch (error) {
     loggers.api.error('Failed to apply env preview action', error instanceof Error ? error : new Error(String(error)));

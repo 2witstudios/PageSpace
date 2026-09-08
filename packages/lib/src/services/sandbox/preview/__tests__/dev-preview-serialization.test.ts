@@ -33,6 +33,7 @@ function sharedStore(initial: DevPreviewRecord | null) {
   let pause: { promise: Promise<void>; release: () => void } | null = null;
   const store: DevPreviewStore = {
     approvePort: async () => null,
+    selectPort: async () => null,
     findStoppedWithRelay: async () => [],
     markSwept: async () => {},
     markRelayStopped: async () => {},

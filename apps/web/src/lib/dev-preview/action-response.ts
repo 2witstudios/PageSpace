@@ -27,7 +27,7 @@ export function respondToDevPreviewUserAction({
   const resourceId = `${holder.kind}:${holder.id}`;
   // The audit trail names the port for an approve — who agreed to share what
   // is the whole point of recording the act.
-  const audited = action.kind === 'approve' ? { action: action.kind, port: action.port } : { action: action.kind };
+  const audited = action.kind === 'approve' || action.kind === 'select' ? { action: action.kind, port: action.port } : { action: action.kind };
   if (!result.ok) {
     if (result.reason === 'wake-not-allowed') {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'dev_preview', resourceId, details: { route, ...audited, reason: 'wake_not_allowed', detail: result.detail }, riskScore: 0.5 });
@@ -40,6 +40,32 @@ export function respondToDevPreviewUserAction({
     }
     if (result.reason === 'port-changed') {
       return NextResponse.json({ error: 'The dev server has moved to a different port since this was shown. Check the port and share it again.', reason: result.reason }, { status: 409 });
+    }
+    // THE SELECT FAILURES, each a sentence a person can act on. This is the
+    // "deliberate error instead of silence" the ports pane exists to give:
+    // every one of these used to be indistinguishable from nothing happening.
+    if (result.reason === 'sandbox-unavailable') {
+      return NextResponse.json({ error: 'This sandbox is not running right now, so there is nothing to preview. Open a shell to start it, then pick the port again.', reason: result.reason }, { status: 409 });
+    }
+    if (result.reason === 'probe-failed') {
+      const detail = result.detail === 'timed-out'
+        ? 'The sandbox did not answer in time when asked which ports are listening.'
+        : result.detail === 'unparsable'
+          ? 'The sandbox answered, but its port listing could not be read.'
+          : 'The sandbox could not be asked which ports are listening.';
+      return NextResponse.json({ error: `${detail} Try Scan again.`, reason: result.reason, detail: result.detail }, { status: 503 });
+    }
+    if (result.reason === 'port-not-listening') {
+      return NextResponse.json({ error: `Nothing is listening on port ${result.port} any more. Scan again to see what is running now.`, reason: result.reason, port: result.port }, { status: 409 });
+    }
+    if (result.reason === 'port-refused') {
+      const why = result.detail === 'non-http-service-port'
+        ? `Port ${result.port} looks like a database or service port, not a web server, so it is not shared.`
+        : result.detail === 'relay-own-listener'
+          ? `Port ${result.port} is the preview relay itself — pick the port your dev server is on.`
+          : `Port ${result.port} cannot be previewed.`;
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'dev_preview', resourceId, details: { route, ...audited, reason: 'port_refused', detail: result.detail }, riskScore: 0.3 });
+      return NextResponse.json({ error: why, reason: result.reason, port: result.port, detail: result.detail }, { status: 422 });
     }
     // `slot-unknown` IS NOT A FAILURE, and answering 4xx made the UI say it
     // was. The user's intent is already written — the resume cleared the stop,

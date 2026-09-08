@@ -105,6 +105,28 @@ function fakeStore(initial: DevPreviewRecord | null, calls: string[] = []): DevP
       void at;
       return current;
     },
+    selectPort: async (holder, { port, spriteInstanceId, sandboxId, at }) => {
+      calls.push(`selectPort:${port}`);
+      // The real store inserts when there is no row, updates when the row is
+      // for the SAME instance, and refuses (null) when it is for another —
+      // a pick made against a sandbox that has since been rebuilt.
+      if (current !== null && current.spriteInstanceId !== spriteInstanceId) return null;
+      current = {
+        id: current?.id ?? 'r1',
+        spriteInstanceId,
+        sandboxId,
+        targetPort: port,
+        // Not this write's to claim; the planner decides the relay.
+        relayServiceName: current?.relayServiceName ?? null,
+        detectedAt: at,
+        stoppedByUserAt: null,
+        approvedPort: port,
+        approvedAt: at,
+        selectedByUserAt: at,
+      };
+      void holder;
+      return current;
+    },
     setStoppedByUser: async (_holder, at) => {
       calls.push(`setStoppedByUser:${at ? 'stop' : 'clear'}`);
       if (current === null) return null;
@@ -506,5 +528,105 @@ describe('approve — one explicit act, bound to the port the user was shown', (
     assert({ given: 'a live known-port preview', should: 'have nothing to approve', actual: live.canApprove, expected: false });
     const stale = buildDevPreviewStatus({ ...base, liveInstanceId: 'other-instance', row: row(9000, { relayServiceName: null }), relay: null, listeners: null });
     assert({ given: 'a row from a dead VM', should: 'offer nothing to approve', actual: stale.canApprove, expected: false });
+  });
+});
+
+describe('select — a person names the port, and the plan is made from a probe, not a guess', () => {
+  // No 8080 here: the handle in `picking()` has NO relay, so a listener on
+  // 8080 would be a user process holding the slot — and the planner would be
+  // right to refuse. That case gets its own test below.
+  const PROBE_3000 = { ok: true as const, ports: [{ port: 3000, pid: 2311 }] };
+  const select = (port: number, spriteInstanceId = INSTANCE) => ({ kind: 'select' as const, port, spriteInstanceId });
+
+  function picking(overrides: Partial<DevPreviewUserActionDeps> & { store?: ReturnType<typeof fakeStore>; calls?: string[] } = {}) {
+    const calls = overrides.calls ?? [];
+    const store = overrides.store ?? fakeStore(null, calls);
+    const { deps } = actionDeps({
+      calls,
+      store,
+      attach: async () => fakeHandle({ relay: null, calls }),
+      // The watch snapshot is deliberately EMPTY of the target: this is the
+      // Next.js case, where detection never saw the port and no row exists.
+      readListeners: async () => ({ detection: 'watching', listeners: [] }),
+      probe: async () => { calls.push('probe'); return PROBE_3000; },
+      ...overrides,
+    });
+    return { deps, calls, store };
+  }
+
+  it('with NO row and a port the watch channel never saw: probes, writes, then starts the relay — in that order', async () => {
+    const { deps, calls, store } = picking();
+    const result = await applyDevPreviewUserAction({ holder: ENV, action: select(3000), ...ACTOR, sandboxId: 'sbx', deps });
+    assert({ given: 'a pick of 3000 on a rowless holder', should: 'create the relay', actual: result, expected: { ok: true, applied: { action: 'start-relay', via: 'create', targetPort: 3000, recorded: true } } });
+    assert({ given: 'the pick', should: 'probe BEFORE writing, and write BEFORE mutating the sprite', actual: calls.indexOf('probe') < calls.indexOf('selectPort:3000') && calls.indexOf('selectPort:3000') < calls.findIndex((c) => c.startsWith('create:')), expected: true });
+    assert({ given: 'the row as written', should: 'be targeted, approved AND pinned to the pick', actual: [store.current()?.targetPort, store.current()?.approvedPort, store.current()?.selectedByUserAt], expected: [3000, 3000, NOW] });
+  });
+
+  it('a probe showing a USER PROCESS on 8080 makes the slot question honest: refused, not relayed blind', async () => {
+    // The watch channel could never prove 8080 was busy (it cannot see every
+    // bind), so the planner read silence as free and created relays that
+    // could not bind. Probe data is complete, so here the refusal is true.
+    const { deps, calls } = picking({ probe: async () => ({ ok: true, ports: [{ port: 3000, pid: 2311 }, { port: SPRITE_HTTP_PORT, pid: 999 }] }) });
+    const result = await applyDevPreviewUserAction({ holder: ENV, action: select(3000), ...ACTOR, sandboxId: 'sbx', deps });
+    assert({ given: 'a stranger on 8080 in the probe, no relay', should: 'refuse http-port-busy rather than start a relay onto it', actual: result.ok && result.applied?.action === 'refuse' && result.applied.reason, expected: 'http-port-busy' });
+    assert({ given: 'that refusal', should: 'still have written the pick (the intent is real; only the relay waits)', actual: calls.some((c) => c === 'selectPort:3000'), expected: true });
+  });
+
+  it('an UNLISTED pick is consent — no await-approval on this path', async () => {
+    const { deps } = picking({ probe: async () => ({ ok: true, ports: [{ port: 9000, pid: 5 }] }) });
+    const result = await applyDevPreviewUserAction({ holder: ENV, action: select(9000), ...ACTOR, sandboxId: 'sbx', deps });
+    assert({ given: 'picking an unlisted port by hand', should: 'start the relay rather than wait for a Share click', actual: result.ok && result.applied?.action, expected: 'start-relay' });
+  });
+
+  it('a port missing from the FRESH probe is a 409, not a relay to nothing', async () => {
+    const { deps, calls } = picking({ probe: async () => { calls.push('probe'); return { ok: true, ports: [{ port: 5173, pid: 1 }] }; } });
+    assert({ given: 'the list said 3000 but the re-probe does not', should: 'refuse as port-not-listening', actual: await applyDevPreviewUserAction({ holder: ENV, action: select(3000), ...ACTOR, sandboxId: 'sbx', deps }), expected: { ok: false, reason: 'port-not-listening', port: 3000 } });
+    assert({ given: 'that refusal', should: 'write nothing and touch no service', actual: calls.filter((c) => c.startsWith('selectPort') || c.startsWith('services.create')), expected: [] });
+  });
+
+  it('a FAILED probe is a named failure — never an empty list that reads as "8080 is free"', async () => {
+    const { deps, calls } = picking({ probe: async () => ({ ok: false, reason: 'timed-out' }) });
+    assert({ given: 'the probe timing out', should: 'say so, with the detail', actual: await applyDevPreviewUserAction({ holder: ENV, action: select(3000), ...ACTOR, sandboxId: 'sbx', deps }), expected: { ok: false, reason: 'probe-failed', detail: 'timed-out' } });
+    assert({ given: 'that failure', should: 'write nothing', actual: calls.some((c) => c.startsWith('selectPort')), expected: false });
+  });
+
+  it('refuses a database port SERVER-SIDE, whatever the list showed', async () => {
+    const { deps, calls } = picking({ probe: async () => ({ ok: true, ports: [{ port: 5432, pid: 9 }] }) });
+    assert({ given: 'a hand-built select for 5432', should: 'refuse as a non-http service port', actual: await applyDevPreviewUserAction({ holder: ENV, action: select(5432), ...ACTOR, sandboxId: 'sbx', deps }), expected: { ok: false, reason: 'port-refused', port: 5432, detail: 'non-http-service-port' } });
+    assert({ given: 'that refusal', should: 'write nothing', actual: calls.some((c) => c.startsWith('selectPort')), expected: false });
+  });
+
+  it('refuses 8080 while our own relay holds it — picking it would tear the relay down', async () => {
+    const calls: string[] = [];
+    const { deps } = picking({ calls, store: fakeStore(row(5173), calls), attach: async () => fakeHandle({ relay: relayService(5173), calls }), probe: async () => ({ ok: true, ports: [{ port: 5173, pid: 7 }, { port: SPRITE_HTTP_PORT, pid: 42 }] }) });
+    assert({ given: 'a pick of 8080 with the relay live on it', should: 'refuse as the relay\'s own listener', actual: await applyDevPreviewUserAction({ holder: ENV, action: select(SPRITE_HTTP_PORT), ...ACTOR, sandboxId: 'sbx', deps }), expected: { ok: false, reason: 'port-refused', port: SPRITE_HTTP_PORT, detail: 'relay-own-listener' } });
+  });
+
+  it('a pick made against a REBUILT sandbox is refused before the probe even runs', async () => {
+    const { deps, calls } = picking();
+    assert({ given: 'an echoed instance that is not the live one', should: 'answer instance-changed', actual: await applyDevPreviewUserAction({ holder: ENV, action: select(3000, 'inst-old'), ...ACTOR, sandboxId: 'sbx', deps }), expected: { ok: false, reason: 'instance-changed' } });
+    assert({ given: 'that refusal', should: 'not have probed (an exec on the wrong VM is a billed wake for nothing)', actual: calls.includes('probe'), expected: false });
+  });
+
+  it('is wake-gated like resume and approve, BEFORE the lock and any exec', async () => {
+    const { deps, calls } = picking({ canRunCode: async () => ({ ok: false as const, reason: 'tier_ineligible' }) });
+    assert({ given: 'a payer whose code execution is off', should: 'refuse the wake', actual: await applyDevPreviewUserAction({ holder: ENV, action: select(3000), ...ACTOR, sandboxId: 'sbx', deps }), expected: { ok: false, reason: 'wake-not-allowed', detail: 'tier_ineligible' } });
+    assert({ given: 'that refusal', should: 'neither attach nor probe', actual: calls.some((c) => c === 'attach' || c === 'probe'), expected: false });
+  });
+
+  it('a holder with no live sandbox has nothing to probe or relay', async () => {
+    const { deps } = picking({ attach: async () => null });
+    assert({ given: 'attach answering null', should: 'say the sandbox is unavailable', actual: await applyDevPreviewUserAction({ holder: ENV, action: select(3000), ...ACTOR, sandboxId: 'sbx', deps }), expected: { ok: false, reason: 'sandbox-unavailable' } });
+    const rowless = picking();
+    assert({ given: 'no row AND no sandbox on the authorization', should: 'say so without attaching', actual: await applyDevPreviewUserAction({ holder: ENV, action: select(3000), ...ACTOR, sandboxId: null, deps: rowless.deps }), expected: { ok: false, reason: 'sandbox-unavailable' } });
+  });
+
+  it('picking a SECOND port replaces the current preview and moves the pin with it', async () => {
+    const calls: string[] = [];
+    const store = fakeStore(row(5173, { selectedByUserAt: NOW, approvedPort: 5173 }), calls);
+    const { deps } = picking({ calls, store, attach: async () => fakeHandle({ relay: relayService(5173), calls }), probe: async () => ({ ok: true, ports: [{ port: 5173, pid: 7 }, { port: 9000, pid: 8 }, { port: SPRITE_HTTP_PORT, pid: 42 }] }) });
+    const result = await applyDevPreviewUserAction({ holder: ENV, action: select(9000), ...ACTOR, sandboxId: 'sbx', deps });
+    assert({ given: 'a pick of 9000 while 5173 is previewed', should: 're-point the relay', actual: result.ok && result.applied?.action, expected: 'replace-relay' });
+    assert({ given: 'the row afterwards', should: 'target and pin 9000', actual: [store.current()?.targetPort, store.current()?.selectedByUserAt], expected: [9000, NOW] });
   });
 });

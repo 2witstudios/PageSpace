@@ -70,6 +70,7 @@ function fakeStore(current: DevPreviewRecord | null, calls: string[]): DevPrevie
     upsert: async () => { calls.push('upsert'); return true; },
     setStoppedByUser: async (_h, at) => { held = held === null ? null : { ...held, stoppedByUserAt: at }; return held; },
     approvePort: async () => null,
+    selectPort: async () => null,
     findStoppedWithRelay: async () => [],
     markSwept: async () => {},
     markRelayStopped: async () => {},

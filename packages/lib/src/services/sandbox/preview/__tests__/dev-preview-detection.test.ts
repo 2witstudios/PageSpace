@@ -45,6 +45,7 @@ function harness(overrides: {
   };
   const store: DevPreviewStore = {
     approvePort: async () => null,
+    selectPort: async () => null,
     findStoppedWithRelay: async () => [],
     markSwept: async () => {},
     markRelayStopped: async () => {},

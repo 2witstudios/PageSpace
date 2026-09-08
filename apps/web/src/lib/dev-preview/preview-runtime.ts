@@ -238,12 +238,15 @@ export function applyDevPreviewUserActionForHolder({
   action,
   userId,
   wakeSubject,
+  sandboxId,
 }: {
   holder: DevPreviewHolderRef;
   action: DevPreviewUserAction;
   userId: string;
   /** `PreviewAuthorization.wakeSubject` — the payer the resume wake gate is asked about. */
   wakeSubject: { driveId: string | null; ownerId: string };
+  /** `PreviewAuthorization.sandboxId` — what a SELECT attaches to when no row exists yet. */
+  sandboxId?: string | null;
 }): Promise<DevPreviewUserActionResult> {
   const deps = buildPreviewAccessDeps();
   return applyDevPreviewUserAction({
@@ -251,6 +254,7 @@ export function applyDevPreviewUserActionForHolder({
     action,
     userId,
     wakeSubject,
+    sandboxId,
     deps: { previewStore: deps.previewStore, attach: deps.attach, readListeners: readDevPreviewListeners, canRunCode: deps.canRunCode, lock: getPreviewLock(), now: deps.now },
   });
 }

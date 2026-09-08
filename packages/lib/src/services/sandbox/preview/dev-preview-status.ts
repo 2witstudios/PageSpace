@@ -37,16 +37,19 @@ import {
   DETECTION_UNAVAILABLE_MESSAGE,
   HTTP_PORT_BUSY_MESSAGE,
   describeHttpPortSlot,
+  classifyDetectedDevServer,
   describeServiceState,
   planDevServerService,
   type DevPreviewHolderRef,
   type DevPreviewRow,
   type DevPreviewServiceState,
+  type DevServerClassification,
   type HttpPortSlotHolder,
   type ListeningPort,
   type ListenerSource,
 } from './dev-preview-core';
 import { applyDevServerServicePlan, type AppliedDevServerServicePlan } from './dev-preview-effects';
+import { probeListeningPorts, type PortProbeFailure, type PortProbeResult } from './port-probe';
 import { unlocked, type DevPreviewLock } from './dev-preview-lock';
 import type { DevPreviewStore } from './dev-preview-store';
 import { authorizePreviewHolder, type PreviewAccessDeps, type PreviewAuthorization } from './preview-access';
@@ -341,7 +344,16 @@ export type DevPreviewUserAction =
        * approve a different VM's server of the same number.
        */
       spriteInstanceId: string;
-    };
+    }
+  /**
+   * A person picked `port` out of the ports pane's list. Same echoed fields
+   * as `approve`, different assertion: approve agrees to share what
+   * DETECTION found and the row already targets; select names a port by
+   * hand, which the row may not target and — for a server the watch channel
+   * cannot see — may never have seen at all. Picking IS the consent, so
+   * there is no separate share step on this path.
+   */
+  | { kind: 'select'; port: number; spriteInstanceId: string };
 
 export interface DevPreviewUserActionDeps {
   previewStore: DevPreviewStore;
@@ -356,6 +368,12 @@ export interface DevPreviewUserActionDeps {
    * binding supplies the real Postgres advisory lock.
    */
   lock?: DevPreviewLock;
+  /**
+   * The authoritative port probe a SELECT runs before it will start anything.
+   * Defaults to the real `ss` exec; tests inject. Never consulted for stop,
+   * resume or approve — those act on what detection already recorded.
+   */
+  probe?: (exec: SandboxHandle['exec']) => Promise<PortProbeResult>;
   now(): Date;
 }
 
@@ -394,7 +412,22 @@ export type DevPreviewUserActionResult =
    * replacement VM commonly re-detects the same one — and telling the user
    * their server moved ports would be a plainly false sentence.
    */
-  | { ok: false; reason: 'instance-changed' };
+  | { ok: false; reason: 'instance-changed' }
+  /** A select on a holder with no live sandbox: nothing to probe, nothing to relay. */
+  | { ok: false; reason: 'sandbox-unavailable' }
+  /**
+   * The probe could not answer. NOT "nothing is listening" — a failed look and
+   * an empty room are different sentences, and only one is safe to act on.
+   */
+  | { ok: false; reason: 'probe-failed'; detail: PortProbeFailure }
+  /** The picked port is not in the FRESH probe: it went away between the list and the click. */
+  | { ok: false; reason: 'port-not-listening'; port: number }
+  /**
+   * The picked port is one the classifier refuses to expose — a database or
+   * broker port, or 8080 while our own relay holds it. Decided server-side;
+   * the list marks these disabled, but the list is copy and this is the gate.
+   */
+  | { ok: false; reason: 'port-refused'; port: number; detail: Extract<DevServerClassification, { kind: 'ignored' }>['reason'] };
 
 /**
  * Record the intent, then reconcile ONCE through the core and the effects
@@ -419,6 +452,7 @@ export async function applyDevPreviewUserAction({
   action,
   userId,
   wakeSubject,
+  sandboxId,
   deps,
 }: {
   holder: DevPreviewHolderRef;
@@ -427,10 +461,18 @@ export async function applyDevPreviewUserAction({
   userId: string;
   /** Who PAYS for compute in this holder's drive — `PreviewAuthorization.wakeSubject`, the same input a session ensure gives `canRunCode`. */
   wakeSubject: { driveId: string | null; ownerId: string };
+  /**
+   * The holder's live sprite name from `PreviewAuthorization`, for a SELECT
+   * on a holder with no row yet — the common case, since a server the watch
+   * channel cannot see was never detected and so never written. The other
+   * actions take it from the row they act on and ignore this.
+   */
+  sandboxId?: string | null;
   deps: DevPreviewUserActionDeps;
 }): Promise<DevPreviewUserActionResult> {
   const now = deps.now();
   const lock = deps.lock ?? unlocked;
+  if (action.kind === 'select') return applyDevPreviewSelect({ holder, action, userId, wakeSubject, sandboxId: sandboxId ?? null, deps, now, lock });
   // Bound once: the locked path and the contended fallback make the SAME
   // write, and only where it happens differs.
   const writeIntent = () => writeDevPreviewIntent({ holder, action, now, userId, store: deps.previewStore });
@@ -505,6 +547,100 @@ export async function applyDevPreviewUserAction({
  * intent, or the approval. Returns the row AS WRITTEN so the plan can be made
  * from it without a second read, or the refusal to hand straight back.
  */
+/**
+ * SELECT: probe → refuse-or-write → plan from the probe. Its own function
+ * because it is the one action whose plan is made from AUTHORITATIVE
+ * listeners rather than the watch snapshot — and the one that must look
+ * before it writes, since a pick of a port that has gone away is a 409, not a
+ * row.
+ *
+ * Order inside the lock, and why each step is where it is:
+ *  1. attach — by the authorization's sandbox, because there may be no row.
+ *  2. instance check against the LIVE handle, before anything else: a pick
+ *     echoes the instance it was rendered against, and a rebuilt sandbox
+ *     must refuse it even when no row exists for the store guard to catch.
+ *  3. re-probe. The list the user clicked was a UI hint and is stale by now;
+ *     the plan is made from THIS read, taken under the lock, immediately
+ *     before use — the only way `listenerSource: 'probe'` is honest.
+ *  4. classify. `NON_HTTP_SERVICE_PORTS` and relay-own-8080 are refused HERE,
+ *     not by the list rendering them disabled — the list is copy, this is
+ *     the gate, and a hand-built request must meet it too.
+ *  5. write the row (target + consent + pin, one statement), THEN mutate the
+ *     sprite — row-first, as everywhere else in this module.
+ *
+ * Cost accepted and documented: an advisory-lock connection is held across
+ * one bounded exec (`PORT_PROBE_TIMEOUT_MS`). A detector frame that lands
+ * meanwhile sees `busy` and re-arms its bounded retry.
+ */
+async function applyDevPreviewSelect({
+  holder,
+  action,
+  userId,
+  wakeSubject,
+  sandboxId,
+  deps,
+  now,
+  lock,
+}: {
+  holder: DevPreviewHolderRef;
+  action: Extract<DevPreviewUserAction, { kind: 'select' }>;
+  userId: string;
+  wakeSubject: { driveId: string | null; ownerId: string };
+  sandboxId: string | null;
+  deps: DevPreviewUserActionDeps;
+  now: Date;
+  lock: DevPreviewLock;
+}): Promise<DevPreviewUserActionResult> {
+  // A SELECT is compute — it exists to start a relay, and the probe itself is
+  // an exec that wakes a paused sprite. Gated exactly like resume and
+  // approve, BEFORE the lock and before any exec.
+  const wake = await deps.canRunCode({ userId, ...wakeSubject });
+  if (!wake.ok) return { ok: false, reason: 'wake-not-allowed', detail: wake.reason };
+
+  const probe = deps.probe ?? probeListeningPorts;
+  const locked = await lock(holder, async (): Promise<DevPreviewUserActionResult> => {
+    const existing = await deps.previewStore.findByHolder(holder);
+    const target = existing?.sandboxId ?? sandboxId;
+    if (target === null) return { ok: false, reason: 'sandbox-unavailable' };
+    const handle = await deps.attach(target);
+    if (handle === null) return { ok: false, reason: 'sandbox-unavailable' };
+    if (handle.spriteInstanceId !== action.spriteInstanceId) return { ok: false, reason: 'instance-changed' };
+
+    const probed = await probe(handle.exec);
+    if (!probed.ok) return { ok: false, reason: 'probe-failed', detail: probed.reason };
+    const listener = probed.ports.find((entry) => entry.port === action.port);
+    if (listener === undefined) return { ok: false, reason: 'port-not-listening', port: action.port };
+
+    const relay = await handle.services.get(PREVIEW_RELAY_SERVICE_NAME);
+    const classified = classifyDetectedDevServer({ event: { type: 'port_opened', port: action.port, ...(listener.pid !== undefined ? { pid: listener.pid } : {}) }, relay });
+    if (classified.kind === 'ignored') return { ok: false, reason: 'port-refused', port: action.port, detail: classified.reason };
+
+    const row = await deps.previewStore.selectPort(holder, { port: action.port, spriteInstanceId: handle.spriteInstanceId, sandboxId: handle.sandboxId, at: now, byUserId: userId });
+    if (row === null) return { ok: false, reason: 'instance-changed' };
+
+    const plan = planDevServerService({
+      liveInstanceId: handle.spriteInstanceId,
+      sandboxId: handle.sandboxId,
+      row,
+      holder,
+      detected: classified,
+      relay,
+      listeners: probed.ports,
+      listenersKnown: true,
+      listenerSource: 'probe',
+      now,
+    });
+    const applied = await applyDevServerServicePlan({ plan, services: handle.services, store: deps.previewStore });
+    return { ok: true, applied };
+  });
+  if (locked.outcome === 'acquired') return locked.result;
+  // Contended: unlike resume, NOTHING was recorded — the write sits behind
+  // the probe, which sits behind the lock. Say so rather than claim a
+  // deferral the next frame cannot deliver (the detector cannot see this
+  // port; that is why the user is here).
+  return { ok: false, reason: 'sandbox-unavailable' };
+}
+
 async function writeDevPreviewIntent({
   holder,
   action,
