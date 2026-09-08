@@ -34,8 +34,12 @@ import { MAX_ADDRESSABLE_ROW, encodeColumnLabel } from '../sheets/address';
 import {
   MAX_CONDITIONAL_RANGES_PER_RULE,
   MAX_CONDITIONAL_RANGE_CELLS,
+  NUMERIC_OPERATORS,
+  SCALE_ANCHOR_TYPES,
+  VALUED_ANCHOR_TYPES,
   VALUELESS_OPERATORS,
   evaluateConditionalFormats,
+  matchesCondition,
 } from '../sheets/conditional';
 
 const tabWith = (overrides: Partial<SheetFormatTarget> = {}): SheetFormatTarget => ({
@@ -1405,6 +1409,59 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
         { type: 'addConditionalRule', rule: cell({ operator: 'between', value: '1', value2: '9' }) },
       ]).conditionalFormats
     ).toHaveLength(1);
+  });
+
+  it('derives the same anchor and operator tables the refusals rely on', () => {
+    // Two more tables that restate behaviour living somewhere else, and so can
+    // silently stop describing it. `VALUED_ANCHOR_TYPES` claims which anchors
+    // read a value; `NUMERIC_OPERATORS` claims which operators are useless
+    // without a numeric one. Both drive refusals in this module, and both are
+    // asked of the code that actually decides rather than trusted.
+    const values: Record<string, number> = { A1: 1, A2: 5, A3: 9 };
+    const context = {
+      valueAt: (address: string) => values[address] ?? '',
+      isError: () => false,
+      evaluateFormula: () => true,
+    };
+    const bar = (min: object) =>
+      ({ id: 'd', kind: 'dataBar', ranges: ['A1:A3'], color: '#3b82f6', min }) as unknown as ConditionalRule;
+    const render = (rule: ConditionalRule) =>
+      JSON.stringify(evaluateConditionalFormats([rule], context as never));
+
+    // An anchor type reads its value if changing the value changes the bars.
+    const readsValue = [...SCALE_ANCHOR_TYPES].filter(
+      (type) => render(bar({ type, value: 2 })) !== render(bar({ type, value: 8 }))
+    );
+    expect(readsValue.sort()).toEqual([...VALUED_ANCHOR_TYPES].sort());
+
+    // An operator needs a number if a non-numeric operand can never match while
+    // a numeric one sometimes does. The second half matters: without it, an
+    // operator that matches nothing either way would qualify.
+    const samples: Array<string | number> = [0, 1, 5, 9, -3, 'text', ''];
+    const operators = [
+      'greaterThan',
+      'greaterThanOrEqual',
+      'lessThan',
+      'lessThanOrEqual',
+      'equal',
+      'notEqual',
+      'between',
+      'notBetween',
+      'contains',
+      'notContains',
+      'startsWith',
+      'endsWith',
+    ] as const;
+
+    const needsNumber = operators.filter((operator) => {
+      const condition = { operator, value: 'abc', value2: 'xyz' } as never;
+      const numeric = { operator, value: '4', value2: '7' } as never;
+      return (
+        samples.every((value) => !matchesCondition(value as never, false, condition)) &&
+        samples.some((value) => matchesCondition(value as never, false, numeric))
+      );
+    });
+    expect([...needsNumber].sort()).toEqual([...NUMERIC_OPERATORS].sort());
   });
 
   it('derives the same read-what table the module encodes', () => {
