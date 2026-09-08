@@ -1088,20 +1088,14 @@ describe('planFormatOps — never something other than what was asked for', () =
     }
   });
 
-  it('refuses freezeHeader while nothing acts on it', () => {
-    // Parsed and stored, with no consumer anywhere: `createRegionResolver` does
-    // not read it and the `setRegions` step only stores the region. Accepting
-    // it would be this module's own contract broken in its own output.
+  it('carries freezeHeader through as an unknown field, since the region type has none', () => {
+    // Frozen panes are tab-level state, so `SheetRegion` does not declare it
+    // and nothing here reads it. It travels like any field a newer build
+    // wrote: stored untouched, never refused, never honoured. The AI tool
+    // accepts `freezeHeader` as an input and turns it into a `setFrozen` op.
     expect(
-      refusalOf([{ type: 'upsertRegion', region: { ...region('r1'), freezeHeader: true } }])
-    ).toContain('freezeHeader is not applied by anything yet');
-    expect(
-      refusalOf([{ type: 'upsertRegion', region: { ...region('r1'), freezeHeader: true } }])
-    ).toContain('setFrozen');
-    // An explicit false asks for nothing and gets nothing, which is honest.
-    expect(
-      plan([{ type: 'upsertRegion', region: { ...region('r1'), freezeHeader: false } }]).regions
-    ).toHaveLength(1);
+      plan([{ type: 'upsertRegion', region: { ...region('r1'), freezeHeader: true } }]).regions[0]
+    ).toMatchObject({ id: 'r1', freezeHeader: true });
   });
 
   it('refuses an unknown key NESTED inside a format', () => {
@@ -2761,14 +2755,12 @@ describe('planFormatOps — the dashboard this epic exists for', () => {
       totalRows: [4],
     });
 
-    // With one exception, and it is deliberate: that sample also carries
-    // `freezeHeader: true`, which nothing reads. Refusing it is the flagged
-    // decision — see the PR discussion — and this assertion is here so that if
-    // someone makes the field work, or decides the loop matters more, the test
-    // that has to change is the one that documents the disagreement.
+    // That sample also carries `freezeHeader: true`. The region type has no
+    // such field — frozen panes are tab-level state — so it travels through as
+    // an unknown field would, and the loop round-trips it rather than refusing.
     expect(
-      refusalOf([{ type: 'upsertRegion', region: { ...documented, freezeHeader: true } }])
-    ).toContain('freezeHeader is not applied by anything yet');
+      plan([{ type: 'upsertRegion', region: { ...documented, freezeHeader: true } }]).regions[0]
+    ).toMatchObject({ id: 'budget', freezeHeader: true });
 
     // The rest of that same sample, written back as the ops it corresponds to.
     // The region is the interesting part, but the loop only works if the whole

@@ -764,14 +764,16 @@ const mintId = (prefix: string, taken: ReadonlySet<string>): string => {
 
 /**
  * Normalise a declared region into what the store stores, and split off the
- * one field it does not: `freezeHeader`.
+ * one input that is not a region field: `freezeHeader`.
  *
- * `parseRegion` accepts `freezeHeader` and `planFormatOps` refuses it, because
- * nothing reads it yet — a stored `true` would pin no rows. `setFrozen` works
- * today, so the intent is honoured through it: a region that starts at row 1
- * and asks for a frozen header produces a freeze of its header rows, and the
- * stored region carries no `freezeHeader` at all. The freeze goes BEFORE the
- * model's own ops, so an explicit `freeze` op still wins.
+ * `SheetRegion` has no `freezeHeader`, on purpose. Frozen panes are tab-level
+ * state (`frozenRows`), not presentation derived per cell, so a region has
+ * nothing to carry — a field there would be parsed, stored and honoured by
+ * nothing. The model still gets to say "pin this table's header" in the place
+ * it is thinking about the table: a region that starts at row 1 and asks for
+ * a frozen header produces a `setFrozen` of its header rows, and the stored
+ * region carries no `freezeHeader` at all. The freeze goes BEFORE the model's
+ * own ops, so an explicit `freeze` op still wins.
  */
 function validateRegions(
   regions: readonly RegionInput[],

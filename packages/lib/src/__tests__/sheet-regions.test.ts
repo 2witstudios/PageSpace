@@ -148,9 +148,12 @@ describe('parseRegion', () => {
     expect(parseRegion(region({ theme: '#3b82f6' }))?.theme).toBeUndefined();
   });
 
-  it('keeps freezeHeader only when it is actually a boolean', () => {
-    expect(parseRegion(region({ freezeHeader: true }))?.freezeHeader).toBe(true);
-    expect(parseRegion(region({ freezeHeader: 'yes' }))?.freezeHeader).toBeUndefined();
+  it('has no freezeHeader of its own, and carries one through like any unknown field', () => {
+    // Frozen panes are tab-level state, so the region type does not declare
+    // the field; a document that has one still round-trips losslessly rather
+    // than being silently downgraded.
+    expect(parseRegion(region({ freezeHeader: true }))).toMatchObject({ freezeHeader: true });
+    expect(parseRegion(region({ freezeHeader: 'yes' }))).toMatchObject({ freezeHeader: 'yes' });
   });
 
   it('drops an unusable optional field without rejecting the region', () => {

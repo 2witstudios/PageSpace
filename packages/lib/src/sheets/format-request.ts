@@ -1561,18 +1561,6 @@ function regionRenderProblem(region: SheetRegion, label: string): string | null 
     }
   }
 
-  // A setting nothing acts on yet. `freezeHeader` is parsed and stored, and a
-  // repo-wide search finds no consumer: `createRegionResolver` does not read it
-  // and the `setRegions` step only stores the region. Accepting it would be the
-  // module's own contract broken in its own output — a request that succeeds
-  // and pins nothing. `setFrozen` does work today, so the refusal names it.
-  if (region.freezeHeader === true) {
-    return (
-      `${label}: freezeHeader is not applied by anything yet, so setting it would pin no rows. Use a ` +
-      'setFrozen op for now.'
-    );
-  }
-
   // The one sanitization the comparator cannot see, because it happens at
   // RENDER time rather than at parse time: `parseRegion` accepts any lowercase
   // word as a theme, and `hueByName` then falls back to the default for one the
