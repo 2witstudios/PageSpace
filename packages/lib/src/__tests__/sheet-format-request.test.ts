@@ -1138,6 +1138,25 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
       plan([{ type: 'addConditionalRule', rule: formula(['A1:A100'], '=SUM(B1:B1000)>0') }])
         .conditionalFormats
     ).toHaveLength(1);
+
+    // And the case that decided the constant: "highlight each row above the
+    // column average" is square in the row count by construction, so a bound
+    // set at the sheet-wide CELL ceiling refused it on any sheet past ~1,400
+    // rows. It is the commonest formula rule there is, and refusing it would
+    // have been a worse defect than the one being fixed.
+    for (const rows of [2000, 4000]) {
+      expect(
+        plan(
+          [
+            {
+              type: 'addConditionalRule',
+              rule: formula([`A2:A${rows}`], `=A2 > AVERAGE($B$2:$B$${rows})`),
+            },
+          ],
+          tabWith({ rowCount: 5000 })
+        ).conditionalFormats
+      ).toHaveLength(1);
+    }
   });
 
   it('refuses a range passed to a function that counts flattened values', () => {

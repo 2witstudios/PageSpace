@@ -94,11 +94,11 @@ function formulaProblem(root: ASTNode, coveredCells: number): string | null {
   // 500,000-cell checks. Bounded by the same ceiling that bounds conditional
   // work generally, because that is what this is: work.
   const work = coveredCells * referenced;
-  if (work > MAX_CONDITIONAL_TOTAL_CELLS) {
+  if (work > MAX_FORMULA_EXPANSION) {
     return (
       `covers ${coveredCells.toLocaleString()} cells and references ${referenced.toLocaleString()} ` +
       `per cell, which is ${work.toLocaleString()} expansions to render once — the limit is ` +
-      `${MAX_CONDITIONAL_TOTAL_CELLS.toLocaleString()}`
+      `${MAX_FORMULA_EXPANSION.toLocaleString()}`
     );
   }
 
@@ -368,6 +368,29 @@ export const MAX_FORMAT_CELLS_PER_REQUEST = 200_000;
 
 /** Enough for any authored batch; bounds the work of validating one. */
 export const MAX_FORMAT_OPS = 200;
+
+/**
+ * The most address materialisations one formula rule may cost to render once.
+ *
+ * A formula rule is evaluated per covered cell and each evaluation expands
+ * every range it references, so its cost is the product of the two — a factor
+ * neither the per-range nor the per-sheet cell cap can see.
+ *
+ * Its own constant rather than a reuse of `MAX_CONDITIONAL_TOTAL_CELLS`, which
+ * was the first attempt and was wrong by being far too tight. That ceiling
+ * counts CELLS; this counts work, and at two million it refused the commonest
+ * formula rule there is — "highlight each row above the column average" — on
+ * any sheet past about 1,400 rows, because such a rule is square in the row
+ * count by construction.
+ *
+ * Twenty million keeps that rule legal to roughly 4,500 rows, which is past the
+ * sheets people actually build, and still refuses the case this bound exists
+ * for by four orders of magnitude. Measured rather than guessed: `expandRange`
+ * produces about 24 million addresses a second, so this is the better part of a
+ * second of pure materialisation — the point where a rule stops being slow and
+ * starts being a mistake.
+ */
+export const MAX_FORMULA_EXPANSION = 20_000_000;
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
