@@ -67,7 +67,9 @@ export function pmDocToBlocks(doc: PmNode): DocumentBlock[] {
       // handing it a `heading` would emit the heading's inline text with no
       // `#` and a `bulletList` with no bullets — the block's own markup is
       // produced by the node serializer that the parent's render invokes.
-      markdown: pmDocToMarkdown(node.type.schema.node('doc', null, node)).trimEnd(),
+      // `topNodeType`, not the literal `'doc'`: the root's name is a schema
+      // property, and the markdown guard already resolves it that way.
+      markdown: pmDocToMarkdown(node.type.schema.topNodeType.create(null, node)).trimEnd(),
     });
   });
   return blocks;

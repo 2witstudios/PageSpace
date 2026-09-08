@@ -99,15 +99,15 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ms-playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
 
-      # `--with-deps` (the apt pass) only on a miss; the browser binary itself is
-      # what the cache restores.
+      # `--with-deps` unconditionally, INCLUDING on a cache hit. Skipping the apt
+      # pass when the browser binary is cached looks like a saving and is a trap:
+      # the cache restores the binary but not the system libraries it links
+      # against, so a runner image that drops one would fail to launch Chromium
+      # only on cache-hit runs — a failure that cannot reproduce on the run that
+      # populated the cache. The download is the expensive part and the cache
+      # already removes it; apt with everything present costs seconds.
       - name: Install Chromium (cross-DOM parse-equality suite)
-        run: |
-          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
-            bunx playwright install chromium
-          else
-            bunx playwright install --with-deps chromium
-          fi
+        run: bunx playwright install --with-deps chromium
         working-directory: apps/e2e
 
       # ADMIN_DATABASE_URL belongs here too, not only on the backfill/db-integration

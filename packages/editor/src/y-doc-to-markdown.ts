@@ -87,11 +87,29 @@ function cellMarkdown(cell: PmNode): string {
     .trim();
 }
 
-const ALIGNMENT_DELIMITERS: Readonly<Record<string, string>> = {
-  left: ':---',
-  center: ':---:',
-  right: '---:',
-};
+/**
+ * A `Map`, NOT an object literal, and that is load-bearing rather than
+ * stylistic.
+ *
+ * `align` is read from a node attribute, and node attributes on a live document
+ * come from whatever a CLIENT wrote into the Y.Doc — the schema declares no
+ * validator for this one, so any string reaches here. Indexing an object
+ * literal with that string resolves through `Object.prototype`:
+ * `align="toString"` returned the function, and `?? '---'` never fired because
+ * a function is not nullish. The projection then emitted
+ * `| function toString() {` into the delimiter row — a function's source, with
+ * its own newlines, injected into the AI-context projection and destroying the
+ * table's structure.
+ *
+ * TipTap's own HTML parser whitelists `align`, so this is unreachable from
+ * stored `pages.content`. It is entirely reachable from the CRDT, which is the
+ * path this package exists to serve.
+ */
+const ALIGNMENT_DELIMITERS: ReadonlyMap<string, string> = new Map([
+  ['left', ':---'],
+  ['center', ':---:'],
+  ['right', '---:'],
+]);
 
 /** A node's children as an array — ProseMirror only offers `forEach`. */
 function childrenOf(node: PmNode): PmNode[] {
@@ -101,7 +119,10 @@ function childrenOf(node: PmNode): PmNode[] {
 }
 
 function alignmentDelimiter(cell: PmNode | undefined): string {
-  return ALIGNMENT_DELIMITERS[cell === undefined ? '' : stringAttr(cell.attrs, 'align')] ?? '---';
+  if (cell === undefined) {
+    return '---';
+  }
+  return ALIGNMENT_DELIMITERS.get(stringAttr(cell.attrs, 'align')) ?? '---';
 }
 
 function tableMarkdown(state: MarkdownSerializerState, node: PmNode): void {

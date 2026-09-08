@@ -58,9 +58,13 @@ beforeAll(async () => {
   await page.addScriptTag({ content: bundle.outputFiles[0].text });
 }, 120_000);
 
+// Explicit timeout: vitest's DEFAULT hook timeout is 10s, and closing Chromium
+// under a loaded full-suite `test:coverage` run exceeded it — the suite's 28
+// tests all passed and the FILE still failed. That failure mode is invisible to
+// a `Tests N passed` summary, and `test:coverage` is exactly what CI runs.
 afterAll(async () => {
   await browser?.close();
-});
+}, 60_000);
 
 async function parseInBrowser(html: string): Promise<unknown> {
   return page.evaluate((source: string) => {

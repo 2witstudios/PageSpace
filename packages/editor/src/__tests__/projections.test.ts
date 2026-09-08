@@ -206,6 +206,31 @@ describe('markdown projection', () => {
     expect(projected).toContain('a\\|b');
   });
 
+  it.each(['toString', 'constructor', '__proto__', 'valueOf', 'hasOwnProperty'])(
+    'does not resolve the align attribute %j through Object.prototype',
+    (align) => {
+      // Node attributes on a live document are written by CLIENTS into the
+      // Y.Doc, and the schema declares no validator for `align`, so any string
+      // arrives here. Indexed against an object literal, `align="toString"`
+      // returned a FUNCTION — and `?? '---'` never fired, because a function is
+      // not nullish — emitting `| function toString() {` and its embedded
+      // newlines into the delimiter row. TipTap's HTML parser whitelists this
+      // attribute, so it is unreachable from stored content and reachable only
+      // from the CRDT: exactly the path these projections exist to serve.
+      const schema = corpusDoc.type.schema;
+      const cell = schema.nodes.tableHeader.createAndFill({ align });
+      if (cell === null) {
+        expect.unreachable('tableHeader must be fillable');
+        return;
+      }
+      const doc = schema.topNodeType.create(null, [
+        schema.nodes.table.create(null, [schema.nodes.tableRow.create(null, [cell])]),
+      ]);
+      const delimiterRow = pmDocToMarkdown(doc).split('\n')[1];
+      expect(delimiterRow).toBe('| --- |');
+    },
+  );
+
   it('pads every row to the widest row, so a short row cannot shift columns', () => {
     // A ragged table is legal in the schema. Sizing the table from the FIRST
     // row instead of the widest silently truncates every wider row's cells —
