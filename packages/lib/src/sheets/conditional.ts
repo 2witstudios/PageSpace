@@ -328,6 +328,13 @@ export function rangeAnchor(range: string): { row: number; column: number } | nu
   }
 }
 
+/**
+ * The coercion `matchesCondition` applies to both sides of a numeric
+ * comparison, exported so a write path can ask "would this operand compare
+ * against anything?" with the same answer the evaluator will give.
+ */
+export const asComparableNumber = (value: SheetPrimitive): number | null => asNumber(value);
+
 const asNumber = (value: SheetPrimitive): number | null => {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
   if (typeof value === 'boolean' || value === '') return null;
@@ -679,6 +686,67 @@ const OPERATORS = new Set<ConditionalOperator>([
 ]);
 
 const ANCHOR_TYPES = new Set(['min', 'max', 'number', 'percent', 'percentile']);
+
+/**
+ * The anchor types `readAnchor` accepts, exported so a write path can refuse
+ * what this one merely declines to read.
+ *
+ * An anchor whose type this set does not hold makes `readAnchor` return null —
+ * and the rule builders below then fall back to the ORIGINAL value through
+ * their `...value` spread, so the unusable anchor is stored verbatim and
+ * `anchorValue` silently substitutes the data's own minimum or maximum for it.
+ * A validator has no way to notice that by re-reading what it stored, because
+ * nothing was dropped; it has to know the list.
+ */
+export const SCALE_ANCHOR_TYPES: ReadonlySet<string> = ANCHOR_TYPES;
+
+/**
+ * Anchor types whose `value` is the whole point. `min` and `max` read the
+ * data's own extremes and ignore any value; these three mean nothing without
+ * one, and `anchorValue` quietly substitutes an extreme when it is missing.
+ */
+export const VALUED_ANCHOR_TYPES: ReadonlySet<string> = new Set([
+  'number',
+  'percent',
+  'percentile',
+]);
+
+/**
+ * Operators that compare against nothing — the panel hides the value field for
+ * these, and every other operator needs one.
+ *
+ * Here rather than beside the panel for the reason `conditional-ops` gives at
+ * length: this is part of what a valid rule IS, and a server that writes rules
+ * has to agree with the UI that edits them. A second copy is how the API comes
+ * to accept a rule the panel would not offer.
+ */
+export const VALUELESS_OPERATORS: ReadonlySet<ConditionalOperator> = new Set([
+  'isEmpty',
+  'isNotEmpty',
+  'isError',
+]);
+
+/** Operators needing a second bound. */
+export const RANGE_OPERATORS: ReadonlySet<ConditionalOperator> = new Set(['between', 'notBetween']);
+
+/**
+ * Operators that compare NUMBERS, and match nothing at all when their operand
+ * is not one.
+ *
+ * Taken from `matchesCondition` below and deliberately excluding `equal` /
+ * `notEqual`, which fall back to a text comparison so `= "done"` works on a
+ * status column. For everything in this set `asComparableNumber(condition.value)`
+ * returning null means the rule is false for every cell it covers — stored,
+ * valid-looking and inert.
+ */
+export const NUMERIC_OPERATORS: ReadonlySet<ConditionalOperator> = new Set([
+  'greaterThan',
+  'greaterThanOrEqual',
+  'lessThan',
+  'lessThanOrEqual',
+  'between',
+  'notBetween',
+]);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);

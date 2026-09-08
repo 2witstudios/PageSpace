@@ -14,6 +14,7 @@ export * from './parser';
 export * from './functions';
 export * from './format';
 export * from './format-ops';
+export * from './format-request';
 export * from './conditional';
 export * from './conditional-ops';
 export * from './palette';

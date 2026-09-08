@@ -84,6 +84,7 @@ export default defineConfig({
         'src/sheets/conditional-ops.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/sheets/palette.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/sheets/regions.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/sheets/format-request.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/sheets/region-format.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
       },
     },
