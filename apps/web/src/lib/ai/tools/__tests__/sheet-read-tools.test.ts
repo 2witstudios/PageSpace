@@ -61,6 +61,7 @@ import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { canActorViewPage, canActorEditPage } from '../actor-permissions';
 import { SheetQueryError } from '@pagespace/lib/sheets/query';
 import { parseRegions } from '@pagespace/lib/sheets/sheet';
+import { serializeSheetContent } from '@pagespace/lib/sheets/io';
 import { MAX_FORMATTING_CHARS } from '../sheet-view';
 import type { ToolExecutionContext } from '../../core/types';
 
@@ -793,6 +794,24 @@ describe('read_sheet — typed values beside the display string', () => {
 });
 
 describe('read_sheet — includeFormatting', () => {
+  /**
+   * A sheet as it exists before migration: everything on one SheetDoc document
+   * in `pages.content`, with no `sheet_tabs` row anywhere.
+   */
+  const legacyDocument = {
+    version: 1,
+    rowCount: 3,
+    columnCount: 3,
+    sheetName: 'Budget',
+    cells: { A1: 'Item', B1: 'Cost', A2: 'Rent', B2: '1200' },
+    formats: { A2: { bold: true } },
+    columnFormats: { B: { number: { kind: 'currency' as const, currency: 'USD', decimals: 2, thousands: true } } },
+    columnWidths: { A: 180 },
+    frozenRows: 1,
+    regions: [{ id: 'r9', range: 'A1:B', headerRows: 1 }],
+    conditionalFormats: [{ id: 'c9', kind: 'dataBar' as const, ranges: ['B2:B3'], color: '#3b82f6' }],
+  };
+
   const formattedTab = {
     ...tab,
     frozenRows: 1,
@@ -968,22 +987,56 @@ describe('read_sheet — includeFormatting', () => {
     expect((result.nextSteps as string[]).some((step) => step.includes('not'))).toBe(true);
   });
 
-  it('refuses to describe an unmigrated sheet as unformatted', async () => {
-    // `{}` would say "this sheet has no formatting", and an agent acting on that
-    // formats over a design someone already applied — the same class of lie this
-    // module refuses to tell about an unparseable document.
+  it('reads an unmigrated sheet\'s formatting out of its stored document', async () => {
+    // The document is not a dead end: `parseSheetContentSafe` reconstructs the
+    // regions, freezes, column formats, per-cell formats and rules that a
+    // pre-row-store sheet carries. Answering `formatting: null` here withheld
+    // the existing design at exactly the moment an agent needs it — before its
+    // first formatting change to a sheet nobody has edited since the row store
+    // shipped.
     mockListTabs.mockResolvedValue([]);
     mockFindById.mockResolvedValue({
       ...sheetPage,
-      content: '#%PAGESPACE_SHEETDOC v1\n\n[[sheets]]\nname = "Sheet1"\norder = 0\n\n[sheets.meta]\nrowCount = 2\ncolumnCount = 2\n\n[sheets.cells]\nA1 = "Item"\n',
+      content: serializeSheetContent(legacyDocument, { pageId: 'page-1' }),
     });
 
     const result = await run({ pageId: 'page-1', includeFormatting: true });
+    const formatting = result.formatting as Record<string, unknown>;
 
     expect(result.success).toBe(true);
-    expect(result.formatting).toBeNull();
-    expect(String(result.formattingUnavailable)).toContain('not');
-    expect(String(result.formattingUnavailable)).toContain('unformatted');
+    expect(result.materialized).toBe(false);
+    expect(formatting.regions).toEqual(legacyDocument.regions);
+    expect(formatting.layout).toEqual({ frozenRows: 1, columnWidths: { A: 180 } });
+    expect(formatting.columnFormats).toEqual(legacyDocument.columnFormats);
+    // The EXPLICIT override only. The evaluator resolves the column format and
+    // any region into the format it applies; reporting that as a per-cell
+    // override is how a region model decays back into per-cell residue.
+    expect(formatting.cellFormats).toEqual({ A2: { bold: true } });
+    expect(formatting.conditionalRules).toEqual([
+      { id: 'c9', kind: 'dataBar', ranges: ['B2:B3'], summary: 'Data bar' },
+    ]);
+  });
+
+  it('returns the machine value on an unmigrated sheet too', async () => {
+    // A range read explicitly supports an unmigrated sheet, so the lossy display
+    // string is reachable there as well — and the fallback path builds its own
+    // cells, so it has to carry the value deliberately.
+    mockListTabs.mockResolvedValue([]);
+    mockFindById.mockResolvedValue({
+      ...sheetPage,
+      content: serializeSheetContent(legacyDocument, { pageId: 'page-1' }),
+    });
+
+    const result = await run({ pageId: 'page-1', includeFormatting: true });
+    const rows = result.rows as { rowNumber: number; cells: Record<string, string>; unformatted?: Record<string, unknown> }[];
+    const dataRow = rows.find((row) => row.rowNumber === 2)!;
+
+    assert({
+      given: 'a currency-formatted cell on a sheet that was never migrated',
+      should: 'show the display string and carry the machine value beside it',
+      actual: { display: dataRow.cells.B, unformatted: dataRow.unformatted },
+      expected: { display: '$1,200.00', unformatted: { B: 1200 } },
+    });
   });
 
   it('advertises includeFormatting so an agent can discover it', async () => {

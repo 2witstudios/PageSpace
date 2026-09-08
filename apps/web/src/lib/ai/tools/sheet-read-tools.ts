@@ -50,6 +50,7 @@ import {
   columnsInRows,
   compareColumnLabels,
   buildSheetFormatting,
+  explicitCellFormats,
   loadSheetWindow,
   renderSheetTableWithinBudget,
   toSheetViewRow,
@@ -197,7 +198,8 @@ export const sheetReadTools = {
           'roles, totals — which you can write straight back), frozen rows/columns, column widths and ' +
           'formats, explicit per-cell formats within the rows returned, and a one-line summary of each ' +
           'conditional rule. Off by default. Ask for it before changing a sheet\'s formatting, so you ' +
-          'build on what is there instead of over it.'
+          'build on what is there instead of over it. Works on unmigrated sheets too — their ' +
+          'formatting is read from the stored document.'
         ),
     }),
     execute: async (
@@ -329,12 +331,7 @@ export const sheetReadTools = {
             nextStartRow: window.nextFromRow !== null ? window.nextFromRow + 1 : null,
             select: selectColumns,
             includeFormatting,
-            // `?? null` rather than the bare field: an unmigrated sheet gets
-            // `formatting: null` beside `formattingUnavailable`, and an agent
-            // that saw the key simply missing would read it as "no formatting",
-            // which is the one answer this path refuses to give.
-            formatting: window.formatting ?? null,
-            formattingUnavailable: window.formattingUnavailable,
+            formatting: window.formatting,
           });
         }
 
@@ -439,8 +436,10 @@ export const sheetReadTools = {
             ? {
                 formatting: buildSheetFormatting(
                   tab,
-                  result.rows,
-                  selectColumns ? new Set(selectColumns.map((column) => column.toUpperCase())) : undefined,
+                  explicitCellFormats(
+                    result.rows,
+                    selectColumns ? new Set(selectColumns.map((column) => column.toUpperCase())) : undefined,
+                  ),
                 ),
               }
             : {}),
@@ -530,15 +529,14 @@ interface BuildResultParams {
   emptyReason?: string;
   /** Whether the caller asked for the formatting block at all. */
   includeFormatting?: boolean;
-  formatting?: SheetFormatting | null;
-  formattingUnavailable?: string;
+  formatting?: SheetFormatting;
 }
 
 function buildResult(params: BuildResultParams) {
   const {
     page, mode, tabIndex, tabName, rowCount, columnCount, tabs,
     materialized, rows, hasMore, matchedRows, nextStartRow, nextOffset, select, emptyReason,
-    includeFormatting, formatting, formattingUnavailable,
+    includeFormatting, formatting,
   } = params;
 
   // With `select`, the projected columns are the answer even when every
@@ -588,10 +586,9 @@ function buildResult(params: BuildResultParams) {
     ...(rendered.rowsShown < rows.length && { tableRowsShown: rendered.rowsShown }),
     ...(rendered.truncatedCells > 0 && { tableTruncatedCells: rendered.truncatedCells }),
     // Only when asked for, so a default read is byte-for-byte what it was
-    // before this existed. `null` is a real answer here (see the call site) and
-    // must survive, so this cannot collapse to a truthiness check.
-    ...(includeFormatting ? { formatting: formatting ?? null } : {}),
-    ...(formattingUnavailable ? { formattingUnavailable } : {}),
+    // before this existed. An empty block is a real answer — "this sheet has no
+    // formatting" — so this cannot collapse to a truthiness check on the block.
+    ...(includeFormatting ? { formatting: formatting ?? {} } : {}),
     ...(emptyReason && { emptyReason }),
     summary: emptyReason
       ? `Sheet "${page.title}" has ${rowCount} rows x ${columnCount} columns. ${emptyReason}`

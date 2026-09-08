@@ -313,6 +313,18 @@ describe('the two paths render one cell one way', () => {
       actual: fromStore.rows[0].formulas,
       expected: fromDocument.rows[0].formulas,
     });
+    // The machine value has to survive the fallback path too. The document path
+    // builds its own synthetic cells, so it once put the DISPLAY string in
+    // `value` — which made the two paths agree on `cells` while only one of them
+    // could hand back the 1200 behind `$1,200.00`.
+    assert({
+      given: 'a formatted cell before and after migration',
+      should: 'recover the same machine value on both paths',
+      actual: fromStore.rows.map((row) => row.unformatted),
+      expected: fromDocument.rows.map((row) => row.unformatted),
+    });
+    // Guard the guard again: an all-undefined comparison would pass vacuously.
+    expect(fromDocument.rows[0].unformatted).toEqual({ B: 1200 });
   });
 });
 
@@ -916,6 +928,86 @@ describe('loadSheetWindow describes formatting only when asked', () => {
     const window = await loadSheetWindow('page-1', { limit: 10 });
 
     expect('formatting' in window).toBe(false);
+  });
+
+  it('builds it from the stored document when the sheet was never migrated', async () => {
+    // The document is where a pre-row-store sheet keeps its design. Refusing
+    // here hid it from the one caller that asked for it.
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', {
+      limit: 10,
+      includeFormatting: true,
+      documentContent: serializeSheetContent(
+        {
+          version: 1,
+          rowCount: 2,
+          columnCount: 2,
+          cells: { A1: 'Item', A2: 'Rent' },
+          formats: { A2: { italic: true } },
+          frozenRows: 1,
+          regions: [{ id: 'r2', range: 'A1:B', headerRows: 1 }],
+        },
+        { pageId: 'page-1' },
+      ),
+    });
+
+    assert({
+      given: 'an unmigrated sheet and includeFormatting',
+      should: 'describe the design the stored document carries',
+      actual: window.formatting,
+      expected: {
+        regions: [{ id: 'r2', range: 'A1:B', headerRows: 1 }],
+        layout: { frozenRows: 1 },
+        cellFormats: { A2: { italic: true } },
+      },
+    });
+  });
+
+  it('leaves the key off on the document path too', async () => {
+    // `read_page` and `list_pages` reach unmigrated sheets through this branch.
+    // Building the block for them would parse the document's rules and regions
+    // on every preview that shows none of it.
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', {
+      limit: 10,
+      documentContent: serializeSheetContent(
+        { version: 1, rowCount: 2, columnCount: 2, cells: { A1: 'x' }, frozenRows: 1 },
+        { pageId: 'page-1' },
+      ),
+    });
+
+    expect('formatting' in window).toBe(false);
+  });
+
+  it('describes only the rows it returned, not the whole document', async () => {
+    // `cellFormats` describes the rows in the response. A document's `formats`
+    // map covers the entire sheet, so without the window restriction a two-row
+    // read of a large legacy sheet would hand back every override it has —
+    // spending the whole budget on rows the agent cannot see.
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', {
+      limit: 2,
+      includeFormatting: true,
+      documentContent: serializeSheetContent(
+        {
+          version: 1,
+          rowCount: 5,
+          columnCount: 2,
+          cells: { A1: 'one', A2: 'two', A5: 'five' },
+          formats: { A1: { bold: true }, A5: { italic: true } },
+        },
+        { pageId: 'page-1' },
+      ),
+    });
+
+    assert({
+      given: 'a document with formats above and below the window',
+      should: 'report only the ones inside it',
+      actual: window.formatting?.cellFormats,
+      expected: { A1: { bold: true } },
+    });
+    // Guard the guard: the window really did stop short of row 5.
+    expect(window.rows.map((row) => row.rowNumber)).toEqual([1, 2]);
   });
 
   it('builds it when asked, from the tab already in hand', async () => {

@@ -188,15 +188,14 @@ export interface SheetWindow {
    */
   documentIsNotASheet: boolean;
   /**
-   * The tab's presentation, when the caller asked for it. `null` means it was
-   * asked for and cannot be answered — see `formattingUnavailable`.
+   * The tab's presentation, when the caller asked for it — from the stored tab
+   * when the sheet has been materialised and from the parsed document when it
+   * has not, so an unmigrated sheet is described rather than refused.
    *
    * Absent (rather than empty) when it was not asked for, so a caller cannot
    * read "no formatting was requested" as "this sheet has no formatting".
    */
-  formatting?: SheetFormatting | null;
-  /** Why `formatting` is null, when it is. */
-  formattingUnavailable?: string;
+  formatting?: SheetFormatting;
 }
 
 /**
@@ -389,6 +388,7 @@ function windowFromDocument(
   fromRow: number,
   limit: number,
   only?: ReadonlySet<string>,
+  includeFormatting?: boolean,
 ): SheetWindow {
   const parsed = parseSheetContentSafe(content);
   if (!parsed.ok) {
@@ -444,9 +444,23 @@ function windowFromDocument(
     }
     const label = encodeColumnLabel(decoded.column);
     const evaluated = evaluation.byAddress[address];
+    // The MACHINE value, with the format that produced its display beside it —
+    // not the display string.
+    //
+    // Storing `evaluated.display` here made the display correct and the value a
+    // copy of it, so a legacy sheet's `$1,200.00` had no `1200` anywhere in the
+    // response and an agent reading a range from an unmigrated sheet (a read
+    // this tool explicitly supports) got the same one-way payload `unformatted`
+    // exists to remove. `SheetEvaluationCell` carries both halves and the
+    // `format` it actually applied — with the column default and any region
+    // already resolved into it, which is why no `columnFormats` are passed
+    // below — so `cellText` re-derives exactly the display the evaluator
+    // produced from the value the agent needs.
     const cell: StoredCell = {
       raw,
-      value: evaluated?.display ?? raw,
+      value: evaluated ? evaluated.value : raw,
+      ...(evaluated?.type ? { type: evaluated.type } : {}),
+      ...(evaluated?.format ? { format: evaluated.format } : {}),
       ...(evaluated?.error ? { error: { type: 'error', message: evaluated.error } } : {}),
     };
     const existing = byRow.get(decoded.row);
@@ -456,12 +470,12 @@ function windowFromDocument(
 
   const indexes = [...byRow.keys()].filter((index) => index >= fromRow).sort((a, b) => a - b);
   const windowed = indexes.slice(0, limit);
-  // No column formats here, deliberately. `evaluated.display` has ALREADY been
-  // formatted by the evaluator with the resolved cell-over-column format, and
-  // the cell's own format is not attached to this synthetic `StoredCell` — so
-  // re-applying the column format would let it beat a per-cell override. A
-  // `plain` cell inside a currency column rendered `$1,200.00` here while the
-  // UI and the row store both showed `1200`.
+  // No column formats here, deliberately. The synthetic cell above already
+  // carries `evaluated.format`, which the evaluator resolved cell-over-column
+  // (and over any region) before it formatted the display. Passing the column
+  // formats again would be at best redundant and at worst let a column default
+  // beat a per-cell override: a `plain` cell inside a currency column rendered
+  // `$1,200.00` here while the UI and the row store both showed `1200`.
   const rows = windowed.map((index) => toSheetViewRow(index, byRow.get(index) ?? {}, only));
   const nextFromRow = windowed.length > 0 ? windowed[windowed.length - 1] + 1 : null;
 
@@ -476,7 +490,70 @@ function windowFromDocument(
     nextFromRow,
     hasMore: nextFromRow !== null && indexes.length > windowed.length,
     documentIsNotASheet: isText,
+    // Read from the document, not refused.
+    //
+    // An unmigrated sheet has no `sheet_tabs` row, and the first version of this
+    // answered `formatting: null` on the grounds that there was nowhere to read
+    // it from. That was wrong on the facts: `parseSheetContentSafe` reconstructs
+    // the regions, freezes, widths, heights, column formats, per-cell formats
+    // and conditional rules from `pages.content`, and this function has already
+    // parsed and selected that tab. Withholding them would have hidden the
+    // existing design at exactly the moment an agent needs it — before its first
+    // formatting change to a sheet nobody has edited since the row store
+    // shipped.
+    //
+    // `sheet.formats` and NOT the synthetic cells' `format`: the cells carry the
+    // RESOLVED format (column and region folded in), while `cellFormats` means
+    // the explicit per-cell overrides. Reporting a derived fill as an override
+    // is how a region model decays back into per-cell residue.
+    ...(includeFormatting
+      ? {
+          formatting: buildSheetFormatting(
+            sheet,
+            documentCellFormats(sheet.formats, windowed, only),
+          ),
+        }
+      : {}),
   };
+}
+
+/**
+ * The explicit per-cell formats a parsed document holds, for the rows in the
+ * window.
+ *
+ * Restricted to the window for the same reason the row-store path only sees the
+ * rows it fetched: `cellFormats` describes the rows that were returned, and a
+ * document's `formats` map covers the whole sheet. Sorted by row then column so
+ * the budget always drops the same cells for the same window.
+ */
+function documentCellFormats(
+  formats: Record<string, CellFormat> | undefined,
+  rowIndexes: readonly number[],
+  only: ReadonlySet<string> | undefined,
+): [string, CellFormat][] {
+  if (!formats) return [];
+
+  const wanted = new Set(rowIndexes);
+  const entries: { row: number; label: string; address: string; format: CellFormat }[] = [];
+
+  for (const [address, format] of Object.entries(formats)) {
+    if (!format || Object.keys(format).length === 0) continue;
+    // Same tolerance as the cell walk above: one junk key in a hand-edited
+    // document must not make the formatting unreadable.
+    let decoded: { row: number; column: number };
+    try {
+      decoded = decodeCellAddress(address);
+    } catch {
+      continue;
+    }
+    if (!wanted.has(decoded.row)) continue;
+    const label = encodeColumnLabel(decoded.column);
+    if (only && !only.has(label)) continue;
+    entries.push({ row: decoded.row, label, address: address.toUpperCase(), format });
+  }
+
+  entries.sort((a, b) => a.row - b.row || compareColumnLabels(a.label, b.label));
+  return entries.map((entry) => [entry.address, entry.format]);
 }
 
 interface LoadSheetWindowOptions {
@@ -530,25 +607,15 @@ export async function loadSheetWindow(
 
   const storedTabs = await listTabs(pageId);
   if (storedTabs.length === 0) {
-    const window = windowFromDocument(options.documentContent, pageId, tabIndex, fromRow, limit, only);
-    // An unmigrated sheet has no `sheet_tabs` row, so there is nowhere for
-    // regions, freezes, column formats or rules to be read FROM — and the
-    // synthetic `StoredCell`s built above carry no format either. Answering
-    // with an empty formatting block would say "this sheet is unstyled", and an
-    // agent acting on that formats over a design someone already applied. Same
-    // refusal this module makes about an unparseable document: say what cannot
-    // be answered rather than answer it wrongly.
-    return options.includeFormatting
-      ? {
-          ...window,
-          formatting: null,
-          formattingUnavailable:
-            "This sheet's rows have not been migrated to row storage, so its formatting is not " +
-            'readable here — regions, freezes, column formats and conditional rules all live on ' +
-            'the stored tab, which does not exist yet. Do NOT treat the sheet as unformatted: it ' +
-            'may carry a design this read cannot see. One edit in the app migrates it.',
-        }
-      : window;
+    return windowFromDocument(
+      options.documentContent,
+      pageId,
+      tabIndex,
+      fromRow,
+      limit,
+      only,
+      options.includeFormatting,
+    );
   }
 
   const tabs = toTabSummaries(storedTabs);
@@ -586,7 +653,9 @@ export async function loadSheetWindow(
     // is per-cell, so a projected read must project it too or the response is
     // bigger than the columns it claims to be about. The tab-level fields are
     // not per-cell and are not projected.
-    ...(options.includeFormatting ? { formatting: buildSheetFormatting(tab, stored, only) } : {}),
+    ...(options.includeFormatting
+      ? { formatting: buildSheetFormatting(tab, explicitCellFormats(stored, only)) }
+      : {}),
   };
 }
 
@@ -880,42 +949,58 @@ const hasKeys = (value: Record<string, unknown> | null | undefined): boolean =>
   value !== null && value !== undefined && Object.keys(value).length > 0;
 
 /**
- * The explicit per-cell overrides in a window of rows, within the budget.
+ * The explicit per-cell overrides carried by a window of stored rows, as
+ * `[A1 address, format]` pairs.
  *
  * Deterministic order — rows as fetched, columns in sheet order — so the same
- * window always drops the same cells, and a re-read to check a change does not
- * silently swap which half of the sheet it describes.
+ * window always drops the same cells under the budget, and a re-read to check a
+ * change does not silently swap which half of the sheet it describes.
+ *
+ * A row-store cell's `format` IS the explicit override: `sheetDataToRows` copies
+ * only `sheet.formats[address]` onto it, leaving column defaults on the tab and
+ * region-derived presentation to be derived at evaluation time. The document
+ * path builds its own entries for exactly that reason — its synthetic cells
+ * carry the RESOLVED format instead.
  */
-function collectCellFormats(
+export function explicitCellFormats(
   rows: readonly { rowIndex: number; cells: Record<string, StoredCell> }[],
-  only: ReadonlySet<string> | undefined,
+  only?: ReadonlySet<string>,
+): [string, CellFormat][] {
+  const entries: [string, CellFormat][] = [];
+  for (const row of rows) {
+    for (const label of Object.keys(row.cells).sort(compareColumnLabels)) {
+      if (only && !only.has(label)) continue;
+      const format = row.cells[label]?.format;
+      if (!format || Object.keys(format).length === 0) continue;
+      entries.push([`${label}${row.rowIndex + 1}`, format]);
+    }
+  }
+  return entries;
+}
+
+/** As many of `entries` as the budget affords, plus how many it left out. */
+function withinFormattingBudget(
+  entries: readonly (readonly [string, CellFormat])[],
   budget: number,
 ): { formats: Record<string, CellFormat>; dropped: number } {
   const formats: Record<string, CellFormat> = {};
   let spent = 0;
   let dropped = 0;
 
-  for (const row of rows) {
-    for (const label of Object.keys(row.cells).sort(compareColumnLabels)) {
-      if (only && !only.has(label)) continue;
-      const format = row.cells[label]?.format;
-      if (!format || Object.keys(format).length === 0) continue;
-
-      const address = `${label}${row.rowIndex + 1}`;
-      // The cost of the entry as it will be serialised: the key, the value, the
-      // quotes and the comma. Measuring the value alone understated a map of
-      // thousands of tiny formats by more than the formats themselves.
-      const cost = address.length + JSON.stringify(format).length + 4;
-      // Counted, not stopped at: the caller is told how many cells it is NOT
-      // seeing, and a single oversized format must not make every later cell
-      // vanish uncounted.
-      if (spent + cost > budget) {
-        dropped++;
-        continue;
-      }
-      spent += cost;
-      formats[address] = format;
+  for (const [address, format] of entries) {
+    // The cost of the entry as it will be serialised: the key, the value, the
+    // quotes and the comma. Measuring the value alone understated a map of
+    // thousands of tiny formats by more than the formats themselves.
+    const cost = address.length + JSON.stringify(format).length + 4;
+    // Counted, not stopped at: the caller is told how many cells it is NOT
+    // seeing, and a single oversized format must not make every later cell
+    // vanish uncounted.
+    if (spent + cost > budget) {
+      dropped++;
+      continue;
     }
+    spent += cost;
+    formats[address] = format;
   }
 
   return { formats, dropped };
@@ -924,15 +1009,16 @@ function collectCellFormats(
 /**
  * A tab's presentation, in the shape an agent can read and write back.
  *
- * Pure, and given the tab record rather than a page id, so `read_sheet`'s two
- * paths — a positional window and a filtered query — describe the same tab
- * identically. It reads nothing: every field is already on the `sheet_tabs` row
- * the caller fetched and on the cells of the rows it returned.
+ * Pure, and given the tab's own fields rather than a page id, so every caller —
+ * a positional window, a filtered query, and the parsed-document fallback —
+ * describes the same tab identically. It reads nothing: `SheetFormattingSource`
+ * is satisfied by both a `sheet_tabs` row and a parsed `SheetData`, and the
+ * per-cell entries are supplied by the caller that knows which of its cells
+ * carry an EXPLICIT format rather than a resolved one.
  */
 export function buildSheetFormatting(
   tab: SheetFormattingSource,
-  rows: readonly { rowIndex: number; cells: Record<string, StoredCell> }[],
-  only?: ReadonlySet<string>,
+  cellFormats: readonly (readonly [string, CellFormat])[],
 ): SheetFormatting {
   const formatting: SheetFormatting = {};
 
@@ -951,7 +1037,7 @@ export function buildSheetFormatting(
 
   if (hasKeys(tab.columnFormats)) formatting.columnFormats = tab.columnFormats!;
 
-  const cells = collectCellFormats(rows, only, MAX_FORMATTING_CHARS);
+  const cells = withinFormattingBudget(cellFormats, MAX_FORMATTING_CHARS);
   if (Object.keys(cells.formats).length > 0) formatting.cellFormats = cells.formats;
   if (cells.dropped > 0) formatting.formattingTruncated = { droppedCells: cells.dropped };
 
