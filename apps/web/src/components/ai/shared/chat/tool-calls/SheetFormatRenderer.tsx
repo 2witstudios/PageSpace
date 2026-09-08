@@ -74,6 +74,12 @@ interface SheetFormatRendererProps {
   cellsFormatted?: number;
   rulesAdded?: number;
   rulesRemoved?: number;
+  /**
+   * From the result: rules in the call that were already on the tab, by index
+   * into `rules`. A retried append reports every rule here with `added: 0`;
+   * without this the card would present them as changes that never landed.
+   */
+  skippedDuplicates?: Array<{ index: number; existingRuleId: string }>;
   removedRuleIds?: string[];
   message?: string;
   maxHeight?: number;
@@ -171,6 +177,7 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
   cellsFormatted,
   rulesAdded,
   rulesRemoved,
+  skippedDuplicates = [],
   removedRuleIds = [],
   message,
   maxHeight = 280,
@@ -178,20 +185,22 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
 }) {
   const { navigateToPage } = usePageNavigation();
   const colours = useMemo(() => collectColours(ops, rules, regions), [ops, rules, regions]);
+  const duplicateIndexes = useMemo(() => new Set(skippedDuplicates.map((entry) => entry.index)), [skippedDuplicates]);
 
   const summary = useMemo(() => {
     const parts: string[] = [];
     const regionCount = regionsApplied ?? regions.length;
     const opCount = opsApplied ?? ops.length;
-    const added = rulesAdded ?? rules.length;
+    const added = rulesAdded ?? rules.length - duplicateIndexes.size;
     const removed = rulesRemoved ?? removedRuleIds.length;
     if (regionCount > 0) parts.push(`${regionCount} ${regionCount === 1 ? 'region' : 'regions'}`);
     if (opCount > 0) parts.push(`${opCount} ${opCount === 1 ? 'op' : 'ops'}`);
     if (cellsFormatted) parts.push(`${cellsFormatted} ${cellsFormatted === 1 ? 'cell' : 'cells'}`);
     if (added > 0) parts.push(`${added} ${added === 1 ? 'rule' : 'rules'} added`);
+    if (duplicateIndexes.size > 0) parts.push(`${duplicateIndexes.size} already present`);
     if (removed > 0) parts.push(`${removed} removed`);
     return parts.join(' · ');
-  }, [regionsApplied, regions.length, opsApplied, ops.length, cellsFormatted, rulesAdded, rules.length, rulesRemoved, removedRuleIds.length]);
+  }, [regionsApplied, regions.length, opsApplied, ops.length, cellsFormatted, rulesAdded, rules.length, duplicateIndexes, rulesRemoved, removedRuleIds.length]);
 
   const empty = regions.length === 0 && ops.length === 0 && rules.length === 0 && removedRuleIds.length === 0;
 
@@ -264,17 +273,25 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
                 </span>
               </div>
             ))}
-            {rules.map((rule, i) => (
-              <div key={`rule-${i}`} className="flex items-center gap-3 px-3 py-1.5 text-sm" data-testid="sheet-format-rule">
-                <Paintbrush className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                <span className="flex-1 min-w-0 truncate font-mono text-xs">{describeRule(rule)}</span>
-                <span className="flex items-center gap-1 shrink-0">
-                  {[rule.format?.background, rule.format?.color, rule.min?.color, rule.mid?.color, rule.max?.color, rule.color]
-                    .filter((c): c is string => Boolean(c))
-                    .map((c, j) => <Swatch key={`${c}-${j}`} colour={c} />)}
-                </span>
-              </div>
-            ))}
+            {rules.map((rule, i) => {
+              const duplicate = duplicateIndexes.has(i);
+              return (
+                <div
+                  key={`rule-${i}`}
+                  className={cn('flex items-center gap-3 px-3 py-1.5 text-sm', duplicate && 'text-muted-foreground')}
+                  data-testid={duplicate ? 'sheet-format-rule-duplicate' : 'sheet-format-rule'}
+                >
+                  <Paintbrush className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <span className="flex-1 min-w-0 truncate font-mono text-xs">{describeRule(rule)}</span>
+                  <span className="flex items-center gap-1 shrink-0">
+                    {[rule.format?.background, rule.format?.color, rule.min?.color, rule.mid?.color, rule.max?.color, rule.color]
+                      .filter((c): c is string => Boolean(c))
+                      .map((c, j) => <Swatch key={`${c}-${j}`} colour={c} />)}
+                    {duplicate && <span className="text-[11px] px-1.5 py-0.5 rounded bg-muted">already present</span>}
+                  </span>
+                </div>
+              );
+            })}
             {removedRuleIds.map((id) => (
               <div key={`removed-${id}`} className="flex items-center gap-3 px-3 py-1.5 text-sm text-muted-foreground" data-testid="sheet-format-removed">
                 <Paintbrush className="h-3.5 w-3.5 shrink-0" />

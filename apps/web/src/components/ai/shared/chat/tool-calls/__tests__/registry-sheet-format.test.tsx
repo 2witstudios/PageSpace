@@ -122,6 +122,30 @@ describe('set_conditional_format renderer', () => {
     expect(getByTestId('sheet-format-swatches').querySelectorAll('span')).toHaveLength(4);
   });
 
+  it('labels rules the result reports as already present, instead of showing them as changes', () => {
+    // An append that overlaps what is already on the tab lands only the new
+    // rules; the result names the rest by index in `skippedDuplicates`. The
+    // card must not present those rows as changes.
+    const retried = {
+      success: true,
+      title: 'Q3 Budget',
+      added: 2,
+      removed: 0,
+      skippedDuplicates: [
+        { index: 0, existingRuleId: 'r-old-1' },
+        { index: 2, existingRuleId: 'r-old-3' },
+      ],
+    };
+    const { getAllByTestId, getByText, queryByTestId } = render(
+      <>{renderTool('set_conditional_format', { rules: input.rules }, retried)}</>,
+    );
+    expect(getAllByTestId('sheet-format-rule-duplicate')).toHaveLength(2);
+    expect(getAllByTestId('sheet-format-rule')).toHaveLength(2);
+    expect(getAllByTestId('sheet-format-rule-duplicate')[0].textContent).toContain('already present');
+    expect(getByText('2 rules added · 2 already present')).toBeTruthy();
+    expect(queryByTestId('sheet-format-removed')).toBeNull();
+  });
+
   it('given nothing to show, says so instead of an empty card', () => {
     const { getByText } = render(
       <>{renderTool('set_conditional_format', { rules: [] }, { success: true, title: 'Q3 Budget', added: 0, removed: 0, message: 'Every rule in this call is already on "Q3 Budget"; nothing was added.' })}</>,

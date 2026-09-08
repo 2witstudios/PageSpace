@@ -639,6 +639,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
         removedRuleIds={parsedInput?.removeRuleIds as string[] | undefined}
         rulesAdded={parsedOutput.added as number | undefined}
         rulesRemoved={parsedOutput.removed as number | undefined}
+        skippedDuplicates={parsedOutput.skippedDuplicates as Array<{ index: number; existingRuleId: string }> | undefined}
         message={parsedOutput.message as string | undefined}
       />
     );

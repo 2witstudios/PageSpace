@@ -65,9 +65,14 @@ describe('sheet formatting tools — registration', () => {
     expect(TOOL_NAME_MAP.set_conditional_format).toBe('Conditional Formatting');
   });
 
-  it('the spreadsheets skill is discoverable through format_sheet and its description names formatting', () => {
+  it('the spreadsheets skill is discoverable through either formatting tool and its description names formatting', () => {
+    // requiredTools is .some()-gated: an agent whose allowlist holds only
+    // set_conditional_format (plus load_skill) must still be offered the
+    // skill that carries the rule semantics.
     const skill = BUILTIN_SKILLS.find((s) => s.trigger === 'spreadsheets')!;
-    expect(skill.requiredTools).toContain('format_sheet');
+    for (const name of SHEET_FORMAT_TOOLS) {
+      expect(skill.requiredTools, name).toContain(name);
+    }
     // The description is the model's only retrieval signal; these are the
     // words a person types.
     for (const word of ['format', 'dashboard', 'presentable']) {
