@@ -193,6 +193,9 @@ export const MAX_FORMAT_OPS = 200;
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+
 /** Keys that would reach a prototype rather than a property once merged. */
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -518,8 +521,9 @@ function validateRuleInput(
   // cross-version data loss the passthrough exists to prevent, arriving as a
   // refusal instead. It also keeps this identical to the panel's `updateRule`,
   // which validates `patch.ranges` and nothing else.
-  if (supplied.ranges !== undefined) {
-    if (!Array.isArray(supplied.ranges) || supplied.ranges.some((entry) => typeof entry !== 'string')) {
+  const suppliedRanges = supplied.ranges;
+  if (suppliedRanges !== undefined) {
+    if (!isStringArray(suppliedRanges)) {
       return refuseOp(index, type, 'ranges must be an array of A1 ranges, such as ["B2:B20"].');
     }
     // Bounds BEFORE `validateRanges`, because `validateRanges` expands each
@@ -530,14 +534,14 @@ function validateRuleInput(
     // stops advancing at that magnitude, so the expansion loop runs to its
     // 500,000-address ceiling emitting the same malformed exponential-form
     // address every time, inside what is supposed to be a cheap check.
-    for (const range of supplied.ranges as string[]) {
+    for (const range of suppliedRanges) {
       if (!parseRangeSpan(range)) {
         return refuseOp(index, type, `"${range}" is not a range this sheet can address.`);
       }
     }
 
     // The caller's array, at its real length.
-    const ranges = validateRanges(supplied.ranges as string[]);
+    const ranges = validateRanges(suppliedRanges);
     if (!ranges.ok) return refuseOp(index, type, ranges.reason);
   }
 
@@ -828,7 +832,7 @@ export function planFormatOps(
           refuseOp(index, op.type, 'patch must be an object of rule fields.');
         }
 
-        const patch = op.patch as Record<string, unknown>;
+        const patch = op.patch;
         // `id` and `kind` are identity, not settings — matching `updateRule`,
         // which pins both so a patch cannot silently detach a rule from the row
         // being edited. Which also means a patch naming ONLY those two asks for
