@@ -227,6 +227,25 @@ function referencedCells(start: string, end: string): number | null {
  * attempt landed" rather than as a fault. What it must not do is treat those
  * four as safe to replay blindly.
  *
+ * The shape a caller is meant to use, since the ordering is the whole point:
+ *
+ *     const plan = planFormatOps(ops, tab);          // throws before any I/O
+ *
+ *     await tx(async () => {
+ *       const rows = await loadRows(tabId, plan.rows);   // exactly these
+ *       let sheet = materialise(tab, rows);
+ *       for (const step of plan.steps) sheet = apply(sheet, step);
+ *       await saveRows(tabId, plan.rows, sheet);
+ *       if (plan.touchesTabFields) await saveTab(tabId, sheet);
+ *     });
+ *
+ * `planFormatOps` runs OUTSIDE the transaction and before the load, which is
+ * what makes `plan.rows` worth having: the set is known before a lock is taken,
+ * so a request that formats six cells locks six rows rather than a tab. A plan
+ * that returns has already refused everything it is going to refuse, so the
+ * loop over `steps` needs no error handling of its own — see the note above on
+ * which ops survive being replayed if the transaction fails.
+ *
  * What the layers above import, and why each is public rather than internal:
  *
  *  - `planFormatOps`, `SheetFormatOp`, `SheetFormatPlan`, `PlannedFormatStep`,
