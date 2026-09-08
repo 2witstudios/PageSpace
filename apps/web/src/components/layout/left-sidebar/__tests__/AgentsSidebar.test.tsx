@@ -50,6 +50,8 @@ interface PageAgentsResult {
     driveName: string;
     agentCount: number;
     agents: { id: string; title: string | null; driveId: string }[];
+    /** The deployment's `LOCAL_ENVS_ENABLED`, ridden per drive the way `sandboxEligible` is. Absent = off. */
+    localEnvsEnabled?: boolean;
   }[];
   isLoading: boolean;
   isError: boolean;
@@ -126,6 +128,7 @@ import type { WorkspaceNodeTarget } from '@pagespace/lib/agent-workspaces/worksp
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { LOCAL_ENV_ENROLLMENT_POLL_MS } from '@/hooks/drive-envs/useDriveEnvs';
 
 const driveFixture = (id: string, name: string, overrides: Partial<Drive> = {}): Drive => ({
   id,
@@ -197,7 +200,10 @@ const SESSION: SessionFixture = {
 interface EnvFixture {
   id: string;
   name: string;
-  status: 'none' | 'running' | 'stopped';
+  status: 'none' | 'running' | 'stopped' | 'connecting' | 'connected' | 'disconnected';
+  substrate?: 'sprite' | 'local';
+  label?: string;
+  enrolled?: boolean;
 }
 
 /**
@@ -2543,6 +2549,299 @@ describe('AgentsSidebar', () => {
 
       expect(screen.getByText('inside staging')).toBeDefined();
       expect(screen.queryByTestId('sidebar-env-env-1')).toBeNull();
+    });
+  });
+
+  /**
+   * LOCAL ENVIRONMENTS (Local Environments epic, [D-3]): a machine is a
+   * SUBSTRATE of an environment, chosen in the ordinary create step — and that
+   * step is the one place the one-time enrollment code is shown. Losing the
+   * code is recoverable: an env whose machine has not enrolled offers "Show a
+   * new code" from its row, backed by a server re-issue.
+   */
+  describe('local environments', () => {
+    beforeEach(() => {
+      useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha')] });
+    });
+    const CODE = 'ABCDEFGHJKMNPQRSTVWX';
+    const expiresAt = () => new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    const localEnv = { id: 'env-mac', name: 'mac', driveId: 'drive-1', substrate: 'local' as const, status: 'disconnected' as const, label: 'jono-macstudio', enrolled: false };
+    const enableLocalEnvs = () =>
+      mockUsePageAgents.mockImplementation((driveId?: string, options?: { enabled?: boolean }) => {
+        const base = defaultPageAgents(driveId, options);
+        return { ...base, agentsByDrive: base.agentsByDrive.map((entry) => ({ ...entry, localEnvsEnabled: true })) };
+      });
+    const openCreateStep = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await screen.findByLabelText('Environment name');
+    };
+
+    test('with the deployment flag off (the default), the create step offers no substrate choice at all — absent, not present-and-refusing', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], []);
+      renderSidebar();
+      await openCreateStep(user);
+      expect(screen.queryByLabelText('This computer')).toBeNull();
+      expect(screen.queryByLabelText('Cloud sandbox')).toBeNull();
+      expect(screen.queryByLabelText('Machine label')).toBeNull();
+    });
+
+    test('with the flag on, leaving the default (cloud) selected posts the byte-identical body the cloud path always sent', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', substrate: 'sprite', status: 'none' } });
+      renderSidebar();
+      await openCreateStep(user);
+      expect((screen.getByLabelText('Cloud sandbox') as HTMLInputElement).checked).toBe(true);
+      expect(screen.queryByLabelText('Machine label')).toBeNull();
+      await user.type(screen.getByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', { name: 'dev' }));
+      // No code step for a cloud env: straight back to the target step.
+      expect(await screen.findByText('Researcher')).toBeDefined();
+      expect(screen.queryByText(/enrol/i)).toBeNull();
+    });
+
+    test('choosing "This computer" asks for a machine label and posts substrate local with it', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', { name: 'mac', substrate: 'local', label: 'jono-macstudio' }),
+      );
+    });
+
+    test('a local create shows the code ONCE with the exact commands for this origin, its expiry, and the boundary statement; Done returns to the flow and the code is gone', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      // The code, exactly once on screen, in its own element.
+      const code = await screen.findByTestId('enrollment-code');
+      expect(code.textContent).toBe(CODE);
+      // The commands, with the real values and the origin the app is served from.
+      const commands = screen.getByTestId('enrollment-commands').textContent ?? '';
+      expect(commands).toContain(`pagespace env enroll enr_1 ${CODE} --host ${window.location.origin}`);
+      expect(commands).toContain(`pagespace env connect enr_1 --host ${window.location.origin}`);
+      expect(commands.indexOf('env enroll')).toBeLessThan(commands.indexOf('env connect'));
+      // The expiry, and what the person is agreeing to (the README's words, not softer ones).
+      expect(screen.getByText(/expires/i)).toBeDefined();
+      expect(screen.getByText(/runs as you/i)).toBeDefined();
+      expect(screen.getByText(/every later command of that kind/i)).toBeDefined();
+      // Never refetched: the only request that ever carried the code is the create.
+      expect(mockPost).toHaveBeenCalledTimes(1);
+
+      await user.click(screen.getByRole('button', { name: 'Done' }));
+      // Back on the target step (where the create was asked from), and the code is gone.
+      expect(await screen.findByText('Researcher')).toBeDefined();
+      expect(screen.queryByTestId('enrollment-code')).toBeNull();
+      expect(screen.queryByText(CODE)).toBeNull();
+    });
+
+    test('copying puts the code on the clipboard', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await user.click(await screen.findByRole('button', { name: 'Copy code' }));
+      expect(await navigator.clipboard.readText()).toBe(CODE);
+      await user.click(screen.getByRole('button', { name: 'Copy commands' }));
+      expect(await navigator.clipboard.readText()).toContain(`pagespace env enroll enr_1 ${CODE}`);
+    });
+
+    test('a local env created from the ENV step is not auto-selected (its machine has not enrolled): the env step re-asks, now listing it as a local machine', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      // The listing the server would return AFTER the create: the palette
+      // revalidates behind its optimistic write, so the mock must answer with
+      // the new env or the revalidation would (in the test only) erase it.
+      const listed: EnvFixture[] = [{ id: 'env-1', name: 'staging', status: 'running' }];
+      respondWithSessions([], listed);
+      mockPost.mockImplementationOnce(async () => {
+        listed.push({ id: 'env-mac', name: 'mac', status: 'disconnected', substrate: 'local', label: 'jono-macstudio', enrolled: false });
+        return { env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } };
+      });
+      renderSidebar();
+      await screen.findByTestId('sidebar-env-env-1');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+      await user.click(await screen.findByText('New environment…'));
+      await user.click(await screen.findByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await user.click(await screen.findByRole('button', { name: 'Done' }));
+      // The env step again — NOT the name step with the new env preselected.
+      expect(await screen.findByText('New sandbox')).toBeDefined();
+      expect(screen.queryByPlaceholderText('Researcher')).toBeNull();
+      expect(screen.getByText('in mac')).toBeDefined();
+      expect(screen.getByText('on jono-macstudio')).toBeDefined();
+    });
+
+    test('a local create that lands after the palette was closed still shows the code — the credential is never silently dropped', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      let resolveCreate: ((value: unknown) => void) | undefined;
+      mockPost.mockImplementationOnce(() => new Promise((resolve) => { resolveCreate = resolve; }));
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await user.keyboard('{Escape}');
+      expect(screen.queryByLabelText('Environment name')).toBeNull();
+
+      await act(async () => {
+        resolveCreate?.({ env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      });
+      expect((await screen.findByTestId('enrollment-code')).textContent).toBe(CODE);
+      await user.click(screen.getByRole('button', { name: 'Done' }));
+      expect(screen.queryByTestId('enrollment-code')).toBeNull();
+    });
+
+    test('a local env row says it is a computer, names the machine, and reads as awaiting enrollment until a machine enrols', async () => {
+      respondWithSessions([], [{ id: 'env-mac', name: 'mac', status: 'disconnected', substrate: 'local', label: 'jono-macstudio', enrolled: false }]);
+      renderSidebar();
+      const row = await screen.findByTestId('sidebar-env-env-mac');
+      expect(within(row).getByText('mac')).toBeDefined();
+      expect(within(row).getByText('jono-macstudio')).toBeDefined();
+      expect(within(row).getByLabelText('Local environment')).toBeDefined();
+      expect(within(row).getByLabelText('Awaiting enrollment')).toBeDefined();
+    });
+
+    test('an enrolled local env whose machine is away reads as not connected — never as awaiting enrollment', async () => {
+      respondWithSessions([], [{ id: 'env-mac', name: 'mac', status: 'disconnected', substrate: 'local', label: 'jono-macstudio', enrolled: true }]);
+      renderSidebar();
+      const row = await screen.findByTestId('sidebar-env-env-mac');
+      expect(within(row).getByLabelText('Machine not connected')).toBeDefined();
+      expect(within(row).queryByLabelText('Awaiting enrollment')).toBeNull();
+    });
+
+    test('an admin gets "Show a new code" on an awaiting-enrollment row, which re-issues on the server and shows the fresh code once', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-mac', name: 'mac', status: 'disconnected', substrate: 'local', label: 'jono-macstudio', enrolled: false }]);
+      mockPost.mockResolvedValue({ enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      renderSidebar();
+      const row = await screen.findByTestId('sidebar-env-env-mac');
+      await user.click(within(row).getByLabelText('Environment actions'));
+      await user.click(await screen.findByText('Show a new code'));
+      await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs/env-mac/enrollment-code'));
+      expect((await screen.findByTestId('enrollment-code')).textContent).toBe(CODE);
+      expect(screen.getByTestId('enrollment-commands').textContent).toContain(`pagespace env enroll enr_1 ${CODE}`);
+      await user.click(screen.getByRole('button', { name: 'Done' }));
+      await waitFor(() => expect(screen.queryByTestId('enrollment-code')).toBeNull());
+    });
+
+    test('"Show a new code" is withheld once a machine has enrolled, and from a member', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-mac', name: 'mac', status: 'connected', substrate: 'local', label: 'jono-macstudio', enrolled: true }]);
+      renderSidebar();
+      const row = await screen.findByTestId('sidebar-env-env-mac');
+      await user.click(within(row).getByLabelText('Environment actions'));
+      expect(await screen.findByText('Rename')).toBeDefined();
+      expect(screen.queryByText('Show a new code')).toBeNull();
+    });
+
+    /**
+     * THE ROW MUST MOVE ON ITS OWN. `enrolledAt` changes from the CLI, outside
+     * every write path this app has, and the env listing neither polls nor
+     * revalidates on focus. Without this a person follows the dialog's two
+     * commands and watches a row that never stops saying "Awaiting
+     * enrollment" (Codex P1 on #2564).
+     */
+    test('a row awaiting enrollment picks up enrolled + connected without a reload — the listing polls while any local env awaits, and stops once none does', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const listed: EnvFixture[] = [{ id: 'env-mac', name: 'mac', status: 'disconnected', substrate: 'local', label: 'jono-macstudio', enrolled: false }];
+        respondWithSessions([], listed);
+        renderSidebar();
+        const row = await screen.findByTestId('sidebar-env-env-mac');
+        expect(within(row).getByLabelText('Awaiting enrollment')).toBeDefined();
+        const envCallsBefore = mockFetchWithAuth.mock.calls.filter(([url]) => String(url).includes('/envs')).length;
+
+        // The machine enrols and connects, on the CLI.
+        listed[0] = { ...listed[0]!, status: 'connected', enrolled: true };
+        await act(async () => { await vi.advanceTimersByTimeAsync(LOCAL_ENV_ENROLLMENT_POLL_MS + 50); });
+        await waitFor(() => expect(within(screen.getByTestId('sidebar-env-env-mac')).getByLabelText('Machine connected')).toBeDefined());
+        expect(mockFetchWithAuth.mock.calls.filter(([url]) => String(url).includes('/envs')).length).toBeGreaterThan(envCallsBefore);
+
+        // Nothing awaits any more: the poll stops.
+        const settled = mockFetchWithAuth.mock.calls.filter(([url]) => String(url).includes('/envs')).length;
+        await act(async () => { await vi.advanceTimersByTimeAsync(LOCAL_ENV_ENROLLMENT_POLL_MS * 3); });
+        expect(mockFetchWithAuth.mock.calls.filter(([url]) => String(url).includes('/envs')).length).toBe(settled);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    test('an already_enrolled refusal refreshes the listing so the row self-heals', async () => {
+      const user = userEvent.setup();
+      const listed: EnvFixture[] = [{ id: 'env-mac', name: 'mac', status: 'disconnected', substrate: 'local', label: 'jono-macstudio', enrolled: false }];
+      respondWithSessions([], listed);
+      mockPost.mockImplementation(async () => {
+        listed[0] = { ...listed[0]!, status: 'connected', enrolled: true };
+        throw new ApiRequestError('A machine has already enrolled in this environment', 409, { reason: 'already_enrolled' });
+      });
+      renderSidebar();
+      const row = await screen.findByTestId('sidebar-env-env-mac');
+      await user.click(within(row).getByLabelText('Environment actions'));
+      await user.click(await screen.findByText('Show a new code'));
+      await waitFor(() => expect(within(screen.getByTestId('sidebar-env-env-mac')).getByLabelText('Machine connected')).toBeDefined());
+      expect(within(screen.getByTestId('sidebar-env-env-mac')).queryByLabelText('Awaiting enrollment')).toBeNull();
+    });
+
+    test('the code step says, BEFORE the commands, that the daemon runs on macOS and Linux only — enrolling from Windows would pin a machine that can never connect', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      const panel = (await screen.findByTestId('enrollment-commands')).closest('[data-testid="enrollment-panel"]') as HTMLElement;
+      const text = panel.textContent ?? '';
+      expect(text).toMatch(/macOS and Linux only/);
+      expect(text).toMatch(/Windows/);
+      expect(text.indexOf('macOS and Linux only')).toBeLessThan(text.indexOf('pagespace env enroll'));
+    });
+
+    test('a refused re-issue (the machine enrolled meanwhile) is reported, not shown as a code', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-mac', name: 'mac', status: 'disconnected', substrate: 'local', label: 'jono-macstudio', enrolled: false }]);
+      mockPost.mockRejectedValue(new ApiRequestError('A machine has already enrolled in this environment', 409, { reason: 'already_enrolled' }));
+      renderSidebar();
+      const row = await screen.findByTestId('sidebar-env-env-mac');
+      await user.click(within(row).getByLabelText('Environment actions'));
+      await user.click(await screen.findByText('Show a new code'));
+      await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+      expect(screen.queryByTestId('enrollment-code')).toBeNull();
     });
   });
 });

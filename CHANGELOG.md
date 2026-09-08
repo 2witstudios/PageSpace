@@ -7,6 +7,22 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Local Environments: create one from the app, get your enrollment code, and get a new one if
+  you lose it (opt-in)** — a local Environment (your own computer, reached through the bridge) is
+  now a choice in the ordinary "New environment" step rather than something only an API call could
+  make. On a deployment with `LOCAL_ENVS_ENABLED`, a drive owner or admin picks **This computer**,
+  names the machine, and is shown the one-time enrollment code beside the exact two commands to run
+  on it — `pagespace env enroll …` then `pagespace env connect …`, with this deployment's address
+  filled in — plus when the code expires and, in plain words, what enrolling agrees to: everything
+  runs as you, with no sandbox, and in `ask` mode one approval covers every later command of that
+  kind for that session. Closing that step used to be a dead end: the code was shown once and
+  could never be recovered, so the Environment had to be deleted and made again. Now the row reads
+  **Awaiting enrollment** and its menu offers **Show a new code**, which replaces the previous one;
+  the server refuses, for good, once a machine has enrolled, so a lost code can never let a second
+  machine take over an enrolled Environment. Local Environments show a laptop and the machine's
+  name in the sidebar and in the "where should it run?" list, so a computer is never mistaken for a
+  cloud sandbox. Creating a cloud Environment is unchanged. Still off by default.
+
 - **Android app: it can now ask for notification permission and register for push (not yet
   distributed)** — the server has been able to send an Android push since the FCM sender landed, but
   no Android build could receive one: the app declared no notification permission and the shared

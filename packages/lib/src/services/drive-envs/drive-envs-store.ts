@@ -206,9 +206,21 @@ export interface DriveEnvStore {
   /**
    * Enroll: pin the machine key and consume the code, IFF the row is pending
    * (`enrolledAt IS NULL AND enrollmentCodeUsedAt IS NULL AND revokedAt IS
-   * NULL`). Clears the code hash — a consumed code is not kept around.
+   * NULL`) AND the stored code hash is still the one the caller VERIFIED
+   * (`enrollmentCodeHash = <verified hash>`). The hash predicate is what makes
+   * a re-issue real: an enrollment that verified the old code just before a
+   * re-issue landed must lose here, or the superseded code would pin its key
+   * and silently invalidate the code the owner was just shown (Codex P1 on
+   * #2564). Clears the code hash — a consumed code is not kept around.
    */
-  pinMachineKey(input: { envId: string; machinePublicKey: string; machineKeyFingerprint: string; serverKeyId: string; now: Date }): Promise<boolean>;
+  pinMachineKey(input: { envId: string; machinePublicKey: string; machineKeyFingerprint: string; serverKeyId: string; enrollmentCodeHash: string; now: Date }): Promise<boolean>;
+  /**
+   * Replace the one-time code (hash + expiry, used stamp cleared) IFF the row
+   * is still pending: `enrolledAt IS NULL AND revokedAt IS NULL`. The
+   * enrollment id is never touched. An enrolled row loses the compare-and-set
+   * — a pinned machine is never re-opened to a second key (M3).
+   */
+  reissueEnrollmentCode(input: { envId: string; enrollmentCodeHash: string; enrollmentCodeExpiresAt: Date; now: Date }): Promise<boolean>;
   /**
    * Store the outstanding challenge (issued `now`) IFF enrolled, not revoked,
    * AND no live challenge is outstanding — i.e. the previous one is absent,
@@ -636,11 +648,29 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       return rows as DriveEnvLocalRecord[];
     },
 
-    async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, now: at }) {
+    async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, enrollmentCodeHash, now: at }) {
       const updated = await db
         .update(driveEnvLocal)
         .set({ machinePublicKey, machineKeyFingerprint, serverKeyId, enrolledAt: at, enrollmentCodeUsedAt: at, enrollmentCodeHash: null, updatedAt: at })
-        .where(and(eq(driveEnvLocal.envId, envId), isNull(driveEnvLocal.enrolledAt), isNull(driveEnvLocal.enrollmentCodeUsedAt), isNull(driveEnvLocal.revokedAt)))
+        .where(
+          and(
+            eq(driveEnvLocal.envId, envId),
+            isNull(driveEnvLocal.enrolledAt),
+            isNull(driveEnvLocal.enrollmentCodeUsedAt),
+            isNull(driveEnvLocal.revokedAt),
+            // Bound to the code that was verified: a re-issued row no longer matches.
+            eq(driveEnvLocal.enrollmentCodeHash, enrollmentCodeHash),
+          ),
+        )
+        .returning({ envId: driveEnvLocal.envId });
+      return updated.length === 1;
+    },
+
+    async reissueEnrollmentCode({ envId, enrollmentCodeHash, enrollmentCodeExpiresAt, now: at }) {
+      const updated = await db
+        .update(driveEnvLocal)
+        .set({ enrollmentCodeHash, enrollmentCodeExpiresAt, enrollmentCodeUsedAt: null, updatedAt: at })
+        .where(and(eq(driveEnvLocal.envId, envId), isNull(driveEnvLocal.enrolledAt), isNull(driveEnvLocal.revokedAt)))
         .returning({ envId: driveEnvLocal.envId });
       return updated.length === 1;
     },
