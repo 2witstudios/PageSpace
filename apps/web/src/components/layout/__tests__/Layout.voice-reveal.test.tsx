@@ -30,7 +30,7 @@ vi.mock('@/hooks/useSocket', () => ({ useSocket: () => undefined }));
 vi.mock('@/hooks/useAccessRevocation', () => ({ useAccessRevocation: () => undefined }));
 vi.mock('@/hooks/useNotificationToasts', () => ({ useNotificationToasts: () => undefined }));
 vi.mock('@/hooks/useDesktopNotifications', () => ({ useDesktopNotifications: () => undefined }));
-vi.mock('@/hooks/useIosBadgeSync', () => ({ useIosBadgeSync: () => undefined }));
+vi.mock('@/hooks/useNativeBadgeSync', () => ({ useNativeBadgeSync: () => undefined }));
 vi.mock('@/hooks/usePerformanceMonitor', () => ({ usePerformanceMonitor: () => undefined }));
 vi.mock('@/hooks/useIOSKeyboardInit', () => ({ useIOSKeyboardInit: () => undefined }));
 vi.mock('@/hooks/useMobileKeyboard', () => ({ dismissKeyboard: () => {} }));

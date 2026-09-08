@@ -3,9 +3,9 @@
 Capacitor wrapper around the web app, mirroring `apps/ios`.
 
 > **Scope of this file today:** why the Capacitor config diverges from the iOS one, what deep
-> links ship and what is deferred, and the server-side push requirements. Client-side setup — the
-> runtime permission prompt, token registration, build and signing — belongs to the Android client
-> work and is not documented here yet.
+> links ship and what is deferred, the server-side push requirements, and the client-side push
+> permission and registration path. Build and signing belong to the release work and are not
+> documented here yet.
 
 ## Why this config is not a copy of the iOS one
 
@@ -317,3 +317,73 @@ Once the secret is set, three sends confirm the whole path:
 
 Only a token-specific verdict from FCM deactivates a device. Credential, project, quota, outage
 and malformed-message rejections never count against a phone, however many times they occur.
+
+## Client-side push: permission and registration
+
+`POST_NOTIFICATIONS` is declared in `AndroidManifest.xml`. It has to be: on API 33+ (targetSdk is
+36) it is a dangerous permission that starts out ungranted, and an *undeclared* dangerous
+permission cannot be requested at all — the request resolves denied with no dialog shown. On API 32
+and below the OS ignores the declaration, and `@capacitor/push-notifications` resolves
+`requestPermissions()` as granted without asking.
+
+The runtime request and the token round trip live in the shared web layer, in
+`apps/web/src/hooks/usePushNotifications.ts` and `apps/web/src/components/PushNotificationManager.tsx`
+— the same code iOS runs. What changed for Android is only the gate: the hook now asks
+`useCapacitor().capabilities.push` (the table in `apps/web/src/lib/capacitor-bridge.ts`) instead of
+comparing the platform to `'ios'`. On registration the FCM token POSTs to
+`/api/notifications/push-tokens` with `platform: 'android'`, which that route has always accepted.
+
+**A refusal is remembered.** The hook writes a `push_permission_denied` record to `localStorage`
+and declines to call `requestPermissions()` again while it stands, so the dialog does not return on
+every cold start. This is not redundant with the OS state: after one refusal Android reports
+`'prompt-with-rationale'` from `checkPermissions()` and would still allow the ask.
+
+The record is a cache of the OS's answer, never a second source of truth. The permission-check
+effect runs once per mount, so the sync below happens on the next launch rather than the moment a
+setting changes; it makes the record agree with the OS in both directions. It writes one when
+`checkPermissions()` reports `denied` or `prompt-with-rationale` — the OS can be holding a refusal
+this client never saw it collect, which is exactly the state of a user who refused on a build
+predating the record, or one whose storage write failed — and it drops one whenever the OS reports a
+state that is not holding a refusal —
+`granted` (the user turned notifications on from system settings) or `prompt` (the OS has forgotten
+the refusal and would ask again, which is where **Android 11+ lands after auto-revoking permissions
+for an app that went unused**). `denied` and `prompt-with-rationale` both keep it. There is
+therefore no manual override to re-ask: the way back is the OS's own state, so the record can never
+outlive the refusal it stands for. While it does stand, `hasPreviouslyDenied` is the signal a
+settings surface should use to say "enable notifications in system settings" rather than offer a
+button that would do nothing.
+
+**Not covered here: how the notification is drawn.** This work makes a push *deliverable*; what the
+tray renders is separate and unverified. The manifest declares no
+`com.google.firebase.messaging.default_notification_icon` or `default_notification_channel_id`
+meta-data, so both the small icon and the channel fall to Firebase's defaults inside
+`CommonNotificationBuilder.getOrCreateChannel` / `createNotificationInfo` (the plugin calls both —
+`PushNotificationsPlugin.java:274-286`). Whether that produces a usable icon and a sensibly-named
+channel on a real device is a device-verification question, and adding a monochrome notification
+icon is its own asset task.
+
+One thing that will look like a bug during verification and is not: a push arriving while the app is
+in the **foreground** does nothing visible. The hook dispatches a `push:received` window event and
+nothing in the app listens for it — deliberately, on both platforms, because the foreground already
+has a better channel (the realtime socket drives `useNotificationStore`, which is what moves the
+in-app unread count and the badge). Tapping a notification *is* wired: `PushActionHandler` listens
+for `push:action` with no platform gate and routes on `data.type` / `data.pageId` / `data.driveId`,
+all of which the sender populates and FCM delivers as strings.
+
+**Badges.** `@capawesome/capacitor-badge` is now an Android dependency and `useNativeBadgeSync`
+(formerly `useIosBadgeSync`) projects the unread count on both platforms. The Android badge is a
+launcher feature: launchers that do not implement one reject or ignore the write, which the hook
+logs and otherwise treats as a no-op. The iOS-only authorization gate inside it is conditional, not
+removed — see the comment there for the one-shot option cap it defends against.
+
+Adding that dependency leaves the generated `capacitor.settings.gradle` and
+`app/capacitor.build.gradle` stale in the repo — neither lists the badge plugin yet, and until they
+do it is not compiled into the APK and `Badge.set()` rejects at runtime (silently, per the above).
+No separate step is needed to fix that: `cap sync android` regenerates both, and it is already the
+second half of `build:full`, so the documented device-verification path
+(`bun run --cwd apps/android build:full`) picks it up. The stale files only bite someone who builds
+Gradle directly without syncing first.
+
+**Not verified on a device.** Nothing here has been exercised on real hardware — there is no
+release build yet. The permission dialog, the FCM token round trip and badge behaviour across
+launchers are all the device-verification task's to confirm.

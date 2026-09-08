@@ -103,4 +103,24 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+        Notification delivery. Declaring this is what makes a runtime request
+        possible at all: on API 33+ (targetSdk is 36) POST_NOTIFICATIONS is a
+        dangerous permission that starts out not granted, and an undeclared
+        dangerous permission cannot be requested — the request resolves denied
+        without ever showing a dialog, so every FCM message would be dropped
+        silently.
+
+        The runtime request itself is issued by @capacitor/push-notifications'
+        requestPermissions(), driven from usePushNotifications.ts. On API 32 and
+        below that plugin resolves "granted" without asking, because
+        notifications were not permission-gated then; maxSdkVersion is therefore
+        deliberately absent — the OS ignores the declaration on those levels.
+
+        This grants the ability to POST a notification, not to receive data.
+        A data-only FCM message still reaches MessagingService while the
+        permission is denied; only the visible notification is suppressed.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>

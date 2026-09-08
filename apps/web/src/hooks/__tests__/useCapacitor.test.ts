@@ -280,7 +280,7 @@ describe('useCapacitor', () => {
       });
     });
 
-    it('exposes the Android capability set, badge still unsupported', async () => {
+    it('exposes the Android capability set', async () => {
       (window as Window & { Capacitor?: MockCapacitor }).Capacitor = {
         isNativePlatform: vi.fn(() => true),
         getPlatform: vi.fn(() => 'android'),
@@ -296,7 +296,7 @@ describe('useCapacitor', () => {
         secureStore: true,
         nativeAuth: true,
         push: true,
-        badge: false,
+        badge: true,
       });
     });
 

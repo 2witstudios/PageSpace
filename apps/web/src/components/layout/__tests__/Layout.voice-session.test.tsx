@@ -67,7 +67,7 @@ vi.mock('@/hooks/useNotificationToasts', () => ({
 vi.mock('@/hooks/useDesktopNotifications', () => ({
   useDesktopNotifications: () => undefined,
 }));
-vi.mock('@/hooks/useIosBadgeSync', () => ({ useIosBadgeSync: () => undefined }));
+vi.mock('@/hooks/useNativeBadgeSync', () => ({ useNativeBadgeSync: () => undefined }));
 vi.mock('@/hooks/usePerformanceMonitor', () => ({
   usePerformanceMonitor: () => undefined,
 }));

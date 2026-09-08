@@ -564,6 +564,7 @@
     },
     "apps/android": {
       "ignoreDependencies": [
+        "@capawesome/capacitor-badge",
         "@capacitor/app",
         "@capacitor/browser",
         "@capacitor/preferences",

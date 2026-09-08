@@ -7,6 +7,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Android app: it can now ask for notification permission and register for push (not yet
+  distributed)** — the server has been able to send an Android push since the FCM sender landed, but
+  no Android build could receive one: the app declared no notification permission and the shared
+  registration code was gated to iOS. Android now declares `POST_NOTIFICATIONS`, asks for it at
+  runtime, and registers its FCM token the same way iOS does. If you say no, that is remembered —
+  the prompt does not come back on every launch — and if you later turn notifications on in system
+  settings, the next time you open the app it picks up where it left off. The app icon can also carry an unread badge on Android now, where the
+  launcher supports one (many do not, and those simply show nothing). **Nobody can see any of this
+  yet:** there is still no Android release build and no distribution, and none of it has been run on
+  a real device — this is the client half of the loop being closed, not a shipped feature.
+
 - **Android app: a failed load now offers a Retry instead of a dead end (not yet distributed)** —
   the Android shell had no bundled error screen, so launching without connectivity left the WebView
   on Chrome's own error page with nothing to do. It now falls back to a PageSpace screen with a

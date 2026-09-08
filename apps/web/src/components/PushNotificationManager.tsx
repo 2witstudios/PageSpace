@@ -29,7 +29,13 @@ export function PushNotificationManager() {
     } else if (permissionStatus === 'granted' && !isRegistered) {
       void registerToken();
     }
-    // 'denied': burn the attempt, do nothing — user must enable in iOS Settings.
+    // Every other state burns the attempt and does nothing:
+    // - 'denied': the OS will not ask again; the user must enable notifications
+    //   in system settings.
+    // - 'prompt-with-rationale' (Android only): the OS would still allow the
+    //   ask, but the user has already refused once. Re-prompting here is exactly
+    //   the every-launch nag the hook's recorded-denial guard exists to stop,
+    //   and requestPermission() would decline it anyway.
   }, [isNative, isSupported, permissionStatus, isRegistered, requestPermission, registerToken]);
 
   return null;
