@@ -573,13 +573,25 @@ export function toSheetViewRow(
     values[label] = text;
     if ((cell.raw ?? '').startsWith('=')) formulas[label] = cell.raw;
     if (cell.error) errors[label] = cell.error.message ?? cell.error.type;
-    // Only where the display is not already the value. `String(value)` is the
-    // right comparison and not an approximation of one: it is exactly what
-    // `formatDisplayValue` produces for the unformatted case, so equality here
-    // means the display text already IS the machine value and a second copy of
-    // it would be pure payload. An errored cell is excluded because its display
-    // is `#ERROR`, not a rendering of the value — reporting a value beside an
-    // error invites an agent to use it.
+    // Only where the display is not already the value.
+    //
+    // `String(value)` agrees with `formatDisplayValue` for every value it is
+    // ordinarily compared against — strings pass through, booleans render
+    // `true`/`false` either way — so equality means the display text already IS
+    // the machine value and a second copy would be pure payload.
+    //
+    // The one place they part company is worth being exact about rather than
+    // waving at, because it is the case that matters most: a number needing
+    // more than 12 characters is displayed through `toPrecision(12)`, so
+    // `0.30000000000000004` shows as `0.3`. `String` disagrees, the comparison
+    // reports divergence, and the full value is emitted — which is right, since
+    // the display really has lost something there. The rule is "emit when the
+    // display is not the value", and the precision case is an instance of that
+    // rather than an exception to it.
+    //
+    // An errored cell is excluded because its display is `#ERROR`, not a
+    // rendering of the value — reporting a value beside an error invites an
+    // agent to use it.
     if (cell.value !== undefined && !cell.error && String(cell.value) !== text) {
       unformatted[label] = cell.value;
     }

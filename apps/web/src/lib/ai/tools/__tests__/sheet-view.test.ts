@@ -486,6 +486,26 @@ describe('a region-derived format is part of what a cell reads as', () => {
     });
   });
 
+  it('recovers a number the display rounded away', async () => {
+    // The one case where `String(value)` and `formatDisplayValue` disagree, and
+    // the case that most needs `unformatted`: a number needing more than 12
+    // characters is displayed through `toPrecision(12)`, so `0.3000...04` shows
+    // as `0.3`. No format is involved at all — the DISPLAY ITSELF is lossy, and
+    // an agent adding up what it read would be adding up rounded numbers.
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: '=0.1+0.2', value: 0.30000000000000004 } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    assert({
+      given: 'a float the display rounds to 12 significant figures',
+      should: 'show the rounded display and hand back the exact value',
+      actual: { display: window.rows[0].cells.A, unformatted: window.rows[0].unformatted },
+      expected: { display: '0.3', unformatted: { A: 0.30000000000000004 } },
+    });
+  });
+
   it('reports no machine value for a cell that was never materialised', async () => {
     // The one exception in `unformatted`'s contract, pinned so the wording stays
     // honest. A cell with no `value` has no machine value to hand back — `cells`
