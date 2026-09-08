@@ -327,6 +327,65 @@ describe('the two paths render one cell one way', () => {
     expect(fromDocument.rows[0].unformatted).toEqual({ B: 1200 });
   });
 
+  it('agrees on a CONDITIONALLY-formatted cell, the other place they diverged', async () => {
+    // A rule's number format changes the TEXT, and the row store keeps no trace
+    // of it: the format is derived when the rule fires. So the document path
+    // (where the evaluator has already run) said `85%` while the row store said
+    // `0.85` — and because the stored text WAS the machine value, `unformatted`
+    // was absent too, leaving an agent no signal that it was seeing something
+    // different from the grid.
+    const conditional = {
+      version: 1,
+      rowCount: 3,
+      columnCount: 2,
+      cells: { A1: '0.85', A2: '0.1' },
+      conditionalFormats: [{
+        id: 'hot', kind: 'cell' as const, ranges: ['A1:A2'],
+        condition: { operator: 'greaterThan' as const, value: '0.5' },
+        format: { background: '#dcfce7', number: { kind: 'percent' as const, decimals: 0 } },
+      }],
+    };
+
+    mockListTabs.mockResolvedValue([]);
+    const fromDocument = await loadSheetWindow('page-1', {
+      limit: 10,
+      documentContent: serializeSheetContent(conditional, { pageId: 'page-1' }),
+    });
+
+    mockListTabs.mockResolvedValue([tab]);
+    mockGetTab.mockResolvedValue({
+      ...tab,
+      rowCount: conditional.rowCount,
+      columnCount: conditional.columnCount,
+      conditionalFormats: conditional.conditionalFormats,
+    });
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: '0.85', value: 0.85 } } },
+      { rowIndex: 1, cells: { A: { raw: '0.1', value: 0.1 } } },
+    ]);
+    const fromStore = await loadSheetWindow('page-1', { limit: 10 });
+
+    // Guard the guard: the rule must fire on one cell and not the other, or
+    // this compares two unformatted sheets and proves nothing.
+    expect(fromDocument.rows[0].cells.A).toBe('85%');
+    expect(fromDocument.rows[1].cells.A).toBe('0.1');
+
+    assert({
+      given: 'a cell a conditional rule formats, before and after migration',
+      should: 'render identically on both paths',
+      actual: fromStore.rows.map((row) => row.cells),
+      expected: fromDocument.rows.map((row) => row.cells),
+    });
+    assert({
+      given: 'the same cell',
+      should: 'hand back the number underneath on both paths',
+      actual: fromStore.rows.map((row) => row.unformatted),
+      expected: fromDocument.rows.map((row) => row.unformatted),
+    });
+    // And that number is genuinely recoverable, not just equal-and-absent.
+    expect(fromStore.rows[0].unformatted).toEqual({ A: 0.85 });
+  });
+
   it('agrees on a REGION-formatted column, which is where they used to diverge', async () => {
     // The sharpest form of the property. A region's presentation is derived at
     // evaluation time, so the document path always had it (via
@@ -1276,11 +1335,9 @@ describe('loadSheetWindow describes formatting only when asked', () => {
 
   it('keeps a format-only row that the document styled but never filled', async () => {
     // The likeliest shape on a legacy sheet: a blank input row someone
-    // pre-styled. `windowed` comes from `sheet.cells`, so that row is not in it
-    // — while `rowsFromSheetData` materialises the UNION of cells and formats,
-    // which means the same read reports the styling after migration and dropped
-    // it before. Losing formatting across a migration is the drift this module
-    // exists to remove.
+    // pre-styled. `rowsFromSheetData` materialises the UNION of cells and
+    // formats, so migration creates that row — and a read that skipped it
+    // reported one thing before migration and another after, on identical data.
     mockListTabs.mockResolvedValue([]);
     const window = await loadSheetWindow('page-1', {
       limit: 10,
@@ -1304,10 +1361,39 @@ describe('loadSheetWindow describes formatting only when asked', () => {
       actual: window.formatting?.cellFormats,
       expected: { A1: { bold: true }, A2: { background: '#eef2ff' } },
     });
-    // The row itself still does not appear — it holds nothing to show. Pinning
-    // that so the next reader knows the formatting entry is deliberate and not
-    // a row that went missing.
-    expect(window.rows.map((row) => row.rowNumber)).toEqual([1, 3]);
+    // And the row itself is part of the window, exactly as it is after
+    // migration — it simply has no cells to show.
+    assert({
+      given: 'the same styled blank row',
+      should: 'appear in the window as a row with nothing in it',
+      actual: window.rows,
+      expected: [
+        { rowNumber: 1, cells: { A: 'Item' } },
+        { rowNumber: 2, cells: {} },
+        { rowNumber: 3, cells: { A: 'Rent' } },
+      ],
+    });
+  });
+
+  it.each([
+    ['above the first value row', { A5: 'only value' }, { A2: { bold: true } }, 'A2'],
+    ['below the last value row', { A1: 'only value' }, { A4: { bold: true } }, 'A4'],
+    ['on a sheet whose only content is formatting', {}, { B3: { bold: true } }, 'B3'],
+  ])('reports a format-only row %s', async (_label, cells, formats, address) => {
+    // The three endpoint cases a span between the first and last VALUE row
+    // cannot reach. Each one is a sheet where migration would report the
+    // styling and the pre-migration read did not.
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', {
+      limit: 10,
+      includeFormatting: true,
+      documentContent: serializeSheetContent(
+        { version: 1, rowCount: 6, columnCount: 3, cells, formats },
+        { pageId: 'page-1' },
+      ),
+    });
+
+    expect(window.formatting?.cellFormats).toEqual({ [address]: { bold: true } });
   });
 
   it('does not admit a styled row from outside the window it returned', async () => {

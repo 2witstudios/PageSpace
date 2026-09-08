@@ -33,7 +33,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { isSheetType, createRegionResolver, parseRegions } from '@pagespace/lib/sheets/sheet';
+import { isSheetType, createRegionResolver, parseRegions, parseConditionalRules } from '@pagespace/lib/sheets/sheet';
 import { queryRows, listTabs, getTab } from '@pagespace/lib/sheets/store';
 import { SHEET_FILTER_OPS, SheetQueryError, type SheetWhere } from '@pagespace/lib/sheets/query';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
@@ -50,6 +50,7 @@ import {
   columnsInRows,
   compareColumnLabels,
   buildSheetFormatting,
+  createConditionalResolver,
   explicitCellFormats,
   loadSheetWindow,
   renderSheetTableWithinBudget,
@@ -422,6 +423,7 @@ export const sheetReadTools = {
         const presentation = {
           columnFormats: tab.columnFormats,
           ...(regions ? { regionAt: createRegionResolver(regions, tab.rowCount) } : {}),
+          conditionalAt: createConditionalResolver(parseConditionalRules(tab.conditionalFormats)),
         };
         const rows = result.rows.map((row) => toSheetViewRow(row.rowIndex, row.cells, undefined, presentation));
 

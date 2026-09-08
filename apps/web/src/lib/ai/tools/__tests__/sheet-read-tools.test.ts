@@ -1181,6 +1181,50 @@ describe('read_sheet — includeFormatting', () => {
     });
   });
 
+  it('resolves conditional cell rules on the filtered path too', async () => {
+    // Same reason as regions: a filtered read is how an agent finds the rows it
+    // is about to restyle, so it has to render them exactly as the positional
+    // path does. A rule's number format changes the TEXT, and the row store
+    // keeps no trace of it — it is derived when the rule fires.
+    const ruleTab = {
+      ...tab,
+      conditionalFormats: [{
+        id: 'hot', kind: 'cell', ranges: ['C1:C99'],
+        condition: { operator: 'greaterThan', value: '0.5' },
+        format: { background: '#dcfce7', number: { kind: 'percent', decimals: 0 } },
+      }],
+    };
+    mockListTabs.mockResolvedValue([ruleTab]);
+    mockGetTab.mockResolvedValue(ruleTab);
+    mockQueryRows.mockResolvedValue({
+      rows: [
+        { rowIndex: 0, cells: { C: { raw: '0.85', value: 0.85 } } },
+        { rowIndex: 1, cells: { C: { raw: '0.1', value: 0.1 } } },
+      ],
+      total: 2,
+      hasMore: false,
+    });
+
+    const result = await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'C', op: 'isNotEmpty' }] },
+    });
+    const rows = result.rows as { cells: Record<string, string>; unformatted?: Record<string, unknown> }[];
+
+    assert({
+      given: 'a rule that fires on one matching row and not the other',
+      should: 'format only the row it fires on, and keep both numbers recoverable',
+      actual: [
+        { display: rows[0].cells.C, unformatted: rows[0].unformatted },
+        { display: rows[1].cells.C, unformatted: rows[1].unformatted },
+      ],
+      expected: [
+        { display: '85%', unformatted: { C: 0.85 } },
+        { display: '0.1', unformatted: undefined },
+      ],
+    });
+  });
+
   it('advertises includeFormatting so an agent can discover it', async () => {
     expect(sheetReadTools.read_sheet.description ?? '').toContain('includeFormatting');
     expect(
