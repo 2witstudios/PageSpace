@@ -216,6 +216,59 @@ cannot reach (`node.text ?? ''` on a text node, `Number(attrs.level) || 1` on a 
 covering them would mean asserting against documents the schema forbids. Deleting the narrowing is
 not available under `no any`. The reasoning is in `vitest.config.ts` next to the numbers.
 
+## Cleanup pass (second commit)
+
+A four-angle quality review (reuse / simplification / efficiency / altitude) ran over the diff.
+What it changed, beyond the mechanical dedup:
+
+- **The two fail-closed guards had already drifted.** HTML checked the document root, markdown did
+  not — `descendants` never visits the root — so a document whose TOP node a projection cannot
+  represent was accepted. Now one shared `assertProjectable`, and the root is checked. The *sets*
+  stay separate on purpose: the markdown serializer's node map legitimately differs from the schema.
+- **Two totality gaps.** Nothing compared the schema's node set against what each projector handles,
+  so adding a node in a Class B change and forgetting a projector left CI green and threw in the
+  collab service instead. And `BLOCK_NODE_TYPES` fails *open*: a block node missing from it silently
+  yields `blockId: null`, which callers read as legitimate pre-v1 content and skip. Both are now
+  compared against the schema in `projector-totality.test.ts`. The current lists are correct — the
+  mechanism was the gap, not the data.
+- **A latent bug the refactor surfaced:** `tableMarkdown` sized the table from the *first* row rather
+  than the widest, so a ragged table dropped the extra cells of every wider row. Found by rewriting
+  it around one `line()` helper; now tested.
+- **The fidelity gate was blind to attribute VALUES.** `attr:p@style` merged the question with the
+  answer — `text-align:center` becoming `left`, or `data-type="taskList"` becoming `taskItem`, moved
+  no construct key. Now keyed per CSS property and per `data-type` value.
+- **Removed a mirror test.** "preserves every visible character" recomputed what `describeHtmlLoss`
+  already asserts and could not fail unless that failed first, while its duplicated whitespace rule
+  would silently drift from `visibleCharacters`.
+- **Efficiency, measured:** `assertMarkdownProjectable` rebuilt two `Set`s per call and
+  `pmDocToBlocks` projects once per block — 400 throwaway sets on a 200-block document, ~40% of its
+  runtime. Now built once.
+- **CI:** the Chromium step had been inserted *between* the `ADMIN_DATABASE_URL` comment and the step
+  it explains. Moved, and cached on the resolved Playwright version — with no CI concurrency group in
+  this repo, every superseded run was re-downloading ~170MB.
+
+Deliberately **not** done, each a real finding parked rather than dismissed:
+
+- **`TEXTLESS_CONTENT_ELEMENTS` is a deny-list, so an unknown embed (`<math>`, `<model-viewer>`, the
+  24 raw-HTML-passthrough pages) fails OPEN** — the one place the inbound half is not fail-closed.
+  The fix is a catch-all "unrecognised `<tag>`" reason, which changes which documents refuse to seed.
+  That belongs to the seed-fidelity leaf, with real corpus numbers behind it.
+- **A `<br>` dropped mid-paragraph is undetectable** — `visibleCharacters` strips `\n`, and `<br>` is
+  excluded from the element count to tolerate trailing caret padding. The precise fix (count only
+  non-trailing `<br>` against `hardBreak`) is also a behaviour change; same leaf.
+- **The happy-dom `Window` per call** (~1.1ms per flush, ~25% of the HTML projection). A shared
+  module-level workspace would recover it, but it argues against a decision this module documents at
+  length, and 1.1ms per flush is not the constraint. Noted, not changed.
+- **`createDomWorkspace` now exists three times** (here, `apps/web/.../document-content-format.ts`,
+  `apps/web/.../census/constructs.ts`). `apps/web` already depends on `@pagespace/editor`, so the
+  direction is legal and this is the right home — but collapsing them edits `apps/web` and the census
+  is documented as temporary. The `dom-workspace.ts` docstring now names both twins so the next
+  reader is not misled.
+
+Final: **283 tests**, 11 files. **19 further mutations** run against the refactored paths; four
+survived and all four were genuine gaps in the new code (the root check, a label-less mention, an
+empty `blockId`, and the ragged table), each now covered and re-confirmed red.
+
 ## Not in scope, and deliberately not done
 
 - The **seed-fidelity gate over real production documents** is its own leaf (`jklkkf8aaao6v7jpc0mk8qub`,
@@ -237,7 +290,7 @@ At the monorepo root:
 | `bun run lint` | **green** — 17/17 tasks |
 | `bun run knip:check` | **green** |
 | `bun run test` | **could not run locally** — see below |
-| `packages/editor` suite | **green** — 288 tests, 10 files |
+| `packages/editor` suite | **green** — 283 tests, 11 files |
 
 `SCHEMA_HASH` unchanged at `'ded0823d'`.
 
