@@ -983,6 +983,36 @@ describe('read_sheet — includeFormatting', () => {
     expect((formatting.regions as unknown[]).length).toBe(1);
   });
 
+  it('projects cellFormats with select, not just the rows', async () => {
+    // `cellFormats` is per-cell, so a projected read has to project it too. A
+    // read that narrowed `rows` to one column while describing the formatting of
+    // all sixteen would be a bigger response presented as a smaller one — the
+    // same failure `select` on the structured rows already exists to prevent.
+    mockGetTab.mockResolvedValue(formattedTab);
+    mockReadRows.mockResolvedValue([
+      {
+        rowIndex: 4,
+        cells: {
+          A: { raw: 'keep', value: 'keep', format: { bold: true } },
+          B: { raw: 'drop', value: 'drop', format: { italic: true } },
+        },
+      },
+    ]);
+
+    const result = await run({ pageId: 'page-1', select: ['A'], includeFormatting: true });
+    const formatting = result.formatting as Record<string, unknown>;
+
+    assert({
+      given: 'a read projected to column A',
+      should: "report A's cell format and not B's",
+      actual: formatting.cellFormats,
+      expected: { A5: { bold: true } },
+    });
+    // Tab-level fields are not per-cell and are deliberately NOT projected — the
+    // regions and layout describe the sheet, not the columns that came back.
+    expect((formatting.regions as unknown[]).length).toBe(1);
+  });
+
   it('caps cellFormats and says how many cells it left out', async () => {
     // A silently partial map is worse than a bounded one: an agent reads "B7 has
     // no override" and writes as though that were true.
