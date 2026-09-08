@@ -619,6 +619,54 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
     });
   });
 
+  it('reads a null optional field as "not set", not as a loss', () => {
+    // JSON cannot express undefined, and every optional field the parsers read
+    // treats a null the same way it treats a missing key.
+    expect(plan([{ type: 'upsertRegion', region: { ...region('r1'), theme: null } }]).regions).toEqual([
+      { id: 'r1', range: 'A1:F' },
+    ]);
+  });
+
+  it('still lets a rule written by a NEWER build be updated', () => {
+    // The pre-parse checks are stricter than the parser, so applying them to a
+    // whole merged rule — mostly the STORED one — would refuse any update to a
+    // rule carrying a field this build does not know, which `parseCellFormat`
+    // deliberately preserves. That is the cross-version data loss the
+    // passthrough exists to prevent, arriving as a refusal instead.
+    // Kills: validating `raw` rather than the caller's `supplied` fields.
+    // Cast because `sparkle` is exactly what this build does not know about.
+    const stored = { ...rule('a'), format: { bold: true, sparkle: 3 } } as unknown as ConditionalRule;
+    const tab = tabWith({ conditionalFormats: [stored] });
+
+    const result = plan([{ type: 'updateConditionalRule', id: 'a', patch: { ranges: ['B1:B4'] } }], tab);
+    expect(result.conditionalFormats[0]).toMatchObject({
+      ranges: ['B1:B4'],
+      format: { bold: true, sparkle: 3 },
+    });
+
+    // A format the caller supplies is still held to the strict bar.
+    expect(
+      refusalOf([{ type: 'updateConditionalRule', id: 'a', patch: { format: { sparkle: 4 } } }], tab)
+    ).toContain('"sparkle" is not a format field');
+  });
+
+  it('holds only the caller’s ranges to the range caps, as the panel does', () => {
+    // `updateRule` in the panel validates `patch.ranges` and nothing else. A
+    // stored rule whose ranges the evaluator already skips must stay editable,
+    // or a sheet can reach a state where no rule on it can be fixed.
+    const stored: ConditionalRule = { ...rule('a'), ranges: ['A1:A600000'] };
+    const tab = tabWith({ conditionalFormats: [stored] });
+
+    expect(
+      plan([{ type: 'updateConditionalRule', id: 'a', patch: { format: { bold: true } } }], tab)
+        .conditionalFormats[0]
+    ).toMatchObject({ format: { bold: true } });
+
+    expect(
+      refusalOf([{ type: 'updateConditionalRule', id: 'a', patch: { ranges: ['A1:A600000'] } }], tab)
+    ).toContain('is not a range this sheet can format');
+  });
+
   it('refuses a field whose very SHAPE the parser would replace', () => {
     // A list where a string belongs, or an object where a number belongs, is
     // dropped whole — the comparator has to notice a type change, not only a

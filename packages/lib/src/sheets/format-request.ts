@@ -454,8 +454,11 @@ function canonical(value: unknown): string {
  * what catches a truncated `ranges` array and a dropped column declaration.
  */
 function firstSanitizedPath(raw: unknown, stored: unknown, path: string): string | null {
-  // Absent and explicitly-undefined are the same thing over the wire, and JSON
-  // cannot express the difference.
+  // Absent and explicitly-undefined are the same thing over the wire, since
+  // JSON cannot express undefined. An explicit `null` needs no guard of its
+  // own: `canonical` maps both it and a missing field to the same string, so a
+  // nulled optional field compares equal to the one the parser dropped, which
+  // is what "not set" means for every optional field these parsers read.
   if (raw === undefined) return null;
 
   if (Array.isArray(raw) || Array.isArray(stored)) {
@@ -492,17 +495,31 @@ function firstSanitizedPath(raw: unknown, stored: unknown, path: string): string
  * would be handed the truncated list, pronounce it fine, and the ranges past
  * the cap would be gone with no refusal anywhere.
  */
-function validateRuleInput(raw: unknown, index: number, type: string): ConditionalRule {
+function validateRuleInput(
+  raw: unknown,
+  supplied: Record<string, unknown>,
+  index: number,
+  type: string
+): ConditionalRule {
   if (!isObject(raw)) {
     return refuseOp(index, type, 'rule must be an object.');
   }
 
-  if (raw.ranges !== undefined) {
-    if (!Array.isArray(raw.ranges) || raw.ranges.some((entry) => typeof entry !== 'string')) {
+  // Both checks below are STRICTER than the parser, so they may only be applied
+  // to fields this request actually carries. `raw` is the whole rule, which for
+  // an update is mostly the stored one — and a stored rule is a fixed point of
+  // the parser, not of these. Holding it to them would refuse an unrelated
+  // update to any rule a newer build wrote (`parseCellFormat` preserves an
+  // unknown field, and the key check would then reject it) — the same
+  // cross-version data loss the passthrough exists to prevent, arriving as a
+  // refusal instead. It also keeps this identical to the panel's `updateRule`,
+  // which validates `patch.ranges` and nothing else.
+  if (supplied.ranges !== undefined) {
+    if (!Array.isArray(supplied.ranges) || supplied.ranges.some((entry) => typeof entry !== 'string')) {
       return refuseOp(index, type, 'ranges must be an array of A1 ranges, such as ["B2:B20"].');
     }
     // The caller's array, at its real length.
-    const ranges = validateRanges(raw.ranges as string[]);
+    const ranges = validateRanges(supplied.ranges as string[]);
     if (!ranges.ok) return refuseOp(index, type, ranges.reason);
   }
 
@@ -510,8 +527,8 @@ function validateRuleInput(raw: unknown, index: number, type: string): Condition
   // `parseCellFormat` carries an unknown field THROUGH untouched — nothing is
   // lost, so nothing would be flagged, and a typo like `bolt` would be stored
   // as an inert field that formats nothing.
-  if (raw.format !== undefined) {
-    validateCellFormatPatch(raw.format, index, type, 'rule format');
+  if (supplied.format !== undefined) {
+    validateCellFormatPatch(supplied.format, index, type, 'rule format');
   }
 
   const rule = parseConditionalRule(raw);
@@ -750,14 +767,18 @@ export function planFormatOps(
       }
 
       case 'addConditionalRule': {
-        // The parser is the only definition of a usable rule, and on the load
-        // path it drops what it cannot use. A blank custom formula is the
-        // canonical case: accepted by a naive writer, gone on the next load.
-        const rule = validateRuleInput(op.rule, index, op.type);
-
+        // Counted before the rule is validated: `validateRanges` expands every
+        // range to addresses, and there is no reason to pay for that on a sheet
+        // that cannot take another rule whatever the rule says.
         if (rules.length >= MAX_CONDITIONAL_RULES) {
           refuseOp(index, op.type, `This sheet already has the maximum of ${MAX_CONDITIONAL_RULES} rules.`);
         }
+
+        // The parser is the only definition of a usable rule, and on the load
+        // path it drops what it cannot use. A blank custom formula is the
+        // canonical case: accepted by a naive writer, gone on the next load.
+        const rule = validateRuleInput(op.rule, isObject(op.rule) ? op.rule : {}, index, op.type);
+
         if (rules.some((existing) => existing.id === rule.id)) {
           // Two rules under one id: `update` and `move` reach the first by
           // `findIndex` while `remove` filters out both, so the new rule is no
@@ -806,6 +827,7 @@ export function planFormatOps(
         // around a limit that adding refuses.
         const merged = validateRuleInput(
           { ...rules[at], ...patch, id: rules[at].id, kind: rules[at].kind },
+          patch,
           index,
           op.type
         );
