@@ -1574,6 +1574,100 @@ describe('planFormatOps — regions', () => {
   });
 });
 
+describe('planFormatOps — the dashboard this epic exists for', () => {
+  // Everything else in this file is a refusal. A validator can pass every one
+  // of those and still be useless, because each new rule is a chance to refuse
+  // something legitimate — and the request that matters is the one the epic
+  // opens with: an agent asked for a budget dashboard, in one batch.
+  //
+  // "A1:F is a table, row 1 is headers, column C is money, row 40 is a total,
+  // accent blue", plus the presentation that goes with it.
+  it('plans a whole budget dashboard in one request', () => {
+    const ops: SheetFormatOp[] = [
+      { type: 'setFrozen', rows: 1, columns: null },
+      { type: 'setColumnWidth', column: 'A', width: 240 },
+      { type: 'setRowHeight', row: 1, height: 32 },
+      { type: 'setColumnFormat', column: 'C', patch: { number: { kind: 'currency', currency: 'USD' } } },
+      { type: 'setCellFormat', range: 'A1:F1', patch: { bold: true, align: 'center' } },
+      { type: 'setCellFormat', range: 'C40:F40', patch: { bold: true, borders: { top: { style: 'thin' } } } },
+      {
+        type: 'upsertRegion',
+        region: {
+          id: 'budget',
+          name: 'FY26 budget',
+          range: 'A1:F',
+          headerRows: 1,
+          totalRows: [40],
+          columns: [
+            { column: 'C', role: 'currency', currency: 'USD' },
+            { column: 'D', role: 'percent', decimals: 1 },
+            { column: 'A', role: 'text' },
+          ],
+          theme: 'blue',
+        },
+      },
+      {
+        type: 'addConditionalRule',
+        rule: {
+          id: 'over-budget',
+          kind: 'cell',
+          ranges: ['C2:C39'],
+          condition: { operator: 'greaterThan', value: '1000' },
+          format: { color: '#b91c1c', bold: true },
+        },
+      },
+      {
+        type: 'addConditionalRule',
+        rule: {
+          id: 'spend-scale',
+          kind: 'colorScale',
+          ranges: ['D2:D39'],
+          min: { type: 'min', color: '#dbeafe' },
+          max: { type: 'max', color: '#1d4ed8' },
+        },
+      },
+      {
+        type: 'addConditionalRule',
+        rule: {
+          id: 'variance-formula',
+          kind: 'formula',
+          ranges: ['E2:E39'],
+          formula: '=ABS(E2) > SUM(C2:C39) * 0.1',
+          format: { italic: true },
+        },
+      },
+    ];
+
+    const result = plan(ops, tabWith({ rowCount: 60, columnCount: 26 }));
+
+    // Every op is planned, in the order it was asked for, with the two
+    // tab-level lists folded into one step each at the end.
+    expect(result.steps.map((step) => step.type)).toEqual([
+      'setFrozen',
+      'setColumnWidth',
+      'setRowHeight',
+      'setColumnFormat',
+      'setCellFormat',
+      'setCellFormat',
+      'setConditionalRules',
+      'setRegions',
+    ]);
+
+    // Exactly the rows the per-cell ops touch — row 1 and row 40, 0-based —
+    // and nothing else. The region covers rows the plan never loads, which is
+    // the whole reason it is a region.
+    expect([...result.rows].sort((a, b) => a - b)).toEqual([0, 39]);
+    expect(result.touchesTabFields).toBe(true);
+
+    expect(result.conditionalFormats.map((rule) => rule.id)).toEqual([
+      'over-budget',
+      'spend-scale',
+      'variance-formula',
+    ]);
+    expect(result.regions[0]).toMatchObject({ id: 'budget', range: 'A1:F', theme: 'blue' });
+  });
+});
+
 describe('planFormatOps — all or nothing', () => {
   it('plans nothing when one op of ten is bad, and names its index (#5)', () => {
     // Kills: any per-op application, and any refusal that omits the index — a
