@@ -22,6 +22,7 @@ describe('AISelector', () => {
       driveSlug: 'my-workspace',
       agentCount: 1,
       sandboxEligible: true,
+      localEnvsEnabled: false,
       agents: [
         {
           id: 'agent_456',

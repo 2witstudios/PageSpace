@@ -73,14 +73,18 @@ describe('drive-env contract — the substrate axis (Local Environments epic)', 
     it('given a local env, should reject a Sprite-only status, and vice versa (the vocabularies do not mix)', () => {
       expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'running' }).success).toBe(false);
       expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'sprite', status: 'connected' }).success).toBe(false);
-      expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'connected', label: 'm' }).success).toBe(true);
+      expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'connected', label: 'm', enrolled: true }).success).toBe(true);
     });
 
-    it('given a local env DTO, should carry the label', () => {
-      const dto = driveEnvDtoSchema.parse({ ...BASE_DTO, substrate: 'local', status: 'disconnected', label: 'jono-macstudio' });
+    it('given a local env DTO, should carry the label AND whether a machine has enrolled — the fact the UI needs to offer a new code only while none has', () => {
+      const dto = driveEnvDtoSchema.parse({ ...BASE_DTO, substrate: 'local', status: 'disconnected', label: 'jono-macstudio', enrolled: false });
       expect(dto.substrate).toBe('local');
-      if (dto.substrate === 'local') expect(dto.label).toBe('jono-macstudio');
-      expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'disconnected' }).success).toBe(false);
+      if (dto.substrate === 'local') {
+        expect(dto.label).toBe('jono-macstudio');
+        expect(dto.enrolled).toBe(false);
+      }
+      expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'disconnected', enrolled: false }).success).toBe(false);
+      expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'disconnected', label: 'm' }).success).toBe(false);
     });
   });
 });

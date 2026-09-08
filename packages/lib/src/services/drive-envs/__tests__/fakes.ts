@@ -156,12 +156,22 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       return [...local.values()].filter((sibling) => sibling.driveId === driveId);
     },
 
-    async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, now: at }) {
+    async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, enrollmentCodeHash, now: at }) {
       const sibling = local.get(envId);
       // The real store's compare-and-set: only a pending, unrevoked row with an
-      // unconsumed code may be enrolled, and enrolling consumes the code.
+      // unconsumed code — still the code that was VERIFIED — may be enrolled,
+      // and enrolling consumes the code.
       if (!sibling || sibling.enrolledAt !== null || sibling.enrollmentCodeUsedAt !== null || sibling.revokedAt !== null) return false;
+      if (sibling.enrollmentCodeHash !== enrollmentCodeHash) return false;
       local.set(envId, { ...sibling, machinePublicKey, machineKeyFingerprint, serverKeyId, enrolledAt: at, enrollmentCodeUsedAt: at, enrollmentCodeHash: null, updatedAt: at });
+      return true;
+    },
+
+    async reissueEnrollmentCode({ envId, enrollmentCodeHash, enrollmentCodeExpiresAt, now: at }) {
+      const sibling = local.get(envId);
+      // The real store's CAS: only a pending, unrevoked row gets a new code.
+      if (!sibling || sibling.enrolledAt !== null || sibling.revokedAt !== null) return false;
+      local.set(envId, { ...sibling, enrollmentCodeHash, enrollmentCodeExpiresAt, enrollmentCodeUsedAt: null, updatedAt: at });
       return true;
     },
 

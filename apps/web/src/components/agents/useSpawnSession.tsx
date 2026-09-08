@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Bot, Boxes, Plus, SquareTerminal, Zap } from 'lucide-react';
+import { Bot, Boxes, Laptop, Plus, SquareTerminal, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSWRConfig } from 'swr';
 
@@ -22,9 +22,29 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { canManageDrive } from '@/hooks/usePermissions';
 import { useEditingSession } from '@/stores/useEditingSession';
 import type { DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
-import { MAX_DRIVE_ENV_NAME_LENGTH, type DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
+import { MAX_DRIVE_ENV_LABEL_LENGTH, MAX_DRIVE_ENV_NAME_LENGTH, type DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
+import { LocalEnvEnrollmentPanel, type LocalEnvEnrollmentIssue } from './LocalEnvEnrollment';
 
 export type SpawnKind = 'agent' | 'shell' | 'assistant';
+
+/**
+ * What the create step asks for. A cloud sandbox is the default and the common
+ * case, and its request body is `{ name }` — byte-identical to before a
+ * substrate existed. A LOCAL environment ([D-3]: the user's own machine as a
+ * substrate of an ordinary environment) also names the machine.
+ */
+type NewEnvironmentInput = { name: string; substrate: 'sprite' } | { name: string; substrate: 'local'; label: string };
+
+/**
+ * A local create's handoff, held until the person has read it: the env it
+ * belongs to and the one-time code the API returned. Rendered from this and
+ * from nothing else — there is no endpoint that returns an existing code.
+ */
+interface PendingEnrollment {
+  envName: string;
+  machineLabel: string;
+  issue: LocalEnvEnrollmentIssue;
+}
 
 /** What the palette's first step picked — drives the naming step's placeholder and spawn() call. */
 export interface SpawnPick {
@@ -99,6 +119,18 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
    * the flow goes straight on to naming with it selected.
    */
   const [newEnvFrom, setNewEnvFrom] = useState<'target' | 'env' | null>(null);
+  /**
+   * The enrollment code of a LOCAL environment just created, until dismissed.
+   *
+   * Set whenever a local create lands — NOT gated on `flowToken` like the rest
+   * of the continuation, and that is the point: the code exists on the wire
+   * exactly once, so a create that lands after the palette was closed must
+   * still put it in front of the person rather than drop it. (Losing it is
+   * recoverable now — the row offers "Show a new code" — but recoverable is
+   * not a reason to lose it.) While set, the palette is open on this step
+   * regardless of whether a spawn flow is still on screen behind it.
+   */
+  const [enrollment, setEnrollment] = useState<PendingEnrollment | null>(null);
   /**
    * WHICH OPENING OF THIS PALETTE A DEFERRED ANSWER BELONGS TO.
    *
@@ -265,6 +297,18 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
     return canManageDrive(drive);
   }, [drives, spawnTarget]);
 
+  /**
+   * Whether the create step may offer "This computer" ([D-3]). The deployment
+   * flag (`LOCAL_ENVS_ENABLED`) is server-side and rides the drive entry the
+   * way `sandboxEligible` does; unlike that one it defaults FALSE while the
+   * entry has not resolved, because the option's absence is the safe state.
+   * Same permission bar as any create — a local env is still an env.
+   */
+  const canCreateLocalEnv = useMemo(
+    () => canCreateEnv && (agentsByDrive.find((entry) => entry.driveId === spawnTarget?.driveId)?.localEnvsEnabled ?? false),
+    [canCreateEnv, agentsByDrive, spawnTarget],
+  );
+
   const { mutate: globalMutate } = useSWRConfig();
 
   /**
@@ -277,12 +321,15 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
    * this palette's own next step is reading a listing that contains it.
    */
   const createEnvironment = useCallback(
-    async (name: string): Promise<'retry' | 'failed' | { envId: string }> => {
+    async (input: NewEnvironmentInput): Promise<'retry' | 'failed' | { envId: string; local: boolean }> => {
       const driveId = spawnTarget?.driveId;
       if (!driveId) return 'failed';
-      let created: { env: DriveEnvDTO };
+      let created: { env: DriveEnvDTO; enrollment?: LocalEnvEnrollmentIssue };
       try {
-        created = await post<{ env: DriveEnvDTO }>(`/api/drives/${encodeURIComponent(driveId)}/envs`, { name });
+        // The cloud body is `{ name }` and nothing else — a user who never
+        // wants a local env must not be able to tell this shipped.
+        const body = input.substrate === 'local' ? { name: input.name, substrate: 'local', label: input.label } : { name: input.name };
+        created = await post<{ env: DriveEnvDTO; enrollment?: LocalEnvEnrollmentIssue }>(`/api/drives/${encodeURIComponent(driveId)}/envs`, body);
       } catch (error) {
         // `'retry'` is the one refusal retyping fixes; everything else has been
         // toasted and is `'failed'`.
@@ -318,16 +365,21 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
         },
         { revalidate: true },
       );
-      return { envId: created.env.id };
+      // A LOCAL create carries the one-time code. Shown now, unconditionally —
+      // see `enrollment` for why this is not behind the flow token.
+      if (created.env.substrate === 'local' && created.enrollment) {
+        setEnrollment({ envName: created.env.name, machineLabel: created.env.label, issue: created.enrollment });
+      }
+      return { envId: created.env.id, local: created.env.substrate === 'local' };
     },
     [spawnTarget, globalMutate],
   );
 
   const handleCreateEnv = useCallback(
-    async (name: string) => {
+    async (input: NewEnvironmentInput) => {
       const from = newEnvFrom;
       const token = flowToken.current;
-      const result = await createEnvironment(name);
+      const result = await createEnvironment(input);
       // The flow that asked is gone — closed, or replaced by another opening.
       // Its answer must not be applied to whatever took its place.
       if (flowToken.current !== token) return;
@@ -339,11 +391,18 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
         setNewEnvFrom(null);
         return;
       }
-      if (from === 'env') {
+      if (from === 'env' && !result.local) {
         // The environment the env step was asking about now exists, and it is
         // the answer: go on to naming with it selected rather than making the
         // user pick the thing they just created.
         setSpawnPick((current) => (current ? { ...current, envId: result.envId } : current));
+      } else if (result.local) {
+        // A LOCAL environment is not an answer yet: no machine has enrolled, so
+        // a session bound to it would be refused (`not_connected`). The code
+        // step is on screen on top of this flow; when it is dismissed, the env
+        // step re-asks with the new environment listed, and any row preset is
+        // dropped for the same reason as the target case below.
+        setSpawnTarget((current) => (current ? { ...current, envId: null } : current));
       } else {
         // From the TARGET step, where the OPENING may already carry an
         // environment: this flow can have been started by one environment's "+"
@@ -361,7 +420,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
 
   const paletteElement = (
     <SpawnSessionPalette
-      open={spawnTarget !== null}
+      open={spawnTarget !== null || enrollment !== null}
       driveName={spawnTarget?.driveName ?? null}
       agents={paletteAgents}
       envs={paletteEnvs}
@@ -370,6 +429,9 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
       onRetryEnvs={retryPaletteEnvs}
       canRunSandbox={canRunSandbox}
       canCreateEnv={canCreateEnv}
+      canCreateLocalEnv={canCreateLocalEnv}
+      enrollment={enrollment}
+      onDismissEnrollment={() => setEnrollment(null)}
       newEnvFrom={newEnvFrom}
       onStartNewEnv={setNewEnvFrom}
       onCancelNewEnv={() => setNewEnvFrom(null)}
@@ -382,6 +444,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
         setSpawnTarget(null);
         setSpawnPick(null);
         setNewEnvFrom(null);
+        setEnrollment(null);
       }}
       onPickTarget={(pick) =>
         // The opening's environment, when it had one, is the answer the env
@@ -425,6 +488,9 @@ function SpawnSessionPalette({
   onRetryEnvs,
   canRunSandbox,
   canCreateEnv,
+  canCreateLocalEnv,
+  enrollment,
+  onDismissEnrollment,
   newEnvFrom,
   onStartNewEnv,
   onCancelNewEnv,
@@ -473,6 +539,11 @@ function SpawnSessionPalette({
   canRunSandbox: boolean;
   /** Whether to offer creating one at all — drive OWNER/ADMIN, on a live drive. */
   canCreateEnv: boolean;
+  /** Whether the create step may offer "This computer" — `canCreateEnv` AND the deployment flag. Off ⇒ no choice is rendered at all. */
+  canCreateLocalEnv: boolean;
+  /** A just-created LOCAL env's one-time code, shown until dismissed; pre-empts every other step. */
+  enrollment: PendingEnrollment | null;
+  onDismissEnrollment: () => void;
   /**
    * Which step asked to create an environment, or null when none did. Doubles
    * as the create step's on-screen flag and its return address.
@@ -480,7 +551,7 @@ function SpawnSessionPalette({
   newEnvFrom: 'target' | 'env' | null;
   onStartNewEnv: (from: 'target' | 'env') => void;
   onCancelNewEnv: () => void;
-  onCreateEnv: (name: string) => Promise<void>;
+  onCreateEnv: (input: NewEnvironmentInput) => Promise<void>;
   pick: SpawnPick | null;
   spawning: boolean;
   onOpenChange: (open: boolean) => void;
@@ -494,8 +565,13 @@ function SpawnSessionPalette({
   // be refused (a name already taken) and hold its text while the session name
   // below is still blank, and neither must ever prefill the other.
   const [envName, setEnvName] = useState('');
+  // The substrate choice and the machine label, reset with the step like the
+  // name. Cloud is the default every time; nothing remembers "local".
+  const [envSubstrate, setEnvSubstrate] = useState<'sprite' | 'local'>('sprite');
+  const [envLabel, setEnvLabel] = useState('');
   const [creatingEnv, setCreatingEnv] = useState(false);
   const createEnvInputId = useId();
+  const substrateGroupId = useId();
   /**
    * WHICH ATTEMPT AT CREATING ONE the pending request belongs to.
    *
@@ -520,6 +596,11 @@ function SpawnSessionPalette({
   useEditingSession(`spawn-new-env-${createEnvInputId}`, newEnvFrom !== null, 'form', {
     componentName: 'SpawnSessionPalette',
   });
+  // The code step too: it is not typed text, but it IS the one rendering of a
+  // credential, and a refresh tearing it down would be the same loss.
+  useEditingSession(`spawn-enrollment-${createEnvInputId}`, enrollment !== null, 'form', {
+    componentName: 'SpawnSessionPalette',
+  });
 
   // Blank by default every time a new naming step starts — a stale typed
   // value from resolving one spawn must never prefill the next.
@@ -535,6 +616,8 @@ function SpawnSessionPalette({
     createAttempt.current += 1;
     if (newEnvFrom === null) return;
     setEnvName('');
+    setEnvSubstrate('sprite');
+    setEnvLabel('');
     // `creatingEnv` too, and for a reason worth naming: a create still in
     // flight when the palette was closed never runs its `finally` against a
     // visible form, so without this the next create step would open with its
@@ -571,8 +654,14 @@ function SpawnSessionPalette({
   // `'new-env'` PRE-EMPTS all of them, because it is a question asked ON TOP of
   // whichever step asked it — the target step and the env step both open it,
   // and `newEnvFrom` is what each of them returns to.
-  const step: 'target' | 'pending' | 'error' | 'env' | 'name' | 'new-env' =
-    newEnvFrom !== null
+  //
+  // `'enrollment'` pre-empts even that: it is the one-time code of a local env
+  // that was just created, and it is shown wherever the flow is — or is not,
+  // since a create can land after the palette closed.
+  const step: 'target' | 'pending' | 'error' | 'env' | 'name' | 'new-env' | 'enrollment' =
+    enrollment !== null
+      ? 'enrollment'
+      : newEnvFrom !== null
       ? 'new-env'
       : pick === null
         ? 'target'
@@ -604,7 +693,9 @@ function SpawnSessionPalette({
       open={open}
       onOpenChange={onOpenChange}
       title={
-        step === 'new-env'
+        step === 'enrollment'
+          ? `Enrol ${enrollment?.machineLabel ?? 'your computer'}`
+          : step === 'new-env'
           ? 'New environment'
           : step === 'target'
             ? 'New session'
@@ -613,7 +704,9 @@ function SpawnSessionPalette({
               : 'Name your session'
       }
       description={
-        step === 'new-env'
+        step === 'enrollment'
+          ? 'Run these on the computer to connect it. The code is shown here once; a new one is a menu away if you lose it.'
+          : step === 'new-env'
           ? `A persistent machine ${driveName ? `${driveName}'s` : 'this drive’s'} sessions can run inside, sharing one filesystem that survives every session that ends. Name it for what it is for — “dev”, “staging”, “data-import”.`
         : step === 'name'
           ? chosenEnv
@@ -630,9 +723,22 @@ function SpawnSessionPalette({
                 : 'Choose an agent to start a session with'
       }
       showCloseButton={false}
-      className="max-w-[420px]"
+      className={step === 'enrollment' ? 'max-w-[560px]' : 'max-w-[420px]'}
     >
-      {step === 'new-env' ? (
+      {step === 'enrollment' && enrollment ? (
+        <div className="space-y-4 p-4">
+          <LocalEnvEnrollmentPanel envName={enrollment.envName} machineLabel={enrollment.machineLabel} enrollment={enrollment.issue} />
+          <div className="flex justify-end">
+            <button
+              type="button"
+              className="rounded-md border border-input px-3 py-1.5 text-sm hover:bg-accent"
+              onClick={onDismissEnrollment}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      ) : step === 'new-env' ? (
         /* The create form lives IN the palette rather than in a dialog over it:
            this is one continuous keyboard flow, and a second Radix layer would
            put two focus traps on screen at once. Cancel returns to whichever
@@ -642,10 +748,15 @@ function SpawnSessionPalette({
           onSubmit={(event) => {
             event.preventDefault();
             const trimmed = envName.trim();
+            const trimmedLabel = envLabel.trim();
             if (!trimmed || creatingEnv) return;
+            // Local only when it was OFFERED: a stale 'local' can never reach
+            // the request if the option is not on screen.
+            const local = canCreateLocalEnv && envSubstrate === 'local';
+            if (local && !trimmedLabel) return;
             const attempt = createAttempt.current;
             setCreatingEnv(true);
-            void onCreateEnv(trimmed).finally(() => {
+            void onCreateEnv(local ? { name: trimmed, substrate: 'local', label: trimmedLabel } : { name: trimmed, substrate: 'sprite' }).finally(() => {
               // Only the attempt still on screen may re-enable the form. An
               // older one landing must leave the current request's POST looking
               // exactly as in-flight as it is.
@@ -663,11 +774,61 @@ function SpawnSessionPalette({
             disabled={creatingEnv}
             className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
           />
+          {/* The substrate ([D-3]): a machine is a KIND of environment, chosen
+              here, not a second concept with its own flow. Rendered only when
+              the deployment offers it — with the flag off the form is exactly
+              the form it was. Native radios, so the choice is keyboard-native
+              inside the palette's focus trap. */}
+          {canCreateLocalEnv && (
+            <fieldset className="space-y-1.5" disabled={creatingEnv}>
+              <legend className="text-xs font-medium text-muted-foreground">Runs on</legend>
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name={substrateGroupId}
+                  aria-label="Cloud sandbox"
+                  className="mt-1"
+                  checked={envSubstrate === 'sprite'}
+                  onChange={() => setEnvSubstrate('sprite')}
+                />
+                <span>
+                  <span className="font-medium">Cloud sandbox</span>
+                  <span className="block text-xs text-muted-foreground">A machine PageSpace runs for this drive.</span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name={substrateGroupId}
+                  aria-label="This computer"
+                  className="mt-1"
+                  checked={envSubstrate === 'local'}
+                  onChange={() => setEnvSubstrate('local')}
+                />
+                <span>
+                  <span className="font-medium">This computer</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Your own machine, enrolled with the PageSpace CLI. You will be shown a one-time code next.
+                  </span>
+                </span>
+              </label>
+              {envSubstrate === 'local' && (
+                <input
+                  aria-label="Machine label"
+                  value={envLabel}
+                  onChange={(event) => setEnvLabel(event.target.value)}
+                  maxLength={MAX_DRIVE_ENV_LABEL_LENGTH}
+                  placeholder="Machine label, e.g. my-laptop"
+                  className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                />
+              )}
+            </fieldset>
+          )}
           <div className="flex items-center gap-2">
             <button
               type="submit"
               className="rounded-md border border-input px-3 py-1.5 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={creatingEnv || envName.trim().length === 0}
+              disabled={creatingEnv || envName.trim().length === 0 || (canCreateLocalEnv && envSubstrate === 'local' && envLabel.trim().length === 0)}
             >
               {creatingEnv ? 'Creating…' : 'Create environment'}
             </button>
@@ -762,8 +923,16 @@ function SpawnSessionPalette({
                   disabled={spawning}
                   onSelect={() => onPickEnv(env.id)}
                 >
-                  <Boxes className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  {/* A LOCAL env is somebody's computer, and says so. */}
+                  {env.substrate === 'local' ? (
+                    <Laptop className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  ) : (
+                    <Boxes className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  )}
                   <span className="truncate">in {env.name}</span>
+                  {env.substrate === 'local' && (
+                    <span className="ml-auto shrink-0 truncate text-xs text-muted-foreground">on {env.label}</span>
+                  )}
                 </CommandItem>
               ))}
             </CommandGroup>

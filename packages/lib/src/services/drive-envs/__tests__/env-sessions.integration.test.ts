@@ -626,7 +626,7 @@ describe('spawnAgentSession into a LOCAL env — the bind gate, for real (C1)', 
     if (!created.ok) throw new Error(`seedLocalEnv refused: ${created.reason}`);
     const envId = created.env.id;
     if (input.enrolled) {
-      await envStore.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', now: new Date() });
+      await envStore.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: new Date() });
     }
     if (input.heartbeat || input.revoked) {
       await db.update(driveEnvLocal).set({ ...(input.heartbeat && { lastSeenAt: input.heartbeat }), ...(input.revoked && { revokedAt: new Date() }) }).where(eq(driveEnvLocal.envId, envId));
