@@ -4,10 +4,9 @@ import { createId } from '@paralleldrive/cuid2';
 /**
  * Key the session JSON is stored under inside the native secure store.
  *
- * Deliberately identical to the iOS key (`ios-google-auth.ts:129`, `:183`,
- * `:220`) — the Android plugin registers under the *same* Capacitor name
- * (`PageSpaceKeychain`), so the two platforms share one contract and there is
- * no reason for the key to fork.
+ * Deliberately identical to the iOS key (`native-google-auth.ts`) — the Android
+ * plugin registers under the *same* Capacitor name (`PageSpaceKeychain`), so the
+ * two platforms share one contract and there is no reason for the key to fork.
  */
 const SESSION_KEY = 'pagespace_session';
 
@@ -15,7 +14,7 @@ const SESSION_KEY = 'pagespace_session';
  * Key the device id is stored under in `@capacitor/preferences`.
  *
  * Must match the iOS key (`ios-storage.ts` `getDeviceId`, and
- * `ios-google-auth.ts:94`) so a device keeps a single identity across the
+ * `native-google-auth.ts`) so a device keeps a single identity across the
  * shared web bundle rather than minting a second one per platform module.
  */
 const DEVICE_ID_KEY = 'pagespace_device_id';
@@ -503,10 +502,6 @@ export class AndroidStorage implements PlatformStorage {
 
   usesBearer() {
     return true;
-  }
-
-  supportsCSRF() {
-    return false;
   }
 
   dispatchAuthEvent(event: 'auth:cleared' | 'auth:refreshed' | 'auth:expired') {

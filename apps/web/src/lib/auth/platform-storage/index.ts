@@ -4,7 +4,7 @@ import { hasNativeCapability, getPlatform, type Platform } from '@/lib/capacitor
  * These were `require()` calls so a platform's module only loaded on that
  * platform. They are static imports now: every one of these modules already
  * defers its platform-specific dependency (`@/lib/keychain-plugin`,
- * `@/lib/ios-google-auth`, `@capacitor/preferences`, `window.electron`) to a
+ * `@/lib/native-google-auth`, `@capacitor/preferences`, `window.electron`) to a
  * dynamic import *inside* a method, so their module bodies carry nothing but
  * `cuid2` — which `web-storage` pulls in on every platform regardless. The
  * requires bought no code splitting and cost the factory its testability:

@@ -141,15 +141,25 @@ describe('/api/auth/google/signin', () => {
     });
 
     describe('input validation', () => {
+      // Was `platform: 'android'`. Android became a legal client in Phase B of
+      // the Android parity epic — the enum rejecting it is precisely why no
+      // server path could emit the `pagespace://` handoff for Android.
       it('returns 400 for invalid platform', async () => {
-        const request = createPostRequest({ platform: 'android' });
+        const request = createPostRequest({ platform: 'symbian' });
         const response = await POST(request);
         const body = await response.json();
 
         expect(response.status).toBe(400);
         expect(body.errors.platform).toEqual([
-          'Invalid option: expected one of "web"|"desktop"|"ios"',
+          'Invalid option: expected one of "web"|"desktop"|"ios"|"android"',
         ]);
+      });
+
+      it('accepts android as a platform', async () => {
+        const request = createPostRequest({ platform: 'android' });
+        const response = await POST(request);
+
+        expect(response.status).toBe(200);
       });
 
       it('accepts valid optional fields', async () => {

@@ -132,11 +132,15 @@ describe('AndroidStorage', () => {
   });
 
   describe('auth transport flags', () => {
-    it('uses Bearer tokens and does not support CSRF, matching iOS', async () => {
+    // `supportsCSRF()` was asserted here too, until it was removed: nothing
+    // consulted it once the client started mirroring the server's actual rule
+    // (attach CSRF when no bearer was attached), and a method named for the CSRF
+    // decision that no longer takes part in it is how the next reader
+    // reintroduces the 403 it caused.
+    it('uses Bearer tokens, matching iOS', async () => {
       const storage = await importAndroidStorage();
 
       expect(storage.usesBearer()).toBe(true);
-      expect(storage.supportsCSRF()).toBe(false);
     });
   });
 
