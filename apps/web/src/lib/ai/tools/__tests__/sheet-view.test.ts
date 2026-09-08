@@ -45,6 +45,7 @@ import {
   renderSheetTableWithinBudget,
   toSheetViewRow,
   describeConditionalRule,
+  createConditionalResolver,
 } from '../sheet-view';
 
 const tab = {
@@ -1247,6 +1248,46 @@ describe('loadSheetWindow — refusals', () => {
 
     expect(window.rows).toEqual([]);
     expect(window.materialized).toBe(false);
+  });
+});
+
+describe('the conditional resolver reads ranges the way the evaluator does', () => {
+  // `createConditionalResolver` parses ranges to bounds instead of expanding
+  // them, and claims to mirror `addressesOfRange`'s reading exactly. That claim
+  // is only worth making if the edges match: a bare address is a range of one,
+  // a truncated `A1:` is refused rather than quietly treated as `A1`, and a
+  // whole-column `A:A` is not something either side accepts.
+  const ruleOver = (ranges: string[]): ConditionalRule[] => [{
+    id: 'r', kind: 'cell', ranges,
+    condition: { operator: 'isNotEmpty' },
+    format: { number: { kind: 'percent', decimals: 0 } },
+  }];
+  const fires = (ranges: string[], row: number, column: number): boolean =>
+    createConditionalResolver(ruleOver(ranges))?.(row, column, 1, false) !== undefined;
+
+  it('treats a bare address as a range of one', () => {
+    expect(fires(['B2'], 1, 1)).toBe(true);
+    expect(fires(['B2'], 1, 2)).toBe(false);
+    expect(fires(['B2'], 2, 1)).toBe(false);
+  });
+
+  it('refuses a truncated range rather than formatting its first cell', () => {
+    // `addressesOfRange`: "A colon means the author meant a range. `A1:` is a
+    // truncated one, and quietly formatting the single cell `A1` instead is
+    // worse than doing nothing — it looks like the rule works."
+    expect(fires(['A1:'], 0, 0)).toBe(false);
+  });
+
+  it('accepts corners given in either order, as every other range does', () => {
+    expect(fires(['C3:A1'], 1, 1)).toBe(true);
+  });
+
+  it('contributes nothing for a range neither side can read', () => {
+    // A whole-column `A:A` is not an address pair; `decodeCellAddress` refuses
+    // it on both sides, so the rule formats nothing rather than throwing.
+    expect(fires(['A:A'], 0, 0)).toBe(false);
+    // And a rule left with no usable range at all resolves to no resolver.
+    expect(createConditionalResolver(ruleOver(['A:A']))).toBeUndefined();
   });
 });
 
