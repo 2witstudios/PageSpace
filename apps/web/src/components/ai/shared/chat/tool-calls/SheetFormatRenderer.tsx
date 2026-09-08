@@ -45,6 +45,8 @@ interface SheetFormatRendererProps {
    * without this the card would present them as changes that never landed.
    */
   skippedDuplicates?: Array<{ index: number }>;
+  /** From the result: false when the sheet already looked like this and nothing was written. */
+  changed?: boolean;
   message?: string;
 }
 
@@ -160,6 +162,7 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
   rulesAdded,
   rulesRemoved,
   skippedDuplicates = NONE,
+  changed,
   message,
 }) {
   const { navigateToPage } = usePageNavigation();
@@ -183,7 +186,10 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
     ...(removed > 0 ? [`${removed} removed`] : []),
   ].join(' · ');
 
-  const empty = regions.length === 0 && ops.length === 0 && rules.length === 0 && removedIds.length === 0 && !replacedAll;
+  // A call the store reports as a no-op is shown as one, not as the list of
+  // formatting it would have applied — that formatting was already there.
+  const unchanged = changed === false;
+  const empty = unchanged || (regions.length === 0 && ops.length === 0 && rules.length === 0 && removedIds.length === 0 && !replacedAll);
 
   return (
     <div className="rounded-lg border bg-card overflow-hidden my-2 shadow-sm">
@@ -209,14 +215,20 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
               <Swatches colours={colours} />
             </span>
           )}
-          {summary && <span className="text-xs text-muted-foreground">{summary}</span>}
+          {unchanged ? (
+            <span className="text-xs text-muted-foreground">already formatted this way</span>
+          ) : (
+            summary && <span className="text-xs text-muted-foreground">{summary}</span>
+          )}
           {pageId && <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />}
         </span>
       </button>
 
       <div className="bg-background overflow-auto divide-y divide-border max-h-[280px]">
         {empty ? (
-          <div className="text-sm text-muted-foreground text-center py-4">{message ?? 'Nothing changed'}</div>
+          <div className="text-sm text-muted-foreground text-center py-4" data-testid="sheet-format-empty">
+            {unchanged ? 'Nothing changed — the sheet already had this formatting.' : (message ?? 'Nothing changed')}
+          </div>
         ) : (
           <>
             {regions.map((region, i) => {

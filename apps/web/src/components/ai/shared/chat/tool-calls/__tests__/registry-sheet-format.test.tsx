@@ -103,6 +103,19 @@ describe('format_sheet renderer', () => {
     expect(none.queryByText('Nothing changed')).toBeNull();
   });
 
+  it('shows a no-op result as unchanged, not as the formatting it would have applied', () => {
+    // The store reports a retry (or a bold that was already bold) with
+    // nothing written; the result says `changed: false`. The card must not
+    // list "1 op" as though something landed.
+    const { getByTestId, getByText, queryByTestId } = render(
+      <>{renderTool('format_sheet', input, { ...output, changed: false })}</>,
+    );
+    expect(getByText('already formatted this way')).toBeTruthy();
+    expect(getByTestId('sheet-format-empty').textContent).toContain('already had this formatting');
+    expect(queryByTestId('sheet-format-op')).toBeNull();
+    expect(queryByTestId('sheet-format-region')).toBeNull();
+  });
+
   it("falls through to the generic envelope on the tool's own refusal", () => {
     const refusal = { success: false, error: 'invalid_range', message: 'Nothing was applied.', suggestion: 'Fix op 0.' };
     expect(renderTool('format_sheet', input, refusal)).toBeNull();

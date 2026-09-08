@@ -629,6 +629,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
         regionsApplied={parsedOutput.regionsApplied as number | undefined}
         opsApplied={parsedOutput.opsApplied as number | undefined}
         cellsFormatted={parsedOutput.cellsFormatted as number | undefined}
+        changed={parsedOutput.changed as boolean | undefined}
       />
     );
   },

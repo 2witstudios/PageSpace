@@ -73,7 +73,7 @@
  * skill, and rendered by `SheetFormatRenderer` — which imports the input
  * types below (type-only, so nothing here reaches the client bundle).
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { PageType } from '@pagespace/lib/utils/enums';
@@ -766,6 +766,19 @@ const mintId = (prefix: string, taken: ReadonlySet<string>): string => {
 };
 
 /**
+ * The id a region declared without one gets: derived from its CONTENT, so
+ * the same declaration mints the same id every time. Two executions of a
+ * retried call that overlap — both planned before either commits, so neither
+ * snapshot shows the other's region — then send the same id, and the store's
+ * upsert-by-id under its lock makes the second a no-op instead of a twin.
+ * Random only when that id is already taken by something else.
+ */
+const contentId = (prefix: string, region: SheetRegion, taken: ReadonlySet<string>): string => {
+  const id = `${prefix}-${createHash('sha256').update(regionContentKey(region)).digest('hex').slice(0, 8)}`;
+  return taken.has(id) ? mintId(prefix, taken) : id;
+};
+
+/**
  * Normalise a declared region into what the store stores, and split off the
  * one input that is not a region field: `freezeHeader`.
  *
@@ -805,15 +818,14 @@ function validateRegions(
     if (input.id !== undefined && out.some((region) => region.id === input.id)) {
       refuse(INVALID_FORMAT_REQUEST, `${label}: two regions in this call share the id "${input.id}".`, NOTHING_APPLIED);
     }
-    const id = input.id ?? mintId('region', taken);
-    taken.add(id);
 
     // Built field by field in the parser's own normal form — trimmed name,
     // uppercase columns and currency codes, sorted unique total rows — because
     // the store compares what it was sent against what `parseRegion` makes of
     // it and refuses any difference. A region the parser would tidy is one the
     // store would turn away, so the tidying happens here, where it is visible.
-    const region: SheetRegion = { id, range };
+    // The id is settled LAST, because without one it is derived from the rest.
+    const region: SheetRegion = { id: input.id ?? '', range };
     const name = input.name?.trim();
     if (name) region.name = name.slice(0, 200);
     if (input.headerRows !== undefined) region.headerRows = input.headerRows;
@@ -835,16 +847,14 @@ function validateRegions(
     if (input.theme !== undefined) region.theme = input.theme;
 
     // A new region (no id) that is content-identical to one already on the
-    // tab IS that region: a retried call after a timed-out response would
-    // otherwise mint a twin under a fresh id on every attempt, and the
-    // store upserts by id. Reusing the id makes the retry a no-op upsert.
+    // tab IS that region, whatever id that one carries: a retried call after
+    // a timed-out response would otherwise mint a twin, and the store upserts
+    // by id. Otherwise the id is derived from the content (see `contentId`),
+    // so overlapping executions of the same call agree on it too.
     if (input.id === undefined) {
-      const twin = existingByContent.get(regionContentKey(region));
-      if (twin !== undefined) {
-        taken.delete(id);
-        region.id = twin;
-      }
+      region.id = existingByContent.get(regionContentKey(region)) ?? contentId('region', region, taken);
     }
+    taken.add(region.id);
 
     const freezeHeader = input.freezeHeader;
     if (freezeHeader === true) {
@@ -1364,9 +1374,16 @@ export const sheetFormatTools = {
           opsApplied: ops?.length ?? 0,
           cellsFormatted: outcome.cellsFormatted,
           tabFieldsChanged: outcome.tabFieldsChanged,
+          // False when the sheet already looked like this (a retry, a bold
+          // that was already bold): nothing was written and no revision
+          // bumped, and the card must not present the request as a change.
+          changed: outcome.rowsTouched > 0 || outcome.tabFieldsChanged.length > 0,
           regionsOnTab: outcome.regions,
           sheetDimensions: { rows: outcome.rowCount, columns: outcome.columnCount },
           message:
+            (outcome.rowsTouched === 0 && outcome.tabFieldsChanged.length === 0
+              ? `"${page.title}" already had this formatting; nothing changed. `
+              : '') +
             `Formatted "${page.title}": ${declared.regions.length} region(s) declared` +
             (regionMode === 'replaceAll' ? ' (every other region on the tab removed)' : '') +
             `, ${ops?.length ?? 0} op(s) applied` +

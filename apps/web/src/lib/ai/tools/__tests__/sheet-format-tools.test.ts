@@ -651,6 +651,20 @@ describe('set_conditional_format', () => {
     expect(changed.success).toBe(true);
   });
 
+  it('a region declared without an id gets the SAME id on every execution, even with no twin in the snapshot', async () => {
+    // Two overlapping executions of a retried call are both planned before
+    // either commits, so neither snapshot shows the other's region. Only a
+    // content-derived id makes the store's upsert-by-id absorb the second.
+    const region = { range: 'A1:D', headerRows: 1, name: 'Orders' };
+    const first = (await format({ regions: [region] })) as { regionIds?: string[] };
+    state = freshTab(); // as if the first commit is not visible yet
+    const again = (await format({ regions: [region] })) as { regionIds?: string[] };
+    assert({ given: 'the same declaration on an empty snapshot', should: 'mint the same id', actual: again.regionIds, expected: first.regionIds });
+    state = freshTab();
+    const other = (await format({ regions: [{ ...region, name: 'Invoices' }] })) as { regionIds?: string[] };
+    expect(other.regionIds).not.toEqual(first.regionIds);
+  });
+
   it('a call that changed nothing logs no activity and broadcasts nothing', async () => {
     // The store reports a no-op (a bold that was already bold, a retry) with
     // rowsTouched 0 and no tab field changed, and bumps no revision. The tool
@@ -668,11 +682,14 @@ describe('set_conditional_format', () => {
     }));
     const noop = await format({ ops: [{ op: 'setFormat', range: 'A1', format: { bold: true } }] });
     assert({ given: 'a no-op format', should: 'still succeed', actual: noop.success, expected: true });
+    assert({ given: 'a no-op format', should: 'report changed: false', actual: (noop as { changed?: boolean }).changed, expected: false });
+    expect(message(noop)).toContain('already had this formatting');
     expect(vi.mocked(logSheetCellActivity)).not.toHaveBeenCalled();
     expect(vi.mocked(broadcastPageEvent)).not.toHaveBeenCalled();
 
     const real = await format({ ops: [{ op: 'setFormat', range: 'A1', format: { bold: true } }] });
     assert({ given: 'a format that changed a row', should: 'succeed', actual: real.success, expected: true });
+    assert({ given: 'a real change', should: 'report changed: true', actual: (real as { changed?: boolean }).changed, expected: true });
     expect(vi.mocked(logSheetCellActivity)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(broadcastPageEvent)).toHaveBeenCalledTimes(1);
   });
