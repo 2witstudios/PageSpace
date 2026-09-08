@@ -819,6 +819,21 @@ describe('set_conditional_format', () => {
     expect(schema).toContain('C2:C40');
   });
 
+  it('replaceAll reports a rule that landed between its read and its write as removed', async () => {
+    // The snapshot the tool planned from never saw the concurrent rule; only
+    // the store, under its lock, did. The count and the id must come from
+    // there, or the destructive half of the call is invisible.
+    const a = { kind: 'dataBar' as const, ranges: ['A1:A9'], color: '#3b82f6' };
+    const real = mockApplyFormatOps.getMockImplementation()!;
+    mockApplyFormatOps.mockImplementationOnce(async (ref, ops) => {
+      state.conditionalFormats = [...state.conditionalFormats, { id: 'concurrent', kind: 'dataBar', ranges: ['Z1:Z9'], color: '#000000' }];
+      return real(ref, ops);
+    });
+    const result = (await conditional({ mode: 'replaceAll', rules: [a] })) as { removed?: number; removedRuleIds?: string[] };
+    assert({ given: 'a rule added between read and write', should: 'be counted as removed', actual: result.removed, expected: 1 });
+    assert({ given: 'a rule added between read and write', should: 'be named as removed', actual: result.removedRuleIds, expected: ['concurrent'] });
+  });
+
   it('replaceAll refuses the same rule twice in one call', async () => {
     const a = { kind: 'dataBar' as const, ranges: ['A1:A9'], color: '#3b82f6' };
     const result = await conditional({ mode: 'replaceAll', rules: [a, { ...a }] });
