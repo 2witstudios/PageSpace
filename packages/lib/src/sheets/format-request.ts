@@ -223,6 +223,20 @@ function referencedCells(start: string, end: string): number | null {
  * attempt landed" rather than as a fault. What it must not do is treat those
  * four as safe to replay blindly.
  *
+ * What the layers above import, and why each is public rather than internal:
+ *
+ *  - `planFormatOps`, `SheetFormatOp`, `SheetFormatPlan`, `PlannedFormatStep`,
+ *    `SheetFormatTarget` — the call and its shapes.
+ *  - `SheetFormatError` — so a route can answer 400 to it by type rather than
+ *    by guessing from a message.
+ *  - `MAX_FORMAT_CELLS`, `MAX_FORMAT_CELLS_PER_REQUEST`, `MAX_FORMAT_OPS`,
+ *    `MAX_FORMULA_EXPANSION`, `MAX_FORMULA_DEPTH` — a tool describing this
+ *    surface to a model should tell it the limits up front rather than let it
+ *    discover them one refusal at a time.
+ *  - `FIELDS_BY_KIND` — which fields each rule kind reads. A tool building a
+ *    per-kind schema needs exactly this, and it is the only copy of that answer
+ *    that a test checks against the evaluator.
+ *
  * Pure: no database, no I/O, no clock. The refusals are the contract, and they
  * have to be testable without any of that.
  */
