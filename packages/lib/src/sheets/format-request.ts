@@ -1,4 +1,83 @@
 /**
+ * What a parsed formula would do wrong at evaluation time, or null.
+ *
+ * Parsing proves the grammar and nothing else, so three things are checked
+ * against the engine that will run it:
+ *
+ *  - a function name it does not implement — `evaluateFunction` throws once per
+ *    covered cell and formats none of them;
+ *  - a call with the wrong number of arguments, which fails exactly the same
+ *    way for exactly as little;
+ *  - a range large enough to take the process down. This one is not a silent
+ *    no-op but a hang: `evaluation.ts` hands every `Range` to `expandRange`,
+ *    which has no cap of any kind — it is two nested loops over the whole
+ *    rectangle. `=SUM(A1:ZZZ5000000)>0` asks it to materialise about ninety-one
+ *    billion addresses, and the rule needs to cover only one cell to get there.
+ *    Bounded by the same `MAX_CONDITIONAL_RANGE_CELLS` a rule's own ranges obey.
+ *
+ * Iterative rather than recursive: the input is a caller-supplied formula, and
+ * a walk whose depth follows it is a stack overflow escaping as a 500. (The
+ * parser would usually blow up first and be caught above, but "usually" is not
+ * a bound.)
+ */
+function formulaProblem(root: ASTNode): string | null {
+  const stack: ASTNode[] = [root];
+
+  while (stack.length > 0) {
+    const node = stack.pop() as ASTNode;
+
+    switch (node.type) {
+      case 'FunctionCall': {
+        const name = node.name.toUpperCase();
+        if (!isSupportedFunction(name)) {
+          return `calls ${name}(), which this sheet does not implement`;
+        }
+        if (!isValidCall(name, node.args.length)) {
+          return `calls ${name}() with ${node.args.length} argument(s), which it does not accept`;
+        }
+        for (const argument of node.args) stack.push(argument);
+        break;
+      }
+
+      case 'Range':
+      case 'ExternalRange': {
+        const cells = referencedCells(node.start.reference, node.end.reference);
+        if (cells === null) {
+          return `refers to ${node.start.reference}:${node.end.reference}, which is not a range this sheet can address`;
+        }
+        if (cells > MAX_CONDITIONAL_RANGE_CELLS) {
+          return (
+            `refers to ${node.start.reference}:${node.end.reference}, ${cells.toLocaleString()} cells. ` +
+            `Evaluating it expands every one of them, per covered cell, with no ceiling — the limit is ` +
+            `${MAX_CONDITIONAL_RANGE_CELLS.toLocaleString()}`
+          );
+        }
+        break;
+      }
+
+      case 'UnaryExpression':
+        stack.push(node.argument);
+        break;
+
+      case 'BinaryExpression':
+        stack.push(node.left, node.right);
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  return null;
+}
+
+/** Cells in a formula's range, or null when it is not addressable. */
+function referencedCells(start: string, end: string): number | null {
+  const span = parseRangeSpan(`${start}:${end}`);
+  return span === null ? null : cellsInSpan(span);
+}
+
+/**
  * @module @pagespace/lib/sheets/format-request
  * @description The refusal boundary for presentation writes that did not come
  * from the toolbar.
@@ -91,14 +170,20 @@ import {
   type ConditionalRule,
 } from './conditional';
 import { validateRanges } from './conditional-ops';
-import { CELL_FORMAT_FIELDS, cellFormatSchema, isValidHexColor } from './format';
+import {
+  CELL_FORMAT_FIELDS,
+  applyNumberFormat,
+  cellFormatSchema,
+  isValidHexColor,
+  numberFormatToExcelCode,
+} from './format';
 import {
   MAX_COLUMN_WIDTH,
   MAX_ROW_HEIGHT,
   MIN_COLUMN_WIDTH,
   MIN_ROW_HEIGHT,
 } from './format-ops';
-import { isSupportedFunction } from './functions';
+import { isSupportedFunction, isValidCall } from './functions';
 import { PALETTE } from './palette';
 import { columnRoleFormat } from './region-format';
 import { FormulaParser, tokenize } from './parser';
@@ -110,7 +195,7 @@ import {
   type RegionColumn,
   type SheetRegion,
 } from './regions';
-import type { ASTNode, CellFormat } from './types';
+import type { ASTNode, CellFormat, NumberFormat } from './types';
 
 /**
  * A caller-supplied op that cannot be applied.
@@ -401,6 +486,28 @@ function validateCellFormatPatch(
   // caller's object against what zod made of it catches that at any depth —
   // and leaves the top-level `undefined` clearing alone, since a raw undefined
   // is never a loss.
+  // Cross-field: each number-format setting is valid on its own, and the kind
+  // decides whether it is read at all.
+  const number = (patch as { number?: NumberFormat }).number;
+  if (number && typeof number.kind === 'string') {
+    for (const [field, a, b] of [
+      ['currency', 'AAA', 'BBB'],
+      ['dateStyle', 'short', 'long'],
+      ['decimals', 1, 4],
+      ['thousands', true, false],
+      ['pattern', 'a', 'b'],
+    ] as const) {
+      if (number[field] === undefined) continue;
+      if (!ignoredNumberFormatField(number, field, a, b)) continue;
+      return refuseOp(
+        index,
+        type,
+        `${label}.number.${field} is not read by a "${number.kind}" format, so it would be stored and ` +
+          'never rendered.'
+      );
+    }
+  }
+
   const nested = sanitizedPathOrRefuse(patch, result.data, index, type, label);
   if (nested) {
     return refuseOp(
@@ -679,42 +786,15 @@ const anchorProblem = (anchor: unknown, needsColor: boolean): string | null => {
     if (anchor.type !== 'number' && (anchor.value < 0 || anchor.value > 100)) {
       return `of type ${anchor.type} needs a value from 0 to 100, not ${anchor.value}`;
     }
+  } else if (anchor.value !== undefined) {
+    // The other direction of the same mistake: `min` and `max` read the data's
+    // own extremes and `anchorValue` never looks at a value, so one supplied
+    // here is stored and silently replaced by whatever the data happens to hold.
+    return `of type ${anchor.type} reads the data's own extreme, so it cannot take a value of ${String(anchor.value)}`;
   }
 
   return null;
 };
-
-/**
- * The first function in a parsed formula that this build does not implement.
- *
- * Iterative rather than recursive: the input is a caller-supplied formula, and
- * a walk whose depth follows it is a stack overflow escaping as a 500. (The
- * parser would usually blow up first and be caught above, but "usually" is not
- * a bound.)
- */
-function firstUnsupportedFunction(root: ASTNode): string | null {
-  const stack: ASTNode[] = [root];
-
-  while (stack.length > 0) {
-    const node = stack.pop() as ASTNode;
-    switch (node.type) {
-      case 'FunctionCall':
-        if (!isSupportedFunction(node.name)) return node.name.toUpperCase();
-        for (const argument of node.args) stack.push(argument);
-        break;
-      case 'UnaryExpression':
-        stack.push(node.argument);
-        break;
-      case 'BinaryExpression':
-        stack.push(node.left, node.right);
-        break;
-      default:
-        break;
-    }
-  }
-
-  return null;
-}
 
 /**
  * Why a rule that stores faithfully would still not do what was asked, or null
@@ -733,6 +813,23 @@ function ruleRenderProblem(rule: ConditionalRule): string | null {
   // `greaterThan` with no value matches NO cell, and a `notContains` with no
   // value matches EVERY non-error one. Which set of operators needs a value is
   // the panel's answer, now shared rather than restated.
+  if (rule.kind === 'cell') {
+    const { operator, value, value2 } = rule.condition;
+
+    // An operand the operator never reads. `matchesCondition` looks at
+    // `condition.value` only for the operators that compare against something,
+    // and at `value2` only for the two range operators — so `isEmpty` with a
+    // value, or `greaterThan` with a second bound, is part of the caller's
+    // instruction stored and thrown away. Neither shape is reachable through
+    // the panel, which hides the fields it does not use.
+    if (VALUELESS_OPERATORS.has(operator) && (value !== undefined || value2 !== undefined)) {
+      return `A "${operator}" rule compares against nothing, so it cannot take a value.`;
+    }
+    if (!RANGE_OPERATORS.has(operator) && value2 !== undefined) {
+      return `Only a between/notBetween rule has a second bound; "${operator}" ignores value2.`;
+    }
+  }
+
   if (rule.kind === 'cell' && !VALUELESS_OPERATORS.has(rule.condition.operator)) {
     const { operator, value, value2 } = rule.condition;
     if (typeof value !== 'string' || value.trim() === '') {
@@ -784,17 +881,10 @@ function ruleRenderProblem(rule: ConditionalRule): string | null {
       );
     }
 
-    // Parsing proves the grammar, not the vocabulary: `FormulaParser` accepts
-    // any identifier followed by parentheses, and `evaluateFunction` then
-    // throws for a name it does not implement — once per covered cell, with the
-    // same nothing to show for it.
-    const unsupported = firstUnsupportedFunction(ast);
-    if (unsupported) {
-      return (
-        `"${rule.formula}" calls ${unsupported}(), which this sheet does not implement. Stored as ` +
-        'written it throws once per covered cell and formats none of them.'
-      );
-    }
+    // Parsing proves the grammar and nothing else — see `formulaProblem` for
+    // the three things the engine will object to that a parse cannot see.
+    const problem = formulaProblem(ast);
+    if (problem) return `"${rule.formula}" ${problem}.`;
   }
 
   // Anchors, which the comparator cannot speak for — see `anchorProblem`.
@@ -929,6 +1019,45 @@ function validateRuleInput(
 }
 
 /**
+ * A number-format setting the chosen `kind` never reads, or null.
+ *
+ * `numberFormatSchema` validates each field on its own, so
+ * `{kind: 'number', dateStyle: 'long'}` and `{kind: 'date', currency: 'EUR'}`
+ * both pass — and `applyNumberFormat` then reads neither, so part of the
+ * requested presentation is stored and has no effect. The toolbar avoids this
+ * by dropping settings that do not apply when the kind changes; a caller has
+ * nothing dropping them.
+ *
+ * Asked of the renderers rather than answered from a table of which kind reads
+ * what: render twice with two different values for the field and see whether
+ * anything moves. Both renderers are consulted, because a field the display
+ * ignores may still reach the exported workbook — `dateStyle` on a `date` kind
+ * is read by one and not the other — and a setting that changes either output
+ * is doing something.
+ *
+ * The probe values cover the shapes `applyNumberFormat` switches on: a number
+ * for the numeric kinds, an ISO timestamp for the date ones, and text.
+ */
+const PROBE_VALUES = [1234.5678, '2026-09-08T13:45:56', 'text'] as const;
+
+function ignoredNumberFormatField(
+  format: NumberFormat,
+  field: 'currency' | 'dateStyle' | 'decimals' | 'thousands' | 'pattern',
+  a: unknown,
+  b: unknown
+): boolean {
+  const render = (value: unknown): string => {
+    const candidate = { ...format, [field]: value } as NumberFormat;
+    return [
+      ...PROBE_VALUES.map((probe) => String(applyNumberFormat(probe, candidate))),
+      String(numberFormatToExcelCode(candidate)),
+    ].join('\u0000');
+  };
+
+  return render(a) === render(b);
+}
+
+/**
  * Whether a column setting has any effect on what that column renders, asked of
  * the deriver rather than assumed.
  *
@@ -982,6 +1111,17 @@ function regionRenderProblem(region: SheetRegion, label: string): string | null 
     // part of it. Both store cleanly and render as something else.
     const headerRows = region.headerRows ?? 1;
     const firstBodyRow = bounds.rowStart + headerRows;
+
+    // A closed region whose header band fills it has no body at all — the
+    // resolver treats every covered row as a header and `continue`s before it
+    // consults the column map. Column roles declared on it can never render,
+    // and unlike an open region it cannot grow into a body later.
+    if (bounds.rowEnd !== null && firstBodyRow > bounds.rowEnd && (region.columns?.length ?? 0) > 0) {
+      return (
+        `${label}: ${region.range} is ${bounds.rowEnd - bounds.rowStart + 1} row(s) tall and all of ` +
+        `them are headers, so it has no body for a column role to apply to.`
+      );
+    }
 
     for (const row of region.totalRows ?? []) {
       if (row - 1 < firstBodyRow) {

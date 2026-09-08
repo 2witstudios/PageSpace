@@ -30,6 +30,7 @@ import { isSupportedFunction } from '../sheets/functions';
 import { MAX_ADDRESSABLE_ROW, encodeColumnLabel } from '../sheets/address';
 import {
   MAX_CONDITIONAL_RANGES_PER_RULE,
+  MAX_CONDITIONAL_RANGE_CELLS,
   VALUELESS_OPERATORS,
 } from '../sheets/conditional';
 
@@ -1071,6 +1072,183 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
           patch: { borders: { top: { style: 'thin', color: '#123456' } } },
         },
       ]).steps
+    ).toHaveLength(1);
+  });
+
+  it('refuses a formula range large enough to take the process down', () => {
+    // Not a silent no-op but a hang. `evaluation.ts` hands every Range to
+    // `expandRange`, which has no cap of any kind — two nested loops over the
+    // whole rectangle. `A1:ZZZ5000000` asks it for about ninety-one billion
+    // addresses, and the rule needs to cover only one cell to get there.
+    const formula = (body: string) => ({
+      id: 'cf_1',
+      kind: 'formula',
+      ranges: ['A1'],
+      formula: body,
+      format: { bold: true },
+    });
+
+    const message = refusalOf([
+      { type: 'addConditionalRule', rule: formula('=SUM(A1:ZZZ5000000)>0') },
+    ]);
+    expect(message).toContain('with no ceiling');
+    expect(message).toContain(MAX_CONDITIONAL_RANGE_CELLS.toLocaleString());
+
+    // A reference the sheet cannot address at all, which `parseRangeSpan`
+    // rejects before there is a count to compare.
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: formula('=SUM(A1:ZZZZ5)>0') }])
+    ).toContain('not a range this sheet can address');
+
+    // Ranges a rule could legally cover on its own are still fine.
+    expect(
+      plan([{ type: 'addConditionalRule', rule: formula('=SUM(A1:A1000)>0') }]).conditionalFormats
+    ).toHaveLength(1);
+  });
+
+  it('refuses a call with a number of arguments the function will not take', () => {
+    // `isSupportedFunction` probes with zero arguments and treats an argument
+    // complaint as proof the name exists — which is right for that question and
+    // leaves this one open. `evaluateFunction` throws for the arity too, once
+    // per covered cell.
+    const formula = (body: string) => ({
+      id: 'cf_1',
+      kind: 'formula',
+      ranges: ['A1:A9'],
+      formula: body,
+      format: { bold: true },
+    });
+
+    expect(refusalOf([{ type: 'addConditionalRule', rule: formula('=ABS()') }])).toContain(
+      'calls ABS() with 0 argument(s)'
+    );
+    expect(refusalOf([{ type: 'addConditionalRule', rule: formula('=IFERROR(1)') }])).toContain(
+      'calls IFERROR() with 1 argument(s)'
+    );
+    for (const body of ['=ABS(A1)>0', '=IFERROR(A1, 0)>0', '=SUM(A1:A9)>0', '=ROUND(A1, 2)>0']) {
+      expect(plan([{ type: 'addConditionalRule', rule: formula(body) }]).conditionalFormats)
+        .toHaveLength(1);
+    }
+  });
+
+  it('refuses an operand the operator never reads', () => {
+    // `matchesCondition` looks at `value` only for the operators that compare
+    // against something and at `value2` only for the two range operators, so
+    // these are part of the caller's instruction stored and thrown away.
+    // Neither shape is reachable through the panel, which hides the fields it
+    // does not use.
+    const cell = (condition: unknown) => ({ ...rule('cf_1'), condition });
+
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: cell({ operator: 'isEmpty', value: 'x' }) }])
+    ).toContain('compares against nothing, so it cannot take a value');
+    expect(
+      refusalOf([
+        { type: 'addConditionalRule', rule: cell({ operator: 'greaterThan', value: '1', value2: '9' }) },
+      ])
+    ).toContain('ignores value2');
+    expect(
+      plan([
+        { type: 'addConditionalRule', rule: cell({ operator: 'between', value: '1', value2: '9' }) },
+      ]).conditionalFormats
+    ).toHaveLength(1);
+  });
+
+  it('refuses a value on an anchor that reads the data instead', () => {
+    // The mirror of the missing-value case: `anchorValue` never looks at a
+    // value for `min`/`max`, so one supplied here is stored and silently
+    // replaced by whatever the data happens to hold.
+    expect(
+      refusalOf([
+        {
+          type: 'addConditionalRule',
+          rule: {
+            id: 'db',
+            kind: 'dataBar',
+            ranges: ['A1:A9'],
+            color: '#3b82f6',
+            min: { type: 'min', value: 50 },
+          },
+        },
+      ])
+    ).toContain("reads the data's own extreme, so it cannot take a value of 50");
+  });
+
+  it('refuses a number-format setting the kind never reads', () => {
+    // `numberFormatSchema` validates each field on its own, so the kind and the
+    // setting are never checked against each other. The toolbar drops settings
+    // that no longer apply when the kind changes; a caller has nothing dropping
+    // them. Asked of the renderers rather than a table: render twice with two
+    // different values and see whether anything moves.
+    // Cast because the point of each case is a combination the type permits
+    // and the renderer ignores.
+    const patch = (number: unknown) =>
+      ({ type: 'setCellFormat', range: 'A1', patch: { number } }) as unknown as SheetFormatOp;
+
+    expect(refusalOf([patch({ kind: 'number', dateStyle: 'long' })])).toContain(
+      'patch.number.dateStyle is not read by a "number" format'
+    );
+    expect(refusalOf([patch({ kind: 'date', currency: 'EUR' })])).toContain(
+      'patch.number.currency is not read by a "date" format'
+    );
+    // Caught beyond the two reported cases, which is the point of asking the
+    // renderer rather than listing the pairs.
+    expect(refusalOf([patch({ kind: 'text', decimals: 2 })])).toContain('is not read by a "text" format');
+
+    // Everything a kind does read still goes through, including the field the
+    // EXPORT reads but the display does not.
+    for (const number of [
+      { kind: 'date', dateStyle: 'long' },
+      { kind: 'currency', currency: 'EUR' },
+      { kind: 'currency', decimals: 0 },
+      { kind: 'percent', thousands: false },
+      { kind: 'custom', pattern: '0.00' },
+    ]) {
+      expect(plan([patch(number)]).steps).toHaveLength(1);
+    }
+  });
+
+  it('refuses column roles on a closed region with no body', () => {
+    // `A1:B1` with the default single header row is all header: the resolver
+    // treats every covered row as one and `continue`s before consulting the
+    // column map, and unlike an open region it cannot grow a body later.
+    expect(
+      refusalOf([
+        {
+          type: 'upsertRegion',
+          region: { id: 'r1', range: 'A1:B1', columns: [{ column: 'A', role: 'currency' }] },
+        },
+      ])
+    ).toContain('all of them are headers');
+
+    // A bodyless region that declares no columns is only a header strip, which
+    // is a legitimate thing to want.
+    expect(
+      plan([{ type: 'upsertRegion', region: { id: 'r1', range: 'A1:B1' } }]).regions
+    ).toHaveLength(1);
+
+    // The same range with no header rows has a body, and an OPEN region always
+    // has one to grow into.
+    expect(
+      plan([
+        {
+          type: 'upsertRegion',
+          region: {
+            id: 'r1',
+            range: 'A1:B1',
+            headerRows: 0,
+            columns: [{ column: 'A', role: 'currency' }],
+          },
+        },
+      ]).regions
+    ).toHaveLength(1);
+    expect(
+      plan([
+        {
+          type: 'upsertRegion',
+          region: { id: 'r1', range: 'A1:B', columns: [{ column: 'A', role: 'currency' }] },
+        },
+      ]).regions
     ).toHaveLength(1);
   });
 
