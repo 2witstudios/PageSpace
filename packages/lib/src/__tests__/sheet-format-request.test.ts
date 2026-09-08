@@ -1235,13 +1235,12 @@ describe('planFormatOps — never something other than what was asked for', () =
     // express one, but an in-process caller building an op by hand can, and the
     // depth bound is the only thing standing between that and a hung request.
     //
-    // Fair warning about the shape of the failure: if that bound regresses this
-    // assertion HANGS rather than failing, because vitest cannot preempt a
-    // synchronous walk (measured — neutralising the depth check produces no
-    // output at all, where the depth fixtures above fail cleanly). A stalled
-    // job is a worse signal than a red one, but it is the only way to pin a
-    // non-termination property, and an unbounded walk reaching production is
-    // the thing actually worth catching.
+    // Measured: neutralising the depth check fails this in 4ms with
+    // `RangeError: Maximum call stack size exceeded`, not a hang — `canonical`
+    // recurses, so a self-reference overflows the stack long before it could
+    // loop forever. Which is the good outcome for a test, and it is why the
+    // bound has to be a bound rather than a cycle-detecting `seen` set: the
+    // same check answers depth and cycles together.
     const cyclic: Record<string, unknown> = { id: 'r1', range: 'A1:F' };
     cyclic.self = cyclic;
     expect(refusalOf([{ type: 'upsertRegion', region: cyclic }])).toContain('nested more than');
