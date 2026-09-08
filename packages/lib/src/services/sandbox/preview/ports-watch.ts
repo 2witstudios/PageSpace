@@ -1,9 +1,18 @@
 /**
- * `ports/watch` — the REQUIRED dev-server detection channel (spike §9).
+ * `ports/watch` — the PASSIVE dev-server detection channel (spike §9).
  *
- * `WSS /v1/sprites/{name}/ports/watch` sends a `port_list` snapshot of every
- * bound port on connect, then `port_opened` / `port_closed` for ALL processes
- * in the sprite, TTY or not. The exec-WS `message` channel the merged seam
+ * `WSS /v1/sprites/{name}/ports/watch` sends a `port_list` snapshot on
+ * connect, then `port_opened` / `port_closed` as binds happen. The platform
+ * docs say "across all processes in the sprite namespace"; that is NOT what
+ * it does. Verified 2026-09-07 on a clean sprite: a Next.js dev server's bind
+ * is never reported — `ss` shows `*:3000` LISTENING, the channel stays
+ * silent, with or without `-H 0.0.0.0` — while python over IPv4 and IPv6,
+ * node grandchildren, TTY-session binds, and pre-existing binds re-emitted on
+ * connect are all reported. So this channel is POSITIVE-ONLY EVIDENCE: what
+ * it reports is bound; what it omits is unknown, never absent. That rule
+ * lives in the core as `ListenerSource`, and the authoritative second opinion
+ * is `port-probe.ts`, which runs only on a user gesture. The exec-WS
+ * `message` channel the merged seam
  * surfaces as `SandboxStream.onPortEvent` is TTY-only (a plain non-TTY
  * `spawn` of a dev server emits NOTHING there — verified twice), so it is
  * SUPERSEDED for detection: a caller fed from it alone silently misses every
@@ -18,11 +27,13 @@
  * `WebSocket` (Node ≥ 24, whose constructor honours `{ headers }` — the same
  * fact the Sprites SDK's exec path relies on), tests pass a fake.
  *
- * FAIL CLOSED. The watch channel is the only detection channel. When it
- * cannot be opened — no token, a refused upgrade, a dropped socket past the
- * caller's reconnect budget — nothing is detected, nothing is planned, and
- * the caller is told so (`onClose`). No fallback to the TTY channel, no
- * exec-based port probe (an exec wakes a paused sprite, and a wake is billed).
+ * FAIL CLOSED. The watch channel is the only AUTOMATIC detection channel.
+ * When it cannot be opened — no token, a refused upgrade, a dropped socket
+ * past the caller's reconnect budget — nothing is detected, nothing is
+ * planned, and the caller is told so (`onClose`). No fallback to the TTY
+ * channel, and no automatic exec-based probe (an exec wakes a paused sprite,
+ * and a wake is billed). The probe exists, but only a person may trigger it
+ * (the Ports pane's Scan), behind the same wake gate as resume and approve.
  *
  * Wire shapes (spike §9): `port_opened`/`port_closed` carry
  * `{port, address: <sprite ip>, pid}` — `address` is never a per-port public

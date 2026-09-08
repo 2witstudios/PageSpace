@@ -250,6 +250,52 @@ order matters: switch the feature off and CONFIRM it before rotating
 `SPRITES_API_TOKEN`. Rotating first while forwarding is still up simply hands
 the previewed dev server the new credential.
 
+## 8. The Ports pane — when detection cannot see your server
+
+`ports/watch` does not report a Next.js dev server's bind at all (reproduced on
+a clean sprite; the platform docs say otherwise). For any server the channel
+misses, the affordance never appears and the user sees nothing. The Ports pane
+is the reliable path and the diagnostic:
+
+- **Split a pane → Ports.** It binds like a page (nothing is minted) and
+  **never probes on mount** — a grid pane is persisted across reloads,
+  devices and viewers, and a probe is an exec that wakes a paused sprite,
+  which is billed. It shows the cached status until you press **Scan**.
+- **Scan** runs `ss -ltnp` in the sandbox (`POST …/preview/ports` — POST
+  because a GET that can wake is unsafe by HTTP semantics), classified
+  server-side: database/broker ports and the relay's own 8080 come back
+  disabled with a reason.
+- **Picking a port is the consent.** The audience is stated beside the list.
+  `POST …/preview/actions {action:'select', port, spriteInstanceId}` checks
+  the instance against the live handle, re-probes under the holder's lock,
+  refuses a port that has gone (409) or is not a web server (422), then
+  writes target + approval + pin in one statement and starts the relay.
+- **The pin.** A picked port survives detection: the detector may not
+  displace a user-selected target, whatever it sees, until a probe proves the
+  port has gone. Without this the next unlisted bind would silently take the
+  preview away from the port the user asked for.
+- **Errors are sentences.** Every failure renders the server's own message
+  in the pane: sandbox not running, probe failed and which way, port gone
+  since the list, port refused and why, relay cannot start because a
+  stranger holds 8080. These used to look like nothing happening.
+
+### The rule underneath: a watch snapshot is positive-only evidence
+
+It proves what IS bound and nothing about what is not. The core carries that
+as `ListenerSource` (`'watch' | 'probe'`), and only a probe may answer "not
+listening". Before this, a working preview of a port the channel could not
+see rendered as `down` / "not listening any more", and the thrash guard
+released it to the next unlisted bind. Both were live in production for a
+few hours; nobody saw them because nothing rendered at all.
+
+### Worth a spike next: `WSS /v1/sprites/{name}/proxy`
+
+The Sprites API documents a bearer-authenticated WebSocket tunnel to ANY port
+inside the sprite. If it is live (the docs have described unreleased
+behaviour before — spike §8), it would remove the in-sprite relay, the 8080
+single slot, and the one-preview-per-sandbox limit entirely. Verify it against
+a real sprite before designing on it.
+
 ## Runtime behaviour worth knowing
 
 - **A refused reconcile is retried, three times across ~21s.** If the holder's
