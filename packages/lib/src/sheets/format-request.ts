@@ -393,7 +393,21 @@ export class SheetDuplicateRuleError extends SheetFormatError {
  * retry cannot reproduce. Exported so the planner's content refusal and a
  * caller's pre-flight dedupe are one definition, not two that drift.
  */
+/**
+ * A region's identity by content — everything but `id`, canonicalised the
+ * same way as a rule's — so a caller that declares a region without an id
+ * can recognise the one it already declared and reuse its id instead of
+ * minting a twin. Retries after a timed-out response are routine.
+ */
+export function regionContentKey(region: Omit<SheetRegion, 'id'> | SheetRegion): string {
+  return contentKey(region);
+}
+
 export function conditionalRuleContentKey(rule: Omit<ConditionalRule, 'id'> | ConditionalRule): string {
+  return contentKey(rule);
+}
+
+function contentKey(value: object): string {
   const canonical = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(canonical);
     if (typeof value === 'object' && value !== null) {
@@ -407,7 +421,7 @@ export function conditionalRuleContentKey(rule: Omit<ConditionalRule, 'id'> | Co
     }
     return value;
   };
-  return JSON.stringify(canonical(rule));
+  return JSON.stringify(canonical(value));
 }
 
 /**
@@ -427,12 +441,17 @@ export type SheetFormatOp =
   | { type: 'setColumnFormat'; column: string; patch: CellFormat }
   | { type: 'setColumnWidth'; column: string; width: number | null }
   | { type: 'setRowHeight'; row: number; height: number | null }
-  | { type: 'setFrozen'; rows: number | null; columns: number | null }
+  // An OMITTED axis keeps what the tab has at plan time — under the store's
+  // lock, so a caller that means "freeze one row" never has to send a value
+  // for the columns it read a moment ago and cannot know still holds.
+  // `null` clears.
+  | { type: 'setFrozen'; rows?: number | null; columns?: number | null }
   | { type: 'addConditionalRule'; rule: unknown }
   | { type: 'updateConditionalRule'; id: string; patch: Record<string, unknown> }
   | { type: 'removeConditionalRule'; id: string }
   | { type: 'moveConditionalRule'; id: string; direction: -1 | 1 }
   | { type: 'clearConditionalRules' }
+  | { type: 'setConditionalRules'; rules: readonly unknown[] }
   | { type: 'setRegions'; regions: readonly unknown[] }
   | { type: 'upsertRegion'; region: unknown }
   | { type: 'removeRegion'; id: string };
@@ -471,6 +490,9 @@ export interface SheetFormatTarget {
   columnCount: number;
   conditionalFormats?: readonly ConditionalRule[];
   regions?: readonly SheetRegion[];
+  /** The freeze in force; a `setFrozen` that omits an axis keeps it. */
+  frozenRows?: number | null;
+  frozenColumns?: number | null;
 }
 
 export interface SheetFormatPlan {
@@ -596,6 +618,7 @@ export const OP_FIELDS: Record<SheetFormatOp['type'], readonly string[]> = {
   removeConditionalRule: ['id'],
   moveConditionalRule: ['id', 'direction'],
   clearConditionalRules: [],
+  setConditionalRules: ['rules'],
   setRegions: ['regions'],
   upsertRegion: ['region'],
   removeRegion: ['id'],
@@ -1853,6 +1876,9 @@ export function planFormatOps(
   let regions: SheetRegion[] = [...(tab.regions ?? [])];
   let rulesTouched = false;
   let regionsTouched = false;
+  // Running, so a second freeze op in the same plan resolves its omitted
+  // axis against the first, not the tab.
+  let frozen = { rows: tab.frozenRows ?? null, columns: tab.frozenColumns ?? null };
 
   // How many cells this request has asked us to EXPAND while checking rules,
   // as opposed to how many the resulting sheet covers. Bounded by the same
@@ -2020,20 +2046,24 @@ export function planFormatOps(
       }
 
       case 'setFrozen': {
+        if (op.rows === undefined && op.columns === undefined) {
+          refuseOp(index, op.type, 'setFrozen needs "rows" and/or "columns" (a count, or null to clear).');
+        }
         const frozenRows = validateFreeze(
-          op.rows,
+          op.rows === undefined ? frozen.rows : op.rows,
           tab.rowCount,
           'frozen rows',
           index,
           op.type
         );
         const frozenColumns = validateFreeze(
-          op.columns,
+          op.columns === undefined ? frozen.columns : op.columns,
           tab.columnCount,
           'frozen columns',
           index,
           op.type
         );
+        frozen = { rows: frozenRows ?? null, columns: frozenColumns ?? null };
         steps.push({ type: 'setFrozen', rows: frozenRows, columns: frozenColumns });
         touchesTabFields = true;
         break;
@@ -2058,6 +2088,27 @@ export function planFormatOps(
           chargeInspection(index, op.type)
         );
 
+        // Content BEFORE id. A caller that mints ids dedupes by content
+        // before its call, but two overlapping calls (a timeout retry racing
+        // the original) both see no duplicate; the store replans HERE under
+        // its lock, so this is the one check that refuses the second one
+        // atomically — as the duplicate it is, which the caller recovers
+        // from, and not as an id collision, which it cannot. A caller that
+        // derives ids from content sends the SAME id both times, so checking
+        // the id first would turn the retry it was designed for into an
+        // ordinary refusal. Without this the tab holds two rules that paint
+        // the same cells the same way and evaluates the formula twice.
+        const key = conditionalRuleContentKey(rule);
+        const twin = rules.find((existing) => conditionalRuleContentKey(existing) === key);
+        if (twin !== undefined) {
+          throw new SheetDuplicateRuleError(
+            `Op ${index} (${op.type}): An identical rule is already on this sheet as "${twin.id}". ` +
+              'Use updateConditionalRule to change it, or removeConditionalRule if it is no longer wanted.',
+            index,
+            twin.id
+          );
+        }
+
         if (rules.some((existing) => existing.id === rule.id)) {
           // Two rules under one id: `update` and `move` reach the first by
           // `findIndex` while `remove` filters out both, so the new rule is no
@@ -2067,25 +2118,6 @@ export function planFormatOps(
             op.type,
             `A rule "${rule.id}" is already on this sheet. Use updateConditionalRule to change it, ` +
               'or give the new rule its own id.'
-          );
-        }
-
-        // Content, not only id. A caller that mints ids dedupes by content
-        // before its call, but two overlapping calls (a timeout retry racing
-        // the original) both see no duplicate and mint different ids; the
-        // store replans HERE under its lock, so this is the one check that
-        // refuses the second one atomically. Without it the tab holds two
-        // rules that paint the same cells the same way and evaluates the
-        // formula twice per cell, and the "sending the same rules twice adds
-        // them once" promise is broken for precisely the retry it was made for.
-        const key = conditionalRuleContentKey(rule);
-        const twin = rules.find((existing) => conditionalRuleContentKey(existing) === key);
-        if (twin !== undefined) {
-          throw new SheetDuplicateRuleError(
-            `Op ${index} (${op.type}): An identical rule is already on this sheet as "${twin.id}". ` +
-              'Use updateConditionalRule to change it, or removeConditionalRule if it is no longer wanted.',
-            index,
-            twin.id
           );
         }
 
@@ -2183,6 +2215,53 @@ export function planFormatOps(
         // names no target and so cannot be wrong about one, while a remove
         // names an id and is telling us something false about the sheet.
         rules = [];
+        rulesTouched = true;
+        break;
+      }
+
+      case 'setConditionalRules': {
+        // The whole list, in the caller's order, replanned under the lock —
+        // so a "keep only these" holds against a rule another writer added
+        // between the caller's read and this write, and reordering two rules
+        // that both already exist is a real change (later rules win). The
+        // store compares the list it stores as JSON, so sending the list the
+        // tab already holds is not a write.
+        if (!Array.isArray(op.rules)) {
+          refuseOp(index, op.type, 'rules must be an array.');
+        }
+        if (op.rules.length > MAX_CONDITIONAL_RULES) {
+          refuseOp(
+            index,
+            op.type,
+            `A sheet can hold at most ${MAX_CONDITIONAL_RULES} rules; got ${op.rules.length}.`
+          );
+        }
+
+        const next: ConditionalRule[] = [];
+        const seenIds = new Set<string>();
+        const seenContent = new Map<string, string>();
+        op.rules.forEach((value: unknown, position: number) => {
+          const rule = validateRuleInput(
+            value,
+            isObject(value) ? value : {},
+            index,
+            op.type,
+            chargeInspection(index, op.type)
+          );
+          if (seenIds.has(rule.id)) {
+            refuseOp(index, op.type, `Two rules share the id "${rule.id}".`);
+          }
+          const key = conditionalRuleContentKey(rule);
+          const twin = seenContent.get(key);
+          if (twin !== undefined) {
+            refuseOp(index, op.type, `rules[${position}] is identical to rule "${twin}".`);
+          }
+          seenIds.add(rule.id);
+          seenContent.set(key, rule.id);
+          next.push(rule);
+        });
+
+        rules = next;
         rulesTouched = true;
         break;
       }

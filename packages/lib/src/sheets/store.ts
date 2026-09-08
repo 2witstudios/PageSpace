@@ -1068,6 +1068,17 @@ export interface ApplyFormatOpsResult {
   tabFieldsChanged: string[];
   /** Conditional rules on the tab after the write. */
   conditionalRules: number;
+  /**
+   * Rule ids the write added and removed, computed under the tab lock from
+   * what the tab held THEN — not from any caller's earlier read. A caller
+   * that plans from a snapshot cannot know what another writer landed in
+   * between; these are what actually changed.
+   */
+  ruleIdsAdded: string[];
+  ruleIdsRemoved: string[];
+  /** Region ids the write added and removed, computed the same way. */
+  regionIdsAdded: string[];
+  regionIdsRemoved: string[];
   /** Regions on the tab after the write. */
   regions: number;
   rowCount: number;
@@ -1180,7 +1191,11 @@ export async function applyFormatOps(
         rowsTouched: 0,
         tabFieldsChanged: [],
         conditionalRules: preview.conditionalFormats.length,
+        ruleIdsAdded: [],
+        ruleIdsRemoved: [],
         regions: preview.regions.length,
+        regionIdsAdded: [],
+        regionIdsRemoved: [],
         rowCount: tab.rowCount,
         columnCount: tab.columnCount,
         recomputed: [],
@@ -1237,7 +1252,12 @@ export async function applyFormatOps(
     // so the two agree on what was locked.
     const current = await getTab(ref, tx);
     if (!current) throw new Error(`Sheet tab not found for page ${ref.pageId}`);
-    const plan = planFormatOps(ops, formatTarget(current));
+    const lockedTarget = formatTarget(current);
+    const plan = planFormatOps(ops, lockedTarget);
+    const ruleIdsBefore = new Set((lockedTarget.conditionalFormats ?? []).map((rule) => rule.id));
+    const ruleIdsAfter = new Set(plan.conditionalFormats.map((rule) => rule.id));
+    const regionIdsBefore = new Set((lockedTarget.regions ?? []).map((region) => region.id));
+    const regionIdsAfter = new Set(plan.regions.map((region) => region.id));
 
     // Growth is re-derived from the locked extent, and only if the snapshot
     // said so: if it did not, no tab lock is held and the recompute seeds were
@@ -1390,7 +1410,11 @@ export async function applyFormatOps(
       rowsTouched,
       tabFieldsChanged,
       conditionalRules: plan.conditionalFormats.length,
+      ruleIdsAdded: [...ruleIdsAfter].filter((id) => !ruleIdsBefore.has(id)),
+      ruleIdsRemoved: [...ruleIdsBefore].filter((id) => !ruleIdsAfter.has(id)),
       regions: plan.regions.length,
+      regionIdsAdded: [...regionIdsAfter].filter((id) => !regionIdsBefore.has(id)),
+      regionIdsRemoved: [...regionIdsBefore].filter((id) => !regionIdsAfter.has(id)),
       rowCount: extent.rowCount,
       columnCount: extent.columnCount,
       recomputed,
@@ -1591,6 +1615,8 @@ function formatTarget(tab: StoredTab): SheetFormatTarget {
     columnCount: tab.columnCount,
     conditionalFormats: parseConditionalRules(tab.conditionalFormats ?? undefined) ?? [],
     regions: parseRegions(tab.regions ?? undefined) ?? [],
+    frozenRows: tab.frozenRows ?? null,
+    frozenColumns: tab.frozenColumns ?? null,
   };
 }
 

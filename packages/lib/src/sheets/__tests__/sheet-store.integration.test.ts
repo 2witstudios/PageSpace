@@ -1497,6 +1497,53 @@ describe('sheet store (integration)', () => {
       expect((await db.select({ id: sheetChanges.id }).from(sheetChanges).where(eq(sheetChanges.tabId, tabId))).length).toBe(logged);
     });
 
+    it('setConditionalRules with the list the tab already holds is not a write', async () => {
+      // The AI tool's replaceAll sends the final list on every call, including
+      // a retry, so a rule added concurrently is removed under the lock. That
+      // is only acceptable because an identical list is compared as JSON and
+      // bumps nothing — the case a retry depends on.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
+      const second = { ...FORMAT_RULE, id: 'second', ranges: ['B1:B9'] };
+      const first = await applyFormatOps(
+        { pageId },
+        [{ type: 'setConditionalRules', rules: [FORMAT_RULE, second] }],
+        { userId: ownerId }
+      );
+      expect(first.tabFieldsChanged).toEqual(['conditionalFormats']);
+      // The delta is computed under the lock from what the tab held THEN.
+      expect(first.ruleIdsAdded.sort()).toEqual(['over-100', 'second']);
+      expect(first.ruleIdsRemoved).toEqual([]);
+      const before = await revisionOf(pageId);
+      const logged = (await db.select({ id: sheetChanges.id }).from(sheetChanges).where(eq(sheetChanges.tabId, tabId))).length;
+
+      const again = await applyFormatOps(
+        { pageId },
+        [{ type: 'setConditionalRules', rules: [FORMAT_RULE, second] }],
+        { userId: ownerId }
+      );
+      expect(again.tabFieldsChanged).toEqual([]);
+      expect(again.ruleIdsAdded).toEqual([]);
+      expect(again.ruleIdsRemoved).toEqual([]);
+      expect(await revisionOf(pageId)).toEqual(before);
+      expect((await db.select({ id: sheetChanges.id }).from(sheetChanges).where(eq(sheetChanges.tabId, tabId))).length).toBe(logged);
+
+      // A list that drops one: the removed id is reported from the locked read.
+      const dropped = await applyFormatOps({ pageId }, [{ type: 'setConditionalRules', rules: [second] }], { userId: ownerId });
+      expect(dropped.ruleIdsRemoved).toEqual(['over-100']);
+      expect(dropped.ruleIdsAdded).toEqual([]);
+      await applyFormatOps({ pageId }, [{ type: 'setConditionalRules', rules: [FORMAT_RULE, second] }], { userId: ownerId });
+
+      // Reversed is a change: later rules win.
+      const reversed = await applyFormatOps(
+        { pageId },
+        [{ type: 'setConditionalRules', rules: [second, FORMAT_RULE] }],
+        { userId: ownerId }
+      );
+      expect(reversed.tabFieldsChanged).toEqual(['conditionalFormats']);
+      const tab = (await getTab({ pageId }))!;
+      expect((tab.conditionalFormats as { id: string }[]).map((rule) => rule.id)).toEqual(['second', 'over-100']);
+    });
+
     it('leaves a formula cell’s raw, value and type untouched', async () => {
       // Kills: fabricating a `StoredCell` instead of spreading the loaded one.
       const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
@@ -1584,6 +1631,8 @@ describe('sheet store (integration)', () => {
         expect(result.tabFieldsChanged.sort()).toEqual(
           ['columnWidths', 'conditionalFormats', 'frozenRows', 'regions'].sort()
         );
+        expect(result.regionIdsAdded).toEqual([REGION.id]);
+        expect(result.regionIdsRemoved).toEqual([]);
         expect(await audit.count()).toBe(1);
       } finally {
         await audit.drop();
@@ -1659,7 +1708,11 @@ describe('sheet store (integration)', () => {
       // held just before its `UPDATE sheet_tabs`, with the tab lock already
       // taken, until the second call is observed waiting on that lock.
       const { pageId, ownerId } = await makeSheet({ rowCount: 20 });
-      const second = { ...FORMAT_RULE, id: 'second' };
+      // A different RANGE, not just a different id: the store refuses a rule
+      // whose content matches one already on the tab (SheetDuplicateRuleError,
+      // keyed by everything but `id`), and this case is about the lock, not
+      // the dedup — two distinct rules must both land.
+      const second = { ...FORMAT_RULE, id: 'second', ranges: ['B1:B9'] };
 
       let other: Promise<unknown> | null = null;
       await db.transaction(async (tx) =>

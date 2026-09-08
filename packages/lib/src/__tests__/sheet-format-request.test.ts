@@ -10,6 +10,7 @@ import {
   SheetDuplicateRuleError,
   SheetFormatError,
   conditionalRuleContentKey,
+  regionContentKey,
   planFormatOps,
   type SheetFormatOp,
   type SheetFormatPlan,
@@ -186,6 +187,7 @@ describe('planFormatOps — the request envelope', () => {
       removeConditionalRule: { id: 'a' },
       moveConditionalRule: { id: 'a', direction: 1 },
       clearConditionalRules: {},
+      setConditionalRules: { rules: [rule('cf_new', '99')] },
       setRegions: { regions: [region('r2')] },
       upsertRegion: { region: region('r2') },
       removeRegion: { id: 'r1' },
@@ -211,10 +213,20 @@ describe('planFormatOps — the request envelope', () => {
           ...samples[type as SheetFormatOp['type']],
         };
         delete op[field];
+        if (type === 'setFrozen') {
+          // The one op whose fields are each optional BY DESIGN: an omitted
+          // axis keeps the current freeze (resolved under the lock). Only
+          // both missing is a no-op that must refuse — asserted separately.
+          expect(() => plan([op as never], target)).not.toThrow();
+          continue;
+        }
         const message = refusalOf([op as never], target);
         // Naming the field is what makes the refusal repairable in one step;
         // "invalid op" would satisfy the throw and help nobody.
         expect(message, `${type} without ${field}`).toContain(field);
+      }
+      if (type === 'setFrozen') {
+        expect(refusalOf([{ type } as never], target)).toContain('rows');
       }
     }
   });
@@ -477,6 +489,26 @@ describe('planFormatOps — columns, rows and freezes', () => {
     expect(result.touchesTabFields).toBe(true);
   });
 
+  it('an omitted freeze axis keeps what the target holds, resolved at plan time', () => {
+    // The caller that means "freeze one row" must not have to send the
+    // columns it read a moment ago: the store plans under its lock, so the
+    // value it keeps is the current one, not a stale snapshot's.
+    const tab = tabWith({ frozenRows: null, frozenColumns: 2 });
+    expect(plan([{ type: 'setFrozen', rows: 1 }], tab).steps).toEqual([{ type: 'setFrozen', rows: 1, columns: 2 }]);
+    expect(plan([{ type: 'setFrozen', columns: null }], tab).steps).toEqual([{ type: 'setFrozen', rows: undefined, columns: undefined }]);
+    // A second freeze in the same plan resolves against the first.
+    expect(plan([{ type: 'setFrozen', rows: 1 }, { type: 'setFrozen', columns: 1 }], tab).steps).toEqual([
+      { type: 'setFrozen', rows: 1, columns: 2 },
+      { type: 'setFrozen', rows: 1, columns: 1 },
+    ]);
+    expect(plan([{ type: 'setFrozen', rows: null, columns: null }, { type: 'setFrozen', columns: 1 }], tab).steps[1]).toEqual({
+      type: 'setFrozen',
+      rows: undefined,
+      columns: 1,
+    });
+    expect(refusalOf([{ type: 'setFrozen' }])).toContain('needs "rows" and/or "columns"');
+  });
+
   it('accepts 0 as "unfreeze", which is what setFrozen already means by it', () => {
     expect(plan([{ type: 'setFrozen', rows: 0, columns: 0 }]).steps).toEqual([
       { type: 'setFrozen', rows: 0, columns: 0 },
@@ -692,6 +724,60 @@ describe('planFormatOps — conditional rules', () => {
     // Unlike removing an id that is not there: a clear names no target and so
     // cannot be wrong about one.
     expect(plan([{ type: 'clearConditionalRules' }]).conditionalFormats).toEqual([]);
+  });
+
+  it('addConditionalRule with the same id AND the same content is the duplicate, not an id collision', () => {
+    // A caller deriving ids from content sends the same id on a retry; the
+    // retry must surface as SheetDuplicateRuleError (recoverable), which
+    // means content is compared before the id.
+    const tab = tabWith({ conditionalFormats: [rule('a')] });
+    let caught: unknown;
+    try {
+      plan([{ type: 'addConditionalRule', rule: rule('a') }], tab);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(SheetDuplicateRuleError);
+    // Same id, different content is still the id collision.
+    expect(refusalOf([{ type: 'addConditionalRule', rule: rule('a', '2') }], tab)).toContain('is already on this sheet');
+  });
+
+  it('setConditionalRules replaces the whole list in the given order', () => {
+    // Order is load-bearing: later rules win. A list that reverses two
+    // existing rules is a real change, not two duplicates.
+    const tab = tabWith({ conditionalFormats: [rule('a'), rule('b', '2')] });
+    const result = plan([{ type: 'setConditionalRules', rules: [rule('b', '2'), rule('a')] }], tab);
+    expect(result.conditionalFormats.map((entry) => entry.id)).toEqual(['b', 'a']);
+    expect(result.touchesTabFields).toBe(true);
+    expect(plan([{ type: 'setConditionalRules', rules: [] }], tab).conditionalFormats).toEqual([]);
+  });
+
+  it('setConditionalRules refuses a non-array and a list over the limit', () => {
+    expect(refusalOf([{ type: 'setConditionalRules', rules: 'nope' } as never])).toContain('rules must be an array');
+    // A non-object entry is validated as an empty rule and refused by name.
+    expect(() => plan([{ type: 'setConditionalRules', rules: ['nope'] }])).toThrow(SheetFormatError);
+    const tooMany = Array.from({ length: MAX_CONDITIONAL_RULES + 1 }, (_, i) => rule(`cf_${i}`, String(i)));
+    expect(refusalOf([{ type: 'setConditionalRules', rules: tooMany }])).toContain(
+      `at most ${MAX_CONDITIONAL_RULES} rules; got ${MAX_CONDITIONAL_RULES + 1}`
+    );
+  });
+
+  it('regionContentKey identifies a region by everything but its id', () => {
+    // The tool reuses an existing region's id when a new declaration
+    // matches it by content, and derives a stable id from the same key.
+    const base = region('r1');
+    expect(regionContentKey({ ...base, id: 'other' })).toBe(regionContentKey(base));
+    expect(regionContentKey({ ...base, name: undefined })).toBe(regionContentKey(base));
+    expect(regionContentKey({ ...base, theme: 'red' })).not.toBe(regionContentKey(base));
+  });
+
+  it('setConditionalRules refuses a duplicate id or duplicate content within the list', () => {
+    expect(refusalOf([{ type: 'setConditionalRules', rules: [rule('a'), rule('a', '2')] }])).toContain(
+      'Two rules share the id "a"'
+    );
+    expect(refusalOf([{ type: 'setConditionalRules', rules: [rule('a'), rule('b')] }])).toContain(
+      'rules[1] is identical to rule "a"'
+    );
   });
 
   it('refuses a resulting rule list that would come back shorter', () => {
@@ -2225,8 +2311,10 @@ describe('planFormatOps — rule identity', () => {
     // Two rules under one id: `update` and `move` reach the first by index
     // while `remove` filters out both, so the new rule is not addressable at
     // all. The region path already refused this.
+    // Different content under the same id — identical content is the
+    // duplicate case, tested separately.
     const tab = tabWith({ conditionalFormats: [rule('a')] });
-    const message = refusalOf([{ type: 'addConditionalRule', rule: rule('a') }], tab);
+    const message = refusalOf([{ type: 'addConditionalRule', rule: rule('a', '2') }], tab);
     expect(message).toContain('A rule "a" is already on this sheet');
     expect(message).toContain('updateConditionalRule');
   });

@@ -68,14 +68,17 @@
  * `sheet-read-is-read-only.guard.test.ts` against every mutating store export,
  * and this one imports the write path on purpose.
  *
- * Not registered anywhere yet: wiring into `ai-tools.ts`, `WRITE_TOOLS`,
- * `tool-labels.ts` and the sheet skill is a separate change.
+ * Registered through `TOOL_MODULES.sheetsFormat` in `core/ai-tools.ts`, gated
+ * in `WRITE_TOOLS`, labelled in `tool-labels.ts`, taught by the spreadsheets
+ * skill, and rendered by `SheetFormatRenderer` — which imports the input
+ * types below (type-only, so nothing here reaches the client bundle).
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { PageType } from '@pagespace/lib/utils/enums';
 import {
+  regionContentKey,
   MAX_ADDRESSABLE_ROW,
   MAX_CONDITIONAL_RULES,
   MAX_DECIMALS,
@@ -88,7 +91,6 @@ import {
   MIN_ROW_HEIGHT,
   PALETTE,
   RANGE_OPERATORS,
-  SheetDuplicateRuleError,
   SheetFormatError,
   VALUELESS_OPERATORS,
   conditionalRuleContentKey,
@@ -267,7 +269,7 @@ const regionSchema = z
   })
   .strict();
 
-type RegionInput = z.infer<typeof regionSchema>;
+export type RegionInput = z.infer<typeof regionSchema>;
 
 const FORMAT_OPS = ['setFormat', 'clearFormat', 'columnFormat', 'columnWidth', 'rowHeight', 'freeze'] as const;
 type FormatOpName = (typeof FORMAT_OPS)[number];
@@ -299,7 +301,7 @@ const formatOpSchema = z
   })
   .strict();
 
-type FormatOpInput = z.infer<typeof formatOpSchema>;
+export type FormatOpInput = z.infer<typeof formatOpSchema>;
 
 const formatSheetInputSchema = z.object({
   pageId: z.string().optional().describe('Defaults to the page in view.'),
@@ -375,7 +377,7 @@ const ruleSchema = z
     operator: z.enum(OPERATORS).optional().describe('cell.'),
     value: operandSchema.optional().describe('cell: the operand. Not for isEmpty/isNotEmpty/isError.'),
     value2: operandSchema.optional().describe('cell: upper bound for between/notBetween.'),
-    formula: z.string().max(4000).optional().describe('formula: e.g. "=C2>AVERAGE(C:C)", anchored at the range\'s top-left.'),
+    formula: z.string().max(4000).optional().describe('formula: e.g. "=C2>AVERAGE(C2:C40)", anchored at the range\'s top-left; ranges must be bounded.'),
     format: aiCellFormatSchema.optional().describe('cell/formula: applied where the rule matches.'),
     min: anchorSchema.optional().describe('colorScale (needs color) / dataBar.'),
     mid: anchorSchema.optional().describe('colorScale.'),
@@ -384,7 +386,7 @@ const ruleSchema = z
   })
   .strict();
 
-type RuleInput = z.infer<typeof ruleSchema>;
+export type RuleInput = z.infer<typeof ruleSchema>;
 
 const setConditionalFormatInputSchema = z.object({
   pageId: z.string().optional().describe('Defaults to the page in view.'),
@@ -596,35 +598,15 @@ function chargeRange(range: string, label: string, budget: { used: number }): vo
   }
 }
 
-/**
- * The freeze in force, for a `freeze` op that names only one axis.
- *
- * The store's `setFrozen` sets both axes at once and reads `null` as "clear",
- * so a freeze op that mentioned only `frozenRows` would have cleared the
- * frozen columns as a side effect. An omitted axis keeps what is frozen at
- * that point in the call — the tab's snapshot, as updated by every earlier
- * op that froze or cleared. Resolving from the snapshot alone would make
- * `[freeze rows 1, freeze columns 1]` emit `{rows: null, columns: 1}` second
- * and unfreeze the row the first op had just pinned.
- */
-interface CurrentFreeze {
-  frozenRows: number | null;
-  frozenColumns: number | null;
-}
-
 /** Validated, resolved to the store's op, and labelled for the refusal path. */
 interface PlannedOp {
   op: SheetFormatOp;
   label: string;
 }
 
-function validateFormatOps(ops: readonly FormatOpInput[], initial: CurrentFreeze): PlannedOp[] {
+function validateFormatOps(ops: readonly FormatOpInput[]): PlannedOp[] {
   const planned: PlannedOp[] = [];
   const budget = { used: 0 };
-  // Running, not the snapshot: each freeze op is resolved against what the
-  // ops before it left frozen (see CurrentFreeze). The caller's copy is not
-  // mutated, so a refusal mid-list leaves no trace.
-  let current: CurrentFreeze = { ...initial };
 
   ops.forEach((input, index) => {
     const label = `ops[${index}]`;
@@ -721,10 +703,6 @@ function validateFormatOps(ops: readonly FormatOpInput[], initial: CurrentFreeze
             );
           }
           planned.push({ label, op: { type: 'setFrozen', rows: null, columns: null } });
-          // Later ops in this call resolve their omitted axis against the
-          // clear, not the snapshot — otherwise a freeze after a clear would
-          // resurrect the axis the clear removed.
-          current = { frozenRows: null, frozenColumns: null };
           break;
         }
         if (input.frozenRows === undefined && input.frozenColumns === undefined) {
@@ -734,15 +712,17 @@ function validateFormatOps(ops: readonly FormatOpInput[], initial: CurrentFreeze
             NOTHING_APPLIED
           );
         }
-        const frozen: CurrentFreeze = {
-          frozenRows: input.frozenRows ?? current.frozenRows,
-          frozenColumns: input.frozenColumns ?? current.frozenColumns,
-        };
+        // Only the axis the model named. The store keeps the other one as
+        // it finds it UNDER ITS LOCK — resolving it here, from the snapshot,
+        // would write back a value another writer may have changed since.
         planned.push({
           label,
-          op: { type: 'setFrozen', rows: frozen.frozenRows, columns: frozen.frozenColumns },
+          op: {
+            type: 'setFrozen',
+            ...(input.frozenRows !== undefined ? { rows: input.frozenRows } : {}),
+            ...(input.frozenColumns !== undefined ? { columns: input.frozenColumns } : {}),
+          },
         });
-        current = frozen;
         break;
       }
     }
@@ -763,6 +743,19 @@ const mintId = (prefix: string, taken: ReadonlySet<string>): string => {
 };
 
 /**
+ * The id a region declared without one gets: derived from its CONTENT, so
+ * the same declaration mints the same id every time. Two executions of a
+ * retried call that overlap — both planned before either commits, so neither
+ * snapshot shows the other's region — then send the same id, and the store's
+ * upsert-by-id under its lock makes the second a no-op instead of a twin.
+ * Random only when that id is already taken by something else.
+ */
+const contentId = (prefix: string, region: SheetRegion, taken: ReadonlySet<string>): string => {
+  const id = `${prefix}-${createHash('sha256').update(regionContentKey(region)).digest('hex').slice(0, 8)}`;
+  return taken.has(id) ? mintId(prefix, taken) : id;
+};
+
+/**
  * Normalise a declared region into what the store stores, and split off the
  * one input that is not a region field: `freezeHeader`.
  *
@@ -777,11 +770,13 @@ const mintId = (prefix: string, taken: ReadonlySet<string>): string => {
  */
 function validateRegions(
   regions: readonly RegionInput[],
-  existingIds: ReadonlySet<string>
+  existing: readonly SheetRegion[]
 ): { regions: SheetRegion[]; labels: string[]; frozenRows: number | undefined } {
   const out: SheetRegion[] = [];
   const labels: string[] = [];
-  const taken = new Set(existingIds);
+  const taken = new Set(existing.map((region) => region.id));
+  const existingByContent = new Map(existing.map((region) => [regionContentKey(region), region.id]));
+  const declaredByContent = new Map<string, string>();
   let frozenRows: number | undefined;
 
   regions.forEach((input, index) => {
@@ -801,15 +796,14 @@ function validateRegions(
     if (input.id !== undefined && out.some((region) => region.id === input.id)) {
       refuse(INVALID_FORMAT_REQUEST, `${label}: two regions in this call share the id "${input.id}".`, NOTHING_APPLIED);
     }
-    const id = input.id ?? mintId('region', taken);
-    taken.add(id);
 
     // Built field by field in the parser's own normal form — trimmed name,
     // uppercase columns and currency codes, sorted unique total rows — because
     // the store compares what it was sent against what `parseRegion` makes of
     // it and refuses any difference. A region the parser would tidy is one the
     // store would turn away, so the tidying happens here, where it is visible.
-    const region: SheetRegion = { id, range };
+    // The id is settled LAST, because without one it is derived from the rest.
+    const region: SheetRegion = { id: input.id ?? '', range };
     const name = input.name?.trim();
     if (name) region.name = name.slice(0, 200);
     if (input.headerRows !== undefined) region.headerRows = input.headerRows;
@@ -829,6 +823,36 @@ function validateRegions(
       region.columns = [...byColumn.values()];
     }
     if (input.theme !== undefined) region.theme = input.theme;
+
+    // A new region (no id) that is content-identical to one already on the
+    // tab IS that region, whatever id that one carries: a retried call after
+    // a timed-out response would otherwise mint a twin, and the store upserts
+    // by id. Otherwise the id is derived from the content (see `contentId`),
+    // so overlapping executions of the same call agree on it too.
+    // The same declaration twice in one call is a mistake, not two regions,
+    // however the ids were supplied: two ids over identical content is an
+    // overlapping twin that costs two region slots.
+    const key = regionContentKey(region);
+    const earlier = declaredByContent.get(key);
+    if (earlier !== undefined) {
+      refuse(INVALID_FORMAT_REQUEST, `${label} declares the same region as ${earlier}.`, NOTHING_APPLIED);
+    }
+    declaredByContent.set(key, label);
+    const existingTwin = existingByContent.get(key);
+    if (input.id === undefined) {
+      region.id = existingTwin ?? contentId('region', region, taken);
+    } else if (existingTwin !== undefined && existingTwin !== input.id) {
+      // An explicit id that is NOT the existing region's, over identical
+      // content: a stale or invented id. Upserting it would land an
+      // overlapping twin under a second id.
+      refuse(
+        INVALID_FORMAT_REQUEST,
+        `${label}: a region with exactly this content already exists as "${existingTwin}". Pass that id to ` +
+          'restyle it, omit the id, or change the region.',
+        NOTHING_APPLIED
+      );
+    }
+    taken.add(region.id);
 
     const freezeHeader = input.freezeHeader;
     if (freezeHeader === true) {
@@ -975,7 +999,7 @@ function buildRule(input: RuleInput, label: string): BuiltRule {
       };
     }
     case 'formula': {
-      need('formula', '(e.g. "=C2>AVERAGE(C:C)")');
+      need('formula', '(e.g. "=C2>AVERAGE(C2:C40)" — ranges must be bounded)');
       need('format', '(what to apply where the formula is true)');
       const formula = (input.formula as string).trim();
       if (formula === '') {
@@ -1033,6 +1057,12 @@ function buildRule(input: RuleInput, label: string): BuiltRule {
  * is told failed.
  */
 const contentKey = (rule: ConditionalRule | RuleContent): string => conditionalRuleContentKey(rule);
+
+/** A rule's id from its content — the same declaration mints the same id on every execution. */
+const ruleContentId = (key: string, taken: ReadonlySet<string>): string => {
+  const id = `rule-${createHash('sha256').update(key).digest('hex').slice(0, 8)}`;
+  return taken.has(id) ? mintId('rule', taken) : id;
+};
 
 // ---------------------------------------------------------------------------
 // Shared: locating the tab
@@ -1151,12 +1181,13 @@ async function locateTab(
 /**
  * The write, with the store's refusals turned into the envelope.
  *
- * `onDuplicateRule: 'throw'` lets the store's content-twin refusal
- * (`SheetDuplicateRuleError`) escape instead of becoming an envelope. Only
- * `set_conditional_format` asks for it: that tool minted the ids, so a twin
- * refused under the lock is its own retry racing it, and it has the rules in
- * hand to check. `format_sheet` relays the model's ids and has no such
- * standing, so for it the twin is a refusal like any other.
+ * `onStoreRefusal: 'throw'` lets the store's refusal under its lock (a
+ * content twin, an id already gone) escape instead of becoming an envelope.
+ * Only `set_conditional_format`'s append path asks for it: that tool minted
+ * the ids and planned the removals from a snapshot, so a refusal under the
+ * lock may be its own retry racing it, and it has the requested final state
+ * in hand to re-verify. `format_sheet` relays the model's ids and has no such
+ * standing, so for it every refusal is a refusal.
  */
 async function applyPlanned(
   ref: TabRef,
@@ -1167,7 +1198,7 @@ async function applyPlanned(
   toolName: string,
   error: string,
   metadata: Record<string, unknown>,
-  onDuplicateRule: 'refuse' | 'throw' = 'refuse'
+  onStoreRefusal: 'refuse' | 'throw' = 'refuse'
 ) {
   const ops = planned.map((entry) => entry.op);
   const labels = planned.map((entry) => entry.label);
@@ -1203,7 +1234,7 @@ async function applyPlanned(
       metadata: { source: 'ai-tool', tool: toolName, ...metadata },
     });
   } catch (cause) {
-    if (cause instanceof SheetDuplicateRuleError && onDuplicateRule === 'throw') {
+    if (cause instanceof SheetFormatError && onStoreRefusal === 'throw') {
       throw cause;
     }
     if (cause instanceof SheetFormatError) {
@@ -1212,6 +1243,17 @@ async function applyPlanned(
     throw cause;
   }
 
+  // The store reports a request that changed nothing — a bold that was
+  // already bold, a retried call — with no rows touched and no tab field
+  // changed, and deliberately bumps no revision for it. Logging an activity
+  // entry, firing the workflow trigger and broadcasting content-updated for
+  // that would turn a harmless retry into an observable automation run.
+  if (result.rowsTouched === 0 && result.tabFieldsChanged.length === 0) {
+    return result;
+  }
+
+  // What the write DID, from under the lock — not what the caller planned
+  // from its snapshot. The workflow trigger reads this.
   await logSheetCellActivity({
     pageId: page.id,
     driveId: page.driveId,
@@ -1221,7 +1263,17 @@ async function applyPlanned(
     actorDisplayName: mutationContext.actorDisplayName,
     changeGroupId: mutationContext.changeGroupId,
     isAiGenerated: true,
-    metadata: { source: 'ai-tool', tool: toolName, ...metadata },
+    metadata: {
+      source: 'ai-tool',
+      tool: toolName,
+      ...metadata,
+      cellsFormatted: result.cellsFormatted,
+      tabFieldsChanged: result.tabFieldsChanged,
+      rulesAdded: result.ruleIdsAdded.length,
+      rulesRemoved: result.ruleIdsRemoved.length,
+      regionsAdded: result.regionIdsAdded.length,
+      regionsRemoved: result.regionIdsRemoved.length,
+    },
   });
 
   await broadcastPageEvent(createPageEventPayload(page.driveId, page.id, 'content-updated', { title: page.title }));
@@ -1261,7 +1313,11 @@ export const sheetFormatTools = {
       const pageId = resolveOrThrowPageId(pageIdArg, toolContext);
 
       try {
-        if ((regions?.length ?? 0) === 0 && (ops?.length ?? 0) === 0) {
+        // An empty `replaceAll` is a request in its own right — "keep only
+        // these" with nothing to keep clears every region, the way the
+        // conditional tool's replaceAll clears every rule — so it passes
+        // this guard and plans a `setRegions` of the empty list.
+        if ((regions?.length ?? 0) === 0 && (ops?.length ?? 0) === 0 && regionMode !== 'replaceAll') {
           return refusal(
             INVALID_FORMAT_REQUEST,
             'Neither regions nor ops were given, so there is nothing to apply.',
@@ -1285,10 +1341,7 @@ export const sheetFormatTools = {
         // Regions first, then the freeze a region asked for, then the
         // model's own ops — so an explicit op layers over what a region
         // implies, never under it.
-        const declared = validateRegions(
-          regions ?? [],
-          new Set(formatting.regions.map((region) => region.id))
-        );
+        const declared = validateRegions(regions ?? [], formatting.regions);
         if (regionMode === 'replaceAll') {
           planned.push({ label: 'regions', op: { type: 'setRegions', regions: declared.regions } });
         } else {
@@ -1296,23 +1349,15 @@ export const sheetFormatTools = {
             planned.push({ label: declared.labels[index], op: { type: 'upsertRegion', region } });
           });
         }
-        // The freeze the model's ops start from. A region's freezeHeader
-        // lands in it, so a later `{op: 'freeze', frozenColumns: 1}` keeps
-        // the header rows the region pinned instead of resolving its omitted
-        // rows from the snapshot and erasing them.
-        const current: CurrentFreeze = {
-          frozenRows: formatting.frozenRows,
-          frozenColumns: formatting.frozenColumns,
-        };
+        // A region's freezeHeader pins rows only; the columns axis is left
+        // to the store, which keeps what it finds under its lock. A later
+        // `{op: 'freeze', frozenColumns: 1}` in the same call resolves its
+        // omitted rows against this op, in the store's running plan.
         if (declared.frozenRows !== undefined) {
-          current.frozenRows = declared.frozenRows;
-          planned.push({
-            label: 'regions (freezeHeader)',
-            op: { type: 'setFrozen', rows: current.frozenRows, columns: current.frozenColumns },
-          });
+          planned.push({ label: 'regions (freezeHeader)', op: { type: 'setFrozen', rows: declared.frozenRows } });
         }
 
-        planned.push(...validateFormatOps(ops ?? [], current));
+        planned.push(...validateFormatOps(ops ?? []));
 
         const outcome = await applyPlanned(
           ref,
@@ -1322,7 +1367,7 @@ export const sheetFormatTools = {
           page,
           'format_sheet',
           INVALID_FORMAT_REQUEST,
-          { regions: declared.regions.length, ops: ops?.length ?? 0, regionMode: regionMode ?? 'merge' }
+          { regionsDeclared: declared.regions.length, ops: ops?.length ?? 0, regionMode: regionMode ?? 'merge' }
         );
         if (isRefusal(outcome)) return outcome;
 
@@ -1333,14 +1378,27 @@ export const sheetFormatTools = {
           title: page.title,
           tabIndex: ref.tabIndex,
           regionsApplied: declared.regions.length,
+          regionMode: regionMode ?? 'merge',
           regionIds,
+          // From under the lock: what a replaceAll actually removed.
+          regionIdsAdded: outcome.regionIdsAdded,
+          removedRegionIds: outcome.regionIdsRemoved,
           opsApplied: ops?.length ?? 0,
           cellsFormatted: outcome.cellsFormatted,
           tabFieldsChanged: outcome.tabFieldsChanged,
+          // False when the sheet already looked like this (a retry, a bold
+          // that was already bold): nothing was written and no revision
+          // bumped, and the card must not present the request as a change.
+          changed: outcome.rowsTouched > 0 || outcome.tabFieldsChanged.length > 0,
           regionsOnTab: outcome.regions,
           sheetDimensions: { rows: outcome.rowCount, columns: outcome.columnCount },
           message:
-            `Formatted "${page.title}": ${declared.regions.length} region(s) declared, ${ops?.length ?? 0} op(s) applied` +
+            (outcome.rowsTouched === 0 && outcome.tabFieldsChanged.length === 0
+              ? `"${page.title}" already had this formatting; nothing changed. `
+              : '') +
+            `Formatted "${page.title}": ${declared.regions.length} region(s) declared` +
+            (outcome.regionIdsRemoved.length > 0 ? ` (${outcome.regionIdsRemoved.length} other region(s) removed)` : '') +
+            `, ${ops?.length ?? 0} op(s) applied` +
             (outcome.cellsFormatted > 0 ? `, ${outcome.cellsFormatted} cell(s) restyled` : '') +
             '.',
           nextSteps: [
@@ -1416,22 +1474,100 @@ export const sheetFormatTools = {
 
         let remaining: ConditionalRule[];
         if (mode === 'replaceAll') {
-          planned.push({ label: 'mode', op: { type: 'clearConditionalRules' } });
-          remaining = [];
-        } else {
-          const removals = new Set<string>();
-          (removeRuleIds ?? []).forEach((id, index) => {
-            if (!existingIds.includes(id)) {
-              refuse(
+          // The FINAL list, in the caller's order, as one op the store
+          // reconciles under its lock: a rule another writer added between
+          // this read and that write is removed too, reordering existing
+          // rules is a real change (later rules win), and an identical retry
+          // sends the list the tab already holds — which the store compares
+          // as JSON and does not write. Rules that match an existing one by
+          // content keep its id, so ids an earlier attempt returned stay
+          // valid; new ones get content-derived ids.
+          const byExistingContent = new Map(existing.map((rule) => [contentKey(rule), rule.id]));
+          const seen = new Map<string, number>();
+          const takenIds = new Set(existingIds);
+          const final: ConditionalRule[] = [];
+          const ruleIds: string[] = [];
+          const skippedDuplicates: { index: number; existingRuleId: string }[] = [];
+          for (const [index, entry] of built.entries()) {
+            const key = contentKey(entry.rule);
+            const earlier = seen.get(key);
+            if (earlier !== undefined) {
+              return refusal(
                 INVALID_RULE_REQUEST,
-                `removeRuleIds[${index}]: no rule "${id}" on this tab. Rules that exist: ` +
-                  (existingIds.length > 0 ? existingIds.map((existingId) => `"${existingId}"`).join(', ') : 'none') +
-                  '.',
-                NOTHING_APPLIED
+                `rules[${index}] is identical to rules[${earlier}].`,
+                'Send each rule once; give one rule several ranges instead of the same rule twice.'
               );
             }
+            seen.set(key, index);
+            const existingId = byExistingContent.get(key);
+            const id = existingId ?? ruleContentId(key, takenIds);
+            takenIds.add(id);
+            if (existingId !== undefined) skippedDuplicates.push({ index, existingRuleId: existingId });
+            ruleIds.push(id);
+            final.push({ ...entry.rule, id } as ConditionalRule);
+          }
+          planned.push({ label: 'mode', op: { type: 'setConditionalRules', rules: final } });
+
+          const outcome = await applyPlanned(
+            ref,
+            planned,
+            formatting,
+            toolContext,
+            page,
+            'set_conditional_format',
+            INVALID_RULE_REQUEST,
+            { mode }
+          );
+          if (isRefusal(outcome)) return outcome;
+          // Counts from what the store found under its lock, not from the
+          // snapshot: a rule another writer added in between was removed
+          // too, and is reported.
+          const changed = outcome.rowsTouched > 0 || outcome.tabFieldsChanged.length > 0;
+          const reordered = changed && outcome.ruleIdsAdded.length === 0 && outcome.ruleIdsRemoved.length === 0;
+          return {
+            success: true as const,
+            pageId: page.id,
+            title: page.title,
+            tabIndex: ref.tabIndex,
+            mode: 'replaceAll' as const,
+            ruleIds,
+            ruleIdsAdded: outcome.ruleIdsAdded,
+            removedRuleIds: outcome.ruleIdsRemoved,
+            added: outcome.ruleIdsAdded.length,
+            removed: outcome.ruleIdsRemoved.length,
+            changed,
+            conditionalRules: outcome.conditionalRules,
+            ...(warnings.length > 0 ? { warnings } : {}),
+            message: !changed
+              ? `"${page.title}" already held exactly these rules; nothing changed.`
+              : reordered
+                ? `Conditional formatting on "${page.title}": the same ${final.length} rule(s), reordered (later rules win).`
+                : `Conditional formatting on "${page.title}": now exactly the ${final.length} rule(s) in this call ` +
+                  `(${outcome.ruleIdsAdded.length} added, ${outcome.ruleIdsRemoved.length} removed).`,
+            nextSteps: [
+              'Call read_sheet with includeFormatting to verify the rules.',
+              'Keep the returned ruleIds to remove or replace these rules later.',
+            ],
+          };
+        } else {
+          // An id that is not on the tab is treated as already removed, with a
+          // warning, not refused: a retried call whose first attempt committed
+          // but lost its response reads a tab where the id is already gone,
+          // and refusing it would report failure for a request that landed.
+          // The store would refuse the op (a remove names an id and asserts it
+          // exists), so it is simply not planned.
+          const removals = new Set<string>();
+          (removeRuleIds ?? []).forEach((id, index) => {
             if (removals.has(id)) return;
             removals.add(id);
+            if (!existingIds.includes(id)) {
+              warnings.push(
+                `removeRuleIds[${index}]: no rule "${id}" on this tab — treated as already removed. Rules that exist: ` +
+                  (existingIds.length > 0 ? existingIds.map((existingId) => `"${existingId}"`).join(', ') : 'none') +
+                  '.'
+              );
+              return;
+            }
             planned.push({ label: `removeRuleIds[${index}]`, op: { type: 'removeConditionalRule', id } });
           });
           remaining = existing.filter((rule) => !removals.has(rule.id));
@@ -1454,7 +1590,7 @@ export const sheetFormatTools = {
             skippedDuplicates.push({ index, existingRuleId: duplicateOf });
             return;
           }
-          const id = mintId('rule', taken);
+          const id = ruleContentId(key, taken);
           taken.add(id);
           byContent.set(key, id);
           const rule = { ...entry.rule, id } as ConditionalRule;
@@ -1484,9 +1620,13 @@ export const sheetFormatTools = {
             pageId: page.id,
             title: page.title,
             tabIndex: ref.tabIndex,
+            mode: 'append' as const,
             ruleIds,
+            ruleIdsAdded: [],
+            removedRuleIds: [],
             added: 0,
             removed: 0,
+            changed: false,
             skippedDuplicates,
             conditionalRules: existing.length,
             ...(warnings.length > 0 ? { warnings } : {}),
@@ -1505,25 +1645,25 @@ export const sheetFormatTools = {
             page,
             'set_conditional_format',
             INVALID_RULE_REQUEST,
-            { mode, rulesAdded: toAdd.length, rulesRemoved: existing.length - remaining.length },
+            { mode },
             'throw'
           );
         } catch (cause) {
-          if (!(cause instanceof SheetDuplicateRuleError)) throw cause;
+          if (!(cause instanceof SheetFormatError)) throw cause;
 
-          // The store refused a content twin under its lock: a rule with this
-          // content landed between the read above and the write. The dedupe
-          // above cannot see that — it ran against a snapshot — and this is
-          // the one case it exists for: a timeout retry overlapping the call
-          // it retries. Both read no rule, both minted an id, and the lock
-          // let exactly one through. To the model that IS the landed retry,
-          // so the answer is the same success the dedupe gives when the
-          // snapshot already held every rule.
+          // The store refused under its lock what the snapshot allowed: a
+          // content twin that landed in between, or a removal whose id was
+          // already gone. Both are what a timeout retry overlapping the call
+          // it retries looks like — both executions read the same tab, and
+          // the lock let exactly one through. To the model that IS the landed
+          // retry, so the answer is the same success the dedupe gives when
+          // the snapshot already held every rule.
           //
-          // Only if the fresh read accounts for the WHOLE call, though. The
-          // store refused every op atomically, so a twin that explains one
-          // rule and not the others (another writer added it) means nothing
-          // in this call was written, and reporting success would tell the
+          // Only if the fresh read accounts for the WHOLE call, though: every
+          // rule present by content and every removal absent. The store
+          // refused every op atomically, so a fresh read that explains one
+          // part and not the rest (another writer did it) means nothing in
+          // this call was written, and reporting success would tell the
           // model the rest landed too.
           const fresh = await readTabFormatting(ref);
           if (!fresh) {
@@ -1549,9 +1689,13 @@ export const sheetFormatTools = {
             pageId: page.id,
             title: page.title,
             tabIndex: ref.tabIndex,
+            mode: 'append' as const,
             ruleIds: landedIds,
+            ruleIdsAdded: [],
+            removedRuleIds: [],
             added: 0,
             removed: 0,
+            changed: false,
             skippedDuplicates: landedIds.map((existingRuleId, index) => ({ index, existingRuleId })),
             conditionalRules: fresh.conditionalFormats.length,
             ...(warnings.length > 0 ? { warnings } : {}),
@@ -1566,15 +1710,21 @@ export const sheetFormatTools = {
           pageId: page.id,
           title: page.title,
           tabIndex: ref.tabIndex,
+          mode: 'append' as const,
           ruleIds,
-          added: toAdd.length,
-          removed: existing.length - remaining.length,
+          ruleIdsAdded: outcome.ruleIdsAdded,
+          // Confirmed under the lock — an id the snapshot lacked was never a
+          // removal, and is not listed.
+          removedRuleIds: outcome.ruleIdsRemoved,
+          added: outcome.ruleIdsAdded.length,
+          removed: outcome.ruleIdsRemoved.length,
+          changed: outcome.rowsTouched > 0 || outcome.tabFieldsChanged.length > 0,
           skippedDuplicates,
           conditionalRules: outcome.conditionalRules,
           ...(warnings.length > 0 ? { warnings } : {}),
           message:
-            `Conditional formatting on "${page.title}": ${toAdd.length} rule(s) added, ` +
-            `${existing.length - remaining.length} removed, ${outcome.conditionalRules} on the tab now.`,
+            `Conditional formatting on "${page.title}": ${outcome.ruleIdsAdded.length} rule(s) added, ` +
+            `${outcome.ruleIdsRemoved.length} removed, ${outcome.conditionalRules} on the tab now.`,
           nextSteps: [
             'Call read_sheet with includeFormatting to verify the rules.',
             'Keep the returned ruleIds to remove or replace these rules later.',
