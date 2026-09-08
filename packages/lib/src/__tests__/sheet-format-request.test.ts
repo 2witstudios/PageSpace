@@ -1577,6 +1577,65 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
     ).toContain("reads the data's own extreme, so it cannot take a value of 50");
   });
 
+  it('states, kind by kind, which number-format settings are read', () => {
+    // The number-format check asks the renderers rather than consulting a
+    // table, which is right — but WHICH values it renders with is a judgement,
+    // and a change to them would quietly move every one of these verdicts.
+    // Pinned here as one legible matrix, so the refusals it produces can be
+    // audited in a single place instead of inferred from eleven switch arms.
+    const fields: Record<string, unknown> = {
+      currency: 'EUR',
+      dateStyle: 'long',
+      decimals: 2,
+      thousands: false,
+      pattern: '0.00',
+    };
+
+    const readsFor = (kind: string) =>
+      Object.entries(fields)
+        .filter(([field, value]) => {
+          try {
+            planFormatOps(
+              [{ type: 'setCellFormat', range: 'A1', patch: { number: { kind, [field]: value } } }] as never,
+              tabWith()
+            );
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        .map(([field]) => field);
+
+    expect({
+      auto: readsFor('auto'),
+      plain: readsFor('plain'),
+      number: readsFor('number'),
+      currency: readsFor('currency'),
+      percent: readsFor('percent'),
+      date: readsFor('date'),
+      time: readsFor('time'),
+      datetime: readsFor('datetime'),
+      scientific: readsFor('scientific'),
+      text: readsFor('text'),
+      custom: readsFor('custom'),
+    }).toEqual({
+      auto: [],
+      plain: [],
+      number: ['decimals', 'thousands'],
+      currency: ['currency', 'decimals', 'thousands'],
+      percent: ['decimals', 'thousands'],
+      date: ['dateStyle'],
+      // `time` renders hh:mm:ss and exports as a fixed code, so a dateStyle on
+      // it changes nothing — the one row most likely to look like a bug.
+      time: [],
+      datetime: ['dateStyle'],
+      // Scientific uses `toExponential`, which has no thousands separator.
+      scientific: ['decimals'],
+      text: [],
+      custom: ['pattern'],
+    });
+  });
+
   it('refuses a number-format setting the kind never reads', () => {
     // `numberFormatSchema` validates each field on its own, so the kind and the
     // setting are never checked against each other. The toolbar drops settings
