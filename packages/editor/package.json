@@ -13,6 +13,11 @@
     "lint": "eslint src"
   },
   "exports": {
+    "./apply-pm-doc-to-y-doc": {
+      "types": "./dist/apply-pm-doc-to-y-doc.d.ts",
+      "import": "./dist/apply-pm-doc-to-y-doc.js",
+      "default": "./dist/apply-pm-doc-to-y-doc.js"
+    },
     "./block-id": {
       "types": "./dist/block-id.d.ts",
       "import": "./dist/block-id.js",
@@ -22,6 +27,11 @@
       "types": "./dist/code-block-node.d.ts",
       "import": "./dist/code-block-node.js",
       "default": "./dist/code-block-node.js"
+    },
+    "./collab-document": {
+      "types": "./dist/collab-document.d.ts",
+      "import": "./dist/collab-document.js",
+      "default": "./dist/collab-document.js"
     },
     "./collab-marks": {
       "types": "./dist/collab-marks.d.ts",
@@ -33,6 +43,16 @@
       "import": "./dist/collab-schema.js",
       "default": "./dist/collab-schema.js"
     },
+    "./dom-workspace": {
+      "types": "./dist/dom-workspace.d.ts",
+      "import": "./dist/dom-workspace.js",
+      "default": "./dist/dom-workspace.js"
+    },
+    "./html-to-ydoc": {
+      "types": "./dist/html-to-ydoc.d.ts",
+      "import": "./dist/html-to-ydoc.js",
+      "default": "./dist/html-to-ydoc.js"
+    },
     "./image-node": {
       "types": "./dist/image-node.d.ts",
       "import": "./dist/image-node.js",
@@ -43,19 +63,55 @@
       "import": "./dist/page-mention-node.js",
       "default": "./dist/page-mention-node.js"
     },
+    "./pm-attrs": {
+      "types": "./dist/pm-attrs.d.ts",
+      "import": "./dist/pm-attrs.js",
+      "default": "./dist/pm-attrs.js"
+    },
+    "./projection-errors": {
+      "types": "./dist/projection-errors.d.ts",
+      "import": "./dist/projection-errors.js",
+      "default": "./dist/projection-errors.js"
+    },
     "./simple-data-attr": {
       "types": "./dist/simple-data-attr.d.ts",
       "import": "./dist/simple-data-attr.js",
       "default": "./dist/simple-data-attr.js"
+    },
+    "./y-doc-to-blocks": {
+      "types": "./dist/y-doc-to-blocks.d.ts",
+      "import": "./dist/y-doc-to-blocks.js",
+      "default": "./dist/y-doc-to-blocks.js"
+    },
+    "./y-doc-to-html": {
+      "types": "./dist/y-doc-to-html.d.ts",
+      "import": "./dist/y-doc-to-html.js",
+      "default": "./dist/y-doc-to-html.js"
+    },
+    "./y-doc-to-markdown": {
+      "types": "./dist/y-doc-to-markdown.d.ts",
+      "import": "./dist/y-doc-to-markdown.js",
+      "default": "./dist/y-doc-to-markdown.js"
+    },
+    "./y-doc-to-text": {
+      "types": "./dist/y-doc-to-text.d.ts",
+      "import": "./dist/y-doc-to-text.js",
+      "default": "./dist/y-doc-to-text.js"
     }
   },
   "typesVersions": {
     "*": {
+      "apply-pm-doc-to-y-doc": [
+        "./dist/apply-pm-doc-to-y-doc.d.ts"
+      ],
       "block-id": [
         "./dist/block-id.d.ts"
       ],
       "code-block-node": [
         "./dist/code-block-node.d.ts"
+      ],
+      "collab-document": [
+        "./dist/collab-document.d.ts"
       ],
       "collab-marks": [
         "./dist/collab-marks.d.ts"
@@ -63,14 +119,38 @@
       "collab-schema": [
         "./dist/collab-schema.d.ts"
       ],
+      "dom-workspace": [
+        "./dist/dom-workspace.d.ts"
+      ],
+      "html-to-ydoc": [
+        "./dist/html-to-ydoc.d.ts"
+      ],
       "image-node": [
         "./dist/image-node.d.ts"
       ],
       "page-mention-node": [
         "./dist/page-mention-node.d.ts"
       ],
+      "pm-attrs": [
+        "./dist/pm-attrs.d.ts"
+      ],
+      "projection-errors": [
+        "./dist/projection-errors.d.ts"
+      ],
       "simple-data-attr": [
         "./dist/simple-data-attr.d.ts"
+      ],
+      "y-doc-to-blocks": [
+        "./dist/y-doc-to-blocks.d.ts"
+      ],
+      "y-doc-to-html": [
+        "./dist/y-doc-to-html.d.ts"
+      ],
+      "y-doc-to-markdown": [
+        "./dist/y-doc-to-markdown.d.ts"
+      ],
+      "y-doc-to-text": [
+        "./dist/y-doc-to-text.d.ts"
       ]
     }
   },
@@ -85,10 +165,20 @@
     "@tiptap/extension-text-style": "^3.0.7",
     "@tiptap/pm": "^3.7.2",
     "@tiptap/starter-kit": "^3.0.7",
-    "tiptap-markdown": "^0.8.10"
+    "happy-dom": "^20.8.9",
+    "prosemirror-markdown": "^1.13.4",
+    "prosemirror-model": "^1.25.7",
+    "prosemirror-state": "^1.4.4",
+    "prosemirror-view": "^1.41.8",
+    "tiptap-markdown": "^0.8.10",
+    "y-prosemirror": "1.3.7",
+    "y-protocols": "^1.0.7",
+    "yjs": "13.6.32"
   },
   "devDependencies": {
+    "esbuild": "^0.25.12",
     "eslint": "^9.36.0",
+    "playwright-core": "^1.60.0",
     "typescript-eslint": "^8.59.0"
   }
 }

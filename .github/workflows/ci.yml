@@ -72,6 +72,44 @@ jobs:
       - name: Create scratch Admin database
         run: PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE pagespace_admin_test'
 
+      # packages/editor's cross-DOM parse-equality suite drives a REAL Chromium
+      # and compares its ProseMirror parse against happy-dom's over the construct
+      # corpus. Several `parseHTML` functions in the frozen collab schema read the
+      # DOM rather than the source string, so two processes can agree on
+      # SCHEMA_HASH and still disagree about what a document IS — and nothing else
+      # in the suite can catch that. The test deliberately does NOT skip when the
+      # browser is missing (a cross-DOM check that goes green with one DOM is
+      # worse than no check), so this step is required, not optional.
+      #
+      # Installed from apps/e2e, the workspace that owns Playwright; the browser
+      # cache is shared, and packages/editor's playwright-core resolves the same
+      # build. Cached on the resolved Playwright version so only the first run
+      # after a bump pays the ~170MB download — without this every push to every
+      # branch re-downloads it, and this repo has no CI concurrency group, so
+      # superseded runs never cancel and each one pays again.
+      - name: Resolve Playwright version (cache key)
+        id: playwright-version
+        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+        working-directory: packages/editor
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      # `--with-deps` unconditionally, INCLUDING on a cache hit. Skipping the apt
+      # pass when the browser binary is cached looks like a saving and is a trap:
+      # the cache restores the binary but not the system libraries it links
+      # against, so a runner image that drops one would fail to launch Chromium
+      # only on cache-hit runs — a failure that cannot reproduce on the run that
+      # populated the cache. The download is the expensive part and the cache
+      # already removes it; apt with everything present costs seconds.
+      - name: Install Chromium (cross-DOM parse-equality suite)
+        run: bunx playwright install --with-deps chromium
+        working-directory: apps/e2e
+
       # ADMIN_DATABASE_URL belongs here too, not only on the backfill/db-integration
       # steps below. The GDPR eraser's integration suite
       # (packages/lib/src/compliance/erasure/__tests__) gates its whole describe
