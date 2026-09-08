@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { derivePreviewCookieKey, signPreviewCookie, PREVIEW_COOKIE_NAME } from '@pagespace/lib/services/sandbox/preview/preview-grant';
+import { DEV_PREVIEW_PATH_HEADER } from '@/lib/dev-preview/preview-path-header';
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -240,12 +241,15 @@ describe('authorize + decide, per request', () => {
 
 describe('after the middleware rewrite the handler sees the ORIGINAL pathname', () => {
   // Production shape: the browser asked the preview host for `/`; the
-  // middleware rewrote it onto the mount, but `request.nextUrl.pathname`
-  // inside the handler is still `/` (Next 15.5, self-hosted). The route must
-  // not demand the mount — the first real preview 404'd on every path.
+  // middleware rewrote it onto the mount and stamped the original pathname
+  // on the request, but `request.nextUrl.pathname` inside the handler is
+  // still `/` (Next 15.5, self-hosted). The route must not demand the mount
+  // — the first real preview 404'd on every path — and must not guess the
+  // path by shape either: it takes the stamped one.
   const rawReq = (path: string, headers: Record<string, string> = {}): NextRequest => {
     const h = new Headers(headers);
     h.set('host', HOST);
+    h.set(DEV_PREVIEW_PATH_HEADER, path.split('?')[0]);
     return new NextRequest(`https://${HOST}${path}`, { headers: h });
   };
   const forwardable = () => {
@@ -268,7 +272,24 @@ describe('after the middleware rewrite the handler sees the ORIGINAL pathname', 
     expect(loggers.security.info).toHaveBeenLastCalledWith('dev-preview.access', expect.objectContaining({ outcome: 'forwarded', path: '/_next/static/a.js' }));
   });
 
-  it('still strips the mount when the request carries it itself', async () => {
+  it('a preview path that LOOKS like the mount, or like a sibling of it, is forwarded verbatim — never stripped, never refused', async () => {
+    forwardable();
+    const mountShaped = `/api/dev-preview/host/${HOLDER.kind}/${HOLDER.id}/assets/app.js`;
+    expect((await GET(rawReq(mountShaped, { cookie: cookie() }), ctx())).status).toBe(200);
+    expect(forwardPreviewRequest).toHaveBeenLastCalledWith(expect.objectContaining({ pathAndQuery: mountShaped }));
+    const sibling = `/api/dev-preview/host/${HOLDER.kind}/${HOLDER.id}-assets`;
+    expect((await GET(rawReq(sibling, { cookie: cookie() }), ctx())).status).toBe(200);
+    expect(forwardPreviewRequest).toHaveBeenLastCalledWith(expect.objectContaining({ pathAndQuery: sibling }));
+  });
+
+  it('a stamped path that is not a path is ignored — the mount-stripping fallback decides', async () => {
+    forwardable();
+    const res = await GET(req('/items', { headers: { cookie: cookie(), [DEV_PREVIEW_PATH_HEADER]: 'https://evil.example/x' } }), ctx());
+    expect(res.status).toBe(200);
+    expect(forwardPreviewRequest).toHaveBeenLastCalledWith(expect.objectContaining({ pathAndQuery: '/items' }));
+  });
+
+  it('still strips the mount when the request carries it itself and nothing is stamped', async () => {
     forwardable();
     expect((await GET(req('/items?x=1', { headers: { cookie: cookie() } }), ctx())).status).toBe(200);
     expect(forwardPreviewRequest).toHaveBeenLastCalledWith(expect.objectContaining({ pathAndQuery: '/items?x=1' }));

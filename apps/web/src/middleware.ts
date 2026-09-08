@@ -16,6 +16,7 @@ import {
 import { isCanvasPreviewRoute } from '@/app/api/canvas/_shared/previewRoute';
 import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { parsePreviewHost, rewritePreviewHostPath } from '@pagespace/lib/services/sandbox/preview/preview-host';
+import { DEV_PREVIEW_PATH_HEADER } from '@/lib/dev-preview/preview-path-header';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/url-utils';
 import { logSecurityEvent } from '@/lib/logging/edge-logger';
 import {
@@ -153,7 +154,13 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     if (previewHolder !== null) {
       const rewritten = new URL(req.url);
       rewritten.pathname = rewritePreviewHostPath(previewHolder, pathname);
-      return NextResponse.rewrite(rewritten);
+      // The handler sees the ORIGINAL pathname after a rewrite, not this one,
+      // and cannot tell a mount-shaped preview path from a mount-carrying
+      // request by shape — so hand it the original explicitly. Overwrites
+      // any client-sent value: on a preview host this header is ours.
+      const requestHeaders = new Headers(req.headers);
+      requestHeaders.set(DEV_PREVIEW_PATH_HEADER, pathname);
+      return NextResponse.rewrite(rewritten, { request: { headers: requestHeaders } });
     }
 
     // Non-cloud route blocking (defense-in-depth)

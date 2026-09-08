@@ -20,8 +20,18 @@ class NextResponseStub extends Response {
     destination: string | URL,
     init?: { request?: { headers?: Headers } },
   ) {
-    void init;
     const headers = new Headers({ 'x-middleware-rewrite': destination.toString() });
+    // Request-header overrides travel on the response exactly as the real
+    // `handleMiddlewareField` encodes them: one `x-middleware-request-<key>`
+    // per header plus the key list — which is what a test can assert on.
+    if (init?.request?.headers) {
+      const keys: string[] = [];
+      for (const [key, value] of init.request.headers) {
+        headers.set(`x-middleware-request-${key}`, value);
+        keys.push(key);
+      }
+      headers.set('x-middleware-override-headers', keys.join(','));
+    }
     return new NextResponseStub(null, { status: 200, headers });
   }
 }

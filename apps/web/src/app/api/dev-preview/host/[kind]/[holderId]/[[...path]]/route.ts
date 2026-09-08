@@ -55,6 +55,7 @@ import { buildPreviewAccessLog, extractPreviewPath } from '@pagespace/lib/servic
 import { resolveSpritesToken } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { DevPreviewHolderRef } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 import { forwardPreviewRequest } from '@/lib/dev-preview/preview-forward';
+import { DEV_PREVIEW_PATH_HEADER } from '@/lib/dev-preview/preview-path-header';
 import { getPreviewCookieKey, getPreviewGrantsStore, resolveAppOrigin, resolvePreviewOpenPath, resolvePreviewTargetForRequest } from '@/lib/dev-preview/preview-runtime';
 
 type RouteContext = { params: Promise<{ kind: string; holderId: string; path?: string[] }> };
@@ -115,15 +116,16 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Resp
   const holder = hostHolder;
 
   const mount = `${DEV_PREVIEW_HOST_ROUTE_PREFIX}/${holder.kind}/${holder.id}`;
-  // After the middleware rewrite the handler's `nextUrl.pathname` is the
-  // browser's ORIGINAL path (`/`, `/_next/static/x.js`), not the mount-
-  // prefixed one it was rewritten onto — the mount only appears on a request
-  // that carried it itself (a test-built one, or a direct hit that the Host
-  // guard above has already ruled out of the app origin). The Host guard is
-  // what proves this request is for a preview, so the original path IS the
-  // preview path; strip the mount only when it is there.
+  // The middleware stamps the browser's ORIGINAL pathname on the rewritten
+  // request (`DEV_PREVIEW_PATH_HEADER`): after a rewrite `nextUrl.pathname`
+  // is that original path, not the mount-prefixed one, and a preview app may
+  // legitimately serve a path that LOOKS like the mount — so the path is
+  // taken from the header verbatim, never inferred from shape. Without the
+  // header (a direct or test-built request, which carries the mount in its
+  // URL) the mount is stripped, and a path outside it is refused.
+  const stamped = request.headers.get(DEV_PREVIEW_PATH_HEADER);
   const rawPath = request.nextUrl.pathname;
-  const path = rawPath.startsWith(mount) ? extractPreviewPath(rawPath, mount) : rawPath;
+  const path = stamped !== null && stamped.startsWith('/') ? stamped : extractPreviewPath(rawPath, mount);
   if (path === null) {
     loggers.security.info('dev-preview.access', buildPreviewAccessLog({ userId: 'anonymous', holder, method: request.method, path: rawPath, outcome: 'refused', reason: 'path-outside-mount', status: 404, transport: 'http' }));
     return notFound();
