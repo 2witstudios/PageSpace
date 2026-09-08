@@ -1215,17 +1215,36 @@ describe('planFormatOps — never something other than what was asked for', () =
     let deep: Record<string, unknown> = { end: true };
     for (let i = 0; i < 5_000; i++) deep = { next: deep };
 
-    // Refused wherever it sits, including where the identity fast path would
-    // have skipped the walk entirely. That shortcut is a performance
-    // optimisation, not a verification — accepting a value BECAUSE it was too
-    // deep to look at would turn the bound into a hole, and this module's whole
-    // claim is that what it stores has been checked.
+    // Refused wherever it sits — nested inside a list entry, where a naive
+    // comparison trips over its own recursion, and at the top level, which an
+    // identity fast path (`raw === stored`) would once have skipped entirely.
+    // That shortcut has since been removed as unobservable, but both placements
+    // stay pinned: accepting a value BECAUSE it was too deep to look at would
+    // turn the bound into a hole, and this module's whole claim is that what it
+    // stores has been checked.
     for (const region of [
       { id: 'r1', range: 'A1:F', columns: [{ column: 'B', role: 'text', extra: deep }] },
       { id: 'r1', range: 'A1:F', extra: deep },
     ]) {
       expect(refusalOf([{ type: 'upsertRegion', region }])).toContain('nested more than');
     }
+
+    // A cycle is the same guard answering a different failure. Depth escapes as
+    // a RangeError; a walk that follows a self-reference never returns, and no
+    // timeout in front of this module would make that a 400. JSON cannot
+    // express one, but an in-process caller building an op by hand can, and the
+    // depth bound is the only thing standing between that and a hung request.
+    //
+    // Fair warning about the shape of the failure: if that bound regresses this
+    // assertion HANGS rather than failing, because vitest cannot preempt a
+    // synchronous walk (measured — neutralising the depth check produces no
+    // output at all, where the depth fixtures above fail cleanly). A stalled
+    // job is a worse signal than a red one, but it is the only way to pin a
+    // non-termination property, and an unbounded walk reaching production is
+    // the thing actually worth catching.
+    const cyclic: Record<string, unknown> = { id: 'r1', range: 'A1:F' };
+    cyclic.self = cyclic;
+    expect(refusalOf([{ type: 'upsertRegion', region: cyclic }])).toContain('nested more than');
 
     // Depth is only half of it: the same field can be shallow and arbitrarily
     // WIDE, and the comparison builds and sorts a canonical array out of every
