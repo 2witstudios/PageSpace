@@ -6,6 +6,7 @@ import {
   MAX_FORMAT_CELLS_PER_REQUEST,
   MAX_FORMAT_OPS,
   FIELDS_BY_KIND,
+  OP_FIELDS,
   SheetFormatError,
   planFormatOps,
   type SheetFormatOp,
@@ -158,6 +159,60 @@ describe('planFormatOps — the request envelope', () => {
         { type: 'moveConditionalRule', id: 'a', direction: 1 },
       ], tabWith({ conditionalFormats: [rule('a'), rule('b')] })).steps
     ).toHaveLength(2);
+  });
+
+  it('refuses every op that leaves out one of its own fields', () => {
+    // Driven off `OP_FIELDS` rather than a list written here, so an op added to
+    // the union is swept without anyone remembering to sweep it — the sample
+    // table below has to gain an entry or the first assertion fails.
+    //
+    // The property is the module's second principle applied across all fourteen
+    // ops at once: a missing required field must never plan as a no-op that
+    // reports success. One op validating its fields is easy; all of them
+    // staying that way as the union grows is the part that needs a machine.
+    const samples: Record<SheetFormatOp['type'], Record<string, unknown>> = {
+      setCellFormat: { range: 'A1', patch: { bold: true } },
+      clearCellFormat: { range: 'A1' },
+      setColumnFormat: { column: 'C', patch: { bold: true } },
+      setColumnWidth: { column: 'C', width: 120 },
+      setRowHeight: { row: 3, height: 40 },
+      setFrozen: { rows: 1, columns: 0 },
+      addConditionalRule: { rule: rule('cf_new') },
+      updateConditionalRule: { id: 'a', patch: { format: { italic: true } } },
+      removeConditionalRule: { id: 'a' },
+      moveConditionalRule: { id: 'a', direction: 1 },
+      clearConditionalRules: {},
+      setRegions: { regions: [region('r2')] },
+      upsertRegion: { region: region('r2') },
+      removeRegion: { id: 'r1' },
+    };
+    expect(Object.keys(samples).sort()).toEqual(Object.keys(OP_FIELDS).sort());
+
+    const target = tabWith({
+      conditionalFormats: [rule('a'), rule('b')],
+      regions: [region('r1')],
+    });
+
+    for (const [type, fields] of Object.entries(OP_FIELDS)) {
+      // Every sample must be valid to begin with, or an op could "pass" this
+      // sweep by being refused for some reason that has nothing to do with the
+      // field being dropped.
+      expect(() =>
+        plan([{ type, ...samples[type as SheetFormatOp['type']] } as never], target)
+      ).not.toThrow();
+
+      for (const field of fields) {
+        const op: Record<string, unknown> = {
+          type,
+          ...samples[type as SheetFormatOp['type']],
+        };
+        delete op[field];
+        const message = refusalOf([op as never], target);
+        // Naming the field is what makes the refusal repairable in one step;
+        // "invalid op" would satisfy the throw and help nobody.
+        expect(message, `${type} without ${field}`).toContain(field);
+      }
+    }
   });
 
   it('refuses an unknown op type by name', () => {

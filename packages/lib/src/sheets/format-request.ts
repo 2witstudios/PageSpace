@@ -501,8 +501,13 @@ export const MAX_FORMULA_DEPTH = 256;
  * Ops are transient and versioned with the code that sends them, so unlike the
  * stored shapes elsewhere in this module there is no forward-compatibility
  * argument for letting an unrecognised key through.
+ *
+ * Exported so a test can enumerate the ops rather than restate them: a new op
+ * added to the union has to be added here too, and that is what makes the
+ * "every op refuses its own field missing" sweep cover it without being
+ * taught.
  */
-const OP_FIELDS: Record<SheetFormatOp['type'], readonly string[]> = {
+export const OP_FIELDS: Record<SheetFormatOp['type'], readonly string[]> = {
   setCellFormat: ['range', 'patch'],
   clearCellFormat: ['range'],
   setColumnFormat: ['column', 'patch'],
