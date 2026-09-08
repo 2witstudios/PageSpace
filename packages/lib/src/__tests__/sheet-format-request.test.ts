@@ -581,7 +581,20 @@ describe('planFormatOps — conditional rules', () => {
   });
 });
 
-describe('planFormatOps — nothing the parser would quietly rewrite', () => {
+// The largest group in this file, and named for the principle rather than one
+// of its halves — it began as "nothing the parser would quietly rewrite" and
+// grew past that. It covers the module's two questions, the same two its header
+// names:
+//
+//   1. Would what we store differ from what was sent? The comparator, the caps
+//      the parsers apply silently, nulls, shapes, forward compatibility.
+//   2. Would the thing we store DO what was asked? Formulas, arity, anchors,
+//      hues, column roles, number formats — all stored byte for byte and inert.
+//
+// They are interleaved rather than grouped, because each arrived with the
+// review round that found it and reordering them would cost the one thing the
+// order still records: which of these a careful reader spots, and in what order.
+describe('planFormatOps — never something other than what was asked for', () => {
   // `parseConditionalRule` and `parseRegion` are LOAD-path parsers: they
   // sanitize field by field so one bad setting cannot cost a user the rest of a
   // stored document. Reused as-is on a WRITE path that generosity is a lie —
