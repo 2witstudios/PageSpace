@@ -358,10 +358,40 @@ describe('planFormatOps — columns, rows and freezes', () => {
   it.each([
     ['zero', 0],
     ['fractional', 2.5],
-    ['not a number', 'first' as unknown as number],
     ['past the last row', MAX_ADDRESSABLE_ROW + 2],
   ])('refuses a row height addressed at %s', (_label, row) => {
     expect(refusalOf([{ type: 'setRowHeight', row, height: 40 }])).toContain('1-based row number');
+  });
+
+  it.each([
+    ['a quoted number', '3' as unknown as number],
+    ['a word', 'first' as unknown as number],
+    ['null', null as unknown as number],
+    ['missing', undefined as unknown as number],
+  ])('names the type when the row is not a number at all: %s', (_label, row) => {
+    // Kills: folding this back into the range check, which is where it lived.
+    //
+    // `row: "3"` is what a JSON round trip through a tool call produces, and
+    // the single combined check answered it with `got 3` — a rejection of the
+    // number 3, which is a legal row. The caller cannot repair that; it has to
+    // see that the QUOTES are the problem.
+    const message = refusalOf([{ type: 'setRowHeight', row, height: 40 }]);
+    expect(message).toContain('row must be a number, not');
+    expect(message).not.toContain('1-based row number');
+  });
+
+  it('shows a quoted row still quoted, so the fix is visible', () => {
+    // Kills: `String(row)` here, which renders "3" and 3 identically and puts
+    // the message straight back to blaming a legal row number.
+    expect(refusalOf([{ type: 'setRowHeight', row: '3' as unknown as number, height: 40 }])).toContain(
+      'not string; got "3".'
+    );
+    // And every other input still renders — `JSON.stringify` alone returns a
+    // non-string for `undefined`, which would print "got undefined." only by
+    // accident of interpolation.
+    expect(
+      refusalOf([{ type: 'setRowHeight', row: undefined as unknown as number, height: 40 }])
+    ).toContain('not undefined; got undefined.');
   });
 
   it('accepts a row height on the last addressable row, as the range path does', () => {

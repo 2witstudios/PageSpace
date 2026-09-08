@@ -1863,7 +1863,20 @@ export function planFormatOps(
         // index everywhere it is compared. Comparing `row` to it directly left
         // the last addressable row able to take a cell format but not a row
         // height, which is the kind of disagreement no caller can see coming.
-        if (typeof row !== 'number' || !Number.isInteger(row) || row < 1 || row - 1 > MAX_ADDRESSABLE_ROW) {
+        // Split from the range check on purpose. A quoted row — `row: "3"` is
+        // what JSON round-tripping through a tool call produces — used to
+        // refuse with `got 3`, which reads as a rejection of the number 3, a
+        // perfectly legal row. The quoting IS the defect, so name the type.
+        // `String(JSON.stringify(...))` renders every input, `undefined`
+        // included, and shows a string with its quotes still on.
+        if (typeof row !== 'number') {
+          refuseOp(
+            index,
+            op.type,
+            `row must be a number, not ${typeof row}; got ${String(JSON.stringify(row))}.`
+          );
+        }
+        if (!Number.isInteger(row) || row < 1 || row - 1 > MAX_ADDRESSABLE_ROW) {
           refuseOp(index, op.type, `row must be a 1-based row number; got ${String(row)}.`);
         }
         const height = validateExtent(
