@@ -217,9 +217,9 @@ describe('env-bridge ws route', () => {
       // them means `isConnected(envId)` answers true for a socket nobody is on
       // until the five-minute sweep, and a real exec is routed into nothing.
       expect(getEnvConnection(ENV)).toBeUndefined();
-      const closesAfterRefusal = ws.close.mock.calls.length;
+      const closesAfterRefusal = vi.mocked(ws.close).mock.calls.length;
       await vi.advanceTimersByTimeAsync(ENV_BRIDGE_HELLO_TIMEOUT_MS + 1_000);
-      expect(ws.close.mock.calls.length).toBe(closesAfterRefusal);
+      expect(ws.close).toHaveBeenCalledTimes(closesAfterRefusal);
       store.findLocalByEnvId = realFind;
     });
   });
