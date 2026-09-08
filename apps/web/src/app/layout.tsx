@@ -7,6 +7,7 @@ import "@/styles/editor-readonly.css";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
 import { THEME_COOKIE_NAME } from "@/lib/theme-cookie";
 import ClientTrackingProvider from "@/components/providers/ClientTrackingProvider";
+import { DeepLinkHandler } from "@/components/DeepLinkHandler";
 import ConsentProvider from "@/components/providers/ConsentProvider";
 import { Toaster } from "@/components/ui/sonner";
 import { getRequestNonce } from "@/lib/request-nonce";
@@ -187,6 +188,10 @@ export default async function RootLayout({
           nonce={nonce}
         >
           <ClientTrackingProvider />
+          {/* Root, not the dashboard layout: a signed-out `/dashboard` is
+              rewritten to `/auth/signin`, and an invite tap is very often
+              signed out — mounted any lower, the launch URL is never read. */}
+          <DeepLinkHandler />
           {children}
           <ConsentProvider />
           <Toaster position="top-right" />

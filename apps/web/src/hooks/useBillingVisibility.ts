@@ -31,9 +31,23 @@ export function useBillingVisibility() {
   }
 
   return {
-    /** Whether billing UI should be shown (true on web/android, false on iOS) */
-    showBilling: isReady ? !isIOS : true,
-    /** Whether billing UI should be hidden (true on iOS) */
+    /**
+     * Whether billing UI should be shown. False until platform detection
+     * finishes, not true.
+     *
+     * This gates purchase surfaces, so the unsafe direction is showing one we
+     * later retract: on iOS the old default rendered "buy credits" affordances
+     * for a frame before `useCapacitor` resolved. Every one of the six callers
+     * is a purchase surface, so the default belongs here rather than as
+     * `isReady && showBilling` repeated at each of them. The cost on web is one
+     * frame without a buy button.
+     */
+    showBilling: isReady && !isIOS,
+    /**
+     * Whether billing UI should be hidden (true on iOS). Deliberately NOT the
+     * negation of `showBilling`: this drives redirects, and redirecting before
+     * detection completes would bounce web users off their own billing pages.
+     */
     hideBilling: isReady && isIOS,
     /** Whether platform detection is complete (for SSR hydration safety) */
     isReady,

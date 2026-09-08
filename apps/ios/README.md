@@ -20,11 +20,8 @@ This is a **remote-loading** app. The WebView loads the live site directly:
 
 > **App Review note (Guideline 4.2):** Apple scrutinizes thin WebView wrappers. Our native
 > value — push notifications, Sign in with Apple, native social login, the keychain plugin,
-> and app-icon badge sync — is what clears this bar. Always submit with reviewer notes calling
-> these out plus a working demo account (see "Submitting", below).
->
-> Universal links are **not** on that list: the entitlement is declared but the AASA claims no
-> paths, because nothing routes an incoming link yet. See below.
+> app-icon badge sync, and universal links — is what clears this bar. Always submit with
+> reviewer notes calling these out plus a working demo account (see "Submitting", below).
 
 ## Native capabilities (entitlements)
 
@@ -34,32 +31,41 @@ This is a **remote-loading** app. The WebView loads the live site directly:
 - Associated domains: `applinks:pagespace.ai`, `webcredentials:pagespace.ai`
 - Sign in with Apple
 
-### Universal links (associated domains) — claimed paths deferred
+### Universal links (associated domains)
 
-The entitlement declares `applinks:pagespace.ai`, but the served AASA claims **no paths**, on
-purpose. Claiming a path without routing it is worse than not claiming it: the link stops opening
-in Safari, where it works, and instead launches the app at `server.url` (`/dashboard`) — silently
-dropping the invite token. `apps/android/README.md` ("Prerequisite 2") documents the same trap,
-which is why Android has not claimed App Links either.
+`https://pagespace.ai/invite/*` opens in the app. Three pieces have to agree, and they broke
+independently before:
 
-**The prerequisite:** nothing consumes the `@capacitor/app` plugin's `appUrlOpen` event or
-`getLaunchUrl()` on either platform. Both are needed — `getLaunchUrl` for a cold start, `appUrlOpen`
-for a warm one — before any path goes into `paths`.
+1. **Entitlement** — `applinks:pagespace.ai` in `App.entitlements`.
+2. **The AASA** — Caddy routes `/.well-known/*` to **marketing** (only `oauth-*` reaches web), so
+   the single source of truth is `apps/marketing/public/.well-known/apple-app-site-association`.
+   `appID` is team plus bundle id (`M96WTV3CKX.ai.pagespace.ios`), and it must be served as
+   `application/json` — the file is deliberately extensionless, so `apps/marketing/next.config.ts`
+   sets the header.
+3. **Routing** — `apps/web/src/components/DeepLinkHandler.tsx`, mounted in
+   `DashboardLayoutClient`. Both halves are required: `App.getLaunchUrl()` for a cold start (the
+   URL is spent before any listener exists) and the `appUrlOpen` listener for a warm one (the
+   native side only notifies plugins, it never calls `loadUrl`, so without a listener the WebView
+   simply stays put). Which URLs resolve to which route is
+   `apps/web/src/lib/navigation/deep-links.ts`.
 
-What the file does carry is `webcredentials`, which needs no routing: it enables associated-domain
-password autofill for `pagespace.ai`.
+**Keep `paths` and the resolver in step.** Claiming a path the resolver returns `null` for stops
+the link working in Safari and does nothing in the app — strictly worse than never claiming it. The
+resolver hands any unrecognised URL on the claimed host to the browser rather than swallowing it,
+which limits the blast radius but is not a licence to claim loosely.
 
-Mechanics, for whoever picks this up: Caddy routes `/.well-known/*` to **marketing** (only
-`oauth-*` reaches web), so the single source of truth is
-`apps/marketing/public/.well-known/apple-app-site-association`. `appID` is team plus bundle id —
-`M96WTV3CKX.ai.pagespace.ios` — and it must be served as `application/json` (the file is
-deliberately extensionless, so `apps/marketing/next.config.ts` sets the header). Apple's CDN caches
-it, so after any change: redeploy marketing, curl the live URL, then reinstall the app before
-testing on device.
+Navigation goes through the router, never `window.location`: in the iOS shell a top-level location
+change reaches Capacitor's `WKNavigationDelegate`, which cancels anything outside `server.url`'s
+`/dashboard` prefix and opens system Safari, blanking the WebView. `/invite/*` is outside that
+prefix.
 
-When paths are eventually claimed, do **not** add the OAuth callbacks: native sign-in returns
-through the `pagespace://auth-exchange` custom scheme, and claiming those paths would hijack the
-web fallback.
+Do **not** claim the OAuth callback paths. Native sign-in returns through the
+`pagespace://auth-exchange` custom scheme, and `/api/auth/desktop/exchange` redeems its code with
+no PKCE binding — whichever app receives the code can take a session. The resolver ignores that
+scheme outright, and binding the exchange is a prerequisite for ever changing that.
+
+Apple's CDN caches the AASA, so after any change: redeploy marketing, curl the live URL, then
+reinstall the app before testing on device.
 
 Push is driven from the web layer (`apps/web/src/hooks/usePushNotifications.ts`), device tokens
 POST to `/api/notifications/push-tokens`, and the server sends via
@@ -147,8 +153,9 @@ bundle exec fastlane release   # deliver: push metadata + submit the App Store v
 - [ ] `cap sync` run immediately before archiving; `capacitor.config.json` matches `capacitor.config.ts`
 - [ ] Archive signed with an **Apple Distribution** identity (check Xcode Organizer before uploading)
 - [ ] AASA verified live: `curl https://pagespace.ai/.well-known/apple-app-site-association`
-      returns `M96WTV3CKX.ai.pagespace.ios` as `application/json` with **no** claimed `applinks`
-      paths (see "Universal links", above)
+      returns `M96WTV3CKX.ai.pagespace.ios` as `application/json`, **and** an
+      `https://pagespace.ai/invite/...` link opens the app on a device from both a cold start and
+      with the app already running (the two paths are handled separately — verify both)
 - [ ] Build uploaded and finished **Processing** in App Store Connect
 - [ ] App privacy answers match `ios/App/PrivacyInfo.xcprivacy` (Email + User ID linked / App
       Functionality; Device ID / Analytics and Crash + Performance Data, not linked; Product
@@ -164,9 +171,35 @@ bundle exec fastlane release   # deliver: push metadata + submit the App Store v
 - [ ] No purchase surface reachable on iOS — walk `/settings/billing`, `/settings/usage`, and any
       in-app link that reaches marketing pricing (Guideline 3.1.1)
 - [ ] Reviewer notes emphasize native features — push, Sign in with Apple, native Google sign-in,
-      keychain session persistence, app-icon badge — and **not** universal links, plus a working
-      demo account with seeded content
+      keychain session persistence, app-icon badge, universal links — plus a working demo account
+      with seeded content
 - [ ] Submit for review
+
+## The Facebook SDK that ships but never runs
+
+`Package.resolved` pins `facebook-ios-sdk 18.x`. Nothing here configures Facebook login — it
+arrives because `@capgo/capacitor-social-login` hard-depends on `FacebookCore` and `FacebookLogin`
+in its own plugin target, so it cannot be excluded without forking the plugin.
+
+It is linked but inert, and each link in that chain was checked:
+
+- `Info.plist` declares no `FacebookAppID` and no `FacebookClientToken`. The SDK cannot initialize
+  or send anything without them.
+- `FacebookProvider.init()` only configures an `ISO8601DateFormatter`; its `initialize()` is an
+  empty method.
+- The plugin only reaches Facebook when `SocialLogin.initialize` is called with a `facebook` object
+  carrying an `appId`. We call it with `apple` (`native-apple-auth.ts`) and `google`
+  (`native-google-auth.ts`) only.
+
+So `NSPrivacyTracking = false` is accurate. Facebook ships the SDK signature and privacy manifest
+Apple requires of it, so the binary is compliant as-is.
+
+**If Facebook login is ever added**, revisit this: the SDK auto-logs app events and collects the
+advertiser ID once an app ID exists, which changes both the tracking declaration and the App Store
+Connect nutrition labels. `FacebookAutoLogAppEventsEnabled` and
+`FacebookAdvertiserIDCollectionEnabled` (both `false`) are the plist keys that turn that off. They
+are deliberately absent today — with no app ID there is nothing to disable, and dead configuration
+rots.
 
 ## Privacy manifest
 
