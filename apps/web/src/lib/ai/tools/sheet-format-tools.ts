@@ -852,16 +852,16 @@ function validateRegions(
     // a timed-out response would otherwise mint a twin, and the store upserts
     // by id. Otherwise the id is derived from the content (see `contentId`),
     // so overlapping executions of the same call agree on it too.
+    // The same declaration twice in one call is a mistake, not two regions,
+    // however the ids were supplied: two ids over identical content is an
+    // overlapping twin that costs two region slots.
+    const key = regionContentKey(region);
+    const earlier = declaredByContent.get(key);
+    if (earlier !== undefined) {
+      refuse(INVALID_FORMAT_REQUEST, `${label} declares the same region as ${earlier}.`, NOTHING_APPLIED);
+    }
+    declaredByContent.set(key, label);
     if (input.id === undefined) {
-      const key = regionContentKey(region);
-      const earlier = declaredByContent.get(key);
-      if (earlier !== undefined) {
-        // The same declaration twice in one call is a mistake, not two
-        // regions: the content id would already be taken, and a random
-        // fallback would land an overlapping twin.
-        refuse(INVALID_FORMAT_REQUEST, `${label} declares the same region as ${earlier}.`, NOTHING_APPLIED);
-      }
-      declaredByContent.set(key, label);
       region.id = existingByContent.get(key) ?? contentId('region', region, taken);
     }
     taken.add(region.id);
@@ -1478,17 +1478,76 @@ export const sheetFormatTools = {
 
         let remaining: ConditionalRule[];
         if (mode === 'replaceAll') {
-          // A diff, not a clear-and-rebuild: rules already on the tab that
-          // match one in the call keep their ids (a retried replaceAll then
-          // plans nothing, bumps no revision, and the ids an earlier attempt
-          // returned stay valid); only the rest are removed.
-          const wanted = new Set(built.map((entry) => contentKey(entry.rule)));
-          remaining = existing.filter((rule) => wanted.has(contentKey(rule)));
-          for (const rule of existing) {
-            if (!wanted.has(contentKey(rule))) {
-              planned.push({ label: 'mode', op: { type: 'removeConditionalRule', id: rule.id } });
+          // The FINAL list, in the caller's order, as one op the store
+          // reconciles under its lock: a rule another writer added between
+          // this read and that write is removed too, reordering existing
+          // rules is a real change (later rules win), and an identical retry
+          // sends the list the tab already holds — which the store compares
+          // as JSON and does not write. Rules that match an existing one by
+          // content keep its id, so ids an earlier attempt returned stay
+          // valid; new ones get content-derived ids.
+          const byExistingContent = new Map(existing.map((rule) => [contentKey(rule), rule.id]));
+          const seen = new Map<string, number>();
+          const takenIds = new Set(existingIds);
+          const final: ConditionalRule[] = [];
+          const ruleIds: string[] = [];
+          const skippedDuplicates: { index: number; existingRuleId: string }[] = [];
+          let addedCount = 0;
+          for (const [index, entry] of built.entries()) {
+            const key = contentKey(entry.rule);
+            const earlier = seen.get(key);
+            if (earlier !== undefined) {
+              return refusal(
+                INVALID_RULE_REQUEST,
+                `rules[${index}] is identical to rules[${earlier}].`,
+                'Send each rule once; give one rule several ranges instead of the same rule twice.'
+              );
             }
+            seen.set(key, index);
+            const existingId = byExistingContent.get(key);
+            const id = existingId ?? ruleContentId(key, takenIds);
+            takenIds.add(id);
+            if (existingId !== undefined) skippedDuplicates.push({ index, existingRuleId: existingId });
+            else addedCount += 1;
+            ruleIds.push(id);
+            final.push({ ...entry.rule, id } as ConditionalRule);
           }
+          const finalIds = new Set(final.map((rule) => rule.id));
+          const removedCount = existing.filter((rule) => !finalIds.has(rule.id)).length;
+          planned.push({ label: 'mode', op: { type: 'setConditionalRules', rules: final } });
+
+          const outcome = await applyPlanned(
+            ref,
+            planned,
+            formatting,
+            toolContext,
+            page,
+            'set_conditional_format',
+            INVALID_RULE_REQUEST,
+            { mode, rulesAdded: addedCount, rulesRemoved: removedCount }
+          );
+          if (isRefusal(outcome)) return outcome;
+          const unchanged = outcome.rowsTouched === 0 && outcome.tabFieldsChanged.length === 0;
+          return {
+            success: true as const,
+            pageId: page.id,
+            title: page.title,
+            tabIndex: ref.tabIndex,
+            ruleIds,
+            added: addedCount,
+            removed: removedCount,
+            skippedDuplicates,
+            conditionalRules: outcome.conditionalRules,
+            ...(warnings.length > 0 ? { warnings } : {}),
+            message: unchanged
+              ? `"${page.title}" already held exactly these rules; nothing changed.`
+              : `Conditional formatting on "${page.title}": now exactly the ${final.length} rule(s) in this call ` +
+                `(${addedCount} added, ${removedCount} removed).`,
+            nextSteps: [
+              'Call read_sheet with includeFormatting to verify the rules.',
+              'Keep the returned ruleIds to remove or replace these rules later.',
+            ],
+          };
         } else {
           const removals = new Set<string>();
           (removeRuleIds ?? []).forEach((id, index) => {

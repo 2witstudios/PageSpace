@@ -1497,6 +1497,42 @@ describe('sheet store (integration)', () => {
       expect((await db.select({ id: sheetChanges.id }).from(sheetChanges).where(eq(sheetChanges.tabId, tabId))).length).toBe(logged);
     });
 
+    it('setConditionalRules with the list the tab already holds is not a write', async () => {
+      // The AI tool's replaceAll sends the final list on every call, including
+      // a retry, so a rule added concurrently is removed under the lock. That
+      // is only acceptable because an identical list is compared as JSON and
+      // bumps nothing — the case a retry depends on.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
+      const second = { ...FORMAT_RULE, id: 'second', ranges: ['B1:B9'] };
+      const first = await applyFormatOps(
+        { pageId },
+        [{ type: 'setConditionalRules', rules: [FORMAT_RULE, second] }],
+        { userId: ownerId }
+      );
+      expect(first.tabFieldsChanged).toEqual(['conditionalFormats']);
+      const before = await revisionOf(pageId);
+      const logged = (await db.select({ id: sheetChanges.id }).from(sheetChanges).where(eq(sheetChanges.tabId, tabId))).length;
+
+      const again = await applyFormatOps(
+        { pageId },
+        [{ type: 'setConditionalRules', rules: [FORMAT_RULE, second] }],
+        { userId: ownerId }
+      );
+      expect(again.tabFieldsChanged).toEqual([]);
+      expect(await revisionOf(pageId)).toEqual(before);
+      expect((await db.select({ id: sheetChanges.id }).from(sheetChanges).where(eq(sheetChanges.tabId, tabId))).length).toBe(logged);
+
+      // Reversed is a change: later rules win.
+      const reversed = await applyFormatOps(
+        { pageId },
+        [{ type: 'setConditionalRules', rules: [second, FORMAT_RULE] }],
+        { userId: ownerId }
+      );
+      expect(reversed.tabFieldsChanged).toEqual(['conditionalFormats']);
+      const tab = (await getTab({ pageId }))!;
+      expect((tab.conditionalFormats as { id: string }[]).map((rule) => rule.id)).toEqual(['second', 'over-100']);
+    });
+
     it('leaves a formula cell’s raw, value and type untouched', async () => {
       // Kills: fabricating a `StoredCell` instead of spreading the loaded one.
       const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });

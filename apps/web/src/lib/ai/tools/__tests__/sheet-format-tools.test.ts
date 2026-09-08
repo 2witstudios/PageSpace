@@ -61,6 +61,9 @@ let applied: SheetFormatOp[][] = [];
 const mockApplyFormatOps = vi.fn(async (_ref: unknown, ops: readonly SheetFormatOp[]) => {
   const plan = planFormatOps(ops, state);
   applied.push([...ops]);
+  // Mirrors the store: a tab field counts as changed only when the value it
+  // would store differs from what it holds, compared as JSON.
+  const tabBefore = JSON.stringify([state.conditionalFormats, state.regions, state.frozenRows, state.frozenColumns]);
   state = { ...state, conditionalFormats: [...plan.conditionalFormats], regions: [...plan.regions] };
   for (const step of plan.steps) {
     if (step.type === 'setFrozen') {
@@ -68,10 +71,12 @@ const mockApplyFormatOps = vi.fn(async (_ref: unknown, ops: readonly SheetFormat
       state.frozenColumns = step.columns ?? null;
     }
   }
+  const tabChanged =
+    JSON.stringify([state.conditionalFormats, state.regions, state.frozenRows, state.frozenColumns]) !== tabBefore;
   return {
     cellsFormatted: plan.rows.size,
     rowsTouched: plan.rows.size,
-    tabFieldsChanged: plan.touchesTabFields ? ['tab'] : [],
+    tabFieldsChanged: tabChanged ? ['tab'] : [],
     conditionalRules: plan.conditionalFormats.length,
     regions: plan.regions.length,
     rowCount: state.rowCount,
@@ -714,25 +719,71 @@ describe('set_conditional_format', () => {
     assert({ given: 'no regions, no ops, no mode', should: 'still refuse', actual: bare.success, expected: false });
   });
 
-  it('a retried replaceAll plans nothing and keeps the ids the first attempt returned', async () => {
+  it('a retried replaceAll writes nothing, fires nothing, and keeps the ids the first attempt returned', async () => {
     const rules = [
       { kind: 'dataBar' as const, ranges: ['A1:A9'], color: '#3b82f6' },
       { kind: 'cell' as const, ranges: ['B1:B9'], operator: 'greaterThan' as const, value: 5, format: { bold: true } },
     ];
     const first = (await conditional({ mode: 'replaceAll', rules })) as { ruleIds?: string[]; added?: number };
     assert({ given: 'the first replaceAll', should: 'add both', actual: first.added, expected: 2 });
-    const calls = mockApplyFormatOps.mock.calls.length;
+    vi.mocked(logSheetCellActivity).mockClear();
+    vi.mocked(broadcastPageEvent).mockClear();
 
+    // The list is sent again — it must be, so a rule another writer added in
+    // between is removed under the lock — but it equals what the tab holds,
+    // so the store reports no change and nothing downstream fires.
     const retry = (await conditional({ mode: 'replaceAll', rules })) as { ruleIds?: string[]; added?: number; removed?: number };
     assert({ given: 'the identical replaceAll again', should: 'add nothing', actual: retry.added, expected: 0 });
     assert({ given: 'the identical replaceAll again', should: 'remove nothing', actual: retry.removed, expected: 0 });
     assert({ given: 'the retry', should: 'return the same ids', actual: retry.ruleIds, expected: first.ruleIds });
-    assert({ given: 'the retry', should: 'reach the store zero times', actual: mockApplyFormatOps.mock.calls.length, expected: calls });
+    expect(message(retry)).toContain('nothing changed');
+    expect(vi.mocked(logSheetCellActivity)).not.toHaveBeenCalled();
+    expect(vi.mocked(broadcastPageEvent)).not.toHaveBeenCalled();
 
     const changed = (await conditional({ mode: 'replaceAll', rules: [rules[0]] })) as { ruleIds?: string[]; added?: number; removed?: number };
     assert({ given: 'a replaceAll that drops one rule', should: 'remove exactly that one', actual: changed.removed, expected: 1 });
     assert({ given: 'a replaceAll that drops one rule', should: 'keep the other rule under its id', actual: changed.ruleIds, expected: [first.ruleIds![0]] });
     assert({ given: 'the tab after', should: 'hold one rule', actual: state.conditionalFormats.map((rule) => rule.id), expected: [first.ruleIds![0]] });
+  });
+
+  it('replaceAll in a different order is a real change, and removes a rule added concurrently', async () => {
+    const a = { kind: 'dataBar' as const, ranges: ['A1:A9'], color: '#3b82f6' };
+    const b = { kind: 'cell' as const, ranges: ['B1:B9'], operator: 'greaterThan' as const, value: 5, format: { bold: true } };
+    const first = (await conditional({ mode: 'replaceAll', rules: [a, b] })) as { ruleIds?: string[] };
+    // Another writer lands a rule after this call's read and before its write:
+    // it is on the tab the store sees, so the whole-list op removes it.
+    state.conditionalFormats = [
+      ...state.conditionalFormats,
+      { id: 'concurrent', kind: 'dataBar', ranges: ['Z1:Z9'], color: '#000000' },
+    ];
+    const reordered = (await conditional({ mode: 'replaceAll', rules: [b, a] })) as { ruleIds?: string[]; added?: number; removed?: number };
+    assert({ given: 'the same two rules reversed', should: 'keep both ids, reversed', actual: reordered.ruleIds, expected: [first.ruleIds![1], first.ruleIds![0]] });
+    assert({ given: 'the tab after', should: 'hold them in the NEW order and nothing else', actual: state.conditionalFormats.map((rule) => rule.id), expected: [first.ruleIds![1], first.ruleIds![0]] });
+    assert({ given: 'the concurrent rule', should: 'be counted as removed', actual: reordered.removed, expected: 1 });
+    expect(vi.mocked(logSheetCellActivity)).toHaveBeenCalled();
+  });
+
+  it('replaceAll refuses the same rule twice in one call', async () => {
+    const a = { kind: 'dataBar' as const, ranges: ['A1:A9'], color: '#3b82f6' };
+    const result = await conditional({ mode: 'replaceAll', rules: [a, { ...a }] });
+    assert({ given: 'a duplicated rule', should: 'refuse', actual: result.success, expected: false });
+    expect(message(result)).toContain('rules[1] is identical to rules[0]');
+  });
+
+  it('a same-call duplicate region is refused however the ids were supplied', async () => {
+    // Explicit id + none, none + explicit id, and two different explicit ids:
+    // every pairing is an overlapping twin that costs two region slots.
+    const region = { range: 'A1:D', headerRows: 1, name: 'Orders' };
+    for (const pair of [
+      [{ ...region, id: 'one' }, { ...region }],
+      [{ ...region }, { ...region, id: 'two' }],
+      [{ ...region, id: 'one' }, { ...region, id: 'two' }],
+    ]) {
+      const result = await format({ regions: pair });
+      assert({ given: `ids ${pair.map((r) => ('id' in r ? r.id : 'none')).join('+')}`, should: 'refuse', actual: result.success, expected: false });
+      expect(message(result)).toContain('regions[1] declares the same region as regions[0]');
+    }
+    expect(mockApplyFormatOps).not.toHaveBeenCalled();
   });
 
   it('a rule declared without an id gets the same content-derived id on every execution', async () => {

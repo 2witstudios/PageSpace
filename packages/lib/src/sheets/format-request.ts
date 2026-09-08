@@ -447,6 +447,7 @@ export type SheetFormatOp =
   | { type: 'removeConditionalRule'; id: string }
   | { type: 'moveConditionalRule'; id: string; direction: -1 | 1 }
   | { type: 'clearConditionalRules' }
+  | { type: 'setConditionalRules'; rules: readonly unknown[] }
   | { type: 'setRegions'; regions: readonly unknown[] }
   | { type: 'upsertRegion'; region: unknown }
   | { type: 'removeRegion'; id: string };
@@ -610,6 +611,7 @@ export const OP_FIELDS: Record<SheetFormatOp['type'], readonly string[]> = {
   removeConditionalRule: ['id'],
   moveConditionalRule: ['id', 'direction'],
   clearConditionalRules: [],
+  setConditionalRules: ['rules'],
   setRegions: ['regions'],
   upsertRegion: ['region'],
   removeRegion: ['id'],
@@ -2197,6 +2199,53 @@ export function planFormatOps(
         // names no target and so cannot be wrong about one, while a remove
         // names an id and is telling us something false about the sheet.
         rules = [];
+        rulesTouched = true;
+        break;
+      }
+
+      case 'setConditionalRules': {
+        // The whole list, in the caller's order, replanned under the lock —
+        // so a "keep only these" holds against a rule another writer added
+        // between the caller's read and this write, and reordering two rules
+        // that both already exist is a real change (later rules win). The
+        // store compares the list it stores as JSON, so sending the list the
+        // tab already holds is not a write.
+        if (!Array.isArray(op.rules)) {
+          refuseOp(index, op.type, 'rules must be an array.');
+        }
+        if (op.rules.length > MAX_CONDITIONAL_RULES) {
+          refuseOp(
+            index,
+            op.type,
+            `A sheet can hold at most ${MAX_CONDITIONAL_RULES} rules; got ${op.rules.length}.`
+          );
+        }
+
+        const next: ConditionalRule[] = [];
+        const seenIds = new Set<string>();
+        const seenContent = new Map<string, string>();
+        op.rules.forEach((value: unknown, position: number) => {
+          const rule = validateRuleInput(
+            value,
+            isObject(value) ? value : {},
+            index,
+            op.type,
+            chargeInspection(index, op.type)
+          );
+          if (seenIds.has(rule.id)) {
+            refuseOp(index, op.type, `Two rules share the id "${rule.id}".`);
+          }
+          const key = conditionalRuleContentKey(rule);
+          const twin = seenContent.get(key);
+          if (twin !== undefined) {
+            refuseOp(index, op.type, `rules[${position}] is identical to rule "${twin}".`);
+          }
+          seenIds.add(rule.id);
+          seenContent.set(key, rule.id);
+          next.push(rule);
+        });
+
+        rules = next;
         rulesTouched = true;
         break;
       }

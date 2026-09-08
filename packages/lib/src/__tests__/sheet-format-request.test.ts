@@ -186,6 +186,7 @@ describe('planFormatOps — the request envelope', () => {
       removeConditionalRule: { id: 'a' },
       moveConditionalRule: { id: 'a', direction: 1 },
       clearConditionalRules: {},
+      setConditionalRules: { rules: [rule('cf_new', '99')] },
       setRegions: { regions: [region('r2')] },
       upsertRegion: { region: region('r2') },
       removeRegion: { id: 'r1' },
@@ -692,6 +693,25 @@ describe('planFormatOps — conditional rules', () => {
     // Unlike removing an id that is not there: a clear names no target and so
     // cannot be wrong about one.
     expect(plan([{ type: 'clearConditionalRules' }]).conditionalFormats).toEqual([]);
+  });
+
+  it('setConditionalRules replaces the whole list in the given order', () => {
+    // Order is load-bearing: later rules win. A list that reverses two
+    // existing rules is a real change, not two duplicates.
+    const tab = tabWith({ conditionalFormats: [rule('a'), rule('b', '2')] });
+    const result = plan([{ type: 'setConditionalRules', rules: [rule('b', '2'), rule('a')] }], tab);
+    expect(result.conditionalFormats.map((entry) => entry.id)).toEqual(['b', 'a']);
+    expect(result.touchesTabFields).toBe(true);
+    expect(plan([{ type: 'setConditionalRules', rules: [] }], tab).conditionalFormats).toEqual([]);
+  });
+
+  it('setConditionalRules refuses a duplicate id or duplicate content within the list', () => {
+    expect(refusalOf([{ type: 'setConditionalRules', rules: [rule('a'), rule('a', '2')] }])).toContain(
+      'Two rules share the id "a"'
+    );
+    expect(refusalOf([{ type: 'setConditionalRules', rules: [rule('a'), rule('b')] }])).toContain(
+      'rules[1] is identical to rule "a"'
+    );
   });
 
   it('refuses a resulting rule list that would come back shorter', () => {
