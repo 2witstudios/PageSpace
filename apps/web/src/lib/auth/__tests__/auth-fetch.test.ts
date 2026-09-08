@@ -26,7 +26,6 @@ vi.mock('@/lib/auth/platform-storage', () => ({
     getDeviceId: vi.fn().mockResolvedValue('mock-device-id'),
     getDeviceInfo: vi.fn().mockResolvedValue({ deviceId: 'mock-device-id', userAgent: 'test-agent' }),
     usesBearer: vi.fn().mockReturnValue(false),
-    supportsCSRF: vi.fn().mockReturnValue(true),
     dispatchAuthEvent: vi.fn(),
   }),
   resetPlatformStorage: vi.fn(),

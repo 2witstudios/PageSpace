@@ -32,7 +32,6 @@ vi.mock('@/lib/auth/platform-storage', () => ({
     getDeviceId: vi.fn().mockResolvedValue('device-1'),
     getDeviceInfo: vi.fn().mockResolvedValue({ deviceId: 'device-1', userAgent: 'ua' }),
     usesBearer: vi.fn().mockReturnValue(true),
-    supportsCSRF: vi.fn().mockReturnValue(false),
     dispatchAuthEvent: vi.fn(),
   }),
 }));
@@ -143,7 +142,10 @@ describe('desktop: the retry after a refresh carries the FRESH bearer token', ()
 
     await fetchWithAuth('/api/pages', { method: 'POST', body: '{}' });
 
-    for (const attempt of sent.filter((r) => r.url === '/api/pages')) {
+    const attempts = sent.filter((r) => r.url === '/api/pages');
+    // Without this the loop below is vacuous — zero attempts would pass it.
+    expect(attempts).toHaveLength(2);
+    for (const attempt of attempts) {
       expect(attempt.headers['X-CSRF-Token']).toBeUndefined();
       expect(attempt.headers['X-Device-Token']).toBeUndefined();
     }

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 /**
  * Regression coverage for the Android CSRF breakage opened by PR #2557.
  *
- * `AndroidStorage` reports `usesBearer() === true` / `supportsCSRF() === false`,
+ * `AndroidStorage` reports `usesBearer() === true`,
  * but until native sign-in exists an Android session is a **cookie** session with
  * no bearer token. `fetchWithAuth` used to pick its credentials from that stated
  * preference, so those requests went out with neither `Authorization` nor
@@ -33,7 +33,6 @@ const storageMock = {
   getDeviceId: vi.fn().mockResolvedValue('device-1'),
   getDeviceInfo: vi.fn().mockResolvedValue({ deviceId: 'device-1', userAgent: 'ua' }),
   usesBearer: vi.fn().mockReturnValue(true),
-  supportsCSRF: vi.fn().mockReturnValue(false),
   dispatchAuthEvent: vi.fn(),
 };
 
@@ -59,7 +58,6 @@ describe('fetchWithAuth: credentials follow what the request can actually presen
 
     storageMock.platform = 'android';
     storageMock.usesBearer.mockReturnValue(true);
-    storageMock.supportsCSRF.mockReturnValue(false);
     storageMock.getSessionToken.mockReset();
     storageMock.getSessionToken.mockResolvedValue(null);
     storageMock.getStoredSession.mockReset();
@@ -131,6 +129,8 @@ describe('fetchWithAuth: credentials follow what the request can actually presen
 
     await fetchWithAuth('/api/pages');
 
+    // The GET really went out; without this the negative below is vacuous.
+    expect(sent.filter((r) => r.url === '/api/pages')).toHaveLength(1);
     expect(sent.some((r) => r.url === '/api/auth/csrf')).toBe(false);
   });
 
@@ -207,7 +207,6 @@ describe('fetchWithAuth: credentials follow what the request can actually presen
     beforeEach(() => {
       storageMock.platform = 'web';
       storageMock.usesBearer.mockReturnValue(false);
-      storageMock.supportsCSRF.mockReturnValue(true);
     });
 
     it('given a web mutation, should send the CSRF and device tokens as before', async () => {
