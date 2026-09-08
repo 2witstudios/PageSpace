@@ -2031,6 +2031,17 @@ describe('planFormatOps — never something other than what was asked for', () =
     ]);
     expect(result.conditionalFormats[0]).toMatchObject({ stripes: { every: 2 } });
     expect(result.regions[0].columns).toEqual([{ column: 'C', role: 'text', tags: ['wide', 'sticky'] }]);
+
+    // The TOP-level field is the one at risk, and only this pins it. An
+    // unknown field on the OP is refused by name, and the obvious tidy-up is
+    // to make the two consistent — which would refuse this. It must not:
+    // `io.ts` reads regions off `ranges.__regions` and writes them back, so a
+    // read-modify-write of a region a newer build wrote is a path that exists
+    // today, and refusing it turns forward compatibility into a hard failure.
+    // The op envelope has no such path: it is never stored.
+    expect(
+      plan([{ type: 'setRegions', regions: [{ ...region('r1'), rowStripes: 'zebra' }] }]).regions[0]
+    ).toMatchObject({ rowStripes: 'zebra' });
   });
 });
 
