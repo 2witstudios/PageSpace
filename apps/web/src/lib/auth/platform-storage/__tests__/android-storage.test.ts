@@ -1,7 +1,7 @@
 /**
  * Android secure storage tests.
  *
- * Covers the four requirements of the Android storage wiring leaf:
+ * The leaf's four requirements:
  * - the factory resolves AndroidStorage on Android instead of WebStorage
  * - AndroidStorage drives the existing `PageSpaceKeychain` binding rather than
  *   a second registered plugin name
@@ -10,6 +10,20 @@
  *   instead of a silent no-op
  * - the device id round-trips through `@capacitor/preferences` under the exact
  *   key iOS uses, asserted by driving both implementations against one store
+ *
+ * Most of the file is the three contracts review found underneath those, each
+ * of which had a forced sign-out behind it:
+ * - **The legacy migration.** Until Phase B, Android signs in through the web
+ *   flow, which leaves its device token in `localStorage`. Every "the keychain
+ *   holds nothing usable" path answers with that session, and a successful
+ *   keychain write spends it.
+ * - **The bearer-less write.** `/api/auth/device/refresh` returns no
+ *   `sessionToken` for a device record stored as `platform: 'web'`, so such a
+ *   session goes to the legacy store — rotated token included — instead of
+ *   into a keychain blob the reader would reject.
+ * - **Device-id binding.** The refresh route answers a mismatched
+ *   (deviceToken, deviceId) pair 401 as a stolen token, so the id follows the
+ *   session in force, with a fallback chain for when a read fails or hangs.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -87,6 +101,12 @@ describe('AndroidStorage', () => {
   afterEach(() => {
     setPlatform(null);
     vi.restoreAllMocks();
+    // `restoreAllMocks` restores spies but not timers. Four tests here run on
+    // fake timers and clear them inline; if the assertion above that line
+    // fails, the restore never runs and every later test executes with a clock
+    // that does not advance — one real failure arriving as a wall of unrelated
+    // ones. Unconditional here, so a failure stays legible.
+    vi.useRealTimers();
   });
 
   describe('platform-storage factory', () => {
@@ -372,6 +392,33 @@ describe('AndroidStorage', () => {
       expect(await storage.getStoredSession()).toBeNull();
     });
 
+    it('falls back to the legacy session when the payload lacks a session token', async () => {
+      // The same "keychain holds nothing usable" rule as the unparseable case.
+      // Without it, a blob left behind by a swallowed keychain remove shadows a
+      // perfectly good legacy token — the round-2 forced sign-out.
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      keychainMock.get.mockResolvedValue({
+        value: JSON.stringify({ deviceId: 'device-1' }),
+      });
+      const storage = await importAndroidStorage();
+
+      expect((await storage.getStoredSession())?.deviceToken).toBe('legacy-device-token');
+    });
+
+    it('falls back to the legacy session when an optional field is the wrong shape', async () => {
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      keychainMock.get.mockResolvedValue({
+        value: JSON.stringify({
+          sessionToken: 'session-token',
+          deviceId: 'device-1',
+          deviceToken: 42,
+        }),
+      });
+      const storage = await importAndroidStorage();
+
+      expect((await storage.getStoredSession())?.deviceToken).toBe('legacy-device-token');
+    });
+
     it('returns null when an optional field is the wrong shape', async () => {
       keychainMock.get.mockResolvedValue({
         value: JSON.stringify({
@@ -509,6 +556,19 @@ describe('AndroidStorage', () => {
       expect(await storage.getDeviceId()).toBe('web_abc123');
     });
 
+    it('dispatches auth:refreshed when the refresh path asks it to', async () => {
+      // auth-fetch calls dispatchAuthEvent('auth:refreshed') after a successful
+      // bearer refresh; only 'auth:cleared' was ever exercised here.
+      const storage = await importAndroidStorage();
+      const listener = vi.fn();
+      window.addEventListener('auth:refreshed', listener);
+
+      storage.dispatchAuthEvent('auth:refreshed');
+
+      expect(listener).toHaveBeenCalled();
+      window.removeEventListener('auth:refreshed', listener);
+    });
+
     it('still completes the logout when the store rejects', async () => {
       keychainMock.remove.mockRejectedValue(new Error(INIT_FAILURE));
       vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -609,9 +669,11 @@ describe('AndroidStorage', () => {
       expect(await storage.getDeviceId()).toBe('preferences-id');
     });
 
-    it('never answers with an empty id when the legacy session names none', async () => {
+    it('falls through to preferences when the legacy session names no id', async () => {
       // readLegacySession yields deviceId '' when a token was stored without an
-      // id; `??` would let that through where the contract says string | null.
+      // id. The `|| null` guard that keeps '' out of `boundDeviceId`'s return is
+      // NOT observable here — the caller tests truthiness, so '' and null behave
+      // alike — this pins the fall-through that is.
       preferencesStore.set('pagespace_device_id', 'preferences-id');
       localStorage.setItem('deviceToken', 'legacy-device-token');
       keychainMock.get.mockRejectedValue(new Error(INIT_FAILURE));
@@ -741,6 +803,7 @@ describe('AndroidStorage', () => {
 
       const id = await storage.getDeviceId();
 
+      expect(id).toMatch(/^[a-z][a-z0-9]+$/);
       expect(localStorage.getItem('browser_device_id')).toBe(id);
     });
 
@@ -777,7 +840,11 @@ describe('AndroidStorage', () => {
       localStorage.setItem('browser_device_id', 'web_abc123');
       const storage = await importAndroidStorage();
 
-      expect(await storage.getDeviceId()).not.toBe('web_abc123');
+      const id = await storage.getDeviceId();
+
+      expect(id).toMatch(/^[a-z][a-z0-9]+$/);
+      expect(id).not.toBe('web_abc123');
+      expect(preferencesStore.get('pagespace_device_id')).toBe(id);
     });
 
     it('gives concurrent callers one id and writes once', async () => {
@@ -816,11 +883,22 @@ describe('AndroidStorage', () => {
       expect(await storage.getDeviceId()).toBe(preferencesStore.get('pagespace_device_id'));
     });
 
+    it('reads the legacy id from the backwards-compatible alias key', async () => {
+      // `deviceId` is the older key `WebStorage.getDeviceId` still reads, so a
+      // device that predates `browser_device_id` keeps its binding.
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      localStorage.setItem('deviceId', 'web_legacy_alias');
+      const storage = await importAndroidStorage();
+
+      expect(await storage.getDeviceId()).toBe('web_legacy_alias');
+    });
+
     it('reports the device id through getDeviceInfo', async () => {
       const storage = await importAndroidStorage();
 
       const info = await storage.getDeviceInfo();
 
+      expect(info.deviceId).toMatch(/^[a-z][a-z0-9]+$/);
       expect(info.deviceId).toBe(preferencesStore.get('pagespace_device_id'));
       expect(info.userAgent).toBe(navigator.userAgent);
     });
