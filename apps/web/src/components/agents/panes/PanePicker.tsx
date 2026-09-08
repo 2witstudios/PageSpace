@@ -13,7 +13,7 @@
  * the only thing that knows whether a pick should reuse an existing row.
  */
 
-import { useCallback, useEffect, useRef, useState, useState, type Ref } from 'react';
+import { useCallback, useEffect, useRef, useState, type Ref } from 'react';
 import { Bot, Loader2, Search, TerminalSquare } from 'lucide-react';
 import useSWR from 'swr';
 import { PageType } from '@pagespace/lib/utils/enums';
