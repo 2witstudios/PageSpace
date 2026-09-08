@@ -259,6 +259,11 @@ function referencedCells(start: string, end: string): number | null {
  *  - `FIELDS_BY_KIND` — which fields each rule kind reads. A tool building a
  *    per-kind schema needs exactly this, and it is the only copy of that answer
  *    that a test checks against the evaluator.
+ *  - `OP_FIELDS` — which fields each op takes, for the same reason one level
+ *    up: a tool describing the ops has the answer here rather than restating
+ *    it, and the test sweep that checks every op refuses a missing field
+ *    enumerates this instead of a list of its own, so a new op cannot join the
+ *    union without being swept.
  *
  * Pure: no database, no I/O, no clock. The refusals are the contract, and they
  * have to be testable without any of that.
