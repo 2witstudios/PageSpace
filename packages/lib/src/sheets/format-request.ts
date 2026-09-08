@@ -820,7 +820,7 @@ function ruleRenderProblem(
   // Read from what the CALLER sent, not the merged rule, so a stored stray does
   // not make every later update to that rule impossible.
   if ((rule.kind === 'colorScale' || rule.kind === 'dataBar') && supplied.format !== undefined) {
-    return `a ${rule.kind} rule draws from its anchors, not a format, so the format would never be drawn`;
+    return `A ${rule.kind} rule draws from its anchors, not a format, so the format would never be drawn.`;
   }
 
   // A condition whose operator needs an operand it does not have. The parser
@@ -832,55 +832,53 @@ function ruleRenderProblem(
   if (rule.kind === 'cell') {
     const { operator, value, value2 } = rule.condition;
 
-    // An operand the operator never reads. `matchesCondition` looks at
-    // `condition.value` only for the operators that compare against something,
-    // and at `value2` only for the two range operators — so `isEmpty` with a
-    // value, or `greaterThan` with a second bound, is part of the caller's
-    // instruction stored and thrown away. Neither shape is reachable through
-    // the panel, which hides the fields it does not use.
+    // An operand the operator never reads. `matchesCondition` looks at `value`
+    // only for the operators that compare against something, and at `value2`
+    // only for the two range operators — so `isEmpty` with a value, or
+    // `greaterThan` with a second bound, is part of the caller's instruction
+    // stored and thrown away. Neither shape is reachable through the panel,
+    // which hides the fields it does not use.
     if (VALUELESS_OPERATORS.has(operator) && (value !== undefined || value2 !== undefined)) {
       return `A "${operator}" rule compares against nothing, so it cannot take a value.`;
     }
     if (!RANGE_OPERATORS.has(operator) && value2 !== undefined) {
       return `Only a between/notBetween rule has a second bound; "${operator}" ignores value2.`;
     }
-  }
 
-  if (rule.kind === 'cell' && !VALUELESS_OPERATORS.has(rule.condition.operator)) {
-    const { operator, value, value2 } = rule.condition;
-    if (typeof value !== 'string' || value.trim() === '') {
-      return (
-        `A "${operator}" rule needs a value to compare against. Without one it matches nothing — or, ` +
-        'for a negative operator, everything.'
-      );
-    }
-    if (RANGE_OPERATORS.has(operator) && (typeof value2 !== 'string' || value2.trim() === '')) {
-      return `A "${operator}" rule needs both bounds: value and value2.`;
-    }
+    // And the mirror: an operand the operator needs and does not have. The
+    // parser accepts any recognized operator on its own and the comparator sees
+    // nothing dropped, but `matchesCondition` then compares against nothing —
+    // a `greaterThan` with no value matches NO cell, and a `notContains` with
+    // no value matches EVERY non-error one.
+    if (!VALUELESS_OPERATORS.has(operator)) {
+      if (typeof value !== 'string' || value.trim() === '') {
+        return (
+          `A "${operator}" rule needs a value to compare against. Without one it matches nothing — or, ` +
+          'for a negative operator, everything.'
+        );
+      }
+      if (RANGE_OPERATORS.has(operator) && (typeof value2 !== 'string' || value2.trim() === '')) {
+        return `A "${operator}" rule needs both bounds: value and value2.`;
+      }
 
-    // Present but not a number, for an operator that only compares numbers.
-    // `matchesCondition` coerces the operand and returns false for every cell
-    // once that yields null — the same inert rule as a missing value, reached a
-    // different way. `equal`/`notEqual` are absent from the set on purpose:
-    // they fall back to a text comparison, so `= "done"` is a real rule.
-    if (NUMERIC_OPERATORS.has(operator)) {
-      for (const [field, operand] of [['value', value], ['value2', value2]] as const) {
-        if (operand === undefined) continue;
-        if (asComparableNumber(operand) === null) {
-          return (
-            `A "${operator}" rule compares numbers, and ${field} is "${operand}". It would match no ` +
-            'cell at all.'
-          );
+      // Present, non-blank, and still nothing to compare against: the operand
+      // is coerced and returns null, so the rule is false for every cell it
+      // covers. `equal`/`notEqual` are absent from the set on purpose — they
+      // fall back to a text comparison, so `= "done"` is a real rule.
+      if (NUMERIC_OPERATORS.has(operator)) {
+        for (const [field, operand] of [['value', value], ['value2', value2]] as const) {
+          if (operand === undefined) continue;
+          if (asComparableNumber(operand) === null) {
+            return (
+              `A "${operator}" rule compares numbers, and ${field} is "${operand}". It would match no ` +
+              'cell at all.'
+            );
+          }
         }
       }
     }
   }
 
-  // A formula that does not parse. `parseConditionalRule` asks only that it be
-  // non-blank, and the evaluator then throws while tokenizing it once per
-  // covered cell, catches, and applies nothing — the silent render-time no-op
-  // in its purest form. Checked with the engine's own tokenizer and parser, so
-  // "valid" means the same thing here as where it runs.
   if (rule.kind === 'formula') {
     const body = rule.formula.trim().replace(/^=/, '');
     let ast: ASTNode | null = null;
