@@ -1482,6 +1482,77 @@ const regionIdList = (regions: readonly SheetRegion[]): string =>
   regions.length === 0 ? 'none' : regions.map((region) => `"${region.id}"`).join(', ');
 
 /**
+ * The checks a finished rule list must pass before it is worth writing.
+ *
+ * Separate from the op loop because they are a different kind of question:
+ * every check in that loop is about one op, and every check here is about the
+ * list those ops produced. Two of them compare against the list as it WAS,
+ * because a sheet can already be past a limit and the writes that would reduce
+ * it must not be the ones refused.
+ */
+function assertRuleListIsStorable(
+  rules: readonly ConditionalRule[],
+  before: readonly ConditionalRule[]
+): void {
+  const totalCells = (list: readonly ConditionalRule[]): number => {
+    let cells = 0;
+    for (const rule of list) {
+      for (const range of rule.ranges) cells += conditionalCellsOfRange(range);
+    }
+    return cells;
+  };
+
+  // Formula work summed across the whole list, not just the rule being written.
+  // The per-rule ceiling bounds one rule and says nothing about two hundred of
+  // them, each legal, together asking for billions of expansions in one render.
+  const workBefore = formulaWork(before);
+  const workAfter = formulaWork(rules);
+  if (workAfter > MAX_FORMULA_EXPANSION && workAfter > workBefore) {
+    refuse(
+      `Those rules ask for ${workAfter.toLocaleString()} address expansions to render once, over the ` +
+        `limit of ${MAX_FORMULA_EXPANSION.toLocaleString()}. A formula rule costs the cells it covers ` +
+        'times the cells it references, and they add up across rules. (A write that lowers the total ' +
+        'is accepted even while it is still over.)'
+    );
+  }
+
+  // `expandRangesWithinBudget` spends `MAX_CONDITIONAL_TOTAL_CELLS` and then
+  // BREAKS, silently: past the budget, rules simply stop being applied at
+  // render time.
+  const cellsAfter = totalCells(rules);
+  if (cellsAfter > MAX_CONDITIONAL_TOTAL_CELLS && cellsAfter > totalCells(before)) {
+    refuse(
+      `Those rules cover ${cellsAfter.toLocaleString()} cells in total, over the sheet-wide limit of ` +
+        `${MAX_CONDITIONAL_TOTAL_CELLS.toLocaleString()}. Rules past the limit are silently skipped when ` +
+        'the sheet renders, so narrow the ranges rather than adding more. (A write that lowers the ' +
+        'total is accepted even while it is still over.)'
+    );
+  }
+
+  // The round-trip detector. Every cap here was written against a drop mode
+  // someone found the hard way; re-parsing the result catches the ones nobody
+  // has found yet, including caps added to the parsers later.
+  const stored = parseConditionalRules(rules) ?? [];
+  if (stored.length < rules.length) {
+    refuse(
+      `${rules.length - stored.length} of the resulting ${rules.length} rules would be dropped when ` +
+        'the sheet is read back. Nothing was applied.'
+    );
+  }
+}
+
+/** The same, for regions: only the round trip, since regions cost no render work. */
+function assertRegionListIsStorable(regions: readonly SheetRegion[]): void {
+  const stored = parseRegions(regions) ?? [];
+  if (stored.length < regions.length) {
+    refuse(
+      `${regions.length - stored.length} of the resulting ${regions.length} regions would be dropped ` +
+        'when the sheet is read back. Nothing was applied.'
+    );
+  }
+}
+
+/**
  * Validate a whole format request against the tab as it stands, and describe
  * the write it would perform.
  *
@@ -1858,84 +1929,13 @@ export function planFormatOps(
   });
 
   if (rulesTouched) {
-    // The aggregate ceiling `MAX_CONDITIONAL_TOTAL_CELLS` is spent by
-    // `expandRangesWithinBudget` and then *broken out of*, silently: rules past
-    // the budget simply stop contributing at render time. Individually legal
-    // rules can sum past it, so a write that would land there is refused while
-    // there is still someone to tell.
-    const totalCells = (list: readonly ConditionalRule[]): number => {
-      let cells = 0;
-      for (const rule of list) {
-        for (const range of rule.ranges) cells += conditionalCellsOfRange(range);
-      }
-      return cells;
-    };
-
-    const before = totalCells(tab.conditionalFormats ?? []);
-    const after = totalCells(rules);
-
-    // Formula work summed across the whole rule list, not just the one being
-    // written. The per-rule ceiling bounds one rule at twenty million and says
-    // nothing about two hundred of them — each legal, each covering 10,000
-    // cells and referencing 2,000, with the covered-cell aggregate satisfied
-    // and four billion expansions in one render. Same shape as every other
-    // per-op bound on this branch, and the same fix.
-    //
-    // Carries the repair exception for the same reason the cell aggregate does:
-    // a sheet can already be past this, and refusing the writes that would
-    // reduce it is how a sheet becomes unfixable.
-    const formulaWorkBefore = formulaWork(tab.conditionalFormats ?? []);
-    const formulaWorkAfter = formulaWork(rules);
-    if (formulaWorkAfter > MAX_FORMULA_EXPANSION && formulaWorkAfter > formulaWorkBefore) {
-      refuse(
-        `Those rules ask for ${formulaWorkAfter.toLocaleString()} address expansions to render once, ` +
-          `over the limit of ${MAX_FORMULA_EXPANSION.toLocaleString()}. A formula rule costs the cells ` +
-          'it covers times the cells it references, and they add up across rules. (A write that ' +
-          'lowers the total is accepted even while it is still over.)'
-      );
-    }
-
-    // Over the ceiling AND worse than it was. A sheet can already be past this
-    // limit — the panel's `addRule` enforces the per-rule and rule-count caps
-    // but not the aggregate — and refusing every write on such a sheet would
-    // leave it unrepairable: removing a rule from it reduces the skipped render
-    // work and would still have been rejected for not fixing everything at
-    // once. A write that does not make matters worse is always allowed.
-    if (after > MAX_CONDITIONAL_TOTAL_CELLS && after > before) {
-      refuse(
-        `Those rules cover ${after.toLocaleString()} cells in total, over the sheet-wide limit of ` +
-          `${MAX_CONDITIONAL_TOTAL_CELLS.toLocaleString()}. Rules past the limit are silently skipped when ` +
-          'the sheet renders, so narrow the ranges rather than adding more. (A write that lowers the ' +
-          'total is accepted even while it is still over.)'
-      );
-    }
-
-    // Round-trip detector. The plan is only as good as what survives being
-    // stored and read back, and every cap here was written against a drop mode
-    // someone already found the hard way. Re-parsing the result catches the
-    // ones nobody has found yet — including caps added to the parsers later,
-    // which this will notice without being taught about them.
-    const stored = parseConditionalRules(rules) ?? [];
-    if (stored.length < rules.length) {
-      refuse(
-        `${rules.length - stored.length} of the resulting ${rules.length} rules would be dropped when ` +
-          'the sheet is read back. Nothing was applied.'
-      );
-    }
-
+    assertRuleListIsStorable(rules, tab.conditionalFormats ?? []);
     steps.push({ type: 'setConditionalRules', rules });
     touchesTabFields = true;
   }
 
   if (regionsTouched) {
-    const stored = parseRegions(regions) ?? [];
-    if (stored.length < regions.length) {
-      refuse(
-        `${regions.length - stored.length} of the resulting ${regions.length} regions would be dropped ` +
-          'when the sheet is read back. Nothing was applied.'
-      );
-    }
-
+    assertRegionListIsStorable(regions);
     steps.push({ type: 'setRegions', regions });
     touchesTabFields = true;
   }
