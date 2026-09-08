@@ -533,6 +533,38 @@ describe('a region-derived format is part of what a cell reads as', () => {
     });
   });
 
+  it('lets a conditional rule beat the region that formats the same column', async () => {
+    // The layers compose, and the order matters: column < region < explicit
+    // cell < conditional. A rule that fires has to win over the region's role
+    // format, or a "flag this cell" rule would be invisible on exactly the
+    // columns a region already formats — which is most of them, in a sheet built
+    // the way this epic intends.
+    mockGetTab.mockResolvedValue({
+      ...regionTab,
+      conditionalFormats: [{
+        id: 'flag', kind: 'cell', ranges: ['C2:C2'],
+        condition: { operator: 'greaterThan', value: '1000' },
+        format: { number: { kind: 'percent', decimals: 0 } },
+      }],
+    });
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 1, cells: { C: { raw: '1200', value: 1200 } } },
+      { rowIndex: 2, cells: { C: { raw: '1500', value: 1500 } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+
+    assert({
+      given: 'a currency region and a percent rule that fires on only one cell',
+      should: "render the rule's format there and the region's everywhere else",
+      actual: { flagged: window.rows[0].cells.C, plain: window.rows[1].cells.C },
+      // 1200 as a percent is 120,000% — the percent formatter groups thousands
+      // of its own accord, and the rule's `number` replaces the region's whole
+      // number format rather than merging into it.
+      expected: { flagged: '120,000%', plain: '$1,500.00' },
+    });
+  });
+
   it('still hands back the number underneath it', async () => {
     // The whole point of resolving the layer: having made the display richer,
     // the machine value has to stay recoverable or the read is lossy again.
