@@ -639,9 +639,15 @@ export const toolRenderers: Record<string, ToolRenderer> = {
       <SheetFormatRenderer
         {...sheetFormatCard(parsedOutput)}
         rules={parsedInput?.rules as RuleInput[] | undefined}
-        removedRuleIds={parsedInput?.removeRuleIds as string[] | undefined}
+        // Removals as the store confirmed them under its lock — an id the
+        // tab did not hold was never a removal and is not listed.
+        removedRuleIds={parsedOutput.removedRuleIds as string[] | undefined}
+        ruleIds={parsedOutput.ruleIds as string[] | undefined}
+        ruleIdsAdded={parsedOutput.ruleIdsAdded as string[] | undefined}
+        ruleMode={parsedOutput.mode as 'append' | 'replaceAll' | undefined}
         rulesAdded={parsedOutput.added as number | undefined}
         rulesRemoved={parsedOutput.removed as number | undefined}
+        changed={parsedOutput.changed as boolean | undefined}
         skippedDuplicates={parsedOutput.skippedDuplicates as Array<{ index: number }> | undefined}
       />
     );

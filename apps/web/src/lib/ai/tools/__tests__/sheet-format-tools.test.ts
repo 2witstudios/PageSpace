@@ -64,7 +64,9 @@ const mockApplyFormatOps = vi.fn(async (_ref: unknown, ops: readonly SheetFormat
   // Mirrors the store: a tab field counts as changed only when the value it
   // would store differs from what it holds, compared as JSON.
   const tabBefore = JSON.stringify([state.conditionalFormats, state.regions, state.frozenRows, state.frozenColumns]);
+  const ruleIdsBefore = new Set(state.conditionalFormats.map((rule) => rule.id));
   state = { ...state, conditionalFormats: [...plan.conditionalFormats], regions: [...plan.regions] };
+  const ruleIdsAfter = new Set(state.conditionalFormats.map((rule) => rule.id));
   for (const step of plan.steps) {
     if (step.type === 'setFrozen') {
       state.frozenRows = step.rows ?? null;
@@ -77,6 +79,8 @@ const mockApplyFormatOps = vi.fn(async (_ref: unknown, ops: readonly SheetFormat
     cellsFormatted: plan.rows.size,
     rowsTouched: plan.rows.size,
     tabFieldsChanged: tabChanged ? ['tab'] : [],
+    ruleIdsAdded: [...ruleIdsAfter].filter((id) => !ruleIdsBefore.has(id)),
+    ruleIdsRemoved: [...ruleIdsBefore].filter((id) => !ruleIdsAfter.has(id)),
     conditionalRules: plan.conditionalFormats.length,
     regions: plan.regions.length,
     rowCount: state.rowCount,
@@ -693,6 +697,8 @@ describe('set_conditional_format', () => {
       rowsTouched: 0,
       tabFieldsChanged: [],
       conditionalRules: 0,
+      ruleIdsAdded: [],
+      ruleIdsRemoved: [],
       regions: 0,
       rowCount: 500,
       columnCount: 16,
@@ -783,6 +789,34 @@ describe('set_conditional_format', () => {
     assert({ given: 'the identical retry', should: 'return the id the first attempt minted', actual: retry.ruleIds, expected: first.ruleIds });
     expect(retry.warnings?.join(' ')).toContain('treated as already removed');
     assert({ given: 'the tab after', should: 'hold exactly X', actual: state.conditionalFormats.map((rule) => rule.id), expected: first.ruleIds });
+  });
+
+  it('an overlapping retry whose removal already landed under the lock is recovered, not refused', async () => {
+    // Both executions read a tab holding "old"; the first commits (removes
+    // "old", adds X). The second reaches the store, which refuses the
+    // now-absent removal under its lock. The tool re-reads and finds the
+    // whole requested state in place, so it reports the landed retry.
+    state.conditionalFormats = [{ id: 'old', kind: 'dataBar', ranges: ['Z1:Z9'], color: '#000000' }];
+    const x = { kind: 'dataBar' as const, ranges: ['A1:A9'], color: '#3b82f6' };
+    const real = mockApplyFormatOps.getMockImplementation()!;
+    mockApplyFormatOps.mockImplementationOnce(async (ref, ops) => {
+      // The first execution commits between this one's read and its write.
+      state.conditionalFormats = [{ id: 'rule-first', kind: 'dataBar', ranges: ['A1:A9'], color: '#3b82f6' }];
+      return real(ref, ops);
+    });
+    const retry = (await conditional({ rules: [x], removeRuleIds: ['old'] })) as { success: boolean; ruleIds?: string[]; added?: number; removed?: number };
+    assert({ given: 'the overlapping retry', should: 'succeed', actual: retry.success, expected: true });
+    assert({ given: 'the overlapping retry', should: 'report the landed id', actual: retry.ruleIds, expected: ['rule-first'] });
+    assert({ given: 'the overlapping retry', should: 'add and remove nothing itself', actual: [retry.added, retry.removed], expected: [0, 0] });
+    assert({ given: 'the tab after', should: 'hold exactly what the first execution landed', actual: state.conditionalFormats.map((rule) => rule.id), expected: ['rule-first'] });
+  });
+
+  it('the formula examples the model sees use bounded ranges', () => {
+    // `C:C` parses as nothing here; a model following the example would
+    // produce a refused call.
+    const schema = JSON.stringify(z.toJSONSchema(sheetFormatTools.set_conditional_format.inputSchema as z.ZodType));
+    expect(schema).not.toContain('C:C');
+    expect(schema).toContain('C2:C40');
   });
 
   it('replaceAll refuses the same rule twice in one call', async () => {

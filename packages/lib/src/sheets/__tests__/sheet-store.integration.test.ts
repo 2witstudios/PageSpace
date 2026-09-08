@@ -1510,6 +1510,9 @@ describe('sheet store (integration)', () => {
         { userId: ownerId }
       );
       expect(first.tabFieldsChanged).toEqual(['conditionalFormats']);
+      // The delta is computed under the lock from what the tab held THEN.
+      expect(first.ruleIdsAdded.sort()).toEqual(['over-100', 'second']);
+      expect(first.ruleIdsRemoved).toEqual([]);
       const before = await revisionOf(pageId);
       const logged = (await db.select({ id: sheetChanges.id }).from(sheetChanges).where(eq(sheetChanges.tabId, tabId))).length;
 
@@ -1519,8 +1522,16 @@ describe('sheet store (integration)', () => {
         { userId: ownerId }
       );
       expect(again.tabFieldsChanged).toEqual([]);
+      expect(again.ruleIdsAdded).toEqual([]);
+      expect(again.ruleIdsRemoved).toEqual([]);
       expect(await revisionOf(pageId)).toEqual(before);
       expect((await db.select({ id: sheetChanges.id }).from(sheetChanges).where(eq(sheetChanges.tabId, tabId))).length).toBe(logged);
+
+      // A list that drops one: the removed id is reported from the locked read.
+      const dropped = await applyFormatOps({ pageId }, [{ type: 'setConditionalRules', rules: [second] }], { userId: ownerId });
+      expect(dropped.ruleIdsRemoved).toEqual(['over-100']);
+      expect(dropped.ruleIdsAdded).toEqual([]);
+      await applyFormatOps({ pageId }, [{ type: 'setConditionalRules', rules: [FORMAT_RULE, second] }], { userId: ownerId });
 
       // Reversed is a change: later rules win.
       const reversed = await applyFormatOps(

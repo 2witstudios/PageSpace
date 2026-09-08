@@ -32,7 +32,13 @@ interface SheetFormatRendererProps {
   regionMode?: 'merge' | 'replaceAll';
   ops?: FormatOpInput[];
   rules?: RuleInput[];
+  /** From the result: rule ids the store confirmed it removed under its lock. */
   removedRuleIds?: string[];
+  /** From the result: the ids the call's rules landed under, by index. */
+  ruleIds?: string[];
+  /** From the result: which of those ids were NEW on the tab. */
+  ruleIdsAdded?: string[];
+  ruleMode?: 'append' | 'replaceAll';
   /** From the result: what landed, when it differs from what was asked. */
   regionsApplied?: number;
   opsApplied?: number;
@@ -156,6 +162,9 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
   ops = NONE,
   rules = NONE,
   removedRuleIds = NONE,
+  ruleIds = NONE,
+  ruleIdsAdded = NONE,
+  ruleMode,
   regionsApplied,
   opsApplied,
   cellsFormatted,
@@ -175,6 +184,10 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
   const opCount = opsApplied ?? ops.length;
   const added = rulesAdded ?? 0;
   const removed = rulesRemoved ?? removedIds.length;
+  // A replaceAll that neither added nor removed but did write reordered the
+  // rules — a real, precedence-changing change with no row to show for it.
+  const reordered = ruleMode === 'replaceAll' && changed === true && added === 0 && removed === 0 && rules.length > 0;
+  const addedIds = new Set(ruleIdsAdded);
   const replacedAll = regionMode === 'replaceAll';
   const summary = [
     ...(regionCount > 0 ? [count(regionCount, 'region')] : []),
@@ -182,6 +195,8 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
     ...(opCount > 0 ? [count(opCount, 'op')] : []),
     ...(cellsFormatted ? [count(cellsFormatted, 'cell')] : []),
     ...(added > 0 ? [`${count(added, 'rule')} added`] : []),
+    ...(reordered ? ['rules reordered'] : []),
+    ...(ruleMode === 'replaceAll' && !reordered && rules.length - added > 0 ? [`${rules.length - added} kept`] : []),
     ...(duplicateIndexes.size > 0 ? [`${duplicateIndexes.size} already present`] : []),
     ...(removed > 0 ? [`${removed} removed`] : []),
   ].join(' · ');
@@ -272,17 +287,23 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
               </div>
             ))}
             {rules.map((rule, i) => {
+              // In append mode a rule the tab already held is "already
+              // present" (skipped). In replaceAll every rule in the call is
+              // on the tab afterwards; the ones that were there before are
+              // "kept", which is not a skip — their order may have changed.
               const duplicate = duplicateIndexes.has(i);
+              const kept = ruleMode === 'replaceAll' && ruleIds[i] !== undefined && !addedIds.has(ruleIds[i]);
+              const badge = duplicate ? 'already present' : kept ? 'kept' : undefined;
               return (
                 <div
                   key={`rule-${i}`}
-                  className={cn(ROW, duplicate && 'text-muted-foreground')}
-                  data-testid={duplicate ? 'sheet-format-rule-duplicate' : 'sheet-format-rule'}
+                  className={cn(ROW, badge && 'text-muted-foreground')}
+                  data-testid={duplicate ? 'sheet-format-rule-duplicate' : kept ? 'sheet-format-rule-kept' : 'sheet-format-rule'}
                 >
                   <Paintbrush className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                   <span className="flex-1 min-w-0 truncate font-mono text-xs">{describeRule(rule)}</span>
                   <Swatches colours={ruleColours(rule)} />
-                  {duplicate && <span className="text-[11px] px-1.5 py-0.5 rounded bg-muted shrink-0">already present</span>}
+                  {badge && <span className="text-[11px] px-1.5 py-0.5 rounded bg-muted shrink-0">{badge}</span>}
                 </div>
               );
             })}

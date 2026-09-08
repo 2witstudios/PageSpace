@@ -378,7 +378,7 @@ const ruleSchema = z
     operator: z.enum(OPERATORS).optional().describe('cell.'),
     value: operandSchema.optional().describe('cell: the operand. Not for isEmpty/isNotEmpty/isError.'),
     value2: operandSchema.optional().describe('cell: upper bound for between/notBetween.'),
-    formula: z.string().max(4000).optional().describe('formula: e.g. "=C2>AVERAGE(C:C)", anchored at the range\'s top-left.'),
+    formula: z.string().max(4000).optional().describe('formula: e.g. "=C2>AVERAGE(C2:C40)", anchored at the range\'s top-left; ranges must be bounded.'),
     format: aiCellFormatSchema.optional().describe('cell/formula: applied where the rule matches.'),
     min: anchorSchema.optional().describe('colorScale (needs color) / dataBar.'),
     mid: anchorSchema.optional().describe('colorScale.'),
@@ -1011,7 +1011,7 @@ function buildRule(input: RuleInput, label: string): BuiltRule {
       };
     }
     case 'formula': {
-      need('formula', '(e.g. "=C2>AVERAGE(C:C)")');
+      need('formula', '(e.g. "=C2>AVERAGE(C2:C40)" — ranges must be bounded)');
       need('format', '(what to apply where the formula is true)');
       const formula = (input.formula as string).trim();
       if (formula === '') {
@@ -1193,12 +1193,13 @@ async function locateTab(
 /**
  * The write, with the store's refusals turned into the envelope.
  *
- * `onDuplicateRule: 'throw'` lets the store's content-twin refusal
- * (`SheetDuplicateRuleError`) escape instead of becoming an envelope. Only
- * `set_conditional_format` asks for it: that tool minted the ids, so a twin
- * refused under the lock is its own retry racing it, and it has the rules in
- * hand to check. `format_sheet` relays the model's ids and has no such
- * standing, so for it the twin is a refusal like any other.
+ * `onStoreRefusal: 'throw'` lets the store's refusal under its lock (a
+ * content twin, an id already gone) escape instead of becoming an envelope.
+ * Only `set_conditional_format`'s append path asks for it: that tool minted
+ * the ids and planned the removals from a snapshot, so a refusal under the
+ * lock may be its own retry racing it, and it has the requested final state
+ * in hand to re-verify. `format_sheet` relays the model's ids and has no such
+ * standing, so for it every refusal is a refusal.
  */
 async function applyPlanned(
   ref: TabRef,
@@ -1209,7 +1210,7 @@ async function applyPlanned(
   toolName: string,
   error: string,
   metadata: Record<string, unknown>,
-  onDuplicateRule: 'refuse' | 'throw' = 'refuse'
+  onStoreRefusal: 'refuse' | 'throw' = 'refuse'
 ) {
   const ops = planned.map((entry) => entry.op);
   const labels = planned.map((entry) => entry.label);
@@ -1245,7 +1246,7 @@ async function applyPlanned(
       metadata: { source: 'ai-tool', tool: toolName, ...metadata },
     });
   } catch (cause) {
-    if (cause instanceof SheetDuplicateRuleError && onDuplicateRule === 'throw') {
+    if (cause instanceof SheetFormatError && onStoreRefusal === 'throw') {
       throw cause;
     }
     if (cause instanceof SheetFormatError) {
@@ -1512,8 +1513,6 @@ export const sheetFormatTools = {
             ruleIds.push(id);
             final.push({ ...entry.rule, id } as ConditionalRule);
           }
-          const finalIds = new Set(final.map((rule) => rule.id));
-          const removedCount = existing.filter((rule) => !finalIds.has(rule.id)).length;
           planned.push({ label: 'mode', op: { type: 'setConditionalRules', rules: final } });
 
           const outcome = await applyPlanned(
@@ -1524,25 +1523,34 @@ export const sheetFormatTools = {
             page,
             'set_conditional_format',
             INVALID_RULE_REQUEST,
-            { mode, rulesAdded: addedCount, rulesRemoved: removedCount }
+            { mode, rulesAdded: addedCount, rulesRemoved: existing.length - skippedDuplicates.length }
           );
           if (isRefusal(outcome)) return outcome;
-          const unchanged = outcome.rowsTouched === 0 && outcome.tabFieldsChanged.length === 0;
+          // Counts from what the store found under its lock, not from the
+          // snapshot: a rule another writer added in between was removed
+          // too, and is reported.
+          const changed = outcome.rowsTouched > 0 || outcome.tabFieldsChanged.length > 0;
+          const reordered = changed && outcome.ruleIdsAdded.length === 0 && outcome.ruleIdsRemoved.length === 0;
           return {
             success: true as const,
             pageId: page.id,
             title: page.title,
             tabIndex: ref.tabIndex,
+            mode: 'replaceAll' as const,
             ruleIds,
-            added: addedCount,
-            removed: removedCount,
-            skippedDuplicates,
+            ruleIdsAdded: outcome.ruleIdsAdded,
+            removedRuleIds: outcome.ruleIdsRemoved,
+            added: outcome.ruleIdsAdded.length,
+            removed: outcome.ruleIdsRemoved.length,
+            changed,
             conditionalRules: outcome.conditionalRules,
             ...(warnings.length > 0 ? { warnings } : {}),
-            message: unchanged
+            message: !changed
               ? `"${page.title}" already held exactly these rules; nothing changed.`
-              : `Conditional formatting on "${page.title}": now exactly the ${final.length} rule(s) in this call ` +
-                `(${addedCount} added, ${removedCount} removed).`,
+              : reordered
+                ? `Conditional formatting on "${page.title}": the same ${final.length} rule(s), reordered (later rules win).`
+                : `Conditional formatting on "${page.title}": now exactly the ${final.length} rule(s) in this call ` +
+                  `(${outcome.ruleIdsAdded.length} added, ${outcome.ruleIdsRemoved.length} removed).`,
             nextSteps: [
               'Call read_sheet with includeFormatting to verify the rules.',
               'Keep the returned ruleIds to remove or replace these rules later.',
@@ -1619,9 +1627,13 @@ export const sheetFormatTools = {
             pageId: page.id,
             title: page.title,
             tabIndex: ref.tabIndex,
+            mode: 'append' as const,
             ruleIds,
+            ruleIdsAdded: [],
+            removedRuleIds: [],
             added: 0,
             removed: 0,
+            changed: false,
             skippedDuplicates,
             conditionalRules: existing.length,
             ...(warnings.length > 0 ? { warnings } : {}),
@@ -1644,21 +1656,21 @@ export const sheetFormatTools = {
             'throw'
           );
         } catch (cause) {
-          if (!(cause instanceof SheetDuplicateRuleError)) throw cause;
+          if (!(cause instanceof SheetFormatError)) throw cause;
 
-          // The store refused a content twin under its lock: a rule with this
-          // content landed between the read above and the write. The dedupe
-          // above cannot see that — it ran against a snapshot — and this is
-          // the one case it exists for: a timeout retry overlapping the call
-          // it retries. Both read no rule, both minted an id, and the lock
-          // let exactly one through. To the model that IS the landed retry,
-          // so the answer is the same success the dedupe gives when the
-          // snapshot already held every rule.
+          // The store refused under its lock what the snapshot allowed: a
+          // content twin that landed in between, or a removal whose id was
+          // already gone. Both are what a timeout retry overlapping the call
+          // it retries looks like — both executions read the same tab, and
+          // the lock let exactly one through. To the model that IS the landed
+          // retry, so the answer is the same success the dedupe gives when
+          // the snapshot already held every rule.
           //
-          // Only if the fresh read accounts for the WHOLE call, though. The
-          // store refused every op atomically, so a twin that explains one
-          // rule and not the others (another writer added it) means nothing
-          // in this call was written, and reporting success would tell the
+          // Only if the fresh read accounts for the WHOLE call, though: every
+          // rule present by content and every removal absent. The store
+          // refused every op atomically, so a fresh read that explains one
+          // part and not the rest (another writer did it) means nothing in
+          // this call was written, and reporting success would tell the
           // model the rest landed too.
           const fresh = await readTabFormatting(ref);
           if (!fresh) {
@@ -1684,9 +1696,13 @@ export const sheetFormatTools = {
             pageId: page.id,
             title: page.title,
             tabIndex: ref.tabIndex,
+            mode: 'append' as const,
             ruleIds: landedIds,
+            ruleIdsAdded: [],
+            removedRuleIds: [],
             added: 0,
             removed: 0,
+            changed: false,
             skippedDuplicates: landedIds.map((existingRuleId, index) => ({ index, existingRuleId })),
             conditionalRules: fresh.conditionalFormats.length,
             ...(warnings.length > 0 ? { warnings } : {}),
@@ -1701,15 +1717,21 @@ export const sheetFormatTools = {
           pageId: page.id,
           title: page.title,
           tabIndex: ref.tabIndex,
+          mode: 'append' as const,
           ruleIds,
-          added: toAdd.length,
-          removed: existing.length - remaining.length,
+          ruleIdsAdded: outcome.ruleIdsAdded,
+          // Confirmed under the lock — an id the snapshot lacked was never a
+          // removal, and is not listed.
+          removedRuleIds: outcome.ruleIdsRemoved,
+          added: outcome.ruleIdsAdded.length,
+          removed: outcome.ruleIdsRemoved.length,
+          changed: outcome.rowsTouched > 0 || outcome.tabFieldsChanged.length > 0,
           skippedDuplicates,
           conditionalRules: outcome.conditionalRules,
           ...(warnings.length > 0 ? { warnings } : {}),
           message:
-            `Conditional formatting on "${page.title}": ${toAdd.length} rule(s) added, ` +
-            `${existing.length - remaining.length} removed, ${outcome.conditionalRules} on the tab now.`,
+            `Conditional formatting on "${page.title}": ${outcome.ruleIdsAdded.length} rule(s) added, ` +
+            `${outcome.ruleIdsRemoved.length} removed, ${outcome.conditionalRules} on the tab now.`,
           nextSteps: [
             'Call read_sheet with includeFormatting to verify the rules.',
             'Keep the returned ruleIds to remove or replace these rules later.',

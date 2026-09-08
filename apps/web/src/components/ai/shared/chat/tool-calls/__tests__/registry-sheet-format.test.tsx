@@ -145,9 +145,13 @@ describe('set_conditional_format renderer', () => {
     success: true,
     pageId: 'page-1',
     title: 'Q3 Budget',
+    mode: 'append',
     added: 4,
     removed: 1,
+    changed: true,
     ruleIds: ['r1', 'r2', 'r3', 'r4'],
+    ruleIdsAdded: ['r1', 'r2', 'r3', 'r4'],
+    removedRuleIds: ['rule-old'],
   };
 
   it('uses the formatting card', () => {
@@ -216,12 +220,36 @@ describe('set_conditional_format renderer', () => {
     expect(queryByTestId('sheet-format-removed')).toBeNull();
   });
 
-  it('lists a repeated removeRuleIds entry once, as the executor removes it once', () => {
-    const { getAllByTestId, getByText } = render(
-      <>{renderTool('set_conditional_format', { removeRuleIds: ['r-1', 'r-1', 'r-2'] }, { success: true, title: 'S', added: 0, removed: 2 })}</>,
+  it('lists removals as the result confirmed them, not as the input asked for them', () => {
+    // A repeated id is removed once; an id the tab never held is not a
+    // removal at all (the tool warns and treats it as already gone). The
+    // card must show exactly what the store removed under its lock.
+    const { getAllByTestId, getByText, queryByText } = render(
+      <>{renderTool(
+        'set_conditional_format',
+        { removeRuleIds: ['r-1', 'r-1', 'r-zzz'] },
+        { success: true, title: 'S', mode: 'append', added: 0, removed: 1, changed: true, removedRuleIds: ['r-1'] },
+      )}</>,
     );
-    expect(getAllByTestId('sheet-format-removed')).toHaveLength(2);
-    expect(getByText('2 removed')).toBeTruthy();
+    expect(getAllByTestId('sheet-format-removed')).toHaveLength(1);
+    expect(getByText('1 removed')).toBeTruthy();
+    expect(queryByText('r-zzz')).toBeNull();
+  });
+
+  it('shows a replaceAll that only reordered as a reorder, with its rules kept rather than skipped', () => {
+    // Both rules already existed and kept their ids, but the write changed
+    // their precedence. That is neither "already present" nor a no-op.
+    const { getByText, getAllByTestId, queryByTestId } = render(
+      <>{renderTool(
+        'set_conditional_format',
+        { mode: 'replaceAll', rules: [input.rules[1], input.rules[0]] },
+        { success: true, title: 'S', mode: 'replaceAll', added: 0, removed: 0, changed: true, ruleIds: ['r2', 'r1'], ruleIdsAdded: [], removedRuleIds: [] },
+      )}</>,
+    );
+    expect(getByText('rules reordered')).toBeTruthy();
+    expect(getAllByTestId('sheet-format-rule-kept')).toHaveLength(2);
+    expect(queryByTestId('sheet-format-rule-duplicate')).toBeNull();
+    expect(getAllByTestId('sheet-format-rule-kept')[0].textContent).toContain('kept');
   });
 
   it('falls through on the execute_tool error envelope even when the input looks well-formed', () => {
