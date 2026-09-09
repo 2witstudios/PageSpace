@@ -32,6 +32,7 @@ import { generatePresignedUrl, getPresignedUrlTtl, toContentHash } from '@/lib/p
 import { isAllowedImageType } from '@/lib/validation/image-validation';
 import {
   buildRecentImageFileParts,
+  MAX_RECENT_IMAGE_ATTACHMENTS,
   MAX_RECENT_IMAGE_ATTACHMENT_SIZE_BYTES,
   type ImageFilePart,
   type RecentImageFileCandidate,
@@ -290,10 +291,18 @@ async function resolveImageAttachmentsForContext(
     // now carry a whole batch of photos, and an agent mentioned on one should
     // see all of them. Falls back to the legacy column for rows written before
     // messages had attachment rows.
+    //
+    // Capped per message at the same number of slots the final selection has.
+    // The selection keeps the LAST entries (newest messages win), so without
+    // this cap a ten-photo message would contribute photos 6-10 and push out
+    // its own photo 1 — the one an agent saw before this change, since the
+    // legacy column only ever named the first. Taking the earliest few instead
+    // matches reading order and cannot lose ground on the old behaviour.
     const messageAttachments =
       message.attachments && message.attachments.length > 0
         ? [...message.attachments]
             .sort((a, b) => a.position - b.position)
+            .slice(0, MAX_RECENT_IMAGE_ATTACHMENTS)
             .map((attachment) => ({
               fileId: attachment.fileId,
               attachmentMeta: attachment.attachmentMeta,
