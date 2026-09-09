@@ -37,21 +37,7 @@ import {
 } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -61,13 +47,11 @@ import {
 import {
   Plus,
   Search,
-  MoreHorizontal,
   Pencil,
   Trash2,
   FileText,
   GripVertical,
   Zap,
-  Bell,
 } from 'lucide-react';
 import {
   DndContext,
@@ -85,8 +69,6 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/utils';
-import { MultiAssigneeSelect } from './MultiAssigneeSelect';
-import { DueDatePicker } from './DueDatePicker';
 import { TaskKanbanView } from './TaskKanbanView';
 import { TaskListDescriptionContent } from './TaskListDescription';
 import { TaskListHeader } from './TaskListHeader';
@@ -102,6 +84,17 @@ import {
   expandNodePath,
   type TaskNodePath,
 } from './task-tree-core';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from '@/components/ui/sheet';
+import { TaskCompactRow } from '@/components/tasks/TaskCompactRow';
+import { TaskDetailSheet } from '@/components/tasks/TaskDetailSheet';
+import { TaskFilterButton } from '@/components/tasks/TaskFilterSheet';
+import { toDashboardTask } from './toDashboardTask';
 import { StatusConfigManager } from './StatusConfigManager';
 import { TaskAgentTriggersDialog } from './TaskAgentTriggersDialog';
 import { TaskListWorkflowsDialog } from './TaskListWorkflowsDialog';
@@ -109,14 +102,10 @@ import { SubTaskProgress } from './SubTaskProgress';
 import {
   TaskItem,
   TaskListData,
-  TaskStatusConfig,
   TaskLocation,
   LocatedTaskHandlers,
   bindTaskHandlersToList,
-  buildStatusConfig,
-  getStatusOrder,
   isCompletedStatus,
-  PRIORITY_CONFIG,
 } from './task-list-types';
 import {
   resolveToggleStatus,
@@ -140,223 +129,6 @@ const fetcher = async (url: string) => {
 // Matches DEFAULT_LIMIT in the GET route's query-spec.ts; must stay <= that route's
 // MAX_LIMIT (200) or every "Load More" page would silently get clamped down server-side.
 const TASKS_PAGE_SIZE = 100;
-
-// Mobile task card component
-interface MobileTaskCardProps {
-  task: TaskItem;
-  canEdit: boolean;
-  onToggleComplete: (task: TaskItem) => void;
-  onStatusChange: (task: TaskItem, status: string) => void;
-  onPriorityChange: (taskId: string, priority: string) => void;
-  onMultiAssigneeChange: (taskId: string, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
-  onDueDateChange: (taskId: string, date: Date | null) => void;
-  onSaveTitle: (taskId: string, title: string) => void;
-  onDelete: (taskId: string) => void;
-  onNavigate: (task: TaskItem) => void;
-  onConfigureTriggers?: (task: TaskItem) => void;
-  driveId: string;
-  isEditing: boolean;
-  editingTitle: string;
-  onEditingTitleChange: (title: string) => void;
-  onStartEdit: (task: TaskItem) => void;
-  onCancelEdit: () => void;
-  statusConfigMap: Record<string, { label: string; color: string }>;
-  statusOrder: string[];
-  statusConfigs: TaskStatusConfig[];
-}
-
-function MobileTaskCard({
-  task,
-  canEdit,
-  onToggleComplete,
-  onStatusChange,
-  onPriorityChange,
-  onMultiAssigneeChange,
-  onDueDateChange,
-  onSaveTitle,
-  onDelete,
-  onNavigate,
-  onConfigureTriggers,
-  driveId,
-  isEditing,
-  editingTitle,
-  onEditingTitleChange,
-  onStartEdit,
-  onCancelEdit,
-  statusConfigMap,
-  statusOrder,
-  statusConfigs,
-}: MobileTaskCardProps) {
-  const isCompleted = isCompletedStatus(task.status, statusConfigs);
-
-  return (
-    <div
-      className={cn(
-        'border rounded-lg p-4 bg-card',
-        isCompleted && 'opacity-60'
-      )}
-    >
-      {/* Header: Checkbox + Title + Actions */}
-      <div className="flex items-start gap-3">
-        <Checkbox
-          checked={isCompleted}
-          onCheckedChange={() => onToggleComplete(task)}
-          disabled={!canEdit}
-          className="mt-0.5"
-        />
-        <div className="flex-1 min-w-0">
-          {isEditing ? (
-            <Input
-              value={editingTitle}
-              onChange={(e) => onEditingTitleChange(e.target.value)}
-              onBlur={() => {
-                if (editingTitle.trim()) {
-                  onSaveTitle(task.id, editingTitle.trim());
-                }
-                onCancelEdit();
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.currentTarget.blur();
-                }
-                if (e.key === 'Escape') onCancelEdit();
-              }}
-              autoFocus
-              className="h-8"
-            />
-          ) : (
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                className={cn(
-                  'font-medium cursor-pointer hover:text-primary bg-transparent border-0 p-0 text-left',
-                  isCompleted && 'line-through text-muted-foreground'
-                )}
-                onClick={() => onNavigate(task)}
-              >
-                {task.title}
-              </button>
-              {/* Sub-task progress — parity with the table and kanban. */}
-              <SubTaskProgress task={task} className="shrink-0 text-xs text-muted-foreground tabular-nums" />
-            </div>
-          )}
-        </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
-              <MoreHorizontal className="h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {task.pageId && (
-              <DropdownMenuItem onClick={() => onNavigate(task)}>
-                <FileText className="h-4 w-4 mr-2" />
-                Open
-              </DropdownMenuItem>
-            )}
-            <DropdownMenuItem onClick={() => onStartEdit(task)} disabled={!canEdit}>
-              <Pencil className="h-4 w-4 mr-2" />
-              Rename
-            </DropdownMenuItem>
-            {onConfigureTriggers && (
-              <DropdownMenuItem onClick={() => onConfigureTriggers(task)} disabled={!canEdit}>
-                <Zap className="h-4 w-4 mr-2" />
-                Agent triggers…
-              </DropdownMenuItem>
-            )}
-            <DropdownMenuItem
-              onClick={() => onDelete(task.id)}
-              className="text-destructive"
-              disabled={!canEdit}
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-
-      {/* Metadata row */}
-      <div className="flex flex-wrap items-center gap-2 mt-3 pl-7">
-        {/* Status - uses dynamic status configs */}
-        <Select
-          value={task.status}
-          onValueChange={(value) => onStatusChange(task, value)}
-          disabled={!canEdit}
-        >
-          <SelectTrigger className="h-7 w-auto px-2">
-            <SelectValue>
-              <Badge className={cn('text-xs', statusConfigMap[task.status]?.color || 'bg-slate-100 text-slate-700')}>
-                {statusConfigMap[task.status]?.label || task.status}
-              </Badge>
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {statusOrder.map(slug => {
-              const cfg = statusConfigMap[slug];
-              if (!cfg) return null;
-              return (
-                <SelectItem key={slug} value={slug}>
-                  <Badge className={cn('text-xs', cfg.color)}>{cfg.label}</Badge>
-                </SelectItem>
-              );
-            })}
-          </SelectContent>
-        </Select>
-
-        {/* Priority */}
-        <Select
-          value={task.priority}
-          onValueChange={(value) => onPriorityChange(task.id, value)}
-          disabled={!canEdit}
-        >
-          <SelectTrigger className="h-7 w-auto px-2">
-            <SelectValue>
-              <Badge className={cn('text-xs', PRIORITY_CONFIG[task.priority].color)}>
-                {PRIORITY_CONFIG[task.priority].label}
-              </Badge>
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {Object.entries(PRIORITY_CONFIG).map(([key, { label, color }]) => (
-              <SelectItem key={key} value={key}>
-                <Badge className={cn('text-xs', color)}>{label}</Badge>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        {/* Multiple Assignees */}
-        <MultiAssigneeSelect
-          driveId={driveId}
-          assignees={task.assignees || []}
-          onUpdate={(assigneeIds) => onMultiAssigneeChange(task.id, assigneeIds)}
-          disabled={!canEdit}
-        />
-
-        {canEdit && onConfigureTriggers && (task.activeTriggerCount ?? 0) > 0 && (
-          <button
-            type="button"
-            onClick={() => onConfigureTriggers(task)}
-            title="Agent trigger configured — click to edit"
-            aria-label="Agent trigger configured — click to edit"
-            className="inline-flex h-7 items-center gap-1 rounded-md border border-amber-300/60 bg-amber-50 px-2 text-xs text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300"
-          >
-            <Bell className="h-3 w-3" />
-            <span>Trigger</span>
-          </button>
-        )}
-
-        {/* Due Date */}
-        <DueDatePicker
-          currentDate={task.dueDate}
-          onSelect={(date) => onDueDateChange(task.id, date)}
-          disabled={!canEdit}
-        />
-      </div>
-    </div>
-  );
-}
 
 /**
  * The collapsed state, shared. Minting `new Set()` per call is a new reference
@@ -527,7 +299,20 @@ function TaskListView({ page }: TaskListViewProps) {
   const [filter, setFilter] = useTaskListPageFilter(page.id);
   const [search, setSearch] = useState('');
   const [newTaskTitle, setNewTaskTitle] = useState('');
-  const searchInputRef = useRef<HTMLInputElement>(null);
+  // Two search inputs exist at once — the narrow toolbar's and the wide one —
+  // with CSS hiding whichever does not apply. Cmd+F must land on the one the
+  // user can actually see, so focus resolves by visibility, the same way Find's
+  // scroll-to-match picks between the compact list and the table.
+  const narrowSearchRef = useRef<HTMLInputElement>(null);
+  const wideSearchRef = useRef<HTMLInputElement>(null);
+  const visibleSearchInput = () =>
+    [narrowSearchRef.current, wideSearchRef.current].find((el) => el?.offsetParent !== null) ?? null;
+  const newTaskInputRef = useRef<HTMLInputElement>(null);
+  // The compact list tracks the OPEN TASK BY ID, not by object: the sheet stays
+  // mounted across SWR revalidations, and holding the row itself would pin the
+  // sheet to a stale copy that ignores every edit made inside it.
+  const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
+  const [narrowFiltersOpen, setNarrowFiltersOpen] = useState(false);
 
   // Connect Cmd+F to existing search input
   const isFindOpen = useFindStore((s) => s.isOpen);
@@ -537,8 +322,9 @@ function TaskListView({ page }: TaskListViewProps) {
 
   useEffect(() => {
     if (isFindOpen) {
-      searchInputRef.current?.focus();
-      searchInputRef.current?.select();
+      const input = visibleSearchInput();
+      input?.focus();
+      input?.select();
     }
   }, [isFindOpen]);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -767,8 +553,18 @@ function TaskListView({ page }: TaskListViewProps) {
 
   // Derive dynamic status config from API response
   const statusConfigs = useMemo(() => data?.statusConfigs ?? [], [data?.statusConfigs]);
-  const statusConfigMap = useMemo(() => buildStatusConfig(statusConfigs), [statusConfigs]);
-  const statusOrder = useMemo(() => getStatusOrder(statusConfigs), [statusConfigs]);
+  // Identity this list's rows carry into the shared dashboard-shaped components,
+  // which expect the enrichment /api/pages/[pageId]/tasks does not provide.
+  //
+  // `taskListPageTitle` is deliberately omitted. It exists so the DASHBOARD can
+  // say which list a task came from while showing tasks from many lists at once.
+  // Here every task belongs to the page being viewed, so supplying it stamps the
+  // same "you are here" label on every row (and again in the detail sheet) —
+  // noise that costs the row its most valuable asset, horizontal space.
+  const listContext = useMemo(
+    () => ({ driveId: page.driveId, taskListPageId: page.id }),
+    [page.driveId, page.id],
+  );
 
   const activeSearch = isFindOpen ? findQuery : search;
 
@@ -1104,6 +900,24 @@ function TaskListView({ page }: TaskListViewProps) {
   };
   const taskHandlers = bindTaskHandlersToList(locatedHandlers, page.id);
 
+  // The detail sheet is addressed by id, so its contents follow the live cache
+  // and reflect edits made inside it. Resolved against ALL loaded tasks, not
+  // the filtered view: completing a task while the list is filtered to "active"
+  // drops it from filteredTasks, and resolving there would slam the sheet shut
+  // the moment the user ticked the box. A task that is genuinely gone (deleted)
+  // still resolves to null and closes the sheet.
+  const detailTask = useMemo(() => {
+    if (!detailTaskId) return null;
+    const item = data?.tasks.find((t) => t.id === detailTaskId);
+    return item ? toDashboardTask(item, listContext, statusConfigs) : null;
+  }, [detailTaskId, data?.tasks, listContext, statusConfigs]);
+
+  /** Run a TaskItem-taking handler for a row the sheet identified by id. */
+  const withTaskItem = (taskId: string, run: (item: TaskItem) => void) => {
+    const item = data?.tasks.find((t) => t.id === taskId);
+    if (item) run(item);
+  };
+
   const rootPath = rootNodePath(page.id);
 
   // A completed sub-task moves its DIRECT parent's counters, and for a
@@ -1183,7 +997,10 @@ function TaskListView({ page }: TaskListViewProps) {
       // classified foreign and costs the list the full revalidation the whole
       // optimistic path exists to avoid.
       <TaskTreeProvider value={treeValue}>
-      <div className="flex flex-col h-full min-w-0">
+      {/* @container here too: the header's own narrow variants key off this
+          view's width, and without a container they would resolve against the
+          panel instead. */}
+      <div className="flex flex-col h-full min-w-0 @container">
         <TaskListHeader
           pageId={page.id}
           viewMode="editor"
@@ -1198,9 +1015,9 @@ function TaskListView({ page }: TaskListViewProps) {
           className="flex-1 overflow-auto px-4 py-3"
           onEditorChange={setEditorInstance}
         />
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t bg-muted/50 text-sm text-muted-foreground shrink-0">
+        <div className="hidden @[700px]:flex flex-wrap items-center justify-between gap-2 px-4 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t bg-muted/50 text-sm text-muted-foreground shrink-0">
           <span><strong>{data?.tasks.length || 0}</strong> tasks</span>
-          <span className="text-xs sm:text-sm">
+          <span className="text-sm">
             Updated {data?.taskList.updatedAt
               ? formatDistanceToNow(new Date(data.taskList.updatedAt), { addSuffix: true })
               : 'never'}
@@ -1249,9 +1066,94 @@ function TaskListView({ page }: TaskListViewProps) {
           className="h-[40%] shrink-0 overflow-auto px-4 py-3 border-b"
         />
       )}
-      {/* Toolbar */}
-      <div className="flex flex-col @[700px]:flex-row @[700px]:flex-wrap @[700px]:items-center @[700px]:justify-between gap-3 px-4 py-3 border-b bg-background">
-        <div className="flex flex-col @[700px]:flex-row @[700px]:items-center gap-2">
+      {/* Narrow Toolbar — one row. Filter tabs and list-management actions move
+          into a sheet so the header cannot stack into four rows on a phone. */}
+      <div className="flex items-center gap-2 px-3 py-2 border-b bg-background @[700px]:hidden">
+        <div className="relative flex-1 min-w-0">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            ref={narrowSearchRef}
+            placeholder="Filter tasks..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9 h-9 text-sm bg-muted/50 border-0"
+          />
+        </div>
+        <TaskFilterButton
+          activeFilterCount={filter === 'all' ? 0 : 1}
+          onClick={() => setNarrowFiltersOpen(true)}
+        />
+        {canEdit && viewMode === 'table' && (
+          <Button
+            size="icon"
+            className="h-10 w-10 shrink-0"
+            aria-label="New task"
+            onClick={() => {
+              newTaskInputRef.current?.scrollIntoView({ block: 'nearest' });
+              newTaskInputRef.current?.focus();
+            }}
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
+
+      <Sheet open={narrowFiltersOpen} onOpenChange={setNarrowFiltersOpen}>
+        <SheetContent
+          side="bottom"
+          className="rounded-t-2xl max-h-[80vh] pb-[calc(1rem+env(safe-area-inset-bottom))]"
+        >
+          <SheetHeader className="px-5 pt-3 pb-0">
+            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-muted-foreground/30" />
+            <SheetTitle className="text-base">Filters</SheetTitle>
+            <SheetDescription className="sr-only">
+              Filter this task list and manage its statuses and workflows
+            </SheetDescription>
+          </SheetHeader>
+          <div className="px-5 py-4 space-y-4">
+            <div className="flex items-center bg-muted rounded-md p-0.5">
+              {(['all', 'active', 'completed'] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => { setFilter(f); setNarrowFiltersOpen(false); }}
+                  className={cn(
+                    'flex-1 px-3 py-2 text-sm font-medium rounded transition-colors',
+                    filter === f
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {f.charAt(0).toUpperCase() + f.slice(1)}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {canEdit && (
+                <StatusConfigManager
+                  pageId={page.id}
+                  statusConfigs={statusConfigs}
+                  onConfigsChanged={() => mutateTasks()}
+                />
+              )}
+              {canManageWorkflows && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 gap-1"
+                  onClick={() => { setNarrowFiltersOpen(false); setWorkflowsDialogOpen(true); }}
+                >
+                  <Zap className="h-3.5 w-3.5" />
+                  <span>Workflows</span>
+                </Button>
+              )}
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Wide Toolbar */}
+      <div className="hidden @[700px]:flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b bg-background">
+        <div className="flex items-center gap-2">
           {/* Filter tabs */}
           <div className="flex items-center bg-muted rounded-md p-0.5">
             {(['all', 'active', 'completed'] as const).map((f) => (
@@ -1259,7 +1161,7 @@ function TaskListView({ page }: TaskListViewProps) {
                 key={f}
                 onClick={() => setFilter(f)}
                 className={cn(
-                  'px-3 py-1.5 text-sm font-medium rounded transition-colors flex-1 @[700px]:flex-none',
+                  'px-3 py-1.5 text-sm font-medium rounded transition-colors',
                   filter === f
                     ? 'bg-background text-foreground shadow-sm'
                     : 'text-muted-foreground hover:text-foreground'
@@ -1274,47 +1176,41 @@ function TaskListView({ page }: TaskListViewProps) {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              ref={searchInputRef}
+              ref={wideSearchRef}
               placeholder="Filter tasks..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="pl-9 w-full @[700px]:w-48"
+              className="pl-9 w-48"
             />
           </div>
         </div>
 
-        <div className="flex flex-col @[700px]:flex-row @[700px]:items-center gap-2 w-full @[700px]:w-auto">
-          <div className="flex items-center gap-2 @[700px]:contents">
-            {canEdit && (
-              <StatusConfigManager
-                pageId={page.id}
-                statusConfigs={statusConfigs}
-                onConfigsChanged={() => mutateTasks()}
-              />
-            )}
+        <div className="flex items-center gap-2">
+          {canEdit && (
+            <StatusConfigManager
+              pageId={page.id}
+              statusConfigs={statusConfigs}
+              onConfigsChanged={() => mutateTasks()}
+            />
+          )}
 
-            {canManageWorkflows && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 gap-1"
-                onClick={() => setWorkflowsDialogOpen(true)}
-              >
-                <Zap className="h-3.5 w-3.5" />
-                <span className="hidden @[700px]:inline">Workflows</span>
-              </Button>
-            )}
-          </div>
+          {canManageWorkflows && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 gap-1"
+              onClick={() => setWorkflowsDialogOpen(true)}
+            >
+              <Zap className="h-3.5 w-3.5" />
+              <span>Workflows</span>
+            </Button>
+          )}
 
           {canEdit && viewMode === 'table' && (
             <Button
               size="sm"
-              className="w-full @[700px]:w-auto"
               onClick={() => {
-                const mobileInput = document.getElementById('new-task-input-mobile');
-                const desktopInput = document.getElementById('new-task-input');
-                // offsetParent is null for CSS-hidden elements; pick the visible input
-                const input = desktopInput?.offsetParent ? desktopInput : mobileInput;
+                const input = document.getElementById('new-task-input');
                 input?.scrollIntoView({ block: 'nearest' });
                 input?.focus();
               }}
@@ -1326,50 +1222,45 @@ function TaskListView({ page }: TaskListViewProps) {
         </div>
       </div>
 
-      {/* Narrow Card View — table/card switch only; Kanban has its own always-visible view below */}
+      {/* Narrow Compact List — table/list switch only; Kanban has its own always-visible view below.
+          Rows are title + one metadata line; every field edit happens in the detail sheet. */}
       {viewMode !== 'kanban' && (
-      <div className="flex-1 overflow-auto @[700px]:hidden p-4 space-y-3">
-        {filteredTasks.map((task) => (
-          <div key={task.id} data-task-id={task.id}>
-          <MobileTaskCard
-            task={task}
-            canEdit={canEdit}
-            onToggleComplete={taskHandlers.onToggleComplete}
-            onStatusChange={taskHandlers.onStatusChange}
-            onPriorityChange={taskHandlers.onPriorityChange}
-            onMultiAssigneeChange={taskHandlers.onMultiAssigneeChange!}
-            onDueDateChange={taskHandlers.onDueDateChange}
-            onSaveTitle={taskHandlers.onSaveTitle}
-            onStartEdit={taskHandlers.onStartEdit}
-            onDelete={taskHandlers.onDelete}
-            onNavigate={taskHandlers.onNavigate}
-            onConfigureTriggers={taskHandlers.onConfigureTriggers}
-            driveId={page.driveId}
-            isEditing={editingTaskId === task.id}
-            editingTitle={editingTitle}
-            onEditingTitleChange={setEditingTitle}
-            onCancelEdit={() => setEditingTaskId(null)}
-            statusConfigMap={statusConfigMap}
-            statusOrder={statusOrder}
-            statusConfigs={statusConfigs}
-          />
-          </div>
-        ))}
+      <div className="flex-1 overflow-auto @[700px]:hidden">
+        <div className="divide-y divide-border/50">
+          {filteredTasks.map((task) => (
+            // data-task-id stays on the row: Find locates matches by querying
+            // every copy and picking the one that is actually visible.
+            <div key={task.id} data-task-id={task.id}>
+              <TaskCompactRow
+                task={toDashboardTask(task, listContext, statusConfigs)}
+                onToggleComplete={() => taskHandlers.onToggleComplete(task)}
+                onTap={() => setDetailTaskId(task.id)}
+                trailing={
+                  <SubTaskProgress
+                    task={task}
+                    className="shrink-0 text-xs text-muted-foreground tabular-nums"
+                  />
+                }
+              />
+            </div>
+          ))}
+        </div>
 
-        {loadMoreControl}
+        <div className="px-4">{loadMoreControl}</div>
 
-        {/* Mobile new task input */}
+        {/* Narrow new-task input. Focused by ref from the toolbar's add button —
+            the old id + offsetParent probe went away with the card list. */}
         {canEdit && (
-          <div className="border rounded-lg p-4 bg-card">
+          <div className="px-4 py-3">
             <Input
-              id="new-task-input-mobile"
+              ref={newTaskInputRef}
               placeholder="+ Add a new task..."
               value={newTaskTitle}
               onChange={(e) => setNewTaskTitle(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') handleCreateRootTask();
               }}
-              className="border-0 shadow-none focus-visible:ring-0 px-0"
+              className="h-9 text-sm bg-muted/50 border-0"
             />
           </div>
         )}
@@ -1540,10 +1431,11 @@ function TaskListView({ page }: TaskListViewProps) {
       </div>
       )}
 
-      {/* Footer stats */}
-      <div className="flex flex-col @[420px]:flex-row @[420px]:items-center @[420px]:justify-between gap-2 px-4 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t bg-muted/50 text-sm text-muted-foreground">
+      {/* Footer stats — hidden at narrow widths, where the bar costs more screen
+          than the count is worth (same call as the tasks dashboard's mobile view). */}
+      <div className="hidden @[700px]:flex flex-wrap items-center justify-between gap-2 px-4 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t bg-muted/50 text-sm text-muted-foreground">
         <span><strong>{data?.tasks.length || 0}</strong> tasks</span>
-        <span className="text-xs @[420px]:text-sm">
+        <span className="text-sm">
           Updated {data?.taskList.updatedAt
             ? formatDistanceToNow(new Date(data.taskList.updatedAt), { addSuffix: true })
             : 'never'}
@@ -1568,6 +1460,26 @@ function TaskListView({ page }: TaskListViewProps) {
           }}
         />
       )}
+
+      {/* Narrow-width task editing. The sheet speaks the dashboard Task shape and
+          hands that adapted object back to every callback, so each one resolves
+          the ORIGINAL TaskItem by id first — handlers like onStatusChange run a
+          sub-task completion guard that reads the real row. */}
+      <TaskDetailSheet
+        task={detailTask}
+        statusConfigs={statusConfigs}
+        open={!!detailTask}
+        onOpenChange={(open) => { if (!open) setDetailTaskId(null); }}
+        onStatusChange={(t, status) => withTaskItem(t.id, (item) => taskHandlers.onStatusChange(item, status))}
+        onPriorityChange={(t, priority) => taskHandlers.onPriorityChange(t.id, priority)}
+        onToggleComplete={(t) => withTaskItem(t.id, taskHandlers.onToggleComplete)}
+        onMultiAssigneeChange={(t, assigneeIds) => taskHandlers.onMultiAssigneeChange?.(t.id, assigneeIds)}
+        onDueDateChange={(t, date) => taskHandlers.onDueDateChange(t.id, date)}
+        onSaveTitle={(t, title) => taskHandlers.onSaveTitle(t.id, title)}
+        onDelete={(t) => { taskHandlers.onDelete(t.id); setDetailTaskId(null); }}
+        onNavigate={(t) => withTaskItem(t.id, taskHandlers.onNavigate)}
+        onTriggersSaved={() => { mutateTasks(); writeMachinery.refreshNodeCaches(); }}
+      />
 
       <TaskListWorkflowsDialog
         open={workflowsDialogOpen}

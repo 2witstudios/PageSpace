@@ -136,12 +136,23 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
   return (
     <div className="flex flex-col gap-1 @[400px]:gap-2 p-2 @[400px]:p-4 border-b border-[var(--separator)]">
       <Breadcrumbs pageId={pageId} />
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-2 min-w-0">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           <EditableTitle pageId={pageId} />
           <DocumentSaveStatus pageId={page?.id ?? null} enabled={showSaveStatus} />
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-1 @[400px]:gap-2">
+        {/* Never wraps. This cluster used to be `flex-wrap`, so on a narrow pane
+            the actions spilled onto a second row and the header ate vertical
+            space that the content below needed. It now stays one row and
+            scrolls horizontally instead; the title beside it truncates.
+            Kept as real inline controls rather than collapsed into an overflow
+            menu because several of these (ShareDialog, ExportDropdown,
+            PublishControls) are dialog/popover triggers, and nesting those in a
+            DropdownMenu unmounts the dialog when the menu closes.
+            `min-w-0`, not `shrink-0`: a shrink-0 child of a flex-1 min-w-0 row
+            overflows its parent instead of wrapping, so the cluster is allowed
+            to shrink and scroll within itself. */}
+        <div className="flex flex-nowrap items-center justify-end gap-1 @[400px]:gap-2 min-w-0 overflow-x-auto scrollbar-none">
           {pageIsDocument && <EditorToggles />}
           {pageIsDocument && page && <PageSetupButton pageId={page.id} />}
           {(pageIsDocument || pageIsSheet) && page && (

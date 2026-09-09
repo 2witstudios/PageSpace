@@ -1,6 +1,6 @@
 'use client';
 
-import { memo } from 'react';
+import { memo, type ReactNode } from 'react';
 import { format, isPast, isToday, differenceInDays } from 'date-fns';
 import { ChevronRight, AlertCircle } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -13,6 +13,11 @@ export interface TaskCompactRowProps {
   task: Task;
   onToggleComplete: (task: Task) => void;
   onTap: (task: Task) => void;
+  /**
+   * Optional slot before the chevron. The task-list page view uses it for
+   * sub-task progress, which the dashboard has no notion of.
+   */
+  trailing?: ReactNode;
 }
 
 const PRIORITY_DOT: Record<string, string> = {
@@ -25,6 +30,7 @@ export const TaskCompactRow = memo(function TaskCompactRow({
   task,
   onToggleComplete,
   onTap,
+  trailing,
 }: TaskCompactRowProps) {
   const isCompleted = getStatusDisplay(task).group === 'done';
   const dueDate = task.dueDate ? new Date(task.dueDate) : null;
@@ -106,6 +112,8 @@ export const TaskCompactRow = memo(function TaskCompactRow({
           )}
         </div>
       </button>
+
+      {trailing}
 
       {/* Chevron indicator */}
       <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0" />
