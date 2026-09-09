@@ -316,7 +316,8 @@ know what actually ran.
   daemon does not deny: it freezes the exact request under a challenge and the question is put to
   you **in the PageSpace chat**, on a card showing that exact command, directory, environment and
   limits; the machine compares your click against what it froze before anything runs, and the
-  challenge dies with the request's one-minute grant.
+  challenge dies with the request's one-minute grant. Answering that card requires **your
+  passkey** — see below.
 - **`allowlist`** — only the operations in `ops` run; everything else is denied with no prompt.
 
 **`allowlist` allowlists operations, not executables.** `ops` holds `exec`, `fs_read` and
@@ -330,6 +331,30 @@ Because that one edit silently removes the click, the daemon is loud about it: `
 exec from ops to restore the approval prompt`, and `env connect` writes one audit line
 (`policy_warning:exec_allowlisted`) at start.
 
+### A chat approval needs your passkey
+
+When you answer an approval card **in the PageSpace chat**, your browser asks your authenticator
+(Touch ID, Windows Hello, a security key) to sign, and the machine verifies that signature itself
+before it runs anything. The signature is over a challenge derived from the exact request the
+machine froze, so it cannot be moved to a different command, a different question, or a different
+machine — and PageSpace cannot produce one. That is the point: without it, anyone able to sign
+grants *and* stand where the server stands could answer your card for you, and the machine would
+have no way to tell.
+
+The passkeys the machine will accept are pinned **at enrolment**, from your PageSpace account,
+while you are at the keyboard — the same trust-on-first-use as the server signing key the machine
+pins in the other direction. `pagespace env owner-keys <enrollmentId>` prints them.
+
+Two consequences, both deliberate:
+
+- **Nothing can add a key to a machine afterwards.** Not PageSpace, not this CLI, not any message
+  on the bridge. If you register a new passkey and want this machine to trust it, **re-enrol the
+  machine**. A set that could be extended remotely would be worth nothing.
+- **If you had no passkey when you enrolled, chat approvals are refused.** The machine says so at
+  `env enroll` and at `env connect`, and asks in the terminal running `env connect` instead — the
+  terminal prompt never involved the server, so it was never exposed to this. Register a passkey
+  and re-enrol to use the chat.
+
 A drive owner or admin creates a local Environment from the ordinary "New environment" step (choose
 **This computer** and name the machine) and is shown a **one-time enrollment code** (valid ten
 minutes, single use) beside these exact commands. Losing the code is not fatal: until a machine has
@@ -342,13 +367,15 @@ pagespace env token <enrollmentId> [--host <url>]
 pagespace env connect <enrollmentId> [--host <url>]
 pagespace env disconnect <enrollmentId>
 pagespace env policy [--json]
+pagespace env owner-keys <enrollmentId> [--json]
 ```
 
 `env enroll` generates an Ed25519 keypair **on this machine**, sends the server the public half
 with the code, and stores the private half — plus the server signing key it pinned in return — in
 this machine's credential store under the profile `env:<enrollmentId>`. The private key is never
 printed (not even with `--json`) and never leaves the machine. A refused enrollment discards the
-key. `env token` proves possession of that key (the server issues a nonce, the machine signs it)
+key. `env enroll` also pins **your passkeys** at the same moment — see "A chat approval needs your
+passkey" below; `env owner-keys` prints what it pinned. `env token` proves possession of that key (the server issues a nonce, the machine signs it)
 and prints a short-lived bridge token — the round trip `env connect` performs on every
 reconnect. Neither command needs a login: the code, then the key, are the machine's credentials,
 and the machine credential is never used to authenticate ordinary commands (`logout` and

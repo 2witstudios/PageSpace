@@ -32,7 +32,7 @@ import { generateMachineKeypair, signWithMachineKey } from '../env-bridge/keypai
 import type { GenerateMachineKeypair, SignWithMachineKey } from '../env-bridge/keypair.js';
 import { BridgeTokenError, mintBridgeToken, postJson, refusalOf } from '../env-bridge/token.js';
 import { defaultPolicyPath, describePolicyWarnings, openPolicyFile, parseMachinePolicyText, writePolicyFile, type OpenedPolicyFile } from '../env-bridge/policy.js';
-import { GRANT_OPS, type GrantOp } from '../env-bridge/lib-core.js';
+import { GRANT_OPS, type GrantOp, type PinnedOwnerApproval } from '../env-bridge/lib-core.js';
 
 type Fetch = typeof globalThis.fetch;
 
@@ -75,6 +75,33 @@ export const HEADLESS_MACHINE_OPS: readonly GrantOp[] = ['fs_read', 'fs_write'];
  * an op outside the closed union yields `[]` (ask about everything), never a
  * guess.
  */
+/**
+ * The owner's passkeys as the enroll response carried them, validated
+ * STRICTLY into the shape the machine pins (hardening B, leaf B1).
+ *
+ * This is trust on first use, so it is also the only moment the value is
+ * accepted at all — `env connect` reads what was pinned and never updates it,
+ * and no frame can (leaf B5). Anything that is not exactly the expected shape
+ * yields `null`: the machine then knows it cannot prove a human clicked and
+ * refuses chat approvals, which is the fail-closed answer. An owner with no
+ * passkey yields a pinned set with `credentials: []` — pinned, and empty, so
+ * the daemon can tell "nothing was ever pinned" from "you have no key yet".
+ */
+export function pinnedOwnerApprovalFromEnrollment(value: unknown): PinnedOwnerApproval | null {
+  if (value === null || typeof value !== 'object') return null;
+  const { rpId, origin, credentials } = value as { rpId?: unknown; origin?: unknown; credentials?: unknown };
+  if (typeof rpId !== 'string' || rpId.length === 0 || typeof origin !== 'string' || origin.length === 0) return null;
+  if (!Array.isArray(credentials)) return null;
+  const pinned: { credentialId: string; publicKeyCose: string }[] = [];
+  for (const entry of credentials) {
+    if (entry === null || typeof entry !== 'object') return null;
+    const { credentialId, publicKeyCose } = entry as { credentialId?: unknown; publicKeyCose?: unknown };
+    if (typeof credentialId !== 'string' || credentialId.length === 0 || typeof publicKeyCose !== 'string' || publicKeyCose.length === 0) return null;
+    pinned.push({ credentialId, publicKeyCose });
+  }
+  return { rpId, origin, credentials: pinned };
+}
+
 export function machineOpsFromServerPolicy(serverPolicy: unknown): GrantOp[] {
   if (serverPolicy === null || typeof serverPolicy !== 'object') return [];
   const { ops, checkpoint } = serverPolicy as { ops?: unknown; checkpoint?: unknown };
@@ -233,9 +260,12 @@ export function createEnvEnrollHandler(deps: EnvEnrollHandlerDeps): CommandHandl
       ctx.stderr.write(`Enrollment refused: ${await refusalOf(response)}\n`);
       return EXIT_RUNTIME_ERROR;
     }
-    const result = (await response.json()) as { enrollmentId: string; envId: string; serverKeyId: string; serverPublicKey: string; ownerId?: string; serverPolicy?: unknown };
+    const result = (await response.json()) as { enrollmentId: string; envId: string; serverKeyId: string; serverPublicKey: string; ownerId?: string; serverPolicy?: unknown; ownerCredentials?: unknown };
 
-    const credential: MachineHostCredential = { ...pending, envId: result.envId, serverPublicKey: result.serverPublicKey, serverKeyId: result.serverKeyId };
+    // Pinned in the SAME write as the server key: one trust-on-first-use
+    // moment, while the owner is at the keyboard, for both directions.
+    const ownerApproval = pinnedOwnerApprovalFromEnrollment(result.ownerCredentials);
+    const credential: MachineHostCredential = { ...pending, envId: result.envId, serverPublicKey: result.serverPublicKey, serverKeyId: result.serverKeyId, ...(ownerApproval !== null && { ownerApproval }) };
     // (Codex C11) The code is spent and the server has pinned this key. The
     // pending record already proved the store writable moments ago, so a
     // failure here is transient far more often than not: retry once, and if
@@ -260,7 +290,18 @@ export function createEnvEnrollHandler(deps: EnvEnrollHandlerDeps): CommandHandl
     const policy = ownerId === null ? null : await scaffoldPolicyForOwner(deps, ctx.env, ownerId, ops);
 
     if (intent.flags.json) {
-      ctx.stdout.write(`${JSON.stringify({ enrollmentId: result.enrollmentId, envId: result.envId, serverKeyId: result.serverKeyId, host, ownerId, policy: policy && { path: policy.path, scaffolded: policy.scaffolded, kept: policy.kept, ops: policy.ops } })}\n`);
+      ctx.stdout.write(
+        `${JSON.stringify({
+          enrollmentId: result.enrollmentId,
+          envId: result.envId,
+          serverKeyId: result.serverKeyId,
+          host,
+          ownerId,
+          // Credential IDS only — never the keys — so a script can see what was pinned without the output carrying key material around.
+          ownerApproval: ownerApproval === null ? null : { rpId: ownerApproval.rpId, origin: ownerApproval.origin, credentialIds: ownerApproval.credentials.map((credential) => credential.credentialId) },
+          policy: policy && { path: policy.path, scaffolded: policy.scaffolded, kept: policy.kept, ops: policy.ops },
+        })}\n`,
+      );
     } else {
       ctx.stdout.write(
         `Enrolled this machine as environment ${result.envId} on ${host}.\n` +
@@ -287,6 +328,8 @@ export function createEnvEnrollHandler(deps: EnvEnrollHandlerDeps): CommandHandl
         for (const warning of describePolicyWarnings(scaffolded, { homedir: deps.homedir })) ctx.stderr.write(`${warning.message}\n`);
       }
     }
+    // What was pinned about YOU, said plainly at the one moment it is decided (hardening B).
+    if (!intent.flags.json) ctx.stdout.write(`${describeOwnerApprovalPinning(ownerApproval)}\n`);
     if (ownerId === null) ctx.stderr.write('The server did not say who the owner of this environment is, so no policy was scaffolded; create ~/.pagespace/env-policy.json yourself with "principals": [<your user id>].\n');
     if (policy?.warning) ctx.stderr.write(`${policy.warning}\n`);
     if (policy?.error) {
@@ -297,6 +340,33 @@ export function createEnvEnrollHandler(deps: EnvEnrollHandlerDeps): CommandHandl
     }
     return EXIT_SUCCESS;
   };
+}
+
+/**
+ * The one line `enroll` prints about what this machine will and will not
+ * accept as proof that a human clicked (hardening B, leaves B1 and B5).
+ * Three honest states, never a silent one.
+ */
+export function describeOwnerApprovalPinning(pinned: PinnedOwnerApproval | null): string {
+  if (pinned === null) {
+    return (
+      'This server did not send your passkeys, so this machine pinned NONE. ' +
+      'Approvals in the PageSpace chat will be refused (the machine cannot verify that a human clicked) and every request that is not pre-approved will prompt in the terminal running "pagespace env connect". ' +
+      'Register a passkey in PageSpace and re-enrol this machine to use chat approvals.'
+    );
+  }
+  if (pinned.credentials.length === 0) {
+    return (
+      'You have no passkey registered, so this machine pinned an EMPTY set of owner credentials. ' +
+      'Approvals in the PageSpace chat will be refused until you register a passkey and RE-ENROL this machine — a credential can never be added to a machine afterwards, by PageSpace or by anyone else, which is what makes the check worth anything. ' +
+      'Until then, requests that are not pre-approved prompt in the terminal running "pagespace env connect".'
+    );
+  }
+  const plural = pinned.credentials.length === 1 ? 'passkey' : 'passkeys';
+  return (
+    `Pinned ${pinned.credentials.length} of your ${plural} (${pinned.origin}). ` +
+    'From now on this machine verifies YOUR click itself: an approval in the PageSpace chat must carry a signature from one of these keys, over the exact request this machine froze. PageSpace cannot make one, and cannot add another key to this list — re-enrol to change it. Run "pagespace env owner-keys" to see them.'
+  );
 }
 
 async function storeWithOneRetry(store: CredentialStore, host: string, credential: MachineHostCredential, profile: string): Promise<{ ok: true } | { ok: false; error: string }> {

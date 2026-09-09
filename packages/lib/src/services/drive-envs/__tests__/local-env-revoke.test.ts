@@ -15,6 +15,9 @@ const machine = generateKeyPairSync('ed25519');
 const server = generateKeyPairSync('ed25519');
 const machinePublicKey = machine.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
 
+/** The owner's passkeys as enrolment reads them (hardening B, leaf B1); these suites enrol an owner with none, so an empty set is pinned. */
+const ownerCredentials = { rpId: 'pagespace.test', origin: 'https://pagespace.test', list: async () => [] };
+
 const identity: LocalEnvIdentityDeps = {
   random: (length) => new Uint8Array(randomBytes(length)),
   hash: (bytes) => createHash('sha3-256').update(bytes).digest('hex'),
@@ -35,6 +38,7 @@ function harness(machineOutcome: RevokeMachineNotifyOutcome = 'sent_and_closed')
     resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'pro' as const }),
     now: () => NOW,
     identity,
+    ownerCredentials,
     mintToken: async () => {
       order.push('mint');
       return 'tok';

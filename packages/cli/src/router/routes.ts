@@ -89,6 +89,7 @@ import { envEnrollHandler, envTokenHandler } from '../commands/env.js';
 import { envConnectHandler } from '../commands/env/connect.js';
 import { envDisconnectHandler } from '../commands/env/disconnect.js';
 import { envPolicyHandler } from '../commands/env/policy.js';
+import { envOwnerKeysHandler } from '../commands/env/owner-keys.js';
 import { keysHandler } from '../commands/keys/wizard.js';
 import type { Route } from './router.js';
 
@@ -125,6 +126,7 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['env', 'connect'], handler: envConnectHandler, longRunning: true, summary: 'Run the bridge daemon: serve this machine as a local environment (exec + files)' },
   { path: ['env', 'disconnect'], handler: envDisconnectHandler, summary: 'Stop a running env connect for an enrollment' },
   { path: ['env', 'policy'], handler: envPolicyHandler, summary: "Print and validate this machine's local policy file" },
+  { path: ['env', 'owner-keys'], handler: envOwnerKeysHandler, summary: 'Show the passkeys this machine will accept as proof of your click' },
   { path: ['mcp'], handler: mcpHandler, longRunning: true, summary: 'Serve the full operation registry as an MCP stdio server' },
   { path: ['drives', 'list'], handler: drivesListHandler, summary: 'List drives' },
   { path: ['drives', 'create'], handler: drivesCreateHandler, summary: 'Create a drive' },

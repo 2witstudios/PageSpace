@@ -3,7 +3,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { users } from '@pagespace/db/schema/auth';
 import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
-import { driveEnvLocal, type DriveEnvLocalCapabilities } from '@pagespace/db/schema/drive-env-local';
+import { driveEnvLocal, type DriveEnvLocalCapabilities, type DriveEnvLocalOwnerCredentials } from '@pagespace/db/schema/drive-env-local';
 import { driveEnvGrantAudit } from '@pagespace/db/schema/drive-env-grant-audit';
 import { driveEnvApprovals } from '@pagespace/db/schema/drive-env-approvals';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
@@ -1531,6 +1531,8 @@ export interface UserLocalEnvironmentExport {
   serverKeyId: string | null;
   bindPolicy: string;
   capabilities: DriveEnvLocalCapabilities | null;
+  /** The subject's own passkey public keys, as their machine pinned them at enrolment (hardening B). Device data of the same kind as `machinePublicKey`, which this collector already carries. */
+  ownerCredentials: DriveEnvLocalOwnerCredentials | null;
   enrolledAt: Date | null;
   lastSeenAt: Date | null;
   revokedAt: Date | null;
@@ -1550,6 +1552,7 @@ export async function collectUserLocalEnvironments(database: DB, userId: string)
       serverKeyId: driveEnvLocal.serverKeyId,
       bindPolicy: driveEnvLocal.bindPolicy,
       capabilities: driveEnvLocal.capabilities,
+      ownerCredentials: driveEnvLocal.ownerCredentials,
       enrolledAt: driveEnvLocal.enrolledAt,
       lastSeenAt: driveEnvLocal.lastSeenAt,
       revokedAt: driveEnvLocal.revokedAt,
@@ -1563,7 +1566,7 @@ export async function collectUserLocalEnvironments(database: DB, userId: string)
   // does not model `orderBy`, and this collector's rows are few (one per
   // enrolled machine), so sorting after the fetch costs nothing.
   return rows
-    .map((row) => ({ ...row, capabilities: row.capabilities ?? null }))
+    .map((row) => ({ ...row, capabilities: row.capabilities ?? null, ownerCredentials: row.ownerCredentials ?? null }))
     .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 }
 

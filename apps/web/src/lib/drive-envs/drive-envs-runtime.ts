@@ -64,6 +64,7 @@ import { createHash, createPublicKey, randomBytes, verify as nodeVerify } from '
 import { createId } from '@paralleldrive/cuid2';
 import { loadServerSigningKey } from '@pagespace/lib/auth/env-bridge-signing-key';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { listPasskeyPublicKeys, PASSKEY_CONFIG } from '@pagespace/lib/auth/passkey-service';
 import {
   enrollLocalDriveEnv,
   issueLocalEnvChallenge,
@@ -266,6 +267,15 @@ async function localEnvIdentityServiceDeps(): Promise<LocalEnvIdentityServiceDep
     store,
     now: () => new Date(),
     identity: envBridgeIdentity(),
+    // The owner's passkeys, pinned by the machine at enrolment (hardening B,
+    // leaf B1). Public keys only, straight from the passkey store — this is
+    // the first time `passkeys.publicKey` leaves the server, and it is what
+    // ends the machine having to take the server's word that a human clicked.
+    ownerCredentials: {
+      rpId: PASSKEY_CONFIG.rpId,
+      origin: PASSKEY_CONFIG.origin,
+      list: (ownerId) => listPasskeyPublicKeys(ownerId),
+    },
     // The socket token is the machine OWNER's, bound to this env (resourceId)
     // and drive; the env-bridge socket route checks scope, resource and the
     // enrollment before accepting it. Type 'mcp' so no generic web route

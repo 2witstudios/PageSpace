@@ -97,6 +97,13 @@ export interface DriveEnvLocalRecord {
   /** The daemon process the last hello came from (attested in the signed hello); NULL before the first. */
   daemonEpoch: string | null;
   serverPolicy: { ops: string[]; checkpoint: boolean };
+  /**
+   * The owner's passkeys as pinned at enrolment (hardening B). NULL for a row
+   * enrolled before the column existed, and `{ credentials: [] }` for an owner
+   * who had none — both mean the machine cannot prove a human clicked, so it
+   * refuses chat approvals (leaf B5). Public keys only.
+   */
+  ownerCredentials: { rpId: string; origin: string; credentials: { credentialId: string; publicKeyCose: string }[] } | null;
   bindPolicy: string;
   enrollmentCodeHash: string | null;
   enrollmentCodeExpiresAt: Date | null;
@@ -226,7 +233,14 @@ export interface DriveEnvStore {
    * and silently invalidate the code the owner was just shown (Codex P1 on
    * #2564). Clears the code hash — a consumed code is not kept around.
    */
-  pinMachineKey(input: { envId: string; machinePublicKey: string; machineKeyFingerprint: string; serverKeyId: string; enrollmentCodeHash: string; now: Date }): Promise<boolean>;
+  /**
+   * Pin the machine's key AND the owner's passkeys, in ONE update — trust on
+   * first use for both directions of the bridge at the single moment the owner
+   * is provably at the keyboard (hardening B, leaf B1). `ownerCredentials` is
+   * written here and nowhere else: no other store method sets that column, so
+   * no server-mintable path can add a credential later.
+   */
+  pinMachineKey(input: { envId: string; machinePublicKey: string; machineKeyFingerprint: string; serverKeyId: string; ownerCredentials: DriveEnvLocalRecord['ownerCredentials']; enrollmentCodeHash: string; now: Date }): Promise<boolean>;
   /**
    * Replace the one-time code (hash + expiry, used stamp cleared) IFF the row
    * is still pending: `enrolledAt IS NULL AND revokedAt IS NULL`. The
@@ -639,6 +653,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     capabilities: driveEnvLocal.capabilities,
     daemonEpoch: driveEnvLocal.daemonEpoch,
     serverPolicy: driveEnvLocal.serverPolicy,
+    ownerCredentials: driveEnvLocal.ownerCredentials,
     bindPolicy: driveEnvLocal.bindPolicy,
     enrollmentCodeHash: driveEnvLocal.enrollmentCodeHash,
     enrollmentCodeExpiresAt: driveEnvLocal.enrollmentCodeExpiresAt,
@@ -712,10 +727,10 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       return rows.map((row) => ({ env: row.env as DriveEnvRecord, local: row.local as DriveEnvLocalRecord }));
     },
 
-    async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, enrollmentCodeHash, now: at }) {
+    async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, ownerCredentials, enrollmentCodeHash, now: at }) {
       const updated = await db
         .update(driveEnvLocal)
-        .set({ machinePublicKey, machineKeyFingerprint, serverKeyId, enrolledAt: at, enrollmentCodeUsedAt: at, enrollmentCodeHash: null, updatedAt: at })
+        .set({ machinePublicKey, machineKeyFingerprint, serverKeyId, ownerCredentials: ownerCredentials ?? undefined, enrolledAt: at, enrollmentCodeUsedAt: at, enrollmentCodeHash: null, updatedAt: at })
         .where(
           and(
             eq(driveEnvLocal.envId, envId),

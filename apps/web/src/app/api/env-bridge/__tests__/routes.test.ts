@@ -61,12 +61,21 @@ describe('the cloud opt-in (invariant 11)', () => {
 
 describe('POST /api/env-bridge/enroll', () => {
   it('given a valid code and key, should pin and answer 200 with the server key to pin, auditing the pin', async () => {
-    vi.mocked(enrollLocalEnv).mockResolvedValue({ ok: true, envId: 'env_1', enrollmentId: ENROLLMENT, serverKeyId: 'k1', serverPublicKey: 'U0VSVkVS', ownerId: 'user_owner', serverPolicy: { ops: ['fs_read', 'exec'], checkpoint: false } });
+    vi.mocked(enrollLocalEnv).mockResolvedValue({ ok: true, envId: 'env_1', enrollmentId: ENROLLMENT, serverKeyId: 'k1', serverPublicKey: 'U0VSVkVS', ownerId: 'user_owner', serverPolicy: { ops: ['fs_read', 'exec'], checkpoint: false }, ownerCredentials: { rpId: 'pagespace.test', origin: 'https://pagespace.test', credentials: [{ credentialId: 'cred-a', publicKeyCose: 'cose-a' }] } });
     const response = await enroll(enrollReq());
     expect(response.status).toBe(200);
     // `ownerId` rides the answer so the enroller can scaffold `principals: [owner]` (D-6).
     // `serverPolicy` rides too (GA wave 2): the enroller scaffolds the FILE ops it allows into the machine policy — and never `exec`, whatever it says.
-    expect(await json(response)).toEqual({ enrollmentId: ENROLLMENT, envId: 'env_1', serverKeyId: 'k1', serverPublicKey: 'U0VSVkVS', ownerId: 'user_owner', serverPolicy: { ops: ['fs_read', 'exec'], checkpoint: false } });
+    // `ownerCredentials` rides too (hardening B, leaf B1): the owner's PASSKEY PUBLIC KEYS, for the machine to pin, so it can verify the owner's click itself instead of taking this server's word for it.
+    expect(await json(response)).toEqual({
+      enrollmentId: ENROLLMENT,
+      envId: 'env_1',
+      serverKeyId: 'k1',
+      serverPublicKey: 'U0VSVkVS',
+      ownerId: 'user_owner',
+      serverPolicy: { ops: ['fs_read', 'exec'], checkpoint: false },
+      ownerCredentials: { rpId: 'pagespace.test', origin: 'https://pagespace.test', credentials: [{ credentialId: 'cred-a', publicKeyCose: 'cose-a' }] },
+    });
     expect(enrollLocalEnv).toHaveBeenCalledWith(enrollBody);
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'auth.token.created', resourceId: 'env_1' }));
   });
@@ -78,6 +87,8 @@ describe('POST /api/env-bridge/enroll', () => {
     ['used', 409],
     ['already_enrolled', 409],
     ['race', 409],
+    // The passkey store could not be read, so NOTHING was pinned and the code was not spent — retryable, not a refusal of the code (hardening B, leaf B1).
+    ['owner_credentials_unavailable', 503],
     ['mismatch', 401],
     ['malformed', 400],
     ['bad_public_key', 400],
