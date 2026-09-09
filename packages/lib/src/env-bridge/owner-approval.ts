@@ -43,7 +43,7 @@
  * Pure by construction: SHA-256 and the ES256 verification primitive are
  * injected, there is no clock, and nothing here performs I/O.
  */
-import { approvalAssertionSchema, canonicalizeArgs, constantTimeEqual, decodeBase64Url, encodeBase64Url, type ApprovalAssertion } from './grant';
+import { approvalAssertionSchema, canonicalizeArgs, constantTimeEqual, decodeBase64Url, encodeBase64Url } from './grant';
 import { OWNER_APPROVAL_SIGNING_DOMAIN } from './machine-signatures';
 import type { PendingApproval } from './frame-codec';
 import type { NormalizedRequest } from './decide-execution';
@@ -153,8 +153,6 @@ export interface PinnedOwnerApproval {
  * folder avoids everywhere else.
  */
 const assertionSchema = approvalAssertionSchema;
-
-export type OwnerApprovalAssertion = ApprovalAssertion;
 
 export type OwnerApprovalDenyReason =
   /** Nothing was pinned at enrolment (or the pinning is unusable): this machine cannot prove a human, so it refuses rather than accept the server's word (leaf B5). */
