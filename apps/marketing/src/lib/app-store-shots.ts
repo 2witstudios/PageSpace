@@ -31,7 +31,7 @@ export interface Shot {
   headline: string[];
   /**
    * Two lines in portrait; joined with a space onto one line in landscape.
-   * Keep the joined form under ~32 characters — beyond that it wraps in
+   * Keep the joined form to ~34 characters or fewer — beyond that it wraps in
    * landscape and the device, which is positioned for a single line, rides
    * over the second.
    */
@@ -85,10 +85,15 @@ export const SHOTS: Shot[] = [
     subline: "Publish any page to a real address, then change it in plain language.",
   },
   {
-    // Names the fear rather than the feature. "Permissions apply to the AI
-    // too" described a mechanism; the thing that actually stops a buyer is
-    // "if I put an AI in a shared workspace, will it show someone something
-    // they should not see?"
+    // Plain language for the fear underneath: if I put an AI in a shared
+    // workspace, will it show someone something they should not see? Said as
+    // the thing you do about it, in words that need no security vocabulary --
+    // "can't leak" was the same idea but as an absolute, and absolutes in
+    // security copy invite someone to go falsify them.
+    //
+    // The AI half moves to the subtext on purpose: frame 4 already carries
+    // "even to an agent", and repeating the twist in the headline would spend
+    // the same surprise twice.
     //
     // The claim is backed by the architecture, not aspiration: an agent is a
     // permission-scoped principal with its own drive membership and access
@@ -97,8 +102,8 @@ export const SHOTS: Shot[] = [
     // same way a person is rather than inheriting a superset. User-scoped
     // reach is opt-in per agent and defaults to false.
     slug: "permissions",
-    headline: ["Shared AI", "that can't leak."],
-    subline: "Every agent has its own role and per-page access, and every action lands in an audit log.",
+    headline: ["Only give access", "to who needs it."],
+    subline: "Roles and per-page limits bind agents the same as people, with every action logged.",
   },
 ];
 
