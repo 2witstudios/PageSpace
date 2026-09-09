@@ -51,6 +51,7 @@ afterAll(() => {
   workspace.close();
 });
 
+/** Markup into a detached element in the shared workspace. */
 const parse = (html: string): HTMLElement => workspace.parse(html);
 
 /** A clean audit, as a fixture other tests narrow. */
@@ -61,6 +62,7 @@ const CLEAN_HTML =
   '<tr><td colspan="1" rowspan="1"><p>Ada</p></td></tr></tbody></table>' +
   '<pre><code class="language-ts">const x = 1;</code></pre>';
 
+/** Narrows to the audited branch, so a test that meant to measure a page fails loudly if it did not. */
 function audited(audit: PageAudit): PageAudit & { status: 'audited' } {
   if (audit.status !== 'audited') {
     throw new Error(`expected an audited page, got ${audit.status}`);
@@ -318,6 +320,7 @@ describe('censusKeyOf', () => {
 });
 
 describe('the accumulator and the report', () => {
+  /** A clean chain verdict, narrowed by `overrides` — so each test states only what it is about. */
   const chainResult = (overrides: Partial<ChainResult> = {}): ChainResult => ({
     stable: true,
     counterDecreases: [],
@@ -328,6 +331,7 @@ describe('the accumulator and the report', () => {
     ...overrides,
   });
 
+  /** A page that fails all three criteria on the seed chain, diverges, and the gate refuses. */
   function lossyAudit(overrides: Partial<PageAudit & { status: 'audited' }> = {}): PageAudit {
     return {
       status: 'audited',
@@ -351,6 +355,7 @@ describe('the accumulator and the report', () => {
     };
   }
 
+  /** A real audit of a document that loses nothing — not a literal, so it cannot drift from the code. */
   const cleanAudit = (): PageAudit => audited(auditPage(CLEAN_HTML, workspace));
 
   it('tallies each criterion, the conjunction, and per-construct example ids', () => {

@@ -59,6 +59,7 @@ export function visibleCharacters(text: string): string {
   return text.replace(/\s+/gu, '');
 }
 
+/** How many nodes of `typeName` the parsed document holds — the survivor count for a textless element. */
 function countNodesOfType(doc: PmNode, typeName: string): number {
   let count = 0;
   doc.descendants((node) => {

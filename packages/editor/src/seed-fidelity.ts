@@ -231,6 +231,7 @@ export function contentFreeKey(key: string): string {
  */
 export function constructKeysOf(root: Element): Set<string> {
   const keys = new Set<string>();
+  /** Depth-first over the element tree, adding every construct each element carries. */
   const walk = (element: Element): void => {
     const tag = element.tagName.toLowerCase();
     keys.add(`el:${tag}`);

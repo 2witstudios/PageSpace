@@ -28,6 +28,7 @@ function numericFlag(argv: readonly string[], flag: string, fallback: number): n
   return value;
 }
 
+/** The run's options, or a throw naming the offending flag — never a silent full-table audit. */
 export function parseAuditArgs(argv: readonly string[]): AuditOptions {
   const known = new Set<string>(FLAGS);
   argv.forEach((token, index) => {

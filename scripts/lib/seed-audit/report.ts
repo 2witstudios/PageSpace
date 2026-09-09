@@ -98,6 +98,7 @@ export interface AuditAccumulator {
 
 type Tallies = Map<string, { pages: number; examplePageIds: string[] }>;
 
+/** Counts one more page under `key`, keeping at most `MAX_EXAMPLE_PAGE_IDS` ids as examples. */
 function tally(tallies: Tallies, key: string, pageId: string): void {
   let entry = tallies.get(key);
   if (!entry) {
@@ -110,6 +111,7 @@ function tally(tallies: Tallies, key: string, pageId: string): void {
   }
 }
 
+/** A tally map as report rows, most pages first and ties broken by key so runs are comparable. */
 function rows(tallies: Tallies): TallyRow[] {
   return [...tallies]
     .map(([key, entry]) => ({ key, pages: entry.pages, examplePageIds: [...entry.examplePageIds] }))
@@ -138,6 +140,7 @@ export function censusKeyOf(key: string): string {
   return `attr:${rest.split('=')[0]}`;
 }
 
+/** The per-chain half of the accumulator: one of these for the seed chain, one for the census chain. */
 function createChainTallies() {
   const criteria: Tallies = new Map();
   const dropped: Tallies = new Map();
@@ -188,6 +191,7 @@ function createChainTallies() {
   };
 }
 
+/** Collects every page's verdict into the one snapshot the report is formatted from. */
 export function createAuditAccumulator(): AuditAccumulator {
   const seed = createChainTallies();
   const census = createChainTallies();
@@ -303,6 +307,7 @@ export function auditPassed(snapshot: AuditSnapshot): boolean {
   return snapshot.seed.totals.lossy === 0 && snapshot.totals.failed === 0;
 }
 
+/** One padded report table; `(none)` rather than an empty block, so a zero is visibly a measurement. */
 function table(title: string, tallies: TallyRow[], header = 'CONSTRUCT'): string[] {
   if (tallies.length === 0) {
     return [title, '  (none)', ''];
@@ -318,6 +323,7 @@ function table(title: string, tallies: TallyRow[], header = 'CONSTRUCT'): string
   ];
 }
 
+/** The three criteria and their conjunction for one chain, in the same shape for both. */
 function criteriaBlock(title: string, chain: ChainTallies): string[] {
   const { totals } = chain;
   return [
@@ -335,6 +341,7 @@ export interface ReportOptions {
   partial: boolean;
 }
 
+/** The whole report as text: verdict, totals, both chains' criteria, then every diagnostic table. */
 export function formatAuditReport(snapshot: AuditSnapshot, { partial }: ReportOptions): string {
   const { totals, gate } = snapshot;
   const verdict = partial ? 'INTERRUPTED — PARTIAL, NOT A VERDICT' : auditPassed(snapshot) ? 'PASS' : 'BLOCKED';

@@ -9,6 +9,7 @@ import { userColor, USER_COLOR_PALETTE } from '../user-color.js';
 
 /** WCAG 2.x relative luminance, written out here rather than imported so the test does not share code with the module it checks. */
 function relativeLuminance(hex: string): number {
+  /** One sRGB channel, linearised. */
   const channel = (index: number): number => {
     const c = Number.parseInt(hex.slice(1 + index * 2, 3 + index * 2), 16) / 255;
     return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
@@ -16,6 +17,7 @@ function relativeLuminance(hex: string): number {
   return 0.2126 * channel(0) + 0.7152 * channel(1) + 0.0722 * channel(2);
 }
 
+/** WCAG contrast ratio between two `#rrggbb` colours, lighter over darker. */
 function contrastRatio(a: string, b: string): number {
   const [lighter, darker] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x);
   return (lighter + 0.05) / (darker + 0.05);

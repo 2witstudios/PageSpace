@@ -41,6 +41,7 @@ export interface ContentCounter {
   count(root: Element): number;
 }
 
+/** A counter that reports how many elements in the page match `selector`. */
 function bySelector(key: string, selector: string): ContentCounter {
   return { key, count: (root) => root.querySelectorAll(selector).length };
 }
@@ -81,6 +82,7 @@ export const CONTENT_COUNTERS: readonly ContentCounter[] = [
 
 export type ContentCounts = Readonly<Record<string, number>>;
 
+/** Every counter's value for one page — the `src` and `h1` inputs to criterion 2. */
 export function countContent(root: Element): ContentCounts {
   const counts: Record<string, number> = {};
   for (const counter of CONTENT_COUNTERS) {

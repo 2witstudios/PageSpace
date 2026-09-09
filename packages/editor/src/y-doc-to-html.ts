@@ -37,6 +37,7 @@ export function yDocToHtml(yDoc: Y.Doc): string {
  */
 let cachedNames: { nodes: ReadonlySet<string>; marks: ReadonlySet<string> } | undefined;
 
+/** The frozen schema's node and mark names, memoised — what the HTML projection is allowed to contain. */
 function projectableNames(): { nodes: ReadonlySet<string>; marks: ReadonlySet<string> } {
   const schema = collabSchema();
   cachedNames ??= {

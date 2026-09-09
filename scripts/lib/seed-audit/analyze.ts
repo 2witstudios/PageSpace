@@ -118,6 +118,11 @@ function parse(root: HTMLElement): PmNode {
   return parseHtmlElementUnchecked(root);
 }
 
+/**
+ * `doc` seeded into a `Y.Doc` and read straight back out — the step that makes
+ * the seed chain differ from the census chain, and the only place
+ * `y-prosemirror` can lose something.
+ */
 function throughYDoc(doc: PmNode): PmNode {
   const yDoc = pmDocToYDoc(doc);
   try {
@@ -136,6 +141,7 @@ interface Measured {
   constructs: Set<string>;
 }
 
+/** Everything the three criteria and the construct diff need from one parsed page, in one walk. */
 function measure(root: Element): Measured {
   return {
     counts: countContent(root),
@@ -150,6 +156,7 @@ export function judgeChain(sourceRoot: Element, renderedRoot: Element, stable: b
   return judge(measure(sourceRoot), measure(renderedRoot), stable);
 }
 
+/** The three criteria over an already-measured source and rendering; `judgeChain` is the public form. */
 function judge(source: Measured, rendered: Measured, stable: boolean): ChainResult {
   const textPreserved = source.text === rendered.text;
   return {
@@ -169,6 +176,7 @@ export function divergenceBetween(censusRoot: Element, seedRoot: Element): Chain
   return diverge(measure(censusRoot), measure(seedRoot));
 }
 
+/** The census-vs-seed comparison over two already-measured renderings; `divergenceBetween` is the public form. */
 function diverge(census: Measured, seed: Measured): ChainDivergence {
   return {
     counterChanges: Object.keys(census.counts).filter((key) => census.counts[key] !== seed.counts[key]),

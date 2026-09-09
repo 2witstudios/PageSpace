@@ -67,6 +67,7 @@ import { auditPage } from './lib/seed-audit/analyze';
 import { parseAuditArgs } from './lib/seed-audit/options';
 import { auditPassed, createAuditAccumulator, formatAuditReport } from './lib/seed-audit/report';
 
+/** Runs the audit and returns the process exit code: 0 only for a complete, passing run. */
 async function main(): Promise<number> {
   const options = parseAuditArgs(process.argv.slice(2));
 
