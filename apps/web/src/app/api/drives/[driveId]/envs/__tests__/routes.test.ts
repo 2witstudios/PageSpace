@@ -481,6 +481,74 @@ describe('DELETE /envs/[envId] — the destructive verb', () => {
     expect(response.status).toBe(403);
     expect(deleteEnv).not.toHaveBeenCalled();
   });
+
+  /**
+   * A REFUSED delete must revoke NOTHING (M1 exit gate, 2026-09-09).
+   *
+   * The revoke used to run in this route, unconditionally, before `deleteEnv`
+   * was called at all — so `409 live_sessions`, the guard whose whole meaning
+   * is "nothing was destroyed, decide again", arrived with `revokedAt` already
+   * stamped, every session revoked, the socket closed and the daemon's key
+   * deleted. It is now the delete transaction's `beforeDelete`: it runs under
+   * the row lock, after the guard passes, immediately before the row goes.
+   *
+   * These rows read the SEAM (was the revoke handed to the transaction, and did
+   * the route run it?) rather than the ordering of two awaits, because that is
+   * what makes the property hold without a race.
+   */
+  describe('a local env: the revoke is the delete transaction"s, not the route"s', () => {
+    beforeEach(() => {
+      vi.mocked(resolveEnvInDrive).mockResolvedValue({ ...envRow, substrate: 'local' } as never);
+      vi.mocked(revokeEnv).mockResolvedValue({ ok: true, alreadyRevoked: false, revokedAt: new Date(), sessionsRevoked: 22, machine: 'sent_and_closed' } as never);
+    });
+
+    it('given live sessions and no force, should answer 409 and revoke NOTHING — the guard refuses before the hook is ever run', async () => {
+      // The transaction refuses at its guard, so it never calls `beforeDelete`.
+      vi.mocked(deleteEnv).mockImplementation(async () => ({ ok: false, reason: 'live_sessions', liveSessionCount: 23 }) as never);
+
+      const response = await deleteEnvRoute(del(), envParams);
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ reason: 'live_sessions', liveSessionCount: 23 });
+      // The machine is untouched: no stamp, no session revoked, no frame, and
+      // the daemon still holds its key.
+      expect(revokeEnv).not.toHaveBeenCalled();
+      // And the route did not report a revoke it did not perform.
+      expect(auditRequest).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'auth.token.revoked' }));
+    });
+
+    it('given ?force=true, should revoke INSIDE the transaction and only then delete the row', async () => {
+      const order: string[] = [];
+      vi.mocked(revokeEnv).mockImplementation(async () => {
+        order.push('revoke');
+        return { ok: true, alreadyRevoked: false, revokedAt: new Date(), sessionsRevoked: 22, machine: 'sent_and_closed' } as never;
+      });
+      // Stand in for the real transaction: guard, then the hook, then the row.
+      vi.mocked(deleteEnv).mockImplementation(async (input: { beforeDelete?: () => Promise<void> }) => {
+        order.push('guard');
+        await input.beforeDelete?.();
+        order.push('delete');
+        return { ok: true, spriteTornDown: false } as never;
+      });
+
+      const response = await deleteEnvRoute(del('?force=true'), envParams);
+
+      expect(response.status).toBe(200);
+      // The hook was HANDED to the delete, not called beside it.
+      expect(vi.mocked(deleteEnv).mock.calls[0]?.[0]).toMatchObject({ envId: ENV_ID, force: true, beforeDelete: expect.any(Function) });
+      expect(order).toEqual(['guard', 'revoke', 'delete']);
+      expect(await response.json()).toMatchObject({ deleted: true, revoked: { sessionsRevoked: 22, machine: 'sent_and_closed', alreadyRevoked: false } });
+      expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'auth.token.revoked', details: expect.objectContaining({ operation: 'revoke', sessionsRevoked: 22 }) }));
+    });
+
+    it('given a SPRITE env, should hand the delete no revoke hook at all', async () => {
+      vi.mocked(resolveEnvInDrive).mockResolvedValue(envRow as never);
+      vi.mocked(deleteEnv).mockResolvedValue({ ok: true, spriteTornDown: false } as never);
+      await deleteEnvRoute(del('?force=true'), envParams);
+      expect(vi.mocked(deleteEnv).mock.calls[0]?.[0]).toEqual({ envId: ENV_ID, force: true });
+      expect(revokeEnv).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('POST /envs/[envId]/rebuild — the only sprite-replacing verb', () => {
@@ -516,7 +584,13 @@ describe('POST /envs/[envId]/rebuild — the only sprite-replacing verb', () => 
   });
 });
 
-describe('DELETE /envs/[envId] on a LOCAL env — revoke first (Codex C4), then delete', () => {
+/**
+ * The three revoke legs still run before the row goes (Codex C4) — but INSIDE
+ * the delete transaction, as its `beforeDelete`, not beside it in the route.
+ * The two rows below changed with that: they used to pin the revoke as
+ * unconditional, which is the defect the M1 exit gate found on 2026-09-09.
+ */
+describe('DELETE /envs/[envId] on a LOCAL env — revoke inside the delete (Codex C4), then delete', () => {
   const localRow = { id: ENV_ID, driveId: DRIVE_ID, name: 'mac', substrate: 'local' };
   const del = () => deleteEnvRoute(req(`http://localhost/api/drives/${DRIVE_ID}/envs/${ENV_ID}`, { method: 'DELETE' }), envParams);
 
@@ -532,7 +606,10 @@ describe('DELETE /envs/[envId] on a LOCAL env — revoke first (Codex C4), then 
       order.push('revoke');
       return { ok: true, alreadyRevoked: false, revokedAt: new Date(), sessionsRevoked: 2, machine: 'sent_and_closed' };
     });
-    vi.mocked(deleteEnv).mockImplementation(async () => {
+    // The revoke is now the transaction's `beforeDelete`, so the route hands it
+    // over instead of awaiting it first; this stands in for the transaction.
+    vi.mocked(deleteEnv).mockImplementation(async (input: { beforeDelete?: () => Promise<void> }) => {
+      await input.beforeDelete?.();
       order.push('delete');
       return { ok: true, spriteTornDown: false };
     });
@@ -567,11 +644,25 @@ describe('DELETE /envs/[envId] on a LOCAL env — revoke first (Codex C4), then 
     expect(await response.json()).toEqual({ deleted: true, spriteTornDown: false });
   });
 
-  it('given live sessions in the env, should still have revoked the machine (revocation is not a deletion) and answer 409', async () => {
-    vi.mocked(deleteEnv).mockResolvedValue({ ok: false, reason: 'live_sessions', liveSessionCount: 1 });
+  /**
+   * REVERSED on 2026-09-09, deliberately. This row used to read "should still
+   * have revoked the machine (revocation is not a deletion)", and that was the
+   * bug, pinned: a delete refused `409 live_sessions` — the guard that exists
+   * so nothing is destroyed — had already stamped `revokedAt`, revoked every
+   * session, closed the socket and made the daemon delete its key, while the
+   * caller was told the delete did not happen. Per R-8 in the posture document
+   * a revoked env can never take a new machine, and the row is still there
+   * because the delete was refused, so the owner is left with an environment
+   * they cannot use and were told nothing about. The cautious path (omitting
+   * `?force` precisely to protect live sessions) was the destructive one.
+   */
+  it('given live sessions in the env, should revoke NOTHING and answer 409 — a refusal must leave the machine alone', async () => {
+    // The transaction refuses at its guard and never reaches `beforeDelete`.
+    vi.mocked(deleteEnv).mockImplementation(async () => ({ ok: false, reason: 'live_sessions', liveSessionCount: 1 }) as never);
     const response = await del();
     expect(response.status).toBe(409);
-    expect(revokeEnv).toHaveBeenCalledTimes(1);
+    expect(revokeEnv).not.toHaveBeenCalled();
+    expect(auditRequest).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'auth.token.revoked' }));
   });
 });
 

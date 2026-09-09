@@ -341,6 +341,25 @@ export interface DriveEnvStore {
   deleteIfUnoccupied(input: {
     envId: string;
     force: boolean;
+    /**
+     * Runs INSIDE the transaction, under the row lock, after the guard has
+     * passed and before the row is deleted — the seam a caller uses to make an
+     * irreversible act conditional on the delete actually happening.
+     *
+     * A local env's machine revoke is the only user (`DELETE .../envs/[envId]`).
+     * It used to run in the route BEFORE this method was even called, so a
+     * delete refused `live_sessions` had already stamped `revokedAt`, revoked
+     * every session, closed the socket and made the daemon delete its key —
+     * while the caller was told nothing happened, and (posture doc R-8) was
+     * left with an env that can never take a new machine because the row it
+     * would have to be recreated from is still there. Passing it here means
+     * the guard decides first and there is no window in which a REFUSAL has
+     * revoked anything.
+     *
+     * A throw propagates and rolls the transaction back: the row survives, and
+     * the caller sees the error rather than a delete it did not get.
+     */
+    beforeDelete?: () => Promise<void>;
   }): Promise<{ ok: true } | { ok: false; reason: 'not_found' } | { ok: false; reason: 'live_sessions'; liveSessionCount: number }>;
   /**
    * Sessions still LIVE inside this env — rows carrying this `envId` with no
@@ -859,7 +878,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       }
     },
 
-    async deleteIfUnoccupied({ envId, force }) {
+    async deleteIfUnoccupied({ envId, force, beforeDelete }) {
       return db.transaction(async (tx) => {
         // The row lock FIRST — see the interface doc for why it, and not the
         // count, is what makes this guard sound.
@@ -881,6 +900,10 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
             return { ok: false as const, reason: 'live_sessions' as const, liveSessionCount };
           }
         }
+
+        // The guard has passed and the row is locked: only now may anything
+        // irreversible happen. A throw here rolls the delete back.
+        if (beforeDelete) await beforeDelete();
 
         await tx.delete(driveEnvs).where(eq(driveEnvs.id, envId));
         return { ok: true as const };

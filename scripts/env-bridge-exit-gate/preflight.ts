@@ -37,7 +37,7 @@
  * Usage:  bun scripts/env-bridge-exit-gate/preflight.ts
  */
 import { execFileSync } from 'node:child_process';
-import { expect, failed, optional, required, summarize } from './report';
+import { expect, failed, optional, required, summarize } from './report.ts';
 
 const host = required('PAGESPACE_GATE_HOST'); // e.g. http://127.0.0.1:3000
 const cliBin = required('PAGESPACE_GATE_CLI'); // e.g. ./packages/cli/dist/bin.js
@@ -48,7 +48,11 @@ async function status(url: string, init?: RequestInit): Promise<{ code: number; 
 }
 
 function run(args: readonly string[]): string {
-  return execFileSync(process.execPath, [cliBin, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const prefix = optional('PAGESPACE_GATE_CLI_EXEC');
+  const [command, ...lead] = prefix === null ? [process.execPath] : prefix.split(/\s+/);
+  const machineBin = optional('PAGESPACE_GATE_MACHINE_CLI') ?? cliBin;
+  const argv = prefix === null ? [cliBin, ...args] : [...lead, machineBin, ...args];
+  return execFileSync(command as string, argv, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
 /** Same, but a non-zero exit is DATA: `env policy` exits 1 when the policy is deny-all. */
@@ -89,18 +93,36 @@ async function main(): Promise<number> {
     failed('F04', 'built CLI runs', error, 'run `bun run --filter @pagespace/cli build` first');
   }
 
-  // F05 — `ask` mode refuses to start without a TTY (packages/cli/src/commands/env/connect.ts).
-  expect('F05', true, process.stdin.isTTY === true, 'stdin is a TTY, so `env connect` can prompt in ask mode');
+  // F05 — where `ask` will ask. This USED to assert a TTY, because `env connect`
+  // refused to start in `ask` mode without one. GA wave 2 removed that refusal:
+  // with no terminal (or with PAGESPACE_ENV_ASK=chat) the daemon freezes each
+  // request under a challenge id, answers `ask_pending:<id>`, and the owner
+  // answers with a click in the PageSpace chat. Headless is the GA path, so a
+  // TTY is no longer a precondition — but the operator must know which
+  // prompter the run is exercising, because they are different code.
+  const askMode = optional('PAGESPACE_GATE_ASK_MODE');
+  expect('F05', true, askMode === 'chat' || askMode === 'terminal', 'set PAGESPACE_GATE_ASK_MODE=chat (headless, the GA path) or =terminal (a TTY prompter)');
+  if (askMode === 'terminal') expect('F05b', true, process.stdin.isTTY === true, 'a terminal run needs a TTY on stdin');
 
   // F06 — this shell. The app's own TZ and Postgres' TZ are the operator's to confirm.
   expect('F06', 'UTC', process.env.TZ ?? '(unset)', 'TZ=UTC in this shell; confirm the same for the app process AND Postgres');
   expect('F06b', 'UTC', optional('PAGESPACE_GATE_APP_TZ') ?? '(unset)', 'operator-asserted TZ of the app + pg processes');
 
   // F07 / F08 — asserted, not probed: this script is outside the app process.
-  expect('F07', 'onprem', optional('PAGESPACE_GATE_DEPLOYMENT_MODE') ?? '(unset)', 'operator-asserted DEPLOYMENT_MODE of the app');
+  // F07 — which deployment mode the run is in, stated. It used to demand
+  // `onprem`, which keeps external integrations out of the way; but the
+  // release target for this feature is CLOUD, and cloud is the mode whose
+  // billing, tier and credit gates sit in front of every step the gate drives.
+  // A gate that can only run in the mode we are not shipping proves less, so
+  // both are accepted and the operator has to say which.
+  const mode = optional('PAGESPACE_GATE_DEPLOYMENT_MODE') ?? '(unset)';
+  expect('F07', true, mode === 'cloud' || mode === 'onprem' || mode === 'tenant', `operator-asserted DEPLOYMENT_MODE of the app: ${mode}`);
   expect('F08', true, optional('PAGESPACE_GATE_S3_ENDPOINT') !== null, 'operator-asserted S3 endpoint; without one, drive/page creation 500s');
 
-  // F09 — the policy the daemon will actually enforce, printed by the CLI itself.
+  // F09 — the policy the daemon will actually enforce, printed by the CLI
+  // itself. `PAGESPACE_GATE_CLI_EXEC` runs it ON THE MACHINE: if the daemon is
+  // not on the operator's own computer, a policy read here describes a
+  // different machine and F09 is worse than no check at all.
   try {
     const policy = runAllowFail(['env', 'policy', '--json']);
     const parsed: unknown = JSON.parse(policy);

@@ -999,11 +999,18 @@ export type DeleteDriveEnvResult =
 export async function deleteDriveEnv({
   envId,
   force,
+  beforeDelete,
   deps,
 }: {
   envId: string;
   /** Override the live-session guard. Nothing else in this flow consults it. */
   force: boolean;
+  /**
+   * Runs inside the delete transaction, under the row lock, after the guard
+   * has passed and before the row goes — for an act that must not happen when
+   * the delete is refused. The local-env machine revoke is the only caller.
+   */
+  beforeDelete?: () => Promise<void>;
   deps: DeleteDriveEnvDeps;
 }): Promise<DeleteDriveEnvResult> {
   const row = await deps.store.findById(envId);
@@ -1023,7 +1030,7 @@ export async function deleteDriveEnv({
   // Step 2. THE guard. A refusal here means nothing was touched — which is now
   // literally true, where before it meant "nothing was deleted, but the machine
   // is already gone".
-  const deleted = await deps.store.deleteIfUnoccupied({ envId, force });
+  const deleted = await deps.store.deleteIfUnoccupied({ envId, force, beforeDelete });
   if (!deleted.ok) {
     // `not_found`: a concurrent delete removed the row first. The env is gone
     // either way, which is what the caller asked for — but say so honestly

@@ -398,9 +398,9 @@ export async function revokeEnv(input: { envId: string; reason: string }): Promi
   return revokeLocalEnv(input);
 }
 
-export async function deleteEnv(input: { envId: string; force: boolean }): Promise<DeleteDriveEnvResult> {
+export async function deleteEnv(input: { envId: string; force: boolean; beforeDelete?: () => Promise<void> }): Promise<DeleteDriveEnvResult> {
   const [store, host] = await Promise.all([getDriveEnvStore(), getSandboxHost()]);
-  return deleteDriveEnv({ envId: input.envId, force: input.force, deps: { store, host, now: () => new Date() } });
+  return deleteDriveEnv({ envId: input.envId, force: input.force, beforeDelete: input.beforeDelete, deps: { store, host, now: () => new Date() } });
 }
 
 /**
