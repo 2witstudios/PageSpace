@@ -351,7 +351,11 @@ async function recomputeConversationLastMessage(
 
     const metas = attachmentRows
       .map((row) => row.attachmentMeta)
-      .filter((meta): meta is AttachmentMeta => meta !== null);
+      // `!= null`, so a row whose meta is absent for any reason is skipped
+      // rather than reaching the preview builder as `undefined` and throwing
+      // on `.mimeType` — the preview must never be the thing that fails a
+      // purge or a send.
+      .filter((meta): meta is AttachmentMeta => meta != null);
     if (metas.length > 0) previewAttachments = metas;
   }
 

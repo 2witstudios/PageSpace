@@ -10,7 +10,7 @@ import { drives, pages, tags } from '@pagespace/db/schema/core';
 import { contentTags } from '@pagespace/db/schema/content-tags';
 import { sheetTabs, sheetRows } from '@pagespace/db/schema/sheets';
 import { aiUsageLogs, activityLogs, systemLogs, apiMetrics, errorLogs, errorResolutions } from '@pagespace/db/schema/monitoring';
-import { files, filePages } from '@pagespace/db/schema/storage';
+import { files, filePages, type AttachmentMeta } from '@pagespace/db/schema/storage';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { channelMessages, channelMessageAttachments } from '@pagespace/db/schema/chat';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
@@ -681,6 +681,16 @@ export async function collectUserSheets(
 }
 
 /**
+ * How many message ids one attachment lookup may bind.
+ *
+ * Drizzle expands every `inArray` value into its own bind parameter, and
+ * Postgres caps a statement at 65535 of them — a subject with that many
+ * messages would otherwise fail the whole export with an opaque `08P01`
+ * protocol error instead of exercising their Art 15 right.
+ */
+const ATTACHMENT_LOOKUP_CHUNK = 500;
+
+/**
  * Group a message table's attachment rows by messageId.
  *
  * Shared by the channel and DM branches because the two attachment tables are
@@ -695,16 +705,28 @@ async function collectAttachments(
   const byMessage = new Map<string, NonNullable<UserMessageExport['attachments']>>();
   if (messageIds.length === 0) return byMessage;
 
-  const rows = await database
-    .select({
-      messageId: table.messageId,
-      fileId: table.fileId,
-      attachmentMeta: table.attachmentMeta,
-      position: table.position,
-    })
-    .from(table)
-    .where(inArray(table.messageId, messageIds));
+  const rows: Array<{
+    messageId: string;
+    fileId: string | null;
+    attachmentMeta: AttachmentMeta | null;
+    position: number;
+  }> = [];
+  for (let i = 0; i < messageIds.length; i += ATTACHMENT_LOOKUP_CHUNK) {
+    const chunk = messageIds.slice(i, i + ATTACHMENT_LOOKUP_CHUNK);
+    const chunkRows = await database
+      .select({
+        messageId: table.messageId,
+        fileId: table.fileId,
+        attachmentMeta: table.attachmentMeta,
+        position: table.position,
+      })
+      .from(table)
+      .where(inArray(table.messageId, chunk));
+    rows.push(...chunkRows);
+  }
 
+  // Sorted across the whole result, not per chunk: a message's rows all land in
+  // one chunk (chunking is by message id), so this restores display order.
   for (const row of [...rows].sort((a, b) => a.position - b.position)) {
     const list = byMessage.get(row.messageId) ?? [];
     list.push({

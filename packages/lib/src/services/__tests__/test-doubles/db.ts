@@ -110,8 +110,16 @@ export const operators = {
     (row) => compare(row[col.name], value) < 0,
   gt: (col: ColumnRef, value: unknown): RowPredicate =>
     (row) => compare(row[col.name], value) > 0,
-  inArray: (col: ColumnRef, values: readonly unknown[]): RowPredicate =>
-    (row) => values.includes(row[col.name]),
+  inArray: (col: ColumnRef, values: readonly unknown[]): RowPredicate => {
+    // Recorded, not just evaluated. Drizzle binds one parameter per value and
+    // Postgres caps a statement at 65535 of them, so "how many ids did this
+    // query name?" is a real property of the SQL that a predicate-as-function
+    // double would otherwise hide completely — a query that binds an unbounded
+    // id list behaves identically here and fails with an opaque 08P01 in
+    // production.
+    testDbState.recordInArray(col, values.length);
+    return (row) => values.includes(row[col.name]);
+  },
   isNull: (col: ColumnRef): RowPredicate =>
     (row) => row[col.name] === null || row[col.name] === undefined,
   isNotNull: (col: ColumnRef): RowPredicate =>
@@ -211,6 +219,12 @@ function applyDefaults(table: string, row: Row): Row {
   if (table === 'channelMessageAttachments' || table === 'directMessageAttachments') {
     if (!out.id) out.id = autoId();
     if (!('createdAt' in out)) out.createdAt = new Date();
+    // A nullable column reads back as NULL, never `undefined` — a fixture that
+    // omits attachmentMeta must look like the legacy row it stands for, or a
+    // `meta !== null` filter downstream lets `undefined` through and the code
+    // under test crashes on something the database cannot produce.
+    if (!('attachmentMeta' in out)) out.attachmentMeta = null;
+    if (!('fileId' in out)) out.fileId = null;
   }
   return out;
 }
@@ -224,6 +238,7 @@ export class DbState {
   private tables = new Map<string, Row[]>();
   private hooks = new Map<string, Hook[]>();
   private executeCalls: SqlMarker[] = [];
+  private inArrayCalls: Array<{ table: string; column: string; count: number }> = [];
   private forCalls: ForCall[] = [];
   private transactionCallCount = 0;
 
@@ -236,6 +251,22 @@ export class DbState {
     const cur = this.tables.get(table) ?? [];
     cur.push(...rows.map((r) => applyDefaults(table, { ...r })));
     this.tables.set(table, cur);
+  }
+
+  /** @see operators.inArray — every id list a query bound, in call order. */
+  recordInArray(col: ColumnRef, count: number): void {
+    this.inArrayCalls.push({ table: col.table, column: col.name, count });
+  }
+
+  /**
+   * The id lists bound so far, optionally narrowed to one column. Lets a test
+   * assert on the SHAPE of a query's binds — that a sweep names no message ids
+   * at all, or that it chunks the ones it does name.
+   */
+  binds(column?: { table: string; name: string }): Array<{ table: string; column: string; count: number }> {
+    return this.inArrayCalls.filter(
+      (call) => !column || (call.table === column.table && call.column === column.name),
+    );
   }
 
   rows(table: string): Row[] {
@@ -343,6 +374,7 @@ export class DbState {
     this.tables.clear();
     this.hooks.clear();
     this.executeCalls.length = 0;
+    this.inArrayCalls.length = 0;
     this.forCalls.length = 0;
     this.transactionCallCount = 0;
   }

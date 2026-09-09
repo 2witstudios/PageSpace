@@ -328,14 +328,21 @@ describe('dmMessageRepository.purgeInactiveMessages', () => {
     // sweep can cover far more tombstones than that. The lock, the legacy-pair
     // capture and the DELETE are all predicate-based and name no ids at all;
     // only the attachment capture names them, and it is chunked well under the
-    // ceiling. An unbounded id list here would turn a large sweep into an
-    // opaque 08P01 protocol error.
+    // ceiling. An unbounded id list would turn a large sweep into an opaque
+    // 08P01 protocol error.
+    //
+    // Asserting on the purge's RESULT cannot see any of that: an unchunked
+    // `inArray(directMessages.id, doomedIds)` returns exactly the same rows
+    // here and only fails in production. So this reads the binds the double
+    // records — how many ids each query actually named — which is the property
+    // the ceiling is about.
     const cutoff = new Date('2026-04-01T00:00:00Z');
     const old = new Date('2026-03-01T00:00:00Z');
 
+    const SWEEP = 1200;
     testDbState.seed(
       'directMessages',
-      Array.from({ length: 40 }, (_, i) => ({
+      Array.from({ length: SWEEP }, (_, i) => ({
         id: `stale-${i}`,
         conversationId: 'conv-1',
         senderId: 'u-1',
@@ -345,14 +352,47 @@ describe('dmMessageRepository.purgeInactiveMessages', () => {
         fileId: null,
       })),
     );
+    // Give every doomed message an attachment row, so the one query that does
+    // name ids runs over the whole sweep.
+    testDbState.seed(
+      'directMessageAttachments',
+      Array.from({ length: SWEEP }, (_, i) => ({
+        id: `att-${i}`,
+        messageId: `stale-${i}`,
+        fileId: `file-${i}`,
+        attachmentMeta: null,
+        position: 0,
+      })),
+    );
 
     const count = await dmMessageRepository.purgeInactiveMessages(cutoff);
 
+    const messageIdBinds = testDbState.binds({ table: 'directMessages', name: 'id' });
+    const attachmentBinds = testDbState.binds({
+      table: 'directMessageAttachments',
+      name: 'messageId',
+    });
+
     assert({
-      given: 'many tombstones in one sweep',
-      should: 'purge them all in one predicate-based pass',
-      actual: { count, remaining: testDbState.count('directMessages') },
-      expected: { count: 40, remaining: 0 },
+      given: 'a sweep of 1200 tombstones, each carrying an attachment row',
+      should:
+        'purge them all, name no message ids in the predicate-based queries, and chunk the one lookup that does name them',
+      actual: {
+        count,
+        remaining: testDbState.count('directMessages'),
+        boundMessageIdLists: messageIdBinds.length,
+        attachmentChunks: attachmentBinds.length,
+        largestAttachmentChunk: Math.max(0, ...attachmentBinds.map((b) => b.count)),
+        idsNamedInTotal: attachmentBinds.reduce((sum, b) => sum + b.count, 0),
+      },
+      expected: {
+        count: SWEEP,
+        remaining: 0,
+        boundMessageIdLists: 0,
+        attachmentChunks: 3,
+        largestAttachmentChunk: 500,
+        idsNamedInTotal: SWEEP,
+      },
     });
   });
 
