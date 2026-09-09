@@ -534,6 +534,10 @@
    forcing its track wide. */
 .lp .appwin-outer { min-width: 0; }
 
+/* HeroDemo is a behaviour wrapper, never a box — display:contents keeps the
+   window's layout exactly as it was before it was wrapped. */
+.lp .hero-demo { display: contents; }
+
 @media (max-width: 600px) {
   .lp .hero-in { padding: 0 16px; }
   /* portrait crop of a landscape image: bias left so the copy stays on the
