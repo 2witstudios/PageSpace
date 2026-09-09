@@ -4,6 +4,7 @@ import { ArrowRight } from "lucide-react";
 import { APP_URL } from "@/lib/metadata";
 import { Ico } from "./landing/icons";
 import { ScaledAppWindow } from "./landing/ScaledAppWindow";
+import { HeroDemo } from "./landing/HeroDemo";
 
 /**
  * Hero — product-as-hero, split layout. Left: the single page <h1>, a quiet
@@ -46,6 +47,7 @@ export function HeroSection() {
         </div>
 
         <ScaledAppWindow>
+        <HeroDemo>
         <div className="appwin">
           <div className="aw-top liquid-thin">
             <span className="aw-tbtn"><svg className="i i14" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 3v18" /></svg></span>
@@ -151,6 +153,7 @@ export function HeroSection() {
             </div>
           </div>
         </div>
+        </HeroDemo>
         </ScaledAppWindow>
       </div>
     </section>
