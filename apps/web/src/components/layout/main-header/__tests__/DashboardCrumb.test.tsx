@@ -105,6 +105,9 @@ describe('DashboardCrumb', () => {
       ['/dashboard/dms'],
       ['/dashboard/tasks'],
       ['/dashboard/calendar'],
+      // The one that most resembles a drive route. Next resolves static
+      // segments ahead of [driveId], so this carries no driveId either.
+      ['/dashboard/drives'],
     ])('given %s, should still offer a link out rather than a dead marker', (pathname) => {
       atRoute(pathname);
 

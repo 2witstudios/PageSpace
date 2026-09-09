@@ -84,6 +84,13 @@ export default function DashboardCrumb() {
         which drive you are in, lives in the sidebar, which is a sheet below lg.
         So below lg the drive's name is nowhere in persistent chrome. The label
         still wins: it is the fix for the bug this control exists for.
+
+        Deliberately not a link to the drive's home page, though a breadcrumb
+        ancestor usually would be. It only renders at lg and up, which is
+        exactly where the sidebar is a fixed panel rather than a sheet — so
+        PrimaryNavigation's "Drive Home" is already on screen, spelled out,
+        whenever this is. A second unlabelled route to the same page would buy
+        nothing and need its own are-we-already-there branch.
       */}
       {driveName ? (
         <>
