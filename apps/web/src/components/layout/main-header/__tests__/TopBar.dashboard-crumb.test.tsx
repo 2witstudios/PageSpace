@@ -30,7 +30,9 @@ vi.mock('@/components/notifications/VerifyEmailButton', () => ({ default: () => 
 vi.mock('@/components/search/InlineSearch', () => ({ default: () => <div /> }));
 vi.mock('@/components/search/GlobalSearch', () => ({ default: () => <div /> }));
 vi.mock('@/components/shared/UserDropdown', () => ({ default: () => <div /> }));
-vi.mock('@/components/shared/RecentsDropdown', () => ({ default: () => <div /> }));
+vi.mock('@/components/shared/RecentsDropdown', () => ({
+  default: ({ className }: { className?: string }) => <div data-testid="recents" className={className} />,
+}));
 vi.mock('@/components/billing/AiBalanceWidget', () => ({ AiBalanceWidget: () => <div /> }));
 vi.mock('../NavButtons', () => ({ default: () => <div /> }));
 
@@ -64,6 +66,19 @@ describe('TopBar — the way back to the dashboard', () => {
 
     expect(group, 'expected a flex-1 ancestor group').not.toBeNull();
     expect(group?.className).toMatch(/\bflex-wrap\b/);
+  });
+
+  it('given a phone-width header, should give up Recents before it gives up the word', () => {
+    // At 390px the right-hand group is five icon controls and the left group
+    // gets what is left. Recents is the one that goes: the left sheet lists
+    // them anyway, and Dashboard's word is the fix for the reported bug.
+    // jsdom applies no media queries, so this pins the mechanism.
+    renderTopBar();
+
+    const recents = screen.getByTestId('recents');
+    expect(recents.className).toMatch(/\bhidden\b/);
+    expect(recents.className).toMatch(/\bsm:flex\b/);
+    expect(recents.className).toMatch(/\blg:hidden\b/);
   });
 
   it('given the header renders, should not fall back to a lone slash as the route home', () => {

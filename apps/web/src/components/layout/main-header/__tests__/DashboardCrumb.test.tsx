@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { Drive } from '@pagespace/lib/types';
 
 import { useParams, usePathname } from 'next/navigation';
@@ -9,6 +10,12 @@ import { useDriveStore } from '@/hooks/useDrive';
 vi.mock('next/navigation', () => ({
   useParams: vi.fn(() => ({})),
   usePathname: vi.fn(() => '/dashboard'),
+}));
+
+// The picker is its own component with its own tests; here it only needs to
+// report whether the crumb opened it.
+vi.mock('@/components/layout/navbar/DrivePickerDialog', () => ({
+  default: ({ open }: { open: boolean }) => (open ? <div data-testid="drive-picker" /> : null),
 }));
 
 const buildDrive = (overrides: Partial<Drive> = {}): Drive => ({
@@ -75,6 +82,22 @@ describe('DashboardCrumb', () => {
       expect(screen.queryByText('Engineering')).not.toBeInTheDocument();
     });
 
+    it('given a loaded drive, should make the drive name a button that opens the drive picker', async () => {
+      atRoute('/dashboard/drive_eng/page_1', { driveId: 'drive_eng' });
+      useDriveStore.setState({ drives: [buildDrive()] });
+
+      render(<DashboardCrumb />);
+
+      const trigger = screen.getByRole('button', { name: /Engineering/ });
+      expect(trigger).toHaveAttribute('aria-haspopup', 'dialog');
+      expect(screen.queryByTestId('drive-picker')).not.toBeInTheDocument();
+
+      await userEvent.click(trigger);
+
+      expect(screen.getByTestId('drive-picker')).toBeInTheDocument();
+      expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    });
+
     it('given a drive name long enough to truncate, should keep the full name recoverable on hover', () => {
       atRoute('/dashboard/drive_eng/page_1', { driveId: 'drive_eng' });
       useDriveStore.setState({ drives: [buildDrive({ name: 'Q3 Platform Migration Programme' })] });
@@ -131,9 +154,9 @@ describe('DashboardCrumb', () => {
 
       render(<DashboardCrumb />);
 
-      const crumb = screen.getByText('Engineering').parentElement;
-      expect(crumb?.className).toMatch(/\bhidden\b/);
-      expect(crumb?.className).toMatch(/\blg:flex\b/);
+      const crumb = screen.getByRole('button', { name: /Engineering/ });
+      expect(crumb.className).toMatch(/\bhidden\b/);
+      expect(crumb.className).toMatch(/\blg:inline-flex\b/);
 
       const label = screen.getByRole('link', { name: 'Dashboard' });
       expect(label.className).not.toMatch(/\bhidden\b/);
@@ -154,6 +177,31 @@ describe('DashboardCrumb', () => {
       atRoute('/dashboard/drive_eng', { driveId: 'drive_eng' });
       render(<DashboardCrumb />);
       expect(screen.getByRole('link', { name: 'Dashboard' }).className).not.toMatch(/\bhidden\b/);
+    });
+  });
+
+  describe('fits the navbar', () => {
+    // Every other control in this header is a ghost button. The outlined card
+    // this replaced was the one bordered thing in the row, and it was the
+    // thing users called out. Asserting the absence keeps the border from
+    // creeping back in a "make it more visible" pass.
+    it('given the link variant, should be a ghost control with no border or card background', () => {
+      atRoute('/dashboard/drive_eng', { driveId: 'drive_eng' });
+
+      render(<DashboardCrumb />);
+
+      const link = screen.getByRole('link', { name: 'Dashboard' });
+      expect(link.className).not.toMatch(/\bborder\b/);
+      expect(link.className).not.toMatch(/\bbg-card\b/);
+      expect(link.className).toMatch(/\bhover:bg-accent\b/);
+    });
+
+    it('given the dashboard route, should render the marker as plain text rather than a tinted pill', () => {
+      atRoute('/dashboard');
+
+      render(<DashboardCrumb />);
+
+      expect(screen.getByText('Dashboard').className).not.toMatch(/\bbg-primary-soft\b/);
     });
   });
 

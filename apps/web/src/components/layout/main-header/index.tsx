@@ -89,7 +89,12 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel, onReveal
           </Button>
         </div>
 
-        <div className="flex flex-shrink-0 items-center gap-2">
+        {/*
+          gap-1 below sm: on a phone this group is five 36px controls, and the
+          left group gets whatever is left. Recents is hidden there too — the
+          left sheet still lists them — so `Dashboard` keeps its word on one row.
+        */}
+        <div className="flex flex-shrink-0 items-center gap-1 sm:gap-2">
           {/*
             THE voice trigger, in the one piece of chrome that is on every
             route. Voice is not a feature of a panel — it is a second transport
@@ -104,7 +109,7 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel, onReveal
 
           <NotificationBell />
 
-          <RecentsDropdown className="lg:hidden" />
+          <RecentsDropdown className="hidden sm:flex lg:hidden" />
 
           <Button
             variant="ghost"
