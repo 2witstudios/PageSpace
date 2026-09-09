@@ -31,6 +31,14 @@ export interface Shot {
   /** Rendered as separate lines, so the break is deliberate rather than reflowed. */
   headline: string[];
   /**
+   * Two lines in portrait; joined with a space onto one line in landscape.
+   * Keep the joined form under ~32 characters — beyond that it wraps in
+   * landscape and the device, which is positioned for a single line, rides
+   * over the second.
+   */
+  headline: string[];
+
+  /**
    * Optional, and used on one shot only.
    *
    * Most captions were cut because they argued with the picture rather than
@@ -47,18 +55,22 @@ export interface Shot {
 
 export const SHOTS: Shot[] = [
   {
-    // Leads deliberately. Only the first one to three appear in App Store
-    // search results, and a live customer site stops the scroll where a dark
-    // chat UI does not — it is also the single clearest refutation of "this is
-    // a website in a wrapper", since a wrapper cannot publish one.
-    slug: "publish",
-    tag: "Publish",
-    headline: ["Change your site", "by asking."],
+    // Leads because it is the only frame that shows the whole proposition at
+    // once: two people, an agent answering as a participant, and an answer
+    // grounded in the workspace's own numbers rather than the open internet.
+    slug: "team",
+    tag: "Together",
+    headline: ["Ask your team.", "And your agent."],
+  },
+  {
+    slug: "agent",
+    tag: "Agents",
+    headline: ["Build your own", "expert."],
   },
   {
     slug: "ask",
     tag: "Ask",
-    headline: ["Tell it what", "you need."],
+    headline: ["Give it the", "whole project."],
   },
   {
     slug: "builds",
@@ -70,23 +82,17 @@ export const SHOTS: Shot[] = [
     subline: "Documents, sheets, channels, tasks, canvases, files, code and AI chats.",
   },
   {
-    slug: "result",
-    tag: "Workspace",
-    headline: ["A workspace,", "not a blank page."],
+    slug: "publish",
+    tag: "Publish",
+    headline: ["Change your site", "by asking."],
   },
   {
-    slug: "triggers",
-    // iPad only: no iPhone capture of the Agent triggers panel exists yet.
-    devices: ["ipad"],
-    tag: "Automate",
-    headline: ["Tasks that", "start themselves."],
-  },
-  {
-    slug: "workflows",
-    // iPad only: no iPhone capture of the Create Workflow dialog exists yet.
-    devices: ["ipad"],
-    tag: "Schedule",
-    headline: ["Work that", "keeps running."],
+    // Straight from the landing page — the promise is that the AI gets real
+    // access, and that the same permissions, restore points and audit trail
+    // apply to it as to people.
+    slug: "permissions",
+    tag: "Control",
+    headline: ["Full access.", "Your brakes."],
   },
 ];
 
