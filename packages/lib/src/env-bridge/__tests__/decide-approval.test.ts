@@ -193,6 +193,14 @@ describe('parseApprovalsFile — strict; ANY defect ⇒ null (empty), never a pa
     expect(parseApprovalsFile({ version: 1, approvals: [] })).toEqual([]);
   });
 
+  it.each(['exec:/usr/bin/git', 'builtin:cd', 'root:/home/u/proj', 'file:/home/u/proj/.git/hooks/pre-commit'])(
+    'given the subject namespace %s, should parse — every namespace approvalSubjects can MINT must survive a round trip through the file (A3)',
+    (subject) => {
+      const row = approval({ subject });
+      expect(parseApprovalsFile({ version: 1, approvals: [row] })).toEqual([row]);
+    },
+  );
+
   it.each([
     ['not an object', 'nope'],
     ['wrong version', { ...valid, version: 2 }],

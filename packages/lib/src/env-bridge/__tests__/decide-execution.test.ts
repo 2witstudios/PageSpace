@@ -274,8 +274,10 @@ describe('decideExecution — the daemon is the policy enforcement point (invari
     });
 
     it('given a mode that changes and NOTHING else, should produce different canonical bytes (an approval cannot be replayed at another mode)', () => {
+      // Two NON-executable modes: an executable bit would escalate to an ask
+      // (A3), and this row is about the canonical bytes, not the verdict.
       const a = write([0o644, null]);
-      const b = write([0o755, null]);
+      const b = write([0o600, null]);
       if (a.kind !== 'allow' || b.kind !== 'allow') throw new Error('expected allow');
       expect(Buffer.from(canonicalizeArgs(a.request)).toString('utf8')).not.toBe(Buffer.from(canonicalizeArgs(b.request)).toString('utf8'));
       expect(Buffer.from(canonicalizeArgs(a.request)).toString('utf8')).toContain('"writeModes":[420,null]');
@@ -314,6 +316,83 @@ describe('decideExecution — the daemon is the policy enforcement point (invari
     it('given writeModes on an fs_read (an op that has no such thing), should deny malformed', () => {
       const hostile = { op: 'fs_read', paths: [`${ROOT}/src/a.ts`], writeModes: [0o644] } as unknown as Parameters<typeof decideExecution>[0]['request'];
       expect(decide({ grant: { ...grant, op: 'fs_read' }, request: hostile, probe })).toEqual({ kind: 'deny', reason: 'malformed' });
+    });
+  });
+
+  describe('A3: a sensitive write escalates to the owner\'s click instead of running headless', () => {
+    const fsGrant = { ...grant, op: 'fs_write' as const };
+    const probe: PathProbe = { realpath: (p) => p, isSymlink: () => false };
+    const approvals = { entries: [] as DurableApproval[], now: 1, resolveArgv0: () => null };
+    const write = (paths: string[], writeModes?: (number | null)[], overrides: Partial<Parameters<typeof decideExecution>[0]> = {}) =>
+      decide({ grant: fsGrant, request: { op: 'fs_write', paths, ...(writeModes !== undefined && { writeModes }) }, probe, approvals, ...overrides });
+
+    it('given fs_write pre-approved in ops and every file ordinary, should still allow headless with basis preapproved_op (no Tier A regression)', () => {
+      const verdict = write([`${ROOT}/src/index.ts`], [0o644]);
+      expect(verdict).toMatchObject({ kind: 'allow', basis: { kind: 'preapproved_op' } });
+    });
+
+    it('given fs_write pre-approved and ANY file sensitive, should ask instead — the pre-approved short-circuit must not win', () => {
+      const verdict = write([`${ROOT}/src/index.ts`, `${ROOT}/.git/hooks/pre-commit`], [0o644, 0o755]);
+      expect(verdict.kind).toBe('ask');
+      if (verdict.kind !== 'ask') throw new Error('expected ask');
+      expect(verdict.reason).toBe('sensitive_write');
+    });
+
+    it('given the ask verdict, should say WHICH file and WHY, for every sensitive file, in path order', () => {
+      const verdict = write([`${ROOT}/src/index.ts`, `${ROOT}/.git/hooks/pre-commit`, `${ROOT}/Makefile`], [0o644, 0o755, null]);
+      if (verdict.kind !== 'ask' || verdict.reason !== 'sensitive_write') throw new Error('expected a sensitive_write ask');
+      expect(verdict.sensitive).toEqual([
+        { path: `${ROOT}/.git/hooks/pre-commit`, reason: 'vcs_metadata' },
+        { path: `${ROOT}/Makefile`, reason: 'build_or_task' },
+      ]);
+    });
+
+    it('given an executable bit on an otherwise ordinary file, should ask (the mode alone escalates)', () => {
+      const verdict = write([`${ROOT}/src/tool.sh`], [0o755]);
+      if (verdict.kind !== 'ask' || verdict.reason !== 'sensitive_write') throw new Error('expected a sensitive_write ask');
+      expect(verdict.sensitive).toEqual([{ path: `${ROOT}/src/tool.sh`, reason: 'executable_bit' }]);
+    });
+
+    it('given a sensitive write, the durable-approval subject should be the SPECIFIC PATH, never the policy root', () => {
+      const verdict = write([`${ROOT}/a/.git/hooks/pre-commit`]);
+      if (verdict.kind !== 'ask') throw new Error('expected ask');
+      expect(verdict.subjects).toEqual([`file:${ROOT}/a/.git/hooks/pre-commit`]);
+      // The ordinary write keeps the root subject it has always had.
+      const ordinary = write([`${ROOT}/src/index.ts`], undefined, { machinePolicy: { ...machine, mode: 'ask', ops: [] } });
+      if (ordinary.kind !== 'ask') throw new Error('expected ask');
+      expect(ordinary.subjects).toEqual([`root:${ROOT}`]);
+    });
+
+    it('given a durable approval for one hook, should NOT cover a later write to another hook under the same root', () => {
+      const covered: DurableApproval = { approvalId: 'a1', envId: grant.envId, userId: grant.principal.userId, op: 'fs_write', subject: `file:${ROOT}/a/.git/hooks/pre-commit`, scope: 'until_revoked', createdAt: 0, expiresAt: null };
+      const same = write([`${ROOT}/a/.git/hooks/pre-commit`], undefined, { approvals: { ...approvals, entries: [covered] } });
+      expect(same).toMatchObject({ kind: 'allow', basis: { kind: 'durable_approval', approvalIds: ['a1'] } });
+      const other = write([`${ROOT}/b/.git/hooks/pre-commit`], undefined, { approvals: { ...approvals, entries: [covered] } });
+      expect(other.kind).toBe('ask');
+    });
+
+    it('given a root-wide approval for the policy root, should NOT cover a sensitive write inside it (approving files is not approving hooks)', () => {
+      const rootWide: DurableApproval = { approvalId: 'a2', envId: grant.envId, userId: grant.principal.userId, op: 'fs_write', subject: `root:${ROOT}`, scope: 'until_revoked', createdAt: 0, expiresAt: null };
+      expect(write([`${ROOT}/.git/hooks/pre-commit`], undefined, { approvals: { ...approvals, entries: [rootWide] } }).kind).toBe('ask');
+    });
+
+    it('given the owner\'s click (a fresh approval over the frozen request), should allow — escalation is a question, not a refusal', () => {
+      const asked = write([`${ROOT}/.git/hooks/pre-commit`], [0o755]);
+      if (asked.kind !== 'ask') throw new Error('expected ask');
+      const clicked = write([`${ROOT}/.git/hooks/pre-commit`], [0o755], { localApproval: { grantId: grant.grantId, approvedAt: 1, request: asked.request } });
+      expect(clicked).toMatchObject({ kind: 'allow', basis: { kind: 'fresh_approval' } });
+    });
+
+    it('given a DENY-worthy sensitive write (a path outside every root), should still deny — deny beats ask', () => {
+      expect(write(['/etc/.git/hooks/pre-commit'])).toEqual({ kind: 'deny', reason: 'path_denied' });
+    });
+
+    it('given a sensitive write in a policy that denies the op, should deny, never ask', () => {
+      expect(write([`${ROOT}/.git/hooks/pre-commit`], undefined, { machinePolicy: { ...machine, ops: [] } })).toEqual({ kind: 'deny', reason: 'machine_denied' });
+    });
+
+    it('given a sensitive READ (fs_read of a hook), should not escalate — only writes can plant a command', () => {
+      expect(decide({ grant: { ...grant, op: 'fs_read' }, request: { op: 'fs_read', paths: [`${ROOT}/.git/hooks/pre-commit`] }, probe, approvals })).toMatchObject({ kind: 'allow', basis: { kind: 'preapproved_op' } });
     });
   });
 

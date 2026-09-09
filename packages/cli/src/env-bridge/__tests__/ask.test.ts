@@ -58,6 +58,8 @@ describe('ask prompter (invariant 5) — shows the exact normalized request, rem
     expect(describeSubject('exec:/usr/bin/git')).toBe('/usr/bin/git');
     expect(describeSubject('builtin:cd')).toBe('cd (shell builtin)');
     expect(describeSubject('root:/home/u/proj')).toBe('files under /home/u/proj');
+    // A sensitive write is keyed on the FILE, so the prompt names the file (A3).
+    expect(describeSubject('file:/home/u/proj/.git/hooks/pre-commit')).toBe('the file /home/u/proj/.git/hooks/pre-commit');
     expect(describeScope('once')).toMatch(/only/);
     expect(describeScope('session')).toMatch(/daemon stops/);
     expect(describeScope('30d')).toMatch(/30 days/);

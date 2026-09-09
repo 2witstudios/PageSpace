@@ -103,3 +103,28 @@ export function classifyWrite(input: ClassifyWriteInput): WriteClassification {
   if (input.mode !== null && (input.mode & EXECUTABLE_BITS) !== 0) return sensitive('executable_bit');
   return { sensitive: false };
 }
+
+/** One sensitive file in a write request: which file, and why the owner is being asked. */
+export interface SensitiveWrite {
+  readonly path: string;
+  readonly reason: SensitiveWriteReason;
+}
+
+/**
+ * Every sensitive file in one `fs_write` request, in path order — the answer
+ * both the escalation (`decideExecution`) and the approval subject
+ * (`approvalSubjects`) are derived from, so the two can never disagree about
+ * what "sensitive" meant for a given request.
+ *
+ * `modes` is index-aligned with `paths` (A1); a path with no entry is treated
+ * as having named no mode.
+ */
+export function sensitiveWrites(paths: readonly string[], modes: readonly (number | null)[] | undefined): SensitiveWrite[] {
+  const found: SensitiveWrite[] = [];
+  for (let index = 0; index < paths.length; index += 1) {
+    const path = paths[index] as string;
+    const verdict = classifyWrite({ path, mode: modes?.[index] ?? null });
+    if (verdict.sensitive) found.push({ path, reason: verdict.reason });
+  }
+  return found;
+}

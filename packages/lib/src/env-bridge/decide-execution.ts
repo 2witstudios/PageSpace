@@ -69,6 +69,7 @@ import { capabilityForOp } from './intersect-capabilities';
 import { confinePath, type PathResolver } from './confine-path';
 import { scrubEnv } from './scrub-env';
 import { findApprovalCoverage, type ApprovalMatchDeps, type DurableApproval } from './decide-approval';
+import { sensitiveWrites, type SensitiveWrite } from './classify-write';
 
 export interface ExecutionRequest {
   readonly op: GrantOp;
@@ -136,6 +137,15 @@ export type ExecutionVerdict =
       readonly request: NormalizedRequest;
       /** What a durable approval of this request would be keyed on (`null`: nothing durable can be written; ask every time). */
       readonly subjects: readonly string[] | null;
+    }
+  | {
+      readonly kind: 'ask';
+      /** A write that can become a command (hardening A3): escalated, never refused. */
+      readonly reason: 'sensitive_write';
+      readonly request: NormalizedRequest;
+      readonly subjects: readonly string[] | null;
+      /** Which files, and why — what the card and the terminal prompt say out loud. Never empty. */
+      readonly sensitive: readonly SensitiveWrite[];
     }
   | { readonly kind: 'deny'; readonly reason: ExecDenyReason };
 
@@ -292,7 +302,25 @@ export function decideExecution(input: DecideExecutionInput): ExecutionVerdict {
     clamped: timeout.clamped || bytes.clamped,
   };
 
-  if (preapproved) return { kind: 'allow', request: normalized, basis: { kind: 'preapproved_op' } };
+  /**
+   * THE WRITE ESCALATION (hardening A3). Confinement answers WHERE a write
+   * lands, never WHAT it says: a `.git/hooks/pre-commit` written mode 0o755
+   * inside a declared root runs as the owner at their next `git commit`,
+   * with no click anywhere. So a sensitive write does NOT take the
+   * pre-approved short-circuit below — it falls through to the approval path
+   * and, absent an approval, becomes an `ask`. It is an ask and not a deny:
+   * the owner is asked about a write that would otherwise have run, so a
+   * generous classifier costs one click, and `sensitive_write` never enters
+   * the deny order. Computed on the CONFINED paths — the file that would
+   * actually be written, not the one that was named.
+   */
+  const sensitive = op === 'fs_write' ? sensitiveWrites(paths, normalized.writeModes) : [];
+  const ask = (subjects: readonly string[] | null): ExecutionVerdict =>
+    sensitive.length > 0
+      ? { kind: 'ask', reason: 'sensitive_write', request: normalized, subjects, sensitive }
+      : { kind: 'ask', reason: 'op_not_preapproved', request: normalized, subjects };
+
+  if (preapproved && sensitive.length === 0) return { kind: 'allow', request: normalized, basis: { kind: 'preapproved_op' } };
   if (localApproval !== undefined && localApproval.grantId === grant.grantId) {
     // The grant bounds the whole authorization, prompt included.
     if (!Number.isFinite(localApproval.approvedAt) || localApproval.approvedAt > grant.exp) return deny('approval_expired');
@@ -310,7 +338,7 @@ export function decideExecution(input: DecideExecutionInput): ExecutionVerdict {
     const approvalDeps: ApprovalMatchDeps = { resolveArgv0: approvals.resolveArgv0, roots };
     const coverage = findApprovalCoverage(approvals.entries, grant, normalized, approvals.now, approvalDeps);
     if (coverage.match === 'covered') return { kind: 'allow', request: normalized, basis: { kind: 'durable_approval', approvalIds: coverage.approvalIds } };
-    return { kind: 'ask', reason: 'op_not_preapproved', request: normalized, subjects: coverage.subjects };
+    return ask(coverage.subjects);
   }
-  return { kind: 'ask', reason: 'op_not_preapproved', request: normalized, subjects: null };
+  return ask(null);
 }

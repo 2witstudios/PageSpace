@@ -35,6 +35,7 @@
 import { z } from 'zod';
 import { GRANT_OPS, type Grant, type GrantOp } from './grant';
 import type { NormalizedRequest } from './decide-execution';
+import { sensitiveWrites } from './classify-write';
 
 export const APPROVAL_SCOPES = ['once', 'session', '30d', 'until_revoked'] as const;
 export type ApprovalScope = (typeof APPROVAL_SCOPES)[number];
@@ -290,10 +291,37 @@ export function approvalSubjects(request: NormalizedRequest, deps: ApprovalMatch
       const subject = programSubject(cmd, deps);
       return subject === null ? null : [subject];
     }
-    case 'fs_read':
     case 'fs_write': {
+      // A SENSITIVE write is keyed on the FILE, not the root (hardening A3):
+      // approving one git hook must never cover every future write under the
+      // same root. When any file in the request is sensitive, EVERY path in it
+      // becomes its own subject, so what the approval covers is exactly the
+      // set of files the owner was shown.
+      if (sensitiveWrites(request.paths, request.writeModes).length > 0) {
+        const subjects: string[] = [];
+        for (const path of request.paths) {
+          const subject = `file:${path}`;
+          if (!subjects.includes(subject)) subjects.push(subject);
+        }
+        return subjects.length === 0 ? null : subjects;
+      }
+      return rootSubjects(request.paths, deps);
+    }
+    case 'fs_read':
+      return rootSubjects(request.paths, deps);
+    case 'pty_open':
+      return null;
+    default:
+      return null;
+  }
+}
+
+/** The policy root every path resolves inside — the subject of an ordinary file operation. */
+function rootSubjects(paths: readonly string[], deps: ApprovalMatchDeps): readonly string[] | null {
+  {
+    {
       const subjects: string[] = [];
-      for (const path of request.paths) {
+      for (const path of paths) {
         const root = deps.roots.find((candidate) => isInsideRoot(path, candidate));
         if (root === undefined) return null;
         const subject = `root:${root}`;
@@ -301,10 +329,6 @@ export function approvalSubjects(request: NormalizedRequest, deps: ApprovalMatch
       }
       return subjects.length === 0 ? null : subjects;
     }
-    case 'pty_open':
-      return null;
-    default:
-      return null;
   }
 }
 
@@ -357,7 +381,7 @@ const approvalRowSchema = z
     envId: z.string().min(1),
     userId: z.string().min(1),
     op: z.enum(GRANT_OPS),
-    subject: z.string().regex(/^(exec|builtin|root):.+$/),
+    subject: z.string().regex(/^(exec|builtin|root|file):.+$/),
     scope: z.enum(DURABLE_APPROVAL_SCOPES),
     createdAt: z.number().int().nonnegative(),
     expiresAt: z.number().int().nonnegative().nullable(),

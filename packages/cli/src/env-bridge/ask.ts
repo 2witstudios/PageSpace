@@ -50,6 +50,9 @@ export function describeSubject(subject: string): string {
   if (subject.startsWith('exec:')) return subject.slice('exec:'.length);
   if (subject.startsWith('builtin:')) return `${subject.slice('builtin:'.length)} (shell builtin)`;
   if (subject.startsWith('root:')) return `files under ${subject.slice('root:'.length)}`;
+  // A sensitive write is keyed on the FILE, not the root (hardening A3), so
+  // approving one git hook never covers the next one.
+  if (subject.startsWith('file:')) return `the file ${subject.slice('file:'.length)}`;
   return subject;
 }
 
