@@ -27,7 +27,6 @@ export interface Shot {
    * worse than one fewer frame.
    */
   devices?: ShotDevice[];
-  tag?: string;
   /** Rendered as separate lines, so the break is deliberate rather than reflowed. */
   headline: string[];
   /**
@@ -62,31 +61,26 @@ export const SHOTS: Shot[] = [
     // builds an entire business workspace. Everything after is a facet of
     // "any project, any team" -- the landing hero's promise.
     slug: "builds",
-    tag: "Any project",
     headline: ["The AI for", "any project."],
-    subline: "Ask for a workspace and it builds one \u2014 documents, sheets, channels, tasks, canvases and code.",
+    subline: "Documents, sheets, channels, tasks, canvases and code.",
   },
   {
     slug: "team",
-    tag: "Any team",
     headline: ["The workspace", "for any team."],
     subline: "People and AI agents in the same channels, answering from your pages, not the open internet.",
   },
   {
     slug: "agent",
-    tag: "Agents",
     headline: ["Shape it to", "your business."],
     subline: "Choose the model, write the instructions. It works inside the workspace, not from the sidelines.",
   },
   {
     slug: "tasks",
-    tag: "Assign",
     headline: ["Assign work.", "Even to an agent."],
     subline: "Agents take tasks, assignees and due dates like anyone else on the team.",
   },
   {
     slug: "publish",
-    tag: "Publish",
     headline: ["Change your site", "by asking."],
     subline: "Publish any page to a real address, then change it in plain language.",
   },
@@ -95,7 +89,6 @@ export const SHOTS: Shot[] = [
     // asking "can I let an AI near this?" needs the answer to be specific.
     // Every claim here is from the security page.
     slug: "permissions",
-    tag: "Security",
     headline: ["Permissions apply", "to the AI too."],
     subline: "Roles, per-page access, a tamper-evident audit trail, and restore points before every AI change.",
   },

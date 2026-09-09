@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { ScreenshotCanvas, Headline, Subline, Tag } from "@/components/ScreenshotCanvas";
+import { ScreenshotCanvas, Headline, Subline } from "@/components/ScreenshotCanvas";
 import { DeviceWithReflection } from "@/components/DeviceFrame";
 import { CANVAS, capturePath, type Shot, type ShotDevice } from "@/lib/app-store-shots";
 
@@ -53,7 +53,6 @@ export function StoreScreenshot({ shot, device }: { shot: Shot; device: ShotDevi
           className="absolute flex flex-col items-start"
           style={{ left: LANDSCAPE.copyLeft, top: LANDSCAPE.copyTop, width: LANDSCAPE.copyWidth }}
         >
-          {shot.tag && <Tag className="mb-8">{shot.tag}</Tag>}
           {/* One line at this width — the canvas is wide enough that the
               portrait line break would read as an accident. */}
           <Headline>{shot.headline.join(" ")}</Headline>
@@ -63,8 +62,8 @@ export function StoreScreenshot({ shot, device }: { shot: Shot; device: ShotDevi
         <div
           className="absolute left-1/2"
           style={{
-            top: LANDSCAPE.deviceTop + (hasCaption ? 90 : 0),
-            transform: `translateX(-50%) scale(${hasCaption ? 0.665 : LANDSCAPE.scale})`,
+            top: LANDSCAPE.deviceTop,
+            transform: `translateX(-50%) scale(${hasCaption ? 0.67 : LANDSCAPE.scale})`,
             transformOrigin: "top center",
           }}
         >
@@ -80,7 +79,6 @@ export function StoreScreenshot({ shot, device }: { shot: Shot; device: ShotDevi
         className="absolute left-0 right-0 text-center"
         style={{ top: PORTRAIT.copyTop, paddingLeft: PORTRAIT.copyPad, paddingRight: PORTRAIT.copyPad }}
       >
-        {shot.tag && <Tag className="mb-12">{shot.tag}</Tag>}
         <Headline>
           {shot.headline.map((line) => (
             <span key={line} style={{ display: "block" }}>
@@ -98,8 +96,8 @@ export function StoreScreenshot({ shot, device }: { shot: Shot; device: ShotDevi
       <div
         className="absolute left-1/2"
         style={{
-          top: PORTRAIT.deviceTop + (hasCaption ? 110 : 0),
-          transform: `translateX(-50%) scale(${hasCaption ? 0.65 : PORTRAIT.scale})`,
+          top: PORTRAIT.deviceTop + (hasCaption ? 50 : 0),
+          transform: `translateX(-50%) scale(${hasCaption ? 0.675 : PORTRAIT.scale})`,
           transformOrigin: "top center",
         }}
       >
