@@ -204,6 +204,10 @@ function outcomeOf(challengeId: string, scope: RequestEnvApprovalOutput['scope']
     case 'grant_denied':
       if (reply.reason === 'approval_mismatch') return { challengeId, outcome: 'mismatch', error: reply.reason };
       if (reply.reason === 'approval_expired') return { challengeId, outcome: 'expired', error: reply.reason };
+      if (reply.reason === 'approval_unproven') {
+        // Say what to fix, because the question is still answerable.
+        return { challengeId, outcome: 'failed', error: 'approval_unproven: the machine could not verify that you clicked. Approve in the terminal running "pagespace env connect", or — if this machine has no passkey pinned — register one and re-enrol it. The request is still pending until it expires.' };
+      }
       return { challengeId, outcome: 'failed', error: reply.reason };
   }
 }
@@ -233,8 +237,20 @@ export async function POST(request: Request, context: Params) {
     }
 
     const scope = parsed.data.scope ?? '30d';
-    // Spent before the re-issue: one click answers one question, whatever the machine says next.
+    /**
+     * Spent before the re-issue, so two concurrent clicks cannot both run —
+     * but RESTORED below when the machine's answer is not a decision (Codex on
+     * #2599). A proof the machine could not use is a recoverable error, and
+     * burning the question turns it into a dead end: the owner would be told
+     * "unproven" with nothing left to retry against, and the daemon still
+     * holds its own challenge (it only spends one on a verified allow), so the
+     * two would disagree until the TTL.
+     */
     store.take(challengeId, now);
+    /** Put the question back exactly as it was, for anything that is not the owner's decision. */
+    const restorePending = () => {
+      if (pending.expiresAt > Date.now()) store.remember(pending, Date.now());
+    };
     let reply: MachineResultFrame;
     try {
       reply = await getEnvBridgeClient().sendGrant({
@@ -246,12 +262,19 @@ export async function POST(request: Request, context: Params) {
         approvalIntent: { challengeId, scope, expiresAt: pending.expiresAt, ...(parsed.data.assertion !== undefined && { assertion: parsed.data.assertion }) },
       });
     } catch (error) {
+      // The machine never answered, so the owner never decided: the question stands.
+      restorePending();
       const kind = error instanceof EnvBridgeError ? error.kind : 'error';
       auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'drive_env', resourceId: pending.envId, details: { route: 'env-bridge/approvals', operation: 'allow', challengeId, scope, outcome: 'failed', error: kind } });
       const output: RequestEnvApprovalOutput = { challengeId, outcome: 'failed', scope, error: kind };
       return NextResponse.json(output, { status: 502 });
     }
     const output = outcomeOf(challengeId, scope, reply);
+    // `approval_unproven` means the machine could not USE the proof — no
+    // passkey pinned, a cancelled or malformed assertion, a scope it was not
+    // made for. The owner has not answered anything, and the daemon has not
+    // spent its challenge either, so neither does this.
+    if (reply.type === 'grant_denied' && reply.reason === 'approval_unproven') restorePending();
     // The MIRROR (GA wave 3, leaf 5): the machine remembered this approval
     // (it ran on a byte-compared match, under the challenge id, for every
     // scope but `once`), so the server records what the owner can now see and

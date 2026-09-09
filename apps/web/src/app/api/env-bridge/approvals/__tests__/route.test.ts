@@ -353,6 +353,40 @@ describe('POST allow — the assertion rides to the machine, unexamined', () => 
     expect(sendGrant).not.toHaveBeenCalled();
   });
 
+  it('an `approval_unproven` refusal does NOT burn the question — the owner has decided nothing, and can still answer it (Codex on #2599)', async () => {
+    sendGrant.mockResolvedValueOnce({ type: 'grant_denied', grantId: 'g', reason: 'approval_unproven', sig: 'c2ln' });
+    const r = await post({ decision: 'allow', scope: '30d', assertion: ASSERTION });
+    expect(r.status).toBe(409);
+    // Still pending, and the message says what to fix.
+    expect(getPendingApprovalStore().get('ch_1', NOW)).toBeTruthy();
+    expect((await json(r)).error).toMatch(/could not verify that you clicked/);
+    // …so a second, good click still answers it.
+    sendGrant.mockResolvedValueOnce({ type: 'exec_result', grantId: 'g2', exitCode: 0, stdoutB64: '', stderrB64: '', truncated: false, sig: 'c2ln' });
+    expect((await post({ decision: 'allow', scope: '30d', assertion: ASSERTION })).status).toBe(200);
+    expect(getPendingApprovalStore().get('ch_1', NOW)).toBeFalsy();
+  });
+
+  it('a transport failure does not burn it either — the machine never answered, so the owner never decided', async () => {
+    sendGrant.mockRejectedValueOnce(new EnvBridgeError('not_connected', 'nope', {}));
+    expect((await post({ decision: 'allow', scope: '30d', assertion: ASSERTION })).status).toBe(502);
+    expect(getPendingApprovalStore().get('ch_1', NOW)).toBeTruthy();
+  });
+
+  it('but a DECISION does burn it: an allow that ran, and a deny, both spend the question', async () => {
+    expect((await post({ decision: 'allow', scope: '30d', assertion: ASSERTION })).status).toBe(200);
+    expect(getPendingApprovalStore().get('ch_1', NOW)).toBeFalsy();
+    resetPendingApprovalStoreForTesting();
+    getPendingApprovalStore().remember(pendingEntry(), NOW);
+    expect((await post({ decision: 'deny' })).status).toBe(200);
+    expect(getPendingApprovalStore().get('ch_1', NOW)).toBeFalsy();
+  });
+
+  it('an approval_mismatch still burns it — the machine framed a different request, so THIS question is answered and dead', async () => {
+    sendGrant.mockResolvedValueOnce({ type: 'grant_denied', grantId: 'g', reason: 'approval_mismatch', sig: 'c2ln' });
+    expect((await post({ decision: 'allow', scope: '30d', assertion: ASSERTION })).status).toBe(409);
+    expect(getPendingApprovalStore().get('ch_1', NOW)).toBeFalsy();
+  });
+
   it('Deny needs no assertion — refusing to run is never the dangerous direction', async () => {
     const r = await post({ decision: 'deny' });
     expect(r.status).toBe(200);
