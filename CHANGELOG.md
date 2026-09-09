@@ -36,8 +36,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   checks it itself (opt-in).** When you answer an approval card, your browser asks your
   authenticator — Touch ID, Windows Hello, a security key — to sign, and your machine verifies
   that signature before it runs anything. The signature covers the exact request your machine
-  froze, so it cannot be moved to a different command, a different question or a different
-  computer, and PageSpace cannot produce one. Until now your machine took our word that the click
+  froze and how long you chose to remember it, so it cannot be moved to a different command, a
+  different question or a different computer, nor turned into a longer-lasting approval than the
+  one you gave, and PageSpace cannot produce one. Until now your machine took our word that the click
   had come from you: the owner-only check ran on our servers, which your computer has no way to
   observe. It no longer has to. The passkeys your machine trusts are pinned when you enrol it,
   while you are at the keyboard; `pagespace env owner-keys` prints them, `pagespace env enroll`

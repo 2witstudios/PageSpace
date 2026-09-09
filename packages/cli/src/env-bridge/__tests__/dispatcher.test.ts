@@ -13,7 +13,7 @@ import { createApprovalsStore, type ApprovalsStore } from '../approvals-store.js
 import { createChallengeStore, type ChallengeStore } from '../challenge-store.js';
 import { generateMachineKeypair, signWithMachineKey } from '../keypair.js';
 import { ed25519Verify, envBridgeHash, envBridgeSha256, es256Verify } from '../crypto.js';
-import { deriveOwnerApprovalChallenge, pendingRequestForWire, type OwnerApprovalRequest, type PinnedOwnerApproval } from '../lib-core.js';
+import { deriveOwnerApprovalChallenge, pendingRequestForWire, type ApprovalIntentScope, type OwnerApprovalRequest, type PinnedOwnerApproval } from '../lib-core.js';
 import type { AuditEntry } from '../audit-log.js';
 import type { ExecRunner } from '../exec-runner.js';
 import type { FsRunner } from '../fs-runner.js';
@@ -72,6 +72,8 @@ interface AssertionOverrides {
   readonly rpId?: string;
   readonly flags?: number;
   readonly credential?: typeof OWNER_CREDENTIAL;
+  /** The scope the owner's proof is made FOR; the daemon recomputes from the scope in the received intent. */
+  readonly scope?: ApprovalIntentScope;
 }
 
 /**
@@ -80,7 +82,7 @@ interface AssertionOverrides {
  */
 function ownerAssertion(envId: string, challengeId: string, request: OwnerApprovalRequest, over: AssertionOverrides = {}) {
   const credential = over.credential ?? OWNER_CREDENTIAL;
-  const challenge = over.challenge ?? deriveOwnerApprovalChallenge({ envId, challengeId, request }, envBridgeSha256);
+  const challenge = over.challenge ?? deriveOwnerApprovalChallenge({ envId, challengeId, request, scope: over.scope ?? '30d' }, envBridgeSha256);
   const clientDataJSON = Buffer.from(JSON.stringify({ type: over.type ?? 'webauthn.get', challenge, origin: over.origin ?? ORIGIN, crossOrigin: false }));
   const authenticatorData = Buffer.concat([createHash('sha256').update(over.rpId ?? RP_ID).digest(), Buffer.from([over.flags ?? 0x05]), Buffer.alloc(4)]);
   const signed = Buffer.concat([authenticatorData, createHash('sha256').update(clientDataJSON).digest()]);
@@ -635,7 +637,8 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
        */
       const proof = (challengeId = 'ch_1', over: AssertionOverrides = {}) => {
         const frozen = challenges.peek(challengeId, NOW);
-        return frozen === undefined ? undefined : ownerAssertion(ENV_ID, challengeId, pendingRequestForWire(frozen.request), over);
+        // Defaults to the scope `INTENT` carries, so a click built with the default intent verifies.
+        return frozen === undefined ? undefined : ownerAssertion(ENV_ID, challengeId, pendingRequestForWire(frozen.request), { scope: INTENT.scope, ...over });
       };
       return { ...harness({ policy: () => ASK_POLICY, ask: null, challenges, approvals, resolveArgv0: (name) => BIN[name] ?? null, ...overrides }), challenges, writes, proof };
     }
@@ -720,11 +723,11 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
     it('given scope once, should run and remember nothing; given until_revoked, should remember with no expiry', async () => {
       const once = clickHarness();
       await once.dispatcher.handle(execFrame());
-      expect(await once.dispatcher.handle(click({}, { scope: 'once' }, PRINCIPAL, {}, once.proof()))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
+      expect(await once.dispatcher.handle(click({}, { scope: 'once' }, PRINCIPAL, {}, once.proof('ch_1', { scope: 'once' })))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
       expect(once.writes).toHaveLength(0);
       const forever = clickHarness();
       await forever.dispatcher.handle(execFrame());
-      await forever.dispatcher.handle(click({}, { scope: 'until_revoked' }, PRINCIPAL, {}, forever.proof()));
+      await forever.dispatcher.handle(click({}, { scope: 'until_revoked' }, PRINCIPAL, {}, forever.proof('ch_1', { scope: 'until_revoked' })));
       expect(JSON.parse(forever.writes[0]!)).toMatchObject({ approvals: [expect.objectContaining({ approvalId: 'ch_1', scope: 'until_revoked', expiresAt: null })] });
     });
 
@@ -768,11 +771,26 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
         await refusal(h, otherProof, 'challenge_mismatch');
       });
 
+      it('THE RELAY ATTACK (Codex P1): a proof the owner made for `once` and the server re-issues as `until_revoked` is refused, so no durable approval is written', async () => {
+        const h = clickHarness();
+        await pend(h);
+        const forOnce = h.proof('ch_1', { scope: 'once' });
+        // Presented as the wider scope the owner never chose.
+        const relayed = await h.dispatcher.handle(click({}, { scope: 'until_revoked' }, PRINCIPAL, {}, forOnce));
+        expect(relayed).toMatchObject({ kind: 'reply', frame: { reason: 'approval_unproven' } });
+        expect(h.audits.at(-1)?.verdict).toBe('deny:approval_unproven:challenge_mismatch:ch_1');
+        expect(h.spawnRun).not.toHaveBeenCalled();
+        expect(h.writes, 'nothing durable may be remembered from a relayed proof').toHaveLength(0);
+        // The owner's actual choice still runs, and `once` remembers nothing.
+        expect(await h.dispatcher.handle(click({}, { scope: 'once' }, PRINCIPAL, {}, forOnce))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
+        expect(h.writes).toHaveLength(0);
+      });
+
       it('an assertion bound to another ENVIRONMENT is refused — it never travels between machines', async () => {
         const h = clickHarness();
         await pend(h);
         const frozen = h.challenges.peek('ch_1', NOW)!;
-        await refusal(h, ownerAssertion('env_somewhere_else', 'ch_1', pendingRequestForWire(frozen.request)), 'challenge_mismatch');
+        await refusal(h, ownerAssertion('env_somewhere_else', 'ch_1', pendingRequestForWire(frozen.request), { scope: INTENT.scope }), 'challenge_mismatch');
       });
 
       it.each<[string, AssertionOverrides, string]>([
@@ -791,7 +809,7 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
         const h = clickHarness();
         await pend(h);
         const frozen = h.challenges.peek('ch_1', NOW)!;
-        const impostor = ownerAssertion(ENV_ID, 'ch_1', pendingRequestForWire(frozen.request), { credential: IMPOSTOR_CREDENTIAL });
+        const impostor = ownerAssertion(ENV_ID, 'ch_1', pendingRequestForWire(frozen.request), { credential: IMPOSTOR_CREDENTIAL, scope: INTENT.scope });
         await refusal(h, { ...impostor, credentialId: OWNER_CREDENTIAL.credentialId }, 'bad_signature');
       });
 
@@ -950,7 +968,7 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
         const frozen = challenges.peek('ch_1', NOW)!;
         const click = signedGrant(
           { type: 'grant_exec', cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' } },
-          { approvalIntent: { challengeId: 'ch_1', scope: '30d', expiresAt: NOW + 30_000, assertion: ownerAssertion(ENV_ID, 'ch_1', pendingRequestForWire(frozen.request)) }, principal: { ...PRINCIPAL, sessionId: 'later', conversationId: 'later' } },
+          { approvalIntent: { challengeId: 'ch_1', scope: '30d', expiresAt: NOW + 30_000, assertion: ownerAssertion(ENV_ID, 'ch_1', pendingRequestForWire(frozen.request), { scope: '30d' }) }, principal: { ...PRINCIPAL, sessionId: 'later', conversationId: 'later' } },
         );
         const pending = h.dispatcher.handle(click);
         await Promise.resolve();

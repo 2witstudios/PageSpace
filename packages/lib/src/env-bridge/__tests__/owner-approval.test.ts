@@ -20,6 +20,7 @@ import {
   verifyOwnerApproval,
   type EcJwkPublic,
   type OwnerApprovalRequest,
+  type ApprovalIntentScope,
   type PinnedOwnerApproval,
   type Sha256Bytes,
 } from '../owner-approval';
@@ -51,6 +52,7 @@ const REQUEST: OwnerApprovalRequest = {
 
 const ENV_ID = 'env_1';
 const CHALLENGE_ID = 'chal_1';
+const SCOPE = '30d' as const;
 
 // ---- a real P-256 credential, so the signature rows are not simulated ------
 
@@ -104,7 +106,7 @@ interface AssertionOverrides {
 }
 
 function makeAssertion(overrides: AssertionOverrides = {}) {
-  const challenge = overrides.challenge ?? deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST }, sha256);
+  const challenge = overrides.challenge ?? deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, scope: SCOPE }, sha256);
   const clientData = new TextEncoder().encode(JSON.stringify({ type: overrides.type ?? 'webauthn.get', challenge, origin: overrides.origin ?? ORIGIN, crossOrigin: false }));
   const authData = authenticatorData(overrides.rpId ?? RP_ID, overrides.flags ?? 0x05);
   const signed = new Uint8Array(authData.length + 32);
@@ -119,28 +121,28 @@ function makeAssertion(overrides: AssertionOverrides = {}) {
   };
 }
 
-const verify = (assertion: unknown, pinned: PinnedOwnerApproval = PINNED, request: OwnerApprovalRequest = REQUEST, challengeId = CHALLENGE_ID, envId = ENV_ID) =>
-  verifyOwnerApproval({ assertion, pinned, envId, challengeId, request, sha256, verifyEs256: es256Verify });
+const verify = (assertion: unknown, pinned: PinnedOwnerApproval = PINNED, request: OwnerApprovalRequest = REQUEST, challengeId = CHALLENGE_ID, envId = ENV_ID, scope: ApprovalIntentScope = SCOPE) =>
+  verifyOwnerApproval({ assertion, pinned, envId, challengeId, request, scope, sha256, verifyEs256: es256Verify });
 
 // ---------------------------------------------------------------------------
 
 describe('B2 — the challenge is derived from the frozen request', () => {
   it('both sides derive byte-identical challenges from the same fixture (pure, no clock, no I/O)', () => {
-    const a = deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST }, sha256);
-    const b = deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: { ...REQUEST } }, sha256);
+    const a = deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, scope: SCOPE }, sha256);
+    const b = deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: { ...REQUEST }, scope: SCOPE }, sha256);
     expect(a).toBe(b);
     expect(a).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 
   it('a different challengeId derives a different challenge', () => {
-    expect(deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: 'chal_2', request: REQUEST }, sha256)).not.toBe(
-      deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST }, sha256),
+    expect(deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: 'chal_2', request: REQUEST, scope: SCOPE }, sha256)).not.toBe(
+      deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, scope: SCOPE }, sha256),
     );
   });
 
   it('a different envId derives a different challenge — an assertion never travels between environments', () => {
-    expect(deriveOwnerApprovalChallenge({ envId: 'env_2', challengeId: CHALLENGE_ID, request: REQUEST }, sha256)).not.toBe(
-      deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST }, sha256),
+    expect(deriveOwnerApprovalChallenge({ envId: 'env_2', challengeId: CHALLENGE_ID, request: REQUEST, scope: SCOPE }, sha256)).not.toBe(
+      deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, scope: SCOPE }, sha256),
     );
   });
 
@@ -155,14 +157,32 @@ describe('B2 — the challenge is derived from the frozen request', () => {
     ['maxBytes', { ...REQUEST, maxBytes: 65_537 }],
     ['clamped', { ...REQUEST, clamped: true }],
   ])('a request differing by one byte in %s derives a different challenge', (_field, altered) => {
-    expect(deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: altered }, sha256)).not.toBe(
-      deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST }, sha256),
+    expect(deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: altered, scope: SCOPE }, sha256)).not.toBe(
+      deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, scope: SCOPE }, sha256),
     );
   });
 
   it('a request field the wire gains later is covered without touching this module (whole-request hash)', () => {
     const withExtra = { ...REQUEST, writeModes: [0o755] } as unknown as OwnerApprovalRequest;
     expect(ownerApprovalRequestHash(withExtra, sha256)).not.toBe(ownerApprovalRequestHash(REQUEST, sha256));
+  });
+
+  it.each<[ApprovalIntentScope, ApprovalIntentScope]>([
+    ['once', 'session'],
+    ['once', '30d'],
+    ['once', 'until_revoked'],
+    ['session', 'until_revoked'],
+    ['30d', 'until_revoked'],
+  ])('the SCOPE is in the binding: %s and %s derive different challenges (Codex P1 on #2599)', (a, b) => {
+    expect(deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, scope: a }, sha256)).not.toBe(
+      deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, scope: b }, sha256),
+    );
+  });
+
+  it('all four scopes derive four distinct challenges — a proof authorises exactly the scope it was made for', () => {
+    const scopes: ApprovalIntentScope[] = ['once', 'session', '30d', 'until_revoked'];
+    const derived = scopes.map((scope) => deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, scope }, sha256));
+    expect(new Set(derived).size).toBe(4);
   });
 
   it('the domain is distinct from all five existing ones, so an assertion is never replayable as another message', () => {
@@ -172,9 +192,9 @@ describe('B2 — the challenge is derived from the frozen request', () => {
   });
 
   it('the domain is inside the derivation: a challenge over the same binding without it differs', () => {
-    const withDomain = deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST }, sha256);
+    const withDomain = deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, scope: SCOPE }, sha256);
     const requestHash = ownerApprovalRequestHash(REQUEST, sha256);
-    const withoutDomain = b64url(sha256(new TextEncoder().encode(JSON.stringify({ challengeId: CHALLENGE_ID, envId: ENV_ID, requestHash }))));
+    const withoutDomain = b64url(sha256(new TextEncoder().encode(JSON.stringify({ challengeId: CHALLENGE_ID, envId: ENV_ID, requestHash, scope: SCOPE }))));
     expect(withDomain).not.toBe(withoutDomain);
   });
 
@@ -233,17 +253,27 @@ describe('B4 — the daemon verifies the assertion itself', () => {
 
   it('THE PROPERTY: an assertion bound to a DIFFERENT frozen request is refused', () => {
     const other: OwnerApprovalRequest = { ...REQUEST, cmd: 'curl', args: ['evil.example'] };
-    const assertion = makeAssertion({ challenge: deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: other }, sha256) });
+    const assertion = makeAssertion({ challenge: deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: other, scope: SCOPE }, sha256) });
     expect(verify(assertion)).toEqual({ ok: false, reason: 'challenge_mismatch' });
   });
 
+  it('THE RELAY ATTACK: an assertion made for `once`, presented as `until_revoked`, is refused (Codex P1 on #2599)', () => {
+    const forOnce = makeAssertion({ challenge: deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, scope: 'once' }, sha256) });
+    // Honest presentation: allowed.
+    expect(verify(forOnce, PINNED, REQUEST, CHALLENGE_ID, ENV_ID, 'once')).toEqual({ ok: true, credentialId: CREDENTIAL.credentialId });
+    // Relayed as a durable scope the owner never chose: refused, so no durable approval is written.
+    for (const wider of ['session', '30d', 'until_revoked'] as const) {
+      expect(verify(forOnce, PINNED, REQUEST, CHALLENGE_ID, ENV_ID, wider)).toEqual({ ok: false, reason: 'challenge_mismatch' });
+    }
+  });
+
   it('an assertion bound to a different challenge id is refused', () => {
-    const assertion = makeAssertion({ challenge: deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: 'chal_other', request: REQUEST }, sha256) });
+    const assertion = makeAssertion({ challenge: deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: 'chal_other', request: REQUEST, scope: SCOPE }, sha256) });
     expect(verify(assertion)).toEqual({ ok: false, reason: 'challenge_mismatch' });
   });
 
   it('an assertion bound to another environment is refused', () => {
-    const assertion = makeAssertion({ challenge: deriveOwnerApprovalChallenge({ envId: 'env_other', challengeId: CHALLENGE_ID, request: REQUEST }, sha256) });
+    const assertion = makeAssertion({ challenge: deriveOwnerApprovalChallenge({ envId: 'env_other', challengeId: CHALLENGE_ID, request: REQUEST, scope: SCOPE }, sha256) });
     expect(verify(assertion)).toEqual({ ok: false, reason: 'challenge_mismatch' });
   });
 
@@ -282,8 +312,8 @@ describe('B4 — the daemon verifies the assertion itself', () => {
     const explode = () => {
       throw new Error('boom');
     };
-    expect(verifyOwnerApproval({ assertion: makeAssertion(), pinned: PINNED, envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, sha256, verifyEs256: explode })).toEqual({ ok: false, reason: 'bad_signature' });
-    expect(verifyOwnerApproval({ assertion: makeAssertion(), pinned: PINNED, envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, sha256: explode as unknown as Sha256Bytes, verifyEs256: es256Verify })).toEqual({ ok: false, reason: 'malformed' });
+    expect(verifyOwnerApproval({ assertion: makeAssertion(), pinned: PINNED, envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, scope: SCOPE, sha256, verifyEs256: explode })).toEqual({ ok: false, reason: 'bad_signature' });
+    expect(verifyOwnerApproval({ assertion: makeAssertion(), pinned: PINNED, envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, scope: SCOPE, sha256: explode as unknown as Sha256Bytes, verifyEs256: es256Verify })).toEqual({ ok: false, reason: 'malformed' });
   });
 
   it('the deny order is fixed: the earlier check wins when two are wrong at once', () => {

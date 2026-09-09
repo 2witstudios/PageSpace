@@ -336,8 +336,9 @@ exec from ops to restore the approval prompt`, and `env connect` writes one audi
 When you answer an approval card **in the PageSpace chat**, your browser asks your authenticator
 (Touch ID, Windows Hello, a security key) to sign, and the machine verifies that signature itself
 before it runs anything. The signature is over a challenge derived from the exact request the
-machine froze, so it cannot be moved to a different command, a different question, or a different
-machine — and PageSpace cannot produce one. That is the point: without it, anyone able to sign
+machine froze AND the scope you chose, so it cannot be moved to a different command, a different
+question, a different machine, or relayed as a longer-lasting approval than the one you gave —
+and PageSpace cannot produce one. That is the point: without it, anyone able to sign
 grants *and* stand where the server stands could answer your card for you, and the machine would
 have no way to tell.
 

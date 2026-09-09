@@ -28,7 +28,9 @@ import {
  * ALLOW REQUIRES THE OWNER'S PASSKEY (hardening B). Before the POST, the
  * browser asks the authenticator to sign a challenge DERIVED from the frozen
  * request, and the assertion rides inside the intent to the machine, which
- * verifies it against the credentials it pinned at enrolment. So the machine
+ * verifies it against the credentials it pinned at enrolment. The challenge
+ * also binds the SCOPE the owner chose, so a proof made for "this once"
+ * cannot be relayed as "until I revoke it". So the machine
  * no longer takes this server's word that a human was here — which is the
  * whole point, because a server that could sign grants could otherwise answer
  * this card by itself. Deny needs no assertion: refusing to run is never the
@@ -84,7 +86,8 @@ interface PendingWriteFile {
 interface WebauthnOptions {
   available: boolean;
   rpId: string | null;
-  challenge: string;
+  /** One challenge per scope: the challenge binds the scope, and the owner picks it here. */
+  challenges: Partial<Record<EnvApprovalScope, string>>;
   allowCredentials: Array<{ id: string; type: 'public-key' }>;
 }
 
@@ -111,10 +114,12 @@ interface OwnerAssertion {
  * caller surfaces it rather than sending an unproven click — the machine
  * would refuse it anyway, and saying so here is the honest answer.
  */
-async function proveOwnerClick(options: WebauthnOptions): Promise<OwnerAssertion> {
+async function proveOwnerClick(options: WebauthnOptions, scope: EnvApprovalScope): Promise<OwnerAssertion> {
+  const challenge = options.challenges[scope];
+  if (challenge === undefined) throw new Error(`This machine did not offer a challenge for "${SCOPE_LABELS[scope]}"; reload the conversation and try again.`);
   const assertion = await startAuthentication({
     optionsJSON: {
-      challenge: options.challenge,
+      challenge,
       ...(options.rpId !== null && { rpId: options.rpId }),
       allowCredentials: options.allowCredentials,
       userVerification: 'preferred',
@@ -255,7 +260,7 @@ export function EnvApprovalCard({ part }: EnvApprovalCardProps) {
           setBusy(null);
           return;
         }
-        assertion = await proveOwnerClick(options);
+        assertion = await proveOwnerClick(options, scope);
       }
       const response = await fetchWithAuth(`/api/env-bridge/approvals/${encodeURIComponent(challengeId)}`, {
         method: 'POST',

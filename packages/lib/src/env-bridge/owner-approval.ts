@@ -21,12 +21,13 @@
  *
  * THE DERIVATION (leaf B2). The challenge is not random:
  *
- *   challenge = SHA256({ domain, envId, challengeId, requestHash })
  *   requestHash = SHA256(canonicalizeArgs(frozen request))
+ *   challenge   = SHA256({ domain, envId, challengeId, requestHash, scope })
  *
  * so an assertion cannot be moved to another request (the request hash), to
  * another pending question (the challenge id), to another machine (the env
- * id) or to another message type (the domain). Both sides derive it
+ * id), to a WIDER durable scope than the owner chose (the scope), or to
+ * another message type (the domain). Both sides derive it
  * independently from what they each hold — the server from the frozen request
  * the machine SIGNED into the `grant_denied`, the daemon from the request it
  * actually froze — and it is the daemon's derivation that decides.
@@ -107,9 +108,22 @@ export interface OwnerApprovalBinding {
   readonly challengeId: string;
   /** The request the MACHINE froze (the daemon's own copy is what decides). */
   readonly request: OwnerApprovalRequest;
+  /**
+   * HOW LONG the owner chose to remember it — inside the binding, not beside
+   * it (Codex P1 on #2599). Without this the assertion says only "a human
+   * approved this request", and in precisely the attack this exists to stop a
+   * server that receives a proof for `once` could relay it as
+   * `until_revoked` and the machine would write a durable approval the owner
+   * never granted. Each scope derives a different challenge, so an assertion
+   * authorises exactly the scope it was made for.
+   */
+  readonly scope: ApprovalIntentScope;
 }
 
-/** The WebAuthn challenge for one pending approval, as base64url — what `clientDataJSON.challenge` must equal. */
+/** The scopes an owner may choose on the card; mirrors `ApprovalIntent['scope']`. */
+export type ApprovalIntentScope = 'once' | 'session' | '30d' | 'until_revoked';
+
+/** The WebAuthn challenge for one pending approval AT ONE SCOPE, as base64url — what `clientDataJSON.challenge` must equal. */
 export function deriveOwnerApprovalChallenge(binding: OwnerApprovalBinding, sha256: Sha256Bytes): string {
   return encodeBase64Url(
     sha256(
@@ -118,6 +132,7 @@ export function deriveOwnerApprovalChallenge(binding: OwnerApprovalBinding, sha2
         envId: binding.envId,
         challengeId: binding.challengeId,
         requestHash: ownerApprovalRequestHash(binding.request, sha256),
+        scope: binding.scope,
       }),
     ),
   );
@@ -195,6 +210,12 @@ export interface VerifyOwnerApprovalInput {
   readonly challengeId: string;
   /** The request THIS machine froze under that id — never one the server supplied. */
   readonly request: OwnerApprovalRequest;
+  /**
+   * The scope from the RECEIVED intent — what the server is asking the machine
+   * to remember. Recomputing the challenge from it is what refuses a proof
+   * made for a narrower scope and relayed as a wider one.
+   */
+  readonly scope: ApprovalIntentScope;
   readonly sha256: Sha256Bytes;
   readonly verifyEs256: Es256Verify;
 }
@@ -263,7 +284,7 @@ export function verifyOwnerApproval(input: VerifyOwnerApprovalInput): OwnerAppro
   let rpIdHash: Uint8Array;
   let clientDataHash: Uint8Array;
   try {
-    expectedChallenge = deriveOwnerApprovalChallenge({ envId: input.envId, challengeId: input.challengeId, request: input.request }, input.sha256);
+    expectedChallenge = deriveOwnerApprovalChallenge({ envId: input.envId, challengeId: input.challengeId, request: input.request, scope: input.scope }, input.sha256);
     rpIdHash = input.sha256(new TextEncoder().encode(input.pinned.rpId));
     clientDataHash = input.sha256(clientDataJSON);
   } catch {

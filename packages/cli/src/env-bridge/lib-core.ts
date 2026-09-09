@@ -33,7 +33,7 @@ export type { AdvertisedCapabilities, MachinePolicy, ServerPolicy } from '@pages
 export type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
 export { encodeApprovalRevokeForSigning, encodeHelloForSigning, encodeResultForSigning, machineResultBindingId, OWNER_APPROVAL_SIGNING_DOMAIN, resultHashForFrame, verifyPause, verifyRevoke } from '@pagespace/lib/env-bridge/machine-signatures';
 export { deriveOwnerApprovalChallenge, ownerApprovalRequestHash, pendingRequestForWire, verifyOwnerApproval } from '@pagespace/lib/env-bridge/owner-approval';
-export type { EcJwkPublic, Es256Verify, OwnerApprovalDenyReason, OwnerApprovalRequest, OwnerApprovalVerdict, PinnedOwnerApproval, PinnedOwnerCredential, Sha256Bytes } from '@pagespace/lib/env-bridge/owner-approval';
+export type { ApprovalIntentScope, EcJwkPublic, Es256Verify, OwnerApprovalDenyReason, OwnerApprovalRequest, OwnerApprovalVerdict, PinnedOwnerApproval, PinnedOwnerCredential, Sha256Bytes } from '@pagespace/lib/env-bridge/owner-approval';
 export type { MachineResultFrame, MachineResultFrameType } from '@pagespace/lib/env-bridge/machine-signatures';
 export { decodeFrame, encodeFrame, execOutputCeiling, fsReadContentCeiling } from '@pagespace/lib/env-bridge/frame-codec';
 export type { Frame, FrameLimits, PendingApproval } from '@pagespace/lib/env-bridge/frame-codec';

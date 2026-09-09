@@ -313,6 +313,10 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         challengeId: intent.challengeId,
         // The request THIS machine froze — never one the server supplied.
         request: pendingRequestForWire(frozen.request),
+        // The scope the server is ASKING for, not one the machine assumes: a
+        // proof made for `once` and relayed as `until_revoked` derives a
+        // different challenge and is refused (Codex P1 on #2599).
+        scope: intent.scope,
         sha256: deps.ownerApproval?.sha256 ?? UNAVAILABLE_SHA256,
         verifyEs256: deps.ownerApproval?.verifyEs256 ?? UNAVAILABLE_ES256,
       });

@@ -188,6 +188,8 @@ function daemonVerifies(frame: Frame) {
     challengeId: intent.challengeId,
     // The request the MACHINE froze; here, the one it signed into `ask_pending`.
     request: REQUEST,
+    // The scope from the RECEIVED intent: relaying a narrower proof as a wider scope must fail here.
+    scope: intent.scope,
     sha256: envBridgeSha256,
     verifyEs256: es256Verify,
   });
@@ -197,11 +199,11 @@ function daemonVerifies(frame: Frame) {
 describe("the owner's click, end to end — card → route → signer → wire → daemon", () => {
   it('THE EXIT CRITERION: an assertion the owner makes in the browser survives every hop and the daemon ALLOWS the run', async () => {
     // 1. The card fetches what to sign.
-    const options = ((await (await get()).json()) as { webauthn: { available: boolean; challenge: string } }).webauthn;
+    const options = ((await (await get()).json()) as { webauthn: { available: boolean; challenges: Record<string, string> } }).webauthn;
     expect(options.available).toBe(true);
 
-    // 2. The owner's authenticator signs it.
-    const assertion = authenticatorSigns(options.challenge);
+    // 2. The owner's authenticator signs the challenge for the scope they chose.
+    const assertion = authenticatorSigns(options.challenges['30d']!);
 
     // 3. The card POSTs the decision — exactly the body EnvApprovalCard sends.
     const response = await post({ decision: 'allow', scope: '30d', assertion });
@@ -220,8 +222,8 @@ describe("the owner's click, end to end — card → route → signer → wire �
   });
 
   it('the assertion is under the SERVER SIGNATURE: stripping or altering it after signing makes the grant unverifiable', async () => {
-    const options = ((await (await get()).json()) as { webauthn: { challenge: string } }).webauthn;
-    await post({ decision: 'allow', scope: '30d', assertion: authenticatorSigns(options.challenge) });
+    const options = ((await (await get()).json()) as { webauthn: { challenges: Record<string, string> } }).webauthn;
+    await post({ decision: 'allow', scope: '30d', assertion: authenticatorSigns(options.challenges['30d']!) });
     const frame = sentOverTheWire[0] as GrantFrame;
     const grant = frame.grant as { approvalIntent: { assertion: { signature: string } } };
 
@@ -239,4 +241,24 @@ describe("the owner's click, end to end — card → route → signer → wire �
     expect(outcome.stage === 'proof' && outcome.proof).toEqual({ ok: false, reason: 'malformed' });
   });
 
+
+  it('THE RELAY ATTACK (Codex P1): an assertion the owner made for `once` cannot be relayed as `until_revoked`', async () => {
+    const options = ((await (await get()).json()) as { webauthn: { challenges: Record<string, string> } }).webauthn;
+    // Every scope is a different challenge, so a proof authorises exactly one of them.
+    expect(new Set(Object.values(options.challenges)).size).toBe(4);
+
+    // The owner chose `once`; a compromised server re-issues that proof under a durable scope.
+    const assertion = authenticatorSigns(options.challenges.once!);
+    await post({ decision: 'allow', scope: 'until_revoked', assertion });
+    const relayed = daemonVerifies(sentOverTheWire[0]!);
+    expect(relayed.stage === 'proof' && relayed.intent.scope).toBe('until_revoked');
+    expect(relayed.stage === 'proof' && relayed.proof).toEqual({ ok: false, reason: 'challenge_mismatch' });
+
+    // …and the scope the owner actually chose still runs.
+    resetPendingApprovalStoreForTesting();
+    getPendingApprovalStore().remember(pendingEntry(), NOW);
+    sentOverTheWire = [];
+    await post({ decision: 'allow', scope: 'once', assertion });
+    expect(daemonVerifies(sentOverTheWire[0]!)).toMatchObject({ stage: 'proof', proof: { ok: true } });
+  });
 });

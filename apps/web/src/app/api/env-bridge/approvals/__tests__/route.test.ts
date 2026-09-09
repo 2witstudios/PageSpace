@@ -85,17 +85,25 @@ describe('GET — the owner sees the frozen request verbatim', () => {
         available: true,
         rpId: 'pagespace.test',
         // DERIVED from the frozen request, never random (hardening B, leaf B2) — the daemon recomputes the same value from the request IT froze.
-        challenge: deriveOwnerApprovalChallenge({ envId: ENV, challengeId: 'ch_1', request: REQUEST }, envBridgeSha256),
+        // One per SCOPE, because the challenge binds the scope and the owner chooses it on the card, after this response.
+        challenges: {
+          once: deriveOwnerApprovalChallenge({ envId: ENV, challengeId: 'ch_1', request: REQUEST, scope: 'once' }, envBridgeSha256),
+          session: deriveOwnerApprovalChallenge({ envId: ENV, challengeId: 'ch_1', request: REQUEST, scope: 'session' }, envBridgeSha256),
+          '30d': deriveOwnerApprovalChallenge({ envId: ENV, challengeId: 'ch_1', request: REQUEST, scope: '30d' }, envBridgeSha256),
+          until_revoked: deriveOwnerApprovalChallenge({ envId: ENV, challengeId: 'ch_1', request: REQUEST, scope: 'until_revoked' }, envBridgeSha256),
+        },
         allowCredentials: [{ id: 'cred-a', type: 'public-key' }],
       },
     });
   });
 
-  it('the challenge is bound to THIS question and THIS request — a different challenge id or a byte of the request changes it', async () => {
+  it('the challenge is bound to THIS question, THIS request and THAT scope — changing any of them changes it', async () => {
     const body = await json(await get());
-    const webauthn = body.webauthn as { challenge: string };
-    expect(webauthn.challenge).not.toBe(deriveOwnerApprovalChallenge({ envId: ENV, challengeId: 'ch_other', request: REQUEST }, envBridgeSha256));
-    expect(webauthn.challenge).not.toBe(deriveOwnerApprovalChallenge({ envId: ENV, challengeId: 'ch_1', request: { ...REQUEST, cwd: '/elsewhere' }, }, envBridgeSha256));
+    const { challenges } = body.webauthn as { challenges: Record<string, string> };
+    expect(challenges['30d']).not.toBe(deriveOwnerApprovalChallenge({ envId: ENV, challengeId: 'ch_other', request: REQUEST, scope: '30d' }, envBridgeSha256));
+    expect(challenges['30d']).not.toBe(deriveOwnerApprovalChallenge({ envId: ENV, challengeId: 'ch_1', request: { ...REQUEST, cwd: '/elsewhere' }, scope: '30d' }, envBridgeSha256));
+    // Every scope is distinct, so a proof for one can never authorise another (Codex P1 on #2599).
+    expect(new Set(Object.values(challenges)).size).toBe(4);
   });
 
   it('given the machine pinned NO passkey, should say the ceremony is unavailable rather than offer credentials the daemon would refuse', async () => {

@@ -96,8 +96,10 @@ Each guarantee is followed by its exact limit.
 - **Approving in the chat needs your passkey, and your machine checks it itself.** When you
   answer an approval card, your browser asks your authenticator — Touch ID, Windows Hello, a
   security key — to sign, and your machine verifies that signature before it runs anything. The
-  signature covers the exact request your machine froze, so it cannot be moved to a different
-  command, a different question, or a different computer, and **PageSpace cannot produce one**.
+  signature covers the exact request your machine froze **and how long you chose to remember
+  it**, so it cannot be moved to a different command, a different question, a different computer,
+  or turned into a longer-lasting approval than the one you gave — and **PageSpace cannot produce
+  one**.
   That is the point: without it, anyone who could sign requests *and* stand where our servers
   stand could answer your card for you, and your machine would have no way to tell. The
   passkeys your machine trusts are pinned when you enrol it, from your account, while you are

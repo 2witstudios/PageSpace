@@ -121,7 +121,14 @@ function webauthnOptionsFor(sibling: LocalSibling, challengeId: string, envId: s
   return {
     available: credentials.length > 0,
     rpId: pinned?.rpId ?? null,
-    challenge: deriveOwnerApprovalChallenge({ envId, challengeId, request }, envBridgeSha256),
+    /**
+     * ONE CHALLENGE PER SCOPE. The challenge binds the scope (Codex P1 on
+     * #2599) and the owner picks the scope on the card, after this response —
+     * so the card signs the one matching its selection. Deriving all four here
+     * keeps the browser free of hashing, and a card that signs the wrong one
+     * simply fails on the machine rather than approving anything.
+     */
+    challenges: Object.fromEntries(ENV_APPROVAL_SCOPES.map((scope) => [scope, deriveOwnerApprovalChallenge({ envId, challengeId, request, scope }, envBridgeSha256)])) as Record<(typeof ENV_APPROVAL_SCOPES)[number], string>,
     allowCredentials: credentials.map((credential) => ({ id: credential.credentialId, type: 'public-key' as const })),
   };
 }

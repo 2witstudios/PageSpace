@@ -22,7 +22,13 @@ const PENDING = {
   principal: { userId: 'user_owner', sessionId: 'sess_1', conversationId: 'conv_1' },
   expiresAt: 1_800_000_030_000,
   request: { op: 'exec', cmd: 'sh', args: ['-c', 'git status'], cwd: '/home/o/proj', paths: [], env: { CI: '1' }, timeoutMs: 120_000, maxBytes: 1_048_576, clamped: true },
-  webauthn: { available: true, rpId: 'pagespace.test', challenge: 'Y2hhbGxlbmdl', allowCredentials: [{ id: 'cred-a', type: 'public-key' as const }] },
+  // One challenge per SCOPE: the challenge binds the scope the owner picks (Codex P1 on #2599).
+  webauthn: {
+    available: true,
+    rpId: 'pagespace.test',
+    challenges: { once: 'Y2hhbC1vbmNl', session: 'Y2hhbC1zZXNz', '30d': 'Y2hhbC0zMGQ', until_revoked: 'Y2hhbC1mb3JldmVy' },
+    allowCredentials: [{ id: 'cred-a', type: 'public-key' as const }],
+  },
 };
 
 /** What `startAuthentication` hands back for the pinned credential. */
@@ -213,10 +219,40 @@ describe('EnvApprovalCard — the owner\'s passkey', () => {
     await waitFor(() => expect(screen.getByTestId('env-approval-allow')).toBeTruthy());
     fireEvent.click(screen.getByTestId('env-approval-allow'));
     await waitFor(() => expect(submitAnswers).toHaveBeenCalledTimes(1));
+    // The default scope is 30d, so THAT scope's challenge is what the authenticator signs.
     expect(startAuthenticationMock).toHaveBeenCalledWith({
-      optionsJSON: { challenge: 'Y2hhbGxlbmdl', rpId: 'pagespace.test', allowCredentials: [{ id: 'cred-a', type: 'public-key' }], userVerification: 'preferred' },
+      optionsJSON: { challenge: 'Y2hhbC0zMGQ', rpId: 'pagespace.test', allowCredentials: [{ id: 'cred-a', type: 'public-key' }], userVerification: 'preferred' },
     });
     expect(posted).toEqual({ decision: 'allow', scope: '30d', assertion: EXPECTED_ASSERTION });
+  });
+
+  it('signs the challenge for the SCOPE the owner selected, not a fixed one (Codex P1 on #2599)', async () => {
+    let posted: { scope?: string } | undefined;
+    fetchWithAuthMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (!init || init.method !== 'POST') return jsonResponse(PENDING);
+      posted = JSON.parse(String(init.body)) as { scope?: string };
+      return jsonResponse({ challengeId: 'ch_1', outcome: 'allowed', scope: posted.scope });
+    });
+    const submitAnswers = renderCard();
+    await waitFor(() => expect(screen.getByTestId('env-approval-allow')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('Remember for'), { target: { value: 'once' } });
+    fireEvent.click(screen.getByTestId('env-approval-allow'));
+    await waitFor(() => expect(submitAnswers).toHaveBeenCalledTimes(1));
+    expect(startAuthenticationMock.mock.calls[0]![0]).toMatchObject({ optionsJSON: { challenge: 'Y2hhbC1vbmNl' } });
+    expect(posted?.scope).toBe('once');
+  });
+
+  it('refuses to sign when the route offered no challenge for the selected scope, rather than signing the wrong one', async () => {
+    fetchWithAuthMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (!init || init.method !== 'POST') return jsonResponse({ ...PENDING, webauthn: { ...PENDING.webauthn, challenges: { '30d': 'Y2hhbC0zMGQ' } } });
+      throw new Error('the POST must not happen');
+    });
+    renderCard();
+    await waitFor(() => expect(screen.getByTestId('env-approval-allow')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('Remember for'), { target: { value: 'until_revoked' } });
+    fireEvent.click(screen.getByTestId('env-approval-allow'));
+    await waitFor(() => expect(screen.getByText(/did not offer a challenge/)).toBeTruthy());
+    expect(fetchWithAuthMock.mock.calls.filter((call) => (call[1] as RequestInit | undefined)?.method === 'POST')).toHaveLength(0);
   });
 
   it('the ceremony runs BEFORE the POST — a cancelled prompt sends nothing at all', async () => {
@@ -234,7 +270,7 @@ describe('EnvApprovalCard — the owner\'s passkey', () => {
 
   it('given the machine pinned no passkey, says so on the card and refuses to send an unprovable Allow', async () => {
     fetchWithAuthMock.mockImplementation(async (_url: string, init?: RequestInit) => {
-      if (!init || init.method !== 'POST') return jsonResponse({ ...PENDING, webauthn: { available: false, rpId: null, challenge: 'Y2hhbGxlbmdl', allowCredentials: [] } });
+      if (!init || init.method !== 'POST') return jsonResponse({ ...PENDING, webauthn: { available: false, rpId: null, challenges: {}, allowCredentials: [] } });
       throw new Error('the POST must not happen');
     });
     renderCard();
