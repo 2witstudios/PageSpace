@@ -38,7 +38,7 @@ import { machineProfileName } from '../../credentials/serialize.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../exit-codes.js';
 import type { CommandHandler } from '../../router/router.js';
 import { signWithMachineKey, type SignWithMachineKey } from '../../env-bridge/keypair.js';
-import { ed25519Verify, envBridgeHash } from '../../env-bridge/crypto.js';
+import { ed25519Verify, envBridgeHash, envBridgeSha256, es256Verify } from '../../env-bridge/crypto.js';
 import { createAuditLog, defaultAuditPath } from '../../env-bridge/audit-log.js';
 import { createAskPrompter, describeScope, describeSubject } from '../../env-bridge/ask.js';
 import { createApprovalsStore, defaultApprovalsPath, writeApprovalsFile } from '../../env-bridge/approvals-store.js';
@@ -235,6 +235,9 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
       resolveArgv0: (name) => resolveCommand(name, resolver),
       ids: { approvalId: deps.approvalId },
       challenges,
+      // The owner's pinned passkeys (hardening B): what lets this daemon
+      // verify the click itself instead of trusting the server that sent it.
+      ...(credential.ownerApproval !== undefined && { ownerApproval: { pinned: credential.ownerApproval, sha256: envBridgeSha256, verifyEs256: es256Verify } }),
       preferChat: askInChat(ctx),
       log,
       limits: DEFAULT_FRAME_LIMITS,
