@@ -460,9 +460,13 @@ export default function InboxDMPage() {
       createdAt: new Date().toISOString(),
       fileId: attachmentPayload[0]?.fileId ?? null,
       attachmentMeta: attachmentPayload[0]?.attachmentMeta ?? null,
-      attachments: attachmentPayload.map(({ fileId, attachmentMeta }) => ({
+      // Carry position on the optimistic rows too, so the gallery's ordering
+      // never has to lean on sort stability to look right before the server
+      // echo replaces them.
+      attachments: attachmentPayload.map(({ fileId, attachmentMeta }, position) => ({
         fileId,
         attachmentMeta,
+        position,
       })),
       clientNonce,
       quotedMessageId: activeQuoteId,
