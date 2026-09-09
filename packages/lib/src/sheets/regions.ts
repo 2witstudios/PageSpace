@@ -414,18 +414,16 @@ export function shiftRegionsForRowDelete(
     // keeps this from being the place that silently invents coordinates.
     if (!bounds) continue;
 
-    // A start inside the band collapses onto the first surviving row, which is
-    // the band's start once the band is gone.
-    const nextStart = bounds.rowStart > bandEnd ? bounds.rowStart - count
-      : bounds.rowStart >= fromRow ? fromRow
-      : bounds.rowStart;
+    // Both edges are `moveRow` plus what a deleted edge collapses onto: a start
+    // that was inside the band lands on the first surviving row, and an end that
+    // was inside it lands on the last surviving row before it. Expressed through
+    // `moveRow` rather than repeating its branches, so the two cannot drift.
+    const nextStart = moveRow(bounds.rowStart) ?? fromRow;
 
     // An open region has no end to move: it always reaches the sheet's extent.
     let nextEnd: number | null = null;
     if (bounds.rowEnd !== null) {
-      nextEnd = bounds.rowEnd > bandEnd ? bounds.rowEnd - count
-        : bounds.rowEnd >= fromRow ? fromRow - 1
-        : bounds.rowEnd;
+      nextEnd = moveRow(bounds.rowEnd) ?? fromRow - 1;
       // Every row it covered is gone.
       if (nextEnd < nextStart) continue;
     }
