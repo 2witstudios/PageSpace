@@ -15,6 +15,7 @@ import {
 import type { ExecutableSandbox, SandboxRunResult } from '../sandbox-client/types';
 import type { CodeExecutionAuditInput } from '../audit';
 import { SANDBOX_ROOT } from '../sandbox-paths';
+import { LocalEnvServerDeniedError } from '../sandbox-client/local-env-sandbox-host';
 import { DEFAULT_READ_LINES, SANDBOX_MAX_OUTPUT_BYTES, MAX_LINE_BYTES } from '../execution-policy';
 import { LINE_ELISION_MARKER } from '../output-limit';
 import { LocalEnvUnsupportedError } from '../sandbox-host';
@@ -1960,6 +1961,47 @@ describe('a LOCAL environment\'s two refusals stay distinguishable all the way t
     expect(localRefusalToToolDenial('not_connected')).toBe('local_not_connected');
     expect(localRefusalToToolDenial('bind_policy')).toBe('local_bind_denied');
     expect(localRefusalToToolDenial('not_connected')).not.toBe(localRefusalToToolDenial('bind_policy'));
+  });
+
+  it('should map server_denied to a reason of its own — PageSpace refused to sign, which neither the requester nor the machine fixes', () => {
+    expect(localRefusalToToolDenial('server_denied')).toBe('local_server_denied');
+    expect(localRefusalToToolDenial('server_denied')).not.toBe(localRefusalToToolDenial('not_connected'));
+    expect(localRefusalToToolDenial('server_denied')).not.toBe(localRefusalToToolDenial('bind_policy'));
+  });
+
+  it('given exec throws the typed LocalEnvServerDeniedError (the server refused to sign), the agent should receive local_server_denied — not execution_failed', async () => {
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async () => {
+            throw new LocalEnvServerDeniedError('env-1', 'server_denied');
+          },
+        }),
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toEqual({ success: false, reason: 'local_server_denied', error: DENIAL_MESSAGES.local_server_denied });
+  });
+
+  it('given exec throws an ORDINARY error, the agent should still receive execution_failed (the typed mapping is narrow)', async () => {
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async () => {
+            throw new Error('socket closed');
+          },
+        }),
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'execution_failed' });
+  });
+
+  it('local_server_denied copy should name the settings page and say retrying will not help; never the same sentence as its siblings', () => {
+    const serverDenied = DENIAL_MESSAGES.local_server_denied;
+    expect(serverDenied).toContain('settings');
+    expect(serverDenied).toContain('Retrying will not help');
+    expect(serverDenied).not.toBe(DENIAL_MESSAGES.local_not_connected);
+    expect(serverDenied).not.toBe(DENIAL_MESSAGES.local_bind_denied);
+    expect(serverDenied).not.toBe(DENIAL_MESSAGES.provision_failed);
   });
 
   it.each(['flag_disabled', 'code_exec_denied', 'not_local', 'revoked', 'substrate_unsupported', undefined])(

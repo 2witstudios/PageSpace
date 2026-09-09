@@ -89,6 +89,28 @@ export class LocalEnvGrantDeniedError extends Error {
   }
 }
 
+/**
+ * PageSpace itself refused to SIGN the grant (`decideSign` in the bridge
+ * client): the op is not in the env's `serverPolicy`, or the env is revoked,
+ * paused or the feature is off. The daemon never saw a frame. Distinct from
+ * {@link LocalEnvGrantDeniedError} (the MACHINE refused) and from a
+ * disconnected env, because each has a different owner: this one is fixed on
+ * the environment's settings page by the machine's owner, and by nobody else.
+ * Thrown by the production transport, which maps the bridge client's typed
+ * `server_denied` failure onto it so this package can name it without
+ * importing apps/web.
+ */
+export class LocalEnvServerDeniedError extends Error {
+  constructor(
+    readonly envId: string,
+    /** `decideSign`'s reason word: `flag_disabled | revoked | paused | server_denied`. */
+    readonly reason: string,
+  ) {
+    super(`PageSpace refused to sign the request for local environment ${envId}: ${reason}`);
+    this.name = 'LocalEnvServerDeniedError';
+  }
+}
+
 /** A verified frame arrived, but of a type this op cannot read. Never a silent coercion. */
 export class LocalEnvUnexpectedResultError extends Error {
   constructor(

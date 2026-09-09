@@ -11,13 +11,15 @@ import { generateKeyPairSync, createPrivateKey, createPublicKey, createHash, sig
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) } }));
 vi.mock('@/lib/websocket/ws-env-connections', () => ({ getAuthorizedEnvConnection: vi.fn(), getEnvConnectionMetadata: vi.fn(), onEnvConnectionLost: vi.fn() }));
 vi.mock('@pagespace/lib/auth/env-bridge-signing-key', () => ({ loadServerSigningKeyring: vi.fn() }));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
+vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn() }));
 
 import { decodeFrame, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
 import { encodeResultForSigning, resultHashForFrame, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
 import { parseServerSigningKeyring, type SigningKeyPrimitives } from '@pagespace/lib/env-bridge/server-signing-key';
 import { DEFAULT_TIMEOUT_DEFAULTS } from '@pagespace/lib/env-bridge/resolve-timeout';
 import { RequestCorrelator } from '../correlator';
-import { EnvBridgeClient, EnvBridgeError, type EnvBridgeClientDeps, type EnvSocketFacts } from '../bridge-client';
+import { EnvBridgeClient, EnvBridgeError, type EnvBridgeClientDeps, type EnvSocketFacts, type SigningSibling } from '../bridge-client';
 import { envBridgeHash } from '../crypto';
 import { verifyResultFromMachine } from '../result-verifier';
 
@@ -62,6 +64,11 @@ describe('EnvBridgeClient', () => {
   let unverified: Array<{ envId: string; grantId: string; reason: string }>;
   let client: EnvBridgeClient;
   let correlator: RequestCorrelator<MachineResultFrame>;
+  /** The sibling `sendGrant` consults BEFORE signing; tests override per env. */
+  let siblings: Map<string, SigningSibling | null>;
+  let flagEnabled: boolean;
+  let keyGet: ReturnType<typeof vi.fn>;
+  let signRefusals: Array<{ envId: string; op: string; reason: string; userId: string }>;
 
   function connect(envId: string, over: Partial<EnvSocketFacts> = {}): FakeSocket {
     const ws = socket();
@@ -76,12 +83,20 @@ describe('EnvBridgeClient', () => {
     sockets = new Map();
     facts = new Map();
     unverified = [];
+    siblings = new Map();
+    flagEnabled = true;
+    signRefusals = [];
+    keyGet = vi.fn((keyId: string) => ring.get(keyId));
     correlator = new RequestCorrelator<MachineResultFrame>();
     const deps: EnvBridgeClientDeps = {
       correlator,
       getAuthorizedConnection: (envId) => sockets.get(envId),
       getSocketFacts: (ws) => facts.get(ws as FakeSocket),
-      keyring: () => ring,
+      keyring: () => ({ get: keyGet as (keyId: string) => ReturnType<typeof ring.get> }),
+      // Default: an enrolled, live sibling that allows every op — every existing row keeps its meaning.
+      findLocalByEnvId: async (envId) => (siblings.has(envId) ? siblings.get(envId)! : { revokedAt: null, serverPolicy: { ops: ['exec', 'fs_read', 'fs_write', 'pty_open'], checkpoint: false } }),
+      flagEnabled: () => flagEnabled,
+      onSignRefused: (info) => signRefusals.push({ envId: info.envId, op: info.op, reason: info.reason, userId: info.principal.userId }),
       now: () => 1_760_000_000_000,
       ids: { grantId: () => `g-${++counter}`, nonce: () => `n-${counter}` },
       onUnverified: (info) => unverified.push({ envId: info.envId, grantId: info.grantId, reason: info.reason }),
@@ -101,6 +116,7 @@ describe('EnvBridgeClient', () => {
   it('given an authorized socket, should sign the grant with the pinned key and send the encoded frame over THAT socket', async () => {
     const ws = connect('env-1');
     const pending = client.sendGrant({ envId: 'env-1', frame: { type: 'grant_fs_read', paths: ['/a'] }, principal });
+    await flushPromises();
     pending.catch(() => {});
     expect(ws.sent).toHaveLength(1);
     const frame = sentFrame(ws);
@@ -114,6 +130,7 @@ describe('EnvBridgeClient', () => {
   it('given a result signed by the pinned machine key, should deliver it to the caller', async () => {
     const ws = connect('env-1');
     const pending = client.sendGrant({ envId: 'env-1', frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+    await flushPromises();
     const result = signedResult({ type: 'exec_result', grantId: 'g-1', exitCode: 0, stdoutB64: 'b2s=', stderrB64: '', truncated: false });
     expect(client.handleMachineResult(ws, result)).toBe('delivered');
     await expect(pending).resolves.toEqual(result);
@@ -123,6 +140,7 @@ describe('EnvBridgeClient', () => {
   it('EXIT CRITERION — given an exec_result whose machine signature does not verify, should NOT deliver it: the request fails with typed unverified_result and the event is surfaced', async () => {
     const ws = connect('env-1');
     const pending = client.sendGrant({ envId: 'env-1', frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+    await flushPromises();
     const forged = signedResult({ type: 'exec_result', grantId: 'g-1', exitCode: 0, stdoutB64: 'cHduZWQ=', stderrB64: '', truncated: false }, rogue);
     expect(client.handleMachineResult(ws, forged)).toBe('unverified');
     await expect(pending).rejects.toMatchObject({ kind: 'unverified_result' });
@@ -134,6 +152,7 @@ describe('EnvBridgeClient', () => {
   it('given a correctly signed result whose payload was edited in flight, should NOT deliver it either (every field is under the hash)', async () => {
     const ws = connect('env-1');
     const pending = client.sendGrant({ envId: 'env-1', frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+    await flushPromises();
     const genuine = signedResult({ type: 'exec_result', grantId: 'g-1', exitCode: 1, stdoutB64: '', stderrB64: 'ZGVuaWVk', truncated: false }) as Extract<MachineResultFrame, { type: 'exec_result' }>;
     expect(client.handleMachineResult(ws, { ...genuine, exitCode: 0 })).toBe('unverified');
     await expect(pending).rejects.toMatchObject({ kind: 'unverified_result' });
@@ -142,6 +161,7 @@ describe('EnvBridgeClient', () => {
   it('given a grant_denied signed by the machine, should deliver it as the (typed) answer', async () => {
     const ws = connect('env-1');
     const pending = client.sendGrant({ envId: 'env-1', frame: { type: 'grant_fs_write', files: [{ path: '/a', contentB64: 'aGk=' }] }, principal });
+    await flushPromises();
     const denied = signedResult({ type: 'grant_denied', grantId: 'g-1', reason: 'policy_denied' });
     expect(client.handleMachineResult(ws, denied)).toBe('delivered');
     await expect(pending).resolves.toEqual(denied);
@@ -159,6 +179,7 @@ describe('EnvBridgeClient', () => {
     const wsA = connect('env-a');
     const wsB = connect('env-b', { machinePublicKey: rogue.publicKey.export({ type: 'spki', format: 'der' }).toString('base64') });
     const pending = client.sendGrant({ envId: 'env-a', frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+    await flushPromises();
     let state = 'pending';
     pending.then(() => (state = 'resolved'), () => (state = 'rejected'));
     // B's key is the one pinned for B's socket — this WOULD verify if the socket's key were the only check.
@@ -178,6 +199,7 @@ describe('EnvBridgeClient', () => {
     connect('env-a');
     const wsB = connect('env-b', { machinePublicKey: rogue.publicKey.export({ type: 'spki', format: 'der' }).toString('base64') });
     const pending = client.sendGrant({ envId: 'env-a', frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+    await flushPromises();
     pending.catch(() => {});
     const signedByA = signedResult({ type: 'exec_result', grantId: 'g-1', exitCode: 0, stdoutB64: '', stderrB64: '', truncated: false });
     expect(client.handleMachineResult(wsB, signedByA)).toBe('dropped_wrong_env');
@@ -197,6 +219,7 @@ describe('EnvBridgeClient', () => {
   it('given a grant_exec with timeoutMs 120_000, should wait ≥120 s (resolveTimeout), never the MCP bridge\'s 30 s', async () => {
     connect('env-1');
     const pending = client.sendGrant({ envId: 'env-1', frame: { type: 'grant_exec', cmd: 'sleep', args: ['100'], timeoutMs: 120_000 }, principal });
+    await flushPromises();
     let state = 'pending';
     pending.then(() => (state = 'resolved'), () => (state = 'rejected'));
     await vi.advanceTimersByTimeAsync(30_000);
@@ -214,6 +237,7 @@ describe('EnvBridgeClient', () => {
     const a = client.sendGrant({ envId: 'env-a', frame: { type: 'grant_exec', cmd: 'ls' }, principal });
     const b = client.sendGrant({ envId: 'env-b', frame: { type: 'grant_exec', cmd: 'ls' }, principal });
     b.catch(() => {});
+    await flushPromises();
     expect(client.cancelEnv('env-a')).toBe(1);
     await expect(a).rejects.toMatchObject({ kind: 'disconnected' });
     expect(client.pendingCountForEnv('env-b')).toBe(1);
@@ -227,6 +251,80 @@ describe('EnvBridgeClient', () => {
     await expect(client.sendGrant({ envId: 'env-1', frame: { type: 'grant_exec', cmd: 'ls' }, principal })).rejects.toMatchObject({ kind: 'send_failed' });
     expect(client.pendingCountForEnv('env-1')).toBe(0);
   });
+
+  describe('decideSign before signGrantFrame — serverPolicy is enforced where the capability is minted', () => {
+    const exec = { type: 'grant_exec' as const, cmd: 'ls' };
+
+    it('EXIT CRITERION — given exec is NOT in serverPolicy.ops, should reject typed server_denied, never touch the signing key, send nothing, and leave nothing pending', async () => {
+      const ws = connect('env-1');
+      siblings.set('env-1', { revokedAt: null, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } });
+      const pending = client.sendGrant({ envId: 'env-1', frame: exec, principal });
+      await flushPromises();
+      await expect(pending).rejects.toBeInstanceOf(EnvBridgeError);
+      await expect(pending).rejects.toMatchObject({ kind: 'server_denied', detail: { envId: 'env-1', op: 'exec', reason: 'server_denied' } });
+      expect(keyGet).not.toHaveBeenCalled();
+      expect(ws.sent).toHaveLength(0);
+      expect(client.pendingCountForEnv('env-1')).toBe(0);
+      // No grant id was minted either: the gate ran before anything that belongs to signing.
+      expect(counter).toBe(0);
+      expect(signRefusals).toEqual([{ envId: 'env-1', op: 'exec', reason: 'server_denied', userId: 'user-1' }]);
+    });
+
+    it('given the same policy, should still sign fs_read (the policy is per op, not per env)', async () => {
+      const ws = connect('env-1');
+      siblings.set('env-1', { revokedAt: null, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } });
+      const pending = client.sendGrant({ envId: 'env-1', frame: { type: 'grant_fs_read', paths: ['/a'] }, principal });
+      await flushPromises();
+      pending.catch(() => {});
+      expect(ws.sent).toHaveLength(1);
+      expect(keyGet).toHaveBeenCalledWith(ring.current.keyId);
+      expect(signRefusals).toEqual([]);
+    });
+
+    it('given the sibling is revoked, should reject server_denied with reason revoked — ahead of the policy, key untouched', async () => {
+      const ws = connect('env-1');
+      siblings.set('env-1', { revokedAt: new Date(1_760_000_000_000), serverPolicy: { ops: ['exec'], checkpoint: false } });
+      await expect(client.sendGrant({ envId: 'env-1', frame: exec, principal })).rejects.toMatchObject({ kind: 'server_denied', detail: { reason: 'revoked' } });
+      expect(keyGet).not.toHaveBeenCalled();
+      expect(ws.sent).toHaveLength(0);
+    });
+
+    it('given NO sibling row (a dead local env), should reject as revoked — a missing row is never a permissive default', async () => {
+      const ws = connect('env-1');
+      siblings.set('env-1', null);
+      await expect(client.sendGrant({ envId: 'env-1', frame: exec, principal })).rejects.toMatchObject({ kind: 'server_denied', detail: { reason: 'revoked' } });
+      expect(keyGet).not.toHaveBeenCalled();
+      expect(ws.sent).toHaveLength(0);
+    });
+
+    it('given LOCAL_ENVS_ENABLED is off, should reject with reason flag_disabled first — even with a live socket and an allowing policy', async () => {
+      const ws = connect('env-1');
+      flagEnabled = false;
+      await expect(client.sendGrant({ envId: 'env-1', frame: exec, principal })).rejects.toMatchObject({ kind: 'server_denied', detail: { reason: 'flag_disabled' } });
+      expect(keyGet).not.toHaveBeenCalled();
+      expect(ws.sent).toHaveLength(0);
+    });
+
+    it('given a stored policy the strict parser refuses (an op outside the union), should reject server_denied — drift denies', async () => {
+      const ws = connect('env-1');
+      siblings.set('env-1', { revokedAt: null, serverPolicy: { ops: ['exec', 'rm_rf'], checkpoint: false } });
+      await expect(client.sendGrant({ envId: 'env-1', frame: exec, principal })).rejects.toMatchObject({ kind: 'server_denied', detail: { reason: 'server_denied' } });
+      expect(keyGet).not.toHaveBeenCalled();
+      expect(ws.sent).toHaveLength(0);
+    });
+
+    it('given the DB backstop default {ops:[]} (a row minted without an explicit policy), should refuse every op', async () => {
+      const ws = connect('env-1');
+      siblings.set('env-1', { revokedAt: null, serverPolicy: { ops: [], checkpoint: false } });
+      await expect(client.sendGrant({ envId: 'env-1', frame: { type: 'grant_fs_read', paths: ['/a'] }, principal })).rejects.toMatchObject({ kind: 'server_denied' });
+      expect(ws.sent).toHaveLength(0);
+    });
+
+    it('given a refusal, the gate should have run BEFORE the socket was consulted (a disconnected env still learns the policy answer)', async () => {
+      siblings.set('env-x', { revokedAt: null, serverPolicy: { ops: [], checkpoint: false } });
+      await expect(client.sendGrant({ envId: 'env-x', frame: exec, principal })).rejects.toMatchObject({ kind: 'server_denied' });
+    });
+  });
 });
 
 describe('verifyResultFromMachine — the adapter', () => {
@@ -236,4 +334,11 @@ describe('verifyResultFromMachine — the adapter', () => {
     expect(verifyResultFromMachine({ frame, machinePublicKey: '!!' })).toEqual({ ok: false, reason: 'bad_public_key' });
     expect(verifyResultFromMachine({ frame, machinePublicKey })).toMatchObject({ ok: true });
   });
+
+  /**
+   * GA wave 1 — the server's say becomes load-bearing at the ONE chokepoint:
+   * signing. With `exec` off in `serverPolicy` the server refuses to sign an
+   * exec grant, the signing key is never touched, and the daemon never sees
+   * the frame.
+   */
 });

@@ -14,7 +14,13 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const sendGrant = vi.fn(async () => ({ type: 'exec_result' as const, grantId: 'g1', exitCode: 0, stdoutB64: '', stderrB64: '', truncated: false, sig: 's' }));
-vi.mock('@/lib/env-bridge/bridge-client', () => ({ getEnvBridgeClient: () => ({ sendGrant }) }));
+vi.mock('@/lib/env-bridge/bridge-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/env-bridge/bridge-client')>()),
+  getEnvBridgeClient: () => ({ sendGrant }),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({ logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) } }));
+vi.mock('@pagespace/lib/auth/env-bridge-signing-key', () => ({ loadServerSigningKeyring: vi.fn() }));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
 
 const getAuthorizedEnvConnection = vi.fn<(envId: string) => object | undefined>(() => undefined);
 const getEnvConnectionMetadata = vi.fn<(ws: object) => { sessionId: string; connectedAt: Date } | undefined>(() => undefined);
@@ -23,6 +29,8 @@ vi.mock('@/lib/websocket/ws-env-connections', () => ({
   getEnvConnectionMetadata: (ws: object) => getEnvConnectionMetadata(ws),
 }));
 
+import { EnvBridgeError } from '@/lib/env-bridge/bridge-client';
+import { LocalEnvServerDeniedError } from '@pagespace/lib/services/sandbox/sandbox-client/local-env-sandbox-host';
 import { createLocalEnvTransport, LocalEnvNoPrincipalError } from '../local-env-transport';
 
 const ENV_ID = 'env-1';
@@ -41,6 +49,21 @@ describe('createLocalEnvTransport', () => {
     await transport.sendGrant({ envId: ENV_ID, frame: FRAME });
 
     expect(sendGrant).toHaveBeenCalledWith({ envId: ENV_ID, frame: FRAME, principal: PRINCIPAL });
+  });
+
+  it("given the bridge client refuses to SIGN (server_denied), should reject with the lib's typed LocalEnvServerDeniedError carrying the reason — so the tool layer can name it, distinct from not-connected", async () => {
+    sendGrant.mockRejectedValueOnce(new EnvBridgeError('server_denied', 'refused', { envId: ENV_ID, op: 'exec', reason: 'server_denied' }));
+    const transport = createLocalEnvTransport({ principal: PRINCIPAL });
+    const pending = transport.sendGrant({ envId: ENV_ID, frame: FRAME });
+    await expect(pending).rejects.toBeInstanceOf(LocalEnvServerDeniedError);
+    await expect(pending).rejects.toMatchObject({ envId: ENV_ID, reason: 'server_denied' });
+  });
+
+  it('given any OTHER bridge failure (not_connected, timeout, unverified), should pass it through unchanged', async () => {
+    const original = new EnvBridgeError('not_connected', 'no socket', { envId: ENV_ID });
+    sendGrant.mockRejectedValueOnce(original);
+    const transport = createLocalEnvTransport({ principal: PRINCIPAL });
+    await expect(transport.sendGrant({ envId: ENV_ID, frame: FRAME })).rejects.toBe(original);
   });
 
   it('given NO principal (a connectivity bind), should refuse to send rather than sign under an invented identity', async () => {

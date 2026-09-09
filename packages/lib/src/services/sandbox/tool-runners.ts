@@ -46,6 +46,7 @@ import {
 import { getValidatedEnv } from '../../config/env-validation';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import { LocalEnvUnsupportedError } from './sandbox-host';
+import { LocalEnvServerDeniedError } from './sandbox-client/local-env-sandbox-host';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
 
@@ -426,6 +427,14 @@ export type SandboxToolDenialReason =
   | 'local_not_connected'
   /** The machine owner's bind policy denies this actor. See `local_not_connected` for why the two are separate reasons. */
   | 'local_bind_denied'
+  /**
+   * PageSpace refused to SIGN the grant (GA wave 1): the op is not in the
+   * env's `serverPolicy`, or the env is revoked, paused or the feature is off.
+   * A third word because a third party owns the fix — neither `pagespace env
+   * connect` on the machine nor the machine's local policy file changes it;
+   * only the machine's owner, on the environment's settings page.
+   */
+  | 'local_server_denied'
   | 'error';
 
 export type BashToolResult =
@@ -520,6 +529,9 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   local_bind_denied:
     "The machine owner's policy does not allow you to run code on this local environment. "
     + 'Retrying will not help — the environment owner has to change its bind policy.',
+  local_server_denied:
+    'PageSpace refused to sign this request: the operation is not enabled in this local environment\'s server policy '
+    + '(or the environment is revoked or paused). Retrying will not help — the machine\'s owner enables it on the environment\'s settings page.',
   error: 'Code execution could not be completed.',
 };
 
@@ -546,6 +558,7 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
 export function localRefusalToToolDenial(refusal: string | undefined): SandboxToolDenialReason | null {
   if (refusal === 'not_connected') return 'local_not_connected';
   if (refusal === 'bind_policy') return 'local_bind_denied';
+  if (refusal === 'server_denied') return 'local_server_denied';
   return null;
 }
 
@@ -1033,6 +1046,10 @@ export async function runBashInSandbox({
         durationMs,
         anomaly: 'timeout',
       });
+      // The server refused to SIGN (GA wave 1): typed all the way to the
+      // agent, because "PageSpace's policy for this machine excludes this"
+      // and "the command died" have different owners and different fixes.
+      if (error instanceof LocalEnvServerDeniedError) return fail('local_server_denied');
       return fail('execution_failed');
     }
 
