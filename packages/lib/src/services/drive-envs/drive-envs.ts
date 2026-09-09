@@ -342,7 +342,8 @@ export interface LocalEnvIdentityServiceDeps {
 }
 
 export type EnrollLocalDriveEnvResult =
-  | { ok: true; envId: string; enrollmentId: string; serverKeyId: string; serverPublicKey: string }
+  /** `ownerId` rides the answer so the enroller can scaffold `principals: [owner]` on the machine (D-6, defence in depth). */
+  | { ok: true; envId: string; enrollmentId: string; serverKeyId: string; serverPublicKey: string; ownerId: string }
   | { ok: false; reason: 'not_found' | 'revoked' | 'already_enrolled' | 'bad_public_key' | 'race' | EnrollmentCodeDenyReason };
 
 /**
@@ -404,8 +405,7 @@ export async function enrollLocalDriveEnv({
     envId: row.envId,
     enrollmentId: row.enrollmentId,
     serverKeyId: deps.identity.signingKey.keyId,
-    serverPublicKey: Buffer.from(deps.identity.signingKey.publicKey).toString('base64'),
-  };
+    serverPublicKey: Buffer.from(deps.identity.signingKey.publicKey).toString('base64'), ownerId: row.ownerId };
 }
 
 export type IssueLocalEnvChallengeResult =

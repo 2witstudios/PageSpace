@@ -44,7 +44,7 @@ import type { CommandResolverDeps } from '../../env-bridge/command-resolver.js';
 import { createFsRunner, type FsRunner } from '../../env-bridge/fs-runner.js';
 import { createDaemonNonceStore } from '../../env-bridge/nonce-store.js';
 import { createPathProbe } from '../../env-bridge/path-probe.js';
-import { defaultPolicyPath, describePolicyRefusal, loadMachinePolicy, openPolicyFile, type OpenedPolicyFile } from '../../env-bridge/policy.js';
+import { defaultPolicyPath, describePolicyRefusal, loadMachinePolicy, openPolicyFile, type OpenedPolicyFile, describePrincipalsWarning } from '../../env-bridge/policy.js';
 import { signHello } from '../../env-bridge/result-signer.js';
 import { mintBridgeToken } from '../../env-bridge/token.js';
 import { assertSecureHost, bridgeSocketUrl } from '../../env-bridge/secure-host.js';
@@ -138,6 +138,8 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
       ctx.stderr.write(`${describePolicyRefusal(loaded.reason ?? 'missing', policyPath)}\n`);
     } else {
       ctx.stderr.write(`Policy ${policyPath}: mode ${loaded.policy.mode}, principals ${loaded.policy.principals.join(', ') || '(none)'}, ops ${loaded.policy.ops.join(', ') || '(none)'}, roots ${loaded.policy.roots.join(', ')}\n`);
+      const principalsWarning = describePrincipalsWarning(loaded.policy);
+      if (principalsWarning) ctx.stderr.write(`${principalsWarning}\n`);
       if (loaded.policy.mode === 'ask' && !ctx.isTTY) {
         ctx.stderr.write('Policy mode "ask" needs an interactive terminal to ask on, and there is none (stdin is not a TTY). Use mode "allowlist" or "deny" for a headless machine, or run env connect in a terminal.\n');
         return EXIT_RUNTIME_ERROR;

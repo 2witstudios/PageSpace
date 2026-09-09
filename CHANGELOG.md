@@ -7,6 +7,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Local Environments: PageSpace now has a say in what runs on your computer — and only you
+  can drive it (opt-in).** When you create a local Environment you now choose what PageSpace may
+  ask that computer to do: **Read files** and **Write files** are on by default; **Run commands**
+  is off, behind its own switch, with what it means spelled out beside it (a command runs as you,
+  on your computer, with no sandbox). That choice is enforced where it matters: PageSpace refuses
+  to sign a request for anything you did not enable, so the machine never even sees it — an agent
+  asked to run a command on an Environment with commands off is told plainly that the server
+  declined, which is a different message from "your computer is not connected". Only the person
+  who enrolled the machine can change that policy, or start a session in it; drive admins can
+  still delete or revoke the Environment but cannot drive it, and the settings that would have let
+  other members drive it are gone rather than hidden. An Environment whose policy allows nothing
+  refuses new sessions up front with a message that says where to turn things on.
+
 - **Local Environments: create one from the app, get your enrollment code, and get a new one if
   you lose it (opt-in)** — a local Environment (your own computer, reached through the bridge) is
   now a choice in the ordinary "New environment" step rather than something only an API call could

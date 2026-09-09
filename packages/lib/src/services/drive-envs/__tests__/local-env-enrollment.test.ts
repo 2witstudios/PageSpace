@@ -119,6 +119,13 @@ describe('createDriveEnv with local facts — env + sibling + one-time code in O
 });
 
 describe('enrollLocalDriveEnv — the machine presents the code and its public key', () => {
+  it('given a valid code and key, should answer the machine\'s OWNER id too — the enroller writes it into the scaffolded policy so the machine refuses everyone else even if the server is wrong (D-6, defence in depth)', async () => {
+    const h = harness();
+    const created = await createLocal(h);
+    const result = await enrollLocalDriveEnv({ enrollmentId: created.enrollment.enrollmentId, code: created.enrollment.code, machinePublicKey, deps: h.deps });
+    expect(result).toMatchObject({ ok: true, ownerId: 'user-1' });
+  });
+
   it('given the right code before expiry and a valid Ed25519 SPKI key, should pin key + fingerprint + server keyId, consume the code, and hand back the server public key to pin', async () => {
     const h = harness();
     const { env, enrollment } = await createLocal(h);
@@ -129,6 +136,7 @@ describe('enrollLocalDriveEnv — the machine presents the code and its public k
       enrollmentId: 'enr-1',
       serverKeyId: 'srv-k1',
       serverPublicKey: Buffer.from(identity.signingKey.publicKey).toString('base64'),
+      ownerId: 'user-1',
     });
     const sibling = h.fake.local.get(env.id)!;
     expect(sibling.machinePublicKey).toBe(machinePublicKey);

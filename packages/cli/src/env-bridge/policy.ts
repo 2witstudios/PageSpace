@@ -19,6 +19,8 @@
  */
 import { createHash } from 'node:crypto';
 import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { parseMachinePolicy, type MachinePolicy } from './lib-core.js';
 
 export const POLICY_FILE_NAME = 'env-policy.json';
@@ -129,4 +131,37 @@ export function describePolicyRefusal(reason: PolicyLoadReason, path: string): s
     case 'invalid_schema':
       return `The policy file at ${path} is not a valid policy (unknown field, mode, op, or a non-absolute root), so it is ignored (deny-all).`;
   }
+}
+
+/** The strict parser over raw file text; `null` for non-JSON exactly as for a refused schema. */
+export function parseMachinePolicyText(content: string): MachinePolicy | null {
+  try {
+    return parseMachinePolicy(JSON.parse(content));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The production writer for the scaffold `env enroll` leaves behind: the
+ * directory 0700, the file 0600 — the permissions the loader above demands,
+ * so what `enroll` writes is what `connect` will trust. Never overwrites
+ * (`wx`): a policy that appeared between the check and the write is kept.
+ */
+export async function writePolicyFile(path: string, content: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await writeFile(path, content, { mode: 0o600, flag: 'wx' });
+}
+
+/**
+ * A policy naming more than one principal is the owner's call and is honoured
+ * — but it is also the one thing on this machine that widens D-6, so every
+ * surface that prints the policy says so. `null` when there is nothing to say.
+ */
+export function describePrincipalsWarning(policy: Pick<MachinePolicy, 'principals'>): string | null {
+  if (policy.principals.length <= 1) return null;
+  return (
+    `[D-6] A machine is driven by its owner only, but this policy names ${policy.principals.length} principals (${policy.principals.join(', ')}): ` +
+    'every one of them can run commands as you on this machine, subject to mode and ops. PageSpace itself only ever binds the environment owner\'s sessions, so extra principals here widen nothing on the server side; remove the ones you did not mean.'
+  );
 }
