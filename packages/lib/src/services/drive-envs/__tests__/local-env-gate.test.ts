@@ -136,6 +136,28 @@ describe('gateLocalEnv — the real facts, handed to decideBind then planLocalPr
     });
   });
 
+  describe('no_server_ops — the sibling\'s serverPolicy, passed through from the one read (GA wave 1)', () => {
+    it('given a live, allowed machine whose serverPolicy allows no op, should refuse no_server_ops — LAST, after every other gate passed', async () => {
+      expect(await gate({ sibling: enrolledSibling({ serverPolicy: { ops: [], checkpoint: false } }) })).toEqual({ ok: false, refusal: 'no_server_ops' });
+    });
+
+    it('given a stored serverPolicy the strict parser refuses (an op outside the union), should refuse no_server_ops — drift denies', async () => {
+      expect(await gate({ sibling: enrolledSibling({ serverPolicy: { ops: ['exec', 'rm_rf'], checkpoint: false } }) })).toEqual({ ok: false, refusal: 'no_server_ops' });
+    });
+
+    it('given a stranger to a no-op machine, should still answer bind_policy (the order holds through the gate)', async () => {
+      expect(await gate({ sibling: enrolledSibling({ serverPolicy: { ops: [], checkpoint: false } }), resolveActorRole: async () => 'admin' }, 'admin-2')).toEqual({ ok: false, refusal: 'bind_policy' });
+    });
+
+    it('should read the sibling exactly ONCE — the policy rides the read the gate already makes', async () => {
+      let reads = 0;
+      const sibling = enrolledSibling({ serverPolicy: { ops: [], checkpoint: false } });
+      const verdict = await gateLocalEnv({ row, requesterId: OWNER, deps: deps({ store: { findLocalByEnvId: async () => { reads += 1; return sibling; } } }) });
+      expect(verdict).toEqual({ ok: false, refusal: 'no_server_ops' });
+      expect(reads).toBe(1);
+    });
+  });
+
   it('should pass the REQUESTER as the actor — not the row owner — so the owner check is real', async () => {
     // Same machine, two requesters: the owner passes under owner-only, a stranger does not.
     expect(await gate({}, OWNER)).toEqual({ ok: true, envId: ENV_ID });

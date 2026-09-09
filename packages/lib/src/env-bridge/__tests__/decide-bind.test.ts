@@ -7,6 +7,7 @@ const base: DecideBindInput = {
   actorRole: 'member',
   actorId: 'user_member',
   env: { ownerId: 'user_owner', substrate: 'local', revokedAt: null },
+  serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false },
   connected: true,
   flagEnabled: true,
 };
@@ -60,8 +61,26 @@ describe('decideBind — may this actor bind a session to this local env? (invar
     });
   });
 
-  it('BIND_DENY_ORDER is the documented order', () => {
-    expect(BIND_DENY_ORDER).toEqual(['flag_disabled', 'code_exec_denied', 'not_local', 'revoked', 'not_connected', 'bind_policy']);
+  describe('no_server_ops — a machine PageSpace may ask nothing of is refused at bind, not at every later grant (GA wave 1)', () => {
+    it('given serverPolicy.ops is empty (the DB backstop default), should deny no_server_ops', () => {
+      expect(decideBind({ ...base, serverPolicy: { ops: [], checkpoint: false } })).toEqual({ ok: false, reason: 'no_server_ops' });
+    });
+
+    it('given serverPolicy is null (missing, or refused by the strict parser), should deny no_server_ops — drift never widens', () => {
+      expect(decideBind({ ...base, serverPolicy: null })).toEqual({ ok: false, reason: 'no_server_ops' });
+    });
+
+    it('given at least one op, should allow — WHICH op is the signing gate\'s question, not the bind gate\'s', () => {
+      expect(decideBind({ ...base, serverPolicy: { ops: ['exec'], checkpoint: false } })).toEqual({ ok: true });
+    });
+
+    it('should come AFTER bind_policy: a stranger to a no-op machine learns bind_policy, never the policy state', () => {
+      expect(decideBind({ ...base, bindPolicy: 'owner', actorId: 'user_stranger', serverPolicy: { ops: [], checkpoint: false } })).toEqual({ ok: false, reason: 'bind_policy' });
+    });
+  });
+
+  it('BIND_DENY_ORDER is the documented order, no_server_ops LAST', () => {
+    expect(BIND_DENY_ORDER).toEqual(['flag_disabled', 'code_exec_denied', 'not_local', 'revoked', 'not_connected', 'bind_policy', 'no_server_ops']);
   });
 
   it('should enforce the deny order for EVERY adjacent pair (each row breaks two adjacent gates and expects the earlier)', () => {
@@ -72,7 +91,9 @@ describe('decideBind — may this actor bind a session to this local env? (invar
       ['revoked', (i) => ({ ...i, env: { ...i.env, revokedAt: 1 } })],
       ['not_connected', (i) => ({ ...i, connected: false })],
       ['bind_policy', (i) => ({ ...i, bindPolicy: 'owner', actorId: 'user_stranger' })],
+      ['no_server_ops', (i) => ({ ...i, serverPolicy: { ops: [], checkpoint: false } })],
     ];
+    expect(breakers.map(([name]) => name)).toEqual([...BIND_DENY_ORDER]);
     for (let n = 0; n + 1 < breakers.length; n += 1) {
       const [earlier, breakEarlier] = breakers[n] as [string, (i: DecideBindInput) => DecideBindInput];
       const [later, breakLater] = breakers[n + 1] as [string, (i: DecideBindInput) => DecideBindInput];

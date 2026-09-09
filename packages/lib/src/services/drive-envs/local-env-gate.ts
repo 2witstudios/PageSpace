@@ -11,7 +11,7 @@
  * them over. Every "may" and "is" is theirs:
  *
  *   decideBind        flag_disabled → code_exec_denied → not_local → revoked
- *                     → not_connected → bind_policy
+ *                     → not_connected → bind_policy → no_server_ops
  *   planLocalProvision  revoked → not_connected → attach_local
  *
  * A sibling that is missing means the owner was erased (Art 17 cascades the
@@ -27,6 +27,7 @@
  */
 import { decideBind, type ActorRole, type BindDenyReason, type BindPolicy } from '../../env-bridge/decide-bind';
 import { planLocalProvision } from '../../env-bridge/plan-local-provision';
+import { parseServerPolicy } from '../../env-bridge/policy-types';
 import type { CanRunCodeResult, CodeExecutionDenialReason } from '../sandbox/can-run-code';
 import { deriveLocalEnvStatus } from './drive-envs';
 import type { DriveEnvRecord, DriveEnvStore } from './drive-envs-store';
@@ -89,6 +90,10 @@ export async function gateLocalEnv({
     bindPolicy: sibling.bindPolicy as BindPolicy,
     actorId: requesterId,
     env: { ownerId: sibling.ownerId, substrate: row.substrate, revokedAt: sibling.revokedAt },
+    // The sibling already in hand — no second read (GA wave 1). Parsed
+    // strictly: a stored value the parser refuses is `null`, which the
+    // planner denies as `no_server_ops`.
+    serverPolicy: parseServerPolicy(sibling.serverPolicy),
     connected,
     flagEnabled: deps.flagEnabled,
   };

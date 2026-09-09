@@ -558,7 +558,7 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
 export function localRefusalToToolDenial(refusal: string | undefined): SandboxToolDenialReason | null {
   if (refusal === 'not_connected') return 'local_not_connected';
   if (refusal === 'bind_policy') return 'local_bind_denied';
-  if (refusal === 'server_denied') return 'local_server_denied';
+  if (refusal === 'server_denied' || refusal === 'no_server_ops') return 'local_server_denied';
   return null;
 }
 

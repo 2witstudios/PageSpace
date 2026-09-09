@@ -8,7 +8,7 @@
  * env's own state and its owner-declared `bindPolicy`:
  *
  *   flag_disabled → code_exec_denied → not_local → revoked → not_connected
- *   → bind_policy
+ *   → bind_policy → no_server_ops
  *
  * The cloud opt-in flag comes first so a deployment that has not enabled
  * local envs never evaluates anything else; the base gate comes next so no
@@ -25,9 +25,18 @@
  *   members — anyone who passed `canRunCode`.
  * Any other value is a drifted or hostile row and denies.
  *
+ * `no_server_ops` comes LAST (GA wave 1): a bind to a machine whose
+ * `serverPolicy` allows no operation would succeed and then have every grant
+ * refused at signing (`decideSign`), so it fails here instead, with the one
+ * reason the owner can fix on the settings page. Last, because it is the only
+ * reason that is about what the machine may DO rather than whether this actor
+ * may reach it at all. A `null` policy (missing, or refused by the strict
+ * parser) counts as no ops — drift never widens.
+ *
  * Pure: no db, no ws, no clock. `revokedAt` is judged by presence only.
  */
 import type { CanRunCodeResult, CodeExecutionDenialReason } from '../services/sandbox/can-run-code';
+import type { ServerPolicy } from './policy-types';
 
 export type BindPolicy = 'owner' | 'admins' | 'members';
 export type ActorRole = 'owner' | 'admin' | 'member';
@@ -44,16 +53,18 @@ export interface DecideBindInput {
   readonly actorRole: ActorRole;
   readonly actorId: string;
   readonly env: BindEnv;
+  /** The env's `drive_env_local.serverPolicy`, parsed; `null` = deny-all. */
+  readonly serverPolicy: ServerPolicy | null;
   /** Whether the env's bridge socket is live right now. */
   readonly connected: boolean;
   /** `LOCAL_ENVS_ENABLED` for this deployment. */
   readonly flagEnabled: boolean;
 }
 
-export type BindDenyReason = 'flag_disabled' | 'code_exec_denied' | 'not_local' | 'revoked' | 'not_connected' | 'bind_policy';
+export type BindDenyReason = 'flag_disabled' | 'code_exec_denied' | 'not_local' | 'revoked' | 'not_connected' | 'bind_policy' | 'no_server_ops';
 
 /** The documented, tested deny order. */
-export const BIND_DENY_ORDER: readonly BindDenyReason[] = ['flag_disabled', 'code_exec_denied', 'not_local', 'revoked', 'not_connected', 'bind_policy'];
+export const BIND_DENY_ORDER: readonly BindDenyReason[] = ['flag_disabled', 'code_exec_denied', 'not_local', 'revoked', 'not_connected', 'bind_policy', 'no_server_ops'];
 
 export type BindVerdict =
   | { readonly ok: true }
@@ -81,5 +92,6 @@ export function decideBind(input: DecideBindInput): BindVerdict {
   if (input.env.revokedAt !== null) return { ok: false, reason: 'revoked' };
   if (!input.connected) return { ok: false, reason: 'not_connected' };
   if (!policyAllows(input.bindPolicy, input.actorRole, input.actorId, input.env.ownerId)) return { ok: false, reason: 'bind_policy' };
+  if (input.serverPolicy === null || input.serverPolicy.ops.length === 0) return { ok: false, reason: 'no_server_ops' };
   return { ok: true };
 }

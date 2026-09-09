@@ -1965,6 +1965,8 @@ describe('a LOCAL environment\'s two refusals stay distinguishable all the way t
 
   it('should map server_denied to a reason of its own — PageSpace refused to sign, which neither the requester nor the machine fixes', () => {
     expect(localRefusalToToolDenial('server_denied')).toBe('local_server_denied');
+    // The bind-time twin: a machine whose server policy allows nothing (GA wave 1) — same owner, same fix.
+    expect(localRefusalToToolDenial('no_server_ops')).toBe('local_server_denied');
     expect(localRefusalToToolDenial('server_denied')).not.toBe(localRefusalToToolDenial('not_connected'));
     expect(localRefusalToToolDenial('server_denied')).not.toBe(localRefusalToToolDenial('bind_policy'));
   });

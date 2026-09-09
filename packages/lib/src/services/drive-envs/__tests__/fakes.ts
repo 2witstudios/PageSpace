@@ -56,7 +56,10 @@ export function makeLocalRecord(over: Partial<DriveEnvLocalRecord> = {}): DriveE
     machineKeyFingerprint: null,
     serverKeyId: null,
     capabilities: null,
-    serverPolicy: { ops: [], checkpoint: false },
+    // A MINTED row always carries the dialog's explicit policy (GA wave 1);
+    // the column's deny-all default is the backstop for a row some path
+    // forgot. Tests that want the backstop set `{ ops: [] }` explicitly.
+    serverPolicy: { ops: ['fs_read', 'fs_write', 'exec'], checkpoint: false },
     bindPolicy: 'owner',
     enrollmentCodeHash: null,
     enrollmentCodeExpiresAt: null,
