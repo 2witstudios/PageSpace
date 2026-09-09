@@ -589,6 +589,14 @@ async function restoreDmMessage(messageId: string): Promise<number> {
   });
 }
 
+/**
+ * How many message ids to name per attachment-capture statement. Postgres caps
+ * a statement at 65535 bind parameters and a retention sweep can cover far more
+ * tombstones than that, so the capture is chunked even though the delete that
+ * follows it is predicate-based and unbounded.
+ */
+const ATTACHMENT_CAPTURE_CHUNK = 500;
+
 async function purgeInactiveMessages(olderThan: Date): Promise<number> {
   return db.transaction(async (tx) => {
     // Everything below is expressed against this predicate rather than a list
@@ -603,13 +611,19 @@ async function purgeInactiveMessages(olderThan: Date): Promise<number> {
 
     // Lock the doomed rows before reading what they reference, so a concurrent
     // restore cannot resurrect one between the capture and the delete. Ordered
-    // by id, consistent with the rest of this module's lock order.
-    await tx
-      .select({ id: directMessages.id })
+    // by id, consistent with the rest of this module's lock order. The rows
+    // come back carrying their conversationId, which is what lets the
+    // attachment capture below avoid a join.
+    const doomedMessages = await tx
+      .select({ id: directMessages.id, conversationId: directMessages.conversationId })
       .from(directMessages)
       .where(isDoomed)
       .orderBy(asc(directMessages.id))
       .for('update');
+
+    const conversationByMessageId = new Map(
+      doomedMessages.map((message) => [message.id, message.conversationId]),
+    );
 
     // Capture the released (fileId, conversationId) pairs BEFORE the delete:
     // attachment rows cascade away with their message, so `DELETE ...
@@ -617,14 +631,43 @@ async function purgeInactiveMessages(olderThan: Date): Promise<number> {
     // rows, and the legacy column a pod on the previous build may still be
     // writing. Missing either leaves a file_conversations link behind that
     // nothing references.
-    const releasedPairs = await tx
-      .select({
-        fileId: directMessageAttachments.fileId,
-        conversationId: directMessages.conversationId,
-      })
-      .from(directMessageAttachments)
-      .innerJoin(directMessages, eq(directMessages.id, directMessageAttachments.messageId))
-      .where(and(isDoomed, isNotNull(directMessageAttachments.fileId)));
+    //
+    // Read in chunks rather than joining back to direct_messages: the
+    // conversation id is already in hand from the lock above, and Postgres caps
+    // a statement at 65535 bind parameters, so an unbounded id list would turn
+    // a large retention sweep into an opaque 08P01. The DELETE below stays
+    // predicate-based and is not chunked at all.
+    const seenPairs = new Set<string>();
+    const purgedAttachmentPairs: Array<{ fileId: string; conversationId: string }> = [];
+
+    const addPair = (fileId: string | null, conversationId: string | undefined) => {
+      if (!fileId || conversationId === undefined) return;
+      const key = `${fileId}\u0000${conversationId}`;
+      if (seenPairs.has(key)) return;
+      seenPairs.add(key);
+      purgedAttachmentPairs.push({ fileId, conversationId });
+    };
+
+    const doomedIds = doomedMessages.map((message) => message.id);
+    for (let i = 0; i < doomedIds.length; i += ATTACHMENT_CAPTURE_CHUNK) {
+      const chunk = doomedIds.slice(i, i + ATTACHMENT_CAPTURE_CHUNK);
+      const rows = await tx
+        .select({
+          messageId: directMessageAttachments.messageId,
+          fileId: directMessageAttachments.fileId,
+        })
+        .from(directMessageAttachments)
+        .where(
+          and(
+            inArray(directMessageAttachments.messageId, chunk),
+            isNotNull(directMessageAttachments.fileId)
+          )
+        );
+
+      for (const row of rows) {
+        addPair(row.fileId, conversationByMessageId.get(row.messageId));
+      }
+    }
 
     const legacyPairs = await tx
       .select({
@@ -634,14 +677,8 @@ async function purgeInactiveMessages(olderThan: Date): Promise<number> {
       .from(directMessages)
       .where(and(isDoomed, isNotNull(directMessages.fileId)));
 
-    const seenPairs = new Set<string>();
-    const purgedAttachmentPairs: Array<{ fileId: string; conversationId: string }> = [];
-    for (const pair of [...releasedPairs, ...legacyPairs]) {
-      if (!pair.fileId) continue;
-      const key = `${pair.fileId}\u0000${pair.conversationId}`;
-      if (seenPairs.has(key)) continue;
-      seenPairs.add(key);
-      purgedAttachmentPairs.push({ fileId: pair.fileId, conversationId: pair.conversationId });
+    for (const pair of legacyPairs) {
+      addPair(pair.fileId, pair.conversationId);
     }
 
     const purgedMessages = await tx

@@ -323,12 +323,13 @@ describe('dmMessageRepository.purgeInactiveMessages', () => {
     });
   });
 
-  it('purges without ever passing message ids as bind parameters', async () => {
+  it('purges a large sweep without exceeding the bind-parameter ceiling', async () => {
     // Postgres caps a statement at 65535 bind parameters, and a retention
-    // sweep can cover far more tombstones than that. An earlier revision of
-    // this function collected the doomed ids and threaded them through
-    // inArray(), which would have turned a large sweep into an opaque 08P01
-    // protocol error. Every statement here is predicate-based instead.
+    // sweep can cover far more tombstones than that. The lock, the legacy-pair
+    // capture and the DELETE are all predicate-based and name no ids at all;
+    // only the attachment capture names them, and it is chunked well under the
+    // ceiling. An unbounded id list here would turn a large sweep into an
+    // opaque 08P01 protocol error.
     const cutoff = new Date('2026-04-01T00:00:00Z');
     const old = new Date('2026-03-01T00:00:00Z');
 

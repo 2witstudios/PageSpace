@@ -129,13 +129,17 @@ vi.mock('@pagespace/db/schema/storage', () => ({
   filePages: mockTable('filePages'),
 }));
 vi.mock('@pagespace/db/schema/members', () => ({ driveMembers: mockTable('driveMembers') }));
-vi.mock('@pagespace/db/schema/chat', () => ({ channelMessages: mockTable('channelMessages') }));
+vi.mock('@pagespace/db/schema/chat', () => ({
+  channelMessages: mockTable('channelMessages'),
+  channelMessageAttachments: mockTable('channelMessageAttachments'),
+}));
 vi.mock('@pagespace/db/schema/conversations', () => ({
   conversations: mockTable('conversations'),
   messages: mockTable('messages'),
 }));
 vi.mock('@pagespace/db/schema/social', () => ({
   directMessages: mockTable('directMessages'),
+  directMessageAttachments: mockTable('directMessageAttachments'),
   dmConversations: mockTable('dmConversations'),
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
