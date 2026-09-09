@@ -401,6 +401,17 @@ function joinRelations(
     } else if (relName === 'file') {
       const file = state.rowsRef('files').find((f) => f.id === row.fileId);
       result.file = projectColumns(file, relCfg.columns);
+    } else if (relName === 'attachments') {
+      const attachmentsTable =
+        table === 'channelMessages' ? 'channelMessageAttachments' : 'directMessageAttachments';
+      // Deliberately NOT sorted: the repositories' shared `with` clause carries
+      // no ORDER BY, so production may hand these back in any order and the
+      // client seam (getAttachments) is what applies `position`. Sorting here
+      // would model a guarantee the database does not make.
+      const attachments = state.rowsRef(attachmentsTable).filter((a) => a.messageId === row.id);
+      result.attachments = attachments.map((attachment) =>
+        joinRelations(state, attachmentsTable, attachment, relCfg.with)
+      );
     } else if (relName === 'reactions') {
       const reactionsTable =
         table === 'channelMessages' ? 'channelMessageReactions' : 'dmMessageReactions';

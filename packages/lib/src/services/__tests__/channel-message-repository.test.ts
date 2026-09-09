@@ -199,6 +199,40 @@ describe('channelMessageRepository.loadChannelMessageWithRelations', () => {
       expected: { userId: 'u-1', fileId: 'file-1', reactionUser: 'Bob' },
     });
   });
+
+  it('loads the attachment rows, each with its joined file', async () => {
+    // The shared `with` clause feeds both the POST response and the realtime
+    // broadcast, so if it stops loading this relation a multi-photo send goes
+    // out as an empty bubble and only a refresh repairs it.
+    testDbState.seed('users', [{ id: 'u-1', name: 'Alice' }]);
+    testDbState.seed('files', [
+      { id: 'file-1', mimeType: 'image/png', sizeBytes: 10 },
+      { id: 'file-2', mimeType: 'image/png', sizeBytes: 20 },
+    ]);
+    testDbState.seed('channelMessages', [
+      { id: 'msg-1', pageId: 'page-1', userId: 'u-1', isActive: true, content: '' },
+    ]);
+    testDbState.seed('channelMessageAttachments', [
+      { id: 'att-1', messageId: 'msg-1', fileId: 'file-1', position: 0 },
+      { id: 'att-2', messageId: 'msg-1', fileId: 'file-2', position: 1 },
+    ]);
+
+    const result = await channelMessageRepository.loadChannelMessageWithRelations('msg-1');
+    const attachments = result?.attachments as
+      | Array<{ fileId: string; position: number; file: { mimeType: string } | null }>
+      | undefined;
+
+    assert({
+      given: 'a message carrying two attachment rows',
+      should: 'load both, each with the joined file the renderer needs for its mime type',
+      actual: {
+        pairs: attachments
+          ?.map((a) => `${a.position}:${a.fileId}:${a.file?.mimeType}`)
+          .sort(),
+      },
+      expected: { pairs: ['0:file-1:image/png', '1:file-2:image/png'] },
+    });
+  });
 });
 
 describe('channelMessageRepository.insertChannelMessageWithAttachment', () => {
