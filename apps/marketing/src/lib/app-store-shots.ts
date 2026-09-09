@@ -27,10 +27,9 @@ export interface Shot {
    * worse than one fewer frame.
    */
   devices?: ShotDevice[];
-  /** Rendered as separate lines, so the break is deliberate rather than reflowed. */
-  headline: string[];
   /**
-   * Two lines in portrait; joined with a space onto one line in landscape.
+   * Rendered as separate lines in portrait; joined with a space onto one line
+   * in landscape.
    * Keep the joined form to ~34 characters or fewer — beyond that it wraps in
    * landscape and the device, which is positioned for a single line, rides
    * over the second.
@@ -42,15 +41,6 @@ export interface Shot {
    *
    * Keep it under ~96 characters. Past that it wraps to a second line in
    * landscape and the device, positioned for one, rides over it.
-   *
-   * Most captions were cut because they argued with the picture rather than
-   * adding to it: restating the headline ("edited in plain language" under
-   * "Change your site by asking"), or quoting figures from this one demo as
-   * though they were product claims ("Twenty-two pages across six folders").
-   * The captures tell the story; a caption has to earn its place.
-   *
-   * `builds` keeps one because naming the page types is the fastest way to
-   * show the breadth, and no screenshot of a single screen can.
    */
   subline?: string;
 }
