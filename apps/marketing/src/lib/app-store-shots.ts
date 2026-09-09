@@ -1,11 +1,13 @@
 /**
  * The App Store screenshot set.
  *
- * The five read as one story rather than a feature list — ask, build, result,
- * triggers, schedule. The middle frames are the strongest answer we have to
- * Guideline 4.2 (minimum functionality): nobody looks at an agent creating
- * seven pages and calls the app a website in a wrapper. Only the first two or
+ * Six shots, ordered: a live published site first as the hook, then the story
+ * behind it — ask, build, result, triggers, schedule. Only the first one to
  * three appear in App Store search results, so the order is load-bearing.
+ *
+ * Together they are the strongest answer we have to Guideline 4.2 (minimum
+ * functionality): nobody looks at an agent creating seven pages, publishing a
+ * site, and scheduling its own work, and calls the app a website in a wrapper.
  *
  * `capture` names a real screen recorded off a simulator running the shipping
  * build — guideline 2.3.3 requires screenshots show the app in actual use, so a
@@ -24,6 +26,16 @@ export interface Shot {
 }
 
 export const SHOTS: Shot[] = [
+  {
+    // Leads deliberately. Only the first one to three appear in App Store
+    // search results, and a live customer site stops the scroll where a dark
+    // chat UI does not — it is also the single clearest refutation of "this is
+    // a website in a wrapper", since a wrapper cannot publish one.
+    slug: "publish",
+    tag: "Publish",
+    headline: ["Change your site", "by asking."],
+    subline: "Published to a real address, then edited in plain language.",
+  },
   {
     slug: "ask",
     tag: "Ask",
