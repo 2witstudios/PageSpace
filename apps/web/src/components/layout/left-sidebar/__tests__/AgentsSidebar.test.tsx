@@ -2565,7 +2565,7 @@ describe('AgentsSidebar', () => {
     });
     const CODE = 'ABCDEFGHJKMNPQRSTVWX';
     const expiresAt = () => new Date(Date.now() + 10 * 60 * 1000).toISOString();
-    const localEnv = { id: 'env-mac', name: 'mac', driveId: 'drive-1', substrate: 'local' as const, status: 'disconnected' as const, label: 'jono-macstudio', enrolled: false };
+    const localEnv = { id: 'env-mac', name: 'mac', driveId: 'drive-1', substrate: 'local' as const, status: 'disconnected' as const, label: 'jono-macstudio', enrolled: false, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } };
     const enableLocalEnvs = () =>
       mockUsePageAgents.mockImplementation((driveId?: string, options?: { enabled?: boolean }) => {
         const base = defaultPageAgents(driveId, options);
