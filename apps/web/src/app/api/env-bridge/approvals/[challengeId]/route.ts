@@ -37,7 +37,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import type { MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
-import { ENV_APPROVAL_SCOPES, type RequestEnvApprovalOutput } from '@/lib/ai/tools/env-approval-tools';
+import { ENV_APPROVAL_SCOPES, ENV_APPROVAL_STDERR_MAX_CHARS, ENV_APPROVAL_STDOUT_MAX_CHARS, type RequestEnvApprovalOutput } from '@/lib/ai/tools/env-approval-tools';
 import { EnvBridgeError, getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { getPendingApprovalStore, type PendingEnvApproval } from '@/lib/env-bridge/pending-approvals';
 import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
@@ -112,19 +112,27 @@ export async function GET(request: Request, context: Params) {
   }
 }
 
-/** The tool result for a machine reply to the re-issued grant. */
+/** Cut a stream to the tool output bound (UTF-16 length, the unit zod measures); says whether it cut. */
+function bounded(text: string, maxChars: number): { text: string; cut: boolean } {
+  return text.length > maxChars ? { text: text.slice(0, maxChars), cut: true } : { text, cut: false };
+}
+
+/** The tool result for a machine reply to the re-issued grant. Output is truncated to the schema's bounds so the result always merges. */
 function outcomeOf(challengeId: string, scope: RequestEnvApprovalOutput['scope'], reply: MachineResultFrame): RequestEnvApprovalOutput {
   switch (reply.type) {
-    case 'exec_result':
+    case 'exec_result': {
+      const stdout = bounded(Buffer.from(reply.stdoutB64, 'base64').toString('utf8'), ENV_APPROVAL_STDOUT_MAX_CHARS);
+      const stderr = bounded(Buffer.from(reply.stderrB64, 'base64').toString('utf8'), ENV_APPROVAL_STDERR_MAX_CHARS);
       return {
         challengeId,
         outcome: 'allowed',
         scope,
         exitCode: reply.exitCode,
-        stdout: Buffer.from(reply.stdoutB64, 'base64').toString('utf8'),
-        stderr: Buffer.from(reply.stderrB64, 'base64').toString('utf8'),
-        truncated: reply.truncated,
+        stdout: stdout.text,
+        stderr: stderr.text,
+        truncated: reply.truncated || stdout.cut || stderr.cut,
       };
+    }
     case 'fs_write_result':
       return reply.ok ? { challengeId, outcome: 'allowed', scope } : { challengeId, outcome: 'failed', scope, error: reply.error ?? 'write failed' };
     case 'fs_read_result':

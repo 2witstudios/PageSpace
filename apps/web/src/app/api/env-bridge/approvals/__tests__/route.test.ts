@@ -17,6 +17,7 @@ vi.mock('@/lib/env-bridge/bridge-client', async (importOriginal) => {
 });
 
 import { GET, POST } from '../[challengeId]/route';
+import { ENV_APPROVAL_STDERR_MAX_CHARS, ENV_APPROVAL_STDOUT_MAX_CHARS, requestEnvApprovalOutputSchema } from '@/lib/ai/tools/env-approval-tools';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { authenticateRequestWithOptions } from '@/lib/auth';
@@ -95,6 +96,25 @@ describe('POST allow — the click re-issues a grant over IDENTICAL args carryin
     // Spent: a second click on the same id is gone.
     expect((await post({ decision: 'allow' })).status).toBe(410);
     expect(sendGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it('Codex P1 on #2583: a LARGE successful output (300 KiB stdout) is truncated to the tool output bounds so the result still validates against requestEnvApprovalOutputSchema, with truncated: true', async () => {
+    const big = 'x'.repeat(300 * 1024);
+    sendGrant.mockResolvedValueOnce({ type: 'exec_result', grantId: 'g', exitCode: 0, stdoutB64: Buffer.from(big).toString('base64'), stderrB64: Buffer.from('e'.repeat(60 * 1024)).toString('base64'), truncated: false, sig: 'c2ln' });
+    const r = await post({ decision: 'allow' });
+    expect(r.status).toBe(200);
+    const body = await json(r);
+    const parsed = requestEnvApprovalOutputSchema.safeParse(body);
+    expect(parsed.success, JSON.stringify(parsed.success ? null : parsed.error.issues[0])).toBe(true);
+    expect((body.stdout as string).length).toBe(ENV_APPROVAL_STDOUT_MAX_CHARS);
+    expect((body.stderr as string).length).toBe(ENV_APPROVAL_STDERR_MAX_CHARS);
+    expect(body.truncated).toBe(true);
+    // Under the bound: untouched, and truncated stays what the machine said.
+    sendGrant.mockResolvedValueOnce({ type: 'exec_result', grantId: 'g', exitCode: 0, stdoutB64: Buffer.from('small').toString('base64'), stderrB64: '', truncated: false, sig: 'c2ln' });
+    resetPendingApprovalStoreForTesting();
+    getPendingApprovalStore().remember(pendingEntry(), NOW);
+    const small = await json(await post({ decision: 'allow' }));
+    expect(small).toMatchObject({ stdout: 'small', truncated: false });
   });
 
   it('given no scope, should default to 30d', async () => {

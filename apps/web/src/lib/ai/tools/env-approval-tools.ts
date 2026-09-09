@@ -48,14 +48,24 @@ export type EnvApprovalScope = (typeof ENV_APPROVAL_SCOPES)[number];
  * into model context). `outcome` is what the SERVER answered the click with;
  * `exitCode`/`stdout`/`stderr` are the command's own output when it ran.
  */
+/**
+ * The output bounds, in UTF-16 code units (what zod's `.max` measures). The
+ * approvals route truncates a machine reply to EXACTLY these before it
+ * answers the click (Codex P1 on #2583: a ~786 KiB exec_result used to fail
+ * the merge and leave the tool call pending, so the turn never resumed).
+ * Defined once here so the schema and the route cannot drift.
+ */
+export const ENV_APPROVAL_STDOUT_MAX_CHARS = 200_000;
+export const ENV_APPROVAL_STDERR_MAX_CHARS = 50_000;
+
 export const requestEnvApprovalOutputSchema = z
   .object({
     challengeId: z.string().min(1).max(128),
     outcome: z.enum(['allowed', 'denied', 'expired', 'mismatch', 'unknown', 'not_owner', 'failed']),
     scope: z.enum(ENV_APPROVAL_SCOPES).optional(),
     exitCode: z.number().int().optional(),
-    stdout: z.string().max(200_000).optional(),
-    stderr: z.string().max(50_000).optional(),
+    stdout: z.string().max(ENV_APPROVAL_STDOUT_MAX_CHARS).optional(),
+    stderr: z.string().max(ENV_APPROVAL_STDERR_MAX_CHARS).optional(),
     truncated: z.boolean().optional(),
     error: z.string().max(2_000).optional(),
   })
