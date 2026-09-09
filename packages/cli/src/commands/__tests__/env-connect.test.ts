@@ -234,6 +234,9 @@ describe('pagespace env connect <enrollmentId>', () => {
       grantId: 'g_write',
       reason: 'ask_pending:ch_test',
       pending: { files: [{ path: target, mode: null, reason: 'executable_bit' }] },
+    });
+  });
+
   /**
    * HARDENING B, LEAF B5 — end to end on the daemon: with nothing pinned the
    * machine says so at start and refuses the chat path entirely, rather than

@@ -1138,13 +1138,33 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
 
     it('given the owner CLICKS the sensitive write, should run it — escalation is a question, and the answer is honoured', async () => {
       const approvals = createApprovalsStore({ path: '/p', uid: 501, open: () => null, write: async () => undefined, now: () => NOW });
-      const h = chat({ approvals });
+      const challenges = createChallengeStore({ newId: () => 'ch_1' });
+      const h = chat({ approvals, challenges });
       const file = { path: `${ROOT}/.git/hooks/pre-commit`, contentB64: 'aGk=', mode: 0o755 };
       await h.dispatcher.handle(signedGrant({ type: 'grant_fs_write', files: [file] }));
       expect(h.fsRunner.write).not.toHaveBeenCalled();
-      const clicked = await h.dispatcher.handle(signedGrant({ type: 'grant_fs_write', files: [file] }, { approvalIntent: { challengeId: 'ch_1', scope: 'once', expiresAt: NOW + 30_000 }, principal: { ...PRINCIPAL, sessionId: 'later' } }));
+      // The click must now be PROVEN (hardening B): an assertion over the
+      // request THIS machine froze — `writeModes` included — at THIS scope.
+      const frozen = challenges.peek('ch_1', NOW)!;
+      expect(pendingRequestForWire(frozen.request).writeModes).toEqual([0o755]);
+      const assertion = ownerAssertion(ENV_ID, 'ch_1', pendingRequestForWire(frozen.request), { scope: 'once' });
+      const clicked = await h.dispatcher.handle(
+        signedGrant({ type: 'grant_fs_write', files: [file] }, { approvalIntent: { challengeId: 'ch_1', scope: 'once', expiresAt: NOW + 30_000, assertion }, principal: { ...PRINCIPAL, sessionId: 'later' } }),
+      );
       expect(clicked).toMatchObject({ kind: 'reply', frame: { type: 'fs_write_result', ok: true } });
       expect(h.fsRunner.write).toHaveBeenCalledTimes(1);
+    });
+
+    it('and an UNPROVEN click on the same sensitive write writes nothing (hardening A escalates, hardening B proves)', async () => {
+      const challenges = createChallengeStore({ newId: () => 'ch_1' });
+      const h = chat({ challenges });
+      const file = { path: `${ROOT}/.git/hooks/pre-commit`, contentB64: 'aGk=', mode: 0o755 };
+      await h.dispatcher.handle(signedGrant({ type: 'grant_fs_write', files: [file] }));
+      const clicked = await h.dispatcher.handle(
+        signedGrant({ type: 'grant_fs_write', files: [file] }, { approvalIntent: { challengeId: 'ch_1', scope: 'once', expiresAt: NOW + 30_000 }, principal: { ...PRINCIPAL, sessionId: 'later' } }),
+      );
+      expect(clicked).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'approval_unproven' } });
+      expect(h.fsRunner.write).not.toHaveBeenCalled();
     });
   });
 

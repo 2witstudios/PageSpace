@@ -101,6 +101,11 @@ export function pendingRequestForWire(request: NormalizedRequest): OwnerApproval
     ...(request.args !== undefined && { args: [...request.args] }),
     cwd: request.cwd,
     paths: [...request.paths],
+    // Index-aligned with `paths`, for `fs_write` only (hardening A1). Carried
+    // because this projection is BOTH what the card renders and what the
+    // assertion's challenge hashes: dropping it would hide the executable bit
+    // from the owner AND leave the mode outside what their click authorises.
+    ...(request.writeModes !== undefined && { writeModes: [...request.writeModes] }),
     env: { ...request.env },
     timeoutMs: request.timeoutMs,
     maxBytes: request.maxBytes,

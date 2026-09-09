@@ -210,6 +210,33 @@ describe('B2 — the challenge is derived from the frozen request', () => {
     expect(ownerApprovalRequestHash(withExtra, sha256)).not.toBe(ownerApprovalRequestHash(REQUEST, sha256));
   });
 
+  /**
+   * Hardening A's `writeModes` (the executable bit a write would set) is
+   * INSIDE what the click authorises. `pendingRequestForWire` is both what the
+   * card renders and what the challenge hashes, so a projection that dropped
+   * the field would hide the mode from the owner and leave it outside their
+   * approval.
+   *
+   * DEFENCE IN DEPTH, not the only guard, and this row should not be read as
+   * more than it is: hardening A put `writeModes` in `NormalizedRequest`, so
+   * the daemon's byte-compare against the request it froze already refuses a
+   * re-issued write whose mode changed (`approval_mismatch`). What this adds
+   * is that the OWNER'S SIGNATURE covers the mode too, so the two checks fail
+   * independently rather than both resting on the byte-compare.
+   */
+  it('carries writeModes through the projection, so the mode a write would set is inside the assertion (defence in depth)', () => {
+    const write: NormalizedRequest = { op: 'fs_write', cwd: '/root', paths: ['/root/.git/hooks/pre-commit'], writeModes: [0o755], env: {}, timeoutMs: 1, maxBytes: 1, clamped: false };
+    const wire = pendingRequestForWire(write);
+    expect(wire.writeModes).toEqual([0o755]);
+    // A different mode is a different challenge, so an approval of 0644 cannot run 0755.
+    const harmless = pendingRequestForWire({ ...write, writeModes: [0o644] });
+    expect(deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: wire, scope: SCOPE }, sha256)).not.toBe(
+      deriveOwnerApprovalChallenge({ envId: ENV_ID, challengeId: CHALLENGE_ID, request: harmless, scope: SCOPE }, sha256),
+    );
+    // And absent stays absent, so a non-write hashes exactly as it always did.
+    expect('writeModes' in pendingRequestForWire({ ...write, writeModes: undefined })).toBe(false);
+  });
+
   it.each<[ApprovalIntentScope, ApprovalIntentScope]>([
     ['once', 'session'],
     ['once', '30d'],
