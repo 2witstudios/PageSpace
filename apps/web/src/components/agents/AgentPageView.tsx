@@ -640,11 +640,15 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
                 // leave the user watching a spinner that never resolves.
                 //
                 // The error replaces the CHAT BODY only; the bar above it
-                // stays. Settings is keyed by `page`, not by the agent record
-                // that failed to load, so it still works — and a broken agent
-                // is precisely when a user needs to reach it. Before the page
-                // header was removed its tabs did this for free; losing it
-                // here would have been a real regression, not cosmetic.
+                // stays, so History and Settings are still REACHABLE — and a
+                // broken agent is precisely when a user wants to reach them.
+                // Settings is keyed by `page`, not by the agent record that
+                // failed here, and its config comes from a separate fetch
+                // (`useAgentConfig`), so it renders whenever that fetch
+                // succeeds; if it failed too, the settings tab shows its own
+                // loading state rather than this error. Before the page header
+                // was removed, its tabs gave this for free — losing it would
+                // have been a real regression, not a cosmetic one.
                 <div
                   data-testid="agent-page-view-error"
                   role="alert"

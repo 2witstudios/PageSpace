@@ -720,6 +720,21 @@ describe('AgentPageView', () => {
   });
 
   describe('deleting the current conversation (issue #2263, finding 4)', () => {
+    // A note on the channel these drive. `onConversationDelete` fires from
+    // `useConversations.deleteConversation`, and the page hands that to exactly
+    // one place: the SESSION-LESS branch's History. So a signed-in, session-bound
+    // fixture (the grid) could not reach it through the UI.
+    //
+    // They use one anyway, deliberately: the handler under test is
+    // `mintReplacementForCurrent`, which the GRID reaches too — via
+    // `onConversationClosed` when a listing closes with no replacement — and the
+    // session-bound branches of that handler (mint into the same session, patch
+    // the listing cache, prune the stale pane) only exist when `current` is
+    // bound. Driving it through `onConversationDelete` is the smaller door onto
+    // shared logic, not a claim that History is reachable here. The close
+    // channel's own entry point is covered by the `onConversationClosed`
+    // describe below.
+
     it('when session-bound, mints the replacement INTO that session — never a new one', async () => {
       resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
       mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
