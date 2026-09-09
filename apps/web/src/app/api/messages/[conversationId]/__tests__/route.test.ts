@@ -123,6 +123,13 @@ const mockConversation = (overrides: Partial<{
   participant2Id: overrides.participant2Id ?? RECIPIENT_ID,
 });
 
+/**
+ * The row the repository returns. `attachments` is what the route is given
+ * now, and the repository DUAL-WRITES the first of them into the legacy
+ * fileId/attachmentMeta columns — so this factory does the same, or the
+ * broadcast assertions below would be checking the fixture's omission rather
+ * than the route's behaviour.
+ */
 const mockInsertedRow = (overrides: Partial<{
   id: string;
   conversationId: string;
@@ -130,13 +137,14 @@ const mockInsertedRow = (overrides: Partial<{
   content: string;
   fileId: string | null;
   attachmentMeta: AttachmentMeta | null;
+  attachments: Array<{ fileId: string; attachmentMeta: AttachmentMeta }>;
 }> = {}) => ({
   id: overrides.id ?? 'msg_1',
   conversationId: overrides.conversationId ?? CONVERSATION_ID,
   senderId: overrides.senderId ?? SENDER_ID,
   content: overrides.content ?? '',
-  fileId: overrides.fileId ?? null,
-  attachmentMeta: overrides.attachmentMeta ?? null,
+  fileId: overrides.fileId ?? overrides.attachments?.[0]?.fileId ?? null,
+  attachmentMeta: overrides.attachmentMeta ?? overrides.attachments?.[0]?.attachmentMeta ?? null,
   isRead: false,
   readAt: null,
   isEdited: false,

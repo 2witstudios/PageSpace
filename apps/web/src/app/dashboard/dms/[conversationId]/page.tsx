@@ -19,6 +19,22 @@ import { MessageAttachments } from '@/components/shared/MessageAttachments';
 import type { MessageAttachmentLike } from '@/lib/attachment-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { reconcileOptimistic } from '@/lib/messages/reconcile-optimistic';
+
+const senderOf = (m: { senderId?: string }) => m.senderId;
+
+/**
+ * Fallback used ONLY when a confirmation carries no `clientNonce` — which is
+ * what a pod that predates the nonce broadcasts, so it is reachable during a
+ * rolling deploy. Same conversation, same text, same first file: the matcher
+ * this surface used before the nonce existed.
+ */
+const looksLikeSameSend = (
+  pending: { conversationId?: string; content?: string; fileId?: string | null },
+  confirmed: { conversationId?: string; content?: string; fileId?: string | null },
+) =>
+  pending.conversationId === confirmed.conversationId &&
+  pending.content === confirmed.content &&
+  (pending.fileId ?? null) === (confirmed.fileId ?? null);
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { RichText, addHardLineBreaks } from '@/components/messages/RichText';
@@ -182,7 +198,9 @@ export default function InboxDMPage() {
       // pollute the live DM view of older clients.
       if (message.parentId) return;
       if (message.conversationId === conversationId) {
-        setMessages((prev) => reconcileOptimistic(prev, message, (m) => m.senderId));
+        setMessages((prev) =>
+          reconcileOptimistic(prev, message, senderOf, looksLikeSameSend),
+        );
 
         if (message.senderId !== user.id) {
           patch<{ success: boolean; notificationsMarkedRead: number }>(`/api/messages/${conversationId}`)
@@ -466,7 +484,9 @@ export default function InboxDMPage() {
       const response = await post<{ message?: Message }>(`/api/messages/${conversationId}`, body);
       const persistedMessage = response.message;
       if (persistedMessage) {
-        setMessages((prev) => reconcileOptimistic(prev, persistedMessage, (m) => m.senderId));
+        setMessages((prev) =>
+          reconcileOptimistic(prev, persistedMessage, senderOf, looksLikeSameSend),
+        );
       }
     } catch (error) {
       toast.error('Failed to send message');

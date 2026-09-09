@@ -133,6 +133,67 @@ describe('reconcileOptimistic', () => {
     });
   });
 
+  it('retires the pending row for a nonce-less echo from the same sender', () => {
+    // What a pod that predates the nonce broadcasts — reachable during a
+    // rolling deploy, where a new client posts to an old server. Without this
+    // fallback the sender sees their own message twice until a refetch, which
+    // is the exact complaint this change exists to answer.
+    const prev = [{ id: 'temp-a', clientNonce: 'a', userId: 'me', content: 'hi' }];
+
+    const next = reconcileOptimistic(
+      prev,
+      { id: 'server-a', userId: 'me', content: 'hi' },
+      (m) => m.userId,
+      (pending, confirmed) => pending.content === confirmed.content,
+    );
+
+    assert({
+      given: 'an echo of this client\'s own send that carries no nonce',
+      should: 'retire the pending row rather than append a duplicate',
+      actual: next.map((m) => m.id),
+      expected: ['server-a'],
+    });
+  });
+
+  it('never lets the nonce-less fallback match another sender', () => {
+    const prev = [{ id: 'temp-a', clientNonce: 'a', userId: 'me', content: 'hi' }];
+
+    const next = reconcileOptimistic(
+      prev,
+      { id: 'server-theirs', userId: 'someone-else', content: 'hi' },
+      (m) => m.userId,
+      (pending, confirmed) => pending.content === confirmed.content,
+    );
+
+    assert({
+      given: 'someone else posting the same text while a send is in flight',
+      should: 'append it — identical content is not identity',
+      actual: next.map((m) => m.id),
+      expected: ['temp-a', 'server-theirs'],
+    });
+  });
+
+  it('prefers the nonce over the fallback when both could match', () => {
+    const prev = [
+      { id: 'temp-a', clientNonce: 'a', userId: 'me', content: 'hi' },
+      { id: 'temp-b', clientNonce: 'b', userId: 'me', content: 'hi' },
+    ];
+
+    const next = reconcileOptimistic(
+      prev,
+      { id: 'server-b', clientNonce: 'b', userId: 'me', content: 'hi' },
+      (m) => m.userId,
+      (pending, confirmed) => pending.content === confirmed.content,
+    );
+
+    assert({
+      given: 'two identical sends in flight and a nonce naming the second',
+      should: 'retire the one the nonce names, not the first that looks alike',
+      actual: next.map((m) => m.id),
+      expected: ['temp-a', 'server-b'],
+    });
+  });
+
   it('never matches an already-confirmed row, even on a nonce it still carries', () => {
     // The replaced row keeps the echoed nonce, so matching must also require
     // the row to still be pending.

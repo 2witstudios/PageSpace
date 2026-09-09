@@ -44,6 +44,7 @@ export function reconcileOptimistic<T extends OptimisticallySent>(
   prev: T[],
   message: T,
   authorOf?: (row: T) => string | null | undefined,
+  looksLikeSameSend?: (pending: T, confirmed: T) => boolean,
 ): T[] {
   const sameAuthor = (row: T) => {
     if (!authorOf) return true;
@@ -55,11 +56,29 @@ export function reconcileOptimistic<T extends OptimisticallySent>(
     return pendingAuthor != null && pendingAuthor === confirmedAuthor;
   };
 
-  const pendingIndex = message.clientNonce
+  const nonceIndex = message.clientNonce
     ? prev.findIndex(
         (row) => isPending(row) && row.clientNonce === message.clientNonce && sameAuthor(row),
       )
     : -1;
+
+  // A confirmation with NO nonce is what a server that predates the nonce
+  // broadcasts — which is a real state during a rolling deploy: a new client
+  // posts to an old pod, the echo comes back without the nonce it sent, and
+  // nothing retires the pending row. That leaves the sender looking at their
+  // own message twice, which is the bug this whole change exists to remove.
+  //
+  // So when there is no nonce to match, fall back to what the DM surface did
+  // before it had one: the same author, the same content, the same attachment.
+  // It is guesswork — two identical sends are indistinguishable — but they are
+  // also interchangeable, and only ONE pending row is ever retired. The nonce
+  // path above is still the only one that runs against a current server.
+  const pendingIndex =
+    nonceIndex !== -1 || !looksLikeSameSend || message.clientNonce
+      ? nonceIndex
+      : prev.findIndex(
+          (row) => isPending(row) && sameAuthor(row) && looksLikeSameSend(row, message),
+        );
 
   if (pendingIndex !== -1) {
     // Replace in place, so the message keeps its position in the stream rather

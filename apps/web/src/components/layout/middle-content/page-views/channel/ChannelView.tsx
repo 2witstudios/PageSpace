@@ -25,6 +25,20 @@ import { MessageAttachments } from '@/components/shared/MessageAttachments';
 import type { MessageAttachmentLike } from '@/lib/attachment-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { reconcileOptimistic } from '@/lib/messages/reconcile-optimistic';
+
+const authorOf = (m: { userId?: string }) => m.userId;
+
+/**
+ * Fallback used ONLY when a confirmation carries no `clientNonce` — what a pod
+ * that predates the nonce broadcasts, so it is reachable during a rolling
+ * deploy. Same text, same first file, same author (checked by the reconciler).
+ */
+const looksLikeSameSend = (
+  pending: { content?: string; fileId?: string | null },
+  confirmed: { content?: string; fileId?: string | null },
+) =>
+  pending.content === confirmed.content &&
+  (pending.fileId ?? null) === (confirmed.fileId ?? null);
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
@@ -271,7 +285,9 @@ function ChannelView({ page }: ChannelViewProps) {
       // the ThreadPanel; until then, drop them here so the thread API does
       // not pollute the live channel view of older clients.
       if (message.parentId) return;
-      setMessages((prev) => reconcileOptimistic(prev, message, (m) => m.userId));
+      setMessages((prev) =>
+        reconcileOptimistic(prev, message, authorOf, looksLikeSameSend),
+      );
       // It is on screen now, so it is not unread.
       scheduleMarkChannelRead();
     };
@@ -404,7 +420,9 @@ function ChannelView({ page }: ChannelViewProps) {
       // message the broadcast carries, nonce included, so reconcile with it
       // too; whichever lands second is deduped by id.
       if (persistedMessage?.id) {
-        setMessages((prev) => reconcileOptimistic(prev, persistedMessage, (m) => m.userId));
+        setMessages((prev) =>
+          reconcileOptimistic(prev, persistedMessage, authorOf, looksLikeSameSend),
+        );
       }
     } catch (error) {
       // If the API call fails, remove the optimistic message
