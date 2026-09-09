@@ -24,7 +24,7 @@ import { CANVAS, capturePath, type Shot, type ShotDevice } from "@/lib/app-store
    Both devices sit slightly higher than before to leave the reflection somewhere
    to fade; it is allowed to run off the bottom, where the canvas clips it. */
 const PORTRAIT = { copyTop: 150, copyPad: 90, deviceTop: 640, scale: 0.685 };
-const LANDSCAPE = { copyLeft: 150, copyTop: 120, copyWidth: 1900, deviceTop: 360, scale: 0.70 };
+const LANDSCAPE = { copyLeft: 150, copyTop: 120, copyWidth: 2400, deviceTop: 360, scale: 0.70 };
 
 export function StoreScreenshot({ shot, device }: { shot: Shot; device: ShotDevice }) {
   const canvas = CANVAS[device];

@@ -39,7 +39,10 @@ export interface Shot {
   headline: string[];
 
   /**
-   * Optional, and used on one shot only.
+   * Subtext under the headline.
+   *
+   * Keep it under ~96 characters. Past that it wraps to a second line in
+   * landscape and the device, positioned for one, rides over it.
    *
    * Most captions were cut because they argued with the picture rather than
    * adding to it: restating the headline ("edited in plain language" under
@@ -55,58 +58,46 @@ export interface Shot {
 
 export const SHOTS: Shot[] = [
   {
-    // Leads, and states the thesis the other six are evidence for -- taken off
-    // the landing hero, "Partner for any project, workspace for any team."
-    //
-    // It is also the only frame that proves the claim in the same breath: two
-    // people, an agent answering as a participant, and an answer built from
-    // the workspace's own numbers rather than the open internet.
+    // The thesis, and the frame that earns it: one sentence in, and an agent
+    // builds an entire business workspace. Everything after is a facet of
+    // "any project, any team" -- the landing hero's promise.
+    slug: "builds",
+    tag: "Any project",
+    headline: ["The AI for", "any project."],
+    subline: "Ask for a workspace and it builds one \u2014 documents, sheets, channels, tasks, canvases and code.",
+  },
+  {
     slug: "team",
-    tag: "Together",
-    headline: ["Teams and agents,", "one workspace."],
+    tag: "Any team",
+    headline: ["The workspace", "for any team."],
+    subline: "People and AI agents in the same channels, answering from your pages, not the open internet.",
   },
   {
     slug: "agent",
     tag: "Agents",
-    headline: ["An expert in", "your business."],
+    headline: ["Shape it to", "your business."],
+    subline: "Choose the model, write the instructions. It works inside the workspace, not from the sidelines.",
   },
   {
-    // The honest version of "automate your SOPs" — a training checklist where
-    // Coffee Bot holds "Read Roasting SOP sections 1-3" in the Assignee column
-    // beside two people. A cron dialog described the mechanism; this shows the
-    // outcome.
     slug: "tasks",
     tag: "Assign",
     headline: ["Assign work.", "Even to an agent."],
-  },
-  {
-    slug: "ask",
-    tag: "Ask",
-    headline: ["Give it the", "whole project."],
-  },
-  {
-    slug: "builds",
-    tag: "Build",
-    headline: ["Then it", "builds it."],
-    // The one caption worth keeping. Naming the page types is the fastest way
-    // to show this is a workspace for everything rather than a note-taker —
-    // all nine of PageType, minus Folder, which the tree already shows.
-    subline: "Documents, sheets, channels, tasks, canvases, files, code and AI chats.",
+    subline: "Agents take tasks, assignees and due dates like anyone else on the team.",
   },
   {
     slug: "publish",
     tag: "Publish",
     headline: ["Change your site", "by asking."],
+    subline: "Publish any page to a real address, then change it in plain language.",
   },
   {
-    // Sells authorization, not the role editor. The claim a buyer needs is
-    // that giving an AI real access does not mean giving up access control:
-    // roles, per-page overrides and an audit trail bind an agent exactly as
-    // they bind a person. Naming the feature ("Full access. Your brakes.")
-    // described the control; naming the guarantee sells the category.
+    // Sells authorization, not the role editor. The depth is the point: a buyer
+    // asking "can I let an AI near this?" needs the answer to be specific.
+    // Every claim here is from the security page.
     slug: "permissions",
     tag: "Security",
     headline: ["Permissions apply", "to the AI too."],
+    subline: "Roles, per-page access, a tamper-evident audit trail, and restore points before every AI change.",
   },
 ];
 
