@@ -1,12 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it } from 'vitest';
 import { toDashboardTask } from '../to-dashboard-task';
 import type { TaskItem, TaskStatusConfig } from '../task-list-types';
 import { getStatusDisplay } from '@/components/tasks/task-helpers';
 import { isCompletedStatus } from '../task-list-types';
-
-const assert = ({ given, should, actual, expected }: {
-  given: string; should: string; actual: unknown; expected: unknown;
-}) => expect(actual, `Given ${given}, should ${should}`).toEqual(expected);
+import { assert } from '@/hooks/__tests__/riteway';
 
 const task = (over: Partial<TaskItem> & { id: string }): TaskItem => ({
   userId: 'u1',
@@ -35,7 +32,7 @@ const config = (slug: string, over: Partial<TaskStatusConfig> = {}): TaskStatusC
   ...over,
 });
 
-const ctx = { driveId: 'drive-1', taskListPageId: 'list-page-1', taskListPageTitle: 'Launch' };
+const ctx = { driveId: 'drive-1', taskListPageId: 'list-page-1' };
 
 describe('status resolution', () => {
   it('prefers the list custom status config', () => {
@@ -93,19 +90,26 @@ describe('status resolution', () => {
   // The row derives its checkbox from this group, while the filter, the table
   // and the completion guard all ask isCompletedStatus. If the two disagree the
   // row ticks a task the filter still calls active, and unticking it does
-  // nothing visible.
-  it('never calls a task done that isCompletedStatus calls active', () => {
-    const configs = [config('shipped', { group: 'done' }), config('wip', { group: 'in_progress' })];
-    // 'completed' is a DEFAULT done slug, but absent from this list's vocabulary.
+  // nothing visible. A list with its own vocabulary does not inherit the shared
+  // defaults, so such a slug is an unknown status to every surface alike.
+  it('treats a default done slug the list does not define as unknown, like the table', () => {
+    const configs = [config('shipped', { name: 'Shipped', color: 'bg-purple-100', group: 'done' })];
     const adapted = toDashboardTask(task({ id: 't1', status: 'completed' }), ctx, configs);
     assert({
-      given: 'a default done slug that the list vocabulary does not define',
-      should: 'agree with isCompletedStatus rather than the default config',
+      given: 'a default done slug absent from the list vocabulary',
+      should: 'show the raw slug, not be done, and agree with isCompletedStatus',
       actual: {
+        statusLabel: adapted.statusLabel,
+        statusGroup: adapted.statusGroup,
         rowSaysDone: getStatusDisplay(adapted).group === 'done',
         viewSaysDone: isCompletedStatus('completed', configs),
       },
-      expected: { rowSaysDone: false, viewSaysDone: false },
+      expected: {
+        statusLabel: 'completed',
+        statusGroup: 'todo',
+        rowSaysDone: false,
+        viewSaysDone: false,
+      },
     });
   });
 
@@ -119,34 +123,16 @@ describe('status resolution', () => {
       expected: 'completed',
     });
   });
-
-  // A list with its own vocabulary does not inherit the shared defaults —
-  // buildStatusConfig returns only the custom statuses — so an orphan slug is
-  // an unknown status here exactly as it is in the table, not a green "Done".
-  it('does not dress an orphan slug in the default label and colour', () => {
-    const configs = [config('shipped', { name: 'Shipped', color: 'bg-purple-100', group: 'done' })];
-    const { statusLabel, statusGroup } = toDashboardTask(
-      task({ id: 't1', status: 'completed' }), ctx, configs,
-    );
-    assert({
-      given: 'a default done slug the list vocabulary does not define',
-      should: 'show the raw slug in the todo group, as the table does',
-      actual: { statusLabel, statusGroup },
-      expected: { statusLabel: 'completed', statusGroup: 'todo' },
-    });
-  });
 });
 
 describe('shape normalisation', () => {
   it('injects the list context the page endpoint omits', () => {
-    const { driveId, taskListPageId, taskListPageTitle } = toDashboardTask(
-      task({ id: 't1' }), ctx, [],
-    );
+    const { driveId, taskListPageId } = toDashboardTask(task({ id: 't1' }), ctx, []);
     assert({
       given: 'a task item and its list context',
       should: 'carry driveId and task list identity onto the adapted task',
-      actual: { driveId, taskListPageId, taskListPageTitle },
-      expected: { driveId: 'drive-1', taskListPageId: 'list-page-1', taskListPageTitle: 'Launch' },
+      actual: { driveId, taskListPageId },
+      expected: { driveId: 'drive-1', taskListPageId: 'list-page-1' },
     });
   });
 

@@ -14,16 +14,18 @@ export interface TaskCompactRowProps {
   onToggleComplete: (task: Task) => void;
   onTap: (task: Task) => void;
   /**
-   * Whether the viewer may change this task. Defaults to true: the dashboard
-   * lists tasks from many lists at once and has no single permission to apply,
-   * so it keeps the previous behaviour. A single-list surface passes its own.
+   * Whether the viewer may change this task. Required rather than defaulting to
+   * true: a permission that fails open when a call site forgets it is the wrong
+   * kind of default. The dashboard spans many lists and has no single answer,
+   * so it passes `true` deliberately.
    */
-  canEdit?: boolean;
+  canEdit: boolean;
   /**
-   * Optional slot before the chevron. The task-list page view uses it for
-   * sub-task progress, which the dashboard has no notion of.
+   * Row-level indicators, rendered between the metadata and the chevron. The
+   * task-list page view passes sub-task progress and the agent-trigger bell,
+   * neither of which the dashboard has a notion of.
    */
-  trailing?: ReactNode;
+  rowMeta?: ReactNode;
 }
 
 const PRIORITY_DOT: Record<string, string> = {
@@ -36,8 +38,8 @@ export const TaskCompactRow = memo(function TaskCompactRow({
   task,
   onToggleComplete,
   onTap,
-  trailing,
-  canEdit = true,
+  rowMeta,
+  canEdit,
 }: TaskCompactRowProps) {
   const isCompleted = getStatusDisplay(task).group === 'done';
   const dueDate = task.dueDate ? new Date(task.dueDate) : null;
@@ -125,7 +127,7 @@ export const TaskCompactRow = memo(function TaskCompactRow({
         </div>
       </button>
 
-      {trailing}
+      {rowMeta}
 
       {/* Chevron indicator */}
       <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0" />

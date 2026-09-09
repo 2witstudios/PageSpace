@@ -141,22 +141,13 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
           <EditableTitle pageId={pageId} />
           <DocumentSaveStatus pageId={page?.id ?? null} enabled={showSaveStatus} />
         </div>
-        {/* Never wraps. This cluster used to be `flex-wrap`, so on a narrow pane
-            the actions spilled onto a second row and the header ate vertical
-            space that the content below needed. It now stays one row and
-            scrolls horizontally instead; the title beside it truncates.
-            Kept as real inline controls rather than collapsed into an overflow
-            menu because several of these (ShareDialog, ExportDropdown,
-            PublishControls) are dialog/popover triggers, and nesting those in a
-            DropdownMenu unmounts the dialog when the menu closes.
-            `min-w-0`, not `shrink-0`: a shrink-0 child of a flex-1 min-w-0 row
-            overflows its parent instead of wrapping, so the cluster is allowed
-            to shrink and scroll within itself.
-            No `justify-end` either: the parent row's `justify-between` already
-            puts this on the right, and end-aligning an overflow container sends
-            the excess off the INLINE-START edge, where scrollLeft cannot reach
-            it — the controls would be clipped away permanently. */}
-        <div className="flex flex-nowrap items-center gap-1 @[400px]:gap-2 min-w-0 overflow-x-auto scrollbar-none">
+        {/* One row that scrolls rather than wraps: wrapping cost the content
+            below a whole header row on a narrow pane. Not an overflow menu —
+            ShareDialog, ExportDropdown and PublishControls are dialog triggers,
+            and a DropdownMenu unmounts the dialog when it closes. And no
+            `justify-end`: end-aligning an overflow container pushes the excess
+            past the inline-start edge, where scrollLeft cannot reach it. */}
+        <div className="flex items-center gap-1 @[400px]:gap-2 min-w-0 overflow-x-auto scrollbar-none">
           {pageIsDocument && <EditorToggles />}
           {pageIsDocument && page && <PageSetupButton pageId={page.id} />}
           {(pageIsDocument || pageIsSheet) && page && (

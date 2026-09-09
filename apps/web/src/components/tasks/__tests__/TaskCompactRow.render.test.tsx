@@ -53,6 +53,10 @@ describe('read-only viewers', () => {
     render(
       <TaskCompactRow task={task()} onToggleComplete={onToggleComplete} onTap={noop} canEdit={false} />,
     );
+    // A disabled control has `pointer-events: none`, which userEvent refuses to
+    // click by default. Bypassing that check makes the click really reach the
+    // element, so a missing `disabled` would show up as a call rather than as a
+    // test that quietly skipped its own action.
     await userEvent.click(screen.getByRole('checkbox'), { pointerEventsCheck: 0 });
     assert({
       given: 'a click on the checkbox of a read-only row',
@@ -63,11 +67,11 @@ describe('read-only viewers', () => {
   });
 
   // The dashboard lists tasks from many lists and has no single permission to
-  // apply, so it passes nothing and must keep its existing behaviour.
-  it('stays editable when no permission is supplied', () => {
-    render(<TaskCompactRow task={task()} onToggleComplete={noop} onTap={noop} />);
+  // apply, so it passes true deliberately and the sheet resolves each task's own.
+  it('stays editable when the viewer can edit', () => {
+    render(<TaskCompactRow task={task()} onToggleComplete={noop} onTap={noop} canEdit />);
     assert({
-      given: 'no canEdit prop, as the dashboard renders it',
+      given: 'canEdit true, as the dashboard renders it',
       should: 'leave the checkbox enabled',
       actual: screen.getByRole('checkbox').hasAttribute('disabled'),
       expected: false,
@@ -82,6 +86,7 @@ describe('completion state', () => {
         task={task({ status: 'shipped', statusLabel: 'Shipped', statusColor: 'bg-purple-100', statusGroup: 'done' })}
         onToggleComplete={noop}
         onTap={noop}
+        canEdit
       />,
     );
     const title = screen.getByText('Ship the release notes');
@@ -97,7 +102,7 @@ describe('completion state', () => {
   });
 
   it('names the checkbox after the row it belongs to', () => {
-    render(<TaskCompactRow task={task()} onToggleComplete={noop} onTap={noop} />);
+    render(<TaskCompactRow task={task()} onToggleComplete={noop} onTap={noop} canEdit />);
     assert({
       given: 'an unfinished task',
       should: 'name the checkbox so a screen reader can tell rows apart',

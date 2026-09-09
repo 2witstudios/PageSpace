@@ -96,16 +96,16 @@ export function TaskDetailSheet({
 
   // Permission gate mirrors the row-level Task List badge: edit on the parent
   // task list page is what authorizes configuring triggers on its tasks.
-  // The sheet is the first thing to ask about this list's permissions on the
-  // dashboard, so the request starts when it opens and `canEdit` is false for
-  // the round trip. Disabling on that would grey every control out on open and
-  // then light it up — so controls lock only once the answer is actually known.
-  // Erring open is safe: every handler guards, and the route guards again.
+  // Optimistic while the answer is in flight. The sheet is the first thing to
+  // ask about a list's permissions on the dashboard, so the request starts when
+  // it opens — treating "not yet known" as "not allowed" would grey every
+  // control out on open and light them up a beat later. Erring open is safe:
+  // every handler guards and the route guards again, whereas a dead control
+  // that later comes alive just reads as broken.
   const { permissions, isLoading: permissionsLoading } = usePermissions(
     task?.taskListPageId ?? null,
   );
-  const canEdit = permissions?.canEdit ?? false;
-  const locked = !permissionsLoading && !canEdit;
+  const canEdit = permissionsLoading || (permissions?.canEdit ?? false);
 
   // Reset editing state when task changes
   useEffect(() => {
@@ -171,7 +171,7 @@ export function TaskDetailSheet({
               checked={isCompleted}
               onCheckedChange={() => onToggleComplete(task)}
               className="mt-1 h-5 w-5"
-              disabled={locked}
+              disabled={!canEdit}
               aria-label={`${isCompleted ? 'Reopen' : 'Complete'} ${task.title}`}
             />
             <div className="flex-1 min-w-0">
@@ -202,8 +202,8 @@ export function TaskDetailSheet({
                 <button
                   type="button"
                   className="w-full text-left bg-transparent border-0 p-0"
-                  onClick={locked ? undefined : startEditTitle}
-                  disabled={locked}
+                  onClick={startEditTitle}
+                  disabled={!canEdit}
                 >
                   <span
                     className={cn(
@@ -241,7 +241,7 @@ export function TaskDetailSheet({
               <Select
                 value={task.status}
                 onValueChange={(value) => onStatusChange(task, value)}
-                disabled={locked}
+                disabled={!canEdit}
               >
                 <SelectTrigger className="h-10 w-full">
                   <SelectValue>
@@ -270,7 +270,7 @@ export function TaskDetailSheet({
               <Select
                 value={task.priority}
                 onValueChange={(value) => onPriorityChange(task, value)}
-                disabled={locked}
+                disabled={!canEdit}
               >
                 <SelectTrigger className="h-10 w-full">
                   <SelectValue>
@@ -299,7 +299,7 @@ export function TaskDetailSheet({
               <DueDatePicker
                 currentDate={task.dueDate}
                 onSelect={(date) => onDueDateChange(task, date)}
-                disabled={locked}
+                disabled={!canEdit}
               />
             </div>
           </div>
@@ -313,7 +313,7 @@ export function TaskDetailSheet({
                   driveId={task.driveId}
                   assignees={task.assignees || []}
                   onUpdate={(assigneeIds) => onMultiAssigneeChange(task, assigneeIds)}
-                  disabled={locked}
+                  disabled={!canEdit}
                 />
               </div>
             </div>
@@ -383,7 +383,7 @@ export function TaskDetailSheet({
               variant="outline"
               className="h-11 text-destructive hover:text-destructive hover:bg-destructive/10"
               onClick={handleDelete}
-              disabled={locked}
+              disabled={!canEdit}
               aria-label="Delete task"
             >
               <Trash2 className="h-4 w-4" />

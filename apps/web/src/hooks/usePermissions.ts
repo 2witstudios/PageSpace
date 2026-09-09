@@ -82,7 +82,6 @@ export function usePermissions(pageId?: string | null, driveOwnerId?: string): U
   };
 }
 
-
 /**
  * Get permission error message
  */

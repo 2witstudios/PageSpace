@@ -707,6 +707,11 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
                         task={task}
                         onToggleComplete={handleToggleComplete}
                         onTap={handleOpenDetailSheet}
+                        // This list spans every drive the user belongs to, so
+                        // there is no single permission to apply here; the
+                        // detail sheet resolves each task's own before it
+                        // allows a write.
+                        canEdit
                       />
                     ))}
                   </div>

@@ -132,6 +132,65 @@ const fetcher = async (url: string) => {
 // MAX_LIMIT (200) or every "Load More" page would silently get clamped down server-side.
 const TASKS_PAGE_SIZE = 100;
 
+interface TaskSearchInputProps {
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  value: string;
+  onChange: (next: string) => void;
+  className?: string;
+  /** Fill the row, as the narrow toolbar wants; the wide one is fixed-width. */
+  grow?: boolean;
+}
+
+/**
+ * The task filter box, rendered in both toolbars.
+ *
+ * Shared mainly for the icon: the input's left padding has to clear the
+ * absolutely positioned magnifier, and a copy where the two drift apart looks
+ * fine until someone reads it.
+ */
+function TaskSearchInput({ inputRef, value, onChange, className, grow = false }: TaskSearchInputProps) {
+  return (
+    <div className={cn('relative', grow && 'flex-1 min-w-0')}>
+      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+      <Input
+        ref={inputRef}
+        placeholder="Filter tasks..."
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={cn('pl-9', className)}
+      />
+    </div>
+  );
+}
+
+/**
+ * Task count and last-updated, below the list.
+ *
+ * Hidden at narrow widths, where the bar costs more screen than the count is
+ * worth — the same call the tasks dashboard makes for its mobile view.
+ */
+interface TaskListFooterStatsProps {
+  data: TaskListData | undefined;
+  className?: string;
+}
+
+function TaskListFooterStats({ data, className }: TaskListFooterStatsProps) {
+  return (
+    <div className={cn(
+      'hidden @[700px]:flex flex-wrap items-center justify-between gap-2 px-4 py-2',
+      'pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t bg-muted/50 text-sm text-muted-foreground',
+      className,
+    )}>
+      <span><strong>{data?.tasks.length || 0}</strong> tasks</span>
+      <span>
+        Updated {data?.taskList.updatedAt
+          ? formatDistanceToNow(new Date(data.taskList.updatedAt), { addSuffix: true })
+          : 'never'}
+      </span>
+    </div>
+  );
+}
+
 /**
  * All / Active / Completed, rendered in both toolbars.
  *
@@ -139,17 +198,20 @@ const TASKS_PAGE_SIZE = 100;
  * inside the narrow filter sheet — and the set of filters is the kind of thing
  * that gets a fourth member added to one copy and not the other.
  */
-function TaskFilterTabs({ filter, onSelect, fill = false }: {
+interface TaskFilterTabsProps {
   filter: TaskListPageFilter;
   onSelect: (next: TaskListPageFilter) => void;
   /** Stretch the tabs to fill their row, as the sheet wants. */
   fill?: boolean;
-}) {
+}
+
+function TaskFilterTabs({ filter, onSelect, fill = false }: TaskFilterTabsProps) {
   return (
     <div className="flex items-center bg-muted rounded-md p-0.5">
       {(['all', 'active', 'completed'] as const).map((f) => (
         <button
           key={f}
+          type="button"
           onClick={() => onSelect(f)}
           className={cn(
             'text-sm font-medium rounded transition-colors',
@@ -341,13 +403,13 @@ function TaskListView({ page }: TaskListViewProps) {
   // scroll-to-match picks between the compact list and the table.
   const narrowSearchRef = useRef<HTMLInputElement>(null);
   const wideSearchRef = useRef<HTMLInputElement>(null);
-  const visibleSearchInput = () =>
-    // `el != null` first: optional chaining on a null ref yields `undefined`,
-    // and `undefined !== null` is true — so a null ref would MATCH and this
-    // would hand back the missing input instead of the visible one.
-    [narrowSearchRef.current, wideSearchRef.current]
-      .find((el) => el != null && el.offsetParent !== null) ?? null;
+  // `offsetParent` is null for a hidden element and undefined for a missing
+  // ref, so a truthiness test picks the one on screen without either case
+  // needing to be spelled out.
+  const findVisibleSearchInput = () =>
+    [narrowSearchRef.current, wideSearchRef.current].find((el) => el?.offsetParent);
   const newTaskInputRef = useRef<HTMLInputElement>(null);
+  const wideNewTaskInputRef = useRef<HTMLInputElement>(null);
   // The compact list tracks the OPEN TASK BY ID, not by object: the sheet stays
   // mounted across SWR revalidations, and holding the row itself would pin the
   // sheet to a stale copy that ignores every edit made inside it.
@@ -362,7 +424,7 @@ function TaskListView({ page }: TaskListViewProps) {
 
   useEffect(() => {
     if (isFindOpen) {
-      const input = visibleSearchInput();
+      const input = findVisibleSearchInput();
       input?.focus();
       input?.select();
     }
@@ -595,12 +657,6 @@ function TaskListView({ page }: TaskListViewProps) {
   const statusConfigs = useMemo(() => data?.statusConfigs ?? [], [data?.statusConfigs]);
   // Identity this list's rows carry into the shared dashboard-shaped components,
   // which expect the enrichment /api/pages/[pageId]/tasks does not provide.
-  //
-  // `taskListPageTitle` is deliberately omitted. It exists so the DASHBOARD can
-  // say which list a task came from while showing tasks from many lists at once.
-  // Here every task belongs to the page being viewed, so supplying it stamps the
-  // same "you are here" label on every row (and again in the detail sheet) —
-  // noise that costs the row its most valuable asset, horizontal space.
   const listContext = useMemo(
     () => ({ driveId: page.driveId, taskListPageId: page.id }),
     [page.driveId, page.id],
@@ -1063,14 +1119,7 @@ function TaskListView({ page }: TaskListViewProps) {
           className="flex-1 overflow-auto px-4 py-3"
           onEditorChange={setEditorInstance}
         />
-        <div className="hidden @[700px]:flex flex-wrap items-center justify-between gap-2 px-4 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t bg-muted/50 text-sm text-muted-foreground shrink-0">
-          <span><strong>{data?.tasks.length || 0}</strong> tasks</span>
-          <span className="text-sm">
-            Updated {data?.taskList.updatedAt
-              ? formatDistanceToNow(new Date(data.taskList.updatedAt), { addSuffix: true })
-              : 'never'}
-          </span>
-        </div>
+        <TaskListFooterStats data={data} className="shrink-0" />
       </div>
       </TaskTreeProvider>
     );
@@ -1117,16 +1166,13 @@ function TaskListView({ page }: TaskListViewProps) {
       {/* Narrow Toolbar — one row. Filter tabs and list-management actions move
           into a sheet so the header cannot stack into four rows on a phone. */}
       <div className="flex items-center gap-2 px-3 py-2 border-b bg-background @[700px]:hidden">
-        <div className="relative flex-1 min-w-0">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            ref={narrowSearchRef}
-            placeholder="Filter tasks..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9 h-9 text-sm bg-muted/50 border-0"
-          />
-        </div>
+        <TaskSearchInput
+          inputRef={narrowSearchRef}
+          value={search}
+          onChange={setSearch}
+          grow
+          className="h-9 text-sm bg-muted/50 border-0"
+        />
         <TaskFilterButton
           activeFilterCount={filter === 'all' ? 0 : 1}
           onClick={() => setNarrowFiltersOpen(true)}
@@ -1196,17 +1242,12 @@ function TaskListView({ page }: TaskListViewProps) {
         <div className="flex items-center gap-2">
           <TaskFilterTabs filter={filter} onSelect={setFilter} />
 
-          {/* Search */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              ref={wideSearchRef}
-              placeholder="Filter tasks..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pl-9 w-48"
-            />
-          </div>
+          <TaskSearchInput
+            inputRef={wideSearchRef}
+            value={search}
+            onChange={setSearch}
+            className="w-48"
+          />
         </div>
 
         <div className="flex items-center gap-2">
@@ -1234,9 +1275,8 @@ function TaskListView({ page }: TaskListViewProps) {
             <Button
               size="sm"
               onClick={() => {
-                const input = document.getElementById('new-task-input');
-                input?.scrollIntoView({ block: 'nearest' });
-                input?.focus();
+                wideNewTaskInputRef.current?.scrollIntoView({ block: 'nearest' });
+                wideNewTaskInputRef.current?.focus();
               }}
             >
               <Plus className="h-4 w-4 mr-1" />
@@ -1260,7 +1300,7 @@ function TaskListView({ page }: TaskListViewProps) {
                 onToggleComplete={() => taskHandlers.onToggleComplete(task)}
                 onTap={() => setDetailTaskId(task.id)}
                 canEdit={canEdit}
-                trailing={
+                rowMeta={
                   <>
                     {/* Parity with the table and the card this replaced: a task
                         wired to an agent says so on the row, not only once the
@@ -1446,6 +1486,10 @@ function TaskListView({ page }: TaskListViewProps) {
                       </TableCell>
                       <TableCell colSpan={TASK_TABLE_COLUMN_COUNT - 2}>
                         <Input
+                          ref={wideNewTaskInputRef}
+                          // The id is the task-list E2E's handle on this input
+                          // (`06-task-list.spec.ts` asserts `#new-task-input` is
+                          // focused); the button beside it focuses by ref.
                           id="new-task-input"
                           placeholder="+ Add a new task..."
                           value={newTaskTitle}
@@ -1475,14 +1519,7 @@ function TaskListView({ page }: TaskListViewProps) {
 
       {/* Footer stats — hidden at narrow widths, where the bar costs more screen
           than the count is worth (same call as the tasks dashboard's mobile view). */}
-      <div className="hidden @[700px]:flex flex-wrap items-center justify-between gap-2 px-4 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t bg-muted/50 text-sm text-muted-foreground">
-        <span><strong>{data?.tasks.length || 0}</strong> tasks</span>
-        <span className="text-sm">
-          Updated {data?.taskList.updatedAt
-            ? formatDistanceToNow(new Date(data.taskList.updatedAt), { addSuffix: true })
-            : 'never'}
-        </span>
-      </div>
+      <TaskListFooterStats data={data} />
 
       {triggerDialogTask && (
         <TaskAgentTriggersDialog

@@ -31,7 +31,12 @@ import type { Task } from '@/components/tasks/types';
  */
 export function toDashboardTask(
   item: TaskItem,
-  ctx: { driveId: string; taskListPageId: string; taskListPageTitle?: string },
+  // No `taskListPageTitle`: it exists so the DASHBOARD can say which list a
+  // task came from while showing many lists at once. Every task here belongs to
+  // the page being viewed, so supplying it would stamp the same "you are here"
+  // label on every row and again in the detail sheet — noise costing the row
+  // its most valuable asset, horizontal space.
+  ctx: { driveId: string; taskListPageId: string },
   statusConfigs: TaskStatusConfig[],
 ): Task {
   // buildStatusConfig is the same vocabulary the table, the kanban and the
@@ -84,7 +89,6 @@ export function toDashboardTask(
       : null,
     driveId: ctx.driveId,
     taskListPageId: ctx.taskListPageId,
-    taskListPageTitle: ctx.taskListPageTitle,
     activeTriggerCount: item.activeTriggerCount,
     statusGroup,
     statusLabel,
