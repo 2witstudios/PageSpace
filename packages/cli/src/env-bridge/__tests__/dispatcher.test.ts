@@ -10,6 +10,7 @@ import type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
 import { createDispatcher, DAEMON_CAPABILITIES, type DispatcherDeps } from '../dispatcher.js';
 import { createDaemonNonceStore } from '../nonce-store.js';
 import { createApprovalsStore } from '../approvals-store.js';
+import { createChallengeStore } from '../challenge-store.js';
 import { generateMachineKeypair, signWithMachineKey } from '../keypair.js';
 import { ed25519Verify, envBridgeHash } from '../crypto.js';
 import type { AuditEntry } from '../audit-log.js';
@@ -453,6 +454,72 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
       const h = durableHarness(false, '30d', { policy: () => POLICY });
       expect(await h.dispatcher.handle(fromSession('s1'))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
       expect(h.audits[0]?.verdict).toBe('allow');
+    });
+  });
+
+  describe('GA wave 2 · leaf 4 — the challenge store: an ask with no terminal freezes the request and answers ask_pending:<id>', () => {
+    const BIN: Record<string, string> = { tool: '/usr/bin/tool', rm: '/bin/rm' };
+    function chatHarness(overrides: Partial<DispatcherDeps> = {}) {
+      let n = 0;
+      const challenges = createChallengeStore({ newId: () => `ch_${++n}` });
+      return { ...harness({ policy: () => ASK_POLICY, ask: null, challenges, resolveArgv0: (name) => BIN[name] ?? null, ...overrides }), challenges };
+    }
+
+    it('given an ask verdict and no prompter, should freeze the NORMALISED request under a challenge whose TTL is the grant exp, answer a SIGNED grant_denied ask_pending:<id> carrying it verbatim, audit ask:pending:<id>, and run nothing', async () => {
+      const h = chatHarness();
+      const frame = execFrame({ env: { CI: '1', LD_PRELOAD: '/evil.so' }, timeoutMs: 999_999 });
+      const result = await h.dispatcher.handle(frame);
+      expect(result).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', grantId: 'grant_1', reason: 'ask_pending:ch_1' } });
+      const denied = (result as { frame: Extract<Frame, { type: 'grant_denied' }> }).frame;
+      expect(denied.pending).toEqual({ challengeId: 'ch_1', expiresAt: NOW + 30_000, request: { op: 'exec', cmd: 'tool', args: ['a'], cwd: ROOT, paths: [], env: { CI: '1' }, timeoutMs: 10_000, maxBytes: 4096, clamped: true } });
+      expect(verified(denied)).toMatchObject({ ok: true });
+      expect(h.audits[0]).toMatchObject({ grantId: 'grant_1', verdict: 'ask:pending:ch_1', argsHash: expect.any(String) });
+      expect(h.spawnRun).not.toHaveBeenCalled();
+      expect(h.challenges.size()).toBe(1);
+      expect(h.challenges.peek('ch_1', NOW)).toMatchObject({ request: denied.pending!.request, subjects: ['exec:/usr/bin/tool'], exp: NOW + 30_000 });
+    });
+
+    it('given a second ask for the same subject while one is pending, should answer the SAME id and not grow the store', async () => {
+      const h = chatHarness();
+      await h.dispatcher.handle(execFrame());
+      expect(await h.dispatcher.handle(execFrame({ args: ['b'] }))).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_1' } });
+      expect(h.challenges.size()).toBe(1);
+      expect(await h.dispatcher.handle(execFrame({ cmd: 'rm' }))).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_2' } });
+      expect(h.challenges.size()).toBe(2);
+    });
+
+    it('given a prompter AND preferChat, should go to the chat and never prompt the terminal', async () => {
+      const ask: AskPrompter & { calls: number } = { calls: 0, ask: async () => { ask.calls += 1; return { approved: true, scope: '30d' }; } };
+      const h = chatHarness({ ask, preferChat: true });
+      expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_1' } });
+      expect(ask.calls).toBe(0);
+    });
+
+    it('given a prompter and no preference, should prompt the terminal and not touch the store', async () => {
+      const ask: AskPrompter = { ask: async () => ({ approved: false }) };
+      const h = chatHarness({ ask });
+      expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { reason: 'declined' } });
+      expect(h.challenges.size()).toBe(0);
+    });
+
+    it('given the store is full, should deny ask_unavailable (audited as such) rather than evict a pending question', async () => {
+      const challenges = createChallengeStore({ newId: () => 'ch_x', max: 1 });
+      const h = chatHarness({ challenges });
+      await h.dispatcher.handle(execFrame());
+      expect(await h.dispatcher.handle(execFrame({ cmd: 'rm' }))).toMatchObject({ kind: 'reply', frame: { reason: 'ask_unavailable' } });
+      expect(h.audits[1]?.verdict).toBe('deny:ask_unavailable:challenges_full');
+    });
+
+    it('given a durable approval covering the subject, should run without freezing anything', async () => {
+      const approvals = createApprovalsStore({ path: '/p', uid: 501, open: () => ({ uid: 501, mode: 0o100600, content: JSON.stringify({ version: 1, approvals: [{ approvalId: 'old', envId: ENV_ID, userId: 'u1', op: 'exec', subject: 'exec:/usr/bin/tool', scope: 'until_revoked', createdAt: 1, expiresAt: null }] }) }), write: async () => undefined, now: () => NOW });
+      const h = chatHarness({ approvals });
+      expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
+      expect(h.challenges.size()).toBe(0);
+    });
+
+    it('given no prompter and no challenge store, should deny ask_unavailable (unchanged)', async () => {
+      const h = harness({ policy: () => ASK_POLICY, ask: null });
+      expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { reason: 'ask_unavailable' } });
     });
   });
 

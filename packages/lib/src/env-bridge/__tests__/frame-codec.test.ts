@@ -225,3 +225,24 @@ describe('execOutputCeiling — the largest raw stdout+stderr an exec_result can
     expect(execOutputCeiling({ maxFrameBytes: 10 })).toBe(0);
   });
 });
+
+describe('GA wave 2 — grant_denied may carry a PENDING frozen request', () => {
+  const pending = { challengeId: 'ch_1', expiresAt: 5, request: { op: 'exec', cmd: 'git', args: ['status'], cwd: '/p', paths: [], env: { CI: '1' }, timeoutMs: 1000, maxBytes: 1024, clamped: false } };
+  const limits = { maxFrameBytes: 65536 };
+
+  it('should decode a grant_denied with a well-formed pending request, and one without', () => {
+    expect(decodeFrame({ type: 'grant_denied', grantId: 'g1', reason: 'ask_pending:ch_1', pending, sig: B64 }, limits)).toMatchObject({ ok: true, frame: { pending } });
+    expect(decodeFrame({ type: 'grant_denied', grantId: 'g1', reason: 'x', sig: B64 }, limits)).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ['an extra field inside pending', { ...pending, isAdmin: true }],
+    ['an extra field inside the request', { ...pending, request: { ...pending.request, shell: true } }],
+    ['a missing cwd', { ...pending, request: { ...pending.request, cwd: undefined } }],
+    ['a non-positive timeout', { ...pending, request: { ...pending.request, timeoutMs: 0 } }],
+    ['an op outside the union', { ...pending, request: { ...pending.request, op: 'root' } }],
+    ['an empty challengeId', { ...pending, challengeId: '' }],
+  ])('given %s, should reject the whole frame as malformed', (_label, bad) => {
+    expect(decodeFrame({ type: 'grant_denied', grantId: 'g1', reason: 'ask_pending:ch_1', pending: bad, sig: B64 }, limits)).toEqual({ ok: false, reason: 'malformed' });
+  });
+});

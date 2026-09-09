@@ -41,7 +41,7 @@ import { decideExecution as libDecideExecution, type DecideExecutionInput, type 
 import type { AdvertisedCapabilities, MachinePolicy, ServerPolicy } from './lib-core.js';
 import type { PathProbe } from './lib-core.js';
 import { verifyRevoke } from './lib-core.js';
-import { execOutputCeiling, fsReadContentCeiling, type Frame, type FrameLimits } from './lib-core.js';
+import { execOutputCeiling, fsReadContentCeiling, type Frame, type FrameLimits, type PendingApproval } from './lib-core.js';
 import type { SignWithMachineKey } from './keypair.js';
 import { grantPredatesDaemon, PREDATES_DAEMON_REASON, type DaemonNonceStore } from './nonce-store.js';
 import { signResultFrame, type UnsignedMachineResultFrame } from './result-signer.js';
@@ -50,6 +50,7 @@ import type { ExecRunner } from './exec-runner.js';
 import type { FsRunner } from './fs-runner.js';
 import type { AskPrompter } from './ask.js';
 import type { ApprovalsStore } from './approvals-store.js';
+import type { ChallengeStore } from './challenge-store.js';
 
 /** What this daemon can do in M1: shell and files. PTY is M2; checkpoints are never assumed (invariant 12). */
 export const DAEMON_CAPABILITIES: AdvertisedCapabilities = { shell: true, pty: false, fs: true, checkpoint: false };
@@ -99,6 +100,15 @@ export interface DispatcherDeps {
   readonly resolveArgv0?: (name: string) => string | null;
   /** Id source for approvals the TERMINAL prompt writes (a chat click's approval takes its challenge id). */
   readonly ids?: { approvalId(): string };
+  /**
+   * Pending chat approvals (GA wave 2, Tier B). With a store, an `ask`
+   * verdict that has no terminal to go to (or when `preferChat`) freezes the
+   * request under a challenge id and answers `ask_pending:<id>`; without one
+   * it is `ask_unavailable`, as before.
+   */
+  readonly challenges?: ChallengeStore;
+  /** Send asks to the chat even when a terminal prompter exists. */
+  readonly preferChat?: boolean;
   readonly log: (line: string) => void;
   /** The socket frame limit; bounds what an fs_read may return. */
   readonly limits: FrameLimits;
@@ -129,6 +139,21 @@ function freezeRequest(request: NormalizedRequest): NormalizedRequest {
 }
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** The frozen request as the frame codec carries it (fresh copies of the frozen arrays; every field, nothing else). */
+function pendingRequestOnTheWire(request: NormalizedRequest): PendingApproval['request'] {
+  return {
+    op: request.op,
+    ...(request.cmd !== undefined && { cmd: request.cmd }),
+    ...(request.args !== undefined && { args: [...request.args] }),
+    cwd: request.cwd,
+    paths: [...request.paths],
+    env: { ...request.env },
+    timeoutMs: request.timeoutMs,
+    maxBytes: request.maxBytes,
+    clamped: request.clamped,
+  };
+}
 
 export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const gates: DecisionGates = deps.gates ?? { verifyGrant: libVerifyGrant, decideExecution: libDecideExecution };
@@ -172,19 +197,29 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       capabilities: DAEMON_CAPABILITIES,
       probe: deps.probe,
       // Durable approvals are read from the machine's own file (and this
-      // process's session set) — never from anything the server sent.
-      ...(deps.approvals !== undefined && { approvals: { entries: deps.approvals.entries(), now: deps.now(), resolveArgv0: deps.resolveArgv0 ?? (() => null) } }),
+      // process's session set) — never from anything the server sent. Always
+      // consulted (an absent store is an empty set) so an `ask` verdict
+      // carries the subjects a click or a prompt would approve.
+      approvals: { entries: deps.approvals?.entries() ?? [], now: deps.now(), resolveArgv0: deps.resolveArgv0 ?? (() => null) },
     };
     let decision = gates.decideExecution(decideInput);
     const roots = decideInput.machinePolicy?.roots ?? [];
 
     if (decision.kind === 'ask') {
-      if (deps.ask === null) return denied(grant.grantId, 'ask_unavailable', { grant, op: grant.op });
       // The verified Grant is HELD across the prompt; the wire grant is never
       // re-verified (its nonce is spent). The request the owner sees is frozen
       // and handed back unchanged as the approval.
       const shown = freezeRequest(decision.request);
       const subjects = decision.subjects;
+      if (deps.ask === null || deps.preferChat === true) {
+        // Tier B: no terminal (or the chat is preferred) — freeze the request
+        // under a challenge and let the owner's click in the chat answer it.
+        if (deps.challenges === undefined) return denied(grant.grantId, 'ask_unavailable', { grant, op: grant.op });
+        const pending = deps.challenges.issue({ grant, request: shown, subjects }, deps.now());
+        if (pending === null) return denied(grant.grantId, 'ask_unavailable', { grant, op: grant.op, verdict: 'deny:ask_unavailable:challenges_full' });
+        await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: `ask:pending:${pending.id}`, argsHash: grant.argsHash, exitCode: null });
+        return reply({ type: 'grant_denied', grantId: grant.grantId, reason: `ask_pending:${pending.id}`, pending: { challengeId: pending.id, expiresAt: pending.exp, request: pendingRequestOnTheWire(pending.request) } });
+      }
       const answer = await deps.ask.ask({ grantId: grant.grantId, principal: grant.principal, op: grant.op, request: shown, subjects });
       if (!answer.approved) return denied(grant.grantId, 'declined', { grant, op: grant.op, verdict: 'ask:declined' });
       decision = gates.decideExecution({ ...decideInput, localApproval: { grantId: grant.grantId, approvedAt: deps.now(), request: shown } });

@@ -15,6 +15,7 @@ import {
   encodeResultForSigning,
   encodeRevokeForSigning,
   resultHashForFrame,
+  resultPayloadForFrame,
   verifyHello,
   verifyMachineResult,
   verifyRevoke,
@@ -98,6 +99,34 @@ function signResult(body: Omit<MachineResultFrame, 'sig'>, key = machine): Machi
   return { ...body, sig: signWith(key, encodeResultForSigning({ grantId: body.grantId, resultHash })) } as MachineResultFrame;
 }
 
+const PENDING = { challengeId: 'ch_1', expiresAt: 1_800_000_060_000, request: { op: 'exec' as const, cmd: 'git', args: ['status'], cwd: '/home/u/proj', paths: [], env: {}, timeoutMs: 1000, maxBytes: 1024, clamped: false } };
+
+describe('GA wave 2 — a grant_denied carrying a PENDING frozen request is signed over that request too', () => {
+  const denied = { type: 'grant_denied' as const, grantId: 'g5', reason: 'ask_pending:ch_1', pending: PENDING };
+
+  it('should verify when signed as sent, and its payload names every field of the frozen request', () => {
+    const frame = signResult(denied);
+    expect(verifyMachineResult({ frame, machinePublicKey: spki(machine), verify, hash })).toMatchObject({ ok: true });
+    expect(resultPayloadForFrame(frame)).toEqual({ type: 'grant_denied', grantId: 'g5', reason: 'ask_pending:ch_1', pending: PENDING });
+    // Absent pending hashes as null, distinctly from any present one.
+    expect(resultPayloadForFrame({ ...results.grant_denied, sig: '' } as MachineResultFrame)).toEqual({ type: 'grant_denied', grantId: 'g4', reason: 'policy_denied', pending: null });
+  });
+
+  it.each([
+    ['cmd', { ...PENDING, request: { ...PENDING.request, cmd: 'rm' } }],
+    ['args', { ...PENDING, request: { ...PENDING.request, args: ['push', '--force'] } }],
+    ['cwd', { ...PENDING, request: { ...PENDING.request, cwd: '/etc' } }],
+    ['env', { ...PENDING, request: { ...PENDING.request, env: { LD_PRELOAD: '/evil.so' } } }],
+    ['challengeId', { ...PENDING, challengeId: 'ch_other' }],
+    ['expiresAt', { ...PENDING, expiresAt: PENDING.expiresAt + 1 }],
+    ['removed', undefined],
+  ])('given pending.%s altered after signing, should deny bad_signature — the card can only show what the machine froze', (_label, pending) => {
+    const signed = signResult(denied);
+    const frame = { ...denied, ...(pending === undefined ? { pending: undefined } : { pending }), sig: signed.sig } as MachineResultFrame;
+    expect(verifyMachineResult({ frame, machinePublicKey: spki(machine), verify, hash })).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+});
+
 describe('results — machine-signed over {grantId, resultHash} (invariant 7)', () => {
   it.each(Object.keys(results) as MachineResultFrame['type'][])('given a %s signed by the pinned key, should verify and return the resultHash it covers', (type) => {
     const frame = signResult(results[type]);
@@ -119,6 +148,7 @@ describe('results — machine-signed over {grantId, resultHash} (invariant 7)', 
     ['fs_write_result.ok', { ...results.fs_write_result, ok: false }],
     ['fs_write_result.error', { ...results.fs_write_result, error: 'disk full' }],
     ['grant_denied.reason', { ...results.grant_denied, reason: 'other' }],
+    ['grant_denied.pending (added)', { ...results.grant_denied, pending: PENDING }],
   ] as Array<[string, UnsignedResult[keyof UnsignedResult]]>)('given %s changed after signing, should deny bad_signature — every payload field is covered', (_label, tampered) => {
     const original = results[tampered.type];
     const signed = signResult(original);

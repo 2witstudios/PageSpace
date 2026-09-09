@@ -291,7 +291,11 @@ know what actually ran.
   directory, paths, environment and limits — and which programs an approval would cover. Approving
   remembers those programs (for you, on this environment) for the scope you pick; later commands
   that run only remembered programs are never shown to you, others ask. Declining refuses that
-  request and asks again next time. `ask` needs a terminal: a headless machine cannot use it.
+  request and asks again next time. Without a terminal (or with `PAGESPACE_ENV_ASK=chat`), the
+  daemon does not deny: it freezes the exact request under a challenge and the question is put to
+  you **in the PageSpace chat**, on a card showing that exact command, directory, environment and
+  limits; the machine compares your click against what it froze before anything runs, and the
+  challenge dies with the request's one-minute grant.
 - **`allowlist`** — only the operations in `ops` run; everything else is denied with no prompt.
 
 **`allowlist` allowlists operations, not executables.** `ops` holds `exec`, `fs_read` and

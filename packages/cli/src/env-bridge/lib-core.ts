@@ -30,7 +30,7 @@ export type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
 export { encodeHelloForSigning, encodeResultForSigning, resultHashForFrame, verifyRevoke } from '@pagespace/lib/env-bridge/machine-signatures';
 export type { MachineResultFrame, MachineResultFrameType } from '@pagespace/lib/env-bridge/machine-signatures';
 export { decodeFrame, encodeFrame, execOutputCeiling, fsReadContentCeiling } from '@pagespace/lib/env-bridge/frame-codec';
-export type { Frame, FrameLimits } from '@pagespace/lib/env-bridge/frame-codec';
+export type { Frame, FrameLimits, PendingApproval } from '@pagespace/lib/env-bridge/frame-codec';
 export { initialBridgeSession, isSupersededClose, reduceBridgeSession } from '@pagespace/lib/env-bridge/bridge-session';
 export type { BridgeEffect, BridgeSessionState, BridgeStatus, HelloFrame } from '@pagespace/lib/env-bridge/bridge-session';
 export { isHardDeniedEnvVar } from '@pagespace/lib/env-bridge/scrub-env';

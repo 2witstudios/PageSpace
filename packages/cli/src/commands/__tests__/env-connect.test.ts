@@ -139,6 +139,7 @@ function harness(overrides: Partial<EnvConnectHandlerDeps> & { policy?: string |
     confirm: async () => false,
     writeApprovals: async (path, content) => void approvalWrites.push({ path, content }),
     approvalId: () => 'ap_test',
+    challengeId: () => 'ch_test',
     onSignal: (handler) => void signals.push(handler),
     exit,
     ...rest,
@@ -183,12 +184,24 @@ describe('pagespace env connect <enrollmentId>', () => {
     expect(h.sockets).toHaveLength(0);
   });
 
-  it('R5: given policy mode "ask" without a TTY, should refuse to start with a clear message', async () => {
+  it('R5 (GA wave 2): given policy mode "ask" without a TTY, should START and say asks will wait for a click in the chat; a non-pre-approved grant is answered ask_pending:<id> with the frozen request, nothing runs', async () => {
     const h = harness({ policy: JSON.stringify({ mode: 'ask', principals: ['u1'], ops: [], roots: ['/home/me/proj'], envAllowlist: [] }) });
     const c = ctx(false);
-    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_RUNTIME_ERROR);
-    expect(c.err.text()).toMatch(/"ask" needs an interactive terminal/);
-    expect(h.sockets).toHaveLength(0);
+    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+    expect(c.err.text()).toMatch(/wait for your click in the PageSpace chat/);
+    await flush();
+    h.socket().open();
+    await flush();
+    h.socket().receive({ type: 'ping', ts: 1 });
+    await flush();
+    const unsigned = { type: 'grant_exec' as const, cmd: '/usr/bin/true', args: [], cwd: '/home/me/proj', env: {} };
+    const request = grantRequestForFrame({ ...unsigned, grant: {}, sig: '' } as GrantFrame);
+    const grant: Grant = { grantId: 'g_chat', envId: 'env_1', principal: { userId: 'u1', sessionId: 's', conversationId: 'c' }, op: 'exec', argsHash: envBridgeHash(canonicalizeArgs(request.args)), iat: NOW - 1000, exp: NOW + 30_000, nonce: 'n_chat' };
+    h.socket().receive({ ...unsigned, grant: { ...grant, principal: { ...grant.principal } }, sig: Buffer.from(nodeSign(null, encodeGrant(grant), serverPair.privateKey)).toString('base64') } as unknown as Frame);
+    await flush();
+    const replies = h.socket().sent.map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).filter((d) => d.ok && d.frame.type === 'grant_denied');
+    expect(replies).toHaveLength(1);
+    expect((replies[0] as { frame: Extract<Frame, { type: 'grant_denied' }> }).frame).toMatchObject({ grantId: 'g_chat', reason: 'ask_pending:ch_test', pending: { challengeId: 'ch_test', expiresAt: NOW + 30_000, request: { cmd: '/usr/bin/true', cwd: '/home/me/proj' } } });
   });
 
   it('GA wave 2 · leaf 1: at start the daemon names the approvals file and how many approvals are in force (none ⇒ 0)', async () => {

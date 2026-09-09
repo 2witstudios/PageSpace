@@ -6,6 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`ask` mode works without a terminal: the question goes to the PageSpace chat.** A request that
+  is not pre-approved and not covered by a remembered approval is frozen under a challenge and
+  answered `ask_pending:<id>` together with the exact normalised request (signed by the machine),
+  so the chat can show precisely what would run. The challenge lives as long as the request's
+  grant (at most a minute), the daemon holds at most 64 at once, and a repeat of the same program
+  while one is pending reuses it. `PAGESPACE_ENV_ASK=chat` sends questions to the chat even when a
+  terminal is attached. `env connect` no longer refuses to start in `ask` mode without a TTY.
+
 - **`pagespace env enroll` pre-approves the file operations the environment allows — and never
   `exec`.** The starter policy's `ops` is now the server policy's file operations (`fs_read`,
   `fs_write`), so file work inside the root runs without asking from the start; `exec` is never

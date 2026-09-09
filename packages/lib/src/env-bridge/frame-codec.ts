@@ -44,7 +44,28 @@ const hello = z.object({ type: z.literal('hello'), envId: nonEmpty, capabilities
 const execResult = z.object({ type: z.literal('exec_result'), grantId: nonEmpty, exitCode: z.number().int(), stdoutB64: b64, stderrB64: b64, truncated: z.boolean(), sig: b64 });
 const fsReadResult = z.object({ type: z.literal('fs_read_result'), grantId: nonEmpty, found: z.boolean(), contentB64: b64.optional(), sig: b64 });
 const fsWriteResult = z.object({ type: z.literal('fs_write_result'), grantId: nonEmpty, ok: z.boolean(), error: z.string().optional(), sig: b64 });
-const grantDenied = z.object({ type: z.literal('grant_denied'), grantId: nonEmpty, reason: nonEmpty, sig: b64 });
+/**
+ * The request a daemon FROZE under a pending chat approval (GA wave 2): the
+ * exact normalised request the owner's card shows and the machine will
+ * byte-compare a click against. Carried on a `grant_denied` whose reason is
+ * `ask_pending:<challengeId>`; covered by the result signature like every
+ * other payload field, so the card shows what the machine signed.
+ */
+const pendingRequest = z
+  .object({
+    op: z.enum(['exec', 'fs_read', 'fs_write', 'pty_open']),
+    cmd: z.string().optional(),
+    args: z.array(z.string()).optional(),
+    cwd: nonEmpty,
+    paths: z.array(z.string()),
+    env: z.record(z.string(), z.string()),
+    timeoutMs: posInt,
+    maxBytes: posInt,
+    clamped: z.boolean(),
+  })
+  .strict();
+const pendingApproval = z.object({ challengeId: nonEmpty, expiresAt: nonNegInt, request: pendingRequest }).strict();
+const grantDenied = z.object({ type: z.literal('grant_denied'), grantId: nonEmpty, reason: nonEmpty, pending: pendingApproval.optional(), sig: b64 });
 const ptyOpened = z.object({ type: z.literal('pty_opened'), grantId: nonEmpty, sessionId: nonEmpty });
 const ptyData = z.object({ type: z.literal('pty_data'), sessionId: nonEmpty, seq: nonNegInt, dataB64: b64 });
 const ptyExit = z.object({ type: z.literal('pty_exit'), sessionId: nonEmpty, code: z.number().int() });
@@ -92,6 +113,8 @@ const frameSchema = z.discriminatedUnion('type', [
 ]);
 
 export type Frame = z.infer<typeof frameSchema>;
+/** The frozen request a `grant_denied ask_pending:<id>` carries. */
+export type PendingApproval = z.infer<typeof pendingApproval>;
 export type FrameType = Frame['type'];
 
 /** The closed set. A `type` outside it is `unknown_type`, full stop. */

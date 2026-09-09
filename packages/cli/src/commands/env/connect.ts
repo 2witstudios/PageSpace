@@ -14,8 +14,10 @@
  *  - the policy file is loaded once and its status printed — missing or
  *    untrusted ⇒ the daemon still starts, advertises, and denies everything
  *    (`no_policy`), never crashes (invariant 5);
- *  - `ask` mode needs a terminal to ask on: headless + `ask` refuses to
- *    start rather than silently deny or silently allow.
+ *  - `ask` mode asks in the terminal when there is one, and otherwise (or
+ *    with PAGESPACE_ENV_ASK=chat) freezes each request under a challenge for
+ *    the owner's click in the PageSpace chat (GA wave 2, Tier B) — never a
+ *    silent deny, never a silent allow.
  *
  * AUTH-EXEMPT (`run.ts`): a machine has no login; its key is its credential.
  * Long-running (`routes.ts`): the handler resolves once the first connect is
@@ -39,6 +41,7 @@ import { ed25519Verify, envBridgeHash } from '../../env-bridge/crypto.js';
 import { createAuditLog, defaultAuditPath } from '../../env-bridge/audit-log.js';
 import { createAskPrompter, describeScope, describeSubject } from '../../env-bridge/ask.js';
 import { createApprovalsStore, defaultApprovalsPath, writeApprovalsFile } from '../../env-bridge/approvals-store.js';
+import { createChallengeStore } from '../../env-bridge/challenge-store.js';
 import { resolveCommand, type CommandResolverDeps } from '../../env-bridge/command-resolver.js';
 import { APPROVAL_SCOPES, type ApprovalScope } from '../../env-bridge/lib-core.js';
 import { createDispatcher, DAEMON_CAPABILITIES } from '../../env-bridge/dispatcher.js';
@@ -97,11 +100,20 @@ export interface EnvConnectHandlerDeps {
   readonly writeApprovals: (path: string, content: string) => Promise<void>;
   /** Id for an approval the terminal prompt writes. */
   readonly approvalId: () => string;
+  /** Id for a pending chat approval (a challenge). */
+  readonly challengeId: () => string;
   /** Register a handler for SIGINT / SIGTERM. */
   readonly onSignal: (handler: (signal: string) => void) => void;
   readonly exit: (code: number) => void;
   /** Test hook: observe the live connection and runner. */
   readonly onStarted?: (controls: { connection: BridgeConnection; execRunner: ExecRunner }) => void;
+}
+
+/** `PAGESPACE_ENV_ASK=chat` sends every ask to the PageSpace chat even when a terminal is attached; without a terminal the chat is the only place to ask. */
+export const ASK_MODE_ENV_VAR = 'PAGESPACE_ENV_ASK';
+
+function askInChat(ctx: Parameters<CommandHandler>[0]): boolean {
+  return !ctx.isTTY || ctx.env[ASK_MODE_ENV_VAR]?.trim().toLowerCase() === 'chat';
 }
 
 export function pidFilePath(homedir: string, enrollmentId: string): string {
@@ -148,9 +160,12 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
       ctx.stderr.write(`Policy ${policyPath}: mode ${loaded.policy.mode}, principals ${loaded.policy.principals.join(', ') || '(none)'}, ops ${loaded.policy.ops.join(', ') || '(none)'}, roots ${loaded.policy.roots.join(', ')}\n`);
       const principalsWarning = describePrincipalsWarning(loaded.policy);
       if (principalsWarning) ctx.stderr.write(`${principalsWarning}\n`);
-      if (loaded.policy.mode === 'ask' && !ctx.isTTY) {
-        ctx.stderr.write('Policy mode "ask" needs an interactive terminal to ask on, and there is none (stdin is not a TTY). Use mode "allowlist" or "deny" for a headless machine, or run env connect in a terminal.\n');
-        return EXIT_RUNTIME_ERROR;
+      if (loaded.policy.mode === 'ask') {
+        ctx.stderr.write(
+          askInChat(ctx)
+            ? `Policy mode "ask": requests that are not pre-approved will wait for your click in the PageSpace chat${ctx.isTTY ? ` (${ASK_MODE_ENV_VAR}=chat)` : ' (no terminal to ask on)'}.\n`
+            : `Policy mode "ask": requests that are not pre-approved will prompt in this terminal (set ${ASK_MODE_ENV_VAR}=chat to answer in the PageSpace chat instead).\n`,
+        );
       }
     }
 
@@ -167,6 +182,9 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
     const execRunner = deps.createExecRunner(resolver);
     const fsRunner = deps.createFsRunner();
     const ask = loaded.policy?.mode === 'ask' && ctx.isTTY ? createAskPrompter({ confirm: deps.confirm, chooseScope: deps.chooseScope, write: (chunk) => ctx.stderr.write(chunk) }) : null;
+    // Tier B: a request the terminal cannot (or should not) be asked about is
+    // frozen here and answered by the owner's click in the chat.
+    const challenges = createChallengeStore({ newId: deps.challengeId });
 
     // Durable approvals (GA wave 2): the machine's own file, through the same
     // one-descriptor adapter and trust rules as the policy. Re-read at every
@@ -201,6 +219,8 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
       approvals,
       resolveArgv0: (name) => resolveCommand(name, resolver),
       ids: { approvalId: deps.approvalId },
+      challenges,
+      preferChat: askInChat(ctx),
       log,
       limits: DEFAULT_FRAME_LIMITS,
     });
@@ -347,6 +367,7 @@ export const envConnectHandler: CommandHandler = createEnvConnectHandler({
   chooseScope: clackChooseScope,
   writeApprovals: writeApprovalsFile,
   approvalId: () => `local_${crypto.randomUUID()}`,
+  challengeId: () => `ch_${crypto.randomUUID()}`,
   onSignal: (handler) => {
     process.on('SIGINT', () => handler('SIGINT'));
     process.on('SIGTERM', () => handler('SIGTERM'));

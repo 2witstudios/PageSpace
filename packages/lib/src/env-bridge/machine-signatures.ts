@@ -106,7 +106,9 @@ export function resultPayloadForFrame(frame: MachineResultFrame): Record<string,
     case 'fs_write_result':
       return { type: frame.type, grantId: frame.grantId, ok: frame.ok, error: frame.error ?? null };
     case 'grant_denied':
-      return { type: frame.type, grantId: frame.grantId, reason: frame.reason };
+      // `pending` (a frozen request awaiting a chat click, GA wave 2) is
+      // signed too: the card renders what the MACHINE said it froze.
+      return { type: frame.type, grantId: frame.grantId, reason: frame.reason, pending: frame.pending ?? null };
   }
 }
 
