@@ -363,8 +363,9 @@ https intent-filter is registered.
 
 When it does, mirror `apps/marketing/public/.well-known/apple-app-site-association` (the copy
 Caddy actually serves), currently `/invite/*` and `/auth/magic-link/*`, so both platforms capture
-the same links. Widening beyond these paths should still wait on prerequisite 2 — whole-host
-capture would strand users on `/dashboard` from every marketing, blog, or docs link.
+the same links. Widening beyond those two paths is a separate decision from prerequisite 1:
+whole-host capture would strand users on `/dashboard` from every marketing, blog, or docs link,
+whatever the certificate situation.
 
 **Magic links reach the same wall.** The shared web layer already treats Android as a
 device-bound platform: a magic link requested from the Android app is minted for this device and

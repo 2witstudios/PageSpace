@@ -183,8 +183,9 @@ bundle exec fastlane release   # deliver: push metadata + submit the App Store v
       `https://pagespace.ai/invite/...` link opens the app on a device from both a cold start and
       with the app already running (the two paths are handled separately — verify both)
 - [ ] Magic link verified on a device: request one **from the app**, tap it in Mail, and confirm
-      the app opens signed in (not Safari). Then open the same link on a Mac and confirm it signs
-      that browser in without handing out tokens
+      the app opens signed in (not Safari). Then request a **second** link from the app and open
+      that one on a Mac — the first is spent, so reusing it only proves `magic_link_used` — and
+      confirm the browser is signed in by cookie with no tokens handed out
 - [ ] Build uploaded and finished **Processing** in App Store Connect
 - [ ] App privacy answers match `ios/App/PrivacyInfo.xcprivacy` (Email + User ID linked / App
       Functionality; Device ID / Analytics and Crash + Performance Data, not linked; Product

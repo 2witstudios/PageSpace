@@ -1,13 +1,18 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, ShieldAlert } from 'lucide-react';
 import { AuthShell } from '@/components/auth/AuthShell';
+import { Button } from '@/components/ui/button';
 import { isCapacitorApp } from '@/lib/capacitor-bridge';
 import { getPlatformStorage } from '@/lib/auth/platform-storage';
 
-type Status = { kind: 'redeeming' } | { kind: 'redirecting' } | { kind: 'error'; message: string };
+type Status =
+  | { kind: 'redeeming' }
+  | { kind: 'redirecting' }
+  /** `retryable` is false once the token is spent — retrying would only fail. */
+  | { kind: 'error'; message: string; retryable: boolean };
 
 /** What `POST /api/auth/magic-link/verify` answers on success. */
 interface RedeemResponse {
@@ -32,13 +37,14 @@ const ERROR_MESSAGES: Record<string, string> = {
   account_suspended: 'This account has been suspended.',
   // A failure on our side says nothing about the link. Telling the user it is
   // invalid would send them to request a replacement that fails the same way.
-  server_error: 'Something went wrong on our end. Open the link again in a moment.',
-  session_error: 'Something went wrong on our end. Open the link again in a moment.',
+  server_error: 'Something went wrong on our end. Try again in a moment.',
+  session_error: 'Something went wrong on our end. Try again in a moment.',
 };
 
 const FALLBACK_MESSAGE = 'This sign-in link is not valid. Request a new one to continue.';
 
-const NETWORK_MESSAGE = 'We could not reach PageSpace to complete sign-in. Check your connection and open the link again.';
+const NETWORK_MESSAGE =
+  'We could not reach PageSpace to complete sign-in. Check your connection and try again.';
 
 /**
  * Redeems a magic link the app was opened with.
@@ -56,106 +62,123 @@ export function MagicLinkRedeem({ token, next }: { token: string; next?: string 
   const [status, setStatus] = useState<Status>({ kind: 'redeeming' });
   const started = useRef(false);
 
-  useEffect(() => {
-    // Once only, and deliberately without an "unmounted" guard around the
-    // navigation: the token is single-use, so a second run would spend a token
-    // that is already gone, and a run that completed but refused to navigate
-    // would strand the user on this page with nothing left to retry. A
-    // setState after unmount is a no-op in React 18+, so the worst case if the
-    // user does navigate away first is a redirect they asked for a moment ago.
-    // The ref survives StrictMode's mount/unmount/mount, which is what keeps
-    // the token from being spent twice.
-    if (started.current) return;
-    started.current = true;
-
-    const run = async () => {
-      const native = isCapacitorApp();
-      // A secure store that cannot answer is not a reason to fail the sign-in;
-      // it only means this request cannot prove which device it is, so it
-      // takes the cookie-only path a browser takes.
-      let deviceId: string | undefined;
-      if (native) {
-        try {
-          deviceId = await getPlatformStorage().getDeviceId();
-        } catch (error) {
-          console.warn('[MagicLinkRedeem] could not read the device id', error);
-        }
+  const redeem = useCallback(async () => {
+    const native = isCapacitorApp();
+    // A secure store that cannot answer is not a reason to fail the sign-in;
+    // it only means this request cannot prove which device it is, so it takes
+    // the cookie-only path a browser takes.
+    let deviceId: string | undefined;
+    if (native) {
+      try {
+        deviceId = await getPlatformStorage().getDeviceId();
+      } catch (error) {
+        console.warn('[MagicLinkRedeem] could not read the device id', error);
       }
+    }
 
-      const response = await fetch('/api/auth/magic-link/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          token,
-          ...(next && { next }),
-          ...(deviceId && { deviceId }),
-        }),
-      });
+    const response = await fetch('/api/auth/magic-link/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        token,
+        ...(next && { next }),
+        ...(deviceId && { deviceId }),
+      }),
+    });
 
-      if (!response.ok) {
-        const data = (await response.json().catch(() => ({}))) as { error?: string };
-        const code = data.error ?? 'invalid_token';
-        setStatus({ kind: 'error', message: ERROR_MESSAGES[code] ?? FALLBACK_MESSAGE });
-        // The sign-in page already maps these codes to a toast; landing there
-        // also gives the user the form to request a fresh link.
-        router.replace(`/auth/signin?error=${encodeURIComponent(code)}`);
-        return;
-      }
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      const code = data.error ?? 'invalid_token';
+      // Our fault, so the link is still good and trying again can work. A
+      // rejected token is spent, and only a fresh link will do.
+      const retryable = code === 'server_error' || code === 'session_error';
+      setStatus({ kind: 'error', message: ERROR_MESSAGES[code] ?? FALLBACK_MESSAGE, retryable });
+      if (retryable) return;
+      // The sign-in page already maps these codes to a toast; landing there
+      // also gives the user the form to request a fresh link.
+      router.replace(`/auth/signin?error=${encodeURIComponent(code)}`);
+      return;
+    }
 
-      const data = (await response.json()) as RedeemResponse;
+    const data = (await response.json()) as RedeemResponse;
 
-      // The session is already granted at this point — the response set the
-      // cookie, and the token is spent. Everything below is about making that
-      // session durable in the shell, so a failure degrades the session rather
-      // than discarding it: a cookie-only app session works, and the user can
-      // sign in again later, where being stranded here leaves them no move at
-      // all.
-      if (native && deviceId) {
+    // The session is already granted at this point — the response set the
+    // cookie, and the token is spent. Everything below is about making that
+    // session durable in the shell, so a failure degrades the session rather
+    // than discarding it.
+    if (native && deviceId) {
+      const storage = getPlatformStorage();
+      try {
         if (data.sessionToken) {
-          try {
-            await getPlatformStorage().storeSession({
-              sessionToken: data.sessionToken,
-              csrfToken: data.csrfToken ?? null,
-              deviceId,
-              deviceToken: data.deviceToken ?? null,
-            });
-          } catch (error) {
-            console.error('[MagicLinkRedeem] could not store the session', error);
-          }
+          await storage.storeSession({
+            sessionToken: data.sessionToken,
+            csrfToken: data.csrfToken ?? null,
+            deviceId,
+            deviceToken: data.deviceToken ?? null,
+          });
         } else {
           // This device asked for the link and redeemed it, so the server
           // should have recognised it. Reaching here means the device handoff
-          // failed server-side; the cookie carries the session until it
-          // expires, and there is no stored token to refresh it with.
-          console.warn('[MagicLinkRedeem] signed in by cookie only — no tokens for this device');
+          // failed server-side, and whatever is stored is already stale.
+          console.warn('[MagicLinkRedeem] no tokens for this device; falling back to the cookie');
+          await storage.clearSession();
         }
+      } catch (error) {
+        // Never leave the old entry behind. The server has already revoked
+        // this device's previous sessions and rotated its device token, so a
+        // stale bearer is not merely useless: `auth-fetch` prefers a stored
+        // bearer over the cookie, and the server rejects an invalid bearer
+        // outright rather than falling back — which would turn the valid
+        // cookie session we just received into 401s.
+        console.error('[MagicLinkRedeem] could not store the session; clearing the stale one', error);
+        await getPlatformStorage()
+          .clearSession()
+          .catch((clearError: unknown) => {
+            console.error('[MagicLinkRedeem] could not clear the stale session either', clearError);
+          });
       }
+    }
 
-      const { useAuthStore } = await import('@/stores/useAuthStore');
-      useAuthStore.getState().setAuthFailedPermanently(false);
-      if (data.user) {
-        useAuthStore.getState().setUser({
-          id: data.user.id,
-          name: data.user.name,
-          email: data.user.email,
-          image: data.user.image,
-          emailVerified: data.user.emailVerified ? new Date(data.user.emailVerified) : null,
-        });
-      }
+    const { useAuthStore } = await import('@/stores/useAuthStore');
+    useAuthStore.getState().setAuthFailedPermanently(false);
+    if (data.user) {
+      useAuthStore.getState().setUser({
+        id: data.user.id,
+        name: data.user.name,
+        email: data.user.email,
+        image: data.user.image,
+        emailVerified: data.user.emailVerified ? new Date(data.user.emailVerified) : null,
+      });
+    }
 
-      setStatus({ kind: 'redirecting' });
-      router.replace(data.redirectTo);
-    };
+    setStatus({ kind: 'redirecting' });
+    router.replace(data.redirectTo);
+  }, [router, token, next]);
 
-    run().catch((error: unknown) => {
+  const run = useCallback(() => {
+    setStatus({ kind: 'redeeming' });
+    redeem().catch((error: unknown) => {
       // Keep the reason in the console, not in the copy: this text is read by
       // someone who just tapped a link, and `TypeError: Failed to fetch` tells
-      // them nothing they can act on.
+      // them nothing they can act on. The request never reached the server, so
+      // the token was not spent and this one is retryable.
       console.error('[MagicLinkRedeem] redemption failed', error);
-      setStatus({ kind: 'error', message: NETWORK_MESSAGE });
+      setStatus({ kind: 'error', message: NETWORK_MESSAGE, retryable: true });
     });
-  }, [router, token, next]);
+  }, [redeem]);
+
+  useEffect(() => {
+    // Once only: the token is single-use, so a second automatic run would
+    // spend a token that is already gone. The ref survives StrictMode's
+    // mount/unmount/mount, which is what makes that true. Deliberately no
+    // "unmounted" guard around the navigation — a run that completed but
+    // refused to navigate would strand the user on this page, and a setState
+    // after unmount is a no-op in React 18+.
+    if (started.current) return;
+    started.current = true;
+    run();
+  }, [run]);
 
   return (
     <AuthShell>
@@ -167,6 +190,14 @@ export function MagicLinkRedeem({ token, next }: { token: string; next?: string 
               <p className="text-sm font-medium text-foreground">Sign-in failed</p>
               <p className="mt-1 text-xs text-muted-foreground">{status.message}</p>
             </div>
+            {/* Reopening the link cannot retry: the shell hands a URL to the
+                deep-link handler once per app run and it ignores repeats, so
+                the retry has to live here. */}
+            {status.retryable && (
+              <Button type="button" variant="outline" size="sm" onClick={run}>
+                Try again
+              </Button>
+            )}
           </>
         ) : (
           <>

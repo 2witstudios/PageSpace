@@ -1,12 +1,14 @@
 import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 const {
   mockReplace,
   mockIsCapacitorApp,
   mockGetDeviceId,
   mockStoreSession,
+  mockClearSession,
   mockSetUser,
   mockSetAuthFailedPermanently,
 } = vi.hoisted(() => ({
@@ -14,6 +16,7 @@ const {
   mockIsCapacitorApp: vi.fn(),
   mockGetDeviceId: vi.fn(),
   mockStoreSession: vi.fn(),
+  mockClearSession: vi.fn(),
   mockSetUser: vi.fn(),
   mockSetAuthFailedPermanently: vi.fn(),
 }));
@@ -30,6 +33,7 @@ vi.mock('@/lib/auth/platform-storage', () => ({
   getPlatformStorage: () => ({
     getDeviceId: mockGetDeviceId,
     storeSession: mockStoreSession,
+    clearSession: mockClearSession,
   }),
 }));
 
@@ -58,6 +62,7 @@ describe('MagicLinkRedeem', () => {
     vi.resetAllMocks();
     mockGetDeviceId.mockResolvedValue('dev_iphone');
     mockStoreSession.mockResolvedValue(undefined);
+    mockClearSession.mockResolvedValue(undefined);
     fetchSpy = vi.fn();
     global.fetch = fetchSpy as unknown as typeof fetch;
   });
@@ -105,7 +110,7 @@ describe('MagicLinkRedeem', () => {
     expect(mockStoreSession.mock.invocationCallOrder[0]).toBeLessThan(mockReplace.mock.invocationCallOrder[0]);
   });
 
-  it('in the app, when the server withholds tokens, stores nothing and still lands the user on the cookie session', async () => {
+  it('in the app, when the server withholds tokens, clears the stale entry and lands on the cookie session', async () => {
     mockIsCapacitorApp.mockReturnValue(true);
     fetchSpy.mockResolvedValue(okResponse({ redirectTo: '/dashboard?auth=success', isNewUser: false, user: null }));
 
@@ -114,6 +119,7 @@ describe('MagicLinkRedeem', () => {
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/dashboard?auth=success'));
     expect(mockStoreSession).not.toHaveBeenCalled();
     expect(mockSetUser).not.toHaveBeenCalled();
+    expect(mockClearSession).toHaveBeenCalled();
   });
 
   it('in a browser, presents no device and never touches the secure store', async () => {
@@ -173,6 +179,10 @@ describe('MagicLinkRedeem', () => {
 
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/dashboard?auth=success'));
     expect(screen.queryByText('Sign-in failed')).not.toBeInTheDocument();
+    // The old entry must not survive: the server already revoked this device's
+    // sessions and rotated its token, and auth-fetch would prefer that stale
+    // bearer over the cookie we just received.
+    expect(mockClearSession).toHaveBeenCalled();
   });
 
   it('when the device id cannot be read, falls back to the cookie-only path instead of failing', async () => {
@@ -202,5 +212,51 @@ describe('MagicLinkRedeem', () => {
 
     await waitFor(() => expect(mockReplace).toHaveBeenCalled());
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers a retry after a transient failure, because reopening the link cannot retry', async () => {
+    // DeepLinkHandler remembers the URL it already handled, so tapping the
+    // same link again in the same app run does nothing. The retry has to be
+    // on this page or the user has to restart the app.
+    mockIsCapacitorApp.mockReturnValue(false);
+    fetchSpy.mockRejectedValueOnce(new Error('Failed to fetch'));
+    fetchSpy.mockResolvedValueOnce(
+      okResponse({ redirectTo: '/dashboard?auth=success', isNewUser: false, user: null }),
+    );
+
+    render(<MagicLinkRedeem token="ps_magic_abc" />);
+
+    const retry = await screen.findByRole('button', { name: /try again/i });
+    await userEvent.click(retry);
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/dashboard?auth=success'));
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('offers a retry when the server fails on its own side', async () => {
+    mockIsCapacitorApp.mockReturnValue(false);
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'server_error' }), { status: 500 }),
+    );
+
+    render(<MagicLinkRedeem token="ps_magic_abc" />);
+
+    expect(await screen.findByRole('button', { name: /try again/i })).toBeInTheDocument();
+    expect(screen.getByText(/on our end/i)).toBeInTheDocument();
+    // A server fault says nothing about the link, so do not send the user off
+    // to request a replacement.
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it('offers no retry once the token is spent — only a fresh link will do', async () => {
+    mockIsCapacitorApp.mockReturnValue(false);
+    fetchSpy.mockResolvedValue(
+      new Response(JSON.stringify({ error: 'magic_link_used' }), { status: 401 }),
+    );
+
+    render(<MagicLinkRedeem token="ps_magic_abc" />);
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/auth/signin?error=magic_link_used'));
+    expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
   });
 });
