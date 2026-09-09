@@ -339,12 +339,18 @@ svg.lucide {
 /* App shell entrance — one quiet fade as the boot spinner gives way to the real
    shell, so the app arrives instead of popping.
 
-   Deliberately a bare class with no state behind it. `Layout` unmounts this
-   subtree only on a genuine cold boot — see shouldShowAuthLoadingScreen, whose
-   doc comment records the regression where gating it on raw `isLoading` tore
-   down every socket room — so the animation fires exactly when the shell first
-   mounts and cannot replay on the 15-minute background auth recheck. Adding a
-   ref or state to "play once" would be redundant with that gate.
+   Applied by `Layout` ONLY on a mount that actually rendered the boot screen.
+   Mounting is not the same thing as booting: three sibling layout clients
+   (DashboardLayoutClient, SettingsLayoutClient, NotificationsLayoutClient) each
+   mount their own `Layout`, so moving between /dashboard, /settings and
+   /notifications unmounts one and mounts another. Applied unconditionally, this
+   faded the entire shell out and back in on ordinary navigation. `Layout`
+   tracks the boot screen explicitly instead — see showedBootScreenRef.
+
+   The 15-minute background auth recheck is a separate hazard, already handled
+   upstream: shouldShowAuthLoadingScreen keeps a routine revalidation from
+   blanking this subtree at all, so it never reaches the boot screen and so
+   never re-arms this class.
 
    Opacity only, on purpose: a transform here would make this element the
    containing block for every `position: fixed` descendant below it. And

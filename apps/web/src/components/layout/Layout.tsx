@@ -69,6 +69,16 @@ function Layout({ children }: LayoutProps) {
   if (isAuthenticated && !isLoading) {
     hasConfirmedAuthRef.current = true;
   }
+  // Did THIS mount actually render the boot screen below? That — not the mere
+  // fact of mounting — is what "cold boot" means for the entrance animation.
+  // `Layout` is mounted by three sibling layout clients (DashboardLayoutClient,
+  // SettingsLayoutClient, NotificationsLayoutClient), so navigating between
+  // /dashboard, /settings and /notifications unmounts one Layout and mounts
+  // another. Applying the animation unconditionally therefore faded the whole
+  // shell out and back in on ordinary navigation. Set inline during render,
+  // matching hasConfirmedAuthRef above: the spinner return happens in the same
+  // render pass, so the flag is already correct when the gate finally opens.
+  const showedBootScreenRef = useRef(false);
   const router = useRouter();
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
 
@@ -362,6 +372,7 @@ function Layout({ children }: LayoutProps) {
       hasConfirmedAuthThisMount: hasConfirmedAuthRef.current,
     })
   ) {
+    showedBootScreenRef.current = true;
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="flex items-center gap-2">
@@ -411,7 +422,7 @@ function Layout({ children }: LayoutProps) {
         */}
         <VoiceSessionBridge />
         <div
-          className="app-shell-enter flex flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10"
+          className={`${showedBootScreenRef.current ? "app-shell-enter " : ""}flex flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10`}
           style={{ height: 'var(--app-height, 100dvh)' }}
           onClick={handleLayoutClick}
         >
