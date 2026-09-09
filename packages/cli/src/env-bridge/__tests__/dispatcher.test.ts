@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash, generateKeyPairSync, sign as nodeSign } from 'node:crypto';
-import { canonicalizeArgs, decodeBase64, encodeGrant, verifyGrant, type Grant } from '@pagespace/lib/env-bridge/grant';
+import { canonicalizeArgs, decodeBase64, encodeGrant, verifyGrant, type ApprovalIntent, type Grant } from '@pagespace/lib/env-bridge/grant';
 import { grantRequestForFrame, type GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 import { decideExecution, type NormalizedRequest } from '@pagespace/lib/env-bridge/decide-execution';
 import { encodeRevokeForSigning, verifyMachineResult, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
@@ -520,6 +520,101 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
     it('given no prompter and no challenge store, should deny ask_unavailable (unchanged)', async () => {
       const h = harness({ policy: () => ASK_POLICY, ask: null });
       expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { reason: 'ask_unavailable' } });
+    });
+  });
+
+  describe('GA wave 2 · leaf 7 — the click: the daemon byte-compares the re-issued request against the one it froze; only a match writes the approval and runs', () => {
+    const BIN: Record<string, string> = { tool: '/usr/bin/tool', rm: '/bin/rm' };
+    const INTENT: ApprovalIntent = { challengeId: 'ch_1', scope: '30d', expiresAt: NOW + 30_000 };
+    function clickHarness(overrides: Partial<DispatcherDeps> = {}) {
+      let n = 0;
+      const challenges = createChallengeStore({ newId: () => `ch_${++n}` });
+      const fs = { content: null as string | null };
+      const writes: string[] = [];
+      const approvals = createApprovalsStore({ path: '/p', uid: 501, open: () => (fs.content === null ? null : { uid: 501, mode: 0o100600, content: fs.content }), write: async (_p, c) => { writes.push(c); fs.content = c; }, now: () => NOW });
+      return { ...harness({ policy: () => ASK_POLICY, ask: null, challenges, approvals, resolveArgv0: (name) => BIN[name] ?? null, ...overrides }), challenges, writes };
+    }
+    /** The click: the SAME unsigned frame, a fresh grant, plus the server-signed intent. */
+    const click = (extra: Partial<Extract<GrantFrame, { type: 'grant_exec' }>> = {}, intent: Partial<ApprovalIntent> = {}, principal = PRINCIPAL, grantOverrides: Partial<Grant> = {}) =>
+      signedGrant({ type: 'grant_exec', cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' }, ...extra }, { approvalIntent: { ...INTENT, ...intent }, principal: { ...principal, sessionId: 'later', conversationId: 'later' }, ...grantOverrides });
+
+    it('given a click whose re-issued request is BYTE-IDENTICAL to the frozen one, should run it, audit allow:click:<id>:<scope>, remember the approval under the challenge id, and spend the challenge', async () => {
+      const h = clickHarness();
+      expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_1' } });
+      const result = await h.dispatcher.handle(click());
+      expect(result).toMatchObject({ kind: 'reply', frame: { type: 'exec_result', exitCode: 0 } });
+      expect(h.spawnRun).toHaveBeenCalledTimes(1);
+      expect(h.spawnRun.mock.calls[0]![0]).toMatchObject({ cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' } });
+      expect(h.audits[1]).toMatchObject({ grantId: 'grant_2', verdict: 'allow:click:ch_1:30d' });
+      expect(JSON.parse(h.writes[0]!)).toMatchObject({ approvals: [expect.objectContaining({ approvalId: 'ch_1', subject: 'exec:/usr/bin/tool', scope: '30d', userId: 'u1' })] });
+      expect(h.challenges.size()).toBe(0);
+      // And a third request for the same program from a new chat is now covered: no challenge, no click.
+      expect(await h.dispatcher.handle(execFrame({ args: ['zzz'] }))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
+    });
+
+    it('EXIT CRITERION: a chat click cannot introduce a request the machine did not frame — a click over DIFFERENT bytes is approval_mismatch, executes nothing, remembers nothing, is audited', async () => {
+      const h = clickHarness();
+      await h.dispatcher.handle(execFrame());
+      for (const different of [click({ cmd: 'rm', args: ['-rf', 'x'] }), click({ args: ['b'] }), click({ env: { CI: '2' } }), click({ cwd: `${ROOT}/file` })]) {
+        expect(await h.dispatcher.handle(different)).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'approval_mismatch' } });
+      }
+      expect(h.spawnRun).not.toHaveBeenCalled();
+      expect(h.writes).toHaveLength(0);
+      expect(h.audits.slice(1).every((a) => a.verdict.startsWith('deny:approval_mismatch'))).toBe(true);
+      // The genuine question is still pending: a matching click can still answer it.
+      expect(h.challenges.size()).toBe(1);
+      expect(await h.dispatcher.handle(click())).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
+    });
+
+    it('given a click for a challenge the daemon never froze (a guessed id, or an approval the SERVER "recorded"), should deny approval_unknown and run nothing', async () => {
+      const h = clickHarness();
+      expect(await h.dispatcher.handle(click({}, { challengeId: 'ch_never' }))).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'approval_unknown' } });
+      expect(h.audits[0]?.verdict).toBe('deny:approval_unknown:ch_never');
+      expect(h.spawnRun).not.toHaveBeenCalled();
+      expect(h.writes).toHaveLength(0);
+    });
+
+    it('given a click after the intent expiry or after the challenge TTL, should deny approval_expired', async () => {
+      const h = clickHarness();
+      await h.dispatcher.handle(execFrame());
+      expect(await h.dispatcher.handle(click({}, { expiresAt: NOW - 1 }))).toMatchObject({ kind: 'reply', frame: { reason: 'approval_expired' } });
+      let now = NOW;
+      const late = clickHarness({ now: () => now });
+      await late.dispatcher.handle(execFrame());
+      now = NOW + 31_000; // past the frozen grant's exp: the challenge is evicted (the click's own grant is fresh)
+      expect(await late.dispatcher.handle(click({}, { expiresAt: NOW + 60_000 }, PRINCIPAL, { iat: now - 1000, exp: now + 30_000 }))).toMatchObject({ kind: 'reply', frame: { reason: 'approval_unknown' } });
+      expect(h.spawnRun).not.toHaveBeenCalled();
+      expect(late.spawnRun).not.toHaveBeenCalled();
+    });
+
+    it('given a click carrying ANOTHER user\'s principal for a challenge frozen for u1, should deny approval_mismatch', async () => {
+      const h = clickHarness({ policy: () => ({ ...ASK_POLICY, principals: ['u1', 'u2'] }) });
+      await h.dispatcher.handle(execFrame());
+      expect(await h.dispatcher.handle(click({}, {}, { ...PRINCIPAL, userId: 'u2' }))).toMatchObject({ kind: 'reply', frame: { reason: 'approval_mismatch' } });
+      expect(h.spawnRun).not.toHaveBeenCalled();
+    });
+
+    it('given scope once, should run and remember nothing; given until_revoked, should remember with no expiry', async () => {
+      const once = clickHarness();
+      await once.dispatcher.handle(execFrame());
+      expect(await once.dispatcher.handle(click({}, { scope: 'once' }))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
+      expect(once.writes).toHaveLength(0);
+      const forever = clickHarness();
+      await forever.dispatcher.handle(execFrame());
+      await forever.dispatcher.handle(click({}, { scope: 'until_revoked' }));
+      expect(JSON.parse(forever.writes[0]!)).toMatchObject({ approvals: [expect.objectContaining({ approvalId: 'ch_1', scope: 'until_revoked', expiresAt: null })] });
+    });
+
+    it('a click is only ever a fresh grant: the intent rides the signature (a forged one is bad_signature) and its nonce is spent like any other', async () => {
+      const h = clickHarness();
+      await h.dispatcher.handle(execFrame());
+      const forged = click();
+      const tampered = { ...forged, grant: { ...forged.grant, approvalIntent: { ...INTENT, scope: 'until_revoked' } } } as GrantFrame;
+      expect(await h.dispatcher.handle(tampered)).toMatchObject({ kind: 'reply', frame: { reason: 'bad_signature' } });
+      const genuine = click();
+      await h.dispatcher.handle(genuine);
+      expect(await h.dispatcher.handle(genuine)).toMatchObject({ kind: 'reply', frame: { reason: 'replayed' } });
+      expect(h.spawnRun).toHaveBeenCalledTimes(1);
     });
   });
 

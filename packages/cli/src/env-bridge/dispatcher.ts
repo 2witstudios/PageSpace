@@ -205,6 +205,37 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     let decision = gates.decideExecution(decideInput);
     const roots = decideInput.machinePolicy?.roots ?? [];
 
+    if (grant.approvalIntent !== undefined && decision.kind === 'ask') {
+      // THE CLICK (Tier B, leaf 7). The server re-issued the request with the
+      // owner's signed intent. The daemon honours it ONLY against a request it
+      // froze itself: look the challenge up by id, re-normalise THIS request
+      // (already done above — `decision.request`), and byte-compare the two
+      // through the existing LocalApproval path. Only a match writes the
+      // durable approval and runs. A server that "recorded" an approval, a
+      // guessed id, or a click over different bytes all stop here.
+      const intent = grant.approvalIntent;
+      const now = deps.now();
+      const frozen = deps.challenges?.peek(intent.challengeId, now);
+      if (frozen === undefined) return denied(grant.grantId, 'approval_unknown', { grant, op: grant.op, verdict: `deny:approval_unknown:${intent.challengeId}` });
+      if (intent.expiresAt < now || frozen.exp < now) return denied(grant.grantId, 'approval_expired', { grant, op: grant.op });
+      if (frozen.grant.principal.userId !== grant.principal.userId || frozen.grant.op !== grant.op) {
+        return denied(grant.grantId, 'approval_mismatch', { grant, op: grant.op, verdict: `deny:approval_mismatch:principal:${intent.challengeId}` });
+      }
+      const compared = gates.decideExecution({ ...decideInput, localApproval: { grantId: grant.grantId, approvedAt: now, request: frozen.request } });
+      if (compared.kind !== 'allow') {
+        const reason = compared.kind === 'deny' ? compared.reason : 'approval_mismatch';
+        return denied(grant.grantId, reason, { grant, op: grant.op, verdict: `deny:${reason}:${intent.challengeId}` });
+      }
+      // Matched: the challenge is spent, the approval remembered under ITS id
+      // (what the server can later revoke), and the frozen request runs.
+      deps.challenges?.take(intent.challengeId, now);
+      if (frozen.subjects !== null && intent.scope !== 'once' && deps.approvals !== undefined) {
+        await deps.approvals.remember({ approvalId: intent.challengeId, envId: deps.envId, userId: grant.principal.userId, op: grant.op, subjects: frozen.subjects, scope: intent.scope });
+      }
+      decision = { kind: 'allow', request: compared.request, basis: { kind: 'fresh_approval' } };
+      allowVerdict = `allow:click:${intent.challengeId}:${intent.scope}`;
+    }
+
     if (decision.kind === 'ask') {
       // The verified Grant is HELD across the prompt; the wire grant is never
       // re-verified (its nonce is spent). The request the owner sees is frozen

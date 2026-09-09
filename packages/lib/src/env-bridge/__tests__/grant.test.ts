@@ -307,3 +307,42 @@ describe('createMemoryNonceStore', () => {
     expect(s.has('n')).toBe(true);
   });
 });
+
+describe('GA wave 2 — approvalIntent: the owner\'s click rides the re-issued grant, signed under the pinned key', () => {
+  const INTENT = { challengeId: 'ch_1', scope: '30d' as const, expiresAt: NOW + 30_000 };
+  const request = { op: 'exec' as const, args: ARGS };
+  const nonces = () => createMemoryNonceStore();
+
+  it('given a grant carrying a well-formed approvalIntent signed by the server, should verify and hand the intent back on the Grant', () => {
+    const grant = makeGrant({ approvalIntent: INTENT });
+    const verdict = verifyGrant({ grant, signature: signWith(server.privateKey, grant), serverPublicKey, now: NOW, nonces: nonces(), expectedEnvId: ENV, request, verify, hash });
+    expect(verdict).toEqual({ ok: true, grant });
+  });
+
+  it('a grant WITHOUT an intent keeps the bytes it always had (no approvalIntent key is ever added)', () => {
+    expect(Buffer.from(encodeGrant(makeGrant())).toString()).not.toContain('approvalIntent');
+    expect(Buffer.from(encodeGrant(makeGrant({ approvalIntent: INTENT }))).toString()).toContain('"approvalIntent":{"challengeId":"ch_1","scope":"30d","expiresAt":');
+  });
+
+  it.each([
+    ['added after signing', makeGrant(), makeGrant({ approvalIntent: INTENT })],
+    ['removed after signing', makeGrant({ approvalIntent: INTENT }), makeGrant()],
+    ['challengeId altered', makeGrant({ approvalIntent: INTENT }), makeGrant({ approvalIntent: { ...INTENT, challengeId: 'ch_other' } })],
+    ['scope widened', makeGrant({ approvalIntent: INTENT }), makeGrant({ approvalIntent: { ...INTENT, scope: 'until_revoked' } })],
+    ['expiry extended', makeGrant({ approvalIntent: INTENT }), makeGrant({ approvalIntent: { ...INTENT, expiresAt: INTENT.expiresAt + 1 } })],
+  ])('given the intent %s, should deny bad_signature — a click cannot be forged or edited in flight', (_label, signed, presented) => {
+    const verdict = verifyGrant({ grant: presented, signature: signWith(server.privateKey, signed), serverPublicKey, now: NOW, nonces: nonces(), expectedEnvId: ENV, request, verify, hash });
+    expect(verdict).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+
+  it.each([
+    ['an unknown scope', { ...INTENT, scope: 'forever' }],
+    ['an extra field', { ...INTENT, isAdmin: true }],
+    ['an empty challengeId', { ...INTENT, challengeId: '' }],
+    ['a missing expiry', { challengeId: 'ch_1', scope: '30d' }],
+  ])('given an intent with %s, should deny malformed', (_label, approvalIntent) => {
+    const grant = { ...makeGrant(), approvalIntent } as unknown as Grant;
+    const verdict = verifyGrant({ grant, signature: signWith(server.privateKey, grant), serverPublicKey, now: NOW, nonces: nonces(), expectedEnvId: ENV, request, verify, hash });
+    expect(verdict).toEqual({ ok: false, reason: 'malformed' });
+  });
+});

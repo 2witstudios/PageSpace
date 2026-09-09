@@ -17,7 +17,7 @@
  * `@pagespace/lib` specifier survives in any runtime import.
  */
 export { GRANT_OPS, GRANT_MAX_CLOCK_SKEW_MS, decodeBase64, verifyGrant } from '@pagespace/lib/env-bridge/grant';
-export type { Ed25519Verify, Grant, GrantOp, GrantPrincipal, GrantVerdict, HashBytes, NonceStore, VerifyGrantInput } from '@pagespace/lib/env-bridge/grant';
+export type { ApprovalIntent, Ed25519Verify, Grant, GrantOp, GrantPrincipal, GrantVerdict, HashBytes, NonceStore, VerifyGrantInput } from '@pagespace/lib/env-bridge/grant';
 export { executionRequestForFrame, GRANT_FRAME_TYPES, grantRequestForFrame } from '@pagespace/lib/env-bridge/grant-args';
 export type { GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 export { decideExecution } from '@pagespace/lib/env-bridge/decide-execution';
