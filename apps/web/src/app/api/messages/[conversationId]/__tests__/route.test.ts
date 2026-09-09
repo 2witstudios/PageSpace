@@ -284,6 +284,48 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(payload.attachmentMeta).toEqual(pdfMeta);
     });
 
+    it('broadcasts every attachment row, not just the legacy first pair', async () => {
+      // The DM asymmetry this change had to close. The channel route re-loads
+      // the row through the shared `with` clause and gets the relation for
+      // free; the DM insert returns the bare `.returning()` row, so the route
+      // has to put the attachment rows back by hand. Miss that and the
+      // recipient's socket payload names only the legacy first file — an
+      // empty-looking bubble until they refresh, which is the same class of
+      // bug as the one being fixed. Asserting the RESPONSE alone would not
+      // catch it: only the broadcast reaches the other participant.
+      const rows = [
+        { id: 'att-1', fileId: 'file-1', attachmentMeta: imageMeta, position: 0 },
+        { id: 'att-2', fileId: 'file-2', attachmentMeta: pdfMeta, position: 1 },
+      ];
+      mockInsertDmMessageWithAttachment.mockImplementationOnce(async (input) => ({
+        kind: 'ok',
+        message: mockInsertedRow(input),
+        attachments: rows,
+      }));
+
+      const res = await callRoute({
+        content: 'two files',
+        attachments: [
+          { fileId: 'file-1', attachmentMeta: imageMeta },
+          { fileId: 'file-2', attachmentMeta: pdfMeta },
+        ],
+      });
+
+      expect(res.status).toBe(200);
+      const payload = captureRealtimeBroadcasts(fetchMock)[0].payload as {
+        attachments?: Array<{ fileId: string; position: number }>;
+      };
+      expect(payload.attachments?.map((a) => [a.fileId, a.position])).toEqual([
+        ['file-1', 0],
+        ['file-2', 1],
+      ]);
+
+      const body = (await res.json()) as {
+        message: { attachments?: Array<{ fileId: string }> };
+      };
+      expect(body.message.attachments?.map((a) => a.fileId)).toEqual(['file-1', 'file-2']);
+    });
+
     it('returns 400 when both content is empty and no fileId provided', async () => {
       const res = await callRoute({ content: '' });
 
