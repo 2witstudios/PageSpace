@@ -25,6 +25,12 @@ import {
 
 interface MobileWeekStripProps {
   selectedDate: Date;
+  /**
+   * The month the grid shows when expanded. Separate from `selectedDate`, which
+   * scroll-sync moves: deriving the grid from it rebuilt the whole month under
+   * the user as soon as scrolling reached a trailing day of the next one.
+   */
+  monthDate: Date;
   events: CalendarEvent[];
   tasks: TaskWithDueDate[];
   onDateSelect: (date: Date) => void;
@@ -44,6 +50,7 @@ const WEEKDAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
  */
 export function MobileWeekStrip({
   selectedDate,
+  monthDate,
   events,
   tasks,
   onDateSelect,
@@ -55,15 +62,15 @@ export function MobileWeekStrip({
   const visibleDays = useMemo(() => {
     if (expanded) {
       return eachDayOfInterval({
-        start: startOfWeek(startOfMonth(selectedDate)),
-        end: endOfWeek(endOfMonth(selectedDate)),
+        start: startOfWeek(startOfMonth(monthDate)),
+        end: endOfWeek(endOfMonth(monthDate)),
       });
     }
     return eachDayOfInterval({
       start: startOfWeek(selectedDate),
       end: endOfWeek(selectedDate),
     });
-  }, [expanded, selectedDate]);
+  }, [expanded, monthDate, selectedDate]);
 
   return (
     <div className="flex-none bg-background border-b">
@@ -88,7 +95,7 @@ export function MobileWeekStrip({
           const dayTasks = getTasksForDay(tasks, day);
           const isTodayDate = isToday(day);
           const isSelected = isSameDay(day, selectedDate);
-          const outsideMonth = expanded && !isSameMonth(day, selectedDate);
+          const outsideMonth = expanded && !isSameMonth(day, monthDate);
           const primaryEventColor =
             dayEvents.length > 0
               ? resolveEventColor(dayEvents[0], context, driveColorMap ?? null).dot

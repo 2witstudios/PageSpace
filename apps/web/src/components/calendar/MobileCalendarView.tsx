@@ -268,7 +268,9 @@ export function MobileCalendarView({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" className="gap-1 px-2 text-base font-semibold">
-              {format(selectedDate, 'MMMM yyyy')}
+              {/* Name the month of whichever surface is in charge: the grid
+                  when it is open, otherwise the day the agenda is scrolled to. */}
+              {format(isStripExpanded ? windowDate : selectedDate, 'MMMM yyyy')}
               <ChevronDown className="h-4 w-4 opacity-60" />
             </Button>
           </DropdownMenuTrigger>
@@ -354,6 +356,7 @@ export function MobileCalendarView({
       >
         <MobileWeekStrip
           selectedDate={selectedDate}
+          monthDate={windowDate}
           events={events}
           tasks={showTasks ? tasks : []}
           onDateSelect={handleDateSelect}
