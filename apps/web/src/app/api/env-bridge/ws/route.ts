@@ -21,7 +21,7 @@ import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-env
 import { LOCAL_ENV_HEARTBEAT_WINDOW_MS } from '@pagespace/lib/services/drive-envs/drive-envs';
 import type { DriveEnvLocalRecord } from '@pagespace/lib/services/drive-envs/drive-envs-store';
 import { initialBridgeSession, reduceBridgeSession, type BridgeSessionState } from '@pagespace/lib/env-bridge/bridge-session';
-import { verifyHello, isMachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
+import { verifyHello, isMachineResultFrame, machineResultBindingId } from '@pagespace/lib/env-bridge/machine-signatures';
 import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
 import { getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { decodePinnedPublicKey, ed25519Verify } from '@/lib/env-bridge/crypto';
@@ -397,19 +397,20 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
       return;
     }
     if (isMachineResultFrame(frame)) {
+      const grantId = machineResultBindingId(frame);
       // SECURITY CHECK 7: Connection health check before a result is accepted
       const health = checkEnvConnectionHealth(client);
       if (!health.isHealthy) {
-        dropFrame('ws_unhealthy_connection_result', { reason: health.reason, readyState: health.readyState, grantId: frame.grantId }, 0.5);
+        dropFrame('ws_unhealthy_connection_result', { reason: health.reason, readyState: health.readyState, grantId }, 0.5);
         return;
       }
       const disposition = getEnvBridgeClient().handleMachineResult(client, frame);
       if (disposition === 'unverified') {
-        dropFrame('env_bridge_result_unverified', { grantId: frame.grantId, frameType: frame.type }, 0.8);
+        dropFrame('env_bridge_result_unverified', { grantId, frameType: frame.type }, 0.8);
       } else if (disposition === 'dropped_wrong_env') {
-        dropFrame('env_bridge_result_wrong_env', { grantId: frame.grantId, frameType: frame.type }, 0.8);
+        dropFrame('env_bridge_result_wrong_env', { grantId, frameType: frame.type }, 0.8);
       } else if (disposition !== 'delivered') {
-        dropFrame('env_bridge_result_dropped', { grantId: frame.grantId, frameType: frame.type, disposition }, 0.3);
+        dropFrame('env_bridge_result_dropped', { grantId, frameType: frame.type, disposition }, 0.3);
       }
       return;
     }

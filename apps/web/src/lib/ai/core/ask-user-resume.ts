@@ -13,15 +13,17 @@ import {
   buildAssistantPersistencePayload,
   type AssistantPersistencePayload,
 } from '@/lib/ai/core/persistAssistantParts';
-import { ASK_USER_TOOL_NAME, askUserOutputSchema } from '@/lib/ai/tools/ask-user-tools';
+import { ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
+import { isPausingToolPartType, pausingToolOutputSchema, pausingToolPartType } from '@/lib/ai/tools/pausing-tools';
 
-const ASK_USER_PART_TYPE = `tool-${ASK_USER_TOOL_NAME}`;
+const ASK_USER_PART_TYPE = pausingToolPartType(ASK_USER_TOOL_NAME);
 const DISMISSED_REASON = 'User replied in chat instead of selecting an option.';
 
 type AskUserToolPart = { type: string; toolCallId: string; state?: string; output?: unknown };
 
+/** Every PAUSING tool part: ask_user, and the Tier B approval click (GA wave 2). */
 function isAskUserPart(part: { type: string }): part is AskUserToolPart {
-  return part.type === ASK_USER_PART_TYPE;
+  return isPausingToolPartType(part.type);
 }
 
 export interface ClientAskUserResult {
@@ -68,7 +70,9 @@ function mergeResultsIntoParts(
     if (!result) return part;
     if (part.state !== 'input-available') return part;
 
-    const parsed = askUserOutputSchema.safeParse(result.output);
+    // Each pausing tool validates its own client-supplied result before it is persisted.
+    const schema = pausingToolOutputSchema(part.type);
+    const parsed = schema === null ? { success: false as const, error: { issues: [{ message: `no output schema for ${part.type}` }] } } : schema.safeParse(result.output);
     if (!parsed.success) {
       loggers.ai.warn('ask_user resume: rejected invalid client output', {
         toolCallId: part.toolCallId,
@@ -84,10 +88,15 @@ function mergeResultsIntoParts(
   return { parts: nextParts as UIMessage['parts'], changed };
 }
 
+/**
+ * Only ask_user questions are dismissed by a new chat message: a pending
+ * approval click is not a question the user can answer in prose, and a
+ * dismissal would read to the model as a decision nobody made.
+ */
 function pendingAskUserToolCallIds(parts: UIMessage['parts']): string[] {
   const ids: string[] = [];
   for (const part of parts) {
-    if (isAskUserPart(part) && part.state === 'input-available') ids.push(part.toolCallId);
+    if (part.type === ASK_USER_PART_TYPE && isAskUserPart(part) && part.state === 'input-available') ids.push(part.toolCallId);
   }
   return ids;
 }

@@ -41,7 +41,7 @@ import { decideExecution as libDecideExecution, type DecideExecutionInput, type 
 import type { AdvertisedCapabilities, MachinePolicy, ServerPolicy } from './lib-core.js';
 import type { PathProbe } from './lib-core.js';
 import { verifyRevoke } from './lib-core.js';
-import { execOutputCeiling, fsReadContentCeiling, type Frame, type FrameLimits } from './lib-core.js';
+import { execOutputCeiling, fsReadContentCeiling, type Frame, type FrameLimits, type PendingApproval } from './lib-core.js';
 import type { SignWithMachineKey } from './keypair.js';
 import { grantPredatesDaemon, PREDATES_DAEMON_REASON, type DaemonNonceStore } from './nonce-store.js';
 import { signResultFrame, type UnsignedMachineResultFrame } from './result-signer.js';
@@ -49,6 +49,8 @@ import type { AuditLog } from './audit-log.js';
 import type { ExecRunner } from './exec-runner.js';
 import type { FsRunner } from './fs-runner.js';
 import type { AskPrompter } from './ask.js';
+import type { ApprovalsStore } from './approvals-store.js';
+import type { ChallengeStore } from './challenge-store.js';
 
 /** What this daemon can do in M1: shell and files. PTY is M2; checkpoints are never assumed (invariant 12). */
 export const DAEMON_CAPABILITIES: AdvertisedCapabilities = { shell: true, pty: false, fs: true, checkpoint: false };
@@ -88,6 +90,25 @@ export interface DispatcherDeps {
   readonly audit: AuditLog;
   /** `null` when the daemon cannot prompt (headless); an `ask` verdict is then a deny. */
   readonly ask: AskPrompter | null;
+  /**
+   * Durable approvals (GA wave 2): consulted by `decideExecution` after
+   * normalisation, written ONLY after an owner's approval of a byte-compared
+   * request. Omitted = nothing is ever remembered.
+   */
+  readonly approvals?: ApprovalsStore;
+  /** The PATH walk (`command-resolver.ts`) that turns an exec's argv0 into the subject an approval is keyed on. */
+  readonly resolveArgv0?: (name: string) => string | null;
+  /** Id source for approvals the TERMINAL prompt writes (a chat click's approval takes its challenge id). */
+  readonly ids?: { approvalId(): string };
+  /**
+   * Pending chat approvals (GA wave 2, Tier B). With a store, an `ask`
+   * verdict that has no terminal to go to (or when `preferChat`) freezes the
+   * request under a challenge id and answers `ask_pending:<id>`; without one
+   * it is `ask_unavailable`, as before.
+   */
+  readonly challenges?: ChallengeStore;
+  /** Send asks to the chat even when a terminal prompter exists. */
+  readonly preferChat?: boolean;
   readonly log: (line: string) => void;
   /** The socket frame limit; bounds what an fs_read may return. */
   readonly limits: FrameLimits;
@@ -95,7 +116,12 @@ export interface DispatcherDeps {
   readonly gates?: DecisionGates;
 }
 
-export type DispatchResult = { readonly kind: 'reply'; readonly frame: Frame } | { readonly kind: 'revoke_verified' } | { readonly kind: 'dropped'; readonly reason: string };
+export type DispatchResult =
+  | { readonly kind: 'reply'; readonly frame: Frame }
+  | { readonly kind: 'revoke_verified' }
+  /** ONE durable approval was deleted on the server's signed request (GA wave 2); the enrollment and the key stand. `frame` is the machine-signed ack to send back. */
+  | { readonly kind: 'approval_revoked'; readonly approvalId: string; readonly removed: number; readonly frame: Frame }
+  | { readonly kind: 'dropped'; readonly reason: string };
 
 export interface Dispatcher {
   handle(frame: Frame): Promise<DispatchResult>;
@@ -118,6 +144,21 @@ function freezeRequest(request: NormalizedRequest): NormalizedRequest {
 }
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** The frozen request as the frame codec carries it (fresh copies of the frozen arrays; every field, nothing else). */
+function pendingRequestOnTheWire(request: NormalizedRequest): PendingApproval['request'] {
+  return {
+    op: request.op,
+    ...(request.cmd !== undefined && { cmd: request.cmd }),
+    ...(request.args !== undefined && { args: [...request.args] }),
+    cwd: request.cwd,
+    paths: [...request.paths],
+    env: { ...request.env },
+    timeoutMs: request.timeoutMs,
+    maxBytes: request.maxBytes,
+    clamped: request.clamped,
+  };
+}
 
 export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const gates: DecisionGates = deps.gates ?? { verifyGrant: libVerifyGrant, decideExecution: libDecideExecution };
@@ -151,6 +192,8 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     const grant = verdict.grant;
     if (grantPredatesDaemon(grant.iat, deps.startedAt)) return denied(grant.grantId, PREDATES_DAEMON_REASON, { grant, op: grant.op });
 
+    /** The audit word for an allow: how it came about. */
+    let allowVerdict = 'allow';
     const decideInput: DecideExecutionInput = {
       grant,
       request: executionRequestForFrame(frame),
@@ -158,22 +201,78 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       serverPolicy: SERVER_POLICY_CARRIED_BY_SIGNATURE,
       capabilities: DAEMON_CAPABILITIES,
       probe: deps.probe,
+      // Durable approvals are read from the machine's own file (and this
+      // process's session set) — never from anything the server sent. Always
+      // consulted (an absent store is an empty set) so an `ask` verdict
+      // carries the subjects a click or a prompt would approve.
+      approvals: { entries: deps.approvals?.entries() ?? [], now: deps.now(), resolveArgv0: deps.resolveArgv0 ?? (() => null) },
     };
     let decision = gates.decideExecution(decideInput);
     const roots = decideInput.machinePolicy?.roots ?? [];
 
+    if (grant.approvalIntent !== undefined && decision.kind === 'ask') {
+      // THE CLICK (Tier B, leaf 7). The server re-issued the request with the
+      // owner's signed intent. The daemon honours it ONLY against a request it
+      // froze itself: look the challenge up by id, re-normalise THIS request
+      // (already done above — `decision.request`), and byte-compare the two
+      // through the existing LocalApproval path. Only a match writes the
+      // durable approval and runs. A server that "recorded" an approval, a
+      // guessed id, or a click over different bytes all stop here as
+      // approval_mismatch.
+      const intent = grant.approvalIntent;
+      const now = deps.now();
+      const frozen = deps.challenges?.peek(intent.challengeId, now);
+      // No such frozen request on THIS machine: the click matches nothing the
+      // machine framed — including a challenge the server made up.
+      if (frozen === undefined) return denied(grant.grantId, 'approval_mismatch', { grant, op: grant.op, verdict: `deny:approval_mismatch:unknown_challenge:${intent.challengeId}` });
+      if (intent.expiresAt < now || frozen.exp < now) return denied(grant.grantId, 'approval_expired', { grant, op: grant.op });
+      if (frozen.grant.principal.userId !== grant.principal.userId || frozen.grant.op !== grant.op) {
+        return denied(grant.grantId, 'approval_mismatch', { grant, op: grant.op, verdict: `deny:approval_mismatch:principal:${intent.challengeId}` });
+      }
+      const compared = gates.decideExecution({ ...decideInput, localApproval: { grantId: grant.grantId, approvedAt: now, request: frozen.request } });
+      if (compared.kind !== 'allow') {
+        const reason = compared.kind === 'deny' ? compared.reason : 'approval_mismatch';
+        return denied(grant.grantId, reason, { grant, op: grant.op, verdict: `deny:${reason}:${intent.challengeId}` });
+      }
+      // Matched: the challenge is spent, the approval remembered under ITS id
+      // (what the server can later revoke), and the frozen request runs.
+      deps.challenges?.take(intent.challengeId, now);
+      if (frozen.subjects !== null && intent.scope !== 'once' && deps.approvals !== undefined) {
+        await deps.approvals.remember({ approvalId: intent.challengeId, envId: deps.envId, userId: grant.principal.userId, op: grant.op, subjects: frozen.subjects, scope: intent.scope });
+      }
+      decision = { kind: 'allow', request: compared.request, basis: { kind: 'fresh_approval' } };
+      allowVerdict = `allow:click:${intent.challengeId}:${intent.scope}`;
+    }
+
     if (decision.kind === 'ask') {
-      if (deps.ask === null) return denied(grant.grantId, 'ask_unavailable', { grant, op: grant.op });
       // The verified Grant is HELD across the prompt; the wire grant is never
       // re-verified (its nonce is spent). The request the owner sees is frozen
       // and handed back unchanged as the approval.
       const shown = freezeRequest(decision.request);
-      const approved = await deps.ask.ask({ grantId: grant.grantId, principal: grant.principal, op: grant.op, request: shown });
-      if (!approved) return denied(grant.grantId, 'declined', { grant, op: grant.op, verdict: 'ask:declined' });
+      const subjects = decision.subjects;
+      if (deps.ask === null || deps.preferChat === true) {
+        // Tier B: no terminal (or the chat is preferred) — freeze the request
+        // under a challenge and let the owner's click in the chat answer it.
+        if (deps.challenges === undefined) return denied(grant.grantId, 'ask_unavailable', { grant, op: grant.op });
+        const pending = deps.challenges.issue({ grant, request: shown, subjects }, deps.now());
+        if (pending === null) return denied(grant.grantId, 'ask_unavailable', { grant, op: grant.op, verdict: 'deny:ask_unavailable:challenges_full' });
+        await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: `ask:pending:${pending.id}`, argsHash: grant.argsHash, exitCode: null });
+        return reply({ type: 'grant_denied', grantId: grant.grantId, reason: `ask_pending:${pending.id}`, pending: { challengeId: pending.id, expiresAt: pending.exp, request: pendingRequestOnTheWire(pending.request) } });
+      }
+      const answer = await deps.ask.ask({ grantId: grant.grantId, principal: grant.principal, op: grant.op, request: shown, subjects });
+      if (!answer.approved) return denied(grant.grantId, 'declined', { grant, op: grant.op, verdict: 'ask:declined' });
       decision = gates.decideExecution({ ...decideInput, localApproval: { grantId: grant.grantId, approvedAt: deps.now(), request: shown } });
+      // Remembered ONLY once the byte-compare allowed it, and only under the
+      // subjects the owner was told about. `once` and null subjects remember nothing.
+      if (decision.kind === 'allow' && subjects !== null && answer.scope !== 'once' && deps.approvals !== undefined) {
+        await deps.approvals.remember({ approvalId: deps.ids?.approvalId() ?? `local_${grant.grantId}`, envId: deps.envId, userId: grant.principal.userId, op: grant.op, subjects, scope: answer.scope });
+      }
+      if (decision.kind === 'allow') decision = { ...decision, basis: { kind: 'fresh_approval' } };
+      allowVerdict = `allow:approved:${answer.scope}`;
     }
     if (decision.kind === 'deny') return denied(grant.grantId, decision.reason, { grant, op: grant.op });
     if (decision.kind !== 'allow') return denied(grant.grantId, 'ask_unresolved', { grant, op: grant.op });
+    if (decision.basis.kind === 'durable_approval') allowVerdict = `allow:approval:${decision.basis.approvalIds.join(',')}`;
 
     // Allow: the normalized request is the ONLY thing the runners ever see.
     const normalized = decision.request;
@@ -185,7 +284,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
           const ceiling = execOutputCeiling(deps.limits);
           const bounded = normalized.maxBytes > ceiling ? { ...normalized, maxBytes: ceiling, clamped: true } : normalized;
           const outcome = await deps.execRunner.run(bounded);
-          await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: 'allow', argsHash: grant.argsHash, exitCode: outcome.exitCode });
+          await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: allowVerdict, argsHash: grant.argsHash, exitCode: outcome.exitCode });
           return reply({ type: 'exec_result', grantId: grant.grantId, exitCode: outcome.exitCode, stdoutB64: outcome.stdout.toString('base64'), stderrB64: outcome.stderr.toString('base64'), truncated: outcome.truncated });
         }
         case 'fs_read': {
@@ -193,13 +292,13 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
           if (outcome.kind === 'unsupported') return denied(grant.grantId, `unsupported_${outcome.reason}`, { grant, op: grant.op });
           if (outcome.kind === 'too_large') return denied(grant.grantId, 'too_large', { grant, op: grant.op, verdict: `deny:too_large:${outcome.size}>${outcome.maxContentBytes}` });
           if (outcome.kind === 'error') return denied(grant.grantId, 'fs_error', { grant, op: grant.op, verdict: `deny:fs_error:${outcome.error}` });
-          await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: 'allow', argsHash: grant.argsHash, exitCode: null });
+          await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: allowVerdict, argsHash: grant.argsHash, exitCode: null });
           return reply({ type: 'fs_read_result', grantId: grant.grantId, found: outcome.found, ...(outcome.contentB64 !== undefined && { contentB64: outcome.contentB64 }) });
         }
         case 'fs_write': {
           const files = frame.type === 'grant_fs_write' ? frame.files.map((file) => ({ contentB64: file.contentB64, mode: file.mode ?? null })) : [];
           const outcome = await deps.fsRunner.write(normalized, files, { roots });
-          await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: outcome.ok ? 'allow' : `allow:write_failed:${outcome.error ?? ''}`, argsHash: grant.argsHash, exitCode: null });
+          await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: outcome.ok ? allowVerdict : `${allowVerdict}:write_failed:${outcome.error ?? ''}`, argsHash: grant.argsHash, exitCode: null });
           return reply({ type: 'fs_write_result', grantId: grant.grantId, ok: outcome.ok, ...(outcome.error !== undefined && { error: outcome.error }) });
         }
         case 'pty_open':
@@ -214,8 +313,18 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const handleRevoke = async (frame: Extract<Frame, { type: 'revoke' }>): Promise<DispatchResult> => {
     const verdict = verifyRevoke({ frame, envId: deps.envId, enrollmentId: deps.enrollmentId, keyId: deps.serverKeyId, issuedAt: frame.issuedAt, serverPublicKey: deps.serverPublicKey, verify: deps.verify });
     if (!verdict.ok) {
-      await deps.audit.record({ grantId: null, principal: null, op: 'revoke', verdict: 'dropped:revoke_bad_signature', argsHash: null, exitCode: null });
+      await deps.audit.record({ grantId: null, principal: null, op: 'revoke', verdict: frame.approvalId !== undefined ? 'dropped:approval_revoke_bad_signature' : 'dropped:revoke_bad_signature', argsHash: null, exitCode: null });
       return { kind: 'dropped', reason: 'revoke_bad_signature' };
+    }
+    if (frame.approvalId !== undefined) {
+      // THE ASYMMETRY (GA wave 2, leaf 8): the server may delete exactly one
+      // approval by id — verified under the approval-revoke domain — and can
+      // never add one: no frame writes to the approvals store, and this
+      // branch never touches the key or the enrollment.
+      const removed = deps.approvals === undefined ? 0 : await deps.approvals.revoke(frame.approvalId);
+      await deps.audit.record({ grantId: null, principal: null, op: 'revoke', verdict: `approval_revoked:${frame.approvalId}:${removed}`, argsHash: null, exitCode: null });
+      // The ACK (Codex P2 on #2583): machine-signed over {approvalId, removed}, so the server can only ever claim what this machine did.
+      return { kind: 'approval_revoked', approvalId: frame.approvalId, removed, frame: signResultFrame({ type: 'approval_revoke_result', approvalId: frame.approvalId, removed }, signer) };
     }
     await deps.audit.record({ grantId: null, principal: null, op: 'revoke', verdict: 'revoked', argsHash: null, exitCode: null });
     return { kind: 'revoke_verified' };

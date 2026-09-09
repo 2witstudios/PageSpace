@@ -13,11 +13,11 @@
  */
 import type { WebSocket } from 'ws';
 import { encodeFrame } from '@pagespace/lib/env-bridge/frame-codec';
-import type { GrantPrincipal } from '@pagespace/lib/env-bridge/grant';
+import type { ApprovalIntent, GrantPrincipal } from '@pagespace/lib/env-bridge/grant';
 import { grantRequestForFrame, type GrantFrame, type UnsignedGrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 import { decideSign, type SignDenyReason } from '@pagespace/lib/env-bridge/decide-sign';
 import { parseServerPolicy } from '@pagespace/lib/env-bridge/policy-types';
-import type { MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
+import { approvalRevokeBindingId, machineResultBindingId, type MachineResultFrame, type RevokeFrame } from '@pagespace/lib/env-bridge/machine-signatures';
 import type { ServerSigningKeyring } from '@pagespace/lib/env-bridge/server-signing-key';
 import { logger } from '@pagespace/lib/logging/logger-config';
 import { loadServerSigningKeyring } from '@pagespace/lib/auth/env-bridge-signing-key';
@@ -27,6 +27,10 @@ import { getAuthorizedEnvConnection, getEnvConnectionMetadata, onEnvConnectionLo
 import { RequestCorrelator, CorrelationError, grantCorrelatorTimeoutMs, type CorrelationFailureKind } from './correlator';
 import { signGrantFrame, type GrantIdSource } from './grant-signer';
 import { verifyResultFromMachine } from './result-verifier';
+import { getPendingApprovalStore, type PendingApprovalStore } from './pending-approvals';
+
+/** The reason prefix a daemon answers with while a request waits for its owner's click. */
+export const ASK_PENDING_PREFIX = 'ask_pending:';
 
 export type EnvBridgeFailureKind = CorrelationFailureKind | 'not_connected' | 'signing_key_unavailable' | 'ttl_too_long' | 'server_denied';
 
@@ -68,6 +72,8 @@ export interface EnvBridgeClientDeps {
   readonly ids: GrantIdSource;
   /** Observability hook for a result that failed verification (audit/log). */
   readonly onUnverified?: (info: { envId: string; grantId: string; frameType: MachineResultFrame['type']; reason: string }) => void;
+  /** Where a daemon's `ask_pending` answer is remembered for the owner's click (GA wave 2). Omitted = the process-wide store. */
+  readonly pendingApprovals?: PendingApprovalStore;
 }
 
 export type MachineResultDisposition = 'delivered' | 'unverified' | 'dropped_unknown_grant' | 'dropped_unregistered_socket' | 'dropped_wrong_env';
@@ -93,7 +99,7 @@ export class EnvBridgeClient {
    * chokepoint because the grant IS the capability — refusing to mint beats
    * asking a daemon we do not control to refuse what we minted.
    */
-  async sendGrant(input: { envId: string; frame: UnsignedGrantFrame; principal: GrantPrincipal }): Promise<MachineResultFrame> {
+  async sendGrant(input: { envId: string; frame: UnsignedGrantFrame; principal: GrantPrincipal; approvalIntent?: ApprovalIntent }): Promise<MachineResultFrame> {
     // The op is the same projection the signer and the daemon's gate use on
     // the frame as sent (grant/sig are envelope, so placeholders change nothing).
     const op = grantRequestForFrame({ ...input.frame, grant: {}, sig: '' } as GrantFrame).op;
@@ -125,18 +131,33 @@ export class EnvBridgeClient {
       keyring: this.deps.keyring(),
       now: this.deps.now(),
       ids: this.deps.ids,
+      ...(input.approvalIntent !== undefined && { approvalIntent: input.approvalIntent }),
     });
     if (!signed.ok) throw new EnvBridgeError(signed.reason, `Cannot sign grant for ${input.envId}: ${signed.reason}`, { envId: input.envId, serverKeyId: facts.serverKeyId });
 
     const timeoutMs = grantCorrelatorTimeoutMs(signed.frame);
     log().info('Sending grant to local environment', { envId: input.envId, grantId: signed.grant.grantId, op: signed.grant.op, keyId: signed.keyId, timeoutMs, action: 'send_grant' });
     try {
-      return await this.deps.correlator.open({
+      const result = await this.deps.correlator.open({
         id: signed.grant.grantId,
         group: input.envId,
         timeoutMs,
         send: () => ws.send(encodeFrame(signed.frame)),
       });
+      // The machine froze the request for its owner's click (GA wave 2):
+      // remember what re-issuing it needs, under the id the machine chose,
+      // for as long as the machine itself will hold it (the grant's exp).
+      // Only a VERIFIED reply reaches here, so `pending` is what the machine
+      // signed. A reply whose id and reason disagree is not remembered.
+      if (result.type === 'grant_denied' && result.reason.startsWith(ASK_PENDING_PREFIX) && result.pending !== undefined) {
+        const challengeId = result.reason.slice(ASK_PENDING_PREFIX.length);
+        if (challengeId.length > 0 && challengeId === result.pending.challengeId) {
+          const store = this.deps.pendingApprovals ?? getPendingApprovalStore();
+          const remembered = store.remember({ challengeId, envId: input.envId, frame: input.frame, principal: signed.grant.principal, expiresAt: signed.grant.exp, pending: result.pending, createdAt: this.deps.now() }, this.deps.now());
+          log().info('Local environment is waiting for its owner\'s approval', { envId: input.envId, grantId: signed.grant.grantId, challengeId, remembered, action: 'approval_pending' });
+        }
+      }
+      return result;
     } catch (error) {
       if (error instanceof CorrelationError) throw new EnvBridgeError(error.kind, error.message, { ...error.detail, envId: input.envId });
       throw error;
@@ -157,30 +178,59 @@ export class EnvBridgeClient {
    * request with `unverified_result` — the agent never sees its contents.
    */
   handleMachineResult(ws: WebSocket, frame: MachineResultFrame): MachineResultDisposition {
+    // The grant a result answers — or, for an approval-revoke ack, the namespaced approval id.
+    const grantId = machineResultBindingId(frame);
     const facts = this.deps.getSocketFacts(ws);
     if (!facts) {
-      log().warn('Result frame from an unregistered socket dropped', { grantId: frame.grantId, frameType: frame.type, action: 'result_dropped' });
+      log().warn('Result frame from an unregistered socket dropped', { grantId, frameType: frame.type, action: 'result_dropped' });
       return 'dropped_unregistered_socket';
     }
-    const owner = this.deps.correlator.groupOf(frame.grantId);
+    const owner = this.deps.correlator.groupOf(grantId);
     if (owner === undefined) {
-      log().warn('Result frame for an unknown grant dropped', { envId: facts.envId, grantId: frame.grantId, frameType: frame.type, action: 'result_dropped' });
+      log().warn('Result frame for an unknown grant dropped', { envId: facts.envId, grantId, frameType: frame.type, action: 'result_dropped' });
       return 'dropped_unknown_grant';
     }
     if (owner !== facts.envId) {
-      log().error('Result frame from an env that does not own the grant refused — request stays pending for its owner', { envId: facts.envId, ownerEnvId: owner, grantId: frame.grantId, frameType: frame.type, action: 'result_wrong_env' });
-      this.deps.onUnverified?.({ envId: facts.envId, grantId: frame.grantId, frameType: frame.type, reason: 'wrong_env' });
+      log().error('Result frame from an env that does not own the grant refused — request stays pending for its owner', { envId: facts.envId, ownerEnvId: owner, grantId, frameType: frame.type, action: 'result_wrong_env' });
+      this.deps.onUnverified?.({ envId: facts.envId, grantId, frameType: frame.type, reason: 'wrong_env' });
       return 'dropped_wrong_env';
     }
     const verified = verifyResultFromMachine({ frame, machinePublicKey: facts.machinePublicKey });
     if (!verified.ok) {
-      log().error('Result frame failed machine-signature verification — NOT delivered', { envId: facts.envId, grantId: frame.grantId, frameType: frame.type, reason: verified.reason, action: 'result_unverified' });
-      this.deps.onUnverified?.({ envId: facts.envId, grantId: frame.grantId, frameType: frame.type, reason: verified.reason });
-      this.deps.correlator.reject(frame.grantId, new EnvBridgeError('unverified_result', `Result for grant ${frame.grantId} failed machine-signature verification (${verified.reason})`, { envId: facts.envId, grantId: frame.grantId, reason: verified.reason }));
+      log().error('Result frame failed machine-signature verification — NOT delivered', { envId: facts.envId, grantId, frameType: frame.type, reason: verified.reason, action: 'result_unverified' });
+      this.deps.onUnverified?.({ envId: facts.envId, grantId, frameType: frame.type, reason: verified.reason });
+      // A forged ACK is ignored, not fatal: the revoke stays pending for the genuine ack until its deadline (Codex P2 on #2583).
+      if (frame.type !== 'approval_revoke_result') {
+        this.deps.correlator.reject(grantId, new EnvBridgeError('unverified_result', `Result for grant ${grantId} failed machine-signature verification (${verified.reason})`, { envId: facts.envId, grantId, reason: verified.reason }));
+      }
       return 'unverified';
     }
-    this.deps.correlator.resolve(frame.grantId, frame);
+    this.deps.correlator.resolve(grantId, frame);
     return 'delivered';
+  }
+
+  /**
+   * Send a signed approval revoke over `ws` and await the machine's SIGNED ack
+   * (`approval_revoke_result`, correlated on the namespaced approval id) with
+   * a bounded deadline. Resolves with the verified ack; rejects with a typed
+   * `timeout` / `disconnected` when no genuine ack arrives — the caller must
+   * report that as unacknowledged, never as a revoke it cannot prove.
+   */
+  async awaitApprovalRevokeAck(input: { envId: string; approvalId: string; ws: WebSocket; frame: RevokeFrame; timeoutMs: number }): Promise<Extract<MachineResultFrame, { type: 'approval_revoke_result' }>> {
+    let reply: MachineResultFrame;
+    try {
+      reply = await this.deps.correlator.open({
+        id: approvalRevokeBindingId(input.approvalId),
+        group: input.envId,
+        timeoutMs: input.timeoutMs,
+        send: () => input.ws.send(encodeFrame(input.frame)),
+      });
+    } catch (error) {
+      if (error instanceof CorrelationError) throw new EnvBridgeError(error.kind, error.message, { ...error.detail, envId: input.envId, approvalId: input.approvalId });
+      throw error;
+    }
+    if (reply.type !== 'approval_revoke_result') throw new EnvBridgeError('unverified_result', `Expected an approval_revoke_result for ${input.approvalId}, got ${reply.type}`, { envId: input.envId, approvalId: input.approvalId });
+    return reply;
   }
 
   /** The env's live socket is gone: fail its in-flight requests with a typed `disconnected`. */

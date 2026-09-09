@@ -9,9 +9,11 @@
  *   replayed for another env, and neither the advertised capabilities nor the
  *   policy digest can be altered in flight.
  * - **result** (machine → server, invariant 7): every `exec_result`,
- *   `fs_read_result`, `fs_write_result` and `grant_denied` is signed over
- *   `{grantId, resultHash}` where `resultHash` covers EVERY payload field of
- *   the frame (`resultHashForFrame`). A result cannot be moved onto another
+ *   `fs_read_result`, `fs_write_result`, `grant_denied` and (GA wave 2)
+ *   `approval_revoke_result` is signed over `{grantId, resultHash}` — the
+ *   binding id is the grant, or the namespaced approval id for an ack
+ *   (`machineResultBindingId`) — where `resultHash` covers EVERY payload
+ *   field of the frame (`resultHashForFrame`). A result cannot be moved onto another
  *   grant, and no field of it can be edited between the machine and the agent.
  * - **revoke** (server → machine, invariant 8): signed over
  *   `{envId, enrollmentId, keyId, issuedAt}` — a revoke for one enrollment
@@ -38,14 +40,30 @@ import { canonicalizeArgs, constantTimeEqual, decodeBase64, type Ed25519Verify, 
 export const HELLO_SIGNING_DOMAIN = 'pagespace-env-bridge/hello/v1';
 export const RESULT_SIGNING_DOMAIN = 'pagespace-env-bridge/result/v1';
 export const REVOKE_SIGNING_DOMAIN = 'pagespace-env-bridge/revoke/v1';
+/** A revoke of ONE durable approval (GA wave 2): its own domain, so an approval revoke can never be replayed as an enrollment revoke by dropping the id, nor the reverse. */
+export const REVOKE_APPROVAL_SIGNING_DOMAIN = 'pagespace-env-bridge/revoke-approval/v1';
 
 export type { HelloFrame };
 export type RevokeFrame = Extract<Frame, { type: 'revoke' }>;
-export type MachineResultFrame = Extract<Frame, { type: 'exec_result' | 'fs_read_result' | 'fs_write_result' | 'grant_denied' }>;
+export type MachineResultFrame = Extract<Frame, { type: 'exec_result' | 'fs_read_result' | 'fs_write_result' | 'grant_denied' | 'approval_revoke_result' }>;
 export type MachineResultFrameType = MachineResultFrame['type'];
 
 /** The machine frames that answer a grant and therefore MUST be signed (invariant 7). */
-export const MACHINE_RESULT_FRAME_TYPES: ReadonlySet<MachineResultFrameType> = new Set<MachineResultFrameType>(['exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied']);
+export const MACHINE_RESULT_FRAME_TYPES: ReadonlySet<MachineResultFrameType> = new Set<MachineResultFrameType>(['exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'approval_revoke_result']);
+
+/** The correlation id an approval-revoke ack is bound to — namespaced so it can never collide with a grant id. */
+export function approvalRevokeBindingId(approvalId: string): string {
+  return `approval-revoke:${approvalId}`;
+}
+
+/**
+ * What a machine result is BOUND to in its signature and correlated by on
+ * the server: the grant it answers, or — for an approval-revoke ack (GA
+ * wave 2) — the namespaced approval id.
+ */
+export function machineResultBindingId(frame: MachineResultFrame): string {
+  return frame.type === 'approval_revoke_result' ? approvalRevokeBindingId(frame.approvalId) : frame.grantId;
+}
 
 export function isMachineResultFrame(frame: Frame): frame is MachineResultFrame {
   return (MACHINE_RESULT_FRAME_TYPES as ReadonlySet<string>).has(frame.type);
@@ -106,7 +124,12 @@ export function resultPayloadForFrame(frame: MachineResultFrame): Record<string,
     case 'fs_write_result':
       return { type: frame.type, grantId: frame.grantId, ok: frame.ok, error: frame.error ?? null };
     case 'grant_denied':
-      return { type: frame.type, grantId: frame.grantId, reason: frame.reason };
+      // `pending` (a frozen request awaiting a chat click, GA wave 2) is
+      // signed too: the card renders what the MACHINE said it froze.
+      return { type: frame.type, grantId: frame.grantId, reason: frame.reason, pending: frame.pending ?? null };
+    case 'approval_revoke_result':
+      // The ack covers the id AND the count: the server may only claim what the machine signed.
+      return { type: frame.type, approvalId: frame.approvalId, removed: frame.removed };
   }
 }
 
@@ -144,7 +167,7 @@ export function verifyMachineResult(input: VerifyMachineResultInput): MachineRes
   } catch {
     return { ok: false, reason: 'malformed' };
   }
-  const verdict = safeVerify(input.verify, encodeResultForSigning({ grantId: input.frame.grantId, resultHash }), signature, input.machinePublicKey);
+  const verdict = safeVerify(input.verify, encodeResultForSigning({ grantId: machineResultBindingId(input.frame), resultHash }), signature, input.machinePublicKey);
   return verdict.ok ? { ok: true, resultHash } : verdict;
 }
 
@@ -159,9 +182,19 @@ export interface RevokeBinding {
   readonly issuedAt: number;
 }
 
-/** Canonical bytes the server signs for a revoke. */
+/** Canonical bytes the server signs for a revoke of the ENROLLMENT (unchanged by GA wave 2: an approval revoke uses its own domain and function). */
 export function encodeRevokeForSigning(binding: RevokeBinding): Uint8Array {
   return encode({ domain: REVOKE_SIGNING_DOMAIN, envId: binding.envId, enrollmentId: binding.enrollmentId, keyId: binding.keyId, issuedAt: binding.issuedAt });
+}
+
+export interface ApprovalRevokeBinding extends RevokeBinding {
+  /** The durable approval to delete — the challenge id the click was answered under. */
+  readonly approvalId: string;
+}
+
+/** Canonical bytes the server signs to revoke ONE approval on the machine. The server may only ever REVOKE an approval this way; nothing on the wire can add one. */
+export function encodeApprovalRevokeForSigning(binding: ApprovalRevokeBinding): Uint8Array {
+  return encode({ domain: REVOKE_APPROVAL_SIGNING_DOMAIN, envId: binding.envId, enrollmentId: binding.enrollmentId, keyId: binding.keyId, issuedAt: binding.issuedAt, approvalId: binding.approvalId });
 }
 
 export interface VerifyRevokeInput extends RevokeBinding {
@@ -171,12 +204,21 @@ export interface VerifyRevokeInput extends RevokeBinding {
   readonly verify: Ed25519Verify;
 }
 
-/** The daemon's check before it honours a revoke (t08). `issuedAt` is taken from the binding the daemon supplies, and must equal the frame's. */
+/**
+ * The daemon's check before it honours a revoke (t08). `issuedAt` is taken
+ * from the binding the daemon supplies, and must equal the frame's. A frame
+ * carrying `approvalId` is verified under the approval-revoke domain over
+ * THAT id; one without it under the enrollment-revoke domain — so a captured
+ * approval revoke with the id stripped is `bad_signature`, never a key
+ * deletion, and an enrollment revoke with an id added is `bad_signature`
+ * too.
+ */
 export function verifyRevoke(input: VerifyRevokeInput): MachineSignatureVerdict {
   if (input.frame.issuedAt !== input.issuedAt) return { ok: false, reason: 'bad_signature' };
   const signature = decodeBase64(input.frame.sig);
   if (signature === null) return { ok: false, reason: 'malformed' };
-  const bytes = encodeRevokeForSigning({ envId: input.envId, enrollmentId: input.enrollmentId, keyId: input.keyId, issuedAt: input.issuedAt });
+  const binding = { envId: input.envId, enrollmentId: input.enrollmentId, keyId: input.keyId, issuedAt: input.issuedAt };
+  const bytes = input.frame.approvalId !== undefined ? encodeApprovalRevokeForSigning({ ...binding, approvalId: input.frame.approvalId }) : encodeRevokeForSigning(binding);
   return safeVerify(input.verify, bytes, signature, input.serverPublicKey);
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { decodeFrame, encodeFrame, FRAME_TYPES, FS_READ_ENVELOPE_OVERHEAD_BYTES, fsReadContentCeiling, execOutputCeiling, type Frame } from '../frame-codec';
+import { decodeFrame, encodeFrame, FRAME_TYPES, isMachineToServerFrame, FS_READ_ENVELOPE_OVERHEAD_BYTES, fsReadContentCeiling, execOutputCeiling, type Frame } from '../frame-codec';
 
 const LIMITS = { maxFrameBytes: 64 * 1024 };
 const B64 = Buffer.from('hello').toString('base64');
@@ -13,6 +13,7 @@ const SAMPLES: Record<Frame['type'], Frame> = {
   fs_read_result: { type: 'fs_read_result', grantId: 'g1', found: true, contentB64: B64, sig: B64 },
   fs_write_result: { type: 'fs_write_result', grantId: 'g1', ok: true, sig: B64 },
   grant_denied: { type: 'grant_denied', grantId: 'g1', reason: 'principal_not_allowed', sig: B64 },
+  approval_revoke_result: { type: 'approval_revoke_result', approvalId: 'ch_1', removed: 2, sig: B64 },
   pty_opened: { type: 'pty_opened', grantId: 'g1', sessionId: 'p1' },
   pty_data: { type: 'pty_data', sessionId: 'p1', seq: 0, dataB64: B64 },
   pty_exit: { type: 'pty_exit', sessionId: 'p1', code: 0 },
@@ -57,6 +58,7 @@ function generate(type: Frame['type'], r: () => number): Frame {
     case 'fs_read_result': return r() > 0.5 ? { type, grantId: randomStr(r), found: true, contentB64: randomB64(r), sig: B64 } : { type, grantId: randomStr(r), found: false, sig: B64 };
     case 'fs_write_result': return r() > 0.5 ? { type, grantId: randomStr(r), ok: true, sig: B64 } : { type, grantId: randomStr(r), ok: false, error: randomStr(r), sig: B64 };
     case 'grant_denied': return { type, grantId: randomStr(r), reason: randomStr(r), sig: B64 };
+    case 'approval_revoke_result': return { type, approvalId: randomStr(r), removed: randomInt(r, 8), sig: B64 };
     case 'pty_opened': return { type, grantId: randomStr(r), sessionId: randomStr(r) };
     case 'pty_data': return { type, sessionId: randomStr(r), seq: randomInt(r), dataB64: randomB64(r) };
     case 'pty_exit': return { type, sessionId: randomStr(r), code: randomInt(r, 256) };
@@ -223,5 +225,36 @@ describe('execOutputCeiling — the largest raw stdout+stderr an exec_result can
     expect(decodeFrame(encodeFrame(frame(ceiling)), limits)).toMatchObject({ ok: true });
     expect(Buffer.byteLength(encodeFrame(frame(ceiling + FS_READ_ENVELOPE_OVERHEAD_BYTES)))).toBeGreaterThan(limits.maxFrameBytes);
     expect(execOutputCeiling({ maxFrameBytes: 10 })).toBe(0);
+  });
+});
+
+describe('GA wave 2 — grant_denied may carry a PENDING frozen request', () => {
+  const pending = { challengeId: 'ch_1', expiresAt: 5, request: { op: 'exec', cmd: 'git', args: ['status'], cwd: '/p', paths: [], env: { CI: '1' }, timeoutMs: 1000, maxBytes: 1024, clamped: false } };
+  const limits = { maxFrameBytes: 65536 };
+
+  it('should decode a grant_denied with a well-formed pending request, and one without', () => {
+    expect(decodeFrame({ type: 'grant_denied', grantId: 'g1', reason: 'ask_pending:ch_1', pending, sig: B64 }, limits)).toMatchObject({ ok: true, frame: { pending } });
+    expect(decodeFrame({ type: 'grant_denied', grantId: 'g1', reason: 'x', sig: B64 }, limits)).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ['an extra field inside pending', { ...pending, isAdmin: true }],
+    ['an extra field inside the request', { ...pending, request: { ...pending.request, shell: true } }],
+    ['a missing cwd', { ...pending, request: { ...pending.request, cwd: undefined } }],
+    ['a non-positive timeout', { ...pending, request: { ...pending.request, timeoutMs: 0 } }],
+    ['an op outside the union', { ...pending, request: { ...pending.request, op: 'root' } }],
+    ['an empty challengeId', { ...pending, challengeId: '' }],
+  ])('given %s, should reject the whole frame as malformed', (_label, bad) => {
+    expect(decodeFrame({ type: 'grant_denied', grantId: 'g1', reason: 'ask_pending:ch_1', pending: bad, sig: B64 }, limits)).toEqual({ ok: false, reason: 'malformed' });
+  });
+});
+
+describe('GA wave 2 — approval_revoke_result is a machine→server frame', () => {
+  it('decodes with approvalId + removed + sig, and rejects a missing count or an extra field', () => {
+    const limits = { maxFrameBytes: 65536 };
+    expect(decodeFrame({ type: 'approval_revoke_result', approvalId: 'ch_1', removed: 2, sig: B64 }, limits)).toMatchObject({ ok: true, frame: { type: 'approval_revoke_result', approvalId: 'ch_1', removed: 2 } });
+    expect(decodeFrame({ type: 'approval_revoke_result', approvalId: 'ch_1', sig: B64 }, limits)).toEqual({ ok: false, reason: 'malformed' });
+    expect(decodeFrame({ type: 'approval_revoke_result', approvalId: '', removed: 1, sig: B64 }, limits)).toEqual({ ok: false, reason: 'malformed' });
+    expect(isMachineToServerFrame({ type: 'approval_revoke_result', approvalId: 'ch_1', removed: 0, sig: '' })).toBe(true);
   });
 });

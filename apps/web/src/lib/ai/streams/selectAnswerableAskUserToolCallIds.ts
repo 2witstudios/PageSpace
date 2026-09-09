@@ -1,7 +1,5 @@
 import type { RenderedMessage } from './selectRenderedMessages';
-import { ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
-
-const ASK_USER_PART_TYPE = `tool-${ASK_USER_TOOL_NAME}`;
+import { isPausingToolPartType } from '@/lib/ai/tools/pausing-tools';
 
 export interface AskUserAnswerabilityInput {
   /** Selector output (selectRenderedMessages) — the rendered list, never useChat's local array. */
@@ -13,7 +11,8 @@ export interface AskUserAnswerabilityInput {
 }
 
 /**
- * Pure answerability predicate (epic leaf 6.3): a `tool-ask_user` part is
+ * Pure answerability predicate (epic leaf 6.3): a pausing-tool part (`tool-ask_user`,
+ * `tool-request_env_approval`) is
  * answerable iff it sits on the LAST message, that message is a settled
  * (non-streaming) assistant reply, its state is `input-available`, no other
  * surface already claimed it (answeringToolCallIds), and nothing is busy for
@@ -30,7 +29,7 @@ export const selectAnswerableAskUserToolCallIds = (
   if (!last || last.role !== 'assistant') return ids;
 
   for (const part of last.parts ?? []) {
-    if (part.type !== ASK_USER_PART_TYPE) continue;
+    if (!isPausingToolPartType(part.type)) continue;
     const p = part as { toolCallId: string; state?: string };
     if (p.state !== 'input-available') continue;
     if (input.answeringToolCallIds.has(p.toolCallId)) continue;

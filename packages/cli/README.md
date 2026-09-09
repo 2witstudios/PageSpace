@@ -233,10 +233,16 @@ second surprises people:
   read any file you can read, change any file you can change, reach anything on your network that
   you can reach, and use any credential sitting in your home directory. There is no sandbox
   around it.
-- You see the **first** command of each kind, and approving it covers **every later command of
-  that kind for the rest of that session, unseen**. The approval is remembered per user, session
-  and operation — not per command — so after you approve one `exec`, the next `exec` from that
-  same user and session runs with no prompt at all, whatever it is.
+- Approving a command is remembered **per program, not per session**. The approval is keyed on
+  you, this environment, the operation, and the *program* that ran (`/usr/bin/git` — for a shell
+  command line, every program it names), for the time you choose: once, until the daemon stops,
+  30 days (the default), or until you revoke it. So approving `git status` lets `git push` run
+  from a new chat tomorrow with no prompt, and does **not** let `rm` run: `rm` asks. A command
+  line whose programs cannot be pinned down (`$(…)`, `eval`, a nested `sh -c`, `find -exec`,
+  `sudo`) is never remembered and asks every time. Approvals live in
+  `~/.pagespace/env-approvals.json` (yours, 0600; a file anybody else can write is ignored), and
+  PageSpace can revoke one (from the environment's settings, over a signed frame the daemon checks
+  against its pinned key) but never add one.
 
 The `roots` in your policy file confine the paths an agent can **name** — the working directory it
 asks for, and the files it asks to read or write. They do **not** confine what a program does once
@@ -245,9 +251,9 @@ it has started. A command approved with a working directory inside a root can st
 daemon to open them. Actually confining a running process needs operating-system sandboxing,
 which this daemon does not do.
 
-So the question at the prompt is not "may this touch that folder". It is "may this, and everything
-like it for the rest of this session, run as me". Answer it the way you would answer a stranger
-asking for your shell for the afternoon. Two practical consequences:
+So the question at the prompt is not "may this touch that folder". It is "may this program, run
+with any arguments, from any of my chats, run as me for the time I pick". Answer it the way you
+would answer a stranger asking for your shell for the afternoon. Two practical consequences:
 
 - Run the daemon as an ordinary user, never as root, and prefer a machine — or a separate account —
   that does not hold secrets you would not hand to whoever is driving the agent.
@@ -270,21 +276,27 @@ What the daemon does guarantee is narrower than "safe", and worth knowing exactl
 One consequence of the two facts above, worth seeing once before you pick a mode: an agent that
 reads a file on this machine can be *steered* by what that file says — a README, a dependency's
 source, a downloaded document can all contain text aimed at the agent rather than at you. If the
-agent then runs a command, and you have already approved an `exec` in that session, **that command
-runs without a prompt**. This is inherent to agents reading content nobody vetted, not a defect in
-this daemon; the defences that apply here are the ordinary ones — keep `principals` short, keep
-`ops` narrow, stop the daemon when you are not using it, and read
-`~/.pagespace/env-audit.jsonl` when you want to know what actually ran.
+agent then runs a command whose program you have already approved, **that command runs without a
+prompt** — with whatever arguments the steered agent chose. This is inherent to agents reading
+content nobody vetted, not a defect in this daemon; the defences that apply here are the ordinary
+ones — approve programs, not shells or interpreters, when you can; pick the shortest scope that
+does the job; keep `principals` short and `ops` narrow; stop the daemon when you are not using it;
+revoke approvals you no longer need; and read `~/.pagespace/env-audit.jsonl` when you want to
+know what actually ran.
 
 ### The three modes, in practice
 
 - **`deny`** — nothing runs, ever. The daemon still connects, so the Environment shows as connected.
 - **`ask`** — the safe default to start with. An operation listed in `ops` runs without asking;
   anything else stops and prompts you in this terminal, showing the exact command, working
-  directory, paths, environment and limits. As above, approving covers further requests for that
-  same operation from the same user and session while the daemon runs — those later commands are
-  never shown to you — but not forever, and not for other people. Declining refuses that request
-  and asks again next time. `ask` needs a terminal: a headless machine cannot use it.
+  directory, paths, environment and limits — and which programs an approval would cover. Approving
+  remembers those programs (for you, on this environment) for the scope you pick; later commands
+  that run only remembered programs are never shown to you, others ask. Declining refuses that
+  request and asks again next time. Without a terminal (or with `PAGESPACE_ENV_ASK=chat`), the
+  daemon does not deny: it freezes the exact request under a challenge and the question is put to
+  you **in the PageSpace chat**, on a card showing that exact command, directory, environment and
+  limits; the machine compares your click against what it froze before anything runs, and the
+  challenge dies with the request's one-minute grant.
 - **`allowlist`** — only the operations in `ops` run; everything else is denied with no prompt.
 
 **`allowlist` allowlists operations, not executables.** `ops` holds `exec`, `fs_read` and
@@ -360,12 +372,15 @@ or one that is unreadable, invalid, wrongly owned or writable by others, means e
 denied** (`no_policy`); the daemon still connects so you can see the Environment and fix the file.
 `pagespace env policy` prints what is in force, or why the file is being ignored.
 
-**`env enroll` writes a starter policy for you** if none exists: `mode: ask`, no pre-approved ops,
-the directory you ran `enroll` in as the only root, and — the part that matters — `principals`
+**`env enroll` writes a starter policy for you** if none exists: `mode: ask`, the **file**
+operations the environment's server policy allows (`fs_read`, `fs_write`) pre-approved so file
+work inside the root runs without asking — **never `exec`**, however the environment is
+configured: every command reaches the prompt, and each program needs your approval the first time
+— the directory you ran `enroll` in as the only root, and — the part that matters — `principals`
 set to **your user id and nobody else's**. A machine is driven by its owner only: PageSpace will
 only ever bind the environment owner's sessions to it, and this file makes the machine refuse
 everyone else on its own, even if the server were wrong. An existing policy is never overwritten;
-if it does not name you, `enroll` says so. Naming other users in `principals` is honoured (it is
+`enroll` prints the diff of what it would have written, and if the file does not name you it says so. Naming other users in `principals` is honoured (it is
 your file), but `env policy` and `env connect` warn about it, because each user listed there can
 run commands as you.
 

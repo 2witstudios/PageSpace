@@ -35,7 +35,7 @@ import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
 import { loadServerSigningKeyring } from '@pagespace/lib/auth/env-bridge-signing-key';
 import { LOCAL_ENV_HEARTBEAT_WINDOW_MS } from '@pagespace/lib/services/drive-envs/drive-envs';
 import { decodeFrame, encodeFrame, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
-import { encodeHelloForSigning, encodeResultForSigning, resultHashForFrame, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
+import { encodeHelloForSigning, encodeResultForSigning, machineResultBindingId, resultHashForFrame, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
 import { parseServerSigningKeyring, type SigningKeyPrimitives } from '@pagespace/lib/env-bridge/server-signing-key';
 import { clearAllEnvConnectionsForTesting, getEnvConnection, readEnvLiveConnection, ENV_SUPERSEDED_CLOSE_CODE, ENV_SUPERSEDED_CLOSE_REASON } from '@/lib/websocket/ws-env-connections';
 import { getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
@@ -113,7 +113,7 @@ type UnsignedResult<T = MachineResultFrame> = T extends unknown ? Omit<T, 'sig'>
 
 function signedResult(body: UnsignedResult, key = machine): string {
   const resultHash = resultHashForFrame({ ...body, sig: '' } as MachineResultFrame, envBridgeHash);
-  return encodeFrame({ ...body, sig: Buffer.from(nodeSign(null, encodeResultForSigning({ grantId: body.grantId, resultHash }), key.privateKey)).toString('base64') } as MachineResultFrame);
+  return encodeFrame({ ...body, sig: Buffer.from(nodeSign(null, encodeResultForSigning({ grantId: machineResultBindingId({ ...body, sig: '' } as MachineResultFrame), resultHash }), key.privateKey)).toString('base64') } as MachineResultFrame);
 }
 
 const events = () => vi.mocked(auditRequest).mock.calls.map((call) => (call[1] as { details?: { originalEvent?: string } }).details?.originalEvent);

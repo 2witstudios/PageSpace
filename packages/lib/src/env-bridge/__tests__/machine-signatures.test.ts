@@ -15,6 +15,12 @@ import {
   encodeResultForSigning,
   encodeRevokeForSigning,
   resultHashForFrame,
+  resultPayloadForFrame,
+  machineResultBindingId,
+  approvalRevokeBindingId,
+  encodeApprovalRevokeForSigning,
+  REVOKE_APPROVAL_SIGNING_DOMAIN,
+  REVOKE_SIGNING_DOMAIN,
   verifyHello,
   verifyMachineResult,
   verifyRevoke,
@@ -90,13 +96,42 @@ const results: UnsignedResult = {
   fs_read_result: { type: 'fs_read_result', grantId: 'g2', found: true, contentB64: 'ZGF0YQ==' },
   fs_write_result: { type: 'fs_write_result', grantId: 'g3', ok: true },
   grant_denied: { type: 'grant_denied', grantId: 'g4', reason: 'policy_denied' },
+  approval_revoke_result: { type: 'approval_revoke_result', approvalId: 'ch_9', removed: 1 },
 };
 
 function signResult(body: Omit<MachineResultFrame, 'sig'>, key = machine): MachineResultFrame {
   const frame = { ...body, sig: '' } as MachineResultFrame;
   const resultHash = resultHashForFrame(frame, hash);
-  return { ...body, sig: signWith(key, encodeResultForSigning({ grantId: body.grantId, resultHash })) } as MachineResultFrame;
+  return { ...body, sig: signWith(key, encodeResultForSigning({ grantId: machineResultBindingId(frame), resultHash })) } as MachineResultFrame;
 }
+
+const PENDING = { challengeId: 'ch_1', expiresAt: 1_800_000_060_000, request: { op: 'exec' as const, cmd: 'git', args: ['status'], cwd: '/home/u/proj', paths: [], env: {}, timeoutMs: 1000, maxBytes: 1024, clamped: false } };
+
+describe('GA wave 2 — a grant_denied carrying a PENDING frozen request is signed over that request too', () => {
+  const denied = { type: 'grant_denied' as const, grantId: 'g5', reason: 'ask_pending:ch_1', pending: PENDING };
+
+  it('should verify when signed as sent, and its payload names every field of the frozen request', () => {
+    const frame = signResult(denied);
+    expect(verifyMachineResult({ frame, machinePublicKey: spki(machine), verify, hash })).toMatchObject({ ok: true });
+    expect(resultPayloadForFrame(frame)).toEqual({ type: 'grant_denied', grantId: 'g5', reason: 'ask_pending:ch_1', pending: PENDING });
+    // Absent pending hashes as null, distinctly from any present one.
+    expect(resultPayloadForFrame({ ...results.grant_denied, sig: '' } as MachineResultFrame)).toEqual({ type: 'grant_denied', grantId: 'g4', reason: 'policy_denied', pending: null });
+  });
+
+  it.each([
+    ['cmd', { ...PENDING, request: { ...PENDING.request, cmd: 'rm' } }],
+    ['args', { ...PENDING, request: { ...PENDING.request, args: ['push', '--force'] } }],
+    ['cwd', { ...PENDING, request: { ...PENDING.request, cwd: '/etc' } }],
+    ['env', { ...PENDING, request: { ...PENDING.request, env: { LD_PRELOAD: '/evil.so' } } }],
+    ['challengeId', { ...PENDING, challengeId: 'ch_other' }],
+    ['expiresAt', { ...PENDING, expiresAt: PENDING.expiresAt + 1 }],
+    ['removed', undefined],
+  ])('given pending.%s altered after signing, should deny bad_signature — the card can only show what the machine froze', (_label, pending) => {
+    const signed = signResult(denied);
+    const frame = { ...denied, ...(pending === undefined ? { pending: undefined } : { pending }), sig: signed.sig } as MachineResultFrame;
+    expect(verifyMachineResult({ frame, machinePublicKey: spki(machine), verify, hash })).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+});
 
 describe('results — machine-signed over {grantId, resultHash} (invariant 7)', () => {
   it.each(Object.keys(results) as MachineResultFrame['type'][])('given a %s signed by the pinned key, should verify and return the resultHash it covers', (type) => {
@@ -119,6 +154,7 @@ describe('results — machine-signed over {grantId, resultHash} (invariant 7)', 
     ['fs_write_result.ok', { ...results.fs_write_result, ok: false }],
     ['fs_write_result.error', { ...results.fs_write_result, error: 'disk full' }],
     ['grant_denied.reason', { ...results.grant_denied, reason: 'other' }],
+    ['grant_denied.pending (added)', { ...results.grant_denied, pending: PENDING }],
   ] as Array<[string, UnsignedResult[keyof UnsignedResult]]>)('given %s changed after signing, should deny bad_signature — every payload field is covered', (_label, tampered) => {
     const original = results[tampered.type];
     const signed = signResult(original);
@@ -128,7 +164,7 @@ describe('results — machine-signed over {grantId, resultHash} (invariant 7)', 
 
   it('given the grantId swapped onto another grant after signing, should deny bad_signature (a result cannot be replayed under another grant)', () => {
     const signed = signResult(results.exec_result);
-    expect(verifyMachineResult({ frame: { ...signed, grantId: 'g-other' }, machinePublicKey: spki(machine), verify, hash })).toEqual({ ok: false, reason: 'bad_signature' });
+    expect(verifyMachineResult({ frame: { ...signed, grantId: 'g-other' } as MachineResultFrame, machinePublicKey: spki(machine), verify, hash })).toEqual({ ok: false, reason: 'bad_signature' });
   });
 
   it('given fs_read_result with contentB64 absent vs empty, should hash distinctly (absent is not empty)', () => {
@@ -150,11 +186,75 @@ describe('results — machine-signed over {grantId, resultHash} (invariant 7)', 
   });
 
   it('should name exactly the exec/fs/denied result frames — PTY frames and pong are outside this verifier by design ([D-2])', () => {
-    expect([...MACHINE_RESULT_FRAME_TYPES].sort()).toEqual(['exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied']);
+    expect([...MACHINE_RESULT_FRAME_TYPES].sort()).toEqual(['approval_revoke_result', 'exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied']);
     expect(isMachineResultFrame({ type: 'pty_data', sessionId: 's', seq: 0, dataB64: '' })).toBe(false);
     expect(isMachineResultFrame({ type: 'pty_exit', sessionId: 's', code: 0 })).toBe(false);
     expect(isMachineResultFrame({ type: 'pong', ts: 1 })).toBe(false);
     expect(isMachineResultFrame({ type: 'exec_result', grantId: 'g', exitCode: 0, stdoutB64: '', stderrB64: '', truncated: false, sig: '' })).toBe(true);
+  });
+});
+
+describe('GA wave 2 — revoking ONE approval rides the revoke frame under its own domain', () => {
+  const binding = { envId: 'env_1', enrollmentId: 'enr_1', keyId: 'srv-k1', issuedAt: 1_800_000_000_000 };
+  const approvalRevoke = (key = server, approvalId = 'ch_1'): Extract<Frame, { type: 'revoke' }> => ({
+    type: 'revoke',
+    approvalId,
+    issuedAt: binding.issuedAt,
+    reason: 'owner_revoked_approval',
+    sig: signWith(key, encodeApprovalRevokeForSigning({ ...binding, approvalId })),
+  });
+  const check = (frame: Extract<Frame, { type: 'revoke' }>) => verifyRevoke({ frame, ...binding, serverPublicKey: spki(server), verify });
+
+  it('given an approval revoke signed by the pinned key for THIS enrollment and id, should verify', () => {
+    expect(check(approvalRevoke())).toEqual({ ok: true });
+  });
+
+  it('given the approvalId STRIPPED from a signed approval revoke, should deny bad_signature — it can never become an enrollment revoke (a key deletion)', () => {
+    const { approvalId: _dropped, ...stripped } = approvalRevoke();
+    expect(check(stripped as Extract<Frame, { type: 'revoke' }>)).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+
+  it('given an approvalId ADDED to a signed enrollment revoke, should deny bad_signature — the reverse is closed too', () => {
+    const full: Extract<Frame, { type: 'revoke' }> = { type: 'revoke', issuedAt: binding.issuedAt, sig: signWith(server, encodeRevokeForSigning(binding)) };
+    expect(check(full)).toEqual({ ok: true });
+    expect(check({ ...full, approvalId: 'ch_1' })).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+
+  it('given a different approvalId, enrollment, or a rogue key, should deny bad_signature', () => {
+    expect(check({ ...approvalRevoke(), approvalId: 'ch_other' })).toEqual({ ok: false, reason: 'bad_signature' });
+    expect(verifyRevoke({ frame: approvalRevoke(), ...binding, enrollmentId: 'enr_other', serverPublicKey: spki(server), verify })).toEqual({ ok: false, reason: 'bad_signature' });
+    expect(check(approvalRevoke(rogue))).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+
+  it('the two domains differ, and the enrollment revoke bytes are exactly what they were', () => {
+    expect(REVOKE_APPROVAL_SIGNING_DOMAIN).not.toBe(REVOKE_SIGNING_DOMAIN);
+    expect(Buffer.from(encodeRevokeForSigning(binding)).toString()).toBe(JSON.stringify({ domain: REVOKE_SIGNING_DOMAIN, ...binding }));
+  });
+});
+
+describe('GA wave 2 (Codex P2 on #2583) — the approval-revoke ACK is a machine result signed over {approvalId, removed}', () => {
+  const ack = { type: 'approval_revoke_result' as const, approvalId: 'ch_1', removed: 2 };
+  const signAck = (body = ack, key = machine): MachineResultFrame => {
+    const frame = { ...body, sig: '' } as MachineResultFrame;
+    return { ...body, sig: signWith(key, encodeResultForSigning({ grantId: machineResultBindingId(frame), resultHash: resultHashForFrame(frame, hash) })) } as MachineResultFrame;
+  };
+
+  it('should verify under the pinned machine key, bound to the namespaced approval id (never a grant id)', () => {
+    expect(verifyMachineResult({ frame: signAck(), machinePublicKey: spki(machine), verify, hash })).toMatchObject({ ok: true });
+    expect(machineResultBindingId({ ...ack, sig: '' } as MachineResultFrame)).toBe('approval-revoke:ch_1');
+    expect(approvalRevokeBindingId('ch_1')).toBe('approval-revoke:ch_1');
+  });
+
+  it.each([
+    ['approvalId', { ...ack, approvalId: 'ch_2' }],
+    ['removed', { ...ack, removed: 0 }],
+  ])('given %s edited after signing, should deny bad_signature — the server may only claim what the machine signed', (_label, tampered) => {
+    const signed = signAck();
+    expect(verifyMachineResult({ frame: { ...tampered, sig: signed.sig } as MachineResultFrame, machinePublicKey: spki(machine), verify, hash })).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+
+  it('given an ack signed by a rogue key, should deny bad_signature', () => {
+    expect(verifyMachineResult({ frame: signAck(ack, rogue), machinePublicKey: spki(machine), verify, hash })).toEqual({ ok: false, reason: 'bad_signature' });
   });
 });
 

@@ -126,6 +126,13 @@ describe('enrollLocalDriveEnv — the machine presents the code and its public k
     expect(result).toMatchObject({ ok: true, ownerId: 'user-1' });
   });
 
+  it('GA wave 2 · leaf 3: should answer the env\'s serverPolicy too, so the enroller can scaffold the file ops it allows (and never exec) into the machine policy', async () => {
+    const h = harness();
+    const created = await createLocal(h);
+    const result = await enrollLocalDriveEnv({ enrollmentId: created.enrollment.enrollmentId, code: created.enrollment.code, machinePublicKey, deps: h.deps });
+    expect(result).toMatchObject({ ok: true, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } });
+  });
+
   it('given the right code before expiry and a valid Ed25519 SPKI key, should pin key + fingerprint + server keyId, consume the code, and hand back the server public key to pin', async () => {
     const h = harness();
     const { env, enrollment } = await createLocal(h);
@@ -137,6 +144,7 @@ describe('enrollLocalDriveEnv — the machine presents the code and its public k
       serverKeyId: 'srv-k1',
       serverPublicKey: Buffer.from(identity.signingKey.publicKey).toString('base64'),
       ownerId: 'user-1',
+      serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false },
     });
     const sibling = h.fake.local.get(env.id)!;
     expect(sibling.machinePublicKey).toBe(machinePublicKey);

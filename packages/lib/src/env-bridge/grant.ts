@@ -53,6 +53,21 @@ export interface GrantPrincipal {
   readonly conversationId: string;
 }
 
+/**
+ * The owner's click in the chat, carried on the grant that re-issues the
+ * request it answers (GA wave 2, Tier B). Signed with the grant under the
+ * pinned server key, so the daemon verifies it with the key it already
+ * holds and it cannot be moved onto another grant. The daemon honours it
+ * ONLY against a request it froze itself under `challengeId` (leaf 7).
+ */
+export interface ApprovalIntent {
+  readonly challengeId: string;
+  /** How long the machine should remember the approval — the owner's choice on the card. */
+  readonly scope: 'once' | 'session' | '30d' | 'until_revoked';
+  /** ms since epoch; the click is refused after this (the challenge's own TTL is the grant that froze it). */
+  readonly expiresAt: number;
+}
+
 export interface Grant {
   readonly grantId: string;
   /** The env this grant is for. A grant for another machine never runs here. */
@@ -66,6 +81,8 @@ export interface Grant {
   /** Expiry, ms since epoch. `exp - iat` must not exceed GRANT_MAX_TTL_MS. */
   readonly exp: number;
   readonly nonce: string;
+  /** Present only on a grant re-issued by the owner's click (GA wave 2). */
+  readonly approvalIntent?: ApprovalIntent;
 }
 
 export type GrantDenyReason =
@@ -134,6 +151,14 @@ const principalSchema = z
 
 // `.strict()` everywhere: an extra field is not "ignored", it is a malformed
 // grant. A privileged-looking `isAdmin: true` riding along must fail closed.
+const approvalIntentSchema = z
+  .object({
+    challengeId: z.string().min(1),
+    scope: z.enum(['once', 'session', '30d', 'until_revoked']),
+    expiresAt: z.number().int().nonnegative(),
+  })
+  .strict();
+
 const grantSchema = z
   .object({
     grantId: z.string().min(1),
@@ -144,6 +169,7 @@ const grantSchema = z
     iat: z.number().int().nonnegative(),
     exp: z.number().int().nonnegative(),
     nonce: z.string().min(1),
+    approvalIntent: approvalIntentSchema.optional(),
   })
   .strict();
 
@@ -166,6 +192,11 @@ export function encodeGrant(grant: Grant): Uint8Array {
     iat: grant.iat,
     exp: grant.exp,
     nonce: grant.nonce,
+    // Appended ONLY when present, so every grant without a click keeps the
+    // exact bytes it always had; a click cannot be added or altered in flight.
+    ...(grant.approvalIntent !== undefined && {
+      approvalIntent: { challengeId: grant.approvalIntent.challengeId, scope: grant.approvalIntent.scope, expiresAt: grant.approvalIntent.expiresAt },
+    }),
   };
   return new TextEncoder().encode(JSON.stringify(canonical));
 }

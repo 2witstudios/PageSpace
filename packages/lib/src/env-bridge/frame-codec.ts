@@ -44,11 +44,34 @@ const hello = z.object({ type: z.literal('hello'), envId: nonEmpty, capabilities
 const execResult = z.object({ type: z.literal('exec_result'), grantId: nonEmpty, exitCode: z.number().int(), stdoutB64: b64, stderrB64: b64, truncated: z.boolean(), sig: b64 });
 const fsReadResult = z.object({ type: z.literal('fs_read_result'), grantId: nonEmpty, found: z.boolean(), contentB64: b64.optional(), sig: b64 });
 const fsWriteResult = z.object({ type: z.literal('fs_write_result'), grantId: nonEmpty, ok: z.boolean(), error: z.string().optional(), sig: b64 });
-const grantDenied = z.object({ type: z.literal('grant_denied'), grantId: nonEmpty, reason: nonEmpty, sig: b64 });
+/**
+ * The request a daemon FROZE under a pending chat approval (GA wave 2): the
+ * exact normalised request the owner's card shows and the machine will
+ * byte-compare a click against. Carried on a `grant_denied` whose reason is
+ * `ask_pending:<challengeId>`; covered by the result signature like every
+ * other payload field, so the card shows what the machine signed.
+ */
+const pendingRequest = z
+  .object({
+    op: z.enum(['exec', 'fs_read', 'fs_write', 'pty_open']),
+    cmd: z.string().optional(),
+    args: z.array(z.string()).optional(),
+    cwd: nonEmpty,
+    paths: z.array(z.string()),
+    env: z.record(z.string(), z.string()),
+    timeoutMs: posInt,
+    maxBytes: posInt,
+    clamped: z.boolean(),
+  })
+  .strict();
+const pendingApproval = z.object({ challengeId: nonEmpty, expiresAt: nonNegInt, request: pendingRequest }).strict();
+const grantDenied = z.object({ type: z.literal('grant_denied'), grantId: nonEmpty, reason: nonEmpty, pending: pendingApproval.optional(), sig: b64 });
 const ptyOpened = z.object({ type: z.literal('pty_opened'), grantId: nonEmpty, sessionId: nonEmpty });
 const ptyData = z.object({ type: z.literal('pty_data'), sessionId: nonEmpty, seq: nonNegInt, dataB64: b64 });
 const ptyExit = z.object({ type: z.literal('pty_exit'), sessionId: nonEmpty, code: z.number().int() });
 const pong = z.object({ type: z.literal('pong'), ts: nonNegInt });
+/** The machine's signed acknowledgement of an approval revoke (GA wave 2): exactly this many rows were deleted for this id. */
+const approvalRevokeResult = z.object({ type: z.literal('approval_revoke_result'), approvalId: nonEmpty, removed: nonNegInt, sig: b64 });
 
 // ---- server → machine -----------------------------------------------------
 
@@ -83,20 +106,23 @@ const grantPtyOpen = z.object({
 const ptyInput = z.object({ type: z.literal('pty_input'), sessionId: nonEmpty, seq: nonNegInt, dataB64: b64 });
 const ptyResize = z.object({ type: z.literal('pty_resize'), sessionId: nonEmpty, cols: posInt, rows: posInt });
 const ptyKill = z.object({ type: z.literal('pty_kill'), sessionId: nonEmpty, signal: z.string().optional() });
-const revoke = z.object({ type: z.literal('revoke'), sig: b64, issuedAt: nonNegInt, reason: z.string().optional() });
+/** `approvalId` present ⇒ revoke ONE durable approval on the machine (GA wave 2); absent ⇒ revoke the enrollment (delete the key). Signed under different domains, so neither can be turned into the other. */
+const revoke = z.object({ type: z.literal('revoke'), sig: b64, issuedAt: nonNegInt, reason: z.string().optional(), approvalId: nonEmpty.optional() });
 const ping = z.object({ type: z.literal('ping'), ts: nonNegInt });
 
 const frameSchema = z.discriminatedUnion('type', [
-  hello, execResult, fsReadResult, fsWriteResult, grantDenied, ptyOpened, ptyData, ptyExit, pong,
+  hello, execResult, fsReadResult, fsWriteResult, grantDenied, approvalRevokeResult, ptyOpened, ptyData, ptyExit, pong,
   grantExec, grantFsRead, grantFsWrite, grantPtyOpen, ptyInput, ptyResize, ptyKill, revoke, ping,
 ]);
 
 export type Frame = z.infer<typeof frameSchema>;
+/** The frozen request a `grant_denied ask_pending:<id>` carries. */
+export type PendingApproval = z.infer<typeof pendingApproval>;
 export type FrameType = Frame['type'];
 
 /** The closed set. A `type` outside it is `unknown_type`, full stop. */
 export const FRAME_TYPES: ReadonlySet<FrameType> = new Set<FrameType>([
-  'hello', 'exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'pty_opened', 'pty_data', 'pty_exit', 'pong',
+  'hello', 'exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'approval_revoke_result', 'pty_opened', 'pty_data', 'pty_exit', 'pong',
   'grant_exec', 'grant_fs_read', 'grant_fs_write', 'grant_pty_open', 'pty_input', 'pty_resize', 'pty_kill', 'revoke', 'ping',
 ]);
 
@@ -107,7 +133,7 @@ export const FRAME_TYPES: ReadonlySet<FrameType> = new Set<FrameType>([
  * `exec_result` arriving from the server. Every frame type is in exactly one.
  */
 export const MACHINE_TO_SERVER_FRAME_TYPES: ReadonlySet<FrameType> = new Set<FrameType>([
-  'hello', 'exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'pty_opened', 'pty_data', 'pty_exit', 'pong',
+  'hello', 'exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'approval_revoke_result', 'pty_opened', 'pty_data', 'pty_exit', 'pong',
 ]);
 export const SERVER_TO_MACHINE_FRAME_TYPES: ReadonlySet<FrameType> = new Set<FrameType>([
   'grant_exec', 'grant_fs_read', 'grant_fs_write', 'grant_pty_open', 'pty_input', 'pty_resize', 'pty_kill', 'revoke', 'ping',

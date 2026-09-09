@@ -32,6 +32,7 @@ import { generateMachineKeypair, signWithMachineKey } from '../env-bridge/keypai
 import type { GenerateMachineKeypair, SignWithMachineKey } from '../env-bridge/keypair.js';
 import { BridgeTokenError, mintBridgeToken, postJson, refusalOf } from '../env-bridge/token.js';
 import { defaultPolicyPath, openPolicyFile, parseMachinePolicyText, writePolicyFile, type OpenedPolicyFile } from '../env-bridge/policy.js';
+import { GRANT_OPS, type GrantOp } from '../env-bridge/lib-core.js';
 
 type Fetch = typeof globalThis.fetch;
 
@@ -58,48 +59,101 @@ export interface EnvEnrollHandlerDeps {
 }
 
 /**
+ * The ops the enroller may pre-approve on the machine: file operations only.
+ * `exec` is NEVER in this set (GA wave 2, Tier B): a shell command must reach
+ * the daemon's `ask` verdict by construction, so every exec class needs the
+ * owner's click on the exact normalised command, however permissive the
+ * server policy is. File operations inside the roots are Tier A — bounded by
+ * the roots, so a deliberate setup is enough and they run headless.
+ */
+export const HEADLESS_MACHINE_OPS: readonly GrantOp[] = ['fs_read', 'fs_write'];
+
+/**
+ * The machine `ops` to scaffold from what the server said it allows:
+ * `serverPolicy.ops ∩ HEADLESS_MACHINE_OPS`, in the headless set's order. The
+ * value comes off the wire and is checked strictly — an unrecognised shape or
+ * an op outside the closed union yields `[]` (ask about everything), never a
+ * guess.
+ */
+export function machineOpsFromServerPolicy(serverPolicy: unknown): GrantOp[] {
+  if (serverPolicy === null || typeof serverPolicy !== 'object') return [];
+  const { ops, checkpoint } = serverPolicy as { ops?: unknown; checkpoint?: unknown };
+  if (typeof checkpoint !== 'boolean') return [];
+  if (!Array.isArray(ops) || !ops.every((op) => typeof op === 'string' && (GRANT_OPS as readonly string[]).includes(op))) return [];
+  const allowed = ops as GrantOp[];
+  return HEADLESS_MACHINE_OPS.filter((op) => allowed.includes(op));
+}
+
+/**
  * The policy scaffolded at enrol, while the owner is at the keyboard (D-6,
  * invariant 13 — defence in depth): `principals` is the machine's OWNER and
  * nobody else, so this daemon refuses every other user even if the server
- * were wrong about who may bind. `mode: ask` with no pre-approved ops means
- * every kind of request prompts the first time; the only root is the
- * directory `enroll` ran in. The owner edits from there.
+ * were wrong about who may bind. `mode: ask` with the server-allowed FILE ops
+ * pre-approved (never `exec`) means file work inside the root runs headless
+ * and every command prompts; the only root is the directory `enroll` ran in.
+ * The owner edits from there.
  */
-export function scaffoldedPolicy(input: { ownerId: string; root: string }): string {
-  return `${JSON.stringify({ mode: 'ask', principals: [input.ownerId], ops: [], roots: [input.root], envAllowlist: [] }, null, 2)}\n`;
+export function scaffoldedPolicy(input: { ownerId: string; root: string; ops?: readonly GrantOp[] }): string {
+  return `${JSON.stringify({ mode: 'ask', principals: [input.ownerId], ops: [...(input.ops ?? [])], roots: [input.root], envAllowlist: [] }, null, 2)}\n`;
 }
 
-type PolicyScaffoldOutcome = { path: string; scaffolded: boolean; kept: boolean; warning: string | null; error: string | null };
+/**
+ * A minimal line diff for "here is what enroll would have written": lines
+ * only in `existing` are `-`, lines only in `scaffold` are `+`, shared lines
+ * are printed once with a leading space. Order follows the scaffold, then
+ * the existing file's extras. Good enough to read; not a patch.
+ */
+export function describePolicyDiff(existing: string, scaffold: string): string {
+  const before = existing.split('\n').filter((line) => line.length > 0);
+  const after = scaffold.split('\n').filter((line) => line.length > 0);
+  const lines: string[] = [];
+  const remaining = [...before];
+  for (const line of after) {
+    const index = remaining.indexOf(line);
+    if (index === -1) {
+      lines.push(`+${line}`);
+    } else {
+      lines.push(` ${line}`);
+      remaining.splice(index, 1);
+    }
+  }
+  for (const line of remaining) lines.push(`-${line}`);
+  return lines.join('\n');
+}
 
-/** Write the scaffold IFF no policy file exists; never touch an existing one, but say when it does not name the owner. */
-async function scaffoldPolicyForOwner(deps: EnvEnrollHandlerDeps, env: Readonly<Record<string, string | undefined>>, ownerId: string): Promise<PolicyScaffoldOutcome> {
+type PolicyScaffoldOutcome = { path: string; scaffolded: boolean; kept: boolean; ops: readonly GrantOp[]; diff: string | null; warning: string | null; error: string | null };
+
+/** Write the scaffold IFF no policy file exists; never touch an existing one, but say when it does not name the owner — and show the diff it would have written. */
+async function scaffoldPolicyForOwner(deps: EnvEnrollHandlerDeps, env: Readonly<Record<string, string | undefined>>, ownerId: string, ops: readonly GrantOp[]): Promise<PolicyScaffoldOutcome> {
   const path = defaultPolicyPath(env, deps.homedir);
   let existing: OpenedPolicyFile | null;
   try {
     existing = deps.openPolicy(path);
   } catch (error) {
     // Unreadable is not "missing": leave whatever is there alone.
-    return { path, scaffolded: false, kept: true, warning: null, error: `could not read the existing policy: ${messageOf(error)}` };
+    return { path, scaffolded: false, kept: true, ops, diff: null, warning: null, error: `could not read the existing policy: ${messageOf(error)}` };
   }
+  const content = scaffoldedPolicy({ ownerId, root: deps.cwd(), ops });
   if (existing !== null) {
     const parsed = parseMachinePolicyText(existing.content);
     const warning =
       parsed !== null && !parsed.principals.includes(ownerId)
         ? `The existing policy at ${path} does not name you (${ownerId}) in "principals", so requests from your own sessions will be denied principal_not_allowed until you add it.`
         : null;
-    return { path, scaffolded: false, kept: true, warning, error: null };
+    return { path, scaffolded: false, kept: true, ops, diff: describePolicyDiff(existing.content, content), warning, error: null };
   }
   // Never guess a root for someone's machine (Codex P2 on #2582): the scaffold
   // must be a policy `connect` will accept, so it is parsed with the same
   // strict parser before it is written. The filesystem root, a relative
   // directory, or one with `..` are all refused — and refused OUT LOUD.
   const root = deps.cwd();
-  const content = scaffoldedPolicy({ ownerId, root });
   if (parseMachinePolicyText(content) === null) {
     return {
       path,
       scaffolded: false,
       kept: false,
+      ops,
+      diff: null,
       warning: null,
       error:
         `the directory you ran enroll in (${root}) is not a valid root — a root must be an absolute directory other than the filesystem root, without ".." segments — so nothing was written. ` +
@@ -108,9 +162,9 @@ async function scaffoldPolicyForOwner(deps: EnvEnrollHandlerDeps, env: Readonly<
   }
   try {
     await deps.writePolicyFile(path, content);
-    return { path, scaffolded: true, kept: false, warning: null, error: null };
+    return { path, scaffolded: true, kept: false, ops, diff: null, warning: null, error: null };
   } catch (error) {
-    return { path, scaffolded: false, kept: false, warning: null, error: messageOf(error) };
+    return { path, scaffolded: false, kept: false, ops, diff: null, warning: null, error: messageOf(error) };
   }
 }
 
@@ -179,7 +233,7 @@ export function createEnvEnrollHandler(deps: EnvEnrollHandlerDeps): CommandHandl
       ctx.stderr.write(`Enrollment refused: ${await refusalOf(response)}\n`);
       return EXIT_RUNTIME_ERROR;
     }
-    const result = (await response.json()) as { enrollmentId: string; envId: string; serverKeyId: string; serverPublicKey: string; ownerId?: string };
+    const result = (await response.json()) as { enrollmentId: string; envId: string; serverKeyId: string; serverPublicKey: string; ownerId?: string; serverPolicy?: unknown };
 
     const credential: MachineHostCredential = { ...pending, envId: result.envId, serverPublicKey: result.serverPublicKey, serverKeyId: result.serverKeyId };
     // (Codex C11) The code is spent and the server has pinned this key. The
@@ -200,21 +254,27 @@ export function createEnvEnrollHandler(deps: EnvEnrollHandlerDeps): CommandHandl
     // The key is pinned; from here on nothing can un-enrol. The policy
     // scaffold (D-6) is best-effort and reported, never a reason to fail.
     const ownerId = typeof result.ownerId === 'string' && result.ownerId.length > 0 ? result.ownerId : null;
-    const policy = ownerId === null ? null : await scaffoldPolicyForOwner(deps, ctx.env, ownerId);
+    // Tier A: the FILE ops the server allows run headless from the start. Tier
+    // B: `exec` is never pre-approved here, so every command reaches `ask`.
+    const ops = machineOpsFromServerPolicy(result.serverPolicy);
+    const policy = ownerId === null ? null : await scaffoldPolicyForOwner(deps, ctx.env, ownerId, ops);
 
     if (intent.flags.json) {
-      ctx.stdout.write(`${JSON.stringify({ enrollmentId: result.enrollmentId, envId: result.envId, serverKeyId: result.serverKeyId, host, ownerId, policy: policy && { path: policy.path, scaffolded: policy.scaffolded, kept: policy.kept } })}\n`);
+      ctx.stdout.write(`${JSON.stringify({ enrollmentId: result.enrollmentId, envId: result.envId, serverKeyId: result.serverKeyId, host, ownerId, policy: policy && { path: policy.path, scaffolded: policy.scaffolded, kept: policy.kept, ops: policy.ops } })}\n`);
     } else {
       ctx.stdout.write(
         `Enrolled this machine as environment ${result.envId} on ${host}.\n` +
           `Pinned server signing key ${result.serverKeyId}. The machine key stays in this machine's credential store (profile "${machineProfileName(result.enrollmentId)}").\n`,
       );
       if (policy?.scaffolded) {
+        const headless = policy.ops.length > 0 ? `pre-approved ops ${policy.ops.join(', ')} (file work inside the root runs without asking)` : 'no pre-approved ops';
         ctx.stdout.write(
-          `Wrote a starter policy to ${policy.path}: principals [${ownerId}] (you, and nobody else — a machine is driven by its owner only), mode ask, no pre-approved ops, root ${deps.cwd()}. Edit it to allow more; "pagespace env policy" shows what is in force.\n`,
+          `Wrote a starter policy to ${policy.path}: principals [${ownerId}] (you, and nobody else — a machine is driven by its owner only), mode ask, ${headless}, root ${deps.cwd()}. ` +
+            'Commands (exec) are never pre-approved by enroll: each program needs your approval the first time, in the chat or in this terminal. Edit the file to allow more; "pagespace env policy" shows what is in force.\n',
         );
       } else if (policy?.kept) {
         ctx.stdout.write(`Kept the existing policy at ${policy.path}.\n`);
+        if (policy.diff !== null) ctx.stdout.write(`Enroll would have written (- existing, + scaffold):\n${policy.diff}\n`);
       }
     }
     if (ownerId === null) ctx.stderr.write('The server did not say who the owner of this environment is, so no policy was scaffolded; create ~/.pagespace/env-policy.json yourself with "principals": [<your user id>].\n');

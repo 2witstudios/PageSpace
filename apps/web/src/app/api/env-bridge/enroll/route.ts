@@ -16,7 +16,7 @@
  * for every refusal.
  *
  *   body   { enrollmentId, code, machinePublicKey (base64 SPKI DER) }
- *   200    { enrollmentId, envId, serverKeyId, serverPublicKey (base64 SPKI DER) }
+ *   200    { enrollmentId, envId, serverKeyId, serverPublicKey (base64 SPKI DER), ownerId, serverPolicy }
  */
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -92,5 +92,8 @@ export async function POST(request: Request) {
   });
   // `ownerId` is the enrolling user's id — no secret, and exactly what the
   // machine needs to scaffold `principals: [owner]` in its own policy (D-6).
-  return NextResponse.json({ enrollmentId: result.enrollmentId, envId: result.envId, serverKeyId: result.serverKeyId, serverPublicKey: result.serverPublicKey, ownerId: result.ownerId });
+  // `serverPolicy` is the env's allow-set — no secret either (the owner chose
+  // it in the dialog), and what the machine needs to scaffold the file ops it
+  // may run headless (GA wave 2, Tier A). The enroller never scaffolds `exec`.
+  return NextResponse.json({ enrollmentId: result.enrollmentId, envId: result.envId, serverKeyId: result.serverKeyId, serverPublicKey: result.serverPublicKey, ownerId: result.ownerId, serverPolicy: result.serverPolicy });
 }

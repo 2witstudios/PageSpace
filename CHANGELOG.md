@@ -7,6 +7,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Local Environments: commands need your click in the chat; file work runs on its own
+  (opt-in).** Two tiers now. **Reading and writing files** inside the folders you allowed runs
+  without asking from the moment you enrol — no terminal to babysit. **Running a command** always
+  asks: the first time an agent wants to run a program on your computer, a card appears in the
+  chat showing the exact command, working directory, environment and limits the machine froze,
+  and only you — the person who enrolled it, never a drive admin — can click Allow or Deny. Your
+  click is checked by the machine itself against what it froze, so a click can never run something
+  other than what you saw. Choose how long to remember an approval: this once, until the daemon
+  stops, 30 days, or until you revoke it — remembered per program (approving `git status` covers
+  `git push` from a new chat tomorrow, and never covers `rm`). Approvals live on your machine; a
+  drive admin or you can revoke one from PageSpace, and PageSpace can never add one.
+
 - **Local Environments: PageSpace now has a say in what runs on your computer — and only you
   can drive it (opt-in).** When you create a local Environment you now choose what PageSpace may
   ask that computer to do: **Read files** and **Write files** are on by default; **Run commands**

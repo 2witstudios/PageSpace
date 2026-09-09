@@ -15,7 +15,10 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest:
 vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn() }));
 
 import { decodeFrame, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
-import { encodeResultForSigning, resultHashForFrame, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
+import { createMemoryNonceStore, verifyGrant } from '@pagespace/lib/env-bridge/grant';
+import { grantRequestForFrame } from '@pagespace/lib/env-bridge/grant-args';
+import { ed25519Verify } from '../crypto';
+import { encodeResultForSigning, machineResultBindingId, resultHashForFrame, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
 import { parseServerSigningKeyring, type SigningKeyPrimitives } from '@pagespace/lib/env-bridge/server-signing-key';
 import { DEFAULT_TIMEOUT_DEFAULTS } from '@pagespace/lib/env-bridge/resolve-timeout';
 import { RequestCorrelator } from '../correlator';
@@ -54,7 +57,7 @@ type UnsignedResult<T = MachineResultFrame> = T extends unknown ? Omit<T, 'sig'>
 
 function signedResult(body: UnsignedResult, key = machine): MachineResultFrame {
   const resultHash = resultHashForFrame({ ...body, sig: '' } as MachineResultFrame, envBridgeHash);
-  return { ...body, sig: Buffer.from(nodeSign(null, encodeResultForSigning({ grantId: body.grantId, resultHash }), key.privateKey)).toString('base64') } as MachineResultFrame;
+  return { ...body, sig: Buffer.from(nodeSign(null, encodeResultForSigning({ grantId: machineResultBindingId({ ...body, sig: '' } as MachineResultFrame), resultHash }), key.privateKey)).toString('base64') } as MachineResultFrame;
 }
 
 describe('EnvBridgeClient', () => {
@@ -135,6 +138,53 @@ describe('EnvBridgeClient', () => {
     expect(client.handleMachineResult(ws, result)).toBe('delivered');
     await expect(pending).resolves.toEqual(result);
     expect(unverified).toEqual([]);
+  });
+
+  describe('GA wave 2 — the pending click', () => {
+    const PENDING = { challengeId: 'ch_1', expiresAt: 1_760_000_030_000, request: { op: 'exec' as const, cmd: 'ls', args: [], cwd: '/p', paths: [], env: {}, timeoutMs: 1000, maxBytes: 1024, clamped: false } };
+
+    it('given the machine answers ask_pending:<id> with a signed frozen request, should deliver it AND remember what re-issuing needs under that id, for the grant\'s exp', async () => {
+      const store = { entries: [] as unknown[], remember: vi.fn((entry: unknown) => { store.entries.push(entry); return true; }), get: vi.fn(), take: vi.fn(), evictExpired: vi.fn(), size: () => store.entries.length };
+      const c = new EnvBridgeClient({ ...(client as unknown as { deps: EnvBridgeClientDeps }).deps, pendingApprovals: store });
+      const ws = connect('env-1');
+      const frame = { type: 'grant_exec' as const, cmd: 'ls', cwd: '/p' };
+      const pending = c.sendGrant({ envId: 'env-1', frame, principal });
+      await flushPromises();
+      const denied = signedResult({ type: 'grant_denied', grantId: 'g-1', reason: 'ask_pending:ch_1', pending: PENDING });
+      expect(c.handleMachineResult(ws, denied)).toBe('delivered');
+      await expect(pending).resolves.toEqual(denied);
+      expect(store.remember).toHaveBeenCalledTimes(1);
+      expect(store.entries[0]).toMatchObject({ challengeId: 'ch_1', envId: 'env-1', frame, principal, expiresAt: 1_760_000_060_000, pending: PENDING });
+    });
+
+    it('given an ask_pending whose reason id and pending id disagree, or with no pending body, should deliver but remember NOTHING', async () => {
+      const store = { remember: vi.fn(() => true), get: vi.fn(), take: vi.fn(), evictExpired: vi.fn(), size: () => 0 };
+      const c = new EnvBridgeClient({ ...(client as unknown as { deps: EnvBridgeClientDeps }).deps, pendingApprovals: store });
+      const ws = connect('env-1');
+      const p1 = c.sendGrant({ envId: 'env-1', frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+      await flushPromises();
+      c.handleMachineResult(ws, signedResult({ type: 'grant_denied', grantId: 'g-1', reason: 'ask_pending:ch_other', pending: PENDING }));
+      await p1;
+      const p2 = c.sendGrant({ envId: 'env-1', frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+      await flushPromises();
+      c.handleMachineResult(ws, signedResult({ type: 'grant_denied', grantId: 'g-2', reason: 'ask_pending:ch_1' }));
+      await p2;
+      expect(store.remember).not.toHaveBeenCalled();
+    });
+
+    it('given an approvalIntent, should sign it INTO the grant on the wire (the daemon verifies it with the pinned key)', async () => {
+      const ws = connect('env-1');
+      const intent = { challengeId: 'ch_1', scope: '30d' as const, expiresAt: 1_760_000_030_000 };
+      const pending = client.sendGrant({ envId: 'env-1', frame: { type: 'grant_exec', cmd: 'ls' }, principal, approvalIntent: intent });
+      await flushPromises();
+      pending.catch(() => {});
+      const frame = sentFrame(ws);
+      if (frame.type !== 'grant_exec') throw new Error('type');
+      expect(frame.grant).toMatchObject({ approvalIntent: intent });
+      // Under the pinned key: the daemon's own gate accepts it.
+      const verdict = verifyGrant({ grant: frame.grant, signature: frame.sig, serverPublicKey: ring.current.publicKey, now: 1_760_000_001_000, nonces: createMemoryNonceStore(), expectedEnvId: 'env-1', request: grantRequestForFrame(frame), verify: ed25519Verify, hash: envBridgeHash });
+      expect(verdict).toMatchObject({ ok: true, grant: { approvalIntent: intent } });
+    });
   });
 
   it('EXIT CRITERION — given an exec_result whose machine signature does not verify, should NOT deliver it: the request fails with typed unverified_result and the event is surfaced', async () => {
