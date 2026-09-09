@@ -55,6 +55,8 @@ export const TOOL_NAME_MAP: Record<string, string> = {
   'move_page': 'Move Page',
   'read_sheet': 'Read Sheet',
   'edit_sheet_cells': 'Edit Sheet',
+  'format_sheet': 'Format Sheet',
+  'set_conditional_format': 'Conditional Formatting',
   // Search tools
   'regex_search': 'Search',
   'glob_search': 'Find Pages',

@@ -1,5 +1,6 @@
 /**
- * The colour vocabulary for sheet formatting.
+ * @module @pagespace/lib/sheets/palette
+ * @description The colour vocabulary for sheet formatting.
  *
  * The hues are the twelve the product already uses for task statuses
  * (`StatusConfigManager`'s `COLOR_PRESETS`), so a dashboard built here reads as
@@ -96,11 +97,8 @@ export const normalizeHex = (value: string): string | null => {
   return `#${hex(parsed.r)}${hex(parsed.g)}${hex(parsed.b)}`;
 };
 
-
 /**
- * Re-exported from the lib so the tick drawn on a swatch is decided by exactly
- * the same rule that decides a filled cell's text colour. Two copies of this
- * would be free to disagree, and the disagreement would show as a tick you
- * cannot see on a colour you just picked.
+ * `readableTextColor` is NOT re-exported here. It lives in `./format`, and the
+ * sheets barrel star-exports both modules — two paths to one name would make the
+ * star export ambiguous. Import it from the barrel or from `./format`.
  */
-export { readableTextColor } from '@pagespace/lib/sheets/sheet';

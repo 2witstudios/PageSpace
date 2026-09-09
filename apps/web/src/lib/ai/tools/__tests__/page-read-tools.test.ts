@@ -1648,6 +1648,36 @@ describe('page-read-tools', () => {
       });
     });
 
+    it('keeps the machine value reachable on a SHEET read, beside the formulas', async () => {
+      // `read_page` shares `sheet-view`'s window with `read_sheet`, so the same
+      // lossy display string reaches it: a currency cell reads back as
+      // `$1,200.00` with no way to recover the 1200 a formula would add up.
+      // Flattened by A1 address alongside `formulas` and `errors` — a caller
+      // that finds `formulas.B2` but no equivalent for the value would
+      // reasonably conclude there is nothing to recover.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue({
+        ...sheetTab,
+        columnFormats: { B: { number: { kind: 'currency', currency: 'USD', thousands: true, decimals: 2 } } },
+      });
+      mockReadRows.mockResolvedValue([
+        { rowIndex: 1, cells: { A: { raw: 'Rent', value: 'Rent' }, B: { raw: '1200', value: 1200 } } },
+      ]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Budget', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      // The display is what a person sees, and it stays that.
+      expect((result.rows as { cells: Record<string, string> }[])[0].cells.B).toBe('$1,200.00');
+      // The number underneath is recoverable, and only for the cell that needs it.
+      expect(result.unformatted).toEqual({ B2: 1200 });
+    });
+
     it('returns channel messages when reading a CHANNEL page', async () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'CHANNEL'));
       mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;

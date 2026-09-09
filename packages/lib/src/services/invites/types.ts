@@ -70,7 +70,7 @@ export interface RequestMagicLinkInput {
   email: string;
   now: Date;
   expiryMinutes?: number;
-  platform?: 'web' | 'desktop' | 'ios';
+  platform?: 'web' | 'desktop' | 'ios' | 'android';
   deviceId?: string;
   deviceName?: string;
   // Same-origin redirect target embedded in the verify URL. The caller must

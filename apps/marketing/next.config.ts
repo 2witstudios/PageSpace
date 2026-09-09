@@ -2,6 +2,12 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // Next paints a dev-mode indicator in the corner of the viewport, and
+  // Playwright's element screenshot captures whatever is painted over the
+  // element's box — so it was being burned into every exported store
+  // screenshot. Scoped to the capture run so ordinary `bun run dev` keeps it.
+  ...(process.env.CAPTURE === '1' ? { devIndicators: false as const } : {}),
+
   assetPrefix: '/_marketing',
   images: {
     path: '/_marketing/_next/image',

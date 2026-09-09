@@ -42,6 +42,7 @@ const CATEGORY_MAP: Record<string, string> = {
   create_drive: 'drive', rename_drive: 'drive', update_drive_context: 'drive',
   list_trash: 'pages', list_conversations: 'pages', read_conversation: 'pages',
   rename_page: 'pages', move_page: 'pages', read_sheet: 'pages', edit_sheet_cells: 'pages',
+  format_sheet: 'pages', set_conditional_format: 'pages',
   trash_page: 'pages', trash_drive: 'pages', restore_page: 'pages', restore_drive: 'pages',
   glob_search: 'search', web_fetch: 'search', web_search: 'search',
   update_task: 'tasks', create_task: 'tasks', delete_task: 'tasks', reorder_task: 'tasks', get_assigned_tasks: 'tasks',
@@ -136,6 +137,10 @@ const DOCUMENT_WRITE_TOOL_NAMES = ['replace_lines', 'insert_content', 'copy_cont
  * document editing", page-write-tools.ts). Conversely an agent holding only
  * this can write a Sheet, never a Document.
  */
+// Deliberately NOT format_sheet / set_conditional_format: they restyle a Sheet
+// but cannot put sandbox OUTPUT into one, and this list answers only that
+// question (it feeds buildDriveDestinationPhrase). Listing them would tell an
+// agent holding only a formatting tool that a Sheet is a valid destination.
 const SHEET_WRITE_TOOL_NAMES = ['edit_sheet_cells'];
 
 function hasAnyToolName(availableTools: string[] | undefined, names: readonly string[]): boolean {

@@ -12,6 +12,7 @@ import {
   compile,
   openConversation as openConversationCommand,
   openPage as openPageCommand,
+  openPorts as openPortsCommand,
   openShell as openShellCommand,
   seedRoot,
   split as splitCommand,
@@ -267,6 +268,14 @@ interface AgentWorkspaceState {
   openPage(workspaceId: string, pageId: string, options?: OpenTargetOptions): void;
   /** Make a shell visible — reattaching the node already holding it when there is one. */
   openShell(workspaceId: string, shellId: string, options?: OpenTargetOptions): void;
+  /**
+   * Make the PREVIEW visible: the sandbox's ports and a frame of the one
+   * being previewed. The target is the workspace itself — one sandbox has one
+   * preview, so a second call FOCUSES the pane that already holds it rather
+   * than opening a second view of the same state. Nothing is minted, so like
+   * a page it is placed by whoever binds it.
+   */
+  openPorts(workspaceId: string, options?: OpenTargetOptions): void;
   /**
    * Focus a node, moving it beside where the user is looking if it is somewhere
    * else in the tree.
@@ -1005,6 +1014,10 @@ export const useAgentWorkspaceStore = createStore<AgentWorkspaceState>()(
 
       openShell: (workspaceId, shellId, options) => {
         openTarget(workspaceId, { kind: 'terminal', id: shellId }, options, openShellCommand);
+      },
+
+      openPorts: (workspaceId, options) => {
+        openTarget(workspaceId, { kind: 'ports', id: workspaceId }, options, openPortsCommand);
       },
 
       showNode: (workspaceId, nodeId) => {

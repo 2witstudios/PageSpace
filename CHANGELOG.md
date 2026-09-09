@@ -7,6 +7,33 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **AI agents can format spreadsheets** — two new workspace tools, **Format Sheet** and
+  **Conditional Formatting**, let an agent make a SHEET page presentable instead of leaving a grid
+  of bare numbers. An agent declares what a table *is* (its range, header rows, which columns are
+  money, percentages or dates, which rows are totals, an accent colour) and the sheet derives the
+  header band, number formats and total emphasis from that — so rows added later inherit the
+  formatting, and the agent never hand-picks colours. Conditional rules (highlight when a value
+  crosses a threshold, colour scales, data bars) follow the values as they change. Both tools are
+  write tools: a read-only agent does not get them. The chat shows a card for each call listing the
+  tables declared, ranges touched and rules added, with a swatch per colour, so you can see what
+  changed without opening the sheet. The spreadsheets skill now teaches all of this; the
+  workspace-tool count in the docs goes from 81 to 83.
+- **iPhone and iPad: sign-in no longer tells you Google is blocked when it isn't, and an emailed
+  sign-in link now signs you in inside the app** — two things were wrong on the app's sign-in
+  screen. It showed a warning saying "Google sign-in is blocked in this app" and pushed you toward
+  an email link instead; that warning is meant for in-app browsers like Instagram's or Facebook's,
+  and the app's own window was being mistaken for one. Google sign-in has always worked in the
+  app, so the warning is gone there and the app no longer forces the email-link form open. A real
+  in-app browser still gets the warning, because there the advice is true. The email link was the
+  worse problem: it was the fallback the warning recommended, and it could not work at all. Tapping
+  it opened Safari, and the session it created stayed in Safari — the app never saw it and stayed
+  signed out. Ask for a sign-in link from the app now and the link opens **the app**, signs you in
+  there, and takes you where you were headed. The same link opened somewhere else — a laptop, a
+  friend's phone if you forwarded the mail — still signs that browser in as before, and hands out
+  nothing that would let it act as your phone. Links you request from a browser are unchanged. On
+  Android the link still opens Chrome and signs Chrome in; the app cannot receive links yet, which
+  needs a signed release build.
+
 - **Local Environments: create one from the app, get your enrollment code, and get a new one if
   you lose it (opt-in)** — a local Environment (your own computer, reached through the bridge) is
   now a choice in the ordinary "New environment" step rather than something only an API call could
@@ -406,6 +433,27 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   the only hint was a count inside the expanded row.
 
 ### Changed
+
+- **The header now says "Dashboard" instead of showing a house and a slash** — the way back out of
+  a drive used to be a small house icon followed by a `/`, and nothing on screen said where it
+  went. That made it easy to miss entirely, and easy to misread when you did notice it: drives have
+  their own home page, and the sidebar calls that "Drive Home", so a house in the header looked like
+  it meant the drive you were already in. It now reads **Dashboard** in words. Inside a drive it
+  becomes a bordered button with a back arrow, followed by the name of the drive you are in, so the
+  header tells you both where you can go and where you are standing; on the dashboard itself it
+  stops being a button, because you are already there. On narrower windows, where the header has
+  other things to fit, the button keeps its word wherever it is a way out — that being the whole
+  point — and the drive name and the you-are-here marker are the parts that give way.
+
+- **Android app: first internal-testing version identity, and the Android/iOS shell configs are now
+  checked in CI (still not distributed)** — the Android build now identifies itself as version 1.4
+  (build 2), matching the iOS version, instead of the 1.0 (build 1) left over from a debug build in
+  March. Nothing else about the app changes in this release, and **nothing is distributed**: there
+  is still no release signing key, no Play Console listing, and none of the Android work from the
+  last few releases has been run on a real device — the exact checklist for doing so is now in the
+  app's README, alongside what still blocks a public build. Behind the scenes, the two mobile shell
+  configuration files are type-checked on every pull request and a test now guards the rule that
+  the Android shell never hands its native bridge to a third-party site or a wildcard host.
 
 - **Free plan credits are now a one-time starter grant instead of a monthly allowance** — new
   free accounts still get 5 credits to try AI with, granted once on their first AI call, but

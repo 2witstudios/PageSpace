@@ -8,12 +8,12 @@ import path from "path";
  * testimonials. Run against a dev server:
  *
  *   bun run dev            (port 3004)
- *   bun run capture:og     (or BASE_URL=http://localhost:3104 bun run capture:og)
+ *   bun run capture:og     (or BASE_URL=http://localhost:3004 bun run capture:og)
  *
  * Output is the Open Graph / Twitter large-card size, 1200x630, captured at
  * 2x and downsampled by the browser for crisp text.
  */
-const BASE_URL = process.env.BASE_URL ?? "http://localhost:3004";
+const BASE_URL = process.env.BASE_URL ?? "http://localhost:3005";
 const OUT = path.join(__dirname, "..", "public", "og-image.png");
 const W = 1200;
 const H = 630;

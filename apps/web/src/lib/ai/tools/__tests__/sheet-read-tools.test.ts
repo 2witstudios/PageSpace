@@ -60,6 +60,9 @@ import { sheetReadTools } from '../sheet-read-tools';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { canActorViewPage, canActorEditPage } from '../actor-permissions';
 import { SheetQueryError } from '@pagespace/lib/sheets/query';
+import { parseRegions } from '@pagespace/lib/sheets/sheet';
+import { serializeSheetContent } from '@pagespace/lib/sheets/io';
+import { MAX_FORMATTING_CHARS } from '../sheet-view';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockFindById = vi.mocked(pageRepository.findById);
@@ -724,5 +727,541 @@ describe('read_sheet — schema', () => {
     expect(description).toContain('range');
     expect(description).toContain('where');
     expect(description).toContain('select');
+  });
+});
+
+describe('read_sheet — typed values beside the display string', () => {
+  it('returns the machine value for a formatted cell and nothing extra for an unformatted one', async () => {
+    // The lossy read this fixes: `cells` carries the DISPLAY string, so a
+    // currency cell read back as "$1,200.00" could not be turned into the 1200
+    // that `where` compares against or that a formula would add up. The value
+    // was already loaded on the row the whole time.
+    mockGetTab.mockResolvedValue({
+      ...tab,
+      columnFormats: { B: { number: { kind: 'currency', currency: 'USD', thousands: true, decimals: 2 } } },
+    });
+    mockReadRows.mockResolvedValue([
+      {
+        rowIndex: 0,
+        cells: {
+          A: { raw: 'Rent', value: 'Rent' },
+          B: { raw: '1200', value: 1200 },
+          C: { raw: '7', value: 7 },
+        },
+      },
+    ]);
+
+    const result = await run({ pageId: 'page-1' });
+    const row = (result.rows as { cells: Record<string, string>; unformatted?: Record<string, unknown> }[])[0];
+
+    assert({
+      given: 'a currency-formatted cell and two unformatted ones',
+      should: 'show the display text for all three and the machine value only where they differ',
+      actual: { cells: row.cells, unformatted: row.unformatted },
+      expected: {
+        cells: { A: 'Rent', B: '$1,200.00', C: '7' },
+        unformatted: { B: 1200 },
+      },
+    });
+  });
+
+  it('omits unformatted entirely on a sheet with no formatting', async () => {
+    // Zero cost on today's unformatted sheets is the reason this is emitted on
+    // divergence rather than always.
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'memid', value: 'memid' }, B: { raw: '28605', value: 28605 } } },
+    ]);
+
+    const result = await run({ pageId: 'page-1' });
+    expect((result.rows as { unformatted?: unknown }[])[0].unformatted).toBeUndefined();
+  });
+
+  it('does not report a value beside an errored cell', async () => {
+    // The display is `#ERROR`, which is not a rendering of the value — a value
+    // printed next to it reads as the cell's answer.
+    mockReadRows.mockResolvedValue([
+      {
+        rowIndex: 0,
+        cells: { A: { raw: '=1/0', value: 0, error: { type: 'error', message: 'Division by zero' } } },
+      },
+    ]);
+
+    const result = await run({ pageId: 'page-1' });
+    const row = (result.rows as { cells: Record<string, string>; unformatted?: unknown }[])[0];
+    expect(row.cells.A).toBe('#ERROR');
+    expect(row.unformatted).toBeUndefined();
+  });
+});
+
+describe('read_sheet — includeFormatting', () => {
+  /**
+   * A sheet as it exists before migration: everything on one SheetDoc document
+   * in `pages.content`, with no `sheet_tabs` row anywhere.
+   */
+  const legacyDocument = {
+    version: 1,
+    rowCount: 3,
+    columnCount: 3,
+    sheetName: 'Budget',
+    cells: { A1: 'Item', B1: 'Cost', A2: 'Rent', B2: '1200' },
+    formats: { A2: { bold: true } },
+    columnFormats: { B: { number: { kind: 'currency' as const, currency: 'USD', decimals: 2, thousands: true } } },
+    columnWidths: { A: 180 },
+    frozenRows: 1,
+    regions: [{ id: 'r9', range: 'A1:B', headerRows: 1 }],
+    conditionalFormats: [{ id: 'c9', kind: 'dataBar' as const, ranges: ['B2:B3'], color: '#3b82f6' }],
+  };
+
+  const formattedTab = {
+    ...tab,
+    frozenRows: 1,
+    frozenColumns: 2,
+    columnWidths: { A: 220 },
+    rowHeights: { '1': 32 },
+    columnFormats: { C: { number: { kind: 'currency', currency: 'USD' } } },
+    regions: [
+      {
+        id: 'r1',
+        name: 'Budget',
+        range: 'A1:F',
+        headerRows: 1,
+        totalRows: [40],
+        columns: [{ column: 'C', role: 'currency', currency: 'USD' }],
+        theme: 'indigo',
+        freezeHeader: true,
+      },
+    ],
+    conditionalFormats: [
+      { id: 'c1', kind: 'cell', ranges: ['C2:C40'], condition: { operator: 'greaterThan', value: '100' }, format: { background: '#fee2e2' } },
+    ],
+  };
+
+  it('returns a payload byte-identical to today\'s when includeFormatting is not asked for', async () => {
+    // Snapshotting the WHOLE response, not just `expect(formatting).toBeUndefined()`
+    // — that assertion passes for a payload that grew some other way, which is
+    // exactly the regression a new optional block invites.
+    mockGetTab.mockResolvedValue(formattedTab);
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'Item', value: 'Item' }, C: { raw: 'Cost', value: 'Cost' } } },
+    ]);
+
+    const result = await run({ pageId: 'page-1' });
+
+    expect(result).toMatchInlineSnapshot(`
+      {
+        "columns": [
+          "A",
+          "C",
+        ],
+        "dimensions": {
+          "columnCount": 16,
+          "rowCount": 500,
+        },
+        "hasMore": false,
+        "materialized": true,
+        "mode": "range",
+        "nextSteps": [
+          "Pass where to look rows up by value instead of paging, and select to return only the columns you need.",
+          "Values shown here carry the sheet's display formatting; where and orderBy compare the UNFORMATTED value underneath, so filter on 1200 rather than "$1,200.00".",
+          "Each row's rowNumber is its A1 row — write to it with edit_sheet_cells using addresses like C<rowNumber>.",
+        ],
+        "pageId": "page-1",
+        "rows": [
+          {
+            "cells": {
+              "A": "Item",
+              "C": "Cost",
+            },
+            "rowNumber": 1,
+          },
+        ],
+        "rowsReturned": 1,
+        "success": true,
+        "summary": "Read 1 row from sheet "Members" (500 rows, 16 columns)",
+        "tabIndex": 0,
+        "tabName": "Sheet1",
+        "table": "columns→A | C
+      1→Item | Cost",
+        "tabs": [
+          {
+            "columnCount": 16,
+            "name": "Sheet1",
+            "rowCount": 500,
+            "tabIndex": 0,
+          },
+        ],
+        "title": "Members",
+      }
+    `);
+  });
+
+  it('returns the tab\'s regions in a shape that is valid as a regions input', async () => {
+    // The property that stops an agent fighting itself: what it reads back is
+    // what it writes. A summary of a region, or a re-derivation of one from the
+    // fills it produced, would not survive a round trip.
+    mockGetTab.mockResolvedValue(formattedTab);
+
+    const result = await run({ pageId: 'page-1', includeFormatting: true });
+    const formatting = result.formatting as { regions: unknown[] };
+
+    assert({
+      given: 'a tab with a declared region',
+      should: 'round-trip through the regions parser unchanged',
+      actual: parseRegions(formatting.regions),
+      expected: formatting.regions,
+    });
+    expect(formatting.regions).toEqual([formattedTab.regions[0]]);
+  });
+
+  it('carries a region field this build does not know about', async () => {
+    // `parseRegion` deliberately passes unknown FIELDS through, so a region
+    // written by a newer build survives a load/save cycle instead of being
+    // silently downgraded. That guarantee only holds end-to-end if this read
+    // preserves them too: an agent reads the region list, changes one thing and
+    // writes it back, so anything dropped here is dropped from the sheet on the
+    // next write. A "tidy-up" that picked only the known fields would look
+    // harmless and quietly strip a newer build's settings.
+    const withFutureField = {
+      ...formattedTab,
+      regions: [{ ...formattedTab.regions[0], stripeEveryNthRow: 2 }],
+    };
+    mockGetTab.mockResolvedValue(withFutureField);
+
+    const result = await run({ pageId: 'page-1', includeFormatting: true });
+    const regions = (result.formatting as { regions: Array<Record<string, unknown>> }).regions;
+
+    assert({
+      given: 'a region carrying a field this build has no meaning for',
+      should: 'hand it back untouched, so a read-modify-write does not strip it',
+      actual: regions[0].stripeEveryNthRow,
+      expected: 2,
+    });
+    expect(regions).toEqual(withFutureField.regions);
+  });
+
+  it('describes layout, column formats and conditional rules without the raw rule JSON', async () => {
+    mockGetTab.mockResolvedValue(formattedTab);
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 6, cells: { C: { raw: '5', value: 5, format: { bold: true } } } },
+    ]);
+
+    const result = await run({ pageId: 'page-1', includeFormatting: true });
+    const formatting = result.formatting as Record<string, unknown>;
+
+    // `rowHeights` is projected to the rows returned. This read is of row 7 and
+    // the only stored height is for row 1, so it is correctly absent — see the
+    // dedicated test below for why the map is projected rather than copied.
+    expect(formatting.layout).toEqual({
+      frozenRows: 1,
+      frozenColumns: 2,
+      columnWidths: { A: 220 },
+    });
+    expect(formatting.columnFormats).toEqual({ C: { number: { kind: 'currency', currency: 'USD' } } });
+    // Keyed by A1 address, so the agent can write to exactly the cell it read.
+    expect(formatting.cellFormats).toEqual({ C7: { bold: true } });
+    expect(formatting.conditionalRules).toEqual([
+      { id: 'c1', kind: 'cell', ranges: ['C2:C40'], summary: 'Cell is greater than 100' },
+    ]);
+  });
+
+  it('emits the formatting block on a filtered read too', async () => {
+    // "Is this matching row already styled?" is a legitimate question, and a
+    // filtered read is how an agent finds the rows it is about to restyle.
+    mockGetTab.mockResolvedValue(formattedTab);
+    mockQueryRows.mockResolvedValue({
+      rows: [{ rowIndex: 1, cells: { C: { raw: '9', value: 9, format: { italic: true } } } }],
+      total: 1,
+      hasMore: false,
+    });
+
+    const result = await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'C', op: 'isNotEmpty' }] },
+      includeFormatting: true,
+    });
+
+    const formatting = result.formatting as Record<string, unknown>;
+    expect(formatting.cellFormats).toEqual({ C2: { italic: true } });
+    expect((formatting.regions as unknown[]).length).toBe(1);
+  });
+
+  it('projects cellFormats with select, not just the rows', async () => {
+    // `cellFormats` is per-cell, so a projected read has to project it too. A
+    // read that narrowed `rows` to one column while describing the formatting of
+    // all sixteen would be a bigger response presented as a smaller one — the
+    // same failure `select` on the structured rows already exists to prevent.
+    mockGetTab.mockResolvedValue(formattedTab);
+    mockReadRows.mockResolvedValue([
+      {
+        rowIndex: 4,
+        cells: {
+          A: { raw: 'keep', value: 'keep', format: { bold: true } },
+          B: { raw: 'drop', value: 'drop', format: { italic: true } },
+        },
+      },
+    ]);
+
+    const result = await run({ pageId: 'page-1', select: ['A'], includeFormatting: true });
+    const formatting = result.formatting as Record<string, unknown>;
+
+    assert({
+      given: 'a read projected to column A',
+      should: "report A's cell format and not B's",
+      actual: formatting.cellFormats,
+      expected: { A5: { bold: true } },
+    });
+    // Tab-level fields are not per-cell and are deliberately NOT projected — the
+    // regions and layout describe the sheet, not the columns that came back.
+    expect((formatting.regions as unknown[]).length).toBe(1);
+  });
+
+  it('caps cellFormats and says how many cells it left out', async () => {
+    // A silently partial map is worse than a bounded one: an agent reads "B7 has
+    // no override" and writes as though that were true.
+    const rows = Array.from({ length: 400 }, (_, index) => ({
+      rowIndex: index,
+      cells: {
+        A: { raw: 'x', value: 'x', format: { background: `#ff00${(index % 100).toString().padStart(2, '0')}`, bold: true, italic: true } },
+      },
+    }));
+    mockGetTab.mockResolvedValue(formattedTab);
+    mockReadRows.mockResolvedValue(rows);
+
+    const result = await run({ pageId: 'page-1', limit: 400, includeFormatting: true });
+    const formatting = result.formatting as {
+      cellFormats: Record<string, unknown>;
+      formattingTruncated: { droppedCells: number };
+    };
+
+    const spent = JSON.stringify(formatting.cellFormats).length;
+    expect(spent).toBeLessThanOrEqual(MAX_FORMATTING_CHARS);
+    expect(Object.keys(formatting.cellFormats).length).toBeLessThan(400);
+    assert({
+      given: 'more distinct cell formats than the budget allows',
+      should: 'report every cell it left out',
+      actual: formatting.formattingTruncated.droppedCells,
+      expected: 400 - Object.keys(formatting.cellFormats).length,
+    });
+    expect((result.nextSteps as string[]).some((step) => step.includes('not'))).toBe(true);
+  });
+
+  it('reads an unmigrated sheet\'s formatting out of its stored document', async () => {
+    // The document is not a dead end: `parseSheetContentSafe` reconstructs the
+    // regions, freezes, column formats, per-cell formats and rules that a
+    // pre-row-store sheet carries. Answering `formatting: null` here withheld
+    // the existing design at exactly the moment an agent needs it — before its
+    // first formatting change to a sheet nobody has edited since the row store
+    // shipped.
+    mockListTabs.mockResolvedValue([]);
+    mockFindById.mockResolvedValue({
+      ...sheetPage,
+      content: serializeSheetContent(legacyDocument, { pageId: 'page-1' }),
+    });
+
+    const result = await run({ pageId: 'page-1', includeFormatting: true });
+    const formatting = result.formatting as Record<string, unknown>;
+
+    expect(result.success).toBe(true);
+    expect(result.materialized).toBe(false);
+    expect(formatting.regions).toEqual(legacyDocument.regions);
+    expect(formatting.layout).toEqual({ frozenRows: 1, columnWidths: { A: 180 } });
+    expect(formatting.columnFormats).toEqual(legacyDocument.columnFormats);
+    // The EXPLICIT override only. The evaluator resolves the column format and
+    // any region into the format it applies; reporting that as a per-cell
+    // override is how a region model decays back into per-cell residue.
+    expect(formatting.cellFormats).toEqual({ A2: { bold: true } });
+    expect(formatting.conditionalRules).toEqual([
+      { id: 'c9', kind: 'dataBar', ranges: ['B2:B3'], summary: 'Data bar' },
+    ]);
+  });
+
+  it('returns the machine value on an unmigrated sheet too', async () => {
+    // A range read explicitly supports an unmigrated sheet, so the lossy display
+    // string is reachable there as well — and the fallback path builds its own
+    // cells, so it has to carry the value deliberately.
+    mockListTabs.mockResolvedValue([]);
+    mockFindById.mockResolvedValue({
+      ...sheetPage,
+      content: serializeSheetContent(legacyDocument, { pageId: 'page-1' }),
+    });
+
+    const result = await run({ pageId: 'page-1', includeFormatting: true });
+    const rows = result.rows as { rowNumber: number; cells: Record<string, string>; unformatted?: Record<string, unknown> }[];
+    const dataRow = rows.find((row) => row.rowNumber === 2)!;
+
+    assert({
+      given: 'a currency-formatted cell on a sheet that was never migrated',
+      should: 'show the display string and carry the machine value beside it',
+      actual: { display: dataRow.cells.B, unformatted: dataRow.unformatted },
+      expected: { display: '$1,200.00', unformatted: { B: 1200 } },
+    });
+  });
+
+  it('resolves region-derived formats on the filtered path too', async () => {
+    // A filtered read is how an agent finds the rows it is about to restyle, so
+    // it must render them exactly as the positional path does. Resolving fewer
+    // presentation layers on one path renders one cell two ways depending on
+    // how it was found.
+    const regionTab = {
+      ...tab,
+      rowCount: 10,
+      regions: [{
+        id: 'r1', range: 'A1:D', headerRows: 1,
+        columns: [{ column: 'C', role: 'currency', currency: 'USD' }],
+      }],
+    };
+    mockListTabs.mockResolvedValue([regionTab]);
+    mockGetTab.mockResolvedValue(regionTab);
+    mockQueryRows.mockResolvedValue({
+      rows: [{ rowIndex: 1, cells: { C: { raw: '1200', value: 1200 } } }],
+      total: 1,
+      hasMore: false,
+    });
+
+    const result = await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'C', op: 'gt', value: 100 }] },
+    });
+    const row = (result.rows as { cells: Record<string, string>; unformatted?: Record<string, unknown> }[])[0];
+
+    assert({
+      given: 'a region-formatted column found by a filter',
+      should: 'display it as the grid does and keep the number recoverable',
+      actual: { display: row.cells.C, unformatted: row.unformatted },
+      expected: { display: '$1,200.00', unformatted: { C: 1200 } },
+    });
+  });
+
+  it('answers an unformatted sheet with an empty block, not a missing key', async () => {
+    // The complement of the unmigrated case, and the reason `formatting` is
+    // spread on `includeFormatting` rather than on the block being non-empty.
+    // A sheet that genuinely has no formatting is a real answer an agent can
+    // act on — start from scratch. A MISSING key is the answer to a question
+    // that was not asked. Collapsing the two would make "nothing here" and
+    // "you did not ask" indistinguishable, which is the ambiguity the whole
+    // block is shaped to avoid.
+    mockGetTab.mockResolvedValue(tab); // no regions, freezes, formats or rules
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'plain', value: 'plain' } } },
+    ]);
+
+    const asked = await run({ pageId: 'page-1', includeFormatting: true });
+    const notAsked = await run({ pageId: 'page-1' });
+
+    assert({
+      given: 'a formatting read of a sheet that carries none',
+      should: 'say so with an empty block rather than by omitting the key',
+      actual: { asked: asked.formatting, hasKey: 'formatting' in asked },
+      expected: { asked: {}, hasKey: true },
+    });
+    expect('formatting' in notAsked).toBe(false);
+  });
+
+  it('still describes the structure when the window itself is empty', async () => {
+    // Reading past the end is how an agent discovers a sheet's shape before it
+    // writes. The tab-level design — regions, freezes, column formats — does not
+    // depend on which rows came back, so withholding it here would make an agent
+    // that landed past the last row conclude the sheet has no structure, and
+    // build one over the top of the structure that is already there.
+    mockGetTab.mockResolvedValue(formattedTab);
+    mockReadRows.mockResolvedValue([]); // nothing at this position
+
+    const result = await run({ pageId: 'page-1', startRow: 900, includeFormatting: true });
+    const formatting = result.formatting as Record<string, unknown>;
+
+    expect(result.rows).toEqual([]);
+    expect(String(result.emptyReason)).toContain('past the last row');
+    assert({
+      given: 'a formatting read that landed past the last row',
+      should: 'still report the structure, with no per-cell entries to report',
+      actual: {
+        regions: (formatting.regions as unknown[]).length,
+        frozenRows: (formatting.layout as Record<string, unknown>).frozenRows,
+        cellFormats: formatting.cellFormats,
+      },
+      expected: { regions: 1, frozenRows: 1, cellFormats: undefined },
+    });
+  });
+
+  it('resolves conditional cell rules on the filtered path too', async () => {
+    // Same reason as regions: a filtered read is how an agent finds the rows it
+    // is about to restyle, so it has to render them exactly as the positional
+    // path does. A rule's number format changes the TEXT, and the row store
+    // keeps no trace of it — it is derived when the rule fires.
+    const ruleTab = {
+      ...tab,
+      conditionalFormats: [{
+        id: 'hot', kind: 'cell', ranges: ['C1:C99'],
+        condition: { operator: 'greaterThan', value: '0.5' },
+        format: { background: '#dcfce7', number: { kind: 'percent', decimals: 0 } },
+      }],
+    };
+    mockListTabs.mockResolvedValue([ruleTab]);
+    mockGetTab.mockResolvedValue(ruleTab);
+    mockQueryRows.mockResolvedValue({
+      rows: [
+        { rowIndex: 0, cells: { C: { raw: '0.85', value: 0.85 } } },
+        { rowIndex: 1, cells: { C: { raw: '0.1', value: 0.1 } } },
+      ],
+      total: 2,
+      hasMore: false,
+    });
+
+    const result = await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'C', op: 'isNotEmpty' }] },
+    });
+    const rows = result.rows as { cells: Record<string, string>; unformatted?: Record<string, unknown> }[];
+
+    assert({
+      given: 'a rule that fires on one matching row and not the other',
+      should: 'format only the row it fires on, and keep both numbers recoverable',
+      actual: [
+        { display: rows[0].cells.C, unformatted: rows[0].unformatted },
+        { display: rows[1].cells.C, unformatted: rows[1].unformatted },
+      ],
+      expected: [
+        { display: '85%', unformatted: { C: 0.85 } },
+        { display: '0.1', unformatted: undefined },
+      ],
+    });
+  });
+
+  it('returns row heights for the rows it returned, not the whole tab', async () => {
+    // `rowHeights` is tab-wide and nothing on the write or sanitisation path
+    // caps its entry count — row keys are valid up to MAX_ADDRESSABLE_ROW. So a
+    // sheet with many resized rows could hand back a map of thousands of entries
+    // for a ONE-ROW read, straight past MAX_FORMATTING_CHARS, which only ever
+    // bounded `cellFormats`. A height for a row the agent did not receive tells
+    // it nothing, so this projects rather than merely capping.
+    const tallTab = {
+      ...formattedTab,
+      rowHeights: Object.fromEntries(Array.from({ length: 5000 }, (_, i) => [String(i + 1), 20 + (i % 30)])),
+    };
+    mockGetTab.mockResolvedValue(tallTab);
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 2, cells: { A: { raw: 'x', value: 'x' } } },
+    ]);
+
+    const result = await run({ pageId: 'page-1', includeFormatting: true });
+    const layout = (result.formatting as { layout: { rowHeights?: Record<string, number> } }).layout;
+
+    assert({
+      given: 'a tab with 5,000 stored row heights and a one-row read',
+      should: 'return the height for that row alone',
+      actual: layout.rowHeights,
+      expected: { '3': tallTab.rowHeights['3'] },
+    });
+    // The guard that matters: the whole block stays small regardless of how many
+    // rows the tab has resized.
+    expect(JSON.stringify(result.formatting).length).toBeLessThan(MAX_FORMATTING_CHARS);
+  });
+
+  it('advertises includeFormatting so an agent can discover it', async () => {
+    expect(sheetReadTools.read_sheet.description ?? '').toContain('includeFormatting');
+    expect(
+      (sheetReadTools.read_sheet.inputSchema as { safeParse: (v: unknown) => { success: boolean } })
+        .safeParse({ pageId: 'p', includeFormatting: true }).success
+    ).toBe(true);
   });
 });

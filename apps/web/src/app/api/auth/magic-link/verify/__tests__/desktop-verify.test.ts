@@ -62,6 +62,9 @@ vi.mock('@pagespace/lib/auth/magic-link-service', () => ({
   verifyMagicLinkToken: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/auth/account-lockout', () => ({
+  resetFailedLoginAttempts: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('@pagespace/lib/auth/verification-utils', () => ({
   markEmailVerified: vi.fn(),
 }));
@@ -92,7 +95,9 @@ vi.mock('@/lib/auth/cookie-config', () => ({
 }));
 
 vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
-  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue(null),
+  // Shape matters: the route reads `.created`, so a bare null would make every
+  // test here take the provisioning catch instead of the real path.
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'home-drive', created: false }),
 }));
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
@@ -120,6 +125,7 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
 import { GET } from '../route';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 
@@ -157,6 +163,14 @@ describe('GET /api/auth/magic-link/verify - desktop platform', () => {
     await GET(createVerifyRequest());
 
     expect(appendSessionCookie).toHaveBeenCalled();
+  });
+
+  it('mints the device token for desktop — the platform the link was bound to', async () => {
+    await GET(createVerifyRequest());
+
+    expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
+      expect.objectContaining({ platform: 'desktop', deviceId: 'dev-123', deviceName: 'My Mac' }),
+    );
   });
 
   it('creates exchange code with correct session token', async () => {

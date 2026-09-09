@@ -241,8 +241,8 @@ export const BUILTIN_COMMANDS: readonly BuiltinCommandDefinition[] = [
     trigger: 'spreadsheets',
     kind: 'skill',
     description:
-      'Creates, reads and edits SHEET (spreadsheet) pages: reading rows by range or column value with read_sheet, cell edits with edit_sheet_cells, formulas and the supported function set, and references between sheets. Use when the user asks for a spreadsheet, budget, tracker, table of computed values, or help with formulas.',
-    requiredTools: ['read_sheet', 'edit_sheet_cells'],
+      'Creates, reads, edits and formats SHEET (spreadsheet) pages: reading rows by range or column value with read_sheet, cell edits with edit_sheet_cells, formulas and the supported function set, references between sheets, and making a sheet presentable with format_sheet (declared tables with header rows, currency/percent/date columns, totals and a theme) and set_conditional_format (highlight rules, colour scales, data bars). Use when the user asks for a spreadsheet, budget, tracker, dashboard, report or table of computed values, wants a sheet formatted, styled, cleaned up or made presentable, or needs help with formulas.',
+    requiredTools: ['read_sheet', 'edit_sheet_cells', 'format_sheet', 'set_conditional_format'],
   },
   {
     trigger: 'task-management',

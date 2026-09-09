@@ -442,13 +442,13 @@ describe('tag-service (integration)', () => {
       const afterFirst = `${BODY} Appended sentence one.`;
       const first = expectOk(await reanchorPageTags(page.id, BODY, afterFirst));
       expect(first.considered).toBe(1);
-      expect(first.skippedStaleHash).toBe(0);
+      expect(first.repairedStaleHash).toBe(0);
 
       const afterSecond = `${afterFirst} Appended sentence two.`;
       const second = expectOk(await reanchorPageTags(page.id, afterFirst, afterSecond));
 
       expect(second.considered).toBe(1);
-      expect(second.skippedStaleHash, 'the anchor must still be portable after the first edit').toBe(0);
+      expect(second.repairedStaleHash, 'the anchor must still be portable after the first edit').toBe(0);
     });
 
     it('stores the hash of the projection the anchor now describes', async () => {
@@ -570,8 +570,8 @@ describe('tag-service (integration)', () => {
       }));
 
       expect(swept.considered).toBe(1);
-      expect(swept.skippedFormatFlip, 'a declared conversion is not an accidental flip').toBe(0);
-      expect(swept.skippedStaleHash, 'the old mode must project the old content correctly').toBe(0);
+      expect(swept.repairedFormatFlip, 'a declared conversion is not an accidental flip').toBe(0);
+      expect(swept.repairedStaleHash, 'the old mode must project the old content correctly').toBe(0);
 
       const [row] = await db.select().from(contentTags).where(eq(contentTags.pageId, page.id));
       expect(row.anchorStatus).not.toBe('orphaned');
@@ -648,6 +648,190 @@ describe('tag-service (integration)', () => {
 
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error).toBe('invalid_target');
+    });
+  });
+
+  describe('a stale anchor is repaired, not abandoned', () => {
+    const DOC = 'Alpha beta gamma. The anchored quote sits here. Delta epsilon.';
+    const QUOTE = 'The anchored quote sits here.';
+
+    async function pageWithStaleAnchor() {
+      const owner = await factories.createUser();
+      const drive = await factories.createDrive(owner.id);
+      await factories.createDriveMember(drive.id, owner.id, { role: 'OWNER' });
+      const page = await factories.createPage(drive.id, {
+        type: 'DOCUMENT', title: 'Doc', position: 0, content: DOC, contentMode: 'markdown',
+      });
+      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'stale' }));
+      const projected = projectContent(DOC, 'markdown');
+      const start = projected.indexOf(QUOTE);
+
+      // Inserted directly with a hash from SOME OTHER revision — the shape a
+      // content write that bypassed the hook leaves behind.
+      await db.insert(contentTags).values({
+        tagId: tag.id,
+        pageId: page.id,
+        targetKind: 'text',
+        anchor: {
+          v: 1, exact: QUOTE, prefix: '', suffix: '',
+          start, end: start + QUOTE.length, revision: 1,
+          textHash: 'a-hash-from-a-revision-this-page-never-had',
+        },
+        anchorStatus: 'exact',
+        source: 'user',
+        createdBy: owner.id,
+      });
+      return { page, projected };
+    }
+
+    it('REPAIRS a stale anchor instead of passing over it forever', async () => {
+      // THE PERMANENT-DEATH BUG. Skipping was not a deferral: a hash that does
+      // not describe `oldContent` will not describe any FUTURE oldContent
+      // either, so the anchor was passed over on every later sweep for the rest
+      // of its life — while the row still read anchorStatus 'exact', so nothing
+      // could tell it apart from a healthy one.
+      const { page } = await pageWithStaleAnchor();
+      const edited = `${DOC} Appended.`;
+
+      const swept = expectOk(await reanchorPageTags(page.id, DOC, edited));
+
+      expect(swept.considered).toBe(1);
+      expect(swept.repairedStaleHash, 'the anchor must be repaired, not passed over').toBe(1);
+      expect(swept.updated, 'a repaired anchor must be WRITTEN so it stops being stale').toBe(1);
+
+      const [row] = await db.select().from(contentTags).where(eq(contentTags.pageId, page.id));
+      const stored = row.anchor as { start: number; end: number; textHash: string };
+      // Re-pinned to the revision it now describes — this is what breaks the
+      // permanence: the NEXT sweep finds a hash it can trust.
+      expect(stored.textHash).toBe(hashText(projectContent(edited, 'markdown')));
+      expect(projectContent(edited, 'markdown').slice(stored.start, stored.end)).toBe(QUOTE);
+    });
+
+    it('leaves the anchor portable on the NEXT sweep, which is the whole point', async () => {
+      const { page } = await pageWithStaleAnchor();
+      const first = `${DOC} One.`;
+      expectOk(await reanchorPageTags(page.id, DOC, first));
+
+      const second = `${first} Two.`;
+      const swept = expectOk(await reanchorPageTags(page.id, first, second));
+
+      expect(swept.repairedStaleHash, 'repair must have healed it, so no repair is needed now').toBe(0);
+      expect(swept.considered).toBe(1);
+    });
+
+    it('records an honest status rather than keeping the inherited exact', async () => {
+      // The row said 'exact' while being unusable. After repair the status has
+      // to describe what the repair actually achieved.
+      const { page } = await pageWithStaleAnchor();
+      const moved = `Newly inserted opening sentence. ${DOC}`;
+
+      expectOk(await reanchorPageTags(page.id, DOC, moved));
+
+      const [row] = await db.select().from(contentTags).where(eq(contentTags.pageId, page.id));
+      expect(row.anchorStatus).not.toBe('exact');
+      const stored = row.anchor as { start: number; end: number };
+      expect(projectContent(moved, 'markdown').slice(stored.start, stored.end)).toBe(QUOTE);
+    });
+
+    it('reports an orphan honestly when the quote is genuinely gone', async () => {
+      const { page } = await pageWithStaleAnchor();
+      const rewritten = 'Entirely different prose about shipping containers.';
+
+      const swept = expectOk(await reanchorPageTags(page.id, DOC, rewritten));
+
+      expect(swept.repairedStaleHash).toBe(1);
+      expect(swept.orphaned).toBe(1);
+      const [row] = await db.select().from(contentTags).where(eq(contentTags.pageId, page.id));
+      expect(row.anchorStatus).toBe('orphaned');
+    });
+  });
+
+  describe('a stale repair must not trust the offsets it knows are wrong', () => {
+    // DUPLICATED QUOTE TEXT is the case the epic says search cannot
+    // disambiguate and forward-porting can. A stale anchor cannot forward-port
+    // by definition, so the repair path has to lean on prefix/suffix — and
+    // `positionHolds` would skip that entirely, accepting whatever sits at the
+    // recorded span and calling it 'exact'.
+    const DUP_FIRST = 'Intro alpha. REPEATED PHRASE HERE. middle filler words. REPEATED PHRASE HERE. tail.';
+    const QUOTE = 'REPEATED PHRASE HERE.';
+
+    it('reattaches by CONTEXT, not by the stale recorded span', async () => {
+      const owner = await factories.createUser();
+      const drive = await factories.createDrive(owner.id);
+      await factories.createDriveMember(drive.id, owner.id, { role: 'OWNER' });
+      const page = await factories.createPage(drive.id, {
+        type: 'DOCUMENT', title: 'Doc', position: 0, content: DUP_FIRST, contentMode: 'markdown',
+      });
+      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'dup' }));
+
+      const projected = projectContent(DUP_FIRST, 'markdown');
+      const secondStart = projected.lastIndexOf(QUOTE);
+      const firstStart = projected.indexOf(QUOTE);
+      expect(secondStart).toBeGreaterThan(firstStart);
+
+      // The anchor belongs to the SECOND occurrence — its context says so — but
+      // its recorded offsets point at the FIRST, and its hash is stale. If the
+      // repair trusts the offsets it will silently claim the wrong occurrence.
+      await db.insert(contentTags).values({
+        tagId: tag.id,
+        pageId: page.id,
+        targetKind: 'text',
+        anchor: {
+          v: 1,
+          exact: QUOTE,
+          prefix: projected.slice(Math.max(0, secondStart - 32), secondStart),
+          suffix: projected.slice(secondStart + QUOTE.length, secondStart + QUOTE.length + 32),
+          start: firstStart,
+          end: firstStart + QUOTE.length,
+          revision: 1,
+          textHash: 'a-hash-from-a-revision-this-page-never-had',
+        },
+        anchorStatus: 'exact',
+        source: 'user',
+        createdBy: owner.id,
+      });
+
+      expectOk(await reanchorPageTags(page.id, DUP_FIRST, DUP_FIRST));
+
+      const [row] = await db.select().from(contentTags).where(eq(contentTags.pageId, page.id));
+      const stored = row.anchor as { start: number; end: number };
+      expect(stored.start, 'context must win over the stale offsets').toBe(secondStart);
+    });
+  });
+
+  describe('orphan reporting counts transitions, not states', () => {
+    const DOC2 = 'Alpha beta gamma. The anchored quote sits here. Delta.';
+    const QUOTE2 = 'The anchored quote sits here.';
+
+    it('reports newlyOrphaned once, then zero on later edits', async () => {
+      // An already-orphaned anchor resolves as orphaned again on EVERY edit. A
+      // caller alerting on the total would warn on every save forever for a
+      // page that did not degrade at all.
+      const owner = await factories.createUser();
+      const drive = await factories.createDrive(owner.id);
+      await factories.createDriveMember(drive.id, owner.id, { role: 'OWNER' });
+      const page = await factories.createPage(drive.id, {
+        type: 'DOCUMENT', title: 'Doc', position: 0, content: DOC2, contentMode: 'markdown',
+      });
+      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'orph' }));
+      const projected = projectContent(DOC2, 'markdown');
+      const start = projected.indexOf(QUOTE2);
+      expectOk(await applyTag(owner.id, {
+        pageId: page.id, tagId: tag.id, source: 'user',
+        target: { kind: 'text', anchor: {
+          v: 1, exact: QUOTE2, prefix: '', suffix: '',
+          start, end: start + QUOTE2.length, revision: 1, textHash: hashText(projected),
+        } },
+      }));
+
+      const gone = 'Entirely different prose about shipping containers.';
+      const first = expectOk(await reanchorPageTags(page.id, DOC2, gone));
+      expect(first.newlyOrphaned, 'the anchor degrades on this edit').toBe(1);
+
+      const stillGone = `${gone} And more.`;
+      const second = expectOk(await reanchorPageTags(page.id, gone, stillGone));
+      expect(second.orphaned, 'it is still orphaned').toBe(1);
+      expect(second.newlyOrphaned, 'but it did not degrade AGAIN').toBe(0);
     });
   });
 });

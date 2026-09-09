@@ -863,12 +863,22 @@ describe('conditional formatting through the evaluator', () => {
     }
   });
 
-  it('lets an explicit cell format win over a rule', () => {
-    // The colour someone deliberately set is not silently overruled. Note this
-    // is the opposite of Excel and Google Sheets.
+  it('lets a rule win over an explicit cell format', () => {
+    // Matches Excel and Google Sheets. A rule that visibly failed to fire on
+    // exactly the cells someone had touched reads as a bug, not as deference.
     const sheet = budget();
     sheet.formats = { A3: { background: '#dcfce7' } };
-    expect(evaluateSheet(sheet).byAddress.A3.format?.background).toBe('#dcfce7');
+    expect(evaluateSheet(sheet).byAddress.A3.format?.background).toBe('#fee2e2');
+  });
+
+  it('keeps the fields of an explicit cell format that the rule does not set', () => {
+    // Winning per-field, not wholesale: a rule that only sets a fill must not
+    // discard the bold someone applied.
+    const sheet = budget();
+    sheet.formats = { A3: { background: '#dcfce7', bold: true } };
+    const cell = evaluateSheet(sheet).byAddress.A3;
+    expect(cell.format?.background).toBe('#fee2e2');
+    expect(cell.format?.bold).toBe(true);
   });
 
   it('places a rule above a column default', () => {

@@ -95,6 +95,17 @@ export const sheetTabs = pgTable('sheet_tabs', {
    */
   conditionalFormats: jsonb('conditionalFormats').$type<unknown[]>(),
 
+  /**
+   * Declared structure — header rows, column roles, totals — that presentation
+   * is derived from rather than stored per cell.
+   *
+   * Typed loosely for the same reason as `conditionalFormats`: the real shape
+   * lives in `@pagespace/lib/sheets/regions` and mirroring it here would give
+   * two definitions free to drift. Validated by `parseRegions` as it crosses
+   * this boundary.
+   */
+  regions: jsonb('regions').$type<unknown[]>(),
+
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => ({
