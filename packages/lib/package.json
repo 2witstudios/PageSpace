@@ -213,6 +213,11 @@
       "import": "./dist/env-bridge/decide-bind.js",
       "require": "./dist/env-bridge/decide-bind.js"
     },
+    "./env-bridge/decide-sign": {
+      "types": "./dist/env-bridge/decide-sign.d.ts",
+      "import": "./dist/env-bridge/decide-sign.js",
+      "require": "./dist/env-bridge/decide-sign.js"
+    },
     "./env-bridge/plan-local-provision": {
       "types": "./dist/env-bridge/plan-local-provision.d.ts",
       "import": "./dist/env-bridge/plan-local-provision.js",

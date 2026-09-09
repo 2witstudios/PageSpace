@@ -71,7 +71,7 @@ function harness(now: Date = NOW) {
 }
 
 async function createLocal(h: ReturnType<typeof harness>) {
-  const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'jono-macstudio', ownerId: 'user-1' }, deps: h.deps });
+  const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'jono-macstudio', ownerId: 'user-1', serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } }, deps: h.deps });
   if (!result.ok || !result.enrollment) throw new Error(`create failed: ${JSON.stringify(result)}`);
   return { env: result.env, enrollment: result.enrollment };
 }
@@ -111,7 +111,7 @@ describe('createDriveEnv with local facts — env + sibling + one-time code in O
   it('should meter a local env against the same per-payer ceiling as a Sprite env (an env is an env)', async () => {
     const h = harness();
     h.fake.ownedEnvs.set(PAYER_ID, 1_000);
-    const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'm', ownerId: 'user-1' }, deps: h.deps });
+    const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'm', ownerId: 'user-1', serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } }, deps: h.deps });
     expect(result.ok).toBe(false);
     expect(!result.ok && result.reason).toBe('quota_exceeded');
     expect(h.fake.local.size).toBe(0);
@@ -119,6 +119,13 @@ describe('createDriveEnv with local facts — env + sibling + one-time code in O
 });
 
 describe('enrollLocalDriveEnv — the machine presents the code and its public key', () => {
+  it('given a valid code and key, should answer the machine\'s OWNER id too — the enroller writes it into the scaffolded policy so the machine refuses everyone else even if the server is wrong (D-6, defence in depth)', async () => {
+    const h = harness();
+    const created = await createLocal(h);
+    const result = await enrollLocalDriveEnv({ enrollmentId: created.enrollment.enrollmentId, code: created.enrollment.code, machinePublicKey, deps: h.deps });
+    expect(result).toMatchObject({ ok: true, ownerId: 'user-1' });
+  });
+
   it('given the right code before expiry and a valid Ed25519 SPKI key, should pin key + fingerprint + server keyId, consume the code, and hand back the server public key to pin', async () => {
     const h = harness();
     const { env, enrollment } = await createLocal(h);
@@ -129,6 +136,7 @@ describe('enrollLocalDriveEnv — the machine presents the code and its public k
       enrollmentId: 'enr-1',
       serverKeyId: 'srv-k1',
       serverPublicKey: Buffer.from(identity.signingKey.publicKey).toString('base64'),
+      ownerId: 'user-1',
     });
     const sibling = h.fake.local.get(env.id)!;
     expect(sibling.machinePublicKey).toBe(machinePublicKey);

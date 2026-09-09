@@ -956,6 +956,7 @@ describe('POST /api/agent-workspaces — spawn ceiling (review M6/F4)', () => {
     ['not_connected', 409],
     ['revoked', 409],
     ['substrate_unsupported', 409],
+    ['no_server_ops', 409],
   ] as const)('given a LOCAL env refuses the bind with %s (C1), should answer %i naming the refusal, audit it, and start no conversation', async (refusal, status) => {
     mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
     mockCountActiveSessionsForOwner.mockResolvedValue(0);
@@ -964,6 +965,21 @@ describe('POST /api/agent-workspaces — spawn ceiling (review M6/F4)', () => {
     expect(response.status).toBe(status);
     expect(await response.json()).toMatchObject({ reason: 'env_bind_refused', refusal });
     expect(mockCreateConversationInSession).not.toHaveBeenCalled();
+  });
+
+  it('given no_server_ops (GA wave 1), should answer 409 with a message that states the fact — the owner has not allowed anything — and names the API field', async () => {
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
+    mockSpawnSession.mockResolvedValue({ ok: false, reason: 'env_bind_refused', refusal: 'no_server_ops' });
+    const response = await spawn({ driveId: 'drive-1', envId: 'env-local' });
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { error: string; refusal: string };
+    expect(body.refusal).toBe('no_server_ops');
+    // The FACT, not a pointer to a page that does not exist yet (Codex P1): the owner has not allowed anything; the API field for a technical reader.
+    expect(body.error).not.toMatch(/Drive settings/);
+    expect(body.error).toMatch(/owner/i);
+    expect(body.error).toMatch(/not allowed it to run anything/);
+    expect(body.error).toContain('serverPolicy');
   });
 
   it('429s on the ATOMIC backstop when a concurrent spawn wins the race the pre-check missed (review #2261/2)', async () => {

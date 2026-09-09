@@ -17,8 +17,8 @@
  * user's request run under another user's name.
  */
 import type { GrantPrincipal } from '@pagespace/lib/env-bridge/grant';
-import type { BridgeTransport } from '@pagespace/lib/services/sandbox/sandbox-client/local-env-sandbox-host';
-import { getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
+import { LocalEnvServerDeniedError, type BridgeTransport } from '@pagespace/lib/services/sandbox/sandbox-client/local-env-sandbox-host';
+import { EnvBridgeError, getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { getAuthorizedEnvConnection, getEnvConnectionMetadata } from '@/lib/websocket/ws-env-connections';
 
 /**
@@ -78,7 +78,20 @@ export function createLocalEnvTransport(options: { principal?: GrantPrincipal } 
     sendGrant: ({ envId, frame }) =>
       principal === undefined
         ? Promise.reject(new LocalEnvNoPrincipalError(envId))
-        : getEnvBridgeClient().sendGrant({ envId, frame, principal }),
+        : getEnvBridgeClient()
+            .sendGrant({ envId, frame, principal })
+            .catch((error: unknown) => {
+              // The server's own refusal to SIGN (GA wave 1) crosses into
+              // `@pagespace/lib` as the typed error that package can name, so
+              // the tool layer answers `local_server_denied` rather than a
+              // generic execution failure. Every other failure passes through
+              // untouched — this is a re-label, not a second decision.
+              if (error instanceof EnvBridgeError && error.kind === 'server_denied') {
+                const reason = typeof error.detail?.reason === 'string' ? error.detail.reason : 'server_denied';
+                throw new LocalEnvServerDeniedError(envId, reason);
+              }
+              throw error;
+            }),
     // The AUTHORIZED socket only (invariant 6): a socket whose signed hello has
     // not verified is not a machine we may send a grant to, so it is not a
     // connection as far as this seam is concerned.

@@ -151,10 +151,10 @@ describe('drive_env_local — the 1:1 sibling holding a local env\'s connection 
     expect(localColumns.challengeUsedAt.notNull).toBe(false);
   });
 
-  it('defaults bindPolicy to owner (RCE on personal hardware warrants the strictest default) and exports the closed set', () => {
+  it('defaults bindPolicy to owner and exports a closed set of exactly ONE value — a machine is driven by its owner only ([D-6], invariant 13), structurally', () => {
     expect(localColumns.bindPolicy.notNull).toBe(true);
     expect(localColumns.bindPolicy.hasDefault).toBe(true);
-    expect([...DRIVE_ENV_BIND_POLICIES]).toEqual(['owner', 'admins', 'members']);
+    expect([...DRIVE_ENV_BIND_POLICIES]).toEqual(['owner']);
   });
 
   it('carries a CHECK that bindPolicy is one of the closed set, built FROM the exported set so the two cannot drift apart', () => {

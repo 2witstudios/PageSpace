@@ -118,6 +118,13 @@ export interface NewDriveEnvLocalFacts {
   enrollmentId: string;
   enrollmentCodeHash: string;
   enrollmentCodeExpiresAt: Date;
+  /**
+   * The owner's explicit allow-set, written in the SAME transaction as the
+   * code hash (GA wave 1). Required: the column's deny-all default is the
+   * fail-closed backstop for a row minted by some path that forgot, not a
+   * value this store ever chooses on a caller's behalf.
+   */
+  serverPolicy: { ops: string[]; checkpoint: boolean };
 }
 
 export interface NewDriveEnvInput {
@@ -246,6 +253,16 @@ export interface DriveEnvStore {
   recordHello(input: { envId: string; capabilities: NonNullable<DriveEnvLocalRecord['capabilities']>; now: Date }): Promise<boolean>;
   /** Heartbeat from the live socket (throttled by the route to once per heartbeat window). Same CAS as `recordHello`. */
   recordHeartbeat(input: { envId: string; now: Date }): Promise<boolean>;
+  /**
+   * Replace the server policy IFF the caller is the row's OWNER and the env is
+   * not revoked: ONE `UPDATE … WHERE envId = ? AND ownerId = ? AND revokedAt IS
+   * NULL` returning the row count — a compare-and-set, never a read-then-write
+   * ([D-6]: a machine's policy is the enrolling human's alone; GA wave 1). A
+   * drive admin who did not enrol the machine loses the predicate exactly as a
+   * stranger does, and the row is left byte-identical. False = not written;
+   * the service reads the row afterwards only to choose the honest answer.
+   */
+  setServerPolicy(input: { envId: string; ownerId: string; serverPolicy: { ops: string[]; checkpoint: boolean }; now: Date }): Promise<boolean>;
   /**
    * Revoke: stamp `revokedAt` IFF `revokedAt IS NULL` (Codex C4). False means
    * it was already revoked — the caller still completes the other two legs
@@ -733,6 +750,15 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       return updated.length === 1;
     },
 
+    async setServerPolicy({ envId, ownerId, serverPolicy, now: at }) {
+      const updated = await db
+        .update(driveEnvLocal)
+        .set({ serverPolicy, updatedAt: at })
+        .where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.ownerId, ownerId), isNull(driveEnvLocal.revokedAt)))
+        .returning({ envId: driveEnvLocal.envId });
+      return updated.length === 1;
+    },
+
     async createIfUnderLimit({ driveId, name, createdBy, now: at, payerId, maxEnvs, local }) {
       try {
         return await db.transaction(async (tx) => {
@@ -756,7 +782,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
           // without its lifecycle row, and the composite FK holds both ways.
           const [sibling] = await tx
             .insert(driveEnvLocal)
-            .values({ envId: row!.id, ownerId: local.ownerId, label: local.label, enrollmentId: local.enrollmentId, enrollmentCodeHash: local.enrollmentCodeHash, enrollmentCodeExpiresAt: local.enrollmentCodeExpiresAt, createdAt: at, updatedAt: at })
+            .values({ envId: row!.id, ownerId: local.ownerId, label: local.label, enrollmentId: local.enrollmentId, enrollmentCodeHash: local.enrollmentCodeHash, enrollmentCodeExpiresAt: local.enrollmentCodeExpiresAt, serverPolicy: local.serverPolicy, createdAt: at, updatedAt: at })
             .returning();
           return { ok: true as const, env: row as DriveEnvRecord, local: { ...(sibling as Omit<DriveEnvLocalRecord, 'driveId'>), driveId } as DriveEnvLocalRecord };
         });

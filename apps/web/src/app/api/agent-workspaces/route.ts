@@ -59,7 +59,21 @@ const LOCAL_BIND_REFUSAL_STATUS = {
   revoked: 409,
   not_connected: 409,
   substrate_unsupported: 409,
+  // The machine's state as PageSpace configured it (GA wave 1): allowed
+  // to bind, but its server policy permits no operation. 409, not 403 — the
+  // actor is not refused, the environment is not ready.
+  no_server_ops: 409,
 } as const satisfies Record<LocalEnvRefusal, number>;
+
+/**
+ * The one bind refusal worth spelling out. It states the FACT and names the
+ * API field; it does not point at a settings page, because none exists yet —
+ * wave 3 of the GA container builds it and restores the pointer then (Codex
+ * P1 on #2582: a message must not direct a person to a page that is not there).
+ */
+const NO_SERVER_OPS_MESSAGE =
+  'This environment\'s owner has not allowed it to run anything yet, so a session in it could do nothing. '
+  + 'Only the owner can change that: the environment\'s serverPolicy (PATCH /api/drives/{driveId}/envs/{envId} with { serverPolicy: { ops: [...] } }) names what PageSpace may ask the machine to do.';
 
 /** Bound on the stored display label — rendered everywhere the session appears. */
 const MAX_SESSION_NAME_LENGTH = 120;
@@ -542,7 +556,11 @@ export async function POST(request: Request) {
         riskScore: 0.4,
       });
       return NextResponse.json(
-        { error: 'This environment refused the session', reason: spawned.reason, refusal: spawned.refusal },
+        {
+          error: spawned.refusal === 'no_server_ops' ? NO_SERVER_OPS_MESSAGE : 'This environment refused the session',
+          reason: spawned.reason,
+          refusal: spawned.refusal,
+        },
         { status: LOCAL_BIND_REFUSAL_STATUS[spawned.refusal] },
       );
     }

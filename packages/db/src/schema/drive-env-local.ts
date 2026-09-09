@@ -34,10 +34,13 @@ export { DRIVE_ENV_SUBSTRATES };
  *   (`{ ops, checkpoint }`), intersected on the server with what the machine
  *   advertised and — independently — re-checked by the machine's own policy;
  *   the server is necessary, never sufficient (invariant 4).
- * - **`bindPolicy` defaults to `'owner'`.** Who may bind a session to this env:
- *   only the enrolling user, or drive admins too, or any member who passes the
- *   code-execution gate. RCE on personal hardware warrants the strictest
- *   default (invariant 11); the pure gate is `decideBind` in `env-bridge`.
+ * - **`bindPolicy` is `'owner'`, and that is the whole closed set.** A machine
+ *   is driven by its OWNER only ([D-6], invariant 13) — the enrolling user
+ *   binds, approves, stops and edits policy; drive admins keep Delete and
+ *   Revoke and never get Bind. The values that would have widened it
+ *   (`admins`, `members`) were REMOVED from the CHECK in 0291 rather than
+ *   hidden, so the row cannot hold them; the pure gate is `decideBind` in
+ *   `env-bridge`, which denies any other value as drift.
  * - **No stored connection status.** `connected|connecting|disconnected` is
  *   derived from `lastSeenAt` plus the live socket registry, the way an env's
  *   Sprite status is derived from its pointers — a cached status is a lie
@@ -47,7 +50,7 @@ export { DRIVE_ENV_SUBSTRATES };
  * this module (it already imports the other way for the FK; see its docblock
  * on the sessions edge for the same rule).
  */
-export const DRIVE_ENV_BIND_POLICIES = ['owner', 'admins', 'members'] as const;
+export const DRIVE_ENV_BIND_POLICIES = ['owner'] as const;
 export type DriveEnvBindPolicy = (typeof DRIVE_ENV_BIND_POLICIES)[number];
 
 /** What the machine advertised in its last `hello`. Mirrors `AdvertisedCapabilities` in `env-bridge`. */

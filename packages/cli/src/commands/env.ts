@@ -21,6 +21,7 @@
  * the key, are its credentials. `--host` / PAGESPACE_API_URL choose the
  * deployment, exactly as `login` does.
  */
+import { homedir as osHomedir } from 'node:os';
 import { resolveConfig } from '../config/resolve.js';
 import { createCredentialStore } from '../credentials/store.js';
 import type { CredentialStore } from '../credentials/store.js';
@@ -30,6 +31,7 @@ import type { CommandHandler } from '../router/router.js';
 import { generateMachineKeypair, signWithMachineKey } from '../env-bridge/keypair.js';
 import type { GenerateMachineKeypair, SignWithMachineKey } from '../env-bridge/keypair.js';
 import { BridgeTokenError, mintBridgeToken, postJson, refusalOf } from '../env-bridge/token.js';
+import { defaultPolicyPath, openPolicyFile, parseMachinePolicyText, writePolicyFile, type OpenedPolicyFile } from '../env-bridge/policy.js';
 
 type Fetch = typeof globalThis.fetch;
 
@@ -45,6 +47,71 @@ export interface EnvEnrollHandlerDeps {
   readonly generateKeypair: GenerateMachineKeypair;
   readonly fetch: Fetch;
   readonly now: () => number;
+  /** For the policy scaffold (D-6): where `~/.pagespace/env-policy.json` lives … */
+  readonly homedir: string;
+  /** … the one root the scaffold names (where the owner ran `enroll`) … */
+  readonly cwd: () => string;
+  /** … whether a policy already exists (never overwritten) … */
+  readonly openPolicy: (path: string) => OpenedPolicyFile | null;
+  /** … and the 0600 write. */
+  readonly writePolicyFile: (path: string, content: string) => Promise<void>;
+}
+
+/**
+ * The policy scaffolded at enrol, while the owner is at the keyboard (D-6,
+ * invariant 13 — defence in depth): `principals` is the machine's OWNER and
+ * nobody else, so this daemon refuses every other user even if the server
+ * were wrong about who may bind. `mode: ask` with no pre-approved ops means
+ * every kind of request prompts the first time; the only root is the
+ * directory `enroll` ran in. The owner edits from there.
+ */
+export function scaffoldedPolicy(input: { ownerId: string; root: string }): string {
+  return `${JSON.stringify({ mode: 'ask', principals: [input.ownerId], ops: [], roots: [input.root], envAllowlist: [] }, null, 2)}\n`;
+}
+
+type PolicyScaffoldOutcome = { path: string; scaffolded: boolean; kept: boolean; warning: string | null; error: string | null };
+
+/** Write the scaffold IFF no policy file exists; never touch an existing one, but say when it does not name the owner. */
+async function scaffoldPolicyForOwner(deps: EnvEnrollHandlerDeps, env: Readonly<Record<string, string | undefined>>, ownerId: string): Promise<PolicyScaffoldOutcome> {
+  const path = defaultPolicyPath(env, deps.homedir);
+  let existing: OpenedPolicyFile | null;
+  try {
+    existing = deps.openPolicy(path);
+  } catch (error) {
+    // Unreadable is not "missing": leave whatever is there alone.
+    return { path, scaffolded: false, kept: true, warning: null, error: `could not read the existing policy: ${messageOf(error)}` };
+  }
+  if (existing !== null) {
+    const parsed = parseMachinePolicyText(existing.content);
+    const warning =
+      parsed !== null && !parsed.principals.includes(ownerId)
+        ? `The existing policy at ${path} does not name you (${ownerId}) in "principals", so requests from your own sessions will be denied principal_not_allowed until you add it.`
+        : null;
+    return { path, scaffolded: false, kept: true, warning, error: null };
+  }
+  // Never guess a root for someone's machine (Codex P2 on #2582): the scaffold
+  // must be a policy `connect` will accept, so it is parsed with the same
+  // strict parser before it is written. The filesystem root, a relative
+  // directory, or one with `..` are all refused — and refused OUT LOUD.
+  const root = deps.cwd();
+  const content = scaffoldedPolicy({ ownerId, root });
+  if (parseMachinePolicyText(content) === null) {
+    return {
+      path,
+      scaffolded: false,
+      kept: false,
+      warning: null,
+      error:
+        `the directory you ran enroll in (${root}) is not a valid root — a root must be an absolute directory other than the filesystem root, without ".." segments — so nothing was written. ` +
+        `Create ${path} yourself (chmod 600) with "principals": ["${ownerId}"] and "roots": ["<an absolute project directory>"], then run "pagespace env policy" to check it`,
+    };
+  }
+  try {
+    await deps.writePolicyFile(path, content);
+    return { path, scaffolded: true, kept: false, warning: null, error: null };
+  } catch (error) {
+    return { path, scaffolded: false, kept: false, warning: null, error: messageOf(error) };
+  }
 }
 
 export interface EnvTokenHandlerDeps {
@@ -112,7 +179,7 @@ export function createEnvEnrollHandler(deps: EnvEnrollHandlerDeps): CommandHandl
       ctx.stderr.write(`Enrollment refused: ${await refusalOf(response)}\n`);
       return EXIT_RUNTIME_ERROR;
     }
-    const result = (await response.json()) as { enrollmentId: string; envId: string; serverKeyId: string; serverPublicKey: string };
+    const result = (await response.json()) as { enrollmentId: string; envId: string; serverKeyId: string; serverPublicKey: string; ownerId?: string };
 
     const credential: MachineHostCredential = { ...pending, envId: result.envId, serverPublicKey: result.serverPublicKey, serverKeyId: result.serverKeyId };
     // (Codex C11) The code is spent and the server has pinned this key. The
@@ -130,13 +197,33 @@ export function createEnvEnrollHandler(deps: EnvEnrollHandlerDeps): CommandHandl
       return EXIT_RUNTIME_ERROR;
     }
 
+    // The key is pinned; from here on nothing can un-enrol. The policy
+    // scaffold (D-6) is best-effort and reported, never a reason to fail.
+    const ownerId = typeof result.ownerId === 'string' && result.ownerId.length > 0 ? result.ownerId : null;
+    const policy = ownerId === null ? null : await scaffoldPolicyForOwner(deps, ctx.env, ownerId);
+
     if (intent.flags.json) {
-      ctx.stdout.write(`${JSON.stringify({ enrollmentId: result.enrollmentId, envId: result.envId, serverKeyId: result.serverKeyId, host })}\n`);
+      ctx.stdout.write(`${JSON.stringify({ enrollmentId: result.enrollmentId, envId: result.envId, serverKeyId: result.serverKeyId, host, ownerId, policy: policy && { path: policy.path, scaffolded: policy.scaffolded, kept: policy.kept } })}\n`);
     } else {
       ctx.stdout.write(
         `Enrolled this machine as environment ${result.envId} on ${host}.\n` +
           `Pinned server signing key ${result.serverKeyId}. The machine key stays in this machine's credential store (profile "${machineProfileName(result.enrollmentId)}").\n`,
       );
+      if (policy?.scaffolded) {
+        ctx.stdout.write(
+          `Wrote a starter policy to ${policy.path}: principals [${ownerId}] (you, and nobody else — a machine is driven by its owner only), mode ask, no pre-approved ops, root ${deps.cwd()}. Edit it to allow more; "pagespace env policy" shows what is in force.\n`,
+        );
+      } else if (policy?.kept) {
+        ctx.stdout.write(`Kept the existing policy at ${policy.path}.\n`);
+      }
+    }
+    if (ownerId === null) ctx.stderr.write('The server did not say who the owner of this environment is, so no policy was scaffolded; create ~/.pagespace/env-policy.json yourself with "principals": [<your user id>].\n');
+    if (policy?.warning) ctx.stderr.write(`${policy.warning}\n`);
+    if (policy?.error) {
+      // The enrollment stands (the key is pinned); the SCAFFOLD step failed,
+      // and a step that failed exits non-zero so a script notices.
+      ctx.stderr.write(`Enrolled, but no starter policy was written to ${policy.path}: ${policy.error}.\n`);
+      return EXIT_RUNTIME_ERROR;
     }
     return EXIT_SUCCESS;
   };
@@ -196,6 +283,10 @@ export const envEnrollHandler: CommandHandler = createEnvEnrollHandler({
   generateKeypair: generateMachineKeypair,
   fetch: (...args) => globalThis.fetch(...args),
   now: Date.now,
+  homedir: osHomedir(),
+  cwd: () => process.cwd(),
+  openPolicy: openPolicyFile,
+  writePolicyFile,
 });
 
 export const envTokenHandler: CommandHandler = createEnvTokenHandler({

@@ -603,7 +603,7 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
   // each write is ONE guarded UPDATE, so two replicas enrolling or redeeming
   // the same machine resolve to exactly one winner.
   const NOW = new Date('2026-09-05T10:00:00.000Z');
-  const facts = (enrollmentId: string) => ({ ownerId: payerId, label: 'jono-macstudio', enrollmentId, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(NOW.getTime() + 600_000) });
+  const facts = (enrollmentId: string) => ({ ownerId: payerId, label: 'jono-macstudio', enrollmentId, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(NOW.getTime() + 600_000), serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } });
 
   async function createLocal(name = 'mac') {
     const enrollmentId = `enr_${createId()}`;
@@ -638,7 +638,7 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
 
   it('findLocalByEnrollmentId / listLocalFacts: should join the drive id and scope the listing to the drive', async () => {
     const { envId, enrollmentId } = await createLocal('a');
-    await store.createIfUnderLimit({ driveId: otherDriveId, name: 'theirs', createdBy: otherPayerId, now: NOW, payerId: otherPayerId, maxEnvs: 10, local: { ...facts(`enr_${createId()}`), ownerId: otherPayerId } });
+    await store.createIfUnderLimit({ driveId: otherDriveId, name: 'theirs', createdBy: otherPayerId, now: NOW, payerId: otherPayerId, maxEnvs: 10, local: { ...facts(`enr_${createId()}`), ownerId: otherPayerId, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } } });
     expect((await store.findLocalByEnrollmentId(enrollmentId))?.envId).toBe(envId);
     expect(await store.findLocalByEnrollmentId('enr_nope')).toBeNull();
     expect((await store.listLocalFacts(driveId)).map((r) => r.envId)).toEqual([envId]);
@@ -829,13 +829,20 @@ describe('the local-env connection slice (t07) — recordHello / recordHeartbeat
       now: NOW,
       payerId,
       maxEnvs: 10,
-      local: { ownerId: payerId, label: 'jono-macstudio', enrollmentId, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(NOW.getTime() + 600_000) },
+      local: { ownerId: payerId, label: 'jono-macstudio', enrollmentId, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(NOW.getTime() + 600_000), serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } },
     });
     if (!created.ok) throw new Error(created.reason);
     if (enroll) await store.pinMachineKey({ envId: created.env.id, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW });
     return created.env.id;
   }
   const rowOf = async (envId: string) => (await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId)))[0];
+
+  it('createIfUnderLimit: should write the explicit serverPolicy onto the sibling in the same transaction as the code hash (GA wave 1) — the deny-all column default is never what a minted row carries', async () => {
+    const envId = await createLocal(false);
+    const row = await rowOf(envId);
+    expect(row?.serverPolicy).toEqual({ ops: ['fs_read', 'fs_write'], checkpoint: false });
+    expect(row?.enrollmentCodeHash).toBe('hash');
+  });
 
   it('recordHello: given an enrolled, unrevoked machine, should persist capabilities + lastSeenAt (UTC wall-clock, non-UTC session) and answer true', async () => {
     const envId = await createLocal(true);
@@ -872,6 +879,38 @@ describe('the local-env connection slice (t07) — recordHello / recordHeartbeat
     const row = await rowOf(envId);
     expect(row?.lastSeenAt?.getTime()).toBe(later.getTime());
     expect(row?.capabilities).toEqual(CAPS);
+  });
+
+  describe('setServerPolicy (GA wave 1, D-6): ONE UPDATE … WHERE envId AND ownerId AND revokedAt IS NULL', () => {
+    const POLICY = { ops: ['fs_read', 'exec'], checkpoint: false };
+
+    it('given the OWNER, should write the policy and updatedAt (UTC wall-clock on a non-UTC session) and answer true', async () => {
+      const envId = await createLocal(true);
+      const at = new Date(NOW.getTime() + 5_000);
+      expect(await store.setServerPolicy({ envId, ownerId: payerId, serverPolicy: POLICY, now: at })).toBe(true);
+      const row = await rowOf(envId);
+      expect(row?.serverPolicy).toEqual(POLICY);
+      expect(row?.updatedAt.getTime()).toBe(at.getTime());
+    });
+
+    it('given a user who is NOT the owner (a drive admin with every other right), should answer false and leave the row BYTE-IDENTICAL', async () => {
+      const envId = await createLocal(true);
+      const before = JSON.stringify(await rowOf(envId));
+      expect(await store.setServerPolicy({ envId, ownerId: otherPayerId, serverPolicy: POLICY, now: new Date(NOW.getTime() + 5_000) })).toBe(false);
+      expect(JSON.stringify(await rowOf(envId))).toBe(before);
+    });
+
+    it('given a REVOKED env, should answer false for the owner too and leave the row byte-identical', async () => {
+      const envId = await createLocal(true);
+      expect(await store.revokeLocal({ envId, now: NOW })).toBe(true);
+      const before = JSON.stringify(await rowOf(envId));
+      expect(await store.setServerPolicy({ envId, ownerId: payerId, serverPolicy: POLICY, now: new Date(NOW.getTime() + 5_000) })).toBe(false);
+      expect(JSON.stringify(await rowOf(envId))).toBe(before);
+    });
+
+    it('given an env that does not exist, should answer false', async () => {
+      expect(await store.setServerPolicy({ envId: `env_${createId()}`, ownerId: payerId, serverPolicy: POLICY, now: NOW })).toBe(false);
+    });
   });
 
   it('revokeLocal: should stamp revokedAt exactly once (CAS on revokedAt IS NULL) and keep the FIRST stamp on a repeat', async () => {

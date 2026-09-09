@@ -25,6 +25,7 @@
  */
 
 import { z } from 'zod';
+import { GRANT_OPS } from '../env-bridge/grant';
 
 /** Longest environment name accepted. Long enough for `staging-eu-west` and its kin, short enough to render in a sidebar row. */
 export const MAX_DRIVE_ENV_NAME_LENGTH = 64;
@@ -120,6 +121,18 @@ export const DRIVE_ENV_STATUSES = [...DRIVE_ENV_SPRITE_STATUSES, ...DRIVE_ENV_LO
 export const driveEnvStatusSchema = z.enum(DRIVE_ENV_STATUSES);
 export type DriveEnvStatus = z.infer<typeof driveEnvStatusSchema>;
 
+/**
+ * The policy as SERVED on a local DTO: what the row holds, projected through
+ * the strict parser (a stored value the parser refuses reads as deny-all).
+ * Wider than the request schema on purpose — the row may hold any grant op
+ * and `checkpoint` is a stored boolean — so a client reads the row's truth.
+ */
+export const driveEnvServerPolicyDtoSchema = z.object({
+  ops: z.array(z.enum(GRANT_OPS)),
+  checkpoint: z.boolean(),
+});
+export type DriveEnvServerPolicyDTO = z.infer<typeof driveEnvServerPolicyDtoSchema>;
+
 /** Wire timestamps are ISO-8601 strings; `Date` never crosses the boundary. */
 const isoTimestamp = z.string().datetime();
 
@@ -164,15 +177,49 @@ export const driveEnvDtoSchema = z.discriminatedUnion('substrate', [
      * distinguishes them.
      */
     enrolled: z.boolean(),
+    /** What PageSpace may ask this machine to do (`drive_env_local.serverPolicy`), as enforced at signing. The settings page reads it here. */
+    serverPolicy: driveEnvServerPolicyDtoSchema,
   }),
 ]);
 
 export type DriveEnvDTO = z.infer<typeof driveEnvDtoSchema>;
 
 /**
+ * A local env's SERVER policy as a client may set it — PageSpace's say in the
+ * three-way intersection (invariant 4; GA wave 1). A closed op set drawn from
+ * `GRANT_OPS`, each op at most once, and `checkpoint` pinned to `false`: a
+ * local machine never advertises filesystem checkpoints (invariant 12), so a
+ * client asking for one is asking for a silent no-op, and is refused instead.
+ * An EMPTY op set is valid — a machine that may do nothing yet — but it is
+ * never the default: the create body REQUIRES this field, because the column
+ * default (`{ops:[],checkpoint:false}`) is a fail-closed backstop, not a path
+ * a request may quietly fall to.
+ */
+/**
+ * The ops a server policy may NAME today — the IMPLEMENTED subset of
+ * `GRANT_OPS`. `GRANT_OPS` is the wire vocabulary (what a grant can carry;
+ * `pty_open` is reserved for M2); this is what a policy may allow. Kept apart
+ * so that a `pty_open`-only policy is refused at the boundary rather than
+ * minting a bindable env the daemon then refuses everything on (Codex P2 on
+ * #2582). When M2 lands PTY, this constant grows.
+ */
+export const SERVER_POLICY_OPS = ['exec', 'fs_read', 'fs_write'] as const satisfies readonly (typeof GRANT_OPS)[number][];
+
+export const driveEnvServerPolicySchema = z
+  .object({
+    ops: z.array(z.enum(SERVER_POLICY_OPS)).transform((ops) => [...new Set(ops)]),
+    checkpoint: z.literal(false),
+  })
+  .strict();
+
+
+export type DriveEnvServerPolicy = z.infer<typeof driveEnvServerPolicySchema>;
+
+/**
  * POST body for creating an environment. A name, and optionally a substrate
  * (defaults to `'sprite'`, so every existing client is unchanged). A local env
- * REQUIRES a machine label; a label sent for a Sprite env means nothing and is
+ * REQUIRES a machine label AND an explicit `serverPolicy` (what PageSpace may
+ * ask the machine to do); either sent for a Sprite env means nothing and is
  * dropped rather than stored.
  */
 export const createDriveEnvRequestSchema = z
@@ -180,8 +227,8 @@ export const createDriveEnvRequestSchema = z
     // The discriminator's default: a body with no substrate is a Sprite request.
     (body) => (typeof body === 'object' && body !== null && !('substrate' in body) ? { ...body, substrate: 'sprite' } : body),
     z.discriminatedUnion('substrate', [
-      z.object({ name: driveEnvNameSchema, substrate: z.literal('sprite'), label: driveEnvLabelSchema.optional() }),
-      z.object({ name: driveEnvNameSchema, substrate: z.literal('local'), label: driveEnvLabelSchema }),
+      z.object({ name: driveEnvNameSchema, substrate: z.literal('sprite'), label: driveEnvLabelSchema.optional(), serverPolicy: z.unknown().optional() }),
+      z.object({ name: driveEnvNameSchema, substrate: z.literal('local'), label: driveEnvLabelSchema, serverPolicy: driveEnvServerPolicySchema }),
     ]),
   )
   .transform((value) => (value.substrate === 'local' ? value : { name: value.name, substrate: value.substrate }));
@@ -201,7 +248,19 @@ export const localEnvEnrollmentIssueSchema = z.object({
   expiresAt: isoTimestamp,
 });
 
-/** PATCH body for renaming an environment. */
-export const renameDriveEnvRequestSchema = z.object({
-  name: driveEnvNameSchema,
-});
+/**
+ * PATCH body — exactly ONE of two fields, because they answer to two rules:
+ * `name` is the rename (drive owner or admin), `serverPolicy` is the OWNER-ONLY
+ * write of what PageSpace may ask the machine to do ([D-6]; GA wave 1). A body
+ * carrying both could not be answered with one status code without a partial
+ * write, so it is refused at the boundary.
+ */
+export const patchDriveEnvRequestSchema = z
+  .object({
+    name: driveEnvNameSchema.optional(),
+    serverPolicy: driveEnvServerPolicySchema.optional(),
+  })
+  .strict()
+  .refine((body) => (body.name === undefined) !== (body.serverPolicy === undefined), { message: 'Exactly one of name or serverPolicy is required' });
+
+export type PatchDriveEnvRequest = z.infer<typeof patchDriveEnvRequestSchema>;

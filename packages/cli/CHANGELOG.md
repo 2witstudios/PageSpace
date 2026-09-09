@@ -4,6 +4,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`pagespace env enroll` writes a starter policy naming you as the only principal.** If
+  `~/.pagespace/env-policy.json` (or `PAGESPACE_ENV_POLICY`) does not exist, enrolling creates it:
+  `mode: ask`, no pre-approved operations, the directory you ran `enroll` in as the only root, and
+  `principals` set to your own user id — so this machine refuses every other user on its own,
+  whatever the server says. An existing file is never overwritten; if it does not name you,
+  `enroll` warns that your own requests would be denied. Naming other users in `principals` is
+  still honoured (it is your file), but `env policy` and `env connect` now warn that each of them
+  can run commands as you. `--json` reports the policy path and whether it was scaffolded.
+
 ### Changed
 
 - **The `pagespace env` documentation now states, in plain words and before the commands, what

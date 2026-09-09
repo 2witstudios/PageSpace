@@ -1,8 +1,12 @@
 /**
  * The daemon's local audit trail (invariant 10): one JSON line per decision,
- * appended to `~/.pagespace/env-audit.jsonl`, carrying the `grantId` the
- * server audits on its side so the two logs can be joined. Append-only by
- * construction: the sink only ever appends, nothing here reads or rewrites.
+ * appended to `~/.pagespace/env-audit.jsonl`, keyed by `grantId` so that a
+ * server-side record CAN be joined to it. Today there is no server-side row
+ * per grant — the server logs and security-audits a refusal to sign, but
+ * writes nothing at sign time or result time for a grant it did sign — so
+ * this file is the ONE side of that join until the visibility phase of the
+ * GA container writes the other. Append-only by construction: the sink only
+ * ever appends, nothing here reads or rewrites.
  *
  * Audit I/O must never take the daemon down — a full disk is not a reason to
  * stop enforcing policy — so a failing sink is reported once and swallowed.

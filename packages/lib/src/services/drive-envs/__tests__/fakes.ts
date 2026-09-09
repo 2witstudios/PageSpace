@@ -56,7 +56,10 @@ export function makeLocalRecord(over: Partial<DriveEnvLocalRecord> = {}): DriveE
     machineKeyFingerprint: null,
     serverKeyId: null,
     capabilities: null,
-    serverPolicy: { ops: [], checkpoint: false },
+    // A MINTED row always carries the dialog's explicit policy (GA wave 1);
+    // the column's deny-all default is the backstop for a row some path
+    // forgot. Tests that want the backstop set `{ ops: [] }` explicitly.
+    serverPolicy: { ops: ['fs_read', 'fs_write', 'exec'], checkpoint: false },
     bindPolicy: 'owner',
     enrollmentCodeHash: null,
     enrollmentCodeExpiresAt: null,
@@ -213,6 +216,14 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       // CAS on `revokedAt IS NULL`: a second revoke is an answer (false), not a rewrite of the stamp.
       if (!sibling || sibling.revokedAt !== null) return false;
       local.set(envId, { ...sibling, revokedAt: at, updatedAt: at });
+      return true;
+    },
+
+    async setServerPolicy({ envId, ownerId, serverPolicy, now: at }) {
+      const sibling = local.get(envId);
+      // The real store's CAS predicate, verbatim: owner AND not revoked.
+      if (!sibling || sibling.ownerId !== ownerId || sibling.revokedAt !== null) return false;
+      local.set(envId, { ...sibling, serverPolicy: { ops: [...serverPolicy.ops], checkpoint: serverPolicy.checkpoint }, updatedAt: at });
       return true;
     },
 

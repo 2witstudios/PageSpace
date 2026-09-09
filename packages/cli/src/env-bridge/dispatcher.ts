@@ -19,12 +19,21 @@
  * in M1, and `grant_pty_open` is denied `unsupported` BEFORE verification —
  * nothing this daemon cannot do should cost a nonce or a signature check.
  *
- * SERVER POLICY. `decideExecution` intersects three inputs; the drive's
- * `serverPolicy` is enforced by the server before it signs a grant, and no
- * frame carries it to the machine. The daemon therefore supplies a
- * permissive stand-in for that one input and enforces the two it owns —
- * the machine policy and the advertised capabilities. A grant the server
- * should not have signed is still refused here by the owner's policy.
+ * SERVER POLICY. `decideExecution` intersects three inputs: the advertised
+ * capabilities, the server's allow-set and the machine policy. The server's
+ * say is NOT carried on the wire — it is carried by the signature over `op`.
+ * PageSpace consults `drive_env_local.serverPolicy` at the one place a
+ * capability is minted (`decideSign`, run by the bridge client before
+ * `signGrantFrame`) and refuses to sign any op the policy excludes; a grant
+ * that reaches this daemon with a valid signature is therefore, by
+ * construction, an op the server allowed at the moment it signed, and
+ * `verifyGrant` (run first, below) binds that `op` to this very frame. So
+ * the server-policy input to `decideExecution` is satisfied by the
+ * signature, and the daemon feeds it a set covering every op: nothing here
+ * re-decides what the server already decided, and the daemon still enforces
+ * the two inputs it alone owns — the owner's policy file and what this
+ * machine advertised. Every grant, including one the server should not have
+ * signed, is still subject to the owner's policy.
  */
 import { GRANT_OPS, verifyGrant as libVerifyGrant, type Ed25519Verify, type Grant, type GrantVerdict, type HashBytes, type VerifyGrantInput } from './lib-core.js';
 import { executionRequestForFrame, GRANT_FRAME_TYPES, grantRequestForFrame, type GrantFrame } from './lib-core.js';
@@ -44,8 +53,13 @@ import type { AskPrompter } from './ask.js';
 /** What this daemon can do in M1: shell and files. PTY is M2; checkpoints are never assumed (invariant 12). */
 export const DAEMON_CAPABILITIES: AdvertisedCapabilities = { shell: true, pty: false, fs: true, checkpoint: false };
 
-/** See "SERVER POLICY" above. */
-const DAEMON_SERVER_POLICY: ServerPolicy = { ops: [...GRANT_OPS], checkpoint: false };
+/**
+ * The server-policy input to `decideExecution`, satisfied by the signature
+ * over `op` — see "SERVER POLICY" above. Every op is listed because the
+ * server has already refused, at signing, every op it does not allow; this
+ * is not a policy of the daemon's own and it widens nothing.
+ */
+const SERVER_POLICY_CARRIED_BY_SIGNATURE: ServerPolicy = { ops: [...GRANT_OPS], checkpoint: false };
 
 export interface DecisionGates {
   readonly verifyGrant: (input: VerifyGrantInput) => GrantVerdict;
@@ -141,7 +155,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       grant,
       request: executionRequestForFrame(frame),
       machinePolicy: deps.policy(),
-      serverPolicy: DAEMON_SERVER_POLICY,
+      serverPolicy: SERVER_POLICY_CARRIED_BY_SIGNATURE,
       capabilities: DAEMON_CAPABILITIES,
       probe: deps.probe,
     };

@@ -90,5 +90,7 @@ export async function POST(request: Request) {
     resourceId: result.envId,
     details: { route: 'env-bridge/enroll', enrollmentId: result.enrollmentId, serverKeyId: result.serverKeyId, kind: 'machine_key_pinned' },
   });
-  return NextResponse.json({ enrollmentId: result.enrollmentId, envId: result.envId, serverKeyId: result.serverKeyId, serverPublicKey: result.serverPublicKey });
+  // `ownerId` is the enrolling user's id — no secret, and exactly what the
+  // machine needs to scaffold `principals: [owner]` in its own policy (D-6).
+  return NextResponse.json({ enrollmentId: result.enrollmentId, envId: result.envId, serverKeyId: result.serverKeyId, serverPublicKey: result.serverPublicKey, ownerId: result.ownerId });
 }

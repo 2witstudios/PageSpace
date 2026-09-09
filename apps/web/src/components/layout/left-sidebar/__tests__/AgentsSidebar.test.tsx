@@ -2565,7 +2565,7 @@ describe('AgentsSidebar', () => {
     });
     const CODE = 'ABCDEFGHJKMNPQRSTVWX';
     const expiresAt = () => new Date(Date.now() + 10 * 60 * 1000).toISOString();
-    const localEnv = { id: 'env-mac', name: 'mac', driveId: 'drive-1', substrate: 'local' as const, status: 'disconnected' as const, label: 'jono-macstudio', enrolled: false };
+    const localEnv = { id: 'env-mac', name: 'mac', driveId: 'drive-1', substrate: 'local' as const, status: 'disconnected' as const, label: 'jono-macstudio', enrolled: false, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } };
     const enableLocalEnvs = () =>
       mockUsePageAgents.mockImplementation((driveId?: string, options?: { enabled?: boolean }) => {
         const base = defaultPageAgents(driveId, options);
@@ -2616,7 +2616,94 @@ describe('AgentsSidebar', () => {
       await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
       await user.click(screen.getByRole('button', { name: 'Create environment' }));
       await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', { name: 'mac', substrate: 'local', label: 'jono-macstudio' }),
+        expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', {
+          name: 'mac',
+          substrate: 'local',
+          label: 'jono-macstudio',
+          // The dialog's default: files in, commands OUT. The server writes exactly this.
+          serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false },
+        }),
+      );
+    });
+
+    test('"This computer" preselects reading and writing files, keeps "Run commands" OFF behind its own toggle with the boundary copy, and never offers a terminal or a checkpoint', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      renderSidebar();
+      await openCreateStep(user);
+      // Nothing policy-shaped is on screen for a cloud sandbox.
+      expect(screen.queryByLabelText('Run commands')).toBeNull();
+      await user.click(screen.getByLabelText('This computer'));
+      expect((await screen.findByLabelText('Read files')) as HTMLInputElement).toBeChecked();
+      expect(screen.getByLabelText('Write files') as HTMLInputElement).toBeChecked();
+      const exec = screen.getByLabelText('Run commands') as HTMLInputElement;
+      expect(exec).not.toBeChecked();
+      // The README's words for what exec means, beside the toggle that turns it on.
+      expect(screen.getByText(/runs as you/i)).toBeDefined();
+      expect(screen.getByText(/no sandbox/i)).toBeDefined();
+      // Not offered at all: a terminal, a checkpoint.
+      expect(screen.queryByLabelText(/terminal/i)).toBeNull();
+      expect(screen.queryByLabelText(/checkpoint/i)).toBeNull();
+    });
+
+    test('every policy toggle resets to the safe default when a create step OPENS: enable Run commands, cancel, reopen ⇒ off (Codex P1)', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.click(await screen.findByLabelText('Run commands'));
+      await user.click(screen.getByLabelText('Write files'));
+      expect(screen.getByLabelText('Run commands') as HTMLInputElement).toBeChecked();
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      await user.click(await screen.findByText('New environment'));
+      await user.click(await screen.findByLabelText('This computer'));
+      expect((await screen.findByLabelText('Run commands')) as HTMLInputElement).not.toBeChecked();
+      expect(screen.getByLabelText('Write files') as HTMLInputElement).toBeChecked();
+      expect(screen.getByLabelText('Read files') as HTMLInputElement).toBeChecked();
+    });
+
+    test('enable Run commands, create, then open another create step ⇒ commands are off again', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByLabelText('Run commands'));
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', expect.objectContaining({ serverPolicy: { ops: ['fs_read', 'fs_write', 'exec'], checkpoint: false } })));
+      await user.click(await screen.findByRole('button', { name: 'Done' }));
+      await user.click(await screen.findByText('New environment'));
+      await user.click(await screen.findByLabelText('This computer'));
+      expect((await screen.findByLabelText('Run commands')) as HTMLInputElement).not.toBeChecked();
+    });
+
+    test('turning "Run commands" on posts exec in the serverPolicy; turning "Write files" off leaves it out', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByLabelText('Run commands'));
+      await user.click(screen.getByLabelText('Write files'));
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', {
+          name: 'mac',
+          substrate: 'local',
+          label: 'jono-macstudio',
+          serverPolicy: { ops: ['fs_read', 'exec'], checkpoint: false },
+        }),
       );
     });
 

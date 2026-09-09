@@ -23,7 +23,6 @@ function deps(over: Partial<LocalEnvGateDeps> & { sibling?: DriveEnvLocalRecord 
   return {
     store: { findLocalByEnvId: async () => sibling },
     canRunCode: async () => ({ ok: true }),
-    resolveActorRole: async () => 'member',
     liveConnection: () => null,
     flagEnabled: true,
     now: () => NOW,
@@ -77,62 +76,36 @@ describe('gateLocalEnv — the real facts, handed to decideBind then planLocalPr
     expect(await gate({ sibling: makeLocalRecord({ ownerId: OWNER, enrolledAt: null, lastSeenAt: NOW }) })).toEqual({ ok: false, refusal: 'not_connected' });
   });
 
-  describe('bindPolicy — the env OWNER always passes; others by the owner-declared policy', () => {
-    it('owner (default): a drive admin who did not enroll the machine is refused bind_policy', async () => {
-      expect(await gate({ resolveActorRole: async () => 'admin' }, 'admin-2')).toEqual({ ok: false, refusal: 'bind_policy' });
+  describe('bindPolicy — the env OWNER only ([D-6], invariant 13); no drive role is ever resolved', () => {
+    it('a drive admin who did not enroll the machine is refused bind_policy', async () => {
+      expect(await gate({}, 'admin-2')).toEqual({ ok: false, refusal: 'bind_policy' });
     });
 
-    it('admins: a drive admin passes, a member does not', async () => {
-      expect(await gate({ sibling: enrolledSibling({ bindPolicy: 'admins' }), resolveActorRole: async () => 'admin' }, 'admin-2')).toEqual({ ok: true, envId: ENV_ID });
-      expect(await gate({ sibling: enrolledSibling({ bindPolicy: 'admins' }), resolveActorRole: async () => 'member' }, 'member-3')).toEqual({ ok: false, refusal: 'bind_policy' });
+    it.each(['admins', 'members', 'everyone'])('a row holding %s (a removed or hostile value) denies a non-owner — drift never grants', async (value) => {
+      expect(await gate({ sibling: enrolledSibling({ bindPolicy: value }) }, 'member-3')).toEqual({ ok: false, refusal: 'bind_policy' });
     });
 
-    it('members: anyone who passed canRunCode', async () => {
-      expect(await gate({ sibling: enrolledSibling({ bindPolicy: 'members' }) }, 'member-3')).toEqual({ ok: true, envId: ENV_ID });
-    });
-
-    it('a drifted or hostile policy value denies', async () => {
-      expect(await gate({ sibling: enrolledSibling({ bindPolicy: 'everyone' }) }, 'member-3')).toEqual({ ok: false, refusal: 'bind_policy' });
+    it('the gate has NO role resolver to inject: there is no seam through which a role could widen the answer', () => {
+      expect(Object.keys(deps())).not.toContain('resolveActorRole');
     });
   });
 
   describe('short-circuit order — no IO that cannot change the verdict (Codex P2 on #2537)', () => {
-    const throwingRole = async (): Promise<'member'> => {
-      throw new Error('resolveActorRole must not be reached');
-    };
     const throwingCanRun = async (): Promise<{ ok: true }> => {
       throw new Error('canRunCode must not be reached');
     };
 
-    it('given the flag off, should refuse flag_disabled WITHOUT calling canRunCode or resolving the role', async () => {
-      expect(await gate({ flagEnabled: false, canRunCode: throwingCanRun, resolveActorRole: throwingRole })).toEqual({ ok: false, refusal: 'flag_disabled' });
+    it('given the flag off, should refuse flag_disabled WITHOUT calling canRunCode', async () => {
+      expect(await gate({ flagEnabled: false, canRunCode: throwingCanRun })).toEqual({ ok: false, refusal: 'flag_disabled' });
     });
 
-    it('given canRunCode denies, should refuse code_exec_denied WITHOUT resolving the role', async () => {
-      expect(await gate({ canRunCode: async () => ({ ok: false, reason: 'no_drive_access' }), resolveActorRole: throwingRole })).toEqual({ ok: false, refusal: 'code_exec_denied', cause: 'no_drive_access' });
+    it('given canRunCode denies, should refuse code_exec_denied', async () => {
+      expect(await gate({ canRunCode: async () => ({ ok: false, reason: 'no_drive_access' }) })).toEqual({ ok: false, refusal: 'code_exec_denied', cause: 'no_drive_access' });
     });
 
-    it('given a revoked or disconnected machine, should refuse WITHOUT resolving the role (the role cannot change those)', async () => {
-      expect(await gate({ sibling: enrolledSibling({ revokedAt: NOW }), resolveActorRole: throwingRole })).toEqual({ ok: false, refusal: 'revoked' });
-      expect(await gate({ sibling: enrolledSibling({ lastSeenAt: null }), resolveActorRole: throwingRole })).toEqual({ ok: false, refusal: 'not_connected' });
-    });
-
-    it('given the requester IS the owner, should allow without resolving the role at all (the owner always passes)', async () => {
-      expect(await gate({ resolveActorRole: throwingRole }, OWNER)).toEqual({ ok: true, envId: ENV_ID });
-    });
-
-    it('given a non-owner under the admins policy, should resolve the role — it is the one input that can flip bind_policy', async () => {
-      let resolved = 0;
-      const role = async (): Promise<'admin'> => {
-        resolved += 1;
-        return 'admin';
-      };
-      expect(await gate({ sibling: enrolledSibling({ bindPolicy: 'admins' }), resolveActorRole: role }, 'admin-2')).toEqual({ ok: true, envId: ENV_ID });
-      expect(resolved).toBe(1);
-    });
-
-    it('given a role resolver that throws when it IS needed, should propagate (never invent a verdict)', async () => {
-      await expect(gate({ resolveActorRole: throwingRole }, 'stranger')).rejects.toThrow('resolveActorRole must not be reached');
+    it('given a revoked or disconnected machine, should refuse with the machine\'s word', async () => {
+      expect(await gate({ sibling: enrolledSibling({ revokedAt: NOW }) })).toEqual({ ok: false, refusal: 'revoked' });
+      expect(await gate({ sibling: enrolledSibling({ lastSeenAt: null }) })).toEqual({ ok: false, refusal: 'not_connected' });
     });
   });
 

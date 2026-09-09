@@ -8,11 +8,31 @@ import {
   DRIVE_ENV_SUBSTRATES,
   driveEnvSubstrateSchema,
   localEnvEnrollmentIssueSchema,
+  patchDriveEnvRequestSchema,
+  SERVER_POLICY_OPS,
 } from '../env-contract';
+import { GRANT_OPS } from '../../env-bridge/grant';
 
 const BASE_DTO = { id: 'env_1', driveId: 'drive_1', name: 'dev', substrate: 'sprite', status: 'none', createdAt: '2026-09-04T00:00:00.000Z' };
 
 describe('drive-env contract — the substrate axis (Local Environments epic)', () => {
+  describe('driveEnvDtoSchema — the local variant exposes the server policy (what PageSpace may ask the machine to do)', () => {
+    const localDto = { ...BASE_DTO, substrate: 'local', status: 'disconnected', label: 'mac', enrolled: false };
+
+    it('given a local DTO with a serverPolicy, should accept', () => {
+      expect(driveEnvDtoSchema.safeParse({ ...localDto, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } }).success).toBe(true);
+    });
+
+    it('given a local DTO WITHOUT a serverPolicy, should reject — a settings page cannot render a policy it was not given', () => {
+      expect(driveEnvDtoSchema.safeParse(localDto).success).toBe(false);
+    });
+
+    it('given a Sprite DTO with a stray serverPolicy, should drop it (a Sprite has none; unknown keys are stripped, not refused)', () => {
+      const parsed = driveEnvDtoSchema.parse({ ...BASE_DTO, serverPolicy: { ops: [], checkpoint: false } });
+      expect('serverPolicy' in parsed).toBe(false);
+    });
+  });
+
   it('exposes the closed substrate set and a schema for it', () => {
     expect([...DRIVE_ENV_SUBSTRATES]).toEqual(['sprite', 'local']);
     expect(driveEnvSubstrateSchema.safeParse('sprite').success).toBe(true);
@@ -33,8 +53,62 @@ describe('drive-env contract — the substrate axis (Local Environments epic)', 
       expect(createDriveEnvRequestSchema.safeParse({ name: 'mac', substrate: 'local' }).success).toBe(false);
     });
 
-    it('given substrate local WITH a label, should accept and keep the trimmed label', () => {
-      expect(createDriveEnvRequestSchema.parse({ name: 'mac', substrate: 'local', label: '  jono-macstudio ' })).toEqual({ name: 'mac', substrate: 'local', label: 'jono-macstudio' });
+    it('given substrate local WITH a label and an explicit serverPolicy, should accept and keep the trimmed label', () => {
+      expect(createDriveEnvRequestSchema.parse({ name: 'mac', substrate: 'local', label: '  jono-macstudio ', serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } })).toEqual({
+        name: 'mac',
+        substrate: 'local',
+        label: 'jono-macstudio',
+        serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false },
+      });
+    });
+
+    describe('serverPolicy — REQUIRED for a local env (GA wave 1: the column default is a backstop, never a path)', () => {
+      const local = { name: 'mac', substrate: 'local', label: 'mac' };
+
+      it('given substrate local WITHOUT a serverPolicy, should reject — the dialog must say what the machine may do', () => {
+        const result = createDriveEnvRequestSchema.safeParse(local);
+        expect(result.success).toBe(false);
+        if (!result.success) expect(result.error.issues.map((issue) => String(issue.path[0]))).toContain('serverPolicy');
+      });
+
+      it('given an op outside GRANT_OPS, should reject', () => {
+        expect(createDriveEnvRequestSchema.safeParse({ ...local, serverPolicy: { ops: ['exec', 'rm_rf'], checkpoint: false } }).success).toBe(false);
+      });
+
+      it('given checkpoint true, should reject — a local machine never advertises checkpoints (invariant 12)', () => {
+        expect(createDriveEnvRequestSchema.safeParse({ ...local, serverPolicy: { ops: ['fs_read'], checkpoint: true } }).success).toBe(false);
+      });
+
+      it('SERVER_POLICY_OPS is the IMPLEMENTED subset of GRANT_OPS (the wire vocabulary) — pty_open is not in it until M2 lands PTY', () => {
+        expect([...SERVER_POLICY_OPS]).toEqual(['exec', 'fs_read', 'fs_write']);
+        for (const op of SERVER_POLICY_OPS) expect(GRANT_OPS).toContain(op);
+        expect([...SERVER_POLICY_OPS]).not.toContain('pty_open');
+      });
+
+      it('given a pty_open-only policy, should reject — a bindable env that can do nothing is refused at the boundary (Codex P2)', () => {
+        expect(createDriveEnvRequestSchema.safeParse({ ...local, serverPolicy: { ops: ['pty_open'], checkpoint: false } }).success).toBe(false);
+      });
+
+      it('given pty_open mixed into an otherwise valid policy, should reject too', () => {
+        expect(createDriveEnvRequestSchema.safeParse({ ...local, serverPolicy: { ops: ['fs_read', 'pty_open'], checkpoint: false } }).success).toBe(false);
+        expect(patchDriveEnvRequestSchema.safeParse({ serverPolicy: { ops: ['exec', 'pty_open'], checkpoint: false } }).success).toBe(false);
+      });
+
+      it('given a stray field in serverPolicy, should reject (closed shape)', () => {
+        expect(createDriveEnvRequestSchema.safeParse({ ...local, serverPolicy: { ops: ['fs_read'], checkpoint: false, roots: ['/'] } }).success).toBe(false);
+      });
+
+      it('given an EMPTY ops list, should accept — an owner may mint a machine that does nothing yet and enable ops later', () => {
+        expect(createDriveEnvRequestSchema.parse({ ...local, serverPolicy: { ops: [], checkpoint: false } })).toMatchObject({ serverPolicy: { ops: [], checkpoint: false } });
+      });
+
+      it('given duplicated ops, should keep each once', () => {
+        expect(createDriveEnvRequestSchema.parse({ ...local, serverPolicy: { ops: ['exec', 'exec', 'fs_read'], checkpoint: false } })).toMatchObject({ serverPolicy: { ops: ['exec', 'fs_read'] } });
+      });
+
+      it('given substrate sprite WITH a serverPolicy, should drop it (a Sprite has no server policy)', () => {
+        expect(createDriveEnvRequestSchema.parse({ name: 'dev', substrate: 'sprite', serverPolicy: { ops: ['exec'], checkpoint: false } })).toEqual({ name: 'dev', substrate: 'sprite' });
+      });
     });
 
     it('given substrate sprite WITH a label, should accept and drop the label (it means nothing for a Sprite)', () => {
@@ -73,11 +147,11 @@ describe('drive-env contract — the substrate axis (Local Environments epic)', 
     it('given a local env, should reject a Sprite-only status, and vice versa (the vocabularies do not mix)', () => {
       expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'running' }).success).toBe(false);
       expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'sprite', status: 'connected' }).success).toBe(false);
-      expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'connected', label: 'm', enrolled: true }).success).toBe(true);
+      expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'connected', label: 'm', enrolled: true, serverPolicy: { ops: [], checkpoint: false } }).success).toBe(true);
     });
 
     it('given a local env DTO, should carry the label AND whether a machine has enrolled — the fact the UI needs to offer a new code only while none has', () => {
-      const dto = driveEnvDtoSchema.parse({ ...BASE_DTO, substrate: 'local', status: 'disconnected', label: 'jono-macstudio', enrolled: false });
+      const dto = driveEnvDtoSchema.parse({ ...BASE_DTO, substrate: 'local', status: 'disconnected', label: 'jono-macstudio', enrolled: false, serverPolicy: { ops: [], checkpoint: false } });
       expect(dto.substrate).toBe('local');
       if (dto.substrate === 'local') {
         expect(dto.label).toBe('jono-macstudio');
@@ -85,6 +159,29 @@ describe('drive-env contract — the substrate axis (Local Environments epic)', 
       }
       expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'disconnected', enrolled: false }).success).toBe(false);
       expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'disconnected', label: 'm' }).success).toBe(false);
+    });
+  });
+
+  describe('patchDriveEnvRequestSchema — two fields, two rules, ONE per request (GA wave 1)', () => {
+    it('given just a name, should accept (the rename, owner-or-admin at the route)', () => {
+      expect(patchDriveEnvRequestSchema.parse({ name: ' prod ' })).toEqual({ name: 'prod' });
+    });
+
+    it('given just a serverPolicy, should accept (owner-only at the route)', () => {
+      expect(patchDriveEnvRequestSchema.parse({ serverPolicy: { ops: ['exec', 'exec'], checkpoint: false } })).toEqual({ serverPolicy: { ops: ['exec'], checkpoint: false } });
+    });
+
+    it('given BOTH fields, should reject — two rules cannot be answered by one status code', () => {
+      expect(patchDriveEnvRequestSchema.safeParse({ name: 'prod', serverPolicy: { ops: [], checkpoint: false } }).success).toBe(false);
+    });
+
+    it('given NEITHER field, should reject', () => {
+      expect(patchDriveEnvRequestSchema.safeParse({}).success).toBe(false);
+    });
+
+    it('given an invalid serverPolicy (checkpoint true, or an op outside the set), should reject', () => {
+      expect(patchDriveEnvRequestSchema.safeParse({ serverPolicy: { ops: ['exec'], checkpoint: true } }).success).toBe(false);
+      expect(patchDriveEnvRequestSchema.safeParse({ serverPolicy: { ops: ['shell'], checkpoint: false } }).success).toBe(false);
     });
   });
 });

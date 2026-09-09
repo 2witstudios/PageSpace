@@ -70,7 +70,9 @@ on:
     # Removed rather than left as a line that provably does nothing in a
     # security workflow. See test.yml, where the same misreading cost real
     # capacity rather than merely being inert.
-    branches: [master, pu/flash-sandbox]
+    # `pu/local-env-ga` IS such a branch: the Local Environments GA waves are
+    # PRs targeting it, and they touch the sandbox and drizzle paths below.
+    branches: [master, pu/flash-sandbox, pu/local-env-ga]
     paths:
       - 'packages/lib/src/security/**'
       - 'packages/lib/src/services/sandbox/**'

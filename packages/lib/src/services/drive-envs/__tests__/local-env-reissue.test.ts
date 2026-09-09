@@ -47,7 +47,7 @@ function harness(now: Date = NOW) {
 }
 
 async function createLocal(h: ReturnType<typeof harness>) {
-  const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'jono-macstudio', ownerId: 'user-1' }, deps: h.deps });
+  const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'jono-macstudio', ownerId: 'user-1', serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } }, deps: h.deps });
   if (!result.ok || !result.enrollment) throw new Error(`create failed: ${JSON.stringify(result)}`);
   return { env: result.env, enrollment: result.enrollment };
 }
@@ -153,5 +153,16 @@ describe('reissueLocalEnvEnrollmentCode', () => {
     expect(h.fake.local.get(env.id)!.machinePublicKey).toBeNull();
     // The code the owner was just shown is the one that works.
     expect((await enrollLocalDriveEnv({ enrollmentId: 'enr-1', code: reissued!, machinePublicKey, deps: h.deps })).ok).toBe(true);
+  });
+});
+
+describe('createDriveEnv — serverPolicy is written at mint (GA wave 1)', () => {
+  it('given an explicit serverPolicy, should write it onto the sibling in the SAME step as the code hash — never the column default', async () => {
+    const h = harness();
+    const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'mac', ownerId: 'user-1', serverPolicy: { ops: ['exec'], checkpoint: false } }, deps: h.deps });
+    if (!result.ok) throw new Error(result.reason);
+    const sibling = h.fake.local.get(result.env.id)!;
+    expect(sibling.serverPolicy).toEqual({ ops: ['exec'], checkpoint: false });
+    expect(sibling.enrollmentCodeHash).not.toBeNull();
   });
 });

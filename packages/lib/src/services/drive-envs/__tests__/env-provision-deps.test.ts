@@ -294,7 +294,6 @@ describe('ensureDriveEnvSandbox', () => {
           resolvePayer: async () => ({ payerId: DRIVE_OWNER_ID, tier: 'pro' }),
           liveConnection: input.liveConnection ?? (() => 'connected'),
           localEnvsEnabled: input.flag ?? true,
-          resolveActorRole: async () => input.role ?? 'member',
           ...(local ? { resolveLocalHost: local.resolveLocalHost } : {}),
         },
       });

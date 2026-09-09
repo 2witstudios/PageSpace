@@ -34,7 +34,8 @@ import {
   type SpriteHolderLifecycleRow,
 } from '../../agent-workspaces/plan-workspace-lifecycle';
 import { planEnvDelete } from '../../drive-envs/plan-env-delete';
-import type { DriveEnvDTO, DriveEnvSpriteStatus, DriveEnvLocalStatus } from '../../drive-envs/env-contract';
+import type { DriveEnvDTO, DriveEnvSpriteStatus, DriveEnvLocalStatus, DriveEnvServerPolicy, DriveEnvServerPolicyDTO } from '../../drive-envs/env-contract';
+import { parseServerPolicy } from '../../env-bridge/policy-types';
 import {
   checkDriveEnvAllowance,
   getDriveEnvLimit,
@@ -96,6 +97,15 @@ export interface LocalEnvFacts {
   status: DriveEnvLocalStatus;
   /** `drive_env_local.enrolledAt IS NOT NULL` — a machine has pinned its key. */
   enrolled: boolean;
+  /** The row's server policy through the strict parser; deny-all when the row's value is refused or the row is gone. */
+  serverPolicy: DriveEnvServerPolicyDTO;
+}
+
+/** What a missing or unparseable stored policy projects as: the column's own backstop. */
+export const DENY_ALL_SERVER_POLICY: DriveEnvServerPolicyDTO = { ops: [], checkpoint: false };
+
+function toServerPolicyDto(parsed: ReturnType<typeof parseServerPolicy>): DriveEnvServerPolicyDTO {
+  return parsed === null ? DENY_ALL_SERVER_POLICY : { ops: [...parsed.ops], checkpoint: parsed.checkpoint };
 }
 
 export function toDriveEnvDTO(row: DriveEnvRecord, local?: LocalEnvFacts): DriveEnvDTO {
@@ -112,7 +122,7 @@ export function toDriveEnvDTO(row: DriveEnvRecord, local?: LocalEnvFacts): Drive
     if (local === undefined) {
       throw new Error(`drive env ${row.id} is local but no drive_env_local facts were supplied to toDriveEnvDTO`);
     }
-    return { ...base, substrate: 'local', status: local.status, label: local.label, enrolled: local.enrolled };
+    return { ...base, substrate: 'local', status: local.status, label: local.label, enrolled: local.enrolled, serverPolicy: local.serverPolicy };
   }
   return { ...base, substrate: 'sprite', status: deriveDriveEnvStatus(row) };
 }
@@ -206,12 +216,15 @@ export async function createDriveEnv({
   /** AUDIT ONLY: who asked. Never consulted for permission, payment or lifecycle. */
   createdBy: string | null;
   /**
-   * Present for a LOCAL env: the machine's human label and its OWNER (the
-   * enrolling user — the one `bindPolicy = 'owner'` keys on). The env row and
-   * its `drive_env_local` sibling are minted in ONE store step, with a one-time
-   * enrollment code whose hash is stored and whose value is returned once.
+   * Present for a LOCAL env: the machine's human label, its OWNER (the
+   * enrolling user — the one `bindPolicy = 'owner'` keys on) and the explicit
+   * SERVER POLICY the owner chose in the dialog (GA wave 1: what PageSpace may
+   * ask this machine to do; the column default is a backstop, never a path).
+   * The env row and its `drive_env_local` sibling are minted in ONE store
+   * step, with a one-time enrollment code whose hash is stored and whose value
+   * is returned once — the policy lands in that same transaction.
    */
-  local?: { label: string; ownerId: string };
+  local?: { label: string; ownerId: string; serverPolicy: DriveEnvServerPolicy };
   deps: CreateDriveEnvDeps;
 }): Promise<CreateDriveEnvResult> {
   if (local && !deps.identity) throw new Error('createDriveEnv: a local env needs identity deps (random, hash, newEnrollmentId)');
@@ -242,7 +255,7 @@ export async function createDriveEnv({
     maxEnvs: getDriveEnvLimit(payer.tier),
     local:
       local && issued
-        ? { ownerId: local.ownerId, label: local.label, enrollmentId: issued.enrollmentId, enrollmentCodeHash: issued.codeHash, enrollmentCodeExpiresAt: new Date(issued.exp) }
+        ? { ownerId: local.ownerId, label: local.label, enrollmentId: issued.enrollmentId, enrollmentCodeHash: issued.codeHash, enrollmentCodeExpiresAt: new Date(issued.exp), serverPolicy: local.serverPolicy }
         : undefined,
   });
   if (!created.ok) {
@@ -339,7 +352,8 @@ export interface LocalEnvIdentityServiceDeps {
 }
 
 export type EnrollLocalDriveEnvResult =
-  | { ok: true; envId: string; enrollmentId: string; serverKeyId: string; serverPublicKey: string }
+  /** `ownerId` rides the answer so the enroller can scaffold `principals: [owner]` on the machine (D-6, defence in depth). */
+  | { ok: true; envId: string; enrollmentId: string; serverKeyId: string; serverPublicKey: string; ownerId: string }
   | { ok: false; reason: 'not_found' | 'revoked' | 'already_enrolled' | 'bad_public_key' | 'race' | EnrollmentCodeDenyReason };
 
 /**
@@ -401,8 +415,7 @@ export async function enrollLocalDriveEnv({
     envId: row.envId,
     enrollmentId: row.enrollmentId,
     serverKeyId: deps.identity.signingKey.keyId,
-    serverPublicKey: Buffer.from(deps.identity.signingKey.publicKey).toString('base64'),
-  };
+    serverPublicKey: Buffer.from(deps.identity.signingKey.publicKey).toString('base64'), ownerId: row.ownerId };
 }
 
 export type IssueLocalEnvChallengeResult =
@@ -566,19 +579,21 @@ export function deriveLocalEnvStatus({
   return 'disconnected';
 }
 
-/** The listing's projection of a sibling row (or its absence) into the DTO's local facts. */
-function localFactsFor(row: DriveEnvRecord, sibling: DriveEnvLocalRecord | undefined, liveConnection: 'connecting' | 'connected' | null, now: number): LocalEnvFacts {
+/** The projection of a sibling row (or its absence) into the DTO's local facts — the listing's, and any single-row read's. */
+export function localFactsFor(row: DriveEnvRecord, sibling: DriveEnvLocalRecord | undefined, liveConnection: 'connecting' | 'connected' | null, now: number): LocalEnvFacts {
   // No sibling: the owner was erased (Art 17 cascades the machine's identity
   // facts) and the env row survives as the drive's dead local env. It is
   // listed — disconnected, under its own name — rather than hidden or thrown.
   // `enrolled: true` for the dead row, deliberately: with no sibling there is
   // no code to re-issue, and `false` would offer the owner a "new code" that
   // the store must refuse as `not_found`.
-  if (!sibling) return { label: row.name, status: 'disconnected', enrolled: true };
+  if (!sibling) return { label: row.name, status: 'disconnected', enrolled: true, serverPolicy: DENY_ALL_SERVER_POLICY };
   return {
     label: sibling.label,
     status: deriveLocalEnvStatus({ enrolledAt: sibling.enrolledAt, revokedAt: sibling.revokedAt, lastSeenAt: sibling.lastSeenAt, liveConnection, now }),
     enrolled: sibling.enrolledAt !== null,
+    // The same parser the signing gate uses, so the DTO never shows an op the server would refuse to sign.
+    serverPolicy: toServerPolicyDto(parseServerPolicy(sibling.serverPolicy)),
   };
 }
 
@@ -646,6 +661,63 @@ export async function renameDriveEnv({
   const renamed = await deps.store.rename({ envId, name, now: deps.now() });
   if (!renamed.ok) return { ok: false, reason: renamed.reason };
   return { ok: true, env: renamed.env };
+}
+
+// ---------------------------------------------------------------------------
+// Server policy (local envs) — owner-only, D-6
+// ---------------------------------------------------------------------------
+
+export interface SetLocalEnvServerPolicyDeps {
+  store: Pick<DriveEnvStore, 'setServerPolicy' | 'findLocalByEnvId'>;
+  now: () => Date;
+}
+
+export type SetLocalEnvServerPolicyResult =
+  | { ok: true; serverPolicy: DriveEnvServerPolicy }
+  /** No `drive_env_local` row: a Sprite env, an unknown id, or a local env whose owner was erased. */
+  | { ok: false; reason: 'not_found' }
+  /** The requester is not the enrolling user. Carries the owner so the refusal can name who may. */
+  | { ok: false; reason: 'not_owner'; ownerId: string }
+  | { ok: false; reason: 'revoked' };
+
+/**
+ * Replace what PageSpace may ask a LOCAL machine to do — the server's say in
+ * the three-way intersection, enforced at signing by `decideSign` (GA wave 1).
+ *
+ * **Owner-only, by the row, not by a role** ([D-6]): the predicate is
+ * `drive_env_local.ownerId = requesterId`, so a drive admin who did not enrol
+ * the machine is refused exactly as a stranger is. Drive admins keep Delete
+ * and Revoke; they never get Policy.
+ *
+ * **The security claim is the store's compare-and-set**, not a pre-read: ONE
+ * `UPDATE … WHERE envId AND ownerId AND revokedAt IS NULL`. The read below
+ * runs only AFTER a lost CAS and only to choose the honest typed answer —
+ * it never decides, and a row that changed between the two is answered from
+ * the row as it now is.
+ */
+export async function setLocalEnvServerPolicy({
+  envId,
+  requesterId,
+  serverPolicy,
+  deps,
+}: {
+  envId: string;
+  /** The acting user — compared against the row's OWNER, never against a drive role. */
+  requesterId: string;
+  /** Already validated by `driveEnvServerPolicySchema` at the boundary. */
+  serverPolicy: DriveEnvServerPolicy;
+  deps: SetLocalEnvServerPolicyDeps;
+}): Promise<SetLocalEnvServerPolicyResult> {
+  const written = await deps.store.setServerPolicy({ envId, ownerId: requesterId, serverPolicy, now: deps.now() });
+  if (written) return { ok: true, serverPolicy };
+  const row = await deps.store.findLocalByEnvId(envId);
+  if (!row) return { ok: false, reason: 'not_found' };
+  if (row.revokedAt !== null) return { ok: false, reason: 'revoked' };
+  if (row.ownerId !== requesterId) return { ok: false, reason: 'not_owner', ownerId: row.ownerId };
+  // The CAS lost to nothing this read can see (the row was revoked and un-revoked,
+  // or re-owned, between the write and the read): answer from the row as it is —
+  // it is live and ours — rather than invent a refusal or claim a write that did not happen.
+  return { ok: false, reason: 'revoked' };
 }
 
 // ---------------------------------------------------------------------------

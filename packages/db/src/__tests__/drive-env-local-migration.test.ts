@@ -152,4 +152,22 @@ describe('drizzle/0281 + 0282 local environments (substrate, then drive_env_loca
     expect(both).not.toMatch(/^\s*DELETE\s+FROM\b/m);
     expect(both).not.toMatch(/^\s*INSERT\s+INTO\b/m);
   });
+
+  describe('0291 — bindPolicy narrows to owner only ([D-6], GA wave 1)', () => {
+    const narrowed = load(291);
+
+    it('should exist in the journal as 0291', () => {
+      expect(narrowed.file, 'no 0291_*.sql — run db:generate').toBeDefined();
+    });
+
+    it('should DROP the old CHECK and ADD one that admits only owner — generated, never hand-edited', () => {
+      expect(narrowed.code).toMatch(/ALTER TABLE "drive_env_local" DROP CONSTRAINT "drive_env_local_bind_policy_check";/);
+      expect(narrowed.code).toMatch(/ALTER TABLE "drive_env_local" ADD CONSTRAINT "drive_env_local_bind_policy_check" CHECK \("drive_env_local"\."bindPolicy" IN \('owner'\)\);/);
+      expect(narrowed.code).not.toMatch(/'admins'|'members'/);
+    });
+
+    it('should touch nothing else on the table (no column added, dropped or retyped)', () => {
+      expect(narrowed.code).not.toMatch(/ADD COLUMN|DROP COLUMN|ALTER COLUMN/);
+    });
+  });
 });

@@ -14,17 +14,21 @@
 import type { WebSocket } from 'ws';
 import { encodeFrame } from '@pagespace/lib/env-bridge/frame-codec';
 import type { GrantPrincipal } from '@pagespace/lib/env-bridge/grant';
-import type { UnsignedGrantFrame } from '@pagespace/lib/env-bridge/grant-args';
+import { grantRequestForFrame, type GrantFrame, type UnsignedGrantFrame } from '@pagespace/lib/env-bridge/grant-args';
+import { decideSign, type SignDenyReason } from '@pagespace/lib/env-bridge/decide-sign';
+import { parseServerPolicy } from '@pagespace/lib/env-bridge/policy-types';
 import type { MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
 import type { ServerSigningKeyring } from '@pagespace/lib/env-bridge/server-signing-key';
 import { logger } from '@pagespace/lib/logging/logger-config';
 import { loadServerSigningKeyring } from '@pagespace/lib/auth/env-bridge-signing-key';
+import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
+import { audit } from '@pagespace/lib/audit/audit-log';
 import { getAuthorizedEnvConnection, getEnvConnectionMetadata, onEnvConnectionLost } from '@/lib/websocket/ws-env-connections';
 import { RequestCorrelator, CorrelationError, grantCorrelatorTimeoutMs, type CorrelationFailureKind } from './correlator';
 import { signGrantFrame, type GrantIdSource } from './grant-signer';
 import { verifyResultFromMachine } from './result-verifier';
 
-export type EnvBridgeFailureKind = CorrelationFailureKind | 'not_connected' | 'signing_key_unavailable' | 'ttl_too_long';
+export type EnvBridgeFailureKind = CorrelationFailureKind | 'not_connected' | 'signing_key_unavailable' | 'ttl_too_long' | 'server_denied';
 
 export class EnvBridgeError extends Error {
   constructor(
@@ -44,8 +48,17 @@ export interface EnvSocketFacts {
   readonly serverKeyId: string | null;
 }
 
+/** The two facts of the `drive_env_local` sibling that `decideSign` needs. `serverPolicy` arrives UNPARSED (jsonb) and is parsed strictly here. */
+export type SigningSibling = { readonly revokedAt: Date | null; readonly serverPolicy: unknown };
+
 export interface EnvBridgeClientDeps {
   readonly correlator: RequestCorrelator<MachineResultFrame>;
+  /** The env's sibling row, read fresh per grant — `DriveEnvStore.findLocalByEnvId`. `null` = no sibling (a dead local env). */
+  readonly findLocalByEnvId: (envId: string) => Promise<SigningSibling | null>;
+  /** `LOCAL_ENVS_ENABLED` for this deployment, read per grant so a flag flip needs no restart. */
+  readonly flagEnabled: () => boolean;
+  /** Every refusal to sign is audited; this is the hook (production: the security audit log). */
+  readonly onSignRefused?: (info: { envId: string; op: string; reason: SignDenyReason; principal: GrantPrincipal }) => void;
   /** The env's socket IFF authorized and open — `getAuthorizedEnvConnection`. */
   readonly getAuthorizedConnection: (envId: string) => WebSocket | undefined;
   readonly getSocketFacts: (ws: WebSocket) => EnvSocketFacts | undefined;
@@ -72,8 +85,34 @@ export class EnvBridgeClient {
   /**
    * Send one granted request to the env and await its VERIFIED result.
    * Rejects with a typed `EnvBridgeError` on every failure path.
+   *
+   * **The server's say comes FIRST** (GA wave 1, invariant 4). `decideSign`
+   * runs over the env's sibling row before the socket is looked up and before
+   * `signGrantFrame` is reached: a refusal never touches the signing key,
+   * never mints a grant id, and the daemon never sees a frame. Signing is the
+   * chokepoint because the grant IS the capability — refusing to mint beats
+   * asking a daemon we do not control to refuse what we minted.
    */
   async sendGrant(input: { envId: string; frame: UnsignedGrantFrame; principal: GrantPrincipal }): Promise<MachineResultFrame> {
+    // The op is the same projection the signer and the daemon's gate use on
+    // the frame as sent (grant/sig are envelope, so placeholders change nothing).
+    const op = grantRequestForFrame({ ...input.frame, grant: {}, sig: '' } as GrantFrame).op;
+    const sibling = await this.deps.findLocalByEnvId(input.envId);
+    const verdict = decideSign({
+      op,
+      // A missing sibling is a dead local env (the owner was erased): treated
+      // as revoked, exactly as the bind gate treats it. A stored policy the
+      // strict parser refuses is `null` and denies.
+      envRevoked: sibling === null || sibling.revokedAt !== null,
+      serverPolicy: sibling === null ? null : parseServerPolicy(sibling.serverPolicy),
+      flagEnabled: this.deps.flagEnabled(),
+    });
+    if (!verdict.ok) {
+      log().warn('Refused to sign a grant for a local environment', { envId: input.envId, op, reason: verdict.reason, userId: input.principal.userId, sessionId: input.principal.sessionId, action: 'sign_refused' });
+      this.deps.onSignRefused?.({ envId: input.envId, op, reason: verdict.reason, principal: input.principal });
+      throw new EnvBridgeError('server_denied', `PageSpace refused to sign a ${op} grant for ${input.envId}: ${verdict.reason}`, { envId: input.envId, op, reason: verdict.reason });
+    }
+
     const ws = this.deps.getAuthorizedConnection(input.envId);
     const facts = ws ? this.deps.getSocketFacts(ws) : undefined;
     if (!ws || !facts) throw new EnvBridgeError('not_connected', `Environment ${input.envId} has no authorized bridge connection on this replica`, { envId: input.envId });
@@ -175,6 +214,22 @@ export function getEnvBridgeClient(): EnvBridgeClient {
       onDropped: (id) => log().warn('Reply for a grant that is not pending dropped', { grantId: id, action: 'reply_dropped' }),
     }),
     getAuthorizedConnection: getAuthorizedEnvConnection,
+    // Loaded lazily: the runtime module reaches this client through the
+    // sandbox host registry, so a static import here would be a cycle.
+    findLocalByEnvId: async (envId) => {
+      const { getDriveEnvStore } = await import('@/lib/drive-envs/drive-envs-runtime');
+      return (await getDriveEnvStore()).findLocalByEnvId(envId);
+    },
+    flagEnabled: () => isLocalEnvsEnabled(),
+    onSignRefused: ({ envId, op, reason, principal }) =>
+      audit({
+        eventType: 'authz.access.denied',
+        userId: principal.userId,
+        resourceType: 'drive_env',
+        resourceId: envId,
+        details: { route: 'env-bridge', operation: 'sign_grant', op, reason, sessionId: principal.sessionId, conversationId: principal.conversationId },
+        riskScore: 0.4,
+      }),
     getSocketFacts: (ws) => {
       const metadata = getEnvConnectionMetadata(ws);
       return metadata ? { envId: metadata.envId, machinePublicKey: metadata.machinePublicKey, serverKeyId: metadata.serverKeyId } : undefined;
