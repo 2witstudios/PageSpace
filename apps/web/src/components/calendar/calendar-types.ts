@@ -242,15 +242,13 @@ export function isSameDay(date1: Date, date2: Date): boolean {
 const MIN_SWIPE_DISTANCE = 50;
 const AXIS_DOMINANCE_RATIO = 1.5;
 
-export type SwipeDirection = 'next' | 'previous';
-
 export function resolveSwipeDirection({
   dx,
   dy,
 }: {
   dx: number;
   dy: number;
-}): SwipeDirection | null {
+}): 'next' | 'previous' | null {
   if (Math.abs(dx) < MIN_SWIPE_DISTANCE) return null;
   if (Math.abs(dx) <= Math.abs(dy) * AXIS_DOMINANCE_RATIO) return null;
   return dx > 0 ? 'next' : 'previous';
