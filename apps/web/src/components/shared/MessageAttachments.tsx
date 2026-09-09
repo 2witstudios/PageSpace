@@ -75,10 +75,12 @@ export function MessageAttachments({ message }: MessageAttachmentsProps) {
     setLightboxKey((current) => {
       const keys = imageKeysRef.current;
       if (current === null || keys.length === 0) return current;
+      // Wrap, so paging past either end continues round the gallery.
       const at = keys.indexOf(current);
-      // A key that is no longer present (its file was hard-deleted while the
-      // viewer was open) resumes from the start rather than closing under the
-      // user. Wrap, so paging past either end continues round the gallery.
+      // A key that has left the list normally closes the viewer on the next
+      // render (`activeIndex` goes null), so this is only reachable if a props
+      // update and a keypress land in the same batch. Start from the top there
+      // rather than doing arithmetic on -1.
       const from = at === -1 ? 0 : at;
       return keys[(from + delta + keys.length) % keys.length];
     });

@@ -265,11 +265,11 @@ describe('triggerMentionedAgentResponses — image attachment plumbing', () => {
   });
 
   it('given an old photo batch and a newer photo, keeps the newer one', async () => {
-    // The 5-slot cap keeps the LAST candidates, and the fetch returns the
-    // context newest-first, so the resolver has to reverse it. Without that,
-    // the cap kept the OLDEST images in the window — and now that one message
-    // can carry a whole batch, a single old message can fill every slot and
-    // evict everything posted since.
+    // The 5-slot cap keeps the LAST candidates, and the responder hands the
+    // resolver its context oldest-first — that pairing is what makes the cap
+    // keep the NEWEST images. It only started mattering when one message could
+    // carry a whole batch: reverse either half and a single old batch fills
+    // every slot and evicts everything posted since.
     mockPagesFindMany.mockResolvedValue([
       { id: 'agent-1', title: 'Vision Agent', enabledTools: ['send_channel_message'], aiProvider: 'anthropic', aiModel: 'claude-sonnet-4.5' },
     ]);

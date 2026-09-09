@@ -439,9 +439,13 @@ describe('dmMessageRepository.purgeInactiveMessages', () => {
 
     // Every released link is gone — chunking must not lose a pair at a
     // boundary — and no statement named more than one chunk's worth.
-    const deleteStatements = testDbState
+    // BOTH statements, not just the DELETE. The lock SELECT that precedes it
+    // inlines the same VALUES list and carries the identical bind risk, so
+    // scoping this to the DELETE would leave the test green with the lock
+    // un-chunked — the 08P01 back, from the statement one line earlier.
+    const pairStatements = testDbState
       .executes()
-      .filter((marker) => /DELETE\s+FROM\s+file_conversations/i.test(marker.strings.join(' ')))
+      .filter((marker) => /file_conversations/i.test(marker.strings.join(' ')))
       .map((marker) => {
         const join = marker.values.find(
           (value): value is { __sqlJoin: true; items: unknown[] } =>
@@ -452,18 +456,20 @@ describe('dmMessageRepository.purgeInactiveMessages', () => {
 
     assert({
       given: '600 released (file, conversation) pairs in one sweep',
-      should: 'delete every orphaned link, across two bounded statements rather than one unbounded one',
+      should:
+        'delete every orphaned link, with the lock and the delete each split into bounded statements rather than one unbounded one',
       actual: {
         remainingLinks: testDbState.count('fileConversations'),
-        statements: deleteStatements.length,
-        largestStatement: Math.max(0, ...deleteStatements),
-        pairsNamed: deleteStatements.reduce((sum, n) => sum + n, 0),
+        // Two chunks, each locking then deleting: four statements naming pairs.
+        statements: pairStatements.length,
+        largestStatement: Math.max(0, ...pairStatements),
+        pairsNamed: pairStatements.reduce((sum, n) => sum + n, 0),
       },
       expected: {
         remainingLinks: 0,
-        statements: 2,
+        statements: 4,
         largestStatement: 500,
-        pairsNamed: SWEEP,
+        pairsNamed: SWEEP * 2,
       },
     });
   });

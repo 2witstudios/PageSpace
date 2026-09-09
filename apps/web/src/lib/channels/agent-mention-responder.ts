@@ -286,17 +286,15 @@ async function resolveImageAttachmentsForContext(
   // Map.delete+set (rather than a plain overwrite) moves the re-seen key to
   // the end of iteration order, so final ordering reflects last-seen position.
   //
-  // OLDEST FIRST. `fetchRecentChannelMessages` orders newest-first (it takes
-  // the newest CONTEXT_MESSAGE_LIMIT rows), while everything downstream of
-  // here assumes the opposite: `buildRecentImageFileParts` keeps the LAST
-  // `maxCount` candidates, documented as "the most recent". Feeding it
-  // newest-first inverted both halves of the intent — the 5-slot cap kept the
-  // OLDEST images in the window, and the dedupe kept each file's oldest
-  // mention rather than its latest. That was true before messages could carry
-  // several files; it matters more now, because one batch can fill every slot
-  // and it should be the newest batch that does.
+  // `contextMessages` arrives OLDEST-FIRST: `fetchRecentChannelMessages` orders
+  // newest-first (it takes the newest CONTEXT_MESSAGE_LIMIT rows) and the sole
+  // caller reverses it before passing it here, because the transcript reads in
+  // reading order. Everything below depends on that: `buildRecentImageFileParts`
+  // keeps the LAST `maxCount` candidates, so oldest-first is what makes the cap
+  // keep the newest images and the dedupe keep each file's latest mention. Do
+  // not "fix" this by reversing again — that inverts both.
   const latestByFileId = new Map<string, RecentChannelMessage & { fileId: string }>();
-  for (const message of [...contextMessages].reverse()) {
+  for (const message of contextMessages) {
     // Read every attachment on the message, not just the first. A message can
     // now carry a whole batch of photos, and an agent mentioned on one should
     // see all of them. Falls back to the legacy column for rows written before
@@ -305,10 +303,10 @@ async function resolveImageAttachmentsForContext(
     // Capped per message at the same number of slots the final selection has,
     // taking the first few in the sender's own order. One message cannot then
     // contribute more than the whole budget, and which few it contributes
-    // reads the way the batch reads. With the iteration order fixed above,
-    // the newest messages win the cap — so a ten-photo message posted just now
-    // can fill all five slots, which is the intended precedence, while an old
-    // one no longer evicts everything newer than it.
+    // reads the way the batch reads. The final selection keeps the LAST
+    // candidates, so the newest messages win the cap — a ten-photo message
+    // posted just now can fill all five slots, and an older one cannot evict
+    // what came after it.
     const messageAttachments =
       message.attachments && message.attachments.length > 0
         ? [...message.attachments]

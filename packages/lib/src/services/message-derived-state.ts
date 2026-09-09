@@ -37,6 +37,11 @@ export function buildLastMessagePreview(
   // still renders (attachment-utils falls back to the joined files row), so it
   // still COUNTS here — dropping it would preview a three-photo message as
   // "[2 images]", a confident number that disagrees with the message.
+  //
+  // The trade is explicit: a null entry cannot be classified, so it counts as
+  // a non-image and the batch reads "[3 attachments]" rather than "[3 images]".
+  // A vaguer noun over a wrong number, and only for legacy backfilled rows —
+  // every attachment written since carries validated metadata.
   const attachments = attachmentMeta === null
     ? []
     : Array.isArray(attachmentMeta)
