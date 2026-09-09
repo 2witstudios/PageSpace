@@ -47,8 +47,16 @@ const CONFIGS = {
   ios: readFileSync(resolve(APPS, 'ios/capacitor.config.ts'), 'utf-8'),
 } as const;
 
-/** The app's own apex; a subdomain of it is "own origin", anything else is third party. */
+/** The app's own apex — the one host that must always be listed on both platforms. */
 const OWN_APEX = 'pagespace.ai';
+
+/**
+ * The COMPLETE Android list, asserted exactly. Not "own-origin hosts are fine":
+ * a subdomain entry is still a bridge grant to a host the shell never
+ * navigates to at top level, so adding one (a tenant host, `app.`, `*.`) must
+ * mean editing this constant in the same diff, where review sees the grant.
+ */
+const ANDROID_EXACT_ENTRIES = [OWN_APEX];
 
 /**
  * What the SHIPPED iOS app lists today. This is a ratchet, not an endorsement:
@@ -72,23 +80,47 @@ function stripLineComments(source: string): string {
   return source.replace(/^\s*\/\/[^\n]*/gm, '');
 }
 
-/** The string entries of `allowNavigation: [...]`, or null if the key is absent. */
+/**
+ * The entries of `allowNavigation: [...]`, or null if the key is absent.
+ *
+ * Every element must be a single-quoted string LITERAL. An identifier
+ * (`tenantHost`), a template, a spread, or a call would have been silently
+ * skipped by a literal-only regex and the list would look shorter than it is —
+ * so anything that is not a literal fails here rather than being dropped.
+ */
 function allowNavigationEntries(source: string): string[] | null {
   const match = /allowNavigation:\s*\[([^\]]*)\]/.exec(stripLineComments(source));
   if (!match) return null;
-  return [...match[1].matchAll(/'([^']*)'/g)].map((m) => m[1]);
+  const elements = match[1].split(',').map((e) => e.trim()).filter((e) => e.length > 0);
+  return elements.map((element) => {
+    const literal = /^'([^']*)'$/.exec(element);
+    if (!literal) {
+      throw new Error(`allowNavigation entry is not a string literal: ${element}`);
+    }
+    return literal[1];
+  });
 }
 
-/** The value of `<key>: '<value>'` inside the `server: { ... }` block, or null. */
-function serverString(source: string, key: string): string | null {
+/** The body of the `server: { ... }` block, or null. */
+function serverBlock(source: string): string | null {
   const server = /server:\s*\{([\s\S]*?)\n {2}\},/.exec(stripLineComments(source));
-  if (!server) return null;
-  const match = new RegExp(`\\b${key}:\\s*'([^']*)'`).exec(server[1]);
+  return server ? server[1] : null;
+}
+
+/** The value of `<key>: '<value>'` inside the `server` block, or null. */
+function serverString(source: string, key: string): string | null {
+  const block = serverBlock(source);
+  if (block === null) return null;
+  const match = new RegExp(`\\b${key}:\\s*'([^']*)'`).exec(block);
   return match ? match[1] : null;
 }
 
-function isOwnOrigin(host: string): boolean {
-  return host === OWN_APEX || host.endsWith(`.${OWN_APEX}`);
+/** The raw (unquoted) value of `<key>: <value>,` inside the `server` block, or null. */
+function serverRaw(source: string, key: string): string | null {
+  const block = serverBlock(source);
+  if (block === null) return null;
+  const match = new RegExp(`\\b${key}:\\s*([^,\\n]+)`).exec(block);
+  return match ? match[1].trim() : null;
 }
 
 describe('Android capacitor.config.ts — allowNavigation grants the native bridge', () => {
@@ -99,13 +131,13 @@ describe('Android capacitor.config.ts — allowNavigation grants the native brid
     expect(entries!.length).toBeGreaterThan(0);
   });
 
-  it('lists no third-party host', () => {
+  it('is exactly the app\'s own apex and nothing else', () => {
     // Every entry is handed the native plugin bridge, PageSpaceKeychain
-    // included. A provider consent page must never be one of them; provider
-    // pages belong in a Custom Tab with a bound callback.
-    for (const host of entries ?? []) {
-      expect(isOwnOrigin(host), `${host} is not an own-origin host`).toBe(true);
-    }
+    // included. A provider consent page must never be one of them (provider
+    // pages belong in a Custom Tab with a bound callback), and a subdomain is
+    // a grant the shell has no top-level navigation to justify. Exact match,
+    // so any addition is a deliberate edit to ANDROID_EXACT_ENTRIES.
+    expect(entries).toEqual(ANDROID_EXACT_ENTRIES);
   });
 
   it('contains no wildcard', () => {
@@ -136,9 +168,23 @@ describe('Android capacitor.config.ts — server.url is an origin, the path is a
   const url = serverString(CONFIGS.android, 'url');
   const appStartPath = serverString(CONFIGS.android, 'appStartPath');
   const errorPath = serverString(CONFIGS.android, 'errorPath');
+  const cleartext = serverRaw(CONFIGS.android, 'cleartext');
 
   it('found server.url', () => {
     expect(url).not.toBeNull();
+  });
+
+  it('server.url is https', () => {
+    // The origin below becomes an addWebMessageListener rule and the cookie
+    // domain; an http origin would put the bridge and the session on a
+    // cleartext channel.
+    expect(new URL(url!).protocol).toBe('https:');
+  });
+
+  it('cleartext traffic stays disabled', () => {
+    // `cleartext: false` is what keeps usesCleartextTraffic off in the shell.
+    // Asserted on the literal, so `true` or a removed key both fail.
+    expect(cleartext).toBe('false');
   });
 
   it('server.url carries no path, query, or fragment', () => {
@@ -179,12 +225,14 @@ describe('iOS capacitor.config.ts — allowNavigation is ratcheted, not endorsed
     }
   });
 
-  it('the apex stays listed whenever the wildcard is', () => {
-    // doesHost() compares dot-component counts, so '*.pagespace.ai' (3) never
-    // matches 'pagespace.ai' (2). Dropping the apex while keeping the wildcard
-    // re-creates the PR #2010 brick for every apex navigation.
-    if (entries?.includes(`*.${OWN_APEX}`)) {
-      expect(entries).toContain(OWN_APEX);
-    }
+  it('the apex is always listed', () => {
+    // Unconditional. With the apex absent, shouldAllowNavigation() is false
+    // for pagespace.ai itself and WebViewDelegationHandler falls back to a
+    // string-prefix test against server.url — which carries `/dashboard` — so
+    // the signin redirect leaves for Safari and the WebView is left with no
+    // document (PR #2010). The wildcard does not cover it: doesHost() compares
+    // dot-component counts, and '*.pagespace.ai' (3) never matches
+    // 'pagespace.ai' (2).
+    expect(entries).toContain(OWN_APEX);
   });
 });
