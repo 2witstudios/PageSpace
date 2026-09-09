@@ -85,12 +85,20 @@ export const SHOTS: Shot[] = [
     subline: "Publish any page to a real address, then change it in plain language.",
   },
   {
-    // Sells authorization, not the role editor. The depth is the point: a buyer
-    // asking "can I let an AI near this?" needs the answer to be specific.
-    // Every claim here is from the security page.
+    // Names the fear rather than the feature. "Permissions apply to the AI
+    // too" described a mechanism; the thing that actually stops a buyer is
+    // "if I put an AI in a shared workspace, will it show someone something
+    // they should not see?"
+    //
+    // The claim is backed by the architecture, not aspiration: an agent is a
+    // permission-scoped principal with its own drive membership and access
+    // level (getAgentAccessLevel / hasAgentDriveMembership in
+    // packages/lib/src/permissions/agent-permissions.ts), so it is bound the
+    // same way a person is rather than inheriting a superset. User-scoped
+    // reach is opt-in per agent and defaults to false.
     slug: "permissions",
-    headline: ["Permissions apply", "to the AI too."],
-    subline: "Roles, per-page access, a tamper-evident audit trail, and restore points before every AI change.",
+    headline: ["Shared AI", "that can't leak."],
+    subline: "Every agent has its own role and per-page access, and every action lands in an audit log.",
   },
 ];
 
