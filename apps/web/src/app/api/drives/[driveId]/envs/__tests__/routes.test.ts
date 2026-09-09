@@ -331,14 +331,27 @@ describe('PATCH /envs/[envId] — Stop / Resume (`paused`) is OWNER-ONLY too (GA
   it('given the env OWNER (a plain member), Stop should pause through the service, audit `pause`, and answer the env with paused: true', async () => {
     vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(false);
     vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
-    vi.mocked(setEnvPaused).mockResolvedValue({ ok: true, paused: true } as never);
+    vi.mocked(setEnvPaused).mockResolvedValue({ ok: true, paused: true, machine: { kind: 'acknowledged', killed: 1 } } as never);
     const response = await patchEnv(jsonReq({ paused: true }), envParams);
     expect(response.status).toBe(200);
     expect(setEnvPaused).toHaveBeenCalledWith({ envId: ENV_ID, requesterId: USER_ID, paused: true });
-    expect(await response.json()).toMatchObject({ env: { id: ENV_ID, substrate: 'local' }, paused: true });
+    expect(await response.json()).toMatchObject({ env: { id: ENV_ID, substrate: 'local' }, paused: true, machine: 'acknowledged', killed: 1 });
     expect(setEnvServerPolicy).not.toHaveBeenCalled();
     expect(renameEnv).not.toHaveBeenCalled();
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', userId: USER_ID, resourceType: 'drive_env', resourceId: ENV_ID, details: expect.objectContaining({ operation: 'pause', envId: ENV_ID }) }));
+  });
+
+  it('the MACHINE is reported honestly: unacknowledged ⇒ 202 (the pause went out, nothing proven), no_live_socket ⇒ 200 (the holder delivers within a ping) — never a stop the machine did not sign', async () => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+    vi.mocked(setEnvPaused).mockResolvedValue({ ok: true, paused: true, machine: { kind: 'unacknowledged', reason: 'timeout' } } as never);
+    const late = await patchEnv(jsonReq({ paused: true }), envParams);
+    expect(late.status).toBe(202);
+    expect(await late.json()).toMatchObject({ paused: true, machine: 'unacknowledged' });
+    vi.mocked(setEnvPaused).mockResolvedValue({ ok: true, paused: true, machine: { kind: 'no_live_socket' } } as never);
+    const elsewhere = await patchEnv(jsonReq({ paused: true }), envParams);
+    expect(elsewhere.status).toBe(200);
+    expect(await elsewhere.json()).toMatchObject({ paused: true, machine: 'no_live_socket' });
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', details: expect.objectContaining({ operation: 'pause', machine: 'no_live_socket' }) }));
   });
 
   it('Resume audits `resume` and answers paused: false', async () => {

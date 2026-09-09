@@ -18,7 +18,7 @@ import { grantRequestForFrame, type GrantFrame, type GrantRequest, type Unsigned
 import { canonicalizeArgs } from '@pagespace/lib/env-bridge/grant';
 import { decideSign, type SignDenyReason } from '@pagespace/lib/env-bridge/decide-sign';
 import { parseServerPolicy } from '@pagespace/lib/env-bridge/policy-types';
-import { approvalRevokeBindingId, machineResultBindingId, type MachineResultFrame, type RevokeFrame } from '@pagespace/lib/env-bridge/machine-signatures';
+import { approvalRevokeBindingId, machineResultBindingId, pauseBindingId, type MachineResultFrame, type PauseFrame, type RevokeFrame } from '@pagespace/lib/env-bridge/machine-signatures';
 import type { ServerSigningKeyring } from '@pagespace/lib/env-bridge/server-signing-key';
 import { logger } from '@pagespace/lib/logging/logger-config';
 import { loadServerSigningKeyring } from '@pagespace/lib/auth/env-bridge-signing-key';
@@ -127,7 +127,8 @@ export function resultVerdict(result: MachineResultFrame): { verdict: string; ex
     case 'grant_denied':
       return { verdict: result.reason.startsWith(ASK_PENDING_PREFIX) ? result.reason : `denied:${result.reason}`, exitCode: null };
     case 'approval_revoke_result':
-      // Never an answer to a grant; correlated on its own binding id. Named so the switch stays exhaustive.
+    case 'pause_result':
+      // Never an answer to a grant; correlated on their own binding ids. Named so the switch stays exhaustive.
       return { verdict: 'failed:unexpected_frame', exitCode: null };
   }
 }
@@ -322,8 +323,8 @@ export class EnvBridgeClient {
     if (!verified.ok) {
       log().error('Result frame failed machine-signature verification — NOT delivered', { envId: facts.envId, grantId, frameType: frame.type, reason: verified.reason, action: 'result_unverified' });
       this.deps.onUnverified?.({ envId: facts.envId, grantId, frameType: frame.type, reason: verified.reason });
-      // A forged ACK is ignored, not fatal: the revoke stays pending for the genuine ack until its deadline (Codex P2 on #2583).
-      if (frame.type !== 'approval_revoke_result') {
+      // A forged ACK is ignored, not fatal: the revoke (or pause) stays pending for the genuine ack until its deadline (Codex P2 on #2583).
+      if (frame.type !== 'approval_revoke_result' && frame.type !== 'pause_result') {
         this.deps.correlator.reject(grantId, new EnvBridgeError('unverified_result', `Result for grant ${grantId} failed machine-signature verification (${verified.reason})`, { envId: facts.envId, grantId, reason: verified.reason }));
       }
       return 'unverified';
@@ -353,6 +354,31 @@ export class EnvBridgeClient {
       throw error;
     }
     if (reply.type !== 'approval_revoke_result') throw new EnvBridgeError('unverified_result', `Expected an approval_revoke_result for ${input.approvalId}, got ${reply.type}`, { envId: input.envId, approvalId: input.approvalId });
+    return reply;
+  }
+
+  /**
+   * STOP reaches the machine (GA wave 3): send the signed `pause` over `ws`
+   * and await the machine's SIGNED `pause_result`, correlated on
+   * `pause:<envId>:<pausedAt>`, with a bounded deadline. Resolves with the
+   * verified ack; rejects typed `timeout` / `disconnected` when no genuine
+   * ack arrives — the caller reports that as unacknowledged, never as a stop
+   * it cannot prove.
+   */
+  async awaitPauseAck(input: { envId: string; pausedAt: number; ws: WebSocket; frame: PauseFrame; timeoutMs: number }): Promise<Extract<MachineResultFrame, { type: 'pause_result' }>> {
+    let reply: MachineResultFrame;
+    try {
+      reply = await this.deps.correlator.open({
+        id: pauseBindingId(input.envId, input.pausedAt),
+        group: input.envId,
+        timeoutMs: input.timeoutMs,
+        send: () => input.ws.send(encodeFrame(input.frame)),
+      });
+    } catch (error) {
+      if (error instanceof CorrelationError) throw new EnvBridgeError(error.kind, error.message, { ...error.detail, envId: input.envId, pausedAt: input.pausedAt });
+      throw error;
+    }
+    if (reply.type !== 'pause_result') throw new EnvBridgeError('unverified_result', `Expected a pause_result for ${input.envId}, got ${reply.type}`, { envId: input.envId, pausedAt: input.pausedAt });
     return reply;
   }
 

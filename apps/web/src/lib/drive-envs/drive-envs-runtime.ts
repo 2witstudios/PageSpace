@@ -55,6 +55,7 @@ import {
 } from '@pagespace/lib/services/drive-envs/drive-envs';
 import type { DriveEnvDTO, DriveEnvServerPolicy } from '@pagespace/lib/drive-envs/env-contract';
 import type { RevokeLocalDriveEnvResult } from '@pagespace/lib/services/drive-envs/local-env-revoke';
+import type { PauseNotifyOutcome } from '@/lib/env-bridge/pause';
 import { getSandboxHost } from '@/lib/agent-workspaces/sandbox-host-runtime';
 import { createHash, createPublicKey, randomBytes, verify as nodeVerify } from 'crypto';
 import { createId } from '@paralleldrive/cuid2';
@@ -313,14 +314,19 @@ export async function setEnvServerPolicy(input: { envId: string; requesterId: st
  * at once (other replicas learn it on their next persisted heartbeat, see the
  * socket route). Resume needs no client action — the next grant simply signs.
  */
-export async function setEnvPaused(input: { envId: string; requesterId: string; paused: boolean }): Promise<SetLocalEnvPausedResult> {
+export type SetEnvPausedResult = SetLocalEnvPausedResult | { ok: true; paused: true; machine: PauseNotifyOutcome };
+
+export async function setEnvPaused(input: { envId: string; requesterId: string; paused: boolean }): Promise<SetEnvPausedResult> {
   const store = await getDriveEnvStore();
   const result = await setLocalEnvPaused({ envId: input.envId, requesterId: input.requesterId, paused: input.paused, deps: { store, now: () => new Date() } });
-  if (result.ok && result.paused) {
-    const { getEnvBridgeClient } = await import('@/lib/env-bridge/bridge-client');
-    getEnvBridgeClient().pauseEnv(input.envId);
-  }
-  return result;
+  if (!result.ok || !result.paused) return result;
+  // In flight on THIS replica: fail now. Running on the MACHINE: the signed
+  // pause goes over the socket if this replica holds it; otherwise the holder
+  // sends it on its next heartbeat and this answers `no_live_socket`.
+  const [{ getEnvBridgeClient }, { pauseLocalEnvMachine }] = await Promise.all([import('@/lib/env-bridge/bridge-client'), import('@/lib/env-bridge/pause')]);
+  getEnvBridgeClient().pauseEnv(input.envId);
+  const delivered = await pauseLocalEnvMachine({ envId: input.envId });
+  return { ok: true, paused: true, machine: delivered.ok ? delivered.machine : { kind: 'no_live_socket' } };
 }
 
 /**

@@ -141,14 +141,21 @@ export async function PATCH(request: Request, context: { params: Promise<{ drive
         if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
         return NextResponse.json({ error: 'This environment has been revoked', reason: 'revoked' }, { status: 409 });
       }
+      // Honest about the MACHINE (as the approval revoke is): 200 only when it
+      // signed an ack (or on Resume, which needs none); 202 when the pause went
+      // out and was not acknowledged in time; `no_live_socket` means the
+      // replica holding the socket delivers it on its next heartbeat (within
+      // one ping interval). The grants are refused from this moment either way.
+      const machine = 'machine' in result ? result.machine : null;
       auditRequest(request, {
         eventType: 'data.write',
         userId: auth.userId,
         resourceType: 'drive_env',
         resourceId: envId,
-        details: { route: 'drive-envs', operation, driveId, envId },
+        details: { route: 'drive-envs', operation, driveId, envId, ...(machine !== null && { machine: machine.kind, ...(machine.kind === 'acknowledged' && { killed: machine.killed }) }) },
       });
-      return NextResponse.json({ env: await readEnvDTO(env), paused: result.paused });
+      const body = { env: await readEnvDTO(env), paused: result.paused, ...(machine !== null && { machine: machine.kind, ...(machine.kind === 'acknowledged' && { killed: machine.killed }) }) };
+      return NextResponse.json(body, { status: machine !== null && machine.kind === 'unacknowledged' ? 202 : 200 });
     }
 
     // ---- serverPolicy: the env OWNER only (D-6). No drive role is consulted:

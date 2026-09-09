@@ -19,6 +19,10 @@
  *   `{envId, enrollmentId, keyId, issuedAt}` — a revoke for one enrollment
  *   cannot revoke another, and it must be signed by the key that enrollment
  *   pinned (`keyId`), so a rotated-out key cannot be used to revoke.
+ * - **pause** (server → machine, GA wave 3 — STOP): signed under its own
+ *   domain over `{envId, enrollmentId, keyId, issuedAt, pausedAt}`; the
+ *   machine acks with a signed `pause_result` bound to
+ *   `pause:<envId>:<pausedAt>`.
  *
  * Every encoding is domain-separated (a fixed leading `domain` string) and
  * built from the TYPED value in a fixed key order, so insertion order can never
@@ -42,18 +46,26 @@ export const RESULT_SIGNING_DOMAIN = 'pagespace-env-bridge/result/v1';
 export const REVOKE_SIGNING_DOMAIN = 'pagespace-env-bridge/revoke/v1';
 /** A revoke of ONE durable approval (GA wave 2): its own domain, so an approval revoke can never be replayed as an enrollment revoke by dropping the id, nor the reverse. */
 export const REVOKE_APPROVAL_SIGNING_DOMAIN = 'pagespace-env-bridge/revoke-approval/v1';
+/** STOP (GA wave 3): its own domain, so a pause can never be replayed as a revoke (of anything) nor a revoke as a pause. */
+export const PAUSE_SIGNING_DOMAIN = 'pagespace-env-bridge/pause/v1';
 
 export type { HelloFrame };
 export type RevokeFrame = Extract<Frame, { type: 'revoke' }>;
-export type MachineResultFrame = Extract<Frame, { type: 'exec_result' | 'fs_read_result' | 'fs_write_result' | 'grant_denied' | 'approval_revoke_result' }>;
+export type PauseFrame = Extract<Frame, { type: 'pause' }>;
+export type MachineResultFrame = Extract<Frame, { type: 'exec_result' | 'fs_read_result' | 'fs_write_result' | 'grant_denied' | 'approval_revoke_result' | 'pause_result' }>;
 export type MachineResultFrameType = MachineResultFrame['type'];
 
 /** The machine frames that answer a grant and therefore MUST be signed (invariant 7). */
-export const MACHINE_RESULT_FRAME_TYPES: ReadonlySet<MachineResultFrameType> = new Set<MachineResultFrameType>(['exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'approval_revoke_result']);
+export const MACHINE_RESULT_FRAME_TYPES: ReadonlySet<MachineResultFrameType> = new Set<MachineResultFrameType>(['exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'approval_revoke_result', 'pause_result']);
 
 /** The correlation id an approval-revoke ack is bound to — namespaced so it can never collide with a grant id. */
 export function approvalRevokeBindingId(approvalId: string): string {
   return `approval-revoke:${approvalId}`;
+}
+
+/** The correlation id a pause ack is bound to (GA wave 3): the env AND the pause it answers, so a stale ack for an earlier pause matches nothing. */
+export function pauseBindingId(envId: string, pausedAt: number): string {
+  return `pause:${envId}:${pausedAt}`;
 }
 
 /**
@@ -62,7 +74,9 @@ export function approvalRevokeBindingId(approvalId: string): string {
  * wave 2) — the namespaced approval id.
  */
 export function machineResultBindingId(frame: MachineResultFrame): string {
-  return frame.type === 'approval_revoke_result' ? approvalRevokeBindingId(frame.approvalId) : frame.grantId;
+  if (frame.type === 'approval_revoke_result') return approvalRevokeBindingId(frame.approvalId);
+  if (frame.type === 'pause_result') return pauseBindingId(frame.envId, frame.pausedAt);
+  return frame.grantId;
 }
 
 export function isMachineResultFrame(frame: Frame): frame is MachineResultFrame {
@@ -130,6 +144,9 @@ export function resultPayloadForFrame(frame: MachineResultFrame): Record<string,
     case 'approval_revoke_result':
       // The ack covers the id AND the count: the server may only claim what the machine signed.
       return { type: frame.type, approvalId: frame.approvalId, removed: frame.removed };
+    case 'pause_result':
+      // The env, the pause it answers, and how many process groups died: the server may only claim what the machine signed.
+      return { type: frame.type, envId: frame.envId, pausedAt: frame.pausedAt, killed: frame.killed };
   }
 }
 
@@ -220,6 +237,37 @@ export function verifyRevoke(input: VerifyRevokeInput): MachineSignatureVerdict 
   const binding = { envId: input.envId, enrollmentId: input.enrollmentId, keyId: input.keyId, issuedAt: input.issuedAt };
   const bytes = input.frame.approvalId !== undefined ? encodeApprovalRevokeForSigning({ ...binding, approvalId: input.frame.approvalId }) : encodeRevokeForSigning(binding);
   return safeVerify(input.verify, bytes, signature, input.serverPublicKey);
+}
+
+// ---- pause (STOP, GA wave 3) ----------------------------------------------
+
+export interface PauseBinding extends RevokeBinding {
+  /** ms since epoch — `drive_env_local.pausedAt` as stamped by the owner's Stop; carried in the frame. */
+  readonly pausedAt: number;
+}
+
+/**
+ * Canonical bytes the server signs for a STOP. Its own domain: a pause can
+ * never be verified as an enrollment revoke or an approval revoke, and
+ * neither of those can be verified as a pause. Binds the enrollment, the
+ * pinned key, the issue time AND the pause it delivers.
+ */
+export function encodePauseForSigning(binding: PauseBinding): Uint8Array {
+  return encode({ domain: PAUSE_SIGNING_DOMAIN, envId: binding.envId, enrollmentId: binding.enrollmentId, keyId: binding.keyId, issuedAt: binding.issuedAt, pausedAt: binding.pausedAt });
+}
+
+export interface VerifyPauseInput extends RevokeBinding {
+  readonly frame: PauseFrame;
+  readonly serverPublicKey: Uint8Array;
+  readonly verify: Ed25519Verify;
+}
+
+/** The daemon's check before it honours a STOP: `issuedAt` from the daemon's binding must equal the frame's; the frame's `pausedAt` is under the signature. */
+export function verifyPause(input: VerifyPauseInput): MachineSignatureVerdict {
+  if (input.frame.issuedAt !== input.issuedAt) return { ok: false, reason: 'bad_signature' };
+  const signature = decodeBase64(input.frame.sig);
+  if (signature === null) return { ok: false, reason: 'malformed' };
+  return safeVerify(input.verify, encodePauseForSigning({ envId: input.envId, enrollmentId: input.enrollmentId, keyId: input.keyId, issuedAt: input.issuedAt, pausedAt: input.frame.pausedAt }), signature, input.serverPublicKey);
 }
 
 // ---- shared ----------------------------------------------------------------

@@ -383,24 +383,38 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
     const metadata = getEnvConnectionMetadata(client);
     const now = new Date();
     const lastPersisted = metadata?.lastSeenPersistedAt?.getTime() ?? 0;
+    const store = await getDriveEnvStore();
     // Persist lastSeenAt at most once per heartbeat window — never on every ping.
     if (now.getTime() - lastPersisted >= LOCAL_ENV_HEARTBEAT_WINDOW_MS) {
       markEnvLastSeenPersisted(client, now);
-      const store = await getDriveEnvStore();
       const recorded = await store.recordHeartbeat({ envId, now });
       if (!recorded) {
         refuse('env_bridge_heartbeat_refused', 'enrollment no longer live', 'Environment revoked', 0.5);
         return;
       }
-      // STOP reaches this replica here (GA wave 3): the owner's PATCH may
-      // have landed elsewhere, but the grants in flight live where the socket
-      // is. Once per heartbeat window — the read the heartbeat already pays
-      // for — a paused row fails them typed `paused`, well inside any exec
-      // timeout. The socket stays: Stop pauses grants, not the machine.
-      const sibling = await store.findLocalByEnvId(envId);
-      if (sibling?.pausedAt != null) {
-        const ended = getEnvBridgeClient().pauseEnv(envId);
-        if (ended > 0) dropFrame('env_bridge_paused_in_flight', { ended }, 0.1);
+    }
+    // STOP reaches this replica here (GA wave 3): the owner's PATCH may have
+    // landed elsewhere, but the grants in flight AND the machine's socket are
+    // here. On EVERY pong (one row read per ping interval) a paused row fails
+    // the in-flight requests typed `paused` and delivers the signed `pause`
+    // to the machine — once per pause; `markEnvPauseSent` is the guard — so a
+    // Stop made anywhere reaches the process within ENV_BRIDGE_PING_INTERVAL_MS.
+    // The socket stays: Stop pauses grants and kills processes, not the machine.
+    const sibling = await store.findLocalByEnvId(envId);
+    if (sibling?.pausedAt != null) {
+      const ended = getEnvBridgeClient().pauseEnv(envId);
+      if (ended > 0) dropFrame('env_bridge_paused_in_flight', { ended }, 0.1);
+      if (metadata?.pauseSentForMs !== sibling.pausedAt.getTime()) {
+        const { pauseLocalEnvMachine } = await import('@/lib/env-bridge/pause');
+        const delivered = await pauseLocalEnvMachine({ envId });
+        auditRequest(request, {
+          eventType: 'data.write',
+          userId,
+          resourceType: RESOURCE_TYPE,
+          resourceId: envId,
+          riskScore: 0,
+          details: { originalEvent: 'env_bridge_pause_delivered', pausedAt: sibling.pausedAt.toISOString(), machine: delivered.ok ? delivered.machine.kind : delivered.reason, ...(delivered.ok && delivered.machine.kind === 'acknowledged' && { killed: delivered.machine.killed }) },
+        });
       }
     }
   };

@@ -57,7 +57,7 @@ function socket(): FakeSocket {
 }
 
 describe('revokeLocalEnv — all three legs through the production seams', () => {
-  let row: { envId: string; enrollmentId: string; serverKeyId: string | null; revokedAt: Date | null; serverPolicy: { ops: string[]; checkpoint: boolean } } | null;
+  let row: { envId: string; enrollmentId: string; serverKeyId: string | null; revokedAt: Date | null; pausedAt: Date | null; serverPolicy: { ops: string[]; checkpoint: boolean } } | null;
   let store: { findLocalByEnvId: ReturnType<typeof vi.fn>; revokeLocal: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
@@ -67,7 +67,7 @@ describe('revokeLocalEnv — all three legs through the production seams', () =>
     vi.clearAllMocks();
     clearAllEnvConnectionsForTesting();
     // The sibling `sendGrant` consults before signing (decideSign): live, and allowing the op under test.
-    row = { envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, revokedAt: null, serverPolicy: { ops: ['exec', 'fs_read', 'fs_write'], checkpoint: false } };
+    row = { envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, revokedAt: null, pausedAt: null, serverPolicy: { ops: ['exec', 'fs_read', 'fs_write'], checkpoint: false } };
     store = {
       findLocalByEnvId: vi.fn(async () => row),
       revokeLocal: vi.fn(async ({ now }: { now: Date }) => {

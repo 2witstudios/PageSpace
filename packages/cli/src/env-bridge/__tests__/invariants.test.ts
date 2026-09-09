@@ -138,6 +138,20 @@ describe('daemon structural invariants', () => {
       expect(dispatcher).not.toMatch(/frame\.type === '(approve|approval|allow)/);
     });
 
+    it('GA wave 3: the `pause` path can add nothing and delete no key — handlePause never touches approvals, remember, or deleteKey, and the codec\'s pause schema carries no approvalId', () => {
+      const pauseStart = dispatcher.indexOf('const handlePause');
+      const pauseEnd = dispatcher.indexOf('\n  return {', pauseStart);
+      expect(pauseStart).toBeGreaterThan(0);
+      const body = dispatcher.slice(pauseStart, pauseEnd);
+      expect(body).not.toMatch(/remember\(|approvals\.|deleteKey|revoke_verified/);
+      expect(body).toMatch(/execRunner\.killAll\(\)/);
+      expect(body).toMatch(/challenges\?\.clear\(\)/);
+      const codec = readFileSync(join(HERE, '..', '..', '..', 'lib', 'src', 'env-bridge', 'frame-codec.ts'), 'utf8');
+      const pauseLine = codec.split('\n').find((line) => line.includes("z.literal('pause')"));
+      expect(pauseLine).toBeDefined();
+      expect(pauseLine).not.toMatch(/approvalId|grant/);
+    });
+
     it('decideExecution is fed the machine\'s own approvals (deps.approvals) and nothing carried by the grant or the frame', () => {
       expect(dispatcher).toMatch(/approvals: \{ entries: deps\.approvals\?\.entries\(\) \?\? \[\]/);
       expect(dispatcher).not.toMatch(/grant\.approvals|frame\.approvals/);

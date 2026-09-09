@@ -535,6 +535,34 @@ describe('env-bridge ws route', () => {
       expect(ws.close).not.toHaveBeenCalled();
     });
 
+    it('given a pause made elsewhere, the next pong delivers the signed pause frame to the machine ONCE (a later pong does not resend), audits it, and the machine\'s signed ack is correlated', async () => {
+      const ws = await connectAuthorized();
+      const pausedAt = new Date(NOW.getTime() + 1000);
+      rows.set(ENV, rowFor({ pausedAt }));
+      const before = ws.sent.length;
+      ws.emit('message', Buffer.from(encodeFrame({ type: 'pong', ts: Date.now() })));
+      await flush();
+      await settleGate();
+      const frames = ws.sent.slice(before).map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).filter((d) => d.ok).map((d) => (d as { frame: Frame }).frame);
+      const pause = frames.find((f) => f.type === 'pause');
+      expect(pause).toMatchObject({ type: 'pause', pausedAt: pausedAt.getTime() });
+      // Bounded by ONE ping interval: no heartbeat window had to elapse.
+      expect(store.recordHeartbeat).not.toHaveBeenCalled();
+      // The machine's signed ack lands on the correlator; the audit names the delivery.
+      const ack = { type: 'pause_result' as const, envId: ENV, pausedAt: pausedAt.getTime(), killed: 1 };
+      ws.emit('message', Buffer.from(signedResult(ack)));
+      await flush();
+      await settleGate();
+      expect(events()).toContain('env_bridge_pause_delivered');
+      // A second pong for the SAME pause sends nothing more.
+      const after = ws.sent.length;
+      ws.emit('message', Buffer.from(encodeFrame({ type: 'pong', ts: Date.now() })));
+      await flush();
+      await settleGate();
+      expect(ws.sent.slice(after).map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).filter((d) => d.ok && (d as { frame: Frame }).frame.type === 'pause')).toHaveLength(0);
+      expect(ws.close).not.toHaveBeenCalled();
+    });
+
     it('given the row is NOT paused, the heartbeat leaves in-flight grants alone', async () => {
       const ws = await connectAuthorized();
       const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'sleep', args: ['100'], timeoutMs: 120_000 }, principal: { userId: USER, sessionId: 'sess-1', conversationId: 'conv-1' } });

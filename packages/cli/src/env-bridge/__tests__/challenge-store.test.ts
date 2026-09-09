@@ -72,6 +72,20 @@ describe('expiry and bound — evicted synchronously like the nonce store', () =
     expect(s.size()).toBe(1);
   });
 
+  it('clear() (a verified STOP) should drop EVERY entry — live ones included — and free their reuse keys, reporting the count', () => {
+    let n = 0;
+    const s = createChallengeStore({ newId: () => `ch_${++n}` });
+    const a = s.issue({ grant: grant(), request, subjects: ['exec:/a'] }, NOW);
+    s.issue({ grant: grant({ grantId: 'g2', nonce: 'n2' }), request, subjects: ['exec:/b'] }, NOW);
+    expect(s.size()).toBe(2);
+    expect(s.clear()).toBe(2);
+    expect(s.size()).toBe(0);
+    expect(s.peek(a!.id, NOW)).toBeUndefined();
+    // A re-issue after the clear is a NEW question, not the old id.
+    expect(s.issue({ grant: grant(), request, subjects: ['exec:/a'] }, NOW)?.id).toBe('ch_3');
+    expect(s.clear()).toBe(1);
+  });
+
   it('evictExpired(now) should drop only the expired entries', () => {
     const s = store();
     s.issue({ grant: grant({ exp: NOW + 1000 }), request, subjects: ['a'] }, NOW);

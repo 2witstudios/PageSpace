@@ -254,3 +254,23 @@ describe('ws-client — lifted reconnect/backoff/heartbeat; state driven by redu
     expect(lines.join('')).toMatch(/ECONNREFUSED/);
   });
 });
+
+describe('GA wave 3 — a `paused` dispatch result: the signed ack goes back and the socket STAYS open', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  it('should send the pause_result frame and neither close nor delete the key', async () => {
+    const ack: Frame = { type: 'pause_result', envId: 'env_1', pausedAt: 5, killed: 1, sig: 'AAAA' };
+    const h = harness({ dispatcher: { handle: async (frame: Frame) => (frame.type === 'pause' ? { kind: 'paused', pausedAt: 5, killed: 1, dropped: 0, frame: ack } : { kind: 'reply', frame: { type: 'pong', ts: 1 } }) } });
+    void h.connection.start();
+    await flush();
+    h.socket().open();
+    h.socket().receive({ type: 'ping', ts: 1 });
+    await flush();
+    const before = h.socket().sent.length;
+    h.socket().receive({ type: 'pause', sig: 'AAAA', issuedAt: 1, pausedAt: 5 });
+    await flush();
+    expect(h.socket().sent.slice(before).map((raw) => JSON.parse(raw).type)).toEqual(['pause_result']);
+    expect(h.socket().closed).toBeNull();
+    expect(h.deps.deleteKey).not.toHaveBeenCalled();
+  });
+});

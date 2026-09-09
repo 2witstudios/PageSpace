@@ -52,6 +52,8 @@ export interface EnvConnectionMetadata {
   lastRevalidated?: Date;
   /** When `lastSeenAt` was last persisted for this socket — pings persist at most once per heartbeat window. */
   lastSeenPersistedAt?: Date;
+  /** STOP (GA wave 3): the `pausedAt` (ms) this socket already delivered a signed `pause` for — sent once per pause. */
+  pauseSentForMs?: number;
 }
 
 export interface RegisterEnvConnectionInput {
@@ -202,6 +204,12 @@ export function isEnvAuthorized(ws: WebSocket): boolean {
 export function updateEnvLastPing(ws: WebSocket): void {
   const metadata = connectionMetadata.get(ws);
   if (metadata) metadata.lastPing = new Date();
+}
+
+/** STOP (GA wave 3): this socket delivered the pause stamped at `pausedAtMs`; the PATCH and heartbeat paths both check it so a pause is sent exactly once per socket. */
+export function markEnvPauseSent(ws: WebSocket, pausedAtMs: number): void {
+  const metadata = connectionMetadata.get(ws);
+  if (metadata) metadata.pauseSentForMs = pausedAtMs;
 }
 
 /** Record that `lastSeenAt` was persisted now (heartbeat-window throttle lives in the route). */

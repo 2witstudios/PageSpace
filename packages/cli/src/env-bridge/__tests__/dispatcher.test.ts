@@ -3,7 +3,7 @@ import { createHash, generateKeyPairSync, sign as nodeSign } from 'node:crypto';
 import { canonicalizeArgs, decodeBase64, encodeGrant, verifyGrant, type ApprovalIntent, type Grant } from '@pagespace/lib/env-bridge/grant';
 import { grantRequestForFrame, type GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 import { decideExecution, type NormalizedRequest } from '@pagespace/lib/env-bridge/decide-execution';
-import { encodeApprovalRevokeForSigning, encodeRevokeForSigning, verifyMachineResult, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
+import { encodePauseForSigning, encodeApprovalRevokeForSigning, encodeRevokeForSigning, verifyMachineResult, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
 import { execOutputCeiling, fsReadContentCeiling, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
 import type { MachinePolicy } from '@pagespace/lib/env-bridge/policy-types';
 import type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
@@ -70,7 +70,7 @@ function fakeProbe(existing: Record<string, string> = { [ROOT]: ROOT, [`${ROOT}/
 function harness(overrides: Partial<DispatcherDeps> = {}) {
   const audits: AuditEntry[] = [];
   const spawnRun = vi.fn(async (request: NormalizedRequest) => ({ exitCode: 0, stdout: Buffer.from(`ran ${request.cmd}`), stderr: Buffer.alloc(0), truncated: false, timedOut: false }));
-  const execRunner: ExecRunner = { run: spawnRun, killAll: () => undefined, liveCount: () => 0 };
+  const execRunner: ExecRunner = { run: spawnRun, killAll: () => 0, liveCount: () => 0 };
   const fsRunner: FsRunner = { read: vi.fn(async () => ({ kind: 'read' as const, found: true, contentB64: 'aGk=' })), write: vi.fn(async () => ({ kind: 'write' as const, ok: true })) };
   const deps: DispatcherDeps = {
     envId: ENV_ID,
@@ -621,6 +621,64 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
       await h.dispatcher.handle(genuine);
       expect(await h.dispatcher.handle(genuine)).toMatchObject({ kind: 'reply', frame: { reason: 'replayed' } });
       expect(h.spawnRun).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('GA wave 3 · Stop — a verified `pause` kills what is running, drops every pending challenge, acks signed, and stays connected', () => {
+    const PAUSED_AT = NOW + 500;
+    const pauseFrame = (over: { pausedAt?: number; issuedAt?: number; keyId?: string; sig?: string } = {}): Frame => {
+      const issuedAt = over.issuedAt ?? NOW;
+      const pausedAt = over.pausedAt ?? PAUSED_AT;
+      return { type: 'pause', issuedAt, pausedAt, sig: over.sig ?? serverSign(encodePauseForSigning({ envId: ENV_ID, enrollmentId: ENROLLMENT_ID, keyId: over.keyId ?? serverKeyId, issuedAt, pausedAt })) };
+    };
+    function pauseHarness() {
+      let n = 0;
+      const challenges = createChallengeStore({ newId: () => `ch_${++n}` });
+      const killAll = vi.fn(() => 2);
+      const approvals = createApprovalsStore({ path: '/p', uid: 501, open: () => null, write: async () => undefined, now: () => NOW });
+      const h = harness({ policy: () => ASK_POLICY, ask: null, challenges, approvals, resolveArgv0: (name) => ({ tool: '/usr/bin/tool' })[name] ?? null });
+      h.deps.execRunner.killAll = killAll;
+      return { ...h, dispatcher: createDispatcher(h.deps), challenges, killAll };
+    }
+
+    it('given a pause signed by the pinned server key, should killAll, clear the challenges, audit paused:killed:<n>, and answer a machine-signed pause_result bound to the pause — NOT revoke_verified', async () => {
+      const h = pauseHarness();
+      expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_1' } });
+      expect(h.challenges.size()).toBe(1);
+      const result = await h.dispatcher.handle(pauseFrame());
+      expect(result).toMatchObject({ kind: 'paused', pausedAt: PAUSED_AT, killed: 2, dropped: 1, frame: { type: 'pause_result', envId: ENV_ID, pausedAt: PAUSED_AT, killed: 2 } });
+      expect(h.killAll).toHaveBeenCalledTimes(1);
+      expect(h.challenges.size()).toBe(0);
+      expect(h.audits.at(-1)).toMatchObject({ grantId: null, op: 'pause', verdict: 'paused:killed:2' });
+      const ack = (result as { frame: Frame }).frame;
+      expect(verified(ack)).toMatchObject({ ok: true });
+      expect(verified({ ...ack, killed: 0 } as Frame)).toEqual({ ok: false, reason: 'bad_signature' });
+    });
+
+    it('after a pause, a click naming a challenge frozen BEFORE it is approval_mismatch and runs nothing; a fresh request after Resume is framed anew (no frame needed to resume)', async () => {
+      const h = pauseHarness();
+      await h.dispatcher.handle(execFrame());
+      await h.dispatcher.handle(pauseFrame());
+      const staleClick = signedGrant({ type: 'grant_exec', cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' } }, { approvalIntent: { challengeId: 'ch_1', scope: '30d', expiresAt: NOW + 30_000 }, principal: { ...PRINCIPAL, sessionId: 'later', conversationId: 'later' } });
+      expect(await h.dispatcher.handle(staleClick)).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'approval_mismatch' } });
+      expect(h.spawnRun).not.toHaveBeenCalled();
+      // Resume is the server signing again: the next request is a NEW question, under a new id.
+      expect(await h.dispatcher.handle(execFrame({ args: ['zzz'] }))).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_2' } });
+    });
+
+    it.each([
+      ['a rogue key', () => pauseFrame({ keyId: 'other-key' })],
+      ['an edited pausedAt', () => ({ ...pauseFrame(), pausedAt: PAUSED_AT + 1 })],
+      ['a revoke signature riding a pause frame', () => ({ type: 'revoke' as const, issuedAt: NOW, sig: (pauseFrame() as Extract<Frame, { type: 'pause' }>).sig })],
+    ])('given %s, should drop it, kill NOTHING, clear NOTHING, and audit the drop', async (_label, make) => {
+      const h = pauseHarness();
+      await h.dispatcher.handle(execFrame());
+      const frame = make() as Frame;
+      const result = await h.dispatcher.handle(frame);
+      expect(result.kind).toBe('dropped');
+      expect(h.killAll).not.toHaveBeenCalled();
+      expect(h.challenges.size()).toBe(1);
+      expect(h.audits.at(-1)?.verdict).toMatch(/^dropped:(pause|revoke)_bad_signature$/);
     });
   });
 

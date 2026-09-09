@@ -40,7 +40,7 @@ import { executionRequestForFrame, GRANT_FRAME_TYPES, grantRequestForFrame, type
 import { decideExecution as libDecideExecution, type DecideExecutionInput, type ExecutionVerdict, type NormalizedRequest } from './lib-core.js';
 import type { AdvertisedCapabilities, MachinePolicy, ServerPolicy } from './lib-core.js';
 import type { PathProbe } from './lib-core.js';
-import { verifyRevoke } from './lib-core.js';
+import { verifyPause, verifyRevoke } from './lib-core.js';
 import { execOutputCeiling, fsReadContentCeiling, type Frame, type FrameLimits, type PendingApproval } from './lib-core.js';
 import type { SignWithMachineKey } from './keypair.js';
 import { grantPredatesDaemon, PREDATES_DAEMON_REASON, type DaemonNonceStore } from './nonce-store.js';
@@ -121,6 +121,8 @@ export type DispatchResult =
   | { readonly kind: 'revoke_verified' }
   /** ONE durable approval was deleted on the server's signed request (GA wave 2); the enrollment and the key stand. `frame` is the machine-signed ack to send back. */
   | { readonly kind: 'approval_revoked'; readonly approvalId: string; readonly removed: number; readonly frame: Frame }
+  /** A verified STOP (GA wave 3): every in-flight process group killed, every pending challenge dropped; still connected. `frame` is the machine-signed `pause_result`. */
+  | { readonly kind: 'paused'; readonly pausedAt: number; readonly killed: number; readonly dropped: number; readonly frame: Frame }
   | { readonly kind: 'dropped'; readonly reason: string };
 
 export interface Dispatcher {
@@ -330,10 +332,36 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     return { kind: 'revoke_verified' };
   };
 
+  /**
+   * STOP (GA wave 3). The server's signed `pause` — under its own domain, so
+   * nothing that verifies here could ever have been a revoke — means the
+   * OWNER pressed Stop while something might be running on this machine.
+   * Verified: kill every process group this daemon started (the whole
+   * point: a `curl … | sh` the owner just saw in the activity panel dies
+   * here, not at its own leisure), drop every pending challenge (a click for
+   * a request frozen BEFORE the pause must match nothing after Resume), audit
+   * it, and ack with a machine-signed `pause_result` the server correlates on
+   * `pause:<envId>:<pausedAt>`. The socket stays: the machine is not the
+   * thing being stopped, its grants are. Unverified ⇒ dropped + audited,
+   * nothing killed.
+   */
+  const handlePause = async (frame: Extract<Frame, { type: 'pause' }>): Promise<DispatchResult> => {
+    const verdict = verifyPause({ frame, envId: deps.envId, enrollmentId: deps.enrollmentId, keyId: deps.serverKeyId, issuedAt: frame.issuedAt, serverPublicKey: deps.serverPublicKey, verify: deps.verify });
+    if (!verdict.ok) {
+      await deps.audit.record({ grantId: null, principal: null, op: 'pause', verdict: 'dropped:pause_bad_signature', argsHash: null, exitCode: null });
+      return { kind: 'dropped', reason: 'pause_bad_signature' };
+    }
+    const killed = deps.execRunner.killAll();
+    const dropped = deps.challenges?.clear() ?? 0;
+    await deps.audit.record({ grantId: null, principal: null, op: 'pause', verdict: `paused:killed:${killed}`, argsHash: null, exitCode: null });
+    return { kind: 'paused', pausedAt: frame.pausedAt, killed, dropped, frame: signResultFrame({ type: 'pause_result', envId: deps.envId, pausedAt: frame.pausedAt, killed }, signer) };
+  };
+
   return {
     async handle(frame) {
       if (frame.type === 'ping') return { kind: 'reply', frame: { type: 'pong', ts: deps.now() } };
       if (frame.type === 'revoke') return handleRevoke(frame);
+      if (frame.type === 'pause') return handlePause(frame);
       if (isGrantFrame(frame)) return handleGrant(frame);
       await deps.audit.record({ grantId: null, principal: null, op: frame.type, verdict: 'dropped:unsupported_frame', argsHash: null, exitCode: null });
       return { kind: 'dropped', reason: 'unsupported_frame' };

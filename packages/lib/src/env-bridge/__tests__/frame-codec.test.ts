@@ -14,6 +14,7 @@ const SAMPLES: Record<Frame['type'], Frame> = {
   fs_write_result: { type: 'fs_write_result', grantId: 'g1', ok: true, sig: B64 },
   grant_denied: { type: 'grant_denied', grantId: 'g1', reason: 'principal_not_allowed', sig: B64 },
   approval_revoke_result: { type: 'approval_revoke_result', approvalId: 'ch_1', removed: 2, sig: B64 },
+  pause_result: { type: 'pause_result', envId: 'e1', pausedAt: 5, killed: 1, sig: B64 },
   pty_opened: { type: 'pty_opened', grantId: 'g1', sessionId: 'p1' },
   pty_data: { type: 'pty_data', sessionId: 'p1', seq: 0, dataB64: B64 },
   pty_exit: { type: 'pty_exit', sessionId: 'p1', code: 0 },
@@ -27,6 +28,7 @@ const SAMPLES: Record<Frame['type'], Frame> = {
   pty_resize: { type: 'pty_resize', sessionId: 'p1', cols: 100, rows: 30 },
   pty_kill: { type: 'pty_kill', sessionId: 'p1' },
   revoke: { type: 'revoke', sig: B64, issuedAt: 1, reason: 'owner_disconnect' },
+  pause: { type: 'pause', sig: B64, issuedAt: 1, pausedAt: 5 },
   ping: { type: 'ping', ts: 1 },
 };
 
@@ -59,6 +61,7 @@ function generate(type: Frame['type'], r: () => number): Frame {
     case 'fs_write_result': return r() > 0.5 ? { type, grantId: randomStr(r), ok: true, sig: B64 } : { type, grantId: randomStr(r), ok: false, error: randomStr(r), sig: B64 };
     case 'grant_denied': return { type, grantId: randomStr(r), reason: randomStr(r), sig: B64 };
     case 'approval_revoke_result': return { type, approvalId: randomStr(r), removed: randomInt(r, 8), sig: B64 };
+    case 'pause_result': return { type, envId: randomStr(r), pausedAt: randomInt(r), killed: randomInt(r, 8), sig: B64 };
     case 'pty_opened': return { type, grantId: randomStr(r), sessionId: randomStr(r) };
     case 'pty_data': return { type, sessionId: randomStr(r), seq: randomInt(r), dataB64: randomB64(r) };
     case 'pty_exit': return { type, sessionId: randomStr(r), code: randomInt(r, 256) };
@@ -71,6 +74,7 @@ function generate(type: Frame['type'], r: () => number): Frame {
     case 'pty_resize': return { type, sessionId: randomStr(r), cols: 1 + randomInt(r, 300), rows: 1 + randomInt(r, 100) };
     case 'pty_kill': return { type, sessionId: randomStr(r) };
     case 'revoke': return { type, sig: B64, issuedAt: randomInt(r), reason: randomStr(r) };
+    case 'pause': return { type, sig: B64, issuedAt: randomInt(r), pausedAt: randomInt(r) };
     case 'ping': return { type, ts: randomInt(r) };
   }
 }
@@ -256,5 +260,22 @@ describe('GA wave 2 — approval_revoke_result is a machine→server frame', () 
     expect(decodeFrame({ type: 'approval_revoke_result', approvalId: 'ch_1', sig: B64 }, limits)).toEqual({ ok: false, reason: 'malformed' });
     expect(decodeFrame({ type: 'approval_revoke_result', approvalId: '', removed: 1, sig: B64 }, limits)).toEqual({ ok: false, reason: 'malformed' });
     expect(isMachineToServerFrame({ type: 'approval_revoke_result', approvalId: 'ch_1', removed: 0, sig: '' })).toBe(true);
+  });
+});
+
+describe('GA wave 3 — STOP on the wire: `pause` (server→machine) and `pause_result` (machine→server)', () => {
+  const limits = { maxFrameBytes: 65536 };
+  it('pause decodes with sig + issuedAt + pausedAt and nothing else; it carries NO approval id and no grant', () => {
+    expect(decodeFrame({ type: 'pause', sig: B64, issuedAt: 1, pausedAt: 5 }, limits)).toMatchObject({ ok: true, frame: { type: 'pause', issuedAt: 1, pausedAt: 5 } });
+    expect(decodeFrame({ type: 'pause', sig: B64, issuedAt: 1 }, limits)).toEqual({ ok: false, reason: 'malformed' });
+    const decoded = decodeFrame({ type: 'pause', sig: B64, issuedAt: 1, pausedAt: 5, approvalId: 'ch_1', grant: {} }, limits);
+    expect(decoded.ok && !('approvalId' in decoded.frame) && !('grant' in decoded.frame)).toBe(true);
+    expect(isMachineToServerFrame({ type: 'pause', sig: '', issuedAt: 1, pausedAt: 5 })).toBe(false);
+  });
+  it('pause_result decodes with envId + pausedAt + killed + sig; a missing count or env is malformed', () => {
+    expect(decodeFrame({ type: 'pause_result', envId: 'e1', pausedAt: 5, killed: 2, sig: B64 }, limits)).toMatchObject({ ok: true, frame: { type: 'pause_result', envId: 'e1', pausedAt: 5, killed: 2 } });
+    expect(decodeFrame({ type: 'pause_result', envId: 'e1', pausedAt: 5, sig: B64 }, limits)).toEqual({ ok: false, reason: 'malformed' });
+    expect(decodeFrame({ type: 'pause_result', pausedAt: 5, killed: 0, sig: B64 }, limits)).toEqual({ ok: false, reason: 'malformed' });
+    expect(isMachineToServerFrame({ type: 'pause_result', envId: 'e1', pausedAt: 5, killed: 0, sig: '' })).toBe(true);
   });
 });

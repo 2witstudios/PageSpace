@@ -88,6 +88,9 @@ const sessionService = vi.hoisted(() => ({ createSession: vi.fn(async () => 'tok
 /** Stop (GA wave 3): the in-flight cancel the runtime must reach for on a successful pause — and only then. */
 const bridgeClient = vi.hoisted(() => ({ pauseEnv: vi.fn(() => 1) }));
 vi.mock('@/lib/env-bridge/bridge-client', () => ({ getEnvBridgeClient: () => bridgeClient }));
+/** The machine-side delivery (the signed pause frame + ack) — what a successful Stop must reach for, after the CAS. */
+const pauseMachine = vi.hoisted(() => ({ pauseLocalEnvMachine: vi.fn(async () => ({ ok: true, machine: { kind: 'acknowledged', killed: 2 } })) }));
+vi.mock('@/lib/env-bridge/pause', () => pauseMachine);
 vi.mock('@pagespace/lib/auth/session-service', () => ({ sessionService }));
 vi.mock('@pagespace/lib/auth/env-bridge-signing-key', () => ({
   loadServerSigningKey: () => ({ keyId: 'srv-k1', publicKey: new Uint8Array(0) }),
@@ -173,14 +176,25 @@ describe('redeemEnvChallenge — the identity wiring', () => {
 describe('setEnvPaused — Stop fails this replica\'s in-flight grants at once (GA wave 3)', () => {
   beforeEach(() => {
     bridgeClient.pauseEnv.mockClear();
+    pauseMachine.pauseLocalEnvMachine.mockClear();
     vi.mocked(setLocalEnvPaused).mockReset();
   });
 
-  it('given the service pauses, should call pauseEnv for the env — the CAS first, the cancel after', async () => {
+  it('given the service pauses, should cancel in-flight (pauseEnv), deliver the signed pause to the machine, and answer what the MACHINE acked — the CAS first, everything else after', async () => {
     vi.mocked(setLocalEnvPaused).mockResolvedValue({ ok: true, paused: true });
-    expect(await setEnvPaused({ envId: ENV_ID, requesterId: 'user-owner', paused: true })).toEqual({ ok: true, paused: true });
+    pauseMachine.pauseLocalEnvMachine.mockResolvedValueOnce({ ok: true, machine: { kind: 'acknowledged', killed: 2 } });
+    expect(await setEnvPaused({ envId: ENV_ID, requesterId: 'user-owner', paused: true })).toEqual({ ok: true, paused: true, machine: { kind: 'acknowledged', killed: 2 } });
     expect(setLocalEnvPaused).toHaveBeenCalledWith(expect.objectContaining({ envId: ENV_ID, requesterId: 'user-owner', paused: true }));
     expect(bridgeClient.pauseEnv).toHaveBeenCalledWith(ENV_ID);
+    expect(pauseMachine.pauseLocalEnvMachine).toHaveBeenCalledWith({ envId: ENV_ID });
+  });
+
+  it('given this replica holds no socket, answers no_live_socket (the holder delivers on its next heartbeat) — and a delivery refusal reads the same', async () => {
+    vi.mocked(setLocalEnvPaused).mockResolvedValue({ ok: true, paused: true });
+    pauseMachine.pauseLocalEnvMachine.mockResolvedValueOnce({ ok: true, machine: { kind: 'no_live_socket' } } as never);
+    expect(await setEnvPaused({ envId: ENV_ID, requesterId: 'user-owner', paused: true })).toEqual({ ok: true, paused: true, machine: { kind: 'no_live_socket' } });
+    pauseMachine.pauseLocalEnvMachine.mockResolvedValueOnce({ ok: false, reason: 'not_paused' } as never);
+    expect(await setEnvPaused({ envId: ENV_ID, requesterId: 'user-owner', paused: true })).toEqual({ ok: true, paused: true, machine: { kind: 'no_live_socket' } });
   });
 
   it('given a Resume, or a refused Stop (not the owner), should cancel NOTHING', async () => {
@@ -189,6 +203,7 @@ describe('setEnvPaused — Stop fails this replica\'s in-flight grants at once (
     vi.mocked(setLocalEnvPaused).mockResolvedValue({ ok: false, reason: 'not_owner', ownerId: 'user-owner' });
     expect(await setEnvPaused({ envId: ENV_ID, requesterId: 'user-admin', paused: true })).toEqual({ ok: false, reason: 'not_owner', ownerId: 'user-owner' });
     expect(bridgeClient.pauseEnv).not.toHaveBeenCalled();
+    expect(pauseMachine.pauseLocalEnvMachine).not.toHaveBeenCalled();
   });
 });
 

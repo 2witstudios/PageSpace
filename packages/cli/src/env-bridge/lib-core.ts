@@ -27,7 +27,7 @@ export type { ApprovalScope, DurableApproval } from '@pagespace/lib/env-bridge/d
 export { parseMachinePolicy } from '@pagespace/lib/env-bridge/policy-types';
 export type { AdvertisedCapabilities, MachinePolicy, ServerPolicy } from '@pagespace/lib/env-bridge/policy-types';
 export type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
-export { encodeApprovalRevokeForSigning, encodeHelloForSigning, encodeResultForSigning, machineResultBindingId, resultHashForFrame, verifyRevoke } from '@pagespace/lib/env-bridge/machine-signatures';
+export { encodeApprovalRevokeForSigning, encodeHelloForSigning, encodeResultForSigning, machineResultBindingId, resultHashForFrame, verifyPause, verifyRevoke } from '@pagespace/lib/env-bridge/machine-signatures';
 export type { MachineResultFrame, MachineResultFrameType } from '@pagespace/lib/env-bridge/machine-signatures';
 export { decodeFrame, encodeFrame, execOutputCeiling, fsReadContentCeiling } from '@pagespace/lib/env-bridge/frame-codec';
 export type { Frame, FrameLimits, PendingApproval } from '@pagespace/lib/env-bridge/frame-codec';
