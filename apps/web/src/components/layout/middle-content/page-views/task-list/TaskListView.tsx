@@ -1493,10 +1493,6 @@ function TaskListView({ page }: TaskListViewProps) {
                       <TableCell colSpan={TASK_TABLE_COLUMN_COUNT - 2}>
                         <Input
                           ref={wideNewTaskInputRef}
-                          // The id is the task-list E2E's handle on this input
-                          // (`06-task-list.spec.ts` asserts `#new-task-input` is
-                          // focused); the button beside it focuses by ref.
-                          id="new-task-input"
                           placeholder="+ Add a new task..."
                           value={newTaskTitle}
                           onChange={(e) => setNewTaskTitle(e.target.value)}
