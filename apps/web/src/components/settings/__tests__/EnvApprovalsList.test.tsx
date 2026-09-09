@@ -61,12 +61,12 @@ describe('EnvApprovalsList', () => {
     expect(screen.getByText(/Failed to load approvals/)).toBeInTheDocument();
   });
 
-  it('Revoke confirms, DELETEs through the drive route with the row\'s own drive and env, reports the machine\'s ack, and refetches', async () => {
+  it('Codex P1 #5 (review round 1) — the ACCOUNT list revokes through the owner-scoped account route (no drive in the path: an owner who left the drive can still act), reports the machine\'s ack, and refetches', async () => {
     const user = userEvent.setup();
     render(<EnvApprovalsList approvals={[row()]} isLoading={false} isError={false} refetch={refetch} />);
     await user.click(screen.getByRole('button', { name: 'Revoke' }));
     await user.click(await screen.findByRole('button', { name: 'Revoke' , hidden: false }).then(() => screen.getAllByRole('button', { name: 'Revoke' }).at(-1)!));
-    await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/drives/drive-1/envs/env-1/approvals/ch_1'));
+    await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/env-bridge/approvals/ch_1'));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Approval revoked', expect.objectContaining({ description: expect.stringContaining('2 approval rows') })));
     expect(refetch).toHaveBeenCalled();
   });
@@ -85,7 +85,7 @@ describe('EnvApprovalsList', () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not revoke the approval', expect.anything()));
   });
 
-  it('an env-scoped list (no driveId on the row) uses the driveId prop for the route', async () => {
+  it('an env-scoped list (a driveId prop: drive settings) uses the drive route', async () => {
     const user = userEvent.setup();
     render(<EnvApprovalsList approvals={[row({ driveId: null, envName: null, envLabel: null })]} isLoading={false} isError={false} refetch={refetch} driveId="drive-9" />);
     await user.click(screen.getByRole('button', { name: 'Revoke' }));

@@ -17,7 +17,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { GRANT_AUDIT_LIST_LIMIT } from '@pagespace/lib/services/drive-envs/grant-audit-store';
-import { listOwnerActivity } from '@/lib/drive-envs/drive-envs-runtime';
+import { getDriveEnvStore, listEnvActivity, listOwnerActivity } from '@/lib/drive-envs/drive-envs-runtime';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 
@@ -27,6 +27,20 @@ export async function GET(request: Request) {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
 
+    // ?envId= (Codex P2 #6, review round 1): ONE machine's activity, owner-scoped — `drive_env_local.ownerId`
+    // is the whole check, no drive membership, so an owner who left the drive still sees their own machine.
+    const envId = new URL(request.url).searchParams.get('envId')?.trim() ?? '';
+    if (envId.length > 0) {
+      const sibling = await (await getDriveEnvStore()).findLocalByEnvId(envId);
+      if (!sibling) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+      if (sibling.ownerId !== auth.userId) {
+        auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'drive_env', resourceId: envId, details: { route: 'env-bridge/activity', operation: 'read', ownerId: sibling.ownerId }, riskScore: 0.3 });
+        return NextResponse.json({ error: `Only this machine's owner (the user who enrolled it, ${sibling.ownerId}) can see what ran on it`, reason: 'not_owner', ownerId: sibling.ownerId }, { status: 403 });
+      }
+      const activity = await listEnvActivity({ envId, limit: GRANT_AUDIT_LIST_LIMIT });
+      auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'drive_env', resourceId: envId, details: { route: 'env-bridge/activity', operation: 'read', rows: activity.length } });
+      return NextResponse.json({ activity });
+    }
     const activity = await listOwnerActivity({ ownerId: auth.userId, limit: GRANT_AUDIT_LIST_LIMIT });
     auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'drive_env_activity', resourceId: auth.userId, details: { route: 'env-bridge/activity', operation: 'read', rows: activity.length } });
     return NextResponse.json({ activity });

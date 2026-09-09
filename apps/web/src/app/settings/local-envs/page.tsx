@@ -109,7 +109,7 @@ export default function LocalEnvironmentsSettingsPage() {
                     <p className="mb-3 text-xs text-muted-foreground">
                       PageSpace may: {env.serverPolicy.ops.length === 0 ? 'nothing yet' : env.serverPolicy.ops.map((op) => ({ exec: 'run commands', fs_read: 'read files', fs_write: 'write files', pty_open: 'open a terminal' })[op]).join(', ')}
                     </p>
-                    {env.enrolled && <EnvActivityPanel driveId={machine.driveId} envId={env.id} enabled tailSize={5} />}
+                    {env.enrolled && <EnvActivityPanel driveId={machine.driveId} envId={env.id} enabled tailSize={5} scope="account" />}
                   </CardContent>
                 </Card>
               );

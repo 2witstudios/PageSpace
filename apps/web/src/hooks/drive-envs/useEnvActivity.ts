@@ -27,10 +27,19 @@ import { DRIVE_ENV_ACTIVITY_EVENT, driveEnvActivityDtoSchema, type DriveEnvActiv
 export interface EnvActivityKeyInput {
   driveId: string | null | undefined;
   envId: string | null | undefined;
+  /**
+   * `drive` (default): the drive-scoped route (member + owner). `account`:
+   * the owner-scoped account route (Codex P2 #6, review round 1) — for the
+   * account page, where the owner may no longer be a member of the drive.
+   */
+  scope?: 'drive' | 'account';
 }
 
-export const envActivityKey = ({ driveId, envId }: EnvActivityKeyInput): string | null =>
-  driveId && envId ? `/api/drives/${encodeURIComponent(driveId)}/envs/${encodeURIComponent(envId)}/activity` : null;
+export const envActivityKey = ({ driveId, envId, scope = 'drive' }: EnvActivityKeyInput): string | null => {
+  if (!envId) return null;
+  if (scope === 'account') return `/api/env-bridge/activity?envId=${encodeURIComponent(envId)}`;
+  return driveId ? `/api/drives/${encodeURIComponent(driveId)}/envs/${encodeURIComponent(envId)}/activity` : null;
+};
 
 /** The most rows a panel keeps in memory; the route serves the same ceiling. */
 export const ENV_ACTIVITY_MAX_ROWS = 50;

@@ -29,6 +29,8 @@ export interface EnvActivityPanelProps {
   envId: string;
   /** Owner-only: false mounts nothing and requests nothing. */
   enabled: boolean;
+  /** `account`: read through the owner-scoped account route (no drive membership needed). */
+  scope?: 'drive' | 'account';
   /** The sidebar shape: running rows plus a short tail. */
   compact?: boolean;
   /** How many settled rows the tail shows (compact: 3; full: 20). */
@@ -85,8 +87,8 @@ function ActivityRow({ row, compact }: { row: DriveEnvActivityDTO; compact: bool
   );
 }
 
-export function EnvActivityPanel({ driveId, envId, enabled, compact = false, tailSize, className }: EnvActivityPanelProps) {
-  const { activity, running, isLoading, error } = useEnvActivity({ driveId, envId }, { enabled });
+export function EnvActivityPanel({ driveId, envId, enabled, compact = false, tailSize, className, scope = 'drive' }: EnvActivityPanelProps) {
+  const { activity, running, isLoading, error } = useEnvActivity({ driveId, envId, scope }, { enabled });
   const tail = useMemo(() => activity.filter((row) => !(row.verdict === 'signed' && row.resultAt === null)).slice(0, tailSize ?? (compact ? 3 : 20)), [activity, compact, tailSize]);
 
   if (!enabled) return null;

@@ -84,6 +84,13 @@ describe('useEnvActivity', () => {
     expect(socket.off).toHaveBeenCalledWith('env:activity', expect.any(Function));
   });
 
+  it('Codex P2 #6 (review round 1) — scope account reads the owner-scoped account route (no drive in the path), same event upsert', async () => {
+    const { result } = renderHook(() => useEnvActivity({ driveId: 'drive-1', envId: 'env-1', scope: 'account' }), { wrapper });
+    await waitFor(() => expect(result.current.activity).toHaveLength(2));
+    expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/env-bridge/activity?envId=env-1');
+    expect(envActivityKey({ driveId: null, envId: 'env-1', scope: 'account' })).toBe('/api/env-bridge/activity?envId=env-1');
+  });
+
   it('envActivityKey is null without both ids', () => {
     expect(envActivityKey({ driveId: 'd', envId: null })).toBeNull();
     expect(envActivityKey({ driveId: 'd', envId: 'e' })).toBe('/api/drives/d/envs/e/activity');

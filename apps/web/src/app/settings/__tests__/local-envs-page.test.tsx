@@ -37,7 +37,7 @@ describe('Local environments page', () => {
     const links = screen.getAllByRole('link', { name: 'open in drive settings' });
     expect(links[0]).toHaveAttribute('href', '/dashboard/drive-1/settings/environments?env=mac');
     expect(screen.getByTestId('activity-mac')).toBeInTheDocument();
-    expect(mockPanel).toHaveBeenCalledWith(expect.objectContaining({ driveId: 'drive-1', envId: 'mac', enabled: true }));
+    expect(mockPanel).toHaveBeenCalledWith(expect.objectContaining({ driveId: 'drive-1', envId: 'mac', enabled: true, scope: 'account' }));
   });
 
   it('hands the approvals hook\'s result to the revocable list and says terminal-prompt approvals are not listed', () => {

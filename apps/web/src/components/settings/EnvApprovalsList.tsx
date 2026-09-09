@@ -9,7 +9,9 @@
  * one is bound to the OAuth grants hook and the step-up ceremony an OAuth
  * revoke needs; an approval revoke's ceremony is the machine's signed ack.
  *
- * Revoke rides wave 2's `DELETE …/envs/[envId]/approvals/[approvalId]` and
+ * Revoke rides wave 2's `DELETE …/envs/[envId]/approvals/[approvalId]` from
+ * drive settings, and the owner-scoped `DELETE /api/env-bridge/approvals/[id]`
+ * from account settings, and
  * reports what the MACHINE said: acknowledged (gone), 202 unacknowledged
  * (sent, not proven — it will be replayed when the machine reconnects), 409
  * no live socket (the same replay). Never "revoked" without the signature.
@@ -60,14 +62,14 @@ export function EnvApprovalsList({ approvals, isLoading, isError, refetch, drive
 
   const revoke = useCallback(
     async (approval: DriveEnvApprovalDTO) => {
-      const scopeDriveId = approval.driveId ?? driveId;
-      if (!scopeDriveId) {
-        toast.error('Could not revoke the approval', { description: 'Its drive is unknown.' });
-        return;
-      }
+      // Drive settings (a driveId prop) revokes through the drive route; the ACCOUNT list revokes through the
+      // owner-scoped account route, so an owner who has left the drive can still act (Codex P1 #5, review round 1).
+      const url = driveId
+        ? `/api/drives/${encodeURIComponent(driveId)}/envs/${encodeURIComponent(approval.envId)}/approvals/${encodeURIComponent(approval.id)}`
+        : `/api/env-bridge/approvals/${encodeURIComponent(approval.id)}`;
       setRevokingId(approval.id);
       try {
-        const body = await del<{ removed?: number }>(`/api/drives/${encodeURIComponent(scopeDriveId)}/envs/${encodeURIComponent(approval.envId)}/approvals/${encodeURIComponent(approval.id)}`);
+        const body = await del<{ removed?: number }>(url);
         const answer = describeRevokeAnswer(200, body ?? null);
         toast.success(answer.title, { description: answer.description });
       } catch (error) {

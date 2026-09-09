@@ -9,13 +9,13 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest:
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } } }));
 vi.mock('@pagespace/lib/services/drive-envs/local-envs-enabled', () => ({ isLocalEnvsEnabled: vi.fn(() => true) }));
 vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthError: vi.fn(() => false) }));
-vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ listOwnerActivity: vi.fn() }));
+vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ listOwnerActivity: vi.fn(), listEnvActivity: vi.fn(), getDriveEnvStore: vi.fn() }));
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
-import { listOwnerActivity } from '@/lib/drive-envs/drive-envs-runtime';
+import { getDriveEnvStore, listEnvActivity, listOwnerActivity } from '@/lib/drive-envs/drive-envs-runtime';
 
 const OWNER = 'user-owner';
 const get = () => GET(new Request('http://localhost/api/env-bridge/activity'));
@@ -46,4 +46,20 @@ it('given the store throws, should answer 500 without leaking the error', async 
   const r = await get();
   expect(r.status).toBe(500);
   expect(JSON.stringify(await r.json())).not.toContain('db down');
+});
+
+it('Codex P2 #6 (review round 1) — given ?envId=, should answer THAT env\'s activity for its OWNER without consulting drive membership; a non-owner (drive admin or not) is 403 naming the owner and reads nothing', async () => {
+  vi.mocked(getDriveEnvStore).mockResolvedValue({ findLocalByEnvId: vi.fn(async (id: string) => (id === 'env-1' ? { envId: 'env-1', ownerId: OWNER, revokedAt: null } : null)) } as never);
+  vi.mocked(listEnvActivity).mockResolvedValue([{ id: 'row-1', envId: 'env-1', verdict: 'signed' }] as never);
+  const r = await GET(new Request('http://localhost/api/env-bridge/activity?envId=env-1'));
+  expect(r.status).toBe(200);
+  expect(await r.json()).toEqual({ activity: [{ id: 'row-1', envId: 'env-1', verdict: 'signed' }] });
+  expect(listEnvActivity).toHaveBeenCalledWith({ envId: 'env-1', limit: 50 });
+  expect(listOwnerActivity).not.toHaveBeenCalled();
+  vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: 'user-admin' } as never);
+  const refused = await GET(new Request('http://localhost/api/env-bridge/activity?envId=env-1'));
+  expect(refused.status).toBe(403);
+  expect(await refused.json()).toMatchObject({ reason: 'not_owner', ownerId: OWNER });
+  expect(listEnvActivity).toHaveBeenCalledTimes(1);
+  expect((await GET(new Request('http://localhost/api/env-bridge/activity?envId=env-nope'))).status).toBe(404);
 });

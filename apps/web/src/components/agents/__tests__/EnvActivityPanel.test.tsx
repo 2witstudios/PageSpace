@@ -41,7 +41,7 @@ describe('EnvActivityPanel', () => {
   it('given running and settled rows, shows "Running now" first with the live indicator, then the recent tail with what each did', () => {
     feed([row({ id: 'run', summary: "exec: sh -c 'sleep 30'" }), row({ id: 'done', summary: 'exec: git status', verdict: 'completed', exitCode: 0, resultAt: '2026-09-09T11:59:00.000Z' }), row({ id: 'ref', summary: 'exec: rm -rf /', verdict: 'refused:server_denied', resultAt: '2026-09-09T11:58:00.000Z', grantId: null })]);
     render(<EnvActivityPanel driveId="drive-1" envId="env-1" enabled compact />);
-    expect(mockUseEnvActivity).toHaveBeenCalledWith({ driveId: 'drive-1', envId: 'env-1' }, { enabled: true });
+    expect(mockUseEnvActivity).toHaveBeenCalledWith({ driveId: 'drive-1', envId: 'env-1', scope: 'drive' }, { enabled: true });
     const panel = screen.getByTestId('env-activity-panel-env-1');
     expect(panel).toHaveTextContent('Running now (1)');
     expect(screen.getByRole('img', { name: 'Running' })).toBeInTheDocument();
@@ -75,6 +75,6 @@ describe('EnvActivityPanel', () => {
     feed([row({ id: 'x' })]);
     const { container } = render(<EnvActivityPanel driveId="drive-1" envId="env-1" enabled={false} />);
     expect(container).toBeEmptyDOMElement();
-    expect(mockUseEnvActivity).toHaveBeenCalledWith({ driveId: 'drive-1', envId: 'env-1' }, { enabled: false });
+    expect(mockUseEnvActivity).toHaveBeenCalledWith({ driveId: 'drive-1', envId: 'env-1', scope: 'drive' }, { enabled: false });
   });
 });
