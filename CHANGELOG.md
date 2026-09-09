@@ -434,6 +434,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **The header now says "Dashboard" instead of showing a house and a slash** — the way back out of
+  a drive used to be a small house icon followed by a `/`, and nothing on screen said where it
+  went. That made it easy to miss entirely, and easy to misread when you did notice it: drives have
+  their own home page, and the sidebar calls that "Drive Home", so a house in the header looked like
+  it meant the drive you were already in. It now reads **Dashboard** in words. Inside a drive it
+  becomes a bordered button with a back arrow, followed by the name of the drive you are in, so the
+  header tells you both where you can go and where you are standing; on the dashboard itself it
+  stops being a button, because you are already there. On narrower windows, where the header has
+  other things to fit, the button keeps its word wherever it is a way out — that being the whole
+  point — and the drive name and the you-are-here marker are the parts that give way.
+
 - **Android app: first internal-testing version identity, and the Android/iOS shell configs are now
   checked in CI (still not distributed)** — the Android build now identifies itself as version 1.4
   (build 2), matching the iOS version, instead of the 1.0 (build 1) left over from a debug build in
