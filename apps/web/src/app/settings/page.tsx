@@ -6,7 +6,7 @@ import { useMCP } from "@/hooks/useMCP";
 import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { Button } from "@/components/ui/button";
-import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins, Cookie } from "lucide-react";
+import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins, Cookie, Laptop } from 'lucide-react';
 import { SettingsRow, type SettingsItem } from "./SettingsRow";
 
 const ADMIN_APP_URL = process.env.NEXT_PUBLIC_ADMIN_APP_URL || 'http://localhost:3005';
@@ -143,6 +143,13 @@ export default function SettingsPage() {
           href: "/settings/local-mcp",
           available: true,
           desktopOnly: true,
+        },
+        {
+          title: "Local environments",
+          description: "Your own computers as environments: what they run now, and what runs without asking",
+          icon: Laptop,
+          href: "/settings/local-envs",
+          available: true,
         },
       ]),
     },

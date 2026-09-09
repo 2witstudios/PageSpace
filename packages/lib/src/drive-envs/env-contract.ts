@@ -239,6 +239,33 @@ export type DriveEnvActivityDTO = z.infer<typeof driveEnvActivityDtoSchema>;
 /** The live event a machine's OWNER receives for every audit row written or updated (their own sessions room). */
 export const DRIVE_ENV_ACTIVITY_EVENT = 'env:activity';
 
+/**
+ * One durable approval as the server MIRRORS it (GA wave 3, leaf 5): what a
+ * machine will run without asking, as the owner's click recorded it. The
+ * machine's own file is the authority for allow; this is the view, and the
+ * `id` is what a revoke names. `driveId`/`envName`/`envLabel` ride the
+ * account-level listing so a row can link to its drive settings page; they
+ * are `null` on the env-scoped listing, where the caller already knows them.
+ */
+export const driveEnvApprovalDtoSchema = z.object({
+  id: z.string().min(1),
+  envId: z.string().min(1),
+  driveId: z.string().min(1).nullable(),
+  envName: z.string().min(1).nullable(),
+  envLabel: z.string().min(1).nullable(),
+  userId: z.string().min(1).nullable(),
+  op: z.string().min(1),
+  summary: z.string(),
+  scope: z.enum(['session', '30d', 'until_revoked']),
+  createdAt: isoTimestamp,
+  expiresAt: isoTimestamp.nullable(),
+  /** The owner's decision; the machine may still hold it until `revokeAcknowledgedAt`. */
+  revokedAt: isoTimestamp.nullable(),
+  /** The machine's SIGNED ack — the only proof the approval is gone from the machine. */
+  revokeAcknowledgedAt: isoTimestamp.nullable(),
+});
+export type DriveEnvApprovalDTO = z.infer<typeof driveEnvApprovalDtoSchema>;
+
 export type DriveEnvDTO = z.infer<typeof driveEnvDtoSchema>;
 
 /**

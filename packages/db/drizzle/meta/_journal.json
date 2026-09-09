@@ -2059,6 +2059,13 @@
       "when": 1788948421054,
       "tag": "0293_loud_luckman",
       "breakpoints": true
+    },
+    {
+      "idx": 294,
+      "version": "7",
+      "when": 1788950361236,
+      "tag": "0294_white_queen_noir",
+      "breakpoints": true
     }
   ]
 }

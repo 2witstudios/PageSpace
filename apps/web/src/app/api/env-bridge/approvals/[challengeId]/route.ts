@@ -40,7 +40,8 @@ import type { MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signa
 import { ENV_APPROVAL_SCOPES, ENV_APPROVAL_STDERR_MAX_CHARS, ENV_APPROVAL_STDOUT_MAX_CHARS, type RequestEnvApprovalOutput } from '@/lib/ai/tools/env-approval-tools';
 import { EnvBridgeError, getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { getPendingApprovalStore, type PendingEnvApproval } from '@/lib/env-bridge/pending-approvals';
-import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
+import { getDriveEnvStore, rememberEnvApproval } from '@/lib/drive-envs/drive-envs-runtime';
+import { approvalExpiry } from '@pagespace/lib/env-bridge/decide-approval';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -138,7 +139,8 @@ function outcomeOf(challengeId: string, scope: RequestEnvApprovalOutput['scope']
     case 'fs_read_result':
       return { challengeId, outcome: 'allowed', scope };
     case 'approval_revoke_result':
-      // Not an answer to a grant; a click can never be answered by a revoke ack.
+    case 'pause_result':
+      // Not an answer to a grant; a click can never be answered by an ack.
       return { challengeId, outcome: 'failed', error: 'unexpected_frame' };
     case 'grant_denied':
       if (reply.reason === 'approval_mismatch') return { challengeId, outcome: 'mismatch', error: reply.reason };
@@ -189,6 +191,20 @@ export async function POST(request: Request, context: Params) {
       return NextResponse.json(output, { status: 502 });
     }
     const output = outcomeOf(challengeId, scope, reply);
+    // The MIRROR (GA wave 3, leaf 5): the machine remembered this approval
+    // (it ran on a byte-compared match, under the challenge id, for every
+    // scope but `once`), so the server records what the owner can now see and
+    // revoke. Visibility only: nothing here can widen what runs.
+    if (output.outcome === 'allowed' && scope !== 'once') {
+      const frozen = pending.pending.request;
+      const argv = frozen.op === 'exec' ? [frozen.cmd ?? '', ...(frozen.args ?? [])].join(' ') : frozen.paths.join(', ');
+      try {
+        await rememberEnvApproval({ id: challengeId, envId: pending.envId, userId: auth.userId, op: frozen.op, summary: `${frozen.op}: ${argv}${frozen.op === 'exec' ? ` in ${frozen.cwd}` : ''}`, scope, createdAt: new Date(now), expiresAt: approvalExpiry(scope, now) === null ? null : new Date(approvalExpiry(scope, now)!) });
+      } catch (error) {
+        // The machine already ran it and remembered it; the click's answer does not depend on the mirror.
+        loggers.api.error('Approval mirror write failed after an allowed click', error instanceof Error ? error : new Error(String(error)));
+      }
+    }
     auditRequest(request, {
       eventType: 'data.write',
       userId: auth.userId,

@@ -21,7 +21,7 @@ vi.mock('@/lib/websocket/ws-security', () => ({
   validateMessageSize: vi.fn(() => ({ valid: true })),
   isSecureConnection: vi.fn(() => true),
 }));
-vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn(), getGrantAuditStore: vi.fn() }));
+vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn(), getGrantAuditStore: vi.fn(), listUnacknowledgedEnvApprovalRevokes: vi.fn(async () => []), markEnvApprovalAcknowledged: vi.fn(async () => null) }));
 vi.mock('@/lib/websocket/env-activity-events', () => ({ broadcastEnvActivity: vi.fn() }));
 vi.mock('@pagespace/lib/auth/env-bridge-signing-key', () => ({ loadServerSigningKeyring: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -32,7 +32,7 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { getConnectionFingerprint, isSecureConnection, validateMessageSize } from '@/lib/websocket/ws-security';
-import { getDriveEnvStore, getGrantAuditStore } from '@/lib/drive-envs/drive-envs-runtime';
+import { getDriveEnvStore, getGrantAuditStore, listUnacknowledgedEnvApprovalRevokes, markEnvApprovalAcknowledged } from '@/lib/drive-envs/drive-envs-runtime';
 import { createGrantAuditFake } from '@/test/grant-audit-fake';
 import { broadcastEnvActivity } from '@/lib/websocket/env-activity-events';
 import { loadServerSigningKeyring } from '@pagespace/lib/auth/env-bridge-signing-key';
@@ -160,6 +160,9 @@ describe('env-bridge ws route', () => {
     };
     vi.mocked(getDriveEnvStore).mockResolvedValue(store as never);
     vi.mocked(getGrantAuditStore).mockResolvedValue(createGrantAuditFake());
+    // Nothing owed unless a test says so: the replay's read must not leak between tests (a leaked owed row holds every grant).
+    vi.mocked(listUnacknowledgedEnvApprovalRevokes).mockResolvedValue([]);
+    vi.mocked(markEnvApprovalAcknowledged).mockResolvedValue(null);
     vi.mocked(sessionService.validateSession).mockResolvedValue(claimsFor() as never);
     vi.mocked(isLocalEnvsEnabled).mockReturnValue(true);
     vi.mocked(isSecureConnection).mockReturnValue(true);
@@ -507,6 +510,46 @@ describe('env-bridge ws route', () => {
       pong();
       await flush();
       expect(store.recordHeartbeat).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('GA wave 3 · leaf 5 — a revoke made while the machine was away is replayed on its hello, BEFORE the first grant is signed', () => {
+    const ackFor = (approvalId: string, removed: number) => signedResult({ type: 'approval_revoke_result', approvalId, removed });
+    const framesOf = (ws: FakeSocket, from = 0) => ws.sent.slice(from).map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).filter((d) => d.ok).map((d) => (d as { frame: Frame }).frame);
+
+    it('EXIT CRITERION — revoke offline → reconnect: the owed revoke goes out on the hello, a grant issued meanwhile WAITS, and is signed only after the machine\'s signed ack; the mirror is stamped on that ack', async () => {
+      vi.mocked(listUnacknowledgedEnvApprovalRevokes).mockResolvedValue([{ id: 'ch_owed' }] as never);
+      const ws = socket();
+      const upgrade = UPGRADE(ws, server, request());
+      await flush();
+      ws.emit('message', Buffer.from(signedHello()));
+      await flush();
+      await settleGate();
+      // The ping (hello_ack) and the owed revoke went out — before any grant.
+      const before = framesOf(ws);
+      expect(before.map((f) => f.type)).toEqual(['ping', 'revoke']);
+      expect((before[1] as Extract<Frame, { type: 'revoke' }>).approvalId).toBe('ch_owed');
+      // A grant asked for DURING the replay is held: nothing more on the socket.
+      const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal: { userId: USER, sessionId: 'sess-1', conversationId: 'conv-1' } });
+      pending.catch(() => {});
+      await settleGate();
+      expect(framesOf(ws).map((f) => f.type)).toEqual(['ping', 'revoke']);
+      // The machine's signed ack releases the hold: the ping, then the grant.
+      ws.emit('message', Buffer.from(ackFor('ch_owed', 1)));
+      await flush();
+      await settleGate();
+      await upgrade;
+      await settleGate();
+      const after = framesOf(ws).map((f) => f.type);
+      expect(after.indexOf('revoke')).toBeLessThan(after.indexOf('grant_exec'));
+      expect(markEnvApprovalAcknowledged).toHaveBeenCalledWith({ id: 'ch_owed', removed: 1 });
+      expect(events()).toContain('env_bridge_approval_revokes_replayed');
+    });
+
+    it('given nothing owed, the hello proceeds straight to the ping and no revoke is sent', async () => {
+      const ws = await connectAuthorized();
+      expect(framesOf(ws).map((f) => f.type)).toEqual(['ping']);
+      expect(events()).not.toContain('env_bridge_approval_revokes_replayed');
     });
   });
 

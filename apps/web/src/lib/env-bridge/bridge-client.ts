@@ -136,6 +136,28 @@ export function resultVerdict(result: MachineResultFrame): { verdict: string; ex
 export class EnvBridgeClient {
   constructor(private readonly deps: EnvBridgeClientDeps) {}
 
+  /** Per-env holds (GA wave 3, leaf 5): while one is set, `sendGrant` for that env waits for it — the reconnect replay of owed approval revokes runs BEFORE any grant is signed. */
+  private readonly holds = new Map<string, Promise<void>>();
+
+  /**
+   * Run `work` while holding every grant for `envId`. The hold is released
+   * whether `work` resolves or rejects; a grant that arrived during the hold
+   * proceeds afterwards. Holds do not nest: a second call replaces the first
+   * only after it settles.
+   */
+  async withHold(envId: string, work: () => Promise<void>): Promise<void> {
+    const previous = this.holds.get(envId) ?? Promise.resolve();
+    const current = previous.then(work, work).catch((error: unknown) => {
+      log().error('Held work for env failed; releasing the hold', { envId, error: error instanceof Error ? error.message : String(error), action: 'hold_failed' });
+    });
+    this.holds.set(envId, current);
+    try {
+      await current;
+    } finally {
+      if (this.holds.get(envId) === current) this.holds.delete(envId);
+    }
+  }
+
   /**
    * Send one granted request to the env and await its VERIFIED result.
    * Rejects with a typed `EnvBridgeError` on every failure path.
@@ -179,6 +201,10 @@ export class EnvBridgeClient {
       await this.recordRefusal({ envId: input.envId, principal: input.principal, op, argsHash, summary, reason: verdict.reason, ownerId: sibling?.ownerId ?? null });
       throw new EnvBridgeError('server_denied', `PageSpace refused to sign a ${op} grant for ${input.envId}: ${verdict.reason}`, { envId: input.envId, op, reason: verdict.reason });
     }
+
+    // A revoke owed to the machine is replayed on its hello (leaf 5); nothing is signed for the env until that has run.
+    const hold = this.holds.get(input.envId);
+    if (hold !== undefined) await hold;
 
     const ws = this.deps.getAuthorizedConnection(input.envId);
     const facts = ws ? this.deps.getSocketFacts(ws) : undefined;

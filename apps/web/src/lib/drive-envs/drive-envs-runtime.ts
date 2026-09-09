@@ -15,6 +15,7 @@
  */
 
 import { db } from '@pagespace/db/db';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
@@ -35,6 +36,8 @@ import {
   type DriveEnvStore,
 } from '@pagespace/lib/services/drive-envs/drive-envs-store';
 import { createDbGrantAuditStore, toDriveEnvActivityDTO, GRANT_AUDIT_LIST_LIMIT, type GrantAuditStore } from '@pagespace/lib/services/drive-envs/grant-audit-store';
+import { createDbApprovalMirrorStore, toDriveEnvApprovalDTO, APPROVAL_MIRROR_LIST_LIMIT, type ApprovalMirrorStore, type DriveEnvApprovalRecord, type RememberApprovalInput } from '@pagespace/lib/services/drive-envs/approval-mirror-store';
+import type { DriveEnvApprovalDTO } from '@pagespace/lib/drive-envs/env-contract';
 import type { DriveEnvActivityDTO } from '@pagespace/lib/drive-envs/env-contract';
 import {
   createDriveEnv,
@@ -106,6 +109,57 @@ let grantAuditStorePromise: Promise<GrantAuditStore> | null = null;
 export async function listEnvActivity(input: { envId: string; limit?: number }): Promise<DriveEnvActivityDTO[]> {
   const rows = await (await getGrantAuditStore()).listForEnv({ envId: input.envId, limit: input.limit ?? GRANT_AUDIT_LIST_LIMIT });
   return rows.map(toDriveEnvActivityDTO);
+}
+
+let approvalMirrorPromise: Promise<ApprovalMirrorStore> | null = null;
+
+/** The approval MIRROR (GA wave 3, leaf 5): visibility and revocation only; the seam route tests mock. */
+export function getApprovalMirrorStore(): Promise<ApprovalMirrorStore> {
+  approvalMirrorPromise ??= createDbApprovalMirrorStore();
+  return approvalMirrorPromise;
+}
+
+/** The click ran and the machine remembered: mirror it. Never throws — the click's answer does not depend on the mirror. */
+export async function rememberEnvApproval(input: RememberApprovalInput): Promise<DriveEnvApprovalRecord | null> {
+  try {
+    return await (await getApprovalMirrorStore()).remember(input);
+  } catch (error) {
+    loggers.api.error('Approval mirror write failed', error instanceof Error ? error : new Error(String(error)));
+    return null;
+  }
+}
+
+export async function markEnvApprovalRevoked(input: { id: string; by: string }): Promise<DriveEnvApprovalRecord | null> {
+  return (await getApprovalMirrorStore()).markRevoked({ id: input.id, by: input.by, now: new Date() });
+}
+
+export async function markEnvApprovalAcknowledged(input: { id: string; removed: number }): Promise<DriveEnvApprovalRecord | null> {
+  return (await getApprovalMirrorStore()).markAcknowledged({ id: input.id, removed: input.removed, now: new Date() });
+}
+
+/** Revokes owed to the machine — what the socket route replays on the daemon's hello. */
+export async function listUnacknowledgedEnvApprovalRevokes(envId: string): Promise<DriveEnvApprovalRecord[]> {
+  return (await getApprovalMirrorStore()).listUnacknowledgedRevokes(envId);
+}
+
+/** ONE env's approvals in force — the drive settings read (owner-only at the route). */
+export async function listEnvApprovals(envId: string): Promise<DriveEnvApprovalDTO[]> {
+  const rows = await (await getApprovalMirrorStore()).listActiveForEnv({ envId, now: new Date(), limit: APPROVAL_MIRROR_LIST_LIMIT });
+  return rows.map((row) => toDriveEnvApprovalDTO(row));
+}
+
+/** Approvals in force across every machine the user OWNS — the account page's read, selected by owner in the store. */
+export async function listOwnerApprovals(ownerId: string): Promise<DriveEnvApprovalDTO[]> {
+  const rows = await (await getApprovalMirrorStore()).listActiveForOwner({ ownerId, now: new Date(), limit: APPROVAL_MIRROR_LIST_LIMIT });
+  return rows.map((row) => toDriveEnvApprovalDTO(row, { driveId: row.driveId, envName: row.envName, envLabel: row.envLabel }));
+}
+
+/** Every machine the user OWNS across drives, as DTOs with their drive — the account page's read. */
+export async function listOwnerMachines(ownerId: string): Promise<Array<{ env: DriveEnvDTO; driveId: string }>> {
+  const [store, liveConnection] = await Promise.all([getDriveEnvStore(), liveConnectionReader()]);
+  const rows = await store.listLocalByOwner(ownerId);
+  const now = Date.now();
+  return rows.map(({ env, local }) => ({ env: toDriveEnvDTO(env, localFactsFor(env, local, liveConnection(env.id), now)), driveId: env.driveId }));
 }
 
 /** Activity across every machine a user OWNS, newest first — the account page's read. */

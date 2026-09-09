@@ -212,6 +212,8 @@ export interface DriveEnvStore {
   findLocalByEnvId(envId: string): Promise<DriveEnvLocalRecord | null>;
   /** Every sibling in the drive — what the listing joins. */
   listLocalFacts(driveId: string): Promise<DriveEnvLocalRecord[]>;
+  /** Every machine a user OWNS, across drives, with its env row — the account page's read (GA wave 3). Owner, never requester. */
+  listLocalByOwner(ownerId: string): Promise<Array<{ env: DriveEnvRecord; local: DriveEnvLocalRecord }>>;
   /**
    * Enroll: pin the machine key and consume the code, IFF the row is pending
    * (`enrolledAt IS NULL AND enrollmentCodeUsedAt IS NULL AND revokedAt IS
@@ -675,6 +677,17 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
         .where(eq(driveEnvs.driveId, driveId))
         .limit(MAX_DRIVE_ENVS_LISTED);
       return rows as DriveEnvLocalRecord[];
+    },
+
+    async listLocalByOwner(ownerId) {
+      const rows = await db
+        .select({ env: driveEnvs, local: localSelection })
+        .from(driveEnvLocal)
+        .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId))
+        .where(eq(driveEnvLocal.ownerId, ownerId))
+        .orderBy(asc(driveEnvs.createdAt))
+        .limit(MAX_DRIVE_ENVS_LISTED);
+      return rows.map((row) => ({ env: row.env as DriveEnvRecord, local: row.local as DriveEnvLocalRecord }));
     },
 
     async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, enrollmentCodeHash, now: at }) {

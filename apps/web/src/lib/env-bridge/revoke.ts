@@ -29,7 +29,7 @@ import { revokeLocalDriveEnv, type RevokeLocalDriveEnvResult, type RevokeMachine
 import { logger } from '@pagespace/lib/logging/logger-config';
 import { getEnvConnection, isEnvAuthorized, unregisterEnvConnection } from '@/lib/websocket/ws-env-connections';
 import { EnvBridgeError, getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
-import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
+import { getDriveEnvStore, listUnacknowledgedEnvApprovalRevokes, markEnvApprovalAcknowledged } from '@/lib/drive-envs/drive-envs-runtime';
 
 export const ENV_REVOKED_CLOSE_CODE = 1008;
 export const ENV_REVOKED_CLOSE_REASON = 'Environment revoked';
@@ -226,4 +226,55 @@ export async function revokeLocalEnvApproval(input: { envId: string; approvalId:
     },
   );
   return { ok: true, machine };
+}
+
+/**
+ * The reconnect REPLAY (GA wave 3, leaf 5 — closes the gap wave 2 declared).
+ * A revoke that found no live socket, or got no signed ack, left the machine
+ * holding the approval. On the daemon's `hello` the socket route calls this
+ * INSIDE `EnvBridgeClient.withHold(envId, …)`, so every revoke the mirror
+ * still owes the machine is sent — and its signed ack awaited — before the
+ * first grant for that env is signed. A row is stamped acknowledged only on
+ * the machine's `approval_revoke_result`; one that is still not acked stays
+ * owed and is replayed on the next hello. Never throws.
+ */
+export async function replayUnacknowledgedApprovalRevokes(input: { envId: string; enrollmentId: string; serverKeyId: string | null; ws: WebSocket; now?: number }): Promise<{ replayed: number; acknowledged: number }> {
+  let rows: Awaited<ReturnType<typeof listUnacknowledgedEnvApprovalRevokes>>;
+  try {
+    rows = await listUnacknowledgedEnvApprovalRevokes(input.envId);
+  } catch (error) {
+    log().error('Could not read owed approval revokes for replay', { envId: input.envId, error: error instanceof Error ? error.message : String(error), action: 'approval_replay_read_failed' });
+    return { replayed: 0, acknowledged: 0 };
+  }
+  let acknowledged = 0;
+  for (const row of rows) {
+    const outcome = await notifyMachineOfApprovalRevoke(
+      { envId: input.envId, enrollmentId: input.enrollmentId, serverKeyId: input.serverKeyId, issuedAt: input.now ?? Date.now(), reason: 'replayed_after_reconnect', approvalId: row.id },
+      {
+        // THIS socket, not the registry: the hello is being processed and the replay must go where the hello came from.
+        getConnection: () => input.ws,
+        isAuthorized: isEnvAuthorized,
+        awaitAck: (ack) => getEnvBridgeClient().awaitApprovalRevokeAck(ack),
+        keyring: () => {
+          try {
+            return loadKeyring();
+          } catch (error) {
+            log().error('Signing key ring unavailable during approval replay', { envId: input.envId, error: error instanceof Error ? error.message : String(error), action: 'approval_replay_keyring_error' });
+            return { get: () => null };
+          }
+        },
+      },
+    );
+    if (outcome.kind === 'acknowledged') {
+      acknowledged += 1;
+      try {
+        await markEnvApprovalAcknowledged({ id: row.id, removed: outcome.removed });
+      } catch (error) {
+        log().error('Approval replay acknowledged but the mirror stamp failed; it will replay again', { envId: input.envId, approvalId: row.id, error: error instanceof Error ? error.message : String(error), action: 'approval_replay_stamp_failed' });
+      }
+    } else {
+      log().warn('Approval revoke replay not acknowledged; still owed', { envId: input.envId, approvalId: row.id, outcome: outcome.kind, action: 'approval_replay_unacknowledged' });
+    }
+  }
+  return { replayed: rows.length, acknowledged };
 }

@@ -24,6 +24,7 @@ import { initialBridgeSession, reduceBridgeSession, type BridgeSessionState } fr
 import { verifyHello, isMachineResultFrame, machineResultBindingId } from '@pagespace/lib/env-bridge/machine-signatures';
 import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
 import { getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
+import { replayUnacknowledgedApprovalRevokes } from '@/lib/env-bridge/revoke';
 import { decodePinnedPublicKey, ed25519Verify } from '@/lib/env-bridge/crypto';
 import { ENV_BRIDGE_HELLO_TIMEOUT_MS, ENV_BRIDGE_PING_INTERVAL_MS } from '@/lib/env-bridge/ws-route-config';
 
@@ -366,6 +367,27 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
       resourceId: envId,
       riskScore: 0,
       details: { originalEvent: 'env_bridge_connection_established', capabilities: frame.capabilities, policyDigest: frame.policyDigest },
+    });
+    // THE REPLAY (GA wave 3, leaf 5): every approval revoke the mirror still
+    // owes this machine goes out now, under a hold that keeps every grant for
+    // this env waiting until the machine has signed its acks — so a revoke
+    // made while the machine was away lands before the first grant is signed.
+    // The hold is installed SYNCHRONOUSLY here, in the same tick the socket
+    // became authorized, so no grant can slip between the two; the replay
+    // itself runs in the background and the ping (the daemon's hello_ack)
+    // is not delayed by it — the daemon dispatches `revoke` from every state.
+    void getEnvBridgeClient().withHold(envId, async () => {
+      const replay = await replayUnacknowledgedApprovalRevokes({ envId, enrollmentId: enrollment.enrollmentId, serverKeyId: enrollment.serverKeyId, ws: client });
+      if (replay.replayed > 0) {
+        auditRequest(request, {
+          eventType: 'auth.token.revoked',
+          userId,
+          resourceType: RESOURCE_TYPE,
+          resourceId: envId,
+          riskScore: 0,
+          details: { originalEvent: 'env_bridge_approval_revokes_replayed', replayed: replay.replayed, acknowledged: replay.acknowledged },
+        });
+      }
     });
     // The first server frame acknowledges the hello (the daemon maps it to hello_ack).
     sendPing();

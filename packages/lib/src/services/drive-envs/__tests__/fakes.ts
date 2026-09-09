@@ -160,6 +160,10 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       return [...local.values()].filter((sibling) => sibling.driveId === driveId);
     },
 
+    async listLocalByOwner(ownerId) {
+      return [...local.values()].filter((sibling) => sibling.ownerId === ownerId).flatMap((sibling) => { const env = rows.get(sibling.envId); return env ? [{ env, local: sibling }] : []; });
+    },
+
     async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, enrollmentCodeHash, now: at }) {
       const sibling = local.get(envId);
       // The real store's compare-and-set: only a pending, unrevoked row with an

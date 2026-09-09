@@ -10,7 +10,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest:
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { api: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } }, logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) } }));
 vi.mock('@pagespace/lib/services/drive-envs/local-envs-enabled', () => ({ isLocalEnvsEnabled: vi.fn(() => true) }));
 vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthError: vi.fn(() => false) }));
-vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn() }));
+vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn(), rememberEnvApproval: vi.fn(async () => null) }));
 vi.mock('@/lib/env-bridge/bridge-client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/env-bridge/bridge-client')>();
   return { ...actual, getEnvBridgeClient: vi.fn() };
@@ -21,7 +21,7 @@ import { ENV_APPROVAL_STDERR_MAX_CHARS, ENV_APPROVAL_STDOUT_MAX_CHARS, requestEn
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
+import { getDriveEnvStore, rememberEnvApproval } from '@/lib/drive-envs/drive-envs-runtime';
 import { EnvBridgeError, getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { getPendingApprovalStore, resetPendingApprovalStoreForTesting, type PendingEnvApproval } from '@/lib/env-bridge/pending-approvals';
 
@@ -179,5 +179,37 @@ describe('POST deny', () => {
     expect(sendGrant).not.toHaveBeenCalled();
     expect(getPendingApprovalStore().size()).toBe(0);
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', details: expect.objectContaining({ operation: 'deny', challengeId: 'ch_1' }) }));
+  });
+});
+
+describe('GA wave 3 · leaf 5 — the MIRROR: a click that ran is recorded for visibility, never for allow', () => {
+  it('given Allow with a durable scope and the machine ran it, should mirror the approval under the challenge id with the env, the clicker, the op, a readable summary, the scope and its expiry', async () => {
+    const r = await post({ decision: 'allow', scope: '30d' });
+    expect(r.status).toBe(200);
+    expect(rememberEnvApproval).toHaveBeenCalledTimes(1);
+    expect(rememberEnvApproval).toHaveBeenCalledWith(expect.objectContaining({ id: 'ch_1', envId: ENV, userId: OWNER, op: 'exec', scope: '30d', summary: "exec: sh -c git status in /home/o/proj", createdAt: new Date(NOW) }));
+    const call = vi.mocked(rememberEnvApproval).mock.calls[0]![0];
+    expect(call.expiresAt?.getTime()).toBe(NOW + 30 * 24 * 60 * 60 * 1000);
+  });
+
+  it('given until_revoked, the mirror row never expires; given session, it carries no expiry either (the daemon process is its life)', async () => {
+    await post({ decision: 'allow', scope: 'until_revoked' });
+    expect(vi.mocked(rememberEnvApproval).mock.calls[0]![0].expiresAt).toBeNull();
+  });
+
+  it('given once, deny, or a machine answer that is not allowed (mismatch / expired / denied), NOTHING is mirrored — the machine remembered nothing', async () => {
+    await post({ decision: 'allow', scope: 'once' });
+    getPendingApprovalStore().remember(pendingEntry(), NOW);
+    await post({ decision: 'deny' });
+    getPendingApprovalStore().remember(pendingEntry(), NOW);
+    sendGrant.mockResolvedValueOnce({ type: 'grant_denied', grantId: 'g', reason: 'approval_mismatch', sig: 'c2ln' });
+    await post({ decision: 'allow', scope: '30d' });
+    expect(rememberEnvApproval).not.toHaveBeenCalled();
+  });
+
+  it('a mirror write that fails does not change the click\'s answer (the machine already ran it)', async () => {
+    vi.mocked(rememberEnvApproval).mockRejectedValueOnce(new Error('db down'));
+    const r = await post({ decision: 'allow', scope: '30d' });
+    expect(r.status).toBe(200);
   });
 });
