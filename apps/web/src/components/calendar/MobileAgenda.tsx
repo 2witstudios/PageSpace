@@ -30,7 +30,12 @@ import {
 
 /** Imperative surface the parent uses to drive the agenda from the date strip. */
 export interface MobileAgendaHandle {
-  scrollToDate: (date: Date) => void;
+  /**
+   * Returns false when the day is not on screen to scroll to -- the agenda is
+   * unmounted behind a loading spinner, or the day is not in the window. The
+   * caller keeps the request and retries rather than dropping it.
+   */
+  scrollToDate: (date: Date, behavior?: ScrollBehavior) => boolean;
 }
 
 interface MobileAgendaProps {
@@ -157,14 +162,15 @@ export const MobileAgenda = forwardRef<MobileAgendaHandle, MobileAgendaProps>(
     useImperativeHandle(
       ref,
       () => ({
-        scrollToDate: (date: Date) => {
+        scrollToDate: (date: Date, behavior: ScrollBehavior = 'smooth') => {
           const scroller = scrollRef.current;
           const node = dayRefs.current.get(dayKey(date));
-          if (!scroller || !node) return;
+          if (!scroller || !node) return false;
           // Measured, not offsetTop: the scroller is not the offsetParent.
           const delta =
             node.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-          scroller.scrollTo({ top: scroller.scrollTop + delta, behavior: 'smooth' });
+          scroller.scrollTo({ top: scroller.scrollTop + delta, behavior });
+          return true;
         },
       }),
       []

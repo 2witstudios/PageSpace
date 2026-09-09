@@ -89,24 +89,44 @@ export function MobileCalendarView({
   const [isMonthPickerOpen, setIsMonthPickerOpen] = useState(false);
   const [isStripExpanded, setIsStripExpanded] = useState(false);
   // Set when the user picks a date; cleared once the agenda has scrolled to it.
-  const [pendingScroll, setPendingScroll] = useState<Date | null>(null);
-  const [pinnedDate, setPinnedDate] = useState<Date | null>(null);
+  // Both start at the initial date: the agenda otherwise opens at the month's
+  // first event, and an empty initial date would not be in the list at all.
+  const [pendingScroll, setPendingScroll] = useState<Date | null>(
+    () => parentDate ?? new Date()
+  );
+  const [pinnedDate, setPinnedDate] = useState<Date | null>(() => parentDate ?? new Date());
+  const hasScrolledOnce = useRef(false);
 
   const agendaRef = useRef<MobileAgendaHandle>(null);
 
-  // Sync with parent date when it changes externally
+  // Sync with parent date when it changes externally -- a deep link, or the
+  // date arriving after mount. Pin and scroll to it as if the user had picked
+  // it; the guard makes this a no-op for the echo of our own onDateChange.
   useEffect(() => {
     if (!parentDate) return;
-    setSelectedDate((previousDate) =>
-      isSameDay(parentDate, previousDate) ? previousDate : parentDate
-    );
+    // selectedDate is read as a guard, not a trigger: this effect fires on a new
+    // parentDate only, and the guard makes it a no-op for the echo of our own
+    // onDateChange. Setters stay out of the updater -- StrictMode calls it twice.
+    if (isSameDay(parentDate, selectedDate)) return;
+    setSelectedDate(parentDate);
+    setPinnedDate(parentDate);
+    setPendingScroll(parentDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parentDate]);
 
   useEffect(() => {
     if (!pendingScroll) return;
-    agendaRef.current?.scrollToDate(pendingScroll);
+    // Crossing into an uncached month swaps the agenda for a spinner, so the
+    // ref is null here. Keep the request and retry when loading finishes --
+    // clearing it unconditionally stranded the user on the month's first day.
+    const landed = agendaRef.current?.scrollToDate(
+      pendingScroll,
+      hasScrolledOnce.current ? 'smooth' : 'auto'
+    );
+    if (!landed) return;
+    hasScrolledOnce.current = true;
     setPendingScroll(null);
-  }, [pendingScroll]);
+  }, [pendingScroll, isLoading]);
 
   // The window useCalendarData has actually fetched. Keyed on the month, not the
   // date, so scroll-sync within a month does not hand the agenda a new array.
