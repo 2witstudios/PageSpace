@@ -1,14 +1,14 @@
 /**
- * Static invariants of the multi-attachment migration (0291 DDL + 0292 backfill).
+ * Static invariants of the multi-attachment migration (0292 DDL + 0293 backfill).
  *
  * These pin the migration SQL itself so CI catches a regression without needing
  * a database. Two properties matter enough to assert here:
  *
- *  - 0291 must stay UNEDITED drizzle-kit output. Generated DDL is not
+ *  - 0292 must stay UNEDITED drizzle-kit output. Generated DDL is not
  *    re-runnable (bare CREATE TABLE), which is fine only while nobody edits it
  *    — and the runner keys applied migrations by file hash, so an edit re-runs
  *    it on databases that already applied it.
- *  - 0292 is hand-written and therefore MUST be idempotent, because the same
+ *  - 0293 is hand-written and therefore MUST be idempotent, because the same
  *    hash-keyed replay applies to it.
  */
 import { describe, it, expect } from 'vitest';
@@ -25,20 +25,20 @@ const stripComments = (sql: string) =>
     .filter((line) => !line.trimStart().startsWith('--'))
     .join('\n');
 
-const ddl = stripComments(read('0291_condemned_talos.sql'));
-const backfill = read('0292_backfill_message_attachments.sql');
+const ddl = stripComments(read('0292_absurd_living_mummy.sql'));
+const backfill = read('0293_backfill_message_attachments.sql');
 const backfillCode = stripComments(backfill);
 
 const TABLES = ['channel_message_attachments', 'direct_message_attachments'] as const;
 
-describe('0291 multi-attachment DDL', () => {
+describe('0292 multi-attachment DDL', () => {
   it('should be registered in the journal', () => {
     const journal = JSON.parse(
       readFileSync(path.join(DRIZZLE_DIR, 'meta/_journal.json'), 'utf8'),
     ) as { entries: Array<{ idx: number; tag: string }> };
-    expect(journal.entries.find((e) => e.idx === 291)?.tag).toBe('0291_condemned_talos');
-    expect(journal.entries.find((e) => e.idx === 292)?.tag).toBe(
-      '0292_backfill_message_attachments',
+    expect(journal.entries.find((e) => e.idx === 292)?.tag).toBe('0292_absurd_living_mummy');
+    expect(journal.entries.find((e) => e.idx === 293)?.tag).toBe(
+      '0293_backfill_message_attachments',
     );
   });
 
@@ -97,7 +97,7 @@ describe('0291 multi-attachment DDL', () => {
   });
 });
 
-describe('0292 attachment backfill', () => {
+describe('0293 attachment backfill', () => {
   for (const [table, source] of [
     ['channel_message_attachments', 'channel_messages'],
     ['direct_message_attachments', 'direct_messages'],

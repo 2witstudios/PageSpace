@@ -162,7 +162,7 @@ describe('MAX_MESSAGE_ATTACHMENTS', () => {
     // other from both sides. Raising the cap means a new migration, not just
     // editing this number. See message-attachments-migration.test.ts.
     assert({
-      given: 'the position CHECK in 0291 (position >= 0 AND position < 10)',
+      given: 'the position CHECK in 0292 (position >= 0 AND position < 10)',
       should: 'agree with the application-level cap',
       actual: MAX_MESSAGE_ATTACHMENTS,
       expected: 10,
