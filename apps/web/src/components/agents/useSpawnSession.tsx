@@ -626,6 +626,13 @@ function SpawnSessionPalette({
     setEnvName('');
     setEnvSubstrate('sprite');
     setEnvLabel('');
+    // EVERY policy toggle too (Codex P1 on #2582): a create step that opened
+    // with "Run commands" still on from the last one would hand the next
+    // machine command execution silently — the one default that must never
+    // drift. Files on, commands off, every time the step opens.
+    setAllowFsRead(true);
+    setAllowFsWrite(true);
+    setAllowExec(false);
     // `creatingEnv` too, and for a reason worth naming: a create still in
     // flight when the palette was closed never runs its `finally` against a
     // visible form, so without this the next create step would open with its

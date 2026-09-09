@@ -2647,6 +2647,43 @@ describe('AgentsSidebar', () => {
       expect(screen.queryByLabelText(/checkpoint/i)).toBeNull();
     });
 
+    test('every policy toggle resets to the safe default when a create step OPENS: enable Run commands, cancel, reopen ⇒ off (Codex P1)', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.click(await screen.findByLabelText('Run commands'));
+      await user.click(screen.getByLabelText('Write files'));
+      expect(screen.getByLabelText('Run commands') as HTMLInputElement).toBeChecked();
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      await user.click(await screen.findByText('New environment'));
+      await user.click(await screen.findByLabelText('This computer'));
+      expect((await screen.findByLabelText('Run commands')) as HTMLInputElement).not.toBeChecked();
+      expect(screen.getByLabelText('Write files') as HTMLInputElement).toBeChecked();
+      expect(screen.getByLabelText('Read files') as HTMLInputElement).toBeChecked();
+    });
+
+    test('enable Run commands, create, then open another create step ⇒ commands are off again', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByLabelText('Run commands'));
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', expect.objectContaining({ serverPolicy: { ops: ['fs_read', 'fs_write', 'exec'], checkpoint: false } })));
+      await user.click(await screen.findByRole('button', { name: 'Done' }));
+      await user.click(await screen.findByText('New environment'));
+      await user.click(await screen.findByLabelText('This computer'));
+      expect((await screen.findByLabelText('Run commands')) as HTMLInputElement).not.toBeChecked();
+    });
+
     test('turning "Run commands" on posts exec in the serverPolicy; turning "Write files" off leaves it out', async () => {
       const user = userEvent.setup();
       enableLocalEnvs();
