@@ -23,6 +23,7 @@ import { useFindStore } from '@/stores/useFindStore';
 import { useEditingSession } from '@/stores/useEditingSession';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useTaskListPageFilter } from './useTaskListPageFilter';
+import type { TaskListPageFilter } from '@/stores/useLayoutStore';
 import { TreePage } from '@/hooks/usePageTree';
 import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
@@ -130,6 +131,40 @@ const fetcher = async (url: string) => {
 // Matches DEFAULT_LIMIT in the GET route's query-spec.ts; must stay <= that route's
 // MAX_LIMIT (200) or every "Load More" page would silently get clamped down server-side.
 const TASKS_PAGE_SIZE = 100;
+
+/**
+ * All / Active / Completed, rendered in both toolbars.
+ *
+ * One component because there are two of them — inline in the wide toolbar and
+ * inside the narrow filter sheet — and the set of filters is the kind of thing
+ * that gets a fourth member added to one copy and not the other.
+ */
+function TaskFilterTabs({ filter, onSelect, fill = false }: {
+  filter: TaskListPageFilter;
+  onSelect: (next: TaskListPageFilter) => void;
+  /** Stretch the tabs to fill their row, as the sheet wants. */
+  fill?: boolean;
+}) {
+  return (
+    <div className="flex items-center bg-muted rounded-md p-0.5">
+      {(['all', 'active', 'completed'] as const).map((f) => (
+        <button
+          key={f}
+          onClick={() => onSelect(f)}
+          className={cn(
+            'text-sm font-medium rounded transition-colors',
+            fill ? 'flex-1 px-3 py-2' : 'px-3 py-1.5',
+            filter === f
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          )}
+        >
+          {f.charAt(0).toUpperCase() + f.slice(1)}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 /**
  * The collapsed state, shared. Minting `new Set()` per call is a new reference
@@ -1127,22 +1162,11 @@ function TaskListView({ page }: TaskListViewProps) {
             </SheetDescription>
           </SheetHeader>
           <div className="px-5 py-4 space-y-4">
-            <div className="flex items-center bg-muted rounded-md p-0.5">
-              {(['all', 'active', 'completed'] as const).map((f) => (
-                <button
-                  key={f}
-                  onClick={() => { setFilter(f); setNarrowFiltersOpen(false); }}
-                  className={cn(
-                    'flex-1 px-3 py-2 text-sm font-medium rounded transition-colors',
-                    filter === f
-                      ? 'bg-background text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  )}
-                >
-                  {f.charAt(0).toUpperCase() + f.slice(1)}
-                </button>
-              ))}
-            </div>
+            <TaskFilterTabs
+              filter={filter}
+              fill
+              onSelect={(f) => { setFilter(f); setNarrowFiltersOpen(false); }}
+            />
             <div className="flex flex-wrap items-center gap-2">
               {canEdit && (
                 <StatusConfigManager
@@ -1170,23 +1194,7 @@ function TaskListView({ page }: TaskListViewProps) {
       {/* Wide Toolbar */}
       <div className="hidden @[700px]:flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b bg-background">
         <div className="flex items-center gap-2">
-          {/* Filter tabs */}
-          <div className="flex items-center bg-muted rounded-md p-0.5">
-            {(['all', 'active', 'completed'] as const).map((f) => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                className={cn(
-                  'px-3 py-1.5 text-sm font-medium rounded transition-colors',
-                  filter === f
-                    ? 'bg-background text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                {f.charAt(0).toUpperCase() + f.slice(1)}
-              </button>
-            ))}
-          </div>
+          <TaskFilterTabs filter={filter} onSelect={setFilter} />
 
           {/* Search */}
           <div className="relative">
@@ -1258,11 +1266,16 @@ function TaskListView({ page }: TaskListViewProps) {
                         wired to an agent says so on the row, not only once the
                         detail sheet is open. Indicator, not a control — the row
                         opens the sheet, which is where triggers are edited. */}
-                    {(task.activeTriggerCount ?? 0) > 0 && (
-                      <Bell
-                        className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400"
-                        aria-label="Agent trigger configured"
-                      />
+                    {canEdit && (task.activeTriggerCount ?? 0) > 0 && (
+                      // Gated like the table's badge and the sheet's: a viewer
+                      // who cannot configure triggers is not told they exist.
+                      <span className="shrink-0 text-amber-600 dark:text-amber-400">
+                        {/* aria-label on a bare <svg> is not reliably announced
+                            — lucide sets no role — so the name goes in sr-only
+                            text, as the table's badge does. */}
+                        <Bell className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span className="sr-only">Agent trigger configured</span>
+                      </span>
                     )}
                     <SubTaskProgress
                       task={task}

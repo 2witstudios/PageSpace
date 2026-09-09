@@ -1,5 +1,5 @@
-import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
-import { isCompletedStatus } from './task-list-types';
+import type { TaskStatusGroup } from '@/lib/task-status-config';
+import { buildStatusConfig } from './task-list-types';
 import type { TaskItem, TaskStatusConfig } from './task-list-types';
 import type { Task } from '@/components/tasks/types';
 
@@ -22,36 +22,32 @@ import type { Task } from '@/components/tasks/types';
  * wrong too. Resolving here keeps the shared components and every dashboard
  * call site untouched.
  *
- * Mirrors the server's resolution order exactly: custom config, then default
- * config, then the raw slug in the `todo` group.
+ * It resolves against THIS list's vocabulary rather than the server's merged
+ * order (custom config, then defaults, then the slug). The server serves a
+ * dashboard spanning many lists, where falling back to the shared defaults is
+ * the only sensible guess; here the list's own statuses are authoritative, and
+ * matching them is what keeps the row, the table and the filter agreeing about
+ * which tasks are done.
  */
 export function toDashboardTask(
   item: TaskItem,
   ctx: { driveId: string; taskListPageId: string; taskListPageTitle?: string },
   statusConfigs: TaskStatusConfig[],
 ): Task {
-  const matchingConfig = statusConfigs.find((c) => c.slug === item.status);
-  const defaultConfig = DEFAULT_STATUS_CONFIG[item.status];
+  // buildStatusConfig is the same vocabulary the table, the kanban and the
+  // filter read: the list's own statuses when it defines any, and the shared
+  // defaults only when it does not. Resolving through it means done-ness here
+  // agrees with isCompletedStatus by construction — a slug the list does not
+  // define (a task still holding "completed" on a shipped/wip list) is an
+  // unknown status to every surface alike, rather than a ticked, struck-through
+  // row that the filter still lists as active and that does nothing when
+  // unticked.
+  const config = buildStatusConfig(statusConfigs)[item.status];
 
-  // Done-ness is decided by `isCompletedStatus`, the same rule the filter, the
-  // table and the completion guard use, so one view cannot disagree with itself.
-  // It matters for a slug that is absent from a list's custom configs but is a
-  // default done slug ("completed" on a list whose vocabulary is shipped/wip):
-  // resolving the group from DEFAULT_STATUS_CONFIG alone would tick and strike
-  // the row while the filter still listed it as active, and toggling it would
-  // then appear to do nothing.
-  const resolvedGroup: TaskStatusGroup = matchingConfig?.group ?? defaultConfig?.group ?? 'todo';
-  const statusGroup: TaskStatusGroup = isCompletedStatus(item.status, statusConfigs)
-    ? 'done'
-    : resolvedGroup === 'done'
-      ? 'todo'
-      : resolvedGroup;
-  // `||`, not `??`, to match the server: an empty config name falls through to
-  // the default label rather than rendering an empty badge.
-  const statusLabel = matchingConfig?.name || defaultConfig?.label || item.status;
+  const statusGroup: TaskStatusGroup = config?.group ?? 'todo';
+  const statusLabel = config?.label || item.status;
   const statusColor =
-    matchingConfig?.color ||
-    defaultConfig?.color ||
+    config?.color ||
     'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400';
 
   return {

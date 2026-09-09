@@ -109,13 +109,30 @@ describe('status resolution', () => {
     });
   });
 
-  it('falls back to the default label when a custom config has an empty name', () => {
+  // Same fallback the table uses: `statusConfigMap[status]?.label || status`.
+  it('falls back to the slug when a custom config has an empty name', () => {
     const configs = [config('completed', { name: '', group: 'done' })];
     assert({
       given: 'a custom config whose name is empty',
-      should: 'use the default label instead of rendering an empty badge',
+      should: 'show the slug rather than an empty badge',
       actual: toDashboardTask(task({ id: 't1', status: 'completed' }), ctx, configs).statusLabel,
-      expected: 'Done',
+      expected: 'completed',
+    });
+  });
+
+  // A list with its own vocabulary does not inherit the shared defaults —
+  // buildStatusConfig returns only the custom statuses — so an orphan slug is
+  // an unknown status here exactly as it is in the table, not a green "Done".
+  it('does not dress an orphan slug in the default label and colour', () => {
+    const configs = [config('shipped', { name: 'Shipped', color: 'bg-purple-100', group: 'done' })];
+    const { statusLabel, statusGroup } = toDashboardTask(
+      task({ id: 't1', status: 'completed' }), ctx, configs,
+    );
+    assert({
+      given: 'a default done slug the list vocabulary does not define',
+      should: 'show the raw slug in the todo group, as the table does',
+      actual: { statusLabel, statusGroup },
+      expected: { statusLabel: 'completed', statusGroup: 'todo' },
     });
   });
 });
