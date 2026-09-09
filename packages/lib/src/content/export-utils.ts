@@ -94,6 +94,20 @@ export interface TypedSheetExport {
  * community build) ignores a `!freeze` worksheet property — it writes no
  * `<pane>` element — so setting it would be dead code implying a feature that
  * does not survive the round trip.
+ *
+ * Cell STYLES are omitted for the same reason, and this was measured rather
+ * than assumed: writing `cell.s = { font: { bold: true }, fill: { fgColor: ... } }`
+ * through `XLSX.write` and reading it back with `cellStyles: true` returns
+ * `{ patternType: 'none' }` — the font and the fill are both gone. Style
+ * writing is a SheetJS Pro feature; the community build parses styles but does
+ * not emit them.
+ *
+ * The practical consequence is worth stating plainly, because it is asymmetric:
+ * a region's derived NUMBER FORMATS do survive (they travel as `z`, which this
+ * build does write), so an exported currency column is real Excel currency and
+ * still sums and charts. Only the cosmetic layer — the themed header fill, the
+ * bold, the total-row emphasis — is lost, and it cannot be carried without
+ * changing the library.
  */
 
 /** Excel's own maximum column width, in characters. */

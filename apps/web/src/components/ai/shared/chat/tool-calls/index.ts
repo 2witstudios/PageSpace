@@ -33,6 +33,7 @@ export { WebFetchRenderer } from './WebFetchRenderer';
 export { MemberListRenderer } from './MemberListRenderer';
 export { AgentConfigRenderer } from './AgentConfigRenderer';
 export { SheetEditRenderer } from './SheetEditRenderer';
+export { SheetFormatRenderer } from './SheetFormatRenderer';
 export { TaskStatusRenderer } from './TaskStatusRenderer';
 
 // Calendar renderers

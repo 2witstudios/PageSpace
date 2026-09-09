@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { NEUTRALS, PALETTE, normalizeHex, parseHex, readableTextColor, swatchRow } from '../palette';
-import { cellFormatToStyle, isValidHexColor } from '@pagespace/lib/sheets/sheet';
+import { NEUTRALS, PALETTE, normalizeHex, parseHex, swatchRow } from '../sheets/palette';
+import { cellFormatToStyle, isValidHexColor, readableTextColor } from '../sheets/format';
 
 describe('palette', () => {
   it('offers the same twelve hues the rest of the product uses', () => {

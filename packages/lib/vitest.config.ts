@@ -75,6 +75,17 @@ export default defineConfig({
         branches: 94,
         functions: 88,
         statements: 85,
+        // Pure sheet modules that moved here from apps/web, where that package's
+        // per-glob gate pinned them at 100%. Restated so the move does not
+        // silently relax them to this package's default — the relocation was to
+        // share one definition of what rule edits are allowed, and a shared
+        // definition tested less than its old home is a downgrade wearing a
+        // refactor's clothes.
+        'src/sheets/conditional-ops.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/sheets/palette.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/sheets/regions.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/sheets/format-request.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/sheets/region-format.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
       },
     },
   },

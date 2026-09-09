@@ -23,6 +23,7 @@ import { encodeCellAddress, decodeCellAddress, expandRange, numberRegex, columnL
 import { tokenize, FormulaParser } from './parser';
 import { evaluateFunction, flattenValue, coerceNumber, formatDisplayValue } from './functions';
 import { applyNumberFormat, resolveCellFormat } from './format';
+import { createRegionResolver, type RegionResolver } from './region-format';
 import {
   MAX_CONDITIONAL_TOTAL_CELLS,
   expandRangesWithinBudget,
@@ -45,6 +46,13 @@ interface EvaluationEnvironment {
   sheets: Map<string, SheetData>;
   pageTitles: Map<string, string>;
   resolutionCache: Map<string, SheetExternalReferenceResolution>;
+  /**
+   * Built once per page and reused for every cell of it. Preparing a region —
+   * resolving its bounds, its per-column role formats and its theme — is work
+   * that depends only on the region set, so doing it per cell would make a full
+   * evaluation quadratic in the number of regions for no gain.
+   */
+  regionResolvers: Map<string, RegionResolver>;
 }
 
 function getPageCache(
@@ -57,6 +65,16 @@ function getPageCache(
     env.caches.set(pageKey, cache);
   }
   return cache;
+}
+
+function getRegionResolver(env: EvaluationEnvironment, pageKey: string): RegionResolver {
+  let resolver = env.regionResolvers.get(pageKey);
+  if (!resolver) {
+    const sheet = getSheetForPage(env, pageKey);
+    resolver = createRegionResolver(sheet.regions, sheet.rowCount);
+    env.regionResolvers.set(pageKey, resolver);
+  }
+  return resolver;
 }
 
 function getSheetForPage(env: EvaluationEnvironment, pageKey: string): SheetData {
@@ -462,9 +480,11 @@ function evaluateCellInternal(
   // concatenation and comparison operators format *values* via
   // `formatDisplayValue`, so touching `value` here would make `="Total: "&A1`
   // embed a currency symbol and `A1=B1` compare formatted text.
+  const { row, column } = decodeCellAddress(normalized);
   const format = resolveCellFormat(
     sheet.formats?.[normalized],
-    sheet.columnFormats?.[columnLettersOf(normalized)]
+    sheet.columnFormats?.[columnLettersOf(normalized)],
+    getRegionResolver(env, pageKey)(row, column)
   );
 
   if (format) {
@@ -567,6 +587,7 @@ function applyConditionalFormats(
   const rules = sheet.conditionalFormats;
   if (!rules || rules.length === 0) return {};
 
+  const regionAt = getRegionResolver(env, pageKey);
   const { formats, bars } = evaluateConditionalFormats(rules, {
     valueAt: (address) => byAddress[address]?.value ?? '',
     isError: (address) => Boolean(byAddress[address]?.error),
@@ -577,10 +598,12 @@ function applyConditionalFormats(
     const cell = byAddress[address];
     if (!cell) continue;
 
+    const { row, column } = decodeCellAddress(address);
     cell.format = {
       ...sheet.columnFormats?.[columnLettersOf(address)],
-      ...conditional,
+      ...regionAt(row, column),
       ...sheet.formats?.[address],
+      ...conditional,
     };
 
     // A rule may carry a number format, and `display` was produced before the
@@ -627,6 +650,7 @@ export function evaluateAddresses(
     sheets: new Map([[pageKey, sheet]]),
     pageTitles: new Map([[pageKey, options.pageTitle ?? 'Sheet']]),
     resolutionCache: new Map(),
+    regionResolvers: new Map(),
   };
 
   const result: Record<SheetCellAddress, SheetEvaluationCell> = {};
@@ -651,6 +675,7 @@ export function evaluateSheet(
     sheets: new Map([[pageKey, sheet]]),
     pageTitles: new Map([[pageKey, options.pageTitle ?? 'Sheet']]),
     resolutionCache: new Map(),
+    regionResolvers: new Map(),
   };
   const byAddress: Record<string, SheetEvaluationCell> = {};
   const display: string[][] = Array.from({ length: rowCount }, () => Array(columnCount).fill(''));
@@ -762,6 +787,7 @@ export function evaluateSheetSparse(
     sheets: new Map([[pageKey, sheet]]),
     pageTitles: new Map([[pageKey, options.pageTitle ?? 'Sheet']]),
     resolutionCache: new Map(),
+    regionResolvers: new Map(),
   };
 
   const byAddress: Record<string, SheetEvaluationCell> = {};

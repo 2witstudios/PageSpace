@@ -13,6 +13,8 @@ import { ActivityRenderer, type ActivityItem } from './ActivityRenderer';
 import { WebSearchRenderer, type WebSearchResult } from './WebSearchRenderer';
 import { MemberListRenderer, type MemberInfo } from './MemberListRenderer';
 import { SheetEditRenderer } from './SheetEditRenderer';
+import { SheetFormatRenderer } from './SheetFormatRenderer';
+import type { FormatOpInput, RegionInput, RuleInput } from '@/lib/ai/tools/sheet-format-tools';
 import { AgentConfigRenderer, type AgentConfigData } from './AgentConfigRenderer';
 import { ModelListRenderer, type ModelListProvider } from './ModelListRenderer';
 import { WebFetchRenderer } from './WebFetchRenderer';
@@ -208,6 +210,13 @@ const parsePathsToTree = (paths: string[]): TreeItem[] => {
 
   return buildTreeFromParsed(parsedPages, 1, []);
 };
+
+/** The card chrome both sheet-formatting tools share. */
+const sheetFormatCard = (output: Record<string, unknown>) => ({
+  title: (output.title as string | undefined) || 'Sheet',
+  pageId: output.pageId as string | undefined,
+  message: output.message as string | undefined,
+});
 
 /**
  * Tools handled outside this registry as full-width cards in the wrapper
@@ -601,6 +610,45 @@ export const toolRenderers: Record<string, ToolRenderer> = {
         pageId={parsedOutput.pageId as string | undefined}
         driveId={parsedOutput.driveId as string | undefined}
         cellsUpdated={parsedOutput.cellsUpdated as number | undefined}
+      />
+    );
+  },
+  // Formatting card, not the value table — see SheetFormatRenderer. Two shapes
+  // mean "nothing landed": the tool's own refusal (`success: false`) and the
+  // execute_tool wrapper's `{ error }` envelope, which carries no `success`
+  // key and arrives with the model's UNVALIDATED parameters as the input.
+  // Both fall through to the generic envelope, which prints the error.
+  format_sheet: ({ parsedInput, parsedOutput }) => {
+    if (parsedOutput.success === false || parsedOutput.error) return null;
+    return (
+      <SheetFormatRenderer
+        {...sheetFormatCard(parsedOutput)}
+        regions={parsedInput?.regions as RegionInput[] | undefined}
+        removedRegionIds={parsedOutput.removedRegionIds as string[] | undefined}
+        ops={parsedInput?.ops as FormatOpInput[] | undefined}
+        regionsApplied={parsedOutput.regionsApplied as number | undefined}
+        opsApplied={parsedOutput.opsApplied as number | undefined}
+        cellsFormatted={parsedOutput.cellsFormatted as number | undefined}
+        changed={parsedOutput.changed as boolean | undefined}
+      />
+    );
+  },
+  set_conditional_format: ({ parsedInput, parsedOutput }) => {
+    if (parsedOutput.success === false || parsedOutput.error) return null;
+    return (
+      <SheetFormatRenderer
+        {...sheetFormatCard(parsedOutput)}
+        rules={parsedInput?.rules as RuleInput[] | undefined}
+        // Removals as the store confirmed them under its lock — an id the
+        // tab did not hold was never a removal and is not listed.
+        removedRuleIds={parsedOutput.removedRuleIds as string[] | undefined}
+        ruleIds={parsedOutput.ruleIds as string[] | undefined}
+        ruleIdsAdded={parsedOutput.ruleIdsAdded as string[] | undefined}
+        ruleMode={parsedOutput.mode as 'append' | 'replaceAll' | undefined}
+        rulesAdded={parsedOutput.added as number | undefined}
+        rulesRemoved={parsedOutput.removed as number | undefined}
+        changed={parsedOutput.changed as boolean | undefined}
+        skippedDuplicates={parsedOutput.skippedDuplicates as Array<{ index: number }> | undefined}
       />
     );
   },
