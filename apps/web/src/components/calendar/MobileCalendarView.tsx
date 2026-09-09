@@ -104,20 +104,20 @@ export function MobileCalendarView({
 
   const agendaRef = useRef<MobileAgendaHandle>(null);
 
-  // Sync with parent date when it changes externally -- a deep link, or the
-  // date arriving after mount. Pin and scroll to it as if the user had picked
-  // it; the guard makes this a no-op for the echo of our own onDateChange.
+  // Sync with a date that changes externally -- a deep link, or one arriving
+  // after mount -- treating it exactly as if the user had picked it. Every
+  // setter stays out of a state updater on purpose: these are side effects and
+  // StrictMode invokes updaters twice.
   useEffect(() => {
     if (!parentDate) return;
-    // selectedDate is read as a guard, not a trigger: this effect fires on a new
-    // parentDate only, and the guard makes it a no-op for the echo of our own
-    // onDateChange. Setters stay out of the updater -- StrictMode calls it twice.
+    // A guard, not a trigger. The effect fires on a new parentDate only, and
+    // this makes it a no-op for the echo of our own onDateChange.
     if (isSameDay(parentDate, selectedDate)) return;
     setSelectedDate(parentDate);
     setWindowDate(parentDate);
     setPinnedDate(parentDate);
     setPendingScroll(parentDate);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedDate is read as a guard; adding it would re-run this on every scroll-sync
   }, [parentDate]);
 
   useEffect(() => {
