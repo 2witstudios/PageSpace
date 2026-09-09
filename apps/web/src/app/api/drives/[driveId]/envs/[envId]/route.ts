@@ -258,27 +258,56 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
     }
 
     // A local env's machine is revoked BEFORE the row goes: the stamp, the
-    // sessions and the socket (C4). The row deletion below then cascades the
-    // sibling away; a later token mint finds nothing and fails either way.
-    let revoked: { sessionsRevoked: number; machine: string; alreadyRevoked: boolean } | null = null;
-    if (env.substrate === 'local') {
+    // sessions and the socket (C4). The row deletion then cascades the sibling
+    // away; a later token mint finds nothing and fails either way.
+    //
+    // **But only when the row is actually going.** This used to run here,
+    // unconditionally, before `deleteEnv` was called at all — so a delete
+    // refused `409 live_sessions` had already stamped `revokedAt`, revoked
+    // every session, closed the socket and made the daemon delete its key,
+    // while the caller was told the delete did not happen. The cautious path
+    // (omitting `?force` precisely to avoid harming live sessions) was the
+    // destructive one, and per R-8 in the posture document it left an env that
+    // can never take a new machine — the row is still there, so it cannot be
+    // recreated. Found by the M1 exit gate, 2026-09-09.
+    //
+    // It is now the delete transaction's `beforeDelete`: it runs under the row
+    // lock, AFTER the live-session guard has passed and immediately before the
+    // row goes. There is no window in which a refusal has revoked anything,
+    // and no re-check to race — the guard and the revoke are the same
+    // critical section.
+    // A one-cell box rather than a plain `let`: the assignment happens inside
+    // the hook's closure, where narrowing cannot follow it, and TypeScript
+    // would otherwise keep the variable at `null` for every later read.
+    type RevokeReport = { sessionsRevoked: number; machine: string; alreadyRevoked: boolean };
+    const performed: { revoked: RevokeReport | null } = { revoked: null };
+    const revokeBeforeDelete = async (): Promise<void> => {
       const revocation = await revokeEnv({ envId, reason: 'owner_revoked' });
       if (revocation.ok) {
-        revoked = { sessionsRevoked: revocation.sessionsRevoked, machine: revocation.machine, alreadyRevoked: revocation.alreadyRevoked };
-        auditRequest(request, {
-          eventType: 'auth.token.revoked',
-          userId: auth.userId,
-          resourceType: 'drive_env',
-          resourceId: envId,
-          details: { route: 'drive-envs', operation: 'revoke', driveId, ...revoked },
-        });
+        performed.revoked = { sessionsRevoked: revocation.sessionsRevoked, machine: revocation.machine, alreadyRevoked: revocation.alreadyRevoked };
       }
-    }
+    };
 
     // Opt-in by exact value: any other spelling reads as "not forced", so a
     // stray `?force` or `?force=0` can never destroy a drive's shared work.
     const force = new URL(request.url).searchParams.get('force') === 'true';
-    const result = await deleteEnv({ envId, force });
+    const result = env.substrate === 'local'
+      ? await deleteEnv({ envId, force, beforeDelete: revokeBeforeDelete })
+      : await deleteEnv({ envId, force });
+    const revoked = performed.revoked;
+
+    // Audited only once the revoke has actually happened — which, since it is
+    // the delete's `beforeDelete`, means only on a delete that succeeded. A
+    // 409 writes no `auth.token.revoked` row, because it revoked nothing.
+    if (revoked) {
+      auditRequest(request, {
+        eventType: 'auth.token.revoked',
+        userId: auth.userId,
+        resourceType: 'drive_env',
+        resourceId: envId,
+        details: { route: 'drive-envs', operation: 'revoke', driveId, ...revoked },
+      });
+    }
 
     // Two refusals, both terminal. There is deliberately no `teardown_failed`
     // arm any more: the delete now kills the Sprite only AFTER the row is gone,
