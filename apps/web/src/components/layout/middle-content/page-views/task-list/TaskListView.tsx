@@ -1,11 +1,11 @@
 'use client';
 
 /**
- * Pane-safe by design: layout-mode decisions (card vs. table, toolbar wrap)
- * use `@container` + `@[Npx]:` variants keyed to this view's own rendered
- * width, not viewport (`sm:`/`md:`/`lg:`) breakpoints — a pane can be narrow
- * at any viewport width. Follow this pattern for any other page-view
- * component that needs to reflow inside a resizable pane.
+ * Pane-safe by design: layout-mode decisions (compact rows vs. table, which
+ * toolbar renders) use `@container` + `@[Npx]:` variants keyed to this view's
+ * own rendered width, not viewport (`sm:`/`md:`/`lg:`) breakpoints — a pane
+ * can be narrow at any viewport width. Follow this pattern for any other
+ * page-view component that needs to reflow inside a resizable pane.
  */
 
 import { useState, useEffect, useId, useRef, useCallback, memo, useMemo } from 'react';
@@ -132,6 +132,13 @@ const fetcher = async (url: string) => {
 // MAX_LIMIT (200) or every "Load More" page would silently get clamped down server-side.
 const TASKS_PAGE_SIZE = 100;
 
+/**
+ * The task filter box, rendered in both toolbars.
+ *
+ * Shared mainly for the icon: the input's left padding has to clear the
+ * absolutely positioned magnifier, and a copy where the two drift apart looks
+ * fine until someone reads it.
+ */
 interface TaskSearchInputProps {
   inputRef: React.RefObject<HTMLInputElement | null>;
   value: string;
@@ -141,13 +148,6 @@ interface TaskSearchInputProps {
   grow?: boolean;
 }
 
-/**
- * The task filter box, rendered in both toolbars.
- *
- * Shared mainly for the icon: the input's left padding has to clear the
- * absolutely positioned magnifier, and a copy where the two drift apart looks
- * fine until someone reads it.
- */
 function TaskSearchInput({ inputRef, value, onChange, className, grow = false }: TaskSearchInputProps) {
   return (
     <div className={cn('relative', grow && 'flex-1 min-w-0')}>
@@ -979,8 +979,9 @@ function TaskListView({ page }: TaskListViewProps) {
   };
 
   // Every write is addressed by TaskLocation so a nested row can target its own
-  // parent list. Kanban and the mobile cards only ever render top-level tasks, so
-  // they keep the flat TaskHandlers contract via the root binding below.
+  // parent list. Kanban and the narrow-width compact rows only ever render
+  // top-level tasks, so they keep the flat TaskHandlers contract via the root
+  // binding below.
   const locatedHandlers: LocatedTaskHandlers = {
     onToggleComplete: handleToggleComplete,
     onStatusChange: handleStatusChange,
@@ -1073,7 +1074,7 @@ function TaskListView({ page }: TaskListViewProps) {
   }), [canEdit, page.driveId, writeMachinery, statusConfigs, openTriggerDialog,
        expandedPaths, toggleExpanded, expandNode, editingTaskId, editingTitle]);
 
-  // Shared between the table, kanban, and mobile card renders — the bounded GET route
+  // Shared between the table, kanban, and compact-row renders — the bounded GET route
   // (limit=100 default) means any of them can silently truncate without this.
   const loadMoreControl = (hasMoreTasks || isLoadingMoreTasks || loadMoreFailed) && (
     <div className="flex flex-col items-center gap-2 py-4">
@@ -1213,6 +1214,11 @@ function TaskListView({ page }: TaskListViewProps) {
               fill
               onSelect={(f) => { setFilter(f); setNarrowFiltersOpen(false); }}
             />
+            {/* Workflows closes the sheet first; StatusConfigManager deliberately
+                does not. Its dialog is mounted INSIDE this SheetContent, so
+                closing the sheet would unmount the dialog that was just opened —
+                it stacks instead, which Radix's dismissable-layer stack handles.
+                TaskListWorkflowsDialog is mounted outside the sheet, so it can. */}
             <div className="flex flex-wrap items-center gap-2">
               {canEdit && (
                 <StatusConfigManager
@@ -1517,8 +1523,6 @@ function TaskListView({ page }: TaskListViewProps) {
       </div>
       )}
 
-      {/* Footer stats — hidden at narrow widths, where the bar costs more screen
-          than the count is worth (same call as the tasks dashboard's mobile view). */}
       <TaskListFooterStats data={data} />
 
       {triggerDialogTask && (
@@ -1541,9 +1545,11 @@ function TaskListView({ page }: TaskListViewProps) {
       )}
 
       {/* Narrow-width task editing. The sheet speaks the dashboard Task shape and
-          hands that adapted object back to every callback, so each one resolves
-          the ORIGINAL TaskItem by id first — handlers like onStatusChange run a
-          sub-task completion guard that reads the real row. */}
+          hands that adapted object back to every callback. The callbacks that
+          need the real row — onStatusChange and onToggleComplete run a sub-task
+          completion guard that reads it, onNavigate reads its page link — go
+          through withTaskItem to resolve the ORIGINAL TaskItem by id. The rest
+          only need a location, so they pass the id straight through. */}
       <TaskDetailSheet
         task={detailTask}
         statusConfigs={statusConfigs}
