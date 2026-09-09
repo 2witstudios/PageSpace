@@ -467,6 +467,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **Android app: first internal-testing version identity, and the Android/iOS shell configs are now
+  checked in CI (still not distributed)** — the Android build now identifies itself as version 1.4
+  (build 2), matching the iOS version, instead of the 1.0 (build 1) left over from a debug build in
+  March. Nothing else about the app changes in this release, and **nothing is distributed**: there
+  is still no release signing key, no Play Console listing, and none of the Android work from the
+  last few releases has been run on a real device — the exact checklist for doing so is now in the
+  app's README, alongside what still blocks a public build. Behind the scenes, the two mobile shell
+  configuration files are type-checked on every pull request and a test now guards the rule that
+  the Android shell never hands its native bridge to a third-party site or a wildcard host.
+
 - **Free plan credits are now a one-time starter grant instead of a monthly allowance** — new
   free accounts still get 5 credits to try AI with, granted once on their first AI call, but
   that grant no longer refills or accumulates month over month. Credits you already have never

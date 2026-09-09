@@ -34,6 +34,8 @@
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", "tsconfig*.json"]
     },
+    "@pagespace/android#typecheck": { "dependsOn": [] },
+    "@pagespace/ios#typecheck": { "dependsOn": [] },
     "test": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", "vitest.config.*", "src/**/*.test.{ts,tsx}"],
