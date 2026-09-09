@@ -3,7 +3,7 @@
  * Only then is `request_env_approval` offered. Every failure is "not local".
  */
 import { describe, it, expect } from 'vitest';
-import { resolveLocalEnvBinding, type LocalEnvBindingDeps } from '../local-env-binding';
+import { resolveLocalEnvBinding, withEnvApprovalTool, type LocalEnvBindingDeps } from '../local-env-binding';
 
 function deps(over: Partial<LocalEnvBindingDeps> = {}): LocalEnvBindingDeps {
   return {
@@ -27,5 +27,12 @@ describe('resolveLocalEnvBinding', () => {
     ['a lookup that throws', 'conv_1', deps({ findSessionForConversation: async () => { throw new Error('db down'); } })],
   ])('given %s, should answer null (the tool is not offered)', async (_label, conversationId, d) => {
     expect(await resolveLocalEnvBinding(conversationId, d)).toBeNull();
+  });
+});
+
+describe('withEnvApprovalTool', () => {
+  it('given no conversation id (the production lookup answers null), should return the tools untouched and pause only on ask_user', async () => {
+    const tools = { finish: {} };
+    expect(await withEnvApprovalTool(tools, undefined)).toEqual({ tools, pauseToolNames: ['ask_user'], injected: false });
   });
 });

@@ -44,3 +44,23 @@ export async function resolveLocalEnvBindingForConversation(conversationId: stri
     },
   });
 }
+
+/**
+ * The Tier B tool, injected ONCE for both chat turns (the turn-duplication
+ * ratchet forbids copying it). With the same discipline as `ask_user`: after
+ * every transform, never in `tool_search` / `execute_tool` — and ONLY when the
+ * bound session is on a local environment. Returns the tools to use and the
+ * names the turn must pause on (ask_user always; the approval tool when injected).
+ */
+export async function withEnvApprovalTool<T extends Record<string, unknown>>(
+  tools: T,
+  conversationId: string | undefined,
+): Promise<{ tools: T; pauseToolNames: string[]; injected: boolean }> {
+  const { ASK_USER_TOOL_NAME } = await import('@/lib/ai/tools/ask-user-tools');
+  const pauseToolNames = [ASK_USER_TOOL_NAME];
+  const binding = await resolveLocalEnvBindingForConversation(conversationId);
+  if (binding === null) return { tools, pauseToolNames, injected: false };
+  const { envApprovalTools, REQUEST_ENV_APPROVAL_TOOL_NAME } = await import('@/lib/ai/tools/env-approval-tools');
+  pauseToolNames.push(REQUEST_ENV_APPROVAL_TOOL_NAME);
+  return { tools: { ...tools, ...envApprovalTools } as T, pauseToolNames, injected: true };
+}

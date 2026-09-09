@@ -16,9 +16,8 @@ import { NextResponse } from 'next/server';
 import { streamText, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, type ToolSet } from 'ai';
 import type { convertToModelMessages } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
-import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
-import { envApprovalTools, REQUEST_ENV_APPROVAL_TOOL_NAME } from '@/lib/ai/tools/env-approval-tools';
-import { resolveLocalEnvBindingForConversation } from '@/lib/ai/core/local-env-binding';
+import { askUserTools } from '@/lib/ai/tools/ask-user-tools';
+import { withEnvApprovalTool } from '@/lib/ai/core/local-env-binding';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
 import { readAgentDispatchDepth } from '@/lib/ai/core/agent-dispatch-depth';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
@@ -1138,14 +1137,11 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // so it never enters the tool_search catalog or the execute_tool dispatch map
     // (execute_tool would crash on an execute-less tool).
     finalTools = { ...finalTools, ...askUserTools } as ToolSet;
-    // The Tier B approval click (GA wave 2): same discipline as ask_user, ONLY
+    // The Tier B approval click (GA wave 2), injected by the shared helper ONLY
     // when the bound session is on a LOCAL environment.
-    const localEnvBinding = await resolveLocalEnvBindingForConversation(conversation.id);
-    const pauseToolNames = [ASK_USER_TOOL_NAME];
-    if (localEnvBinding !== null) {
-      finalTools = { ...finalTools, ...envApprovalTools } as ToolSet;
-      pauseToolNames.push(REQUEST_ENV_APPROVAL_TOOL_NAME);
-    }
+    const envApproval = await withEnvApprovalTool(finalTools, conversation.id);
+    finalTools = envApproval.tools as ToolSet;
+    const { pauseToolNames } = envApproval;
 
     // Sanitize, compact, and elide via the unified seam.
     // finalSystemPrompt + finalTools are now known — pass for accurate token budgeting.
@@ -1347,7 +1343,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
             system: finalSystemPrompt,
             messages: cachedMessages,
             tools: finalTools,
-            // hasToolCall(ASK_USER_TOOL_NAME) is documentation: ask_user has no
+            // hasToolCall on the pause tools is documentation: ask_user has no
             // execute, so v6 halts the loop on it anyway (finishReason 'tool-calls').
             stopWhen: [hasToolCall(FINISH_TOOL_NAME), ...pauseToolNames.map((name) => hasToolCall(name)), stepCountIs(AGENT_MAX_STEPS)],
             // The user's Stop composed with the mid-stream credit ceiling —

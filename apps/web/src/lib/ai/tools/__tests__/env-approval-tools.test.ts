@@ -58,20 +58,29 @@ describe('not ask_user — pinned by reading the source', () => {
 });
 
 describe('route-level injection — the same discipline as ask_user, gated on a LOCAL env binding', () => {
-  it.each(['lib/ai/chat-pipeline/page-chat-turn.ts', 'lib/ai/chat-pipeline/global-chat-turn.ts'])('%s spreads envApprovalTools ONLY inside the local-env guard, after the ask_user injection, and pauses on it', (file) => {
-    const source = read(file);
-    expect(source).toMatch(/resolveLocalEnvBindingForConversation\(/);
-    const guard = source.indexOf('if (localEnvBinding !== null) {');
+  it('the ONE injection lives in withEnvApprovalTool: the spread sits after the local-env guard, and the pause list gains the tool only then', () => {
+    const source = read('lib/ai/core/local-env-binding.ts');
+    const guard = source.indexOf("if (binding === null) return { tools, pauseToolNames, injected: false };");
     const spread = source.indexOf('...envApprovalTools');
-    const askUser = source.indexOf('...askUserTools');
     expect(guard).toBeGreaterThan(-1);
     expect(spread).toBeGreaterThan(guard);
-    expect(spread - guard).toBeLessThan(400);
-    expect(askUser).toBeLessThan(spread);
-    // Exactly one spread: never a second, unguarded one.
     expect(source.split('...envApprovalTools').length).toBe(2);
     expect(source).toMatch(/pauseToolNames\.push\(REQUEST_ENV_APPROVAL_TOOL_NAME\)/);
+  });
+
+  it.each(['lib/ai/chat-pipeline/page-chat-turn.ts', 'lib/ai/chat-pipeline/global-chat-turn.ts'])('%s calls the helper AFTER the ask_user injection, never spreads envApprovalTools itself, and pauses on what the helper returned', (file) => {
+    const source = read(file);
+    const askUser = source.indexOf('...askUserTools');
+    const helper = source.indexOf('await withEnvApprovalTool(');
+    expect(askUser).toBeGreaterThan(-1);
+    expect(helper).toBeGreaterThan(askUser);
+    expect(source).not.toMatch(/\.\.\.envApprovalTools|resolveLocalEnvBindingForConversation/);
+    expect(source).toMatch(/const \{ pauseToolNames \} = envApproval;/);
     expect(source).toMatch(/\.\.\.pauseToolNames\.map\(\(name\) => hasToolCall\(name\)\)/);
+  });
+
+  it('the page turn only offers the tool with the sandbox on (the helper gets no conversation otherwise); a helper given no binding injects nothing', () => {
+    expect(read('lib/ai/chat-pipeline/page-chat-turn.ts')).toMatch(/withEnvApprovalTool\(filteredTools, sandboxEnabled \? conversationId : undefined\)/);
   });
 
   it('the base registry builder never mentions it (no accidental catalog entry)', () => {

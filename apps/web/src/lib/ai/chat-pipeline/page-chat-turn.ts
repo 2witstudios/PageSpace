@@ -32,8 +32,8 @@ import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
-import { envApprovalTools, REQUEST_ENV_APPROVAL_TOOL_NAME } from '@/lib/ai/tools/env-approval-tools';
-import { resolveLocalEnvBindingForConversation } from '@/lib/ai/core/local-env-binding';
+import { REQUEST_ENV_APPROVAL_TOOL_NAME } from '@/lib/ai/tools/env-approval-tools';
+import { withEnvApprovalTool } from '@/lib/ai/core/local-env-binding';
 import {
   extractClientAskUserResults,
   applyAskUserResultsToPageMessage,
@@ -1493,17 +1493,13 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     filteredTools = { ...filteredTools, ...askUserTools } as ToolSet;
     allowedToolNames.push(ASK_USER_TOOL_NAME);
 
-    // The Tier B approval click (GA wave 2): injected with the SAME discipline
-    // as ask_user (execute-less, after every transform, never in tool_search /
-    // execute_tool) — but ONLY when the session is bound to a LOCAL environment,
-    // the one substrate whose machine can freeze a request for its owner's click.
-    const localEnvBinding = sandboxEnabled ? await resolveLocalEnvBindingForConversation(conversationId) : null;
-    const pauseToolNames = [ASK_USER_TOOL_NAME];
-    if (localEnvBinding !== null) {
-      filteredTools = { ...filteredTools, ...envApprovalTools } as ToolSet;
-      allowedToolNames.push(REQUEST_ENV_APPROVAL_TOOL_NAME);
-      pauseToolNames.push(REQUEST_ENV_APPROVAL_TOOL_NAME);
-    }
+    // The Tier B approval click (GA wave 2), injected by the shared helper ONLY
+    // when the session is bound to a LOCAL environment (never for a page agent
+    // with the sandbox off).
+    const envApproval = await withEnvApprovalTool(filteredTools, sandboxEnabled ? conversationId : undefined);
+    filteredTools = envApproval.tools as ToolSet;
+    if (envApproval.injected) allowedToolNames.push(REQUEST_ENV_APPROVAL_TOOL_NAME);
+    const { pauseToolNames } = envApproval;
 
     // Guard against a stale read_page tool-result (image bytes delivered on an
     // earlier turn when the model had vision) being re-embedded as an image when
