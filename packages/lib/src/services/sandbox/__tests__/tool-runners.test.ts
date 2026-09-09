@@ -1984,6 +1984,34 @@ describe('a LOCAL environment\'s two refusals stay distinguishable all the way t
     expect(result).toEqual({ success: false, reason: 'local_server_denied', error: DENIAL_MESSAGES.local_server_denied });
   });
 
+  it.each([
+    ['writeSandboxFile', (deps: SandboxRunDeps) => writeSandboxFile({ path: 'a.txt', content: 'hi', ctx: makeCtx(), deps })],
+    ['readSandboxFile', (deps: SandboxRunDeps) => readSandboxFile({ path: 'a.txt', ctx: makeCtx(), deps })],
+    ['readSandboxFileForCopy', (deps: SandboxRunDeps) => readSandboxFileForCopy({ path: 'a.txt', ctx: makeCtx(), deps })],
+    ['editSandboxFile (read leg)', (deps: SandboxRunDeps) => editSandboxFile({ path: 'a.txt', oldString: 'x', newString: 'y', ctx: makeCtx(), deps })],
+  ] as const)('given the server policy excludes the op, %s should answer local_server_denied — not execution_failed (Codex P2: every runner, not only bash)', async (_name, run) => {
+    const denied = async () => {
+      throw new LocalEnvServerDeniedError('env-1', 'server_denied');
+    };
+    const { deps } = makeDeps({ reconnect: async () => makeSandbox({ writeFiles: denied, readFileToBuffer: denied }) });
+    const result = await run(deps);
+    expect(result).toEqual({ success: false, reason: 'local_server_denied', error: DENIAL_MESSAGES.local_server_denied });
+  });
+
+  it('given the server policy allows reading but not WRITING, editSandboxFile should read fine and answer local_server_denied on the write leg', async () => {
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          readFileToBuffer: async () => Buffer.from('hello x'),
+          writeFiles: async () => {
+            throw new LocalEnvServerDeniedError('env-1', 'server_denied');
+          },
+        }),
+    });
+    const result = await editSandboxFile({ path: 'a.txt', oldString: 'x', newString: 'y', ctx: makeCtx(), deps });
+    expect(result).toEqual({ success: false, reason: 'local_server_denied', error: DENIAL_MESSAGES.local_server_denied });
+  });
+
   it('given exec throws an ORDINARY error, the agent should still receive execution_failed (the typed mapping is narrow)', async () => {
     const { deps } = makeDeps({
       reconnect: async () =>

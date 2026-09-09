@@ -1137,7 +1137,7 @@ export async function writeSandboxFile({
     const startedAt = deps.now();
     try {
       await session.sandbox.writeFiles([{ path: resolved, content }]);
-    } catch {
+    } catch (error) {
       const durationMs = deps.now().getTime() - startedAt.getTime();
       await safeAudit(deps, ctx, {
         code: `writeFile ${path}`,
@@ -1145,6 +1145,7 @@ export async function writeSandboxFile({
         durationMs,
         anomaly: 'nonzero_exit',
       });
+      if (error instanceof LocalEnvServerDeniedError) return fail('local_server_denied');
       return fail('execution_failed');
     }
     const durationMs = deps.now().getTime() - startedAt.getTime();
@@ -1305,7 +1306,7 @@ export async function readSandboxFile({
       // stat nor a ranged/streamed read); enforcing it is tracked as an
       // enablement-gate hardening item before the feature is flagged on.
       buffer = await session.sandbox.readFileToBuffer({ path: resolved });
-    } catch {
+    } catch (error) {
       const durationMs = deps.now().getTime() - startedAt.getTime();
       await safeAudit(deps, ctx, {
         code: `readFile ${path}`,
@@ -1313,6 +1314,7 @@ export async function readSandboxFile({
         durationMs,
         anomaly: 'nonzero_exit',
       });
+      if (error instanceof LocalEnvServerDeniedError) return fail('local_server_denied');
       return fail('execution_failed');
     }
     const durationMs = deps.now().getTime() - startedAt.getTime();
@@ -1430,7 +1432,7 @@ export async function readSandboxFileForCopy({
       let buffer: Buffer | null;
       try {
         buffer = await session.sandbox.readFileToBuffer({ path: resolved });
-      } catch {
+      } catch (error) {
         const durationMs = deps.now().getTime() - startedAt.getTime();
         await safeAudit(deps, ctx, {
           code: `copyRead ${path}`,
@@ -1438,6 +1440,7 @@ export async function readSandboxFileForCopy({
           durationMs,
           anomaly: 'nonzero_exit',
         });
+        if (error instanceof LocalEnvServerDeniedError) return fail('local_server_denied');
         return fail('execution_failed');
       }
       const durationMs = deps.now().getTime() - startedAt.getTime();
@@ -1529,9 +1532,10 @@ export async function editSandboxFile({
     let buffer: Buffer | null;
     try {
       buffer = await session.sandbox.readFileToBuffer({ path: resolved });
-    } catch {
+    } catch (error) {
       const durationMs = deps.now().getTime() - startedAt.getTime();
       await safeAudit(deps, ctx, { code: `editFile ${path}`, exitCode: null, durationMs, anomaly: 'nonzero_exit' });
+      if (error instanceof LocalEnvServerDeniedError) return fail('local_server_denied');
       return fail('execution_failed');
     }
     if (buffer === null) {
@@ -1552,9 +1556,10 @@ export async function editSandboxFile({
 
     try {
       await session.sandbox.writeFiles([{ path: resolved, content: edit.content }]);
-    } catch {
+    } catch (error) {
       const durationMs = deps.now().getTime() - startedAt.getTime();
       await safeAudit(deps, ctx, { code: `editFile ${path}`, exitCode: null, durationMs, anomaly: 'nonzero_exit' });
+      if (error instanceof LocalEnvServerDeniedError) return fail('local_server_denied');
       return fail('execution_failed');
     }
     const durationMs = deps.now().getTime() - startedAt.getTime();
