@@ -216,12 +216,40 @@ export function positionHolds(text: string, anchor: TextAnchor): boolean {
  * Use this only when the predecessor content is unavailable; when both sides of
  * a change are in hand, `portAnchor` is exact and this is not.
  */
-export function resolveAnchor(text: string, anchor: TextAnchor): AnchorResolution {
+export type ResolveAnchorOptions = {
+  /**
+   * Whether the anchor's recorded offsets may be believed.
+   *
+   * Default `true`, which is right for the ordinary case: the offsets came from
+   * a revision of THIS text, so a slice that still matches is strong evidence.
+   *
+   * Pass `false` when the offsets are known to describe a DIFFERENT revision —
+   * a stale `textHash`, or a projection format that changed underneath the
+   * anchor. `positionHolds` accepts a matching slice without consulting prefix
+   * or suffix at all, so with duplicated quote text it will happily accept a
+   * different occurrence that merely happens to sit at the recorded span, and
+   * report it as `exact`. Duplicated text is precisely the case the epic says
+   * search cannot disambiguate, so the one path that KNOWS its offsets are
+   * untrustworthy must not take that shortcut.
+   *
+   * `hint` still uses `anchor.start`, and deliberately: a hint only biases
+   * which of several equally-good context matches is nearest, and never
+   * promotes a match on its own.
+   */
+  trustRecordedOffsets?: boolean;
+};
+
+export function resolveAnchor(
+  text: string,
+  anchor: TextAnchor,
+  options: ResolveAnchorOptions = {}
+): AnchorResolution {
   const { exact, prefix, suffix } = anchor;
   const hint = clamp(anchor.start, 0, text.length);
+  const trustRecordedOffsets = options.trustRecordedOffsets ?? true;
 
   // 1. Position — the recorded offsets still hold.
-  if (positionHolds(text, anchor)) {
+  if (trustRecordedOffsets && positionHolds(text, anchor)) {
     return {
       status: 'exact',
       start: anchor.start,

@@ -106,6 +106,13 @@ export interface SheetData {
    */
   conditionalFormats?: import('./conditional').ConditionalRule[];
   /**
+   * Declared structure — which rows are headers, what a column means, where the
+   * totals are. Presentation is *derived* from these (see `sheets/region-format`)
+   * rather than stored per cell, which is what lets a region cover rows that do
+   * not exist yet.
+   */
+  regions?: import('./regions').SheetRegion[];
+  /**
    * Tabs after the first, carried verbatim so a multi-tab document survives a
    * load/save cycle. The editor renders only the first sheet today; without
    * this, saving would silently delete every other tab.

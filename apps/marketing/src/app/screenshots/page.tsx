@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Smartphone, Tablet, ArrowLeft } from "lucide-react";
-import { CANVAS, DEVICES, SHOTS, capturePath } from "@/lib/app-store-shots";
+import { CANVAS, DEVICES, shotsFor, capturePath } from "@/lib/app-store-shots";
 
 export default function ScreenshotsPage() {
   return (
@@ -44,7 +44,7 @@ export default function ScreenshotsPage() {
           <section key={device} className="mb-10">
             <h2 className="font-semibold text-foreground mb-4">{CANVAS[device].label}</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {SHOTS.map((shot) => (
+              {shotsFor(device).map((shot) => (
                 <Link key={shot.slug} href={`/screenshots/${device}/${shot.slug}`} className="group block">
                   <div
                     className="rounded-xl border border-border bg-card overflow-hidden mb-3 flex items-center justify-center text-muted-foreground hover:border-primary/50 hover:shadow-lg transition-all"

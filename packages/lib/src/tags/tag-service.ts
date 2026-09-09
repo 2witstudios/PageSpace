@@ -32,8 +32,8 @@ import { loggers } from '../logging/logger-config';
 import { normalizeTagName, validateTarget, type TagTarget } from './tag-core';
 import type { TextAnchor } from '../content/anchoring/types';
 import { preparePort, portPreparedAnchor } from '../content/anchoring/reanchor';
-import { projectContent, resolveProjectionFormat } from '../content/anchoring/text-projection';
 import { resolveAnchor } from '../content/anchoring/resolve';
+import { projectContent, resolveProjectionFormat } from '../content/anchoring/text-projection';
 import { hashText } from '../content/anchoring/anchor';
 
 const log = loggers.system;
@@ -521,12 +521,33 @@ export type ReanchorSummary = {
   considered: number;
   /** Anchors whose status or offsets changed and were written back. */
   updated: number;
-  /** Anchors that became 'orphaned' in this sweep. Included in `updated`. */
+  /** Anchors whose status is 'orphaned' after this sweep. */
   orphaned: number;
-  /** Skipped because the stored projection hash did not match `oldContent`. */
-  skippedStaleHash: number;
-  /** Skipped because the projection format flipped between the two revisions. */
-  skippedFormatFlip: number;
+  /**
+   * Anchors that became orphaned IN THIS SWEEP — a non-orphaned status going to
+   * 'orphaned'.
+   *
+   * Separate from `orphaned` because an already-orphaned anchor whose quote is
+   * still absent resolves as orphaned again on every subsequent edit. Alerting
+   * on the total would therefore fire on every save, forever, for a page that
+   * did not degrade at all — so callers that log or alert want this one.
+   */
+  newlyOrphaned: number;
+  /**
+   * Anchors that could not be forward-ported and went through QUOTE REPAIR
+   * instead, because their stored hash did not describe `oldContent`.
+   *
+   * Not "skipped": skipping was the original behaviour and it was a permanent
+   * death sentence. Once an anchor's `textHash` stops matching, it never
+   * matches any future `oldContent` either, so the anchor was passed over on
+   * every subsequent sweep for the rest of its life — silently, while the row
+   * still read `anchorStatus: 'exact'`. Repair is applicable here precisely
+   * because `resolveAnchor` searches the NEW text by quote and context and
+   * needs no trustworthy predecessor at all.
+   */
+  repairedStaleHash: number;
+  /** Anchors repaired because the projection format changed between revisions. */
+  repairedFormatFlip: number;
 };
 
 /**
@@ -605,8 +626,9 @@ export async function reanchorPageTags(
     considered: 0,
     updated: 0,
     orphaned: 0,
-    skippedStaleHash: 0,
-    skippedFormatFlip: 0,
+    newlyOrphaned: 0,
+    repairedStaleHash: 0,
+    repairedFormatFlip: 0,
   };
 
   try {
@@ -646,13 +668,14 @@ export async function reanchorPageTags(
     // makes that fallback reachable: the old projection still validates each
     // anchor's hash, and the wholesale difference then routes every anchor to
     // `resolveAnchor` against the new text.
-    if (
+    const formatFlipped =
       !conversion &&
-      resolveProjectionFormat(oldContent, oldMode) !== resolveProjectionFormat(newContent, newMode)
-    ) {
-      summary.skippedFormatFlip = rows.length;
-      log.warn('tag-service: projection format flipped between revisions; skipping re-anchor', { pageId, anchors: rows.length });
-      return ok(summary);
+      resolveProjectionFormat(oldContent, oldMode) !== resolveProjectionFormat(newContent, newMode);
+    if (formatFlipped) {
+      log.warn(
+        'tag-service: projection format changed unexpectedly between revisions; repairing anchors instead of porting',
+        { pageId, anchors: rows.length },
+      );
     }
 
     const oldText = projectContent(oldContent, oldMode);
@@ -664,12 +687,44 @@ export async function reanchorPageTags(
 
     for (const row of rows) {
       const anchor = row.anchor as TextAnchor | null;
-      if (!anchor || anchor.textHash !== oldHash) {
-        summary.skippedStaleHash += 1;
-        continue;
+      if (!anchor) continue;
+
+      // WHY THIS REPAIRS RATHER THAN SKIPS.
+      //
+      // Forward-porting needs a trustworthy predecessor: `oldText` must be the
+      // projection the anchor was measured against, which `anchor.textHash`
+      // is what proves. When it does not match — or when the projection format
+      // changed underneath us — porting would map through the wrong coordinate
+      // system and produce a confident wrong answer.
+      //
+      // The original code therefore SKIPPED those anchors. That was a permanent
+      // death sentence, not a deferral: a hash that does not match `oldContent`
+      // will not match any future `oldContent` either, so the anchor was passed
+      // over on every later sweep for the rest of its life. Worse, the row was
+      // left untouched, so it still read `anchorStatus: 'exact'` and nothing
+      // could distinguish it from a healthy one.
+      //
+      // Quote repair does not need a predecessor at all. `resolveAnchor`
+      // searches the NEW text for the quote and its context, using the stored
+      // offset only as a hint — so it is exactly applicable here, and it is the
+      // fallback the epic already designates for changes with no diffable
+      // predecessor. Whatever it finds, the row is WRITTEN, so the anchor
+      // rejoins the normal flow with an honest status instead of freezing.
+      const staleHash = anchor.textHash !== oldHash;
+      const mustRepair = staleHash || formatFlipped;
+      if (mustRepair) {
+        if (formatFlipped) summary.repairedFormatFlip += 1;
+        else summary.repairedStaleHash += 1;
       }
 
-      const resolution = portPreparedAnchor(prepared, anchor);
+      // `trustRecordedOffsets: false` is the whole point of repairing here. The
+      // hash mismatch is PROOF the offsets describe another revision, and
+      // `positionHolds` would accept a matching slice at those offsets without
+      // consulting prefix or suffix — so with duplicated quote text it would
+      // reattach to the wrong occurrence and store it as 'exact'.
+      const resolution = mustRepair
+        ? resolveAnchor(newText, anchor, { trustRecordedOffsets: false })
+        : portPreparedAnchor(prepared, anchor);
 
       // AnchorResolution is a union: 'orphaned' carries NO offsets, because
       // there is nowhere for them to point. Keep the last known start/end on
@@ -712,7 +767,12 @@ export async function reanchorPageTags(
         .where(eq(contentTags.id, row.id));
 
       summary.updated += 1;
-      if (resolution.status === 'orphaned') summary.orphaned += 1;
+      if (resolution.status === 'orphaned') {
+        summary.orphaned += 1;
+        // A TRANSITION, not a state. `row.anchorStatus` is what this anchor was
+        // before the sweep; only a change into 'orphaned' is new damage.
+        if (row.anchorStatus !== 'orphaned') summary.newlyOrphaned += 1;
+      }
     }
 
     return ok(summary);

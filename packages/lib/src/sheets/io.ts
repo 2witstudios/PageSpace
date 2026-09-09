@@ -19,6 +19,7 @@ import { parseCellFormat } from './format';
 import { SHEETDOC_MAGIC, SHEETDOC_VERSION, SHEET_VERSION, SHEET_DEFAULT_ROWS, SHEET_DEFAULT_COLUMNS } from './constants';
 import { evaluateSheetSparse } from './evaluation';
 import { parseConditionalRules } from './conditional';
+import { parseRegions } from './regions';
 import { sanitizeSheetData } from './update';
 import { cellRegex } from './address';
 
@@ -290,6 +291,7 @@ export function sheetDataFromSheetDoc(doc: SheetDoc): SheetData {
   const columnFormats = readColumnFormats(target.ranges.__columnFormats);
   const rowHeights = readRowHeights(target.ranges.__rowHeights);
   const conditionalFormats = parseConditionalRules(target.ranges.__conditionalFormats);
+  const regions = parseRegions(target.ranges.__regions);
 
   // Strip the internal bags back out so they do not resurface as if they were
   // user-defined named ranges.
@@ -297,6 +299,7 @@ export function sheetDataFromSheetDoc(doc: SheetDoc): SheetData {
   delete userRanges.__columnFormats;
   delete userRanges.__rowHeights;
   delete userRanges.__conditionalFormats;
+  delete userRanges.__regions;
 
   const extraSheets = normalized.sheets.slice(1);
 
@@ -310,6 +313,7 @@ export function sheetDataFromSheetDoc(doc: SheetDoc): SheetData {
     ...(Object.keys(columnWidths).length > 0 ? { columnWidths } : {}),
     ...(rowHeights ? { rowHeights } : {}),
     ...(conditionalFormats ? { conditionalFormats } : {}),
+    ...(regions ? { regions } : {}),
     ...(Object.keys(userRanges).length > 0 ? { ranges: userRanges } : {}),
     ...(typeof target.meta.frozenRows === 'number' && target.meta.frozenRows > 0
       ? { frozenRows: target.meta.frozenRows }
@@ -748,6 +752,7 @@ function sheetDataToSheetDoc(
   delete ranges.__columnFormats;
   delete ranges.__rowHeights;
   delete ranges.__conditionalFormats;
+  delete ranges.__regions;
 
   // Column defaults and row heights have no first-class SheetDoc home yet, so
   // they ride in the same bag under reserved `__`-prefixed keys.
@@ -763,6 +768,14 @@ function sheetDataToSheetDoc(
   if (sheet.conditionalFormats && sheet.conditionalFormats.length > 0) {
     ranges.__conditionalFormats = Object.fromEntries(
       sheet.conditionalFormats.map((rule, index) => [String(index), rule as unknown as Record<string, unknown>])
+    );
+  }
+  // Regions ride the same reserved-prefix convention, and for the same reason:
+  // the bag holds objects, so a list travels as an index-keyed map. Order is
+  // preserved because it is precedence — a later region layers over an earlier.
+  if (sheet.regions && sheet.regions.length > 0) {
+    ranges.__regions = Object.fromEntries(
+      sheet.regions.map((region, index) => [String(index), region as unknown as Record<string, unknown>])
     );
   }
 

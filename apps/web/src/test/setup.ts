@@ -19,6 +19,11 @@ vi.mock('next/navigation', () => ({
   })),
   usePathname: vi.fn(() => '/'),
   useSearchParams: vi.fn(() => new URLSearchParams()),
+  // Route params default to empty rather than being absent: a component that
+  // reads them is a plain consumer of this module, and leaving the hook
+  // undefined here turns "this test doesn't care about the route" into a
+  // TypeError thrown from any ancestor that happens to render one.
+  useParams: vi.fn(() => ({})),
 }))
 
 // jsdom does not implement ResizeObserver or IntersectionObserver.

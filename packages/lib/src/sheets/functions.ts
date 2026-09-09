@@ -93,6 +93,69 @@ export function formatDisplayValue(value: SheetPrimitive): string {
 /**
  * Evaluate a function call
  */
+/**
+ * Thrown for a function name this build does not implement.
+ *
+ * A type rather than a message, because a caller needs to tell "I do not know
+ * this function" apart from "I know it and you called it wrong", and matching
+ * on prose is how that distinction rots. Still an `Error` with the same text,
+ * so every existing catch behaves exactly as before.
+ */
+export class FunctionArityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FunctionArityError';
+  }
+}
+
+export class UnsupportedFunctionError extends Error {
+  constructor(readonly functionName: string) {
+    super(`Unsupported function ${functionName}`);
+    this.name = 'UnsupportedFunctionError';
+  }
+}
+
+/**
+ * Whether this build implements a function, asked of the dispatch itself.
+ *
+ * The alternative is a list of names beside the switch, which is a second copy
+ * free to drift the first time someone adds a function and forgets it — the
+ * exact failure the switch would then hide. Probing costs one call of a pure
+ * function with no arguments: a name that is implemented either returns
+ * something or complains about its arguments, and only an unimplemented one
+ * raises `UnsupportedFunctionError`.
+ */
+export function isSupportedFunction(name: string): boolean {
+  try {
+    evaluateFunction(name, [], () => '');
+    return true;
+  } catch (error) {
+    return !(error instanceof UnsupportedFunctionError);
+  }
+}
+
+/**
+ * Whether a call of `argCount` arguments is one this build can evaluate.
+ *
+ * The same probe, one question further on, and it needs `FunctionArityError` to
+ * exist for the same reason `isSupportedFunction` needs its own type: the
+ * arguments are stand-ins, so a function that dislikes their VALUES will throw
+ * too, and only a typed error separates "you gave me the wrong number of
+ * arguments" from "I cannot work with a 1 there". Anything but the two typed
+ * errors means the shape of the call was fine.
+ */
+export function isValidCall(name: string, argCount: number): boolean {
+  const argument: ASTNode = { type: 'NumberLiteral', value: 1 };
+  const args = Array.from({ length: argCount }, () => argument);
+
+  try {
+    evaluateFunction(name, args, () => 1);
+    return true;
+  } catch (error) {
+    return !(error instanceof UnsupportedFunctionError) && !(error instanceof FunctionArityError);
+  }
+}
+
 export function evaluateFunction(
   name: string,
   args: ASTNode[],
@@ -104,7 +167,7 @@ export function evaluateFunction(
   switch (upperName) {
     case 'IFERROR': {
       if (args.length < 2) {
-        throw new Error('IFERROR expects at least two arguments');
+        throw new FunctionArityError('IFERROR expects at least two arguments');
       }
       try {
         return flattenValue(evaluateNode(args[0]))[0];
@@ -168,13 +231,13 @@ export function evaluateFunction(
     }
     case 'ABS': {
       if (values.length !== 1) {
-        throw new Error('ABS expects exactly one argument');
+        throw new FunctionArityError('ABS expects exactly one argument');
       }
       return Math.abs(coerceNumber(values[0]));
     }
     case 'ROUND': {
       if (values.length === 0) {
-        throw new Error('ROUND expects at least one argument');
+        throw new FunctionArityError('ROUND expects at least one argument');
       }
       const value = coerceNumber(values[0]);
       const precision = values.length > 1 ? coerceNumber(values[1]) : 0;
@@ -183,7 +246,7 @@ export function evaluateFunction(
     }
     case 'FLOOR': {
       if (values.length === 0) {
-        throw new Error('FLOOR expects at least one argument');
+        throw new FunctionArityError('FLOOR expects at least one argument');
       }
       const value = coerceNumber(values[0]);
       const significance = values.length > 1 ? Math.abs(coerceNumber(values[1])) : 1;
@@ -194,7 +257,7 @@ export function evaluateFunction(
     }
     case 'CEILING': {
       if (values.length === 0) {
-        throw new Error('CEILING expects at least one argument');
+        throw new FunctionArityError('CEILING expects at least one argument');
       }
       const value = coerceNumber(values[0]);
       const significance = values.length > 1 ? Math.abs(coerceNumber(values[1])) : 1;
@@ -205,7 +268,7 @@ export function evaluateFunction(
     }
     case 'IF': {
       if (args.length < 2) {
-        throw new Error('IF expects at least two arguments');
+        throw new FunctionArityError('IF expects at least two arguments');
       }
       const conditionValue = flattenValue(evaluateNode(args[0]))[0];
       const condition = toBoolean(conditionValue);
@@ -224,31 +287,31 @@ export function evaluateFunction(
     // String functions
     case 'UPPER': {
       if (values.length !== 1) {
-        throw new Error('UPPER expects exactly one argument');
+        throw new FunctionArityError('UPPER expects exactly one argument');
       }
       return String(values[0]).toUpperCase();
     }
     case 'LOWER': {
       if (values.length !== 1) {
-        throw new Error('LOWER expects exactly one argument');
+        throw new FunctionArityError('LOWER expects exactly one argument');
       }
       return String(values[0]).toLowerCase();
     }
     case 'TRIM': {
       if (values.length !== 1) {
-        throw new Error('TRIM expects exactly one argument');
+        throw new FunctionArityError('TRIM expects exactly one argument');
       }
       return String(values[0]).trim();
     }
     case 'LEN': {
       if (values.length !== 1) {
-        throw new Error('LEN expects exactly one argument');
+        throw new FunctionArityError('LEN expects exactly one argument');
       }
       return String(values[0]).length;
     }
     case 'LEFT': {
       if (values.length < 1 || values.length > 2) {
-        throw new Error('LEFT expects one or two arguments');
+        throw new FunctionArityError('LEFT expects one or two arguments');
       }
       const text = String(values[0]);
       const numChars = values.length > 1 ? coerceNumber(values[1]) : 1;
@@ -256,7 +319,7 @@ export function evaluateFunction(
     }
     case 'RIGHT': {
       if (values.length < 1 || values.length > 2) {
-        throw new Error('RIGHT expects one or two arguments');
+        throw new FunctionArityError('RIGHT expects one or two arguments');
       }
       const text = String(values[0]);
       const numChars = values.length > 1 ? coerceNumber(values[1]) : 1;
@@ -265,7 +328,7 @@ export function evaluateFunction(
     }
     case 'MID': {
       if (values.length !== 3) {
-        throw new Error('MID expects exactly three arguments');
+        throw new FunctionArityError('MID expects exactly three arguments');
       }
       const text = String(values[0]);
       const startNum = Math.max(1, Math.floor(coerceNumber(values[1])));
@@ -274,7 +337,7 @@ export function evaluateFunction(
     }
     case 'SUBSTITUTE': {
       if (values.length < 3 || values.length > 4) {
-        throw new Error('SUBSTITUTE expects three or four arguments');
+        throw new FunctionArityError('SUBSTITUTE expects three or four arguments');
       }
       const text = String(values[0]);
       const oldText = String(values[1]);
@@ -294,7 +357,7 @@ export function evaluateFunction(
     }
     case 'REPT': {
       if (values.length !== 2) {
-        throw new Error('REPT expects exactly two arguments');
+        throw new FunctionArityError('REPT expects exactly two arguments');
       }
       const text = String(values[0]);
       const times = Math.max(0, Math.floor(coerceNumber(values[1])));
@@ -305,7 +368,7 @@ export function evaluateFunction(
     }
     case 'FIND': {
       if (values.length < 2 || values.length > 3) {
-        throw new Error('FIND expects two or three arguments');
+        throw new FunctionArityError('FIND expects two or three arguments');
       }
       const findText = String(values[0]);
       const withinText = String(values[1]);
@@ -318,7 +381,7 @@ export function evaluateFunction(
     }
     case 'SEARCH': {
       if (values.length < 2 || values.length > 3) {
-        throw new Error('SEARCH expects two or three arguments');
+        throw new FunctionArityError('SEARCH expects two or three arguments');
       }
       const findText = String(values[0]).toLowerCase();
       const withinText = String(values[1]).toLowerCase();
@@ -339,7 +402,7 @@ export function evaluateFunction(
     }
     case 'YEAR': {
       if (values.length !== 1) {
-        throw new Error('YEAR expects exactly one argument');
+        throw new FunctionArityError('YEAR expects exactly one argument');
       }
       const date = new Date(String(values[0]));
       if (isNaN(date.getTime())) {
@@ -349,7 +412,7 @@ export function evaluateFunction(
     }
     case 'MONTH': {
       if (values.length !== 1) {
-        throw new Error('MONTH expects exactly one argument');
+        throw new FunctionArityError('MONTH expects exactly one argument');
       }
       const date = new Date(String(values[0]));
       if (isNaN(date.getTime())) {
@@ -359,7 +422,7 @@ export function evaluateFunction(
     }
     case 'DAY': {
       if (values.length !== 1) {
-        throw new Error('DAY expects exactly one argument');
+        throw new FunctionArityError('DAY expects exactly one argument');
       }
       const date = new Date(String(values[0]));
       if (isNaN(date.getTime())) {
@@ -370,44 +433,44 @@ export function evaluateFunction(
     // Logical functions
     case 'AND': {
       if (values.length === 0) {
-        throw new Error('AND expects at least one argument');
+        throw new FunctionArityError('AND expects at least one argument');
       }
       return values.every((v) => toBoolean(v));
     }
     case 'OR': {
       if (values.length === 0) {
-        throw new Error('OR expects at least one argument');
+        throw new FunctionArityError('OR expects at least one argument');
       }
       return values.some((v) => toBoolean(v));
     }
     case 'NOT': {
       if (values.length !== 1) {
-        throw new Error('NOT expects exactly one argument');
+        throw new FunctionArityError('NOT expects exactly one argument');
       }
       return !toBoolean(values[0]);
     }
     case 'ISBLANK': {
       if (values.length !== 1) {
-        throw new Error('ISBLANK expects exactly one argument');
+        throw new FunctionArityError('ISBLANK expects exactly one argument');
       }
       return values[0] === '' || values[0] === null || values[0] === undefined;
     }
     case 'ISNUMBER': {
       if (values.length !== 1) {
-        throw new Error('ISNUMBER expects exactly one argument');
+        throw new FunctionArityError('ISNUMBER expects exactly one argument');
       }
       return typeof values[0] === 'number' && Number.isFinite(values[0]);
     }
     case 'ISTEXT': {
       if (values.length !== 1) {
-        throw new Error('ISTEXT expects exactly one argument');
+        throw new FunctionArityError('ISTEXT expects exactly one argument');
       }
       return typeof values[0] === 'string' && values[0] !== '';
     }
     // Math functions
     case 'SQRT': {
       if (values.length !== 1) {
-        throw new Error('SQRT expects exactly one argument');
+        throw new FunctionArityError('SQRT expects exactly one argument');
       }
       const num = coerceNumber(values[0]);
       if (num < 0) {
@@ -418,13 +481,13 @@ export function evaluateFunction(
     case 'POWER':
     case 'POW': {
       if (values.length !== 2) {
-        throw new Error('POWER expects exactly two arguments');
+        throw new FunctionArityError('POWER expects exactly two arguments');
       }
       return Math.pow(coerceNumber(values[0]), coerceNumber(values[1]));
     }
     case 'MOD': {
       if (values.length !== 2) {
-        throw new Error('MOD expects exactly two arguments');
+        throw new FunctionArityError('MOD expects exactly two arguments');
       }
       const divisor = coerceNumber(values[1]);
       if (divisor === 0) {
@@ -434,13 +497,13 @@ export function evaluateFunction(
     }
     case 'INT': {
       if (values.length !== 1) {
-        throw new Error('INT expects exactly one argument');
+        throw new FunctionArityError('INT expects exactly one argument');
       }
       return Math.floor(coerceNumber(values[0]));
     }
     case 'SIGN': {
       if (values.length !== 1) {
-        throw new Error('SIGN expects exactly one argument');
+        throw new FunctionArityError('SIGN expects exactly one argument');
       }
       return Math.sign(coerceNumber(values[0]));
     }
@@ -452,7 +515,7 @@ export function evaluateFunction(
     }
     case 'RANDBETWEEN': {
       if (values.length !== 2) {
-        throw new Error('RANDBETWEEN expects exactly two arguments');
+        throw new FunctionArityError('RANDBETWEEN expects exactly two arguments');
       }
       const bottom = Math.floor(coerceNumber(values[0]));
       const top = Math.floor(coerceNumber(values[1]));
@@ -462,6 +525,6 @@ export function evaluateFunction(
       return Math.floor(Math.random() * (top - bottom + 1)) + bottom;
     }
     default:
-      throw new Error(`Unsupported function ${upperName}`);
+      throw new UnsupportedFunctionError(upperName);
   }
 }

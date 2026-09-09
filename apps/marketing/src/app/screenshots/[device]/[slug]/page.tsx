@@ -1,9 +1,9 @@
 import { notFound } from "next/navigation";
 import { StoreScreenshot } from "@/components/StoreScreenshot";
-import { DEVICES, SHOTS, type ShotDevice } from "@/lib/app-store-shots";
+import { DEVICES, SHOTS, shotsFor, type ShotDevice } from "@/lib/app-store-shots";
 
 export function generateStaticParams() {
-  return DEVICES.flatMap((device) => SHOTS.map((shot) => ({ device, slug: shot.slug })));
+  return DEVICES.flatMap((device) => shotsFor(device).map((shot) => ({ device, slug: shot.slug })));
 }
 
 export default async function ScreenshotRoute({
