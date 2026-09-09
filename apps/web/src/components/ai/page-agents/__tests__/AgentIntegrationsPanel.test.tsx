@@ -27,6 +27,11 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
+vi.mock('@/components/shared/PageWebhooksDialog', () => ({
+  PageWebhooksDialog: ({ open, pageId, pageType }: { open: boolean; pageId: string; pageType: string }) =>
+    open ? <div data-testid="webhooks-dialog" data-page-id={pageId} data-page-type={pageType} /> : null,
+}));
+
 import { useAgentGrants, useUserConnections, useDriveConnections } from '@/hooks/useIntegrations';
 
 // Fixtures
@@ -617,5 +622,33 @@ describe('AgentIntegrationsPanel bundle presets', () => {
     const summary = screen.getByText(/this agent can use:/i);
     expect(summary).toHaveTextContent('list_repos');
     expect(summary).not.toHaveTextContent('create_issue');
+  });
+
+  describe('incoming webhooks', () => {
+    // Re-homed from the AI_CHAT page's header, which was removed for carrying a
+    // duplicate copy of the pane bar's Chat/History/Settings tabs. An external
+    // service calling this agent is an integration, so this is where it lives —
+    // which also gives the agents console a webhooks entry point it never had.
+    it('opens the webhooks dialog for this agent', async () => {
+      mockHooksDefault({});
+      render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+      expect(screen.queryByTestId('webhooks-dialog')).toBeNull();
+      await userEvent.click(screen.getByRole('button', { name: /manage webhooks/i }));
+
+      const dialog = screen.getByTestId('webhooks-dialog');
+      expect(dialog).toHaveAttribute('data-page-id', 'agent-1');
+      expect(dialog).toHaveAttribute('data-page-type', 'AI_CHAT');
+    });
+
+    it('does not submit the settings form it renders inside', () => {
+      // This panel is rendered inside PageAgentSettingsTab's <form>, where a
+      // typeless button defaults to submit — clicking it would save the whole
+      // agent config on the way to opening a dialog.
+      mockHooksDefault({});
+      render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+      expect(screen.getByRole('button', { name: /manage webhooks/i })).toHaveAttribute('type', 'button');
+    });
   });
 });

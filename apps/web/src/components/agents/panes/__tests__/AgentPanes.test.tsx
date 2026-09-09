@@ -1465,6 +1465,30 @@ describe('AgentPanes — the pane bar', () => {
     expect(await screen.findByRole('tab', { name: /history/i })).toBeDefined();
     expect(screen.queryByRole('tab', { name: /settings/i })).toBeNull();
   });
+
+  it('a PAGE-hosted pane bar cross-links to the console for its OWN conversation', async () => {
+    // The AI_CHAT page has no header any more, so this link lives here. It is
+    // per-pane, not page-wide: a split showing two different threads gives two
+    // different links, which one page-level link could never do.
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    renderPanes({ chatContext: 'page' });
+
+    await screen.findByTestId('pane-chat');
+    expect(await screen.findByLabelText('Open in Agents')).toHaveAttribute(
+      'href',
+      '/dashboard/drive-1/agents?workspace=ses-1&c=conv-1&agent=agent-1',
+    );
+  });
+
+  it('the console does not cross-link to itself', async () => {
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    renderPanes();
+
+    await screen.findByTestId('pane-chat');
+    expect(screen.queryByLabelText('Open in Agents')).toBeNull();
+  });
 });
 
 describe('AgentPanes — a History delete', () => {

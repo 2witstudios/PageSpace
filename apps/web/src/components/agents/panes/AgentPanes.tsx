@@ -46,7 +46,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createId } from '@paralleldrive/cuid2';
-import { Check, History, Loader2, MessageSquare, Save, Settings } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { useSWRConfig } from 'swr';
 import type { Cache } from 'swr';
@@ -73,12 +73,20 @@ import { useAgentConfig } from '@/lib/ai/shared/hooks/useAgentConfig';
 import { useAgentSettingsSaveState } from '@/lib/ai/shared/hooks/useAgentSettingsSaveState';
 import { useProviderSettings } from '@/lib/ai/shared/hooks/useProviderSettings';
 import { PageAgentHistoryTab, PageAgentSettingsTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
-import { cn } from '@/lib/utils';
+import { buildAgentSelectionUrl } from '@/lib/agents/agent-selection';
 import EndSessionDialog from '../EndSessionDialog';
 import { useResolvedAgent } from '../useResolvedAgent';
 import { useSessionRecord } from '../useSessionRecord';
 import SessionPanes from './SessionPanes';
-import PaneBar, { PaneNewConversationAction, PaneSessionIdentity, PaneSplitCloseActions } from './PaneBar';
+import PaneBar, {
+  PaneChatTabStrip,
+  PaneNewConversationAction,
+  PaneOpenInAgentsAction,
+  PaneSettingsSaveAction,
+  PaneSessionIdentity,
+  PaneSplitCloseActions,
+  type PaneChatTab,
+} from './PaneBar';
 import PanePicker, { type PickableAgent, type ReattachableShell } from './PanePicker';
 import { resolvePaneSurface } from './pane-surface';
 import { selectPaneAgent } from './select-pane-agent';
@@ -1630,8 +1638,6 @@ export default function AgentPanes({
   );
 }
 
-type PaneChatTab = 'chat' | 'history' | 'settings';
-
 /**
  * A chat pane, in full: the bar identity (AISelector + Chat/History/Settings tab
  * strip) AND the body those tabs switch between. One component, not two, because
@@ -1642,10 +1648,12 @@ type PaneChatTab = 'chat' | 'history' | 'settings';
  * out for this one kind's own hooks.
  *
  * History and Settings reuse the SAME hooks (`useConversations`,
- * `useAgentConfig`) the page's own `AgentPageView` tabs use — the whole point
- * being that a pane and the page view are not two parallel implementations of
+ * `useAgentConfig`) the agent page's session-less chat uses — the whole point
+ * being that a pane and that surface are not two parallel implementations of
  * "this agent's history/settings": they are the same SWR-keyed data, so two
- * panes on the same agent can never silently drift.
+ * panes on the same agent can never silently drift. They also now share the
+ * literal strip (`PaneChatTabStrip`, in PaneBar.tsx): the page's own duplicate
+ * copy of these tabs is gone.
  */
 function ChatPane({
   conversationId,
@@ -1882,41 +1890,25 @@ function ChatPane({
         actions={
           <>
             {activeTab === 'settings' && agentPageId !== null && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  settingsRef.current?.submitForm();
-                }}
-                // Only clickable once there is something to save — also the guard
-                // against clicking before agentConfig arrives.
-                disabled={settingsSaveState !== 'dirty'}
-                // The state change (Saving.../Saved) is the ONLY save
-                // confirmation — there is no toast — so screen readers need this.
-                aria-live="polite"
-                aria-atomic="true"
-                className={cn(
-                  'flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors disabled:pointer-events-none',
-                  settingsSaveState === 'clean' && 'text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50',
-                  settingsSaveState === 'dirty' && 'text-warning hover:bg-warning/10',
-                  settingsSaveState === 'saving' && 'text-warning',
-                  settingsSaveState === 'saved' && 'text-success',
-                )}
-              >
-                {settingsSaveState === 'saving' ? (
-                  <Loader2 className="size-3 animate-spin" aria-hidden="true" />
-                ) : settingsSaveState === 'saved' ? (
-                  <Check className="size-3 animate-in zoom-in-50 fade-in-0 duration-200" aria-hidden="true" />
-                ) : (
-                  <span className="relative inline-flex">
-                    <Save className="size-3" aria-hidden="true" />
-                    {settingsSaveState === 'dirty' && (
-                      <span aria-hidden="true" className="absolute -right-0.5 -top-0.5 size-1 animate-pulse rounded-full bg-warning" />
-                    )}
-                  </span>
-                )}
-                {settingsSaveState === 'saved' ? 'Saved' : 'Save'}
-              </button>
+              <PaneSettingsSaveAction
+                saveState={settingsSaveState}
+                onSave={() => settingsRef.current?.submitForm()}
+              />
+            )}
+            {chatContext === 'page' && (
+              // Page-hosted only: inside the console this would link to the
+              // surface the user is already looking at. It replaced the AI_CHAT
+              // page's own header link when that header was removed — the pane
+              // bar is the one place a pane's controls live now. Per-pane, so a
+              // split showing two threads gives two correct links.
+              <PaneOpenInAgentsAction
+                href={buildAgentSelectionUrl({
+                  driveId,
+                  sessionId,
+                  agentId: agentPageId,
+                  conversationId,
+                })}
+              />
             )}
             <PaneNewConversationAction
               disabled={disabledNewConversation}
@@ -1991,51 +1983,6 @@ function ChatPane({
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-/**
- * The tab strip itself — icon-only (a pane bar is 30px tall, no room for
- * `AgentPageView`'s spacious text pills), tooltipped/aria-labeled for the text a
- * mouse-hover or screen reader still needs.
- */
-function PaneChatTabStrip({
-  activeTab,
-  onSelectTab,
-  showSettings,
-  agentTitle,
-}: {
-  activeTab: PaneChatTab;
-  onSelectTab: (tab: PaneChatTab) => void;
-  showSettings: boolean;
-  agentTitle: string;
-}) {
-  const tabButton = (tab: PaneChatTab, label: string, Icon: typeof MessageSquare) => (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={activeTab === tab}
-      aria-label={label}
-      title={label}
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelectTab(tab);
-      }}
-      className={cn(
-        'flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground',
-        activeTab === tab && 'bg-primary-soft text-foreground',
-      )}
-    >
-      <Icon className="size-3" aria-hidden="true" />
-    </button>
-  );
-
-  return (
-    <div role="tablist" className="flex shrink-0 items-center gap-0.5">
-      {tabButton('chat', 'Chat', MessageSquare)}
-      {tabButton('history', 'History', History)}
-      {showSettings && tabButton('settings', `${agentTitle} settings`, Settings)}
     </div>
   );
 }

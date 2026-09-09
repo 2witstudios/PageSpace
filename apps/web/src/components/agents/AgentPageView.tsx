@@ -1,55 +1,47 @@
 'use client';
 
 /**
- * AgentPageView — the drive AI_CHAT page, restored to `AiChatView`'s shape.
+ * AgentPageView — the drive AI_CHAT page.
  *
- * **Chat | History | Settings as real tabs** (`grid grid-cols-3 max-w-lg`
- * pills with icons, in the `p-4 border-b` header block — the same `Tabs`
- * defaults every other tabbed surface in the app uses), History as a
- * FULL-HEIGHT tab (`PageAgentHistoryTab` is written `h-full` + virtualized —
- * a popover gave it no height to resolve against), and Save pinned in the
- * header row beside the tabs.
+ * **This page has no chrome of its own.** It used to wear a `p-4` header with
+ * Chat | History | Settings as text pills, a Save button, a webhooks button and
+ * an "Open in Agents" link — and then mount the pane grid inside its own Chat
+ * tab, where the host pane's bar carried a SECOND Chat/History/Settings strip
+ * for the very same conversation. Two tab sets, one conversation. The header is
+ * gone; the pane bar is the only bar. Its former occupants moved to where they
+ * belong: webhooks into the agent's own Settings → Integrations, "Open in
+ * Agents" into the pane bar beside the pane's other controls, Save into the
+ * pane bar it already existed in.
  *
- * **The one addition over the old page: the Chat tab hosts the PANE GRID.**
+ * That leaves this component as a resolver, not a layout: it decides WHICH chat
+ * surface a conversation gets, and owns the conversation-replacement plumbing
+ * (mint, delete, close) that both surfaces share.
+ *
  * A conversation born into a session renders `AgentPanes` — split-capable,
- * every pane sharing the session's ONE sandbox by construction. Sessions are
- * capability-shaped (they own sandboxes), so:
- * - session users (the same admin gate every session surface uses) get new
- *   conversations born WITH a session, and the grid;
- * - everyone else gets the plain chat, exactly the pre-session page.
- * A pre-session conversation (sessionId null) also renders plain — binding is
- * set at creation and permanent, so an old thread cannot join a workspace
- * (that would be a rebind; the model's escape hatch is forking, later).
+ * every pane sharing the session's ONE sandbox by construction, every pane
+ * wearing its own bar. Everyone else gets the plain chat, which wears the SAME
+ * bar with no grid behind it — tab strip included, so History and Settings are
+ * reachable there too. Binding is set at creation and permanent, so a
+ * pre-session conversation (sessionId null) cannot join a workspace (that would
+ * be a rebind; the model's escape hatch is forking, later) — which is why the
+ * plain branch is not a degraded fallback but a permanent home for most of
+ * history.
  *
  * There is NO sandbox chrome here: no status chip, no Add-shell. Provisioning
  * is lazy and automatic (first tool call / shell open), and shells live in
  * panes, opened from the pane picker like everywhere else.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import {
-  AlertCircle,
-  Check,
-  ExternalLink,
-  History,
-  Loader2,
-  MessageSquare,
-  Save,
-  Settings,
-  Webhook,
-} from 'lucide-react';
+import { AlertCircle, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { mutate } from 'swr';
-import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   PageAgentSettingsTab,
   PageAgentHistoryTab,
   type PageAgentSettingsTabRef,
 } from '@/components/ai/page-agents';
-import { PageWebhooksDialog } from '@/components/shared/PageWebhooksDialog';
 import { useProviderSettings } from '@/lib/ai/shared/hooks/useProviderSettings';
 import { useAgentSettingsSaveState } from '@/lib/ai/shared/hooks/useAgentSettingsSaveState';
 import { useConversations } from '@/lib/ai/shared/hooks/useConversations';
@@ -69,7 +61,14 @@ import { useResolvedAgent } from './useResolvedAgent';
 import { useSessionRecord } from './useSessionRecord';
 import SessionChat from './chat/SessionChat';
 import AgentPanes from './panes/AgentPanes';
-import PaneBar, { PaneNewConversationAction, PaneSessionIdentity } from './panes/PaneBar';
+import PaneBar, {
+  PaneChatTabStrip,
+  PaneNewConversationAction,
+  PaneOpenInAgentsAction,
+  PaneSettingsSaveAction,
+  PaneSessionIdentity,
+  type PaneChatTab,
+} from './panes/PaneBar';
 import { agentWorkspacesKey, isAgentWorkspacesKey, type SessionListEntry } from './panes/workspace-conversations';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import type { TreePage } from '@/hooks/usePageTree';
@@ -146,38 +145,20 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   const { data: sessionData } = useSessionRecord(current?.sessionId ?? null);
   const panesDriveId = sessionData?.session ? sessionData.session.driveId : page.driveId;
 
-  // `?tab=` deep-links here (the agents console's per-pane Settings link, via
-  // `/p/[pageId]`, which forwards the query string verbatim). Seeded once at
-  // mount (a lazy initializer, so a fresh navigation lands on the right tab
-  // with no flash of "chat" first) AND re-synced by the effect below on every
-  // subsequent `searchParams` change: clicking that link while THIS SAME
-  // `AgentPageView` instance is already mounted — its own Chat tab hosts a
-  // pane for its own agent, so the pane bar's Settings link can point right
-  // back at the page it's already showing — is a query-only navigation Next
-  // does not remount for, so a mount-only read would silently no-op (review
-  // finding — chatgpt-codex-connector on PR #2296).
-  const [activeTab, setActiveTab] = useState<string>(() => {
-    const tab = searchParams.get('tab');
-    return tab === 'history' || tab === 'settings' ? tab : 'chat';
-  });
-
-  useEffect(() => {
-    const tab = searchParams.get('tab');
-    if (tab !== 'history' && tab !== 'settings') return;
-    setActiveTab(tab);
-    const url = new URL(window.location.href);
-    url.searchParams.delete('tab');
-    window.history.replaceState({}, '', url.toString());
-  }, [searchParams]);
-  const [webhooksOpen, setWebhooksOpen] = useState(false);
+  // Chat | History | Settings for the SESSION-LESS branch only. A session-bound
+  // conversation renders the pane grid, and every pane there carries its own
+  // copy of this strip in its own bar — which is why this page no longer has a
+  // header of its own: two tab sets addressing the same conversation was the
+  // duplicate chrome this state used to feed.
+  const [activeTab, setActiveTab] = useState<PaneChatTab>('chat');
   // SWR-backed and keyed by `page.id` — shared with every pane showing this
   // agent's Settings tab (see `useAgentConfig`'s own doc), not a private
   // per-instance fetch.
   const { config: agentConfig, setConfig: setAgentConfig, revalidate: revalidateAgentConfig } = useAgentConfig(page.id);
-  // `activeTab` can seed straight to 'settings' from a `?tab=settings` URL
-  // (see the effect above), so the Settings tab — and this Save button —
-  // can be visible before `agentConfig` has resolved. Same guard AgentPanes
-  // passes for the same reason (review finding — coderabbitai on this PR).
+  // `isConfigLoaded` matters because the Settings tab registers `submitForm`
+  // before its own config-loaded check returns, and its form defaults contain
+  // an EMPTY prompt/tool list — so Save must stay inert until real config has
+  // loaded and been edited. Same guard AgentPanes passes for the same reason.
   const {
     saveState: settingsSaveState,
     setIsSaving: setIsSettingsSaving,
@@ -538,248 +519,163 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   }
 
   return (
-    <div data-testid="agent-page-view" className="flex h-full flex-col">
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex h-full flex-col gap-0">
-        <div className="border-b border-[var(--separator)] p-4">
-          <div className="flex items-center justify-between">
-            <TabsList className="grid max-w-lg grid-cols-3">
-              <TabsTrigger value="chat" className="flex items-center space-x-2">
-                <MessageSquare className="h-4 w-4" />
-                <span className="hidden sm:inline">Chat</span>
-              </TabsTrigger>
-              <TabsTrigger value="history" className="flex items-center space-x-2">
-                <History className="h-4 w-4" />
-                <span className="hidden sm:inline">History</span>
-              </TabsTrigger>
-              <TabsTrigger value="settings" className="flex items-center space-x-2">
-                <Settings className="h-4 w-4" />
-                <span className="hidden sm:inline">Settings</span>
-              </TabsTrigger>
-            </TabsList>
-
-            <div className="flex items-center gap-3">
-              {activeTab === 'chat' && canUseSessions && (
-                <Link
-                  href={openInAgentsHref}
-                  className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                >
-                  <ExternalLink className="size-3.5" aria-hidden="true" />
-                  Open in Agents
-                </Link>
-              )}
-
-              {activeTab === 'settings' && (
-                <Button
-                  type="button"
-                  variant={settingsSaveState === 'clean' ? 'outline' : 'default'}
-                  onClick={() => agentSettingsRef.current?.submitForm()}
-                  disabled={settingsSaveState !== 'dirty'}
-                  // The state change (Saving.../Saved) is now the ONLY save
-                  // confirmation — there's no toast to announce it anymore,
-                  // so screen readers need this to catch it.
-                  aria-live="polite"
-                  aria-atomic="true"
-                  className={cn(
-                    'min-w-[100px] transition-colors sm:min-w-[120px]',
-                    settingsSaveState === 'dirty' &&
-                      'border-warning/40 bg-warning/10 text-warning hover:bg-warning/15',
-                    settingsSaveState === 'saving' && 'border-warning/40 bg-warning/10 text-warning',
-                    settingsSaveState === 'saved' && 'border-success/40 bg-success/10 text-success hover:bg-success/10',
-                  )}
-                >
-                  {settingsSaveState === 'saving' ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin sm:mr-2" aria-hidden="true" />
-                      {/* sr-only below `sm` instead of `hidden` — a `hidden`
-                          span drops out of the a11y tree too, leaving this
-                          icon-only button with no accessible name at all on
-                          mobile (the icons above carry none of their own),
-                          which would make aria-live's announcement above
-                          silent exactly where the removed toast used to
-                          still work. */}
-                      <span className="sr-only sm:not-sr-only sm:inline">Saving...</span>
-                    </>
-                  ) : settingsSaveState === 'saved' ? (
-                    <>
-                      <Check className="h-4 w-4 animate-in zoom-in-50 fade-in-0 duration-200 sm:mr-2" aria-hidden="true" />
-                      <span className="sr-only sm:not-sr-only sm:inline">Saved</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="relative inline-flex sm:mr-2">
-                        <Save className="h-4 w-4" aria-hidden="true" />
-                        {settingsSaveState === 'dirty' && (
-                          <span
-                            aria-hidden="true"
-                            className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-warning"
-                          />
-                        )}
-                      </span>
-                      <span className="sr-only sm:not-sr-only sm:inline">Save Settings</span>
-                    </>
-                  )}
-                </Button>
-              )}
-
-              {/* Deliberately not permission-gated: the dialog itself explains the
-                  owner/admin requirement, so the feature stays discoverable. */}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setWebhooksOpen(true)}
-                title="Incoming Webhooks"
-                aria-label="Incoming Webhooks"
-                className="px-2 text-muted-foreground hover:text-foreground"
-              >
-                <Webhook className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
+    <div data-testid="agent-page-view" className="flex h-full min-h-0 flex-col">
+      {/* No page header, and no page-level tabs. Every chat surface here wears
+          exactly ONE bar — the pane bar — carrying its own Chat/History/Settings
+          strip, its own Save, and its own cross-link to the console. The page
+          used to stack a second, full-size copy of those tabs above the grid,
+          addressing the same conversation the host pane's bar already did. */}
+      {current.sessionId && canUseSessions ? (
+        <AgentPanes
+          key={current.sessionId}
+          sessionId={current.sessionId}
+          driveId={panesDriveId}
+          initialConversation={{
+            conversationId: current.conversationId,
+            agentPageId: page.id,
+            name: 'Conversation',
+          }}
+          chatContext="page"
+          hostConversationId={current.conversationId}
+          isReadOnly={isReadOnly}
+          onSessionEnded={() => void handleCreateNew({ isRecovery: true })}
+          onConversationClosed={handleConversationClosed}
+        />
+      ) : agentLoading ? (
+        <div className="flex h-full items-center justify-center">
+          <Loader2 className="size-4 animate-spin text-muted-foreground" />
         </div>
-
-        {/* Chat Tab — the pane grid for a session-bound conversation. Every
-            authenticated user gets it (only the sandbox/terminal affordance
-            inside the grid is tier-gated); `canUseSessions` here just waits
-            out the hydration window before `user` resolves. */}
-        <TabsContent value="chat" className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden">
-          {current.sessionId && canUseSessions ? (
-            <AgentPanes
-              key={current.sessionId}
-              sessionId={current.sessionId}
-              driveId={panesDriveId}
-              initialConversation={{
-                conversationId: current.conversationId,
-                agentPageId: page.id,
-                name: 'Conversation',
-              }}
-              chatContext="page"
-              hostConversationId={current.conversationId}
-              isReadOnly={isReadOnly}
-              onSessionEnded={() => void handleCreateNew({ isRecovery: true })}
-              onConversationClosed={handleConversationClosed}
-            />
-          ) : agentLoading ? (
-            <div className="flex h-full items-center justify-center">
-              <Loader2 className="size-4 animate-spin text-muted-foreground" />
-            </div>
-          ) : !agent ? (
-            // Loading FINISHED and there is still no agent — SWR stops retrying
-            // after a genuine failure, so a combined guard would leave the user
-            // watching a spinner that never resolves.
-            <div
-              data-testid="agent-page-view-error"
-              role="alert"
-              className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center"
-            >
-              <AlertCircle className="size-5 text-muted-foreground" />
-              <div className="space-y-1">
-                <p className="text-sm font-medium">Couldn&apos;t load this agent</p>
-                <p className="text-xs text-muted-foreground">
-                  {agentError?.message ?? 'The agent could not be found, or you no longer have access to it.'}
-                </p>
-              </div>
-              <Button variant="outline" size="sm" onClick={retryAgent}>
-                Try again
-              </Button>
-            </div>
-          ) : (
-            // A session-less conversation gets no pane GRID — but it wears the
-            // same bar the grid's panes do. Binding is congenital and permanent
-            // (see useResolvedConversation), so which branch the user lands on
-            // is a property of the conversation they cannot see; without this,
-            // the "+ new conversation" the pane bar carries simply vanished on
-            // any older/history thread and the only way to start one was the
-            // History tab. `group/pane` so the bar's actions reveal on hover
-            // exactly as they do in the grid.
-            <div className="group/pane flex h-full min-h-0 flex-col">
-              <PaneBar
-                // No sibling panes here, so there is no focus state to indicate.
-                isActive={false}
-                // The dot reports the CONVERSATION's binding, not this branch's.
-                // Almost always null here — that is what put us in this branch —
-                // but the branch is also where a bound conversation lands when
-                // `canUseSessions` is false, and a hardcoded `false` would then
-                // state something untrue about it.
-                identity={<PaneSessionIdentity name={agent.title} bound={current.sessionId !== null} />}
-                actions={
-                  // Disabled only while a mint is in flight. Deliberately NOT
-                  // gated on `isReadOnly`, which here means "can view, cannot
-                  // edit": the create route gates on `canPrincipalViewPage`
-                  // (api/ai/page-agents/[agentId]/conversations/route.ts), so a
-                  // viewer starting their OWN conversation with someone else's
-                  // agent is a supported act, not one the server will refuse.
-                  // The History tab's button is ungated for the same reason.
-                  <PaneNewConversationAction
-                    disabled={isCreating || blockedByActiveStream}
-                    onCreate={() => void handleCreateNew({ reuseSessionId: current.sessionId })}
-                  />
-                }
-              />
-              <div className="min-h-0 flex-1 overflow-hidden">
-                <SessionChat
-                  sessionId={null}
-                  agent={agent}
-                  conversationId={current.conversationId}
-                  context="page"
-                  isReadOnly={isReadOnly}
+      ) : !agent ? (
+        // Loading FINISHED and there is still no agent — SWR stops retrying
+        // after a genuine failure, so a combined guard would leave the user
+        // watching a spinner that never resolves.
+        <div
+          data-testid="agent-page-view-error"
+          role="alert"
+          className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center"
+        >
+          <AlertCircle className="size-5 text-muted-foreground" />
+          <div className="space-y-1">
+            <p className="text-sm font-medium">Couldn&apos;t load this agent</p>
+            <p className="text-xs text-muted-foreground">
+              {agentError?.message ?? 'The agent could not be found, or you no longer have access to it.'}
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={retryAgent}>
+            Try again
+          </Button>
+        </div>
+      ) : (
+        // A session-less conversation gets no pane GRID — but it wears the
+        // same bar the grid's panes do, tab strip included. Binding is
+        // congenital and permanent (see useResolvedConversation), so which
+        // branch the user lands on is a property of the conversation they
+        // cannot see; without the strip here, History and Settings would be
+        // reachable for a session-bound conversation and unreachable for every
+        // older one. `group/pane` so the bar's actions reveal on hover exactly
+        // as they do in the grid.
+        <div className="group/pane flex h-full min-h-0 flex-col">
+          <PaneBar
+            // No sibling panes here, so there is no focus state to indicate.
+            isActive={false}
+            identity={
+              <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                {/* The dot reports the CONVERSATION's binding, not this branch's.
+                    Almost always null here — that is what put us in this branch —
+                    but the branch is also where a bound conversation lands when
+                    `canUseSessions` is false, and a hardcoded `false` would then
+                    state something untrue about it. */}
+                <PaneSessionIdentity name={agent.title} bound={current.sessionId !== null} />
+                <PaneChatTabStrip
+                  activeTab={activeTab}
+                  onSelectTab={setActiveTab}
+                  // This branch always has a real agent page behind it (the
+                  // `!agent` case returned above), so Settings always applies —
+                  // unlike a grid pane, which can be showing the Assistant.
+                  showSettings
+                  agentTitle={agent.title}
                 />
               </div>
-            </div>
-          )}
-        </TabsContent>
-
-        {/* History Tab — full height; the component is h-full + virtualized. */}
-        <TabsContent value="history" className="mt-0 min-h-0 flex-1 overflow-hidden">
-          <PageAgentHistoryTab
-            conversations={conversations}
-            currentConversationId={current.conversationId}
-            onSelectConversation={handleSelectConversation}
-            // Deliberately NO `reuseSessionId`: History's "New" spawns a
-            // fresh session, and that is a decision, not an oversight — #2263
-            // (point 4) made the DELETE-replacement reuse the session while
-            // leaving this button alone, and a test pins it by name. An
-            // explicit "new conversation" from the history list is read as
-            // asking to leave, where the "+" over a conversation you are
-            // already in is not. (The grid's own History button reuses, so the
-            // two surfaces do differ — worth settling deliberately, not by a
-            // silent change here.)
-            onCreateNew={() => void handleCreateNew()}
-            // The shared handler's refusals, made visible: this button used to
-            // stay enabled while that handler silently returned.
-            createDisabled={isCreating || blockedByActiveStream}
-            onDeleteConversation={(id) => void deleteConversation(id)}
-            onToggleShare={toggleConversationShare}
-            isLoading={isLoadingConversations}
+            }
+            actions={
+              <>
+                {activeTab === 'settings' && (
+                  <PaneSettingsSaveAction
+                    saveState={settingsSaveState}
+                    onSave={() => agentSettingsRef.current?.submitForm()}
+                  />
+                )}
+                {/* Hidden from a signed-out visitor for the same reason it always
+                    was: the console would refuse them. */}
+                {canUseSessions && <PaneOpenInAgentsAction href={openInAgentsHref} />}
+                {/* Disabled only while a mint is in flight. Deliberately NOT
+                    gated on `isReadOnly`, which here means "can view, cannot
+                    edit": the create route gates on `canPrincipalViewPage`
+                    (api/ai/page-agents/[agentId]/conversations/route.ts), so a
+                    viewer starting their OWN conversation with someone else's
+                    agent is a supported act, not one the server will refuse.
+                    The History tab's button is ungated for the same reason. */}
+                <PaneNewConversationAction
+                  disabled={isCreating || blockedByActiveStream}
+                  onCreate={() => void handleCreateNew({ reuseSessionId: current.sessionId })}
+                />
+              </>
+            }
           />
-        </TabsContent>
-
-        {/* Settings Tab — Save lives in the header row, pinned. */}
-        <TabsContent value="settings" className="mt-0 min-h-0 flex-1 overflow-auto">
-          <PageAgentSettingsTab
-            ref={agentSettingsRef}
-            pageId={page.id}
-            driveId={page.driveId}
-            config={agentConfig}
-            onConfigUpdate={setAgentConfig}
-            onConfigRevalidate={revalidateAgentConfig}
-            selectedProvider={selectedProvider}
-            selectedModel={selectedModel}
-            onProviderChange={setSelectedProvider}
-            onModelChange={setSelectedModel}
-            isProviderConfigured={isProviderConfigured}
-            onSavingChange={setIsSettingsSaving}
-            onDirtyChange={setIsSettingsDirty}
-            onSaved={handleSettingsSaved}
-          />
-        </TabsContent>
-      </Tabs>
-
-      <PageWebhooksDialog
-        open={webhooksOpen}
-        onOpenChange={setWebhooksOpen}
-        pageId={page.id}
-        pageType={page.type}
-      />
+          <div className="min-h-0 flex-1 overflow-hidden">
+            {activeTab === 'chat' ? (
+              <SessionChat
+                sessionId={null}
+                agent={agent}
+                conversationId={current.conversationId}
+                context="page"
+                isReadOnly={isReadOnly}
+              />
+            ) : activeTab === 'history' ? (
+              <PageAgentHistoryTab
+                conversations={conversations}
+                currentConversationId={current.conversationId}
+                onSelectConversation={handleSelectConversation}
+                // Deliberately NO `reuseSessionId`: History's "New" spawns a
+                // fresh session, and that is a decision, not an oversight — #2263
+                // (point 4) made the DELETE-replacement reuse the session while
+                // leaving this button alone, and a test pins it by name. An
+                // explicit "new conversation" from the history list is read as
+                // asking to leave, where the "+" over a conversation you are
+                // already in is not. (The grid's own History button reuses, so the
+                // two surfaces do differ — worth settling deliberately, not by a
+                // silent change here.)
+                onCreateNew={() => void handleCreateNew()}
+                // The shared handler's refusals, made visible: this button used to
+                // stay enabled while that handler silently returned.
+                createDisabled={isCreating || blockedByActiveStream}
+                onDeleteConversation={(id) => void deleteConversation(id)}
+                onToggleShare={toggleConversationShare}
+                isLoading={isLoadingConversations}
+              />
+            ) : (
+              <div className="h-full overflow-auto">
+                <PageAgentSettingsTab
+                  ref={agentSettingsRef}
+                  pageId={page.id}
+                  driveId={page.driveId}
+                  config={agentConfig}
+                  onConfigUpdate={setAgentConfig}
+                  onConfigRevalidate={revalidateAgentConfig}
+                  selectedProvider={selectedProvider}
+                  selectedModel={selectedModel}
+                  onProviderChange={setSelectedProvider}
+                  onModelChange={setSelectedModel}
+                  isProviderConfigured={isProviderConfigured}
+                  onSavingChange={setIsSettingsSaving}
+                  onDirtyChange={setIsSettingsDirty}
+                  onSaved={handleSettingsSaved}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
