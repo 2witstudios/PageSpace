@@ -50,6 +50,18 @@ on:
       # `apps/web/src/lib/ai/tools/**`, already listed above.
       - 'packages/lib/src/services/agent-workspaces/**'
       - 'packages/lib/src/agent-workspaces/**'
+      # The local-environment layer (GA wave 3). Its real-Postgres suites
+      # (`grant-audit-store.integration.test.ts` — the invariant-10 join of the
+      # server's grant rows to the daemon's JSONL — and the later CAS suites)
+      # are NOT excluded from @pagespace/lib's default config, so ci.yml's unit
+      # and `test:integration` steps run them too; the `test:db` step below is
+      # the runner that is NAMED, so a later exclude-list edit cannot silently
+      # orphan them. The path filter covers the code under test.
+      - 'packages/lib/src/services/drive-envs/**'
+      - 'packages/lib/src/env-bridge/**'
+      - 'packages/db/src/schema/drive-env-*.ts'
+      - 'apps/web/src/lib/env-bridge/**'
+      - 'apps/web/src/app/api/env-bridge/**'
       - 'apps/web/src/lib/agent-workspaces/**'
       # The published-app hosting layer, same story. Its claim/transition suite
       # (`provisioner-claim.integration.test.ts`) is excluded from
@@ -120,6 +132,18 @@ on:
       # `apps/web/src/lib/ai/tools/**`, already listed above.
       - 'packages/lib/src/services/agent-workspaces/**'
       - 'packages/lib/src/agent-workspaces/**'
+      # The local-environment layer (GA wave 3). Its real-Postgres suites
+      # (`grant-audit-store.integration.test.ts` — the invariant-10 join of the
+      # server's grant rows to the daemon's JSONL — and the later CAS suites)
+      # are NOT excluded from @pagespace/lib's default config, so ci.yml's unit
+      # and `test:integration` steps run them too; the `test:db` step below is
+      # the runner that is NAMED, so a later exclude-list edit cannot silently
+      # orphan them. The path filter covers the code under test.
+      - 'packages/lib/src/services/drive-envs/**'
+      - 'packages/lib/src/env-bridge/**'
+      - 'packages/db/src/schema/drive-env-*.ts'
+      - 'apps/web/src/lib/env-bridge/**'
+      - 'apps/web/src/app/api/env-bridge/**'
       - 'apps/web/src/lib/agent-workspaces/**'
       # The published-app hosting layer, same story. Its claim/transition suite
       # (`provisioner-claim.integration.test.ts`) is excluded from
@@ -229,6 +253,17 @@ jobs:
       # CAS from one that silently matches nothing. This runs them for real.
       - name: Run agent-session store integration tests
         run: bun run --filter '@pagespace/lib' test:db -- src/services/agent-workspaces/__tests__/agent-sessions-store.integration.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
+      # The local-environment grant audit (GA wave 3, invariant 10): the server's
+      # `drive_env_grant_audit` rows must JOIN the daemon's JSONL on grantId, and
+      # the CHECK that ties "no grant id" to "refused" is Postgres's guarantee. A
+      # fake cannot prove a join across two sides; a real table and a fixture in
+      # the daemon's exact line shape can. Named here so it always has a runner.
+      - name: Run local-env grant audit integration tests
+        run: bun run --filter '@pagespace/lib' test:db -- src/services/drive-envs/__tests__/grant-audit-store.integration.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
