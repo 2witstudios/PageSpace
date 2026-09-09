@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Stop reaches the process.** A server-signed `pause` frame (its own signing domain — never
+  confusable with a revoke) makes the daemon SIGKILL every process group it started, drop every
+  request frozen for a click, write `paused:killed:<n>` to the audit log, and answer with a
+  machine-signed `pause_result { envId, pausedAt, killed }`. The socket stays open and the key
+  stays; Resume needs no frame. A pause that fails to verify is dropped and kills nothing.
+- **The daemon is loud when `exec` is allowlisted.** Under `mode: allowlist`, `exec` in `ops`
+  means every command runs without your click. `env connect` and `env policy` now print one
+  line saying so and how to undo it (`remove exec from ops to restore the approval prompt`), and
+  `env connect` audits `policy_warning:exec_allowlisted` once at start. The wave 1 warning about
+  extra principals now comes from the same place, so both surfaces say the same words.
+- **The audit trail has its other half.** Each line in `~/.pagespace/env-audit.jsonl` joins a
+  server-side row under the same `grantId` (the server records what it signs and what it refuses),
+  and the Environment's owner sees that side as the machine's live activity in PageSpace.
+
 - **PageSpace can revoke one remembered approval on your machine — and can never add one.** A
   revoke of a single approval rides the existing signed `revoke` frame with an `approvalId`,
   signed under its own domain by the key this machine pinned at enrolment, so it can never be
