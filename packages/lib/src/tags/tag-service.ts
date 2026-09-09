@@ -521,8 +521,18 @@ export type ReanchorSummary = {
   considered: number;
   /** Anchors whose status or offsets changed and were written back. */
   updated: number;
-  /** Anchors that became 'orphaned' in this sweep. Included in `updated`. */
+  /** Anchors whose status is 'orphaned' after this sweep. */
   orphaned: number;
+  /**
+   * Anchors that became orphaned IN THIS SWEEP — a non-orphaned status going to
+   * 'orphaned'.
+   *
+   * Separate from `orphaned` because an already-orphaned anchor whose quote is
+   * still absent resolves as orphaned again on every subsequent edit. Alerting
+   * on the total would therefore fire on every save, forever, for a page that
+   * did not degrade at all — so callers that log or alert want this one.
+   */
+  newlyOrphaned: number;
   /**
    * Anchors that could not be forward-ported and went through QUOTE REPAIR
    * instead, because their stored hash did not describe `oldContent`.
@@ -616,6 +626,7 @@ export async function reanchorPageTags(
     considered: 0,
     updated: 0,
     orphaned: 0,
+    newlyOrphaned: 0,
     repairedStaleHash: 0,
     repairedFormatFlip: 0,
   };
@@ -706,8 +717,13 @@ export async function reanchorPageTags(
         else summary.repairedStaleHash += 1;
       }
 
+      // `trustRecordedOffsets: false` is the whole point of repairing here. The
+      // hash mismatch is PROOF the offsets describe another revision, and
+      // `positionHolds` would accept a matching slice at those offsets without
+      // consulting prefix or suffix — so with duplicated quote text it would
+      // reattach to the wrong occurrence and store it as 'exact'.
       const resolution = mustRepair
-        ? resolveAnchor(newText, anchor)
+        ? resolveAnchor(newText, anchor, { trustRecordedOffsets: false })
         : portPreparedAnchor(prepared, anchor);
 
       // AnchorResolution is a union: 'orphaned' carries NO offsets, because
@@ -751,7 +767,12 @@ export async function reanchorPageTags(
         .where(eq(contentTags.id, row.id));
 
       summary.updated += 1;
-      if (resolution.status === 'orphaned') summary.orphaned += 1;
+      if (resolution.status === 'orphaned') {
+        summary.orphaned += 1;
+        // A TRANSITION, not a state. `row.anchorStatus` is what this anchor was
+        // before the sweep; only a change into 'orphaned' is new damage.
+        if (row.anchorStatus !== 'orphaned') summary.newlyOrphaned += 1;
+      }
     }
 
     return ok(summary);

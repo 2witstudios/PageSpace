@@ -365,8 +365,12 @@ export async function applyPageMutation({
           //
           // Logged only when something actually degraded, so an ordinary save
           // stays silent.
-          const { repairedStaleHash, repairedFormatFlip, orphaned } = reanchored.data;
-          if (repairedStaleHash > 0 || repairedFormatFlip > 0 || orphaned > 0) {
+          const { repairedStaleHash, repairedFormatFlip, newlyOrphaned } = reanchored.data;
+          // `newlyOrphaned`, NOT `orphaned`. An anchor that is already orphaned
+          // and whose quote is still gone resolves as orphaned again on every
+          // edit, so alerting on the total would warn on every save — every
+          // autosave keystroke — for a page that did not degrade at all.
+          if (repairedStaleHash > 0 || repairedFormatFlip > 0 || newlyOrphaned > 0) {
             loggers.api.warn('Content tag anchors degraded during a page mutation', {
               pageId,
               ...reanchored.data,

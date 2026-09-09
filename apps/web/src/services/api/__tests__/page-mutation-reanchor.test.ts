@@ -21,7 +21,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockReanchor = vi.fn(async () => ({ ok: true as const, data: { considered: 0, updated: 0, orphaned: 0, repairedStaleHash: 0, repairedFormatFlip: 0 } }));
+const mockReanchor = vi.fn(async () => ({ ok: true as const, data: { considered: 0, updated: 0, orphaned: 0, newlyOrphaned: 0, repairedStaleHash: 0, repairedFormatFlip: 0 } }));
 const mockSyncMentions = vi.fn(async () => undefined);
 const mockLogError = vi.fn();
 const mockLogWarn = vi.fn();
@@ -186,7 +186,7 @@ describe('applyPageMutation re-anchors content tags', () => {
     // discarded here, so nothing could tell a degraded page from a healthy one.
     mockReanchor.mockResolvedValueOnce({
       ok: true as const,
-      data: { considered: 3, updated: 3, orphaned: 1, repairedStaleHash: 2, repairedFormatFlip: 0 },
+      data: { considered: 3, updated: 3, orphaned: 1, newlyOrphaned: 1, repairedStaleHash: 2, repairedFormatFlip: 0 },
     } as never);
 
     await applyPageMutation({ ...baseInput, updates: { content: 'degraded edit' } } as never);
@@ -198,5 +198,17 @@ describe('applyPageMutation re-anchors content tags', () => {
     mockLogWarn.mockClear();
     await applyPageMutation({ ...baseInput, updates: { content: 'clean edit' } } as never);
     expect(mockLogWarn, 'an ordinary save must not log').not.toHaveBeenCalled();
+  });
+
+  it('does NOT warn for an anchor that was already orphaned', async () => {
+    // The state repeats on every edit; only the transition is new damage.
+    // Warning on the total would fire on every autosave, forever.
+    mockReanchor.mockResolvedValueOnce({
+      ok: true as const,
+      data: { considered: 1, updated: 0, orphaned: 1, newlyOrphaned: 0, repairedStaleHash: 0, repairedFormatFlip: 0 },
+    } as never);
+
+    await applyPageMutation({ ...baseInput, updates: { content: 'another edit' } } as never);
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 });
