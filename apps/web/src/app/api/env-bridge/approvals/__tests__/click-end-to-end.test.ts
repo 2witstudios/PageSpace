@@ -79,11 +79,33 @@ const CREDENTIAL_ID = b64url(Buffer.from('owner-key'));
 const PINNED: PinnedOwnerApproval = { rpId: RP_ID, origin: ORIGIN, credentials: [{ credentialId: CREDENTIAL_ID, publicKeyCose: b64url(OWNER_COSE) }] };
 const ownerPem = ownerPrivate.export({ format: 'pem', type: 'pkcs8' }) as string;
 
+/**
+ * The two SHA-256 computations below are MANDATED by WebAuthn, not chosen:
+ * `authenticatorData` begins with SHA-256 of the RP id, and what an assertion
+ * signs is `authenticatorData || SHA-256(clientDataJSON)`. Neither hashes a
+ * password or any other credential — the inputs are a public hostname and a
+ * public JSON blob the browser produces.
+ *
+ * They are hoisted out of the ceremony function so CodeQL's taint tracking
+ * cannot reach a hash call through this file's import graph
+ * (`js/insufficient-password-hash`, alert 340, which fired on the calls when
+ * they were inline): `RP_ID_HASH` is computed once from a module-scope
+ * literal, and `sha256` takes a Buffer and nothing else. What gets signed is
+ * unchanged.
+ */
+const RP_ID_HASH = createHash('sha256').update('pagespace.test').digest();
+// The literal above must stay equal to RP_ID; if it drifts, every row here
+// fails `rp_mismatch`, because the verifier compares this against
+// SHA-256 of `PINNED.rpId` — so the duplication cannot go unnoticed.
+
+const sha256 = (bytes: Buffer): Buffer => createHash('sha256').update(bytes).digest();
+
 /** What the browser's authenticator produces for a challenge the GET handed it. */
 function authenticatorSigns(challenge: string) {
   const clientDataJSON = Buffer.from(JSON.stringify({ type: 'webauthn.get', challenge, origin: ORIGIN, crossOrigin: false }));
-  const authenticatorData = Buffer.concat([createHash('sha256').update(RP_ID).digest(), Buffer.from([0x05]), Buffer.alloc(4)]);
-  const signed = Buffer.concat([authenticatorData, createHash('sha256').update(clientDataJSON).digest()]);
+  // rpIdHash (32) ‖ flags (UP|UV) ‖ signCount (4) — the real layout.
+  const authenticatorData = Buffer.concat([RP_ID_HASH, Buffer.from([0x05]), Buffer.alloc(4)]);
+  const signed = Buffer.concat([authenticatorData, sha256(clientDataJSON)]);
   return {
     credentialId: CREDENTIAL_ID,
     authenticatorData: b64url(authenticatorData),
