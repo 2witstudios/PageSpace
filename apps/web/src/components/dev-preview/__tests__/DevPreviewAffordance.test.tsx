@@ -1,9 +1,9 @@
 /**
  * The detection affordance against real hooks and stores: dark ⇒ nothing and
  * NO status fetch; no dev server ⇒ nothing; a recorded one ⇒ one quiet line
- * and a Preview button that opens the pane store — never auto-opens. The
- * manage verdict is the SERVER's, the verb is honest, and the poll respects
- * the caller's disclosure.
+ * and a Preview button that opens THE GRID PANE — never a second surface,
+ * never auto-opened. The manage verdict is the SERVER's, the verb is honest,
+ * and the poll respects the caller's disclosure.
  */
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
@@ -16,10 +16,12 @@ vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
 });
 
 import { DevPreviewAffordance } from '../DevPreviewAffordance';
-import { useDevPreviewPaneStore } from '@/stores/useDevPreviewPaneStore';
+import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import type { DevPreviewStatusDTO } from '@/hooks/dev-preview/useDevPreviewStatus';
 
 const STATUS_PATH = '/api/agent-workspaces/ws1/preview';
+/** The one thing the click must do: open the session's PREVIEW PANE in the grid. */
+const openPorts = vi.fn();
 
 function status(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
   return {
@@ -43,10 +45,10 @@ function status(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
 let capabilityEnabled = true;
 let preview: DevPreviewStatusDTO = status();
 
-function renderAffordance(props: Partial<{ active: boolean }> = {}) {
+function renderAffordance(props: Partial<{ active: boolean; sessionId: string | null }> = {}) {
   return render(
     <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-      <DevPreviewAffordance statusPath={STATUS_PATH} driveId="d1" title="My session" active={props.active} />
+      <DevPreviewAffordance statusPath={STATUS_PATH} sessionId={'sessionId' in props ? props.sessionId! : 'ws1'} active={props.active} />
     </SWRConfig>,
   );
 }
@@ -56,7 +58,8 @@ beforeEach(() => {
   preview = status();
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ enabled: capabilityEnabled }) })));
   mockFetchJSON.mockImplementation(async () => ({ preview }));
-  useDevPreviewPaneStore.setState({ open: null, reloadNonce: 0 });
+  openPorts.mockClear();
+  useAgentWorkspaceStore.setState({ openPorts });
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -81,21 +84,24 @@ describe('DevPreviewAffordance', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  test('a detected dev server: one line naming the port, a Preview button, and NOTHING opens until it is clicked', async () => {
+  test('a detected dev server: one line naming the port, a Preview button, and NOTHING opens until it is clicked — then it is the GRID pane', async () => {
     renderAffordance();
     await screen.findByText('Dev server detected on :5173');
-    expect(useDevPreviewPaneStore.getState().open).toBeNull();
+    expect(openPorts).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
-    expect(useDevPreviewPaneStore.getState().open).toEqual({
-      holder: { kind: 'workspace', id: 'ws1' },
-      driveId: 'd1',
-      statusPath: STATUS_PATH,
-      openPath: '/api/agent-workspaces/ws1/preview/open',
-      title: 'My session',
-    });
-    // Once open, the button reads as such and is inert.
-    await screen.findByRole('button', { name: 'Open' });
-    expect(screen.getByRole('button', { name: 'Open' })).toBeDisabled();
+    // The session's own pane — `openPorts` focuses the one it already has
+    // rather than making a second view of the same preview.
+    expect(openPorts).toHaveBeenCalledWith('ws1');
+  });
+
+  test('with no session to open into (an environment with none running), the line still states what it knows and the action says why it cannot', async () => {
+    renderAffordance({ sessionId: null });
+    await screen.findByText('Dev server detected on :5173');
+    const button = screen.getByRole('button', { name: 'Preview' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('title', expect.stringContaining('Start a session'));
+    fireEvent.click(button);
+    expect(openPorts).not.toHaveBeenCalled();
   });
 
   test('a stopped or blocked preview still gets its honest line (last-known state, never hidden) — and the verb is "Details", not "Preview"', async () => {

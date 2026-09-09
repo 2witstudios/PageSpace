@@ -3,9 +3,24 @@
 /**
  * The detection affordance: one quiet line — "Dev server detected on :5173 —
  * Preview" — that appears in a session's or environment's chrome when the
- * detection pipeline has recorded a dev server there, and opens the preview
- * pane on click. It AUTO-OPENS NOTHING: the pipeline records, this line
- * offers, the user decides.
+ * detection pipeline has recorded a dev server there. It AUTO-OPENS NOTHING:
+ * the pipeline records, this line offers, the user decides.
+ *
+ * Clicking OPENS THE PREVIEW PANE IN THE GRID (`openPorts`) — the same pane
+ * picking a port in the pane picker binds, not a second surface of its own.
+ * One sandbox has one preview, and the grid pane is the copy that persists,
+ * that every viewer of the session sees, and that can sit beside the work it
+ * belongs to; a per-viewer side panel showing the identical frame was two
+ * containers for one thing. `openPorts` focuses the pane when the session
+ * already has one, so this line is a shortcut into that surface and never a
+ * way to make a second.
+ *
+ * `sessionId` is WHICH grid the pane lands in. An ENVIRONMENT's preview is
+ * previewed from one of that environment's sessions (an env-bound session
+ * reads the env's own holder — the status route resolves that), so the caller
+ * passes the session it would open; `null` means there is no grid to open
+ * into yet (an environment with no sessions running), and the line then
+ * states what it knows without offering an action it cannot perform.
  *
  * Rendered from the polled status read (`useDevPreviewStatus`), which the
  * server folds without ever probing the sprite — when the realtime tier has
@@ -20,9 +35,8 @@
  *
  * POLL DISCIPLINE (`useDevPreviewStatus`): polls only while `active` (the
  * caller's disclosure — an expanded env row; the console header is always
- * active while a session is selected), stops after four idle answers until
- * the disclosure toggles, and runs NO timer while the pane is open on this
- * same holder — the pane owns the poll and this line reads the shared cache.
+ * active while a session is selected) and stops after four idle answers until
+ * the disclosure toggles.
  *
  * WHO MAY MANAGE is the server's answer (`preview.canManage`, read live by
  * the pane from the same status), never a prop: the client cannot know the
@@ -34,42 +48,38 @@ import { Globe } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useDevPreviewCapability } from '@/hooks/dev-preview/useDevPreviewCapability';
 import { useDevPreviewStatus } from '@/hooks/dev-preview/useDevPreviewStatus';
-import { useDevPreviewPaneStore } from '@/stores/useDevPreviewPaneStore';
+import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { devPreviewAffordanceText, devPreviewAffordanceVerb, shouldShowDevPreviewAffordance } from './dev-preview-copy';
 
 /** The affordance polls slowly: a dev server coming up is a seconds-scale event, and every tick is a control-plane read. */
 const AFFORDANCE_POLL_MS = 15_000;
 
+/** Why the line offers no action: there is no grid to put the pane in yet. */
+const NO_SESSION_TO_OPEN_IN = 'Start a session in this environment to preview it';
+
 export function DevPreviewAffordance({
   statusPath,
-  driveId,
-  title,
+  sessionId,
   active = true,
   pauseWhenIdle = true,
   className,
 }: {
   /** The reader's status route — session or env. */
   statusPath: string;
-  /** The drive this affordance lives in (null for a global-assistant session) — the pane renders only beside that drive's console. */
-  driveId: string | null;
-  /** The session or environment name, for the pane's chrome. */
-  title: string;
+  /** The session whose grid the preview pane opens in; `null` when there is none. */
+  sessionId: string | null;
   /** The caller's disclosure: poll only while true; a toggle re-arms an idle-paused poll. */
   active?: boolean;
-  /** Stop polling after four idle answers (per-row surfaces); a per-viewer surface with no disclosure passes false. */
+  /** Stop polling after four idle answers (per-row surfaces); a surface with no disclosure passes false. */
   pauseWhenIdle?: boolean;
   className?: string;
 }) {
   const enabled = useDevPreviewCapability();
-  const openPreview = useDevPreviewPaneStore((state) => state.openPreview);
-  const openStatusPath = useDevPreviewPaneStore((state) => state.open?.statusPath ?? null);
-  const isOpen = openStatusPath === statusPath;
-  // One poll per holder: while the pane is open on this holder it owns the timer and this line reads the shared cache.
-  const { preview } = useDevPreviewStatus(statusPath, { enabled: enabled === true, polling: active && !isOpen, pauseWhenIdle, intervalMs: AFFORDANCE_POLL_MS });
+  const openPorts = useAgentWorkspaceStore((state) => state.openPorts);
+  const { preview } = useDevPreviewStatus(statusPath, { enabled: enabled === true, polling: active, pauseWhenIdle, intervalMs: AFFORDANCE_POLL_MS });
 
   if (enabled !== true || !shouldShowDevPreviewAffordance(preview)) return null;
   const text = devPreviewAffordanceText(preview);
-  const openPath = preview.openPath;
   const verb = devPreviewAffordanceVerb(preview);
 
   return (
@@ -78,24 +88,21 @@ export function DevPreviewAffordance({
       <span className="truncate" title={preview.state.message}>
         {text}
       </span>
-      {openPath !== null && (
-        <>
-          <span aria-hidden="true">—</span>
-          <button
-            type="button"
-            className="shrink-0 font-medium text-foreground underline-offset-2 hover:underline disabled:opacity-60"
-            disabled={isOpen}
-            aria-pressed={isOpen}
-            onClick={(event) => {
-              // A row's own click targets (its context menu, its disclosure) must not also fire.
-              event.stopPropagation();
-              openPreview({ holder: preview.holder, driveId, statusPath, openPath, title });
-            }}
-          >
-            {isOpen ? 'Open' : verb}
-          </button>
-        </>
-      )}
+      <span aria-hidden="true">—</span>
+      <button
+        type="button"
+        className="shrink-0 font-medium text-foreground underline-offset-2 hover:underline disabled:opacity-60"
+        disabled={sessionId === null}
+        title={sessionId === null ? NO_SESSION_TO_OPEN_IN : undefined}
+        onClick={(event) => {
+          // A row's own click targets (its context menu, its disclosure) must not also fire.
+          event.stopPropagation();
+          if (sessionId !== null) openPorts(sessionId);
+        }}
+        data-testid="dev-preview-open"
+      >
+        {verb}
+      </button>
     </div>
   );
 }
