@@ -170,6 +170,7 @@ type Segment = { boundary: true } | { boundary: false; text: string; verbatim: b
  */
 export function interWordText(root: Element): string {
   const segments: Segment[] = [];
+  /** Flattens the tree to segments, marking block edges and `<pre>` content. */
   const walk = (node: Node, verbatim: boolean): void => {
     if (node.nodeType === TEXT_NODE) {
       segments.push({ boundary: false, text: node.nodeValue ?? '', verbatim });
@@ -186,6 +187,7 @@ export function interWordText(root: Element): string {
   };
   walk(root, false);
 
+  /** Whether the segment at `index` is the pretty-printer's whitespace rather than the author's. */
   const isFormatting = (index: number): boolean => {
     const segment = segments[index];
     if (segment.boundary || segment.verbatim || /\S/u.test(segment.text)) return false;

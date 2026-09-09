@@ -85,6 +85,7 @@ async function main(): Promise<number> {
   const audit = createAuditAccumulator();
 
   let interrupted = false;
+  /** First Ctrl-C stops after the current batch and still reports; a second exits immediately. */
   const onInterrupt = () => {
     if (interrupted) process.exit(130);
     interrupted = true;

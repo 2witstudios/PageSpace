@@ -174,6 +174,7 @@ function createChainTallies() {
   };
 
   return {
+    /** Folds one page's verdict for this chain into the tallies. */
     record(pageId: string, verdict: ChainResult) {
       if (!verdict.stable) {
         totals.unstable += 1;
@@ -201,6 +202,7 @@ function createChainTallies() {
       }
       for (const key of new Set(verdict.unexpectedAdditions.map(contentFreeKey))) tally(additions, key, pageId);
     },
+    /** This chain's totals and tables, as plain data. */
     snapshot(): ChainTallies {
       return {
         totals: { ...totals },
@@ -236,6 +238,7 @@ export function createAuditAccumulator(): AuditAccumulator {
   };
 
   return {
+    /** One audited html-mode page: both chains, the divergence, and the gate's verdict. */
     recordHtml(pageId, audit) {
       totals.documents += 1;
       totals.audited += 1;
@@ -290,16 +293,19 @@ export function createAuditAccumulator(): AuditAccumulator {
       for (const reason of new Set(audit.gateReasons)) tally(gateReasons, reason, pageId);
     },
 
+    /** A `contentMode='markdown'` page: counted, not audited — it is not HTML yet (Phase K). */
     recordMarkdownMode() {
       totals.documents += 1;
       totals.markdownMode += 1;
     },
 
+    /** A page with no content at all. */
     recordEmpty() {
       totals.documents += 1;
       totals.empty += 1;
     },
 
+    /** Everything the report is formatted from, as plain data. */
     snapshot() {
       return {
         totals: { ...totals },
