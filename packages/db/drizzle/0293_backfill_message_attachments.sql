@@ -2,7 +2,7 @@
 -- columns on channel_messages / direct_messages.
 --
 -- Hand-written on purpose, and kept in its own file: drizzle-kit cannot emit a
--- data backfill, and 0291 is left as pure unedited generator output so each
+-- data backfill, and 0292 is left as pure unedited generator output so each
 -- file has one reviewable provenance story.
 --
 -- The migration runner keys applied migrations BY HASH of the file text, so any
