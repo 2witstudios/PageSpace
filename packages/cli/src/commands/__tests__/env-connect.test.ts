@@ -419,6 +419,17 @@ describe('pagespace env connect <enrollmentId>', () => {
     expect(quiet.auditLines.some((line) => line.includes('policy_warning'))).toBe(false);
   });
 
+  it('A6: given a policy rooted at the home directory, connect prints the root_is_home line AND audits policy_warning:root_is_home — the audit loops over CODES, it does not special-case one', async () => {
+    const h = harness({ policy: JSON.stringify({ mode: 'allowlist', principals: ['u1'], ops: ['fs_read', 'exec'], roots: [HOME], envAllowlist: [] }), probe: { realpath: (path: string) => (path === HOME ? path : null), isSymlink: () => false } });
+    const c = ctx(false);
+    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+    await flush();
+    expect(c.err.text()).toMatch(/covers your whole home directory/);
+    expect(h.auditLines.filter((line) => line.includes('"verdict":"policy_warning:root_is_home"'))).toHaveLength(1);
+    // The pre-existing code is still printed and still audited exactly once.
+    expect(h.auditLines.filter((line) => line.includes('"verdict":"policy_warning:exec_allowlisted"'))).toHaveLength(1);
+  });
+
   it('R7: a server-signed revoke deletes the machine key from the credential store, stops reconnecting, and exits non-zero with a message', async () => {
     const h = harness();
     const c = ctx(false);

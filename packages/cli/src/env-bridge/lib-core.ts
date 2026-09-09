@@ -26,7 +26,7 @@ export { APPROVAL_SCOPES, APPROVALS_FILE_VERSION, DEFAULT_APPROVAL_SCOPE, approv
 export type { ApprovalScope, DurableApproval } from '@pagespace/lib/env-bridge/decide-approval';
 export { parseMachinePolicy } from '@pagespace/lib/env-bridge/policy-types';
 export { policyWarnings } from '@pagespace/lib/env-bridge/policy-warnings';
-export type { PolicyWarning } from '@pagespace/lib/env-bridge/policy-warnings';
+export type { PolicyWarning, PolicyWarningInput, PolicyWarningOptions } from '@pagespace/lib/env-bridge/policy-warnings';
 export type { AdvertisedCapabilities, MachinePolicy, ServerPolicy } from '@pagespace/lib/env-bridge/policy-types';
 export type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
 export { encodeApprovalRevokeForSigning, encodeHelloForSigning, encodeResultForSigning, machineResultBindingId, resultHashForFrame, verifyPause, verifyRevoke } from '@pagespace/lib/env-bridge/machine-signatures';

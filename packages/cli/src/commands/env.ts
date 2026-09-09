@@ -31,7 +31,7 @@ import type { CommandHandler } from '../router/router.js';
 import { generateMachineKeypair, signWithMachineKey } from '../env-bridge/keypair.js';
 import type { GenerateMachineKeypair, SignWithMachineKey } from '../env-bridge/keypair.js';
 import { BridgeTokenError, mintBridgeToken, postJson, refusalOf } from '../env-bridge/token.js';
-import { defaultPolicyPath, openPolicyFile, parseMachinePolicyText, writePolicyFile, type OpenedPolicyFile } from '../env-bridge/policy.js';
+import { defaultPolicyPath, describePolicyWarnings, openPolicyFile, parseMachinePolicyText, writePolicyFile, type OpenedPolicyFile } from '../env-bridge/policy.js';
 import { GRANT_OPS, type GrantOp } from '../env-bridge/lib-core.js';
 
 type Fetch = typeof globalThis.fetch;
@@ -275,6 +275,16 @@ export function createEnvEnrollHandler(deps: EnvEnrollHandlerDeps): CommandHandl
       } else if (policy?.kept) {
         ctx.stdout.write(`Kept the existing policy at ${policy.path}.\n`);
         if (policy.diff !== null) ctx.stdout.write(`Enroll would have written (- existing, + scaffold):\n${policy.diff}\n`);
+      }
+    }
+    // A6: the scaffolded root is the directory `enroll` ran in, so enrolling
+    // from $HOME scopes an agent to ~/.ssh and every project at once. Say it
+    // HERE — this is the one moment the owner is at the keyboard and can still
+    // choose differently — in the same words `connect` and `policy` use.
+    if (policy?.scaffolded === true) {
+      const scaffolded = parseMachinePolicyText(scaffoldedPolicy({ ownerId: ownerId ?? '', root: deps.cwd(), ops: policy.ops }));
+      if (scaffolded !== null) {
+        for (const warning of describePolicyWarnings(scaffolded, { homedir: deps.homedir })) ctx.stderr.write(`${warning.message}\n`);
       }
     }
     if (ownerId === null) ctx.stderr.write('The server did not say who the owner of this environment is, so no policy was scaffolded; create ~/.pagespace/env-policy.json yourself with "principals": [<your user id>].\n');

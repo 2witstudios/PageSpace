@@ -42,7 +42,7 @@ export function createEnvPolicyHandler(deps: EnvPolicyHandlerDeps): CommandHandl
         '',
       ].join('\n'),
     );
-    for (const warning of describePolicyWarnings(policy)) ctx.stderr.write(`${warning.message}\n`);
+    for (const warning of describePolicyWarnings(policy, { homedir: deps.homedir })) ctx.stderr.write(`${warning.message}\n`);
     return EXIT_SUCCESS;
   };
 }

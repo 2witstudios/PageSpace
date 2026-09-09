@@ -161,7 +161,7 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
       ctx.stderr.write(`${describePolicyRefusal(loaded.reason ?? 'missing', policyPath)}\n`);
     } else {
       ctx.stderr.write(`Policy ${policyPath}: mode ${loaded.policy.mode}, principals ${loaded.policy.principals.join(', ') || '(none)'}, ops ${loaded.policy.ops.join(', ') || '(none)'}, roots ${loaded.policy.roots.join(', ')}\n`);
-      for (const warning of describePolicyWarnings(loaded.policy)) ctx.stderr.write(`${warning.message}\n`);
+      for (const warning of describePolicyWarnings(loaded.policy, { homedir: deps.homedir })) ctx.stderr.write(`${warning.message}\n`);
       if (loaded.policy.mode === 'ask') {
         ctx.stderr.write(
           askInChat(ctx)
@@ -174,11 +174,15 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
     const log = (line: string) => ctx.stderr.write(`[env connect] ${line}\n`);
     const auditPath = defaultAuditPath(ctx.env, deps.homedir);
     const audit = createAuditLog({ appendLine: (line) => deps.appendAuditLine(auditPath, line), now: deps.now, onError: log });
-    // GA wave 3, leaf 7: an allowlisted exec is honoured (the owner's own
-    // file) and audited ONCE at connect, so the trail says this daemon started
-    // with exec running click-free.
-    if (loaded.policy !== null && describePolicyWarnings(loaded.policy).some((warning) => warning.code === 'exec_allowlisted')) {
-      await audit.record({ grantId: null, principal: null, op: 'policy', verdict: 'policy_warning:exec_allowlisted', argsHash: null, exitCode: null });
+    // GA wave 3, leaf 7 (generalised in hardening A6): every widening the
+    // owner's policy carries is honoured — it is their own file — and audited
+    // ONCE at connect, so the trail says what this daemon started with. The
+    // loop is over CODES: a new warning is audited by existing, not by adding
+    // another special case here.
+    if (loaded.policy !== null) {
+      for (const warning of describePolicyWarnings(loaded.policy, { homedir: deps.homedir })) {
+        await audit.record({ grantId: null, principal: null, op: 'policy', verdict: `policy_warning:${warning.code}`, argsHash: null, exitCode: null });
+      }
     }
     const resolver: CommandResolverDeps = {
       platform: deps.platform,
