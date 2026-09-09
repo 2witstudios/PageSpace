@@ -14,6 +14,7 @@ const makeInputRef = (overrides: Partial<ChannelInputRef> = {}) => {
       clear: vi.fn(),
       insertText: vi.fn(),
       uploadFiles,
+      restoreAttachments: vi.fn(),
       canAcceptDrop,
       ...overrides,
     } satisfies ChannelInputRef,
