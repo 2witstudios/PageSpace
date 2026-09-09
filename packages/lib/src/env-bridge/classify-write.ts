@@ -128,3 +128,29 @@ export function sensitiveWrites(paths: readonly string[], modes: readonly (numbe
   }
   return found;
 }
+
+/**
+ * One reason as a plain clause the owner can act on. It lives here, beside the
+ * union it describes, because BOTH surfaces that show it — the daemon's
+ * terminal prompt and the chat approval card — must say the same words: what
+ * the owner reads is the machine's own vocabulary, never a paraphrase composed
+ * by a model or by a server.
+ */
+export function describeSensitiveWrite(reason: SensitiveWriteReason): string {
+  switch (reason) {
+    case 'vcs_metadata':
+      return 'writes inside version-control metadata (a hook here runs at your next commit)';
+    case 'shell_startup':
+      return 'is a shell startup file (it runs at your next shell)';
+    case 'build_or_task':
+      return 'is a build or task file whose contents are commands';
+    case 'package_manifest':
+      return 'is a package manifest, which carries build and script hooks';
+    case 'ci_config':
+      return 'is a CI configuration, which runs at your next push';
+    case 'tool_config':
+      return 'configures a tool to run commands for you';
+    case 'executable_bit':
+      return 'would be made executable';
+  }
+}

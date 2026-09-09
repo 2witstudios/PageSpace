@@ -847,4 +847,51 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
       expect(h.audits.map((a) => a.verdict)).toEqual(['dropped:revoke_bad_signature', 'dropped:revoke_bad_signature']);
     });
   });
+
+  describe('A7: a pending WRITE carries what the card must say', () => {
+    const hookProbe = () => fakeProbe({ [ROOT]: ROOT, [`${ROOT}/.git/hooks/pre-commit`]: `${ROOT}/.git/hooks/pre-commit`, [`${ROOT}/file`]: `${ROOT}/file` });
+    const chat = (overrides: Partial<DispatcherDeps> = {}) => harness({ probe: hookProbe(), challenges: createChallengeStore({ newId: () => 'ch_1' }), ask: null, ...overrides });
+    const HOOK = Buffer.from('#!/bin/sh\nid').toString('base64');
+
+    it('given a sensitive write reaching the chat, should carry every path with its mode, its byte count and the machine\'s OWN reason — and never the content', async () => {
+      const h = chat();
+      const result = await h.dispatcher.handle(signedGrant({ type: 'grant_fs_write', files: [{ path: `${ROOT}/.git/hooks/pre-commit`, contentB64: HOOK, mode: 0o755 }] }));
+      expect(result).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'ask_pending:ch_1' } });
+      const frame = (result as { frame: Frame }).frame as Extract<Frame, { type: 'grant_denied' }>;
+      expect(frame.pending?.request.writeModes).toEqual([0o755]);
+      expect(frame.pending?.files).toEqual([{ path: `${ROOT}/.git/hooks/pre-commit`, mode: 0o755, bytes: Buffer.from(HOOK, 'base64').length, reason: 'vcs_metadata' }]);
+      expect(h.fsRunner.write).not.toHaveBeenCalled();
+      expect(JSON.stringify(frame)).not.toContain(HOOK);
+    });
+
+    it('given a mixed write, should carry the ordinary file too, with a null reason — the card shows every path and marks which ones are sensitive', async () => {
+      const h = chat({ policy: () => ASK_POLICY });
+      const result = await h.dispatcher.handle(signedGrant({ type: 'grant_fs_write', files: [{ path: `${ROOT}/file`, contentB64: HOOK, mode: 0o600 }, { path: `${ROOT}/.git/hooks/pre-commit`, contentB64: 'aGk=', mode: 0o755 }] }));
+      const frame = (result as { frame: Frame }).frame as Extract<Frame, { type: 'grant_denied' }>;
+      expect(frame.pending?.files).toEqual([
+        { path: `${ROOT}/file`, mode: 0o600, bytes: 12, reason: null },
+        { path: `${ROOT}/.git/hooks/pre-commit`, mode: 0o755, bytes: 2, reason: 'vcs_metadata' },
+      ]);
+    });
+
+    it('given an exec reaching the chat, should carry no files and no modes at all', async () => {
+      const h = chat({ policy: () => ASK_POLICY });
+      const result = await h.dispatcher.handle(execFrame());
+      const frame = (result as { frame: Frame }).frame as Extract<Frame, { type: 'grant_denied' }>;
+      expect(frame.pending?.files).toBeUndefined();
+      expect(frame.pending?.request.writeModes).toBeUndefined();
+    });
+
+    it('given the owner CLICKS the sensitive write, should run it — escalation is a question, and the answer is honoured', async () => {
+      const approvals = createApprovalsStore({ path: '/p', uid: 501, open: () => null, write: async () => undefined, now: () => NOW });
+      const h = chat({ approvals });
+      const file = { path: `${ROOT}/.git/hooks/pre-commit`, contentB64: 'aGk=', mode: 0o755 };
+      await h.dispatcher.handle(signedGrant({ type: 'grant_fs_write', files: [file] }));
+      expect(h.fsRunner.write).not.toHaveBeenCalled();
+      const clicked = await h.dispatcher.handle(signedGrant({ type: 'grant_fs_write', files: [file] }, { approvalIntent: { challengeId: 'ch_1', scope: 'once', expiresAt: NOW + 30_000 }, principal: { ...PRINCIPAL, sessionId: 'later' } }));
+      expect(clicked).toMatchObject({ kind: 'reply', frame: { type: 'fs_write_result', ok: true } });
+      expect(h.fsRunner.write).toHaveBeenCalledTimes(1);
+    });
+  });
+
 });

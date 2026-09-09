@@ -20,7 +20,7 @@
  * `@clack/prompts`' confirm and select; tests supply functions. A prompt
  * that throws (stdin closed) is a decline.
  */
-import { DEFAULT_APPROVAL_SCOPE, type ApprovalScope, type GrantOp, type GrantPrincipal } from './lib-core.js';
+import { DEFAULT_APPROVAL_SCOPE, describeSensitiveWrite, type ApprovalScope, type GrantOp, type GrantPrincipal, type SensitiveWrite } from './lib-core.js';
 import type { NormalizedRequest } from './lib-core.js';
 
 export interface AskInput {
@@ -30,6 +30,8 @@ export interface AskInput {
   readonly request: NormalizedRequest;
   /** What an approval would be remembered under; `null` = it cannot be remembered, the owner is asked every time. */
   readonly subjects: readonly string[] | null;
+  /** Why a WRITE was escalated (hardening A7): which files, in the classifier's own words. Empty for every other ask. */
+  readonly sensitive?: readonly SensitiveWrite[];
 }
 
 export type AskAnswer = { readonly approved: false } | { readonly approved: true; readonly scope: ApprovalScope };
@@ -82,6 +84,9 @@ export function renderAskPrompt(input: AskInput): string {
   const env = Object.entries(request.env).map(([name, value]) => `${name}=${value}`);
   lines.push(`  env        ${env.length > 0 ? env.join(' ') : '(none)'}`);
   lines.push(`  limits     timeout ${request.timeoutMs} ms, output ${request.maxBytes} bytes${request.clamped ? ' (clamped to your policy)' : ''}`);
+  // A write that can become a command says WHICH file and WHY, in the
+  // classifier's own vocabulary — never a paraphrase (hardening A7).
+  for (const found of input.sensitive ?? []) lines.push(`  ⚠ ${found.path} — ${describeSensitiveWrite(found.reason)}`);
   if (input.subjects === null) {
     lines.push('This request cannot be remembered (its programs cannot be pinned down): approving covers this request only, and you will be asked again next time.');
   } else {

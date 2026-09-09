@@ -141,6 +141,7 @@ function grantIdOf(frame: GrantFrame): string {
 function freezeRequest(request: NormalizedRequest): NormalizedRequest {
   Object.freeze(request.env);
   Object.freeze(request.paths);
+  if (request.writeModes !== undefined) Object.freeze(request.writeModes);
   if (request.args !== undefined) Object.freeze(request.args);
   return Object.freeze(request);
 }
@@ -155,6 +156,7 @@ function pendingRequestOnTheWire(request: NormalizedRequest): PendingApproval['r
     ...(request.args !== undefined && { args: [...request.args] }),
     cwd: request.cwd,
     paths: [...request.paths],
+    ...(request.writeModes !== undefined && { writeModes: [...request.writeModes] }),
     env: { ...request.env },
     timeoutMs: request.timeoutMs,
     maxBytes: request.maxBytes,
@@ -292,6 +294,21 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       // and handed back unchanged as the approval.
       const shown = freezeRequest(decision.request);
       const subjects = decision.subjects;
+      const sensitive = decision.reason === 'sensitive_write' ? decision.sensitive : [];
+      /**
+       * What the owner's card and the terminal prompt say about each file of a
+       * WRITE (hardening A7): the CONFINED path that would be written, the mode
+       * it would be given, how many bytes, and the machine's own reason from
+       * the classifier's closed set — `null` for an ordinary file in a mixed
+       * request, so every path is shown and the sensitive ones stand out. The
+       * content itself never leaves the machine.
+       */
+      const files = frame.type === 'grant_fs_write'
+        ? frame.files.map((file, index) => {
+            const path = shown.paths[index] ?? file.path;
+            return { path, mode: file.mode ?? null, bytes: Buffer.from(file.contentB64, 'base64').length, reason: sensitive.find((found) => found.path === path)?.reason ?? null };
+          })
+        : undefined;
       if (deps.ask === null || deps.preferChat === true) {
         // Tier B: no terminal (or the chat is preferred) — freeze the request
         // under a challenge and let the owner's click in the chat answer it.
@@ -299,9 +316,9 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         const pending = deps.challenges.issue({ grant, request: shown, subjects }, deps.now());
         if (pending === null) return refuse(grant.grantId, 'ask_unavailable', { grant, op: grant.op, verdict: 'deny:ask_unavailable:challenges_full' });
         await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: `ask:pending:${pending.id}`, argsHash: grant.argsHash, exitCode: null, paths: auditPaths });
-        return reply({ type: 'grant_denied', grantId: grant.grantId, reason: `ask_pending:${pending.id}`, pending: { challengeId: pending.id, expiresAt: pending.exp, request: pendingRequestOnTheWire(pending.request) } });
+        return reply({ type: 'grant_denied', grantId: grant.grantId, reason: `ask_pending:${pending.id}`, pending: { challengeId: pending.id, expiresAt: pending.exp, request: pendingRequestOnTheWire(pending.request), ...(files !== undefined && { files }) } });
       }
-      const answer = await deps.ask.ask({ grantId: grant.grantId, principal: grant.principal, op: grant.op, request: shown, subjects });
+      const answer = await deps.ask.ask({ grantId: grant.grantId, principal: grant.principal, op: grant.op, request: shown, subjects, sensitive });
       // Re-checked after the await: the owner may have pressed Stop while the prompt sat open.
       if (predatesPause(grant)) return refuse(grant.grantId, 'paused', { grant, op: grant.op });
       if (!answer.approved) return refuse(grant.grantId, 'declined', { grant, op: grant.op, verdict: 'ask:declined' });

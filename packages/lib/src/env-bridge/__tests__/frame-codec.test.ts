@@ -322,3 +322,53 @@ describe('grant_fs_write: what no owner should have to adjudicate is refused at 
     expect(Number.isInteger(MAX_FS_WRITE_FILES)).toBe(true);
   });
 });
+
+describe('the frozen request on the wire carries what a WRITE card must say (hardening A7)', () => {
+  const base = { type: 'grant_denied' as const, grantId: 'g1', sig: B64 };
+  const request = { op: 'fs_write' as const, cwd: '/home/u/proj', paths: ['/home/u/proj/.git/hooks/pre-commit'], env: {}, timeoutMs: 1, maxBytes: 1, clamped: false };
+  const decode = (pending: unknown) => decodeFrame(JSON.stringify({ ...base, reason: 'ask_pending:ch_1', pending }), LIMITS);
+
+  it('given a pending write with its modes and the machine\'s own classification, should decode all of it', () => {
+    const decoded = decode({
+      challengeId: 'ch_1',
+      expiresAt: 5,
+      request: { ...request, writeModes: [0o755] },
+      files: [{ path: '/home/u/proj/.git/hooks/pre-commit', mode: 0o755, bytes: 42, reason: 'vcs_metadata' }],
+    });
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok || decoded.frame.type !== 'grant_denied') throw new Error('expected a grant_denied');
+    expect(decoded.frame.pending?.request.writeModes).toEqual([0o755]);
+    expect(decoded.frame.pending?.files).toEqual([{ path: '/home/u/proj/.git/hooks/pre-commit', mode: 0o755, bytes: 42, reason: 'vcs_metadata' }]);
+  });
+
+  it('given an exec pending (no modes, no files), should still decode — both are optional', () => {
+    expect(decode({ challengeId: 'ch_1', expiresAt: 5, request }).ok).toBe(true);
+  });
+
+  it('given a file whose reason is not one of the classifier\'s, should REFUSE — the card must never render a word the machine did not mint', () => {
+    expect(decode({ challengeId: 'ch_1', expiresAt: 5, request, files: [{ path: '/x', mode: null, bytes: 1, reason: 'looks_fine_to_me' }] }).ok).toBe(false);
+  });
+
+  it('given an unmodelled field beside them, should refuse (every level of the pending payload is strict)', () => {
+    expect(decode({ challengeId: 'ch_1', expiresAt: 5, request, note: 'trust me' }).ok).toBe(false);
+    expect(decode({ challengeId: 'ch_1', expiresAt: 5, request: { ...request, note: 'trust me' } }).ok).toBe(false);
+    // Including inside a per-file finding: the card renders these, so nothing
+    // may ride along beside the four fields it knows.
+    expect(decode({ challengeId: 'ch_1', expiresAt: 5, request, files: [{ path: '/x', mode: null, bytes: 1, reason: null, note: 'trust me' }] }).ok).toBe(false);
+  });
+
+  it('given an ordinary file in a mixed write, should carry a null reason rather than being dropped — the card shows every path', () => {
+    const decoded = decode({
+      challengeId: 'ch_1',
+      expiresAt: 5,
+      request: { ...request, paths: ['/home/u/proj/src/a.ts', '/home/u/proj/Makefile'], writeModes: [null, null] },
+      files: [
+        { path: '/home/u/proj/src/a.ts', mode: null, bytes: 3, reason: null },
+        { path: '/home/u/proj/Makefile', mode: null, bytes: 9, reason: 'build_or_task' },
+      ],
+    });
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok || decoded.frame.type !== 'grant_denied') throw new Error('expected a grant_denied');
+    expect(decoded.frame.pending?.files?.map((file) => file.reason)).toEqual([null, 'build_or_task']);
+  });
+});

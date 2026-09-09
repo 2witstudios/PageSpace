@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { useAskUserAnswerContext } from '../ask-user/AskUserAnswerContext';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { describeSensitiveWrite, type SensitiveWriteReason } from '@pagespace/lib/env-bridge/classify-write';
 import {
   ENV_APPROVAL_SCOPES,
   REQUEST_ENV_APPROVAL_TOOL_NAME,
@@ -47,10 +48,21 @@ interface FrozenRequest {
   args?: string[];
   cwd: string;
   paths: string[];
+  /** Index-aligned with `paths`, for `fs_write` only. */
+  writeModes?: Array<number | null>;
   env: Record<string, string>;
   timeoutMs: number;
   maxBytes: number;
   clamped: boolean;
+}
+
+/** What the MACHINE determined about one file of a pending write (hardening A7). */
+interface PendingWriteFile {
+  path: string;
+  mode: number | null;
+  bytes: number;
+  /** `null` for an ordinary file in a mixed request. */
+  reason: SensitiveWriteReason | null;
 }
 
 interface PendingApprovalView {
@@ -59,6 +71,7 @@ interface PendingApprovalView {
   principal: { userId: string; sessionId: string; conversationId: string };
   expiresAt: number;
   request: FrozenRequest;
+  files?: PendingWriteFile[];
 }
 
 type LoadState =
@@ -102,7 +115,24 @@ export function frozenRequestRows(pending: PendingApprovalView): Array<[string, 
   ];
   if (request.cmd !== undefined) rows.push(['command', [request.cmd, ...(request.args ?? [])].join(' ')]);
   rows.push(['cwd', request.cwd]);
-  if (request.paths.length > 0) rows.push(['paths', request.paths.join(', ')]);
+  // A WRITE says, per file: what will be written to, how much, at what mode,
+  // and — for a file the machine escalated — WHY, in the machine's own words
+  // (hardening A7). The content itself is never carried and never rendered:
+  // the byte count is what the owner needs to judge the write.
+  if (pending.files !== undefined && pending.files.length > 0) {
+    rows.push([
+      'files',
+      pending.files
+        .map((file) => {
+          const mode = file.mode === null ? '' : `, mode ${file.mode.toString(8).padStart(4, '0')}`;
+          const why = file.reason === null ? '' : ` — needs your approval: it ${describeSensitiveWrite(file.reason)}`;
+          return `${file.path} (${file.bytes} bytes${mode})${why}`;
+        })
+        .join('\n'),
+    ]);
+  } else if (request.paths.length > 0) {
+    rows.push(['paths', request.paths.join(', ')]);
+  }
   const env = Object.entries(request.env).map(([name, value]) => `${name}=${value}`);
   rows.push(['env', env.length > 0 ? env.join(' ') : '(none)']);
   rows.push(['limits', `timeout ${request.timeoutMs} ms, output ${request.maxBytes} bytes${request.clamped ? ' (clamped to the machine policy)' : ''}`]);

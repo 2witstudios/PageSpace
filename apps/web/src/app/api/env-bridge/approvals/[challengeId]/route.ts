@@ -107,6 +107,11 @@ export async function GET(request: Request, context: Params) {
       expiresAt: pending.expiresAt,
       // Verbatim: the frozen request as the MACHINE signed it.
       request: pending.pending.request,
+      // For a write, the machine's own per-file findings — path, mode, byte
+      // count and why it was escalated, in the classifier's closed vocabulary
+      // (hardening A7). Passed through untouched: the card must never render a
+      // word the server or the model composed.
+      ...(pending.pending.files !== undefined && { files: pending.pending.files }),
       scopes: ENV_APPROVAL_SCOPES,
     });
   } catch (error) {
