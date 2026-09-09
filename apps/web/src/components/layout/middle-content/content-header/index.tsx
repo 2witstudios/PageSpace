@@ -146,8 +146,12 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
             ShareDialog, ExportDropdown and PublishControls are dialog triggers,
             and a DropdownMenu unmounts the dialog when it closes. And no
             `justify-end`: end-aligning an overflow container pushes the excess
-            past the inline-start edge, where scrollLeft cannot reach it. */}
-        <div className="flex items-center gap-1 @[400px]:gap-2 min-w-0 overflow-x-auto scrollbar-none">
+            past the inline-start edge, where scrollLeft cannot reach it. The
+            `py-1 -my-1` is not spacing: `overflow-x-auto` makes overflow-y
+            compute to `auto` too, which would clip the buttons' 3px focus
+            rings — the padding gives them room, the margin takes the row's
+            height back. */}
+        <div className="flex items-center gap-1 @[400px]:gap-2 min-w-0 py-1 -my-1 overflow-x-auto scrollbar-none">
           {pageIsDocument && <EditorToggles />}
           {pageIsDocument && page && <PageSetupButton pageId={page.id} />}
           {(pageIsDocument || pageIsSheet) && page && (
