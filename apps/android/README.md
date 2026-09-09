@@ -29,9 +29,12 @@ This is a **remote-loading** app, like iOS. The WebView loads the live site dire
   plugins, Gradle dependencies, icons/splash, or a Capacitor/plugin upgrade.
 
 Everything the shell *does* natively is driven from the shared web layer through the capability
-table in `apps/web/src/lib/capacitor-bridge.ts` — nothing in `apps/web` asks "is this iOS?" any
-more; it asks `hasNativeCapability('secureStore' | 'nativeAuth' | 'push' | 'badge')`, and Android
-answers yes to all four (Apple sign-in excepted — see below). Adding a capability to Android is a
+table in `apps/web/src/lib/capacitor-bridge.ts`: the storage, auth, push and badge paths ask
+`hasNativeCapability('secureStore' | 'nativeAuth' | 'push' | 'badge')` rather than comparing the
+platform to `'ios'`, and Android answers yes to all four (Apple sign-in excepted — see below).
+`isIOS()` still exists and is still used where behaviour genuinely is iOS-only — the badge hook's
+authorization-option gate, iPad layout heuristics — so a remaining `=== 'ios'` is not automatically
+a parity bug; ask whether Android would want the same branch. Adding a capability to Android is a
 one-line table edit, not a call-site sweep.
 
 ## Building locally
@@ -594,8 +597,8 @@ Links verification against a real `assetlinks.json`, Play internal testing) — 
 
 All deliberately outside the Android Parity Epic's scope, all still outstanding:
 
-- **Release keystore.** `build.gradle` has no `signingConfigs.release`; nothing in the repo or in
-  Fly secrets holds an upload key. Until it exists every build is debug-signed, `assetlinks.json`
+- **Release keystore.** `build.gradle` has no `signingConfigs.release` and nothing in the repo
+  references an upload key. Until it exists every build is debug-signed, `assetlinks.json`
   cannot name a shipped certificate, and Play will not accept an upload.
 - **Play Console.** No app record, no internal-testing track, no store listing, no privacy
   declarations (the data-safety form needs the same answers `PrivacyInfo.xcprivacy` gives on iOS).
@@ -607,7 +610,11 @@ All deliberately outside the Android Parity Epic's scope, all still outstanding:
   the equivalent.
 - **Notification icon.** A monochrome `ic_notification` and the two Firebase meta-data entries in
   the manifest, or the tray shows Firebase's default glyph.
-- **Dependency disclosure.** `@capgo/capacitor-social-login`'s Android target pulls the Facebook
-  SDK the same way its iOS target does. `OSS-COMPLIANCE.md` at the repo root carries the mobile
-  native-dependency inventory (the per-platform files were folded into it in #1029); re-check it
-  against `capacitor.settings.gradle` after a sync before any listing.
+- **Dependency disclosure.** `@capgo/capacitor-social-login`'s Android `build.gradle` pulls the
+  Facebook SDK by default, as its iOS target does — but unlike iOS it is **excludable**: the plugin
+  reads the Gradle property `socialLogin.facebook.include` (default `'true'`), so
+  `socialLogin.facebook.include=false` in `android/gradle.properties` drops it from the APK. We
+  never initialise Facebook, so set that before the first listing rather than disclosing an SDK
+  that does nothing. `OSS-COMPLIANCE.md` at the repo root carries the mobile native-dependency
+  inventory (the per-platform files were folded into it in #1029); re-check it against
+  `capacitor.settings.gradle` after a sync before any listing.
