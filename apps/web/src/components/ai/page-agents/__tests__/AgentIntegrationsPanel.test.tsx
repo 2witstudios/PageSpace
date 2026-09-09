@@ -641,10 +641,17 @@ describe('AgentIntegrationsPanel bundle presets', () => {
       expect(dialog).toHaveAttribute('data-page-type', 'AI_CHAT');
     });
 
-    it('does not submit the settings form it renders inside', () => {
+    it('the trigger cannot submit the settings form it renders inside', () => {
       // This panel is rendered inside PageAgentSettingsTab's <form>, where a
       // typeless button defaults to submit — clicking it would save the whole
       // agent config on the way to opening a dialog.
+      //
+      // This covers the TRIGGER only; the dialog mock above stands in for the
+      // real one. The dialog's OWN form is the other half of the same hazard
+      // (React propagates a portal's submit along the React tree, so it reaches
+      // this ancestor form too) and is covered where it lives, in
+      // PageWebhooksDialog.test.tsx — 'creating a webhook does not submit an
+      // ancestor form'.
       mockHooksDefault({});
       render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
 

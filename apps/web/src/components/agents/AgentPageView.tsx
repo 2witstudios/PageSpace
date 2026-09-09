@@ -473,6 +473,10 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
       // conversation minted into a live session must not be invisible to the
       // grid that is about to mount against a cached listing.
       recordMintedIntoSession(created, options?.reuseSessionId ?? null);
+      // Live only for History's own "New" (the hook is enabled while that tab
+      // is showing); from the bar's "+" the hook is disabled and this is a
+      // no-op, which is correct — a list nothing is rendering needs no refresh,
+      // and SWR revalidates when History next mounts the key.
       refreshConversations();
     } catch (error) {
       // Every caller fires this as `void handleCreateNew()`, so a rejection
