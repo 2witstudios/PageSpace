@@ -141,6 +141,7 @@ function harness(overrides: Partial<EnvConnectHandlerDeps> & { policy?: string |
     approvalId: () => 'ap_test',
     challengeId: () => 'ch_test',
     onSignal: (handler) => void signals.push(handler),
+    daemonEpoch: 'ep_test',
     exit,
     ...rest,
   };
@@ -384,6 +385,24 @@ describe('pagespace env connect <enrollmentId>', () => {
       vi.useFakeTimers();
     }
   }, 20_000);
+
+  it('Codex P2 #7 (review round 1): the hello carries this process\'s daemonEpoch under the signature, and a RECONNECT sends the same epoch', async () => {
+    const h = harness();
+    const c = ctx(false);
+    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+    await flush();
+    h.socket().open();
+    const first = decodeFrame(h.socket().sent[0]!, { maxFrameBytes: 1 << 20 });
+    expect(first).toMatchObject({ ok: true, frame: { type: 'hello', daemonEpoch: 'ep_test' } });
+    expect(verifyHello({ hello: (first as { frame: Extract<Frame, { type: 'hello' }> }).frame, expectedEnvId: 'env_1', machinePublicKey: decodeBase64(machine.publicKey)!, verify: ed25519Verify })).toEqual({ ok: true });
+    h.socket().emit('close', 1006, Buffer.from(''));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.sockets.length).toBeGreaterThan(1);
+    h.socket().open();
+    const again = decodeFrame(h.socket().sent[0]!, { maxFrameBytes: 1 << 20 });
+    expect(again).toMatchObject({ ok: true, frame: { type: 'hello', daemonEpoch: 'ep_test' } });
+    h.signals[0]!('SIGINT');
+  });
 
   it('GA wave 3 · leaf 7: given mode allowlist with exec in ops (the harness default), the daemon prints the exec-allowlisted line at start and audits policy_warning:exec_allowlisted once; with exec absent it prints and audits nothing of the kind', async () => {
     const h = harness();

@@ -40,7 +40,8 @@ const capabilitiesSchema = z.object({
 
 // ---- machine → server -----------------------------------------------------
 
-const hello = z.object({ type: z.literal('hello'), envId: nonEmpty, capabilities: capabilitiesSchema, policyDigest: z.string(), sig: b64 });
+/** `daemonEpoch` (GA wave 3, Codex P2 #7): a random id per daemon PROCESS, attested inside the signed hello bytes — a restart changes it, a reconnect does not. */
+const hello = z.object({ type: z.literal('hello'), envId: nonEmpty, capabilities: capabilitiesSchema, policyDigest: z.string(), daemonEpoch: nonEmpty, sig: b64 });
 const execResult = z.object({ type: z.literal('exec_result'), grantId: nonEmpty, exitCode: z.number().int(), stdoutB64: b64, stderrB64: b64, truncated: z.boolean(), sig: b64 });
 const fsReadResult = z.object({ type: z.literal('fs_read_result'), grantId: nonEmpty, found: z.boolean(), contentB64: b64.optional(), sig: b64 });
 const fsWriteResult = z.object({ type: z.literal('fs_write_result'), grantId: nonEmpty, ok: z.boolean(), error: z.string().optional(), sig: b64 });

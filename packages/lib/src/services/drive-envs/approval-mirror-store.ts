@@ -22,6 +22,8 @@ export interface DriveEnvApprovalRecord {
   op: string;
   summary: string;
   scope: MirroredApprovalScope;
+  /** A `session` row's daemon process; NULL for durable scopes. */
+  daemonEpoch: string | null;
   createdAt: Date;
   expiresAt: Date | null;
   revokedAt: Date | null;
@@ -46,6 +48,8 @@ export interface RememberApprovalInput {
   op: string;
   summary: string;
   scope: MirroredApprovalScope;
+  /** For a `session` scope: the env's current daemon epoch (from its last hello). Ignored for durable scopes. */
+  daemonEpoch?: string | null;
   createdAt: Date;
   expiresAt: Date | null;
 }
@@ -65,6 +69,13 @@ export interface ApprovalMirrorStore {
   listActiveForOwner(input: { ownerId: string; now: Date; limit: number }): Promise<DriveEnvApprovalWithEnv[]>;
   /** One row, for the revoke path to answer with. */
   findById(id: string): Promise<DriveEnvApprovalRecord | null>;
+  /**
+   * A hello from daemon process `epoch` (Codex P2 #7): every `session`-scoped
+   * row of this env held by a DIFFERENT process is expired now — the machine
+   * forgot them when that process exited. Rows of the same epoch (a reconnect
+   * without restart) and every durable row are untouched. @returns rows expired.
+   */
+  expireSessionRowsForOtherEpoch(input: { envId: string; epoch: string; now: Date }): Promise<number>;
 }
 
 export const APPROVAL_MIRROR_LIST_LIMIT = 100;
@@ -97,7 +108,7 @@ export function toDriveEnvApprovalDTO(row: DriveEnvApprovalRecord, env?: { drive
 
 /** Production DB-backed implementation; lazy imports so a test with a fake never loads the DB graph. */
 export async function createDbApprovalMirrorStore(): Promise<ApprovalMirrorStore> {
-  const [{ db }, { eq, and, or, isNull, isNotNull, gt, desc }, { driveEnvApprovals }, { driveEnvLocal }, { driveEnvs }] = await Promise.all([
+  const [{ db }, { eq, ne, and, or, isNull, isNotNull, gt, desc }, { driveEnvApprovals }, { driveEnvLocal }, { driveEnvs }] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/drive-env-approvals'),
@@ -112,6 +123,7 @@ export async function createDbApprovalMirrorStore(): Promise<ApprovalMirrorStore
     op: row.op,
     summary: row.summary,
     scope: row.scope as MirroredApprovalScope,
+    daemonEpoch: row.daemonEpoch,
     createdAt: row.createdAt,
     expiresAt: row.expiresAt,
     revokedAt: row.revokedAt,
@@ -130,7 +142,7 @@ export async function createDbApprovalMirrorStore(): Promise<ApprovalMirrorStore
     async remember(input) {
       const [row] = await db
         .insert(driveEnvApprovals)
-        .values({ id: input.id, envId: input.envId, userId: input.userId, op: input.op, summary: clip(input.summary, APPROVAL_SUMMARY_MAX_CHARS), scope: input.scope, createdAt: input.createdAt, expiresAt: input.expiresAt })
+        .values({ id: input.id, envId: input.envId, userId: input.userId, op: input.op, summary: clip(input.summary, APPROVAL_SUMMARY_MAX_CHARS), scope: input.scope, daemonEpoch: input.scope === 'session' ? (input.daemonEpoch ?? null) : null, createdAt: input.createdAt, expiresAt: input.expiresAt })
         .onConflictDoNothing({ target: driveEnvApprovals.id })
         .returning();
       if (row) return asRecord(row);
@@ -194,6 +206,16 @@ export async function createDbApprovalMirrorStore(): Promise<ApprovalMirrorStore
     async findById(id) {
       const [row] = await db.select().from(driveEnvApprovals).where(eq(driveEnvApprovals.id, id)).limit(1);
       return row ? asRecord(row) : null;
+    },
+
+    async expireSessionRowsForOtherEpoch({ envId, epoch, now }) {
+      const rows = await db
+        .update(driveEnvApprovals)
+        .set({ expiresAt: now })
+        // Session rows only; a different (or unknown) epoch; not already expired.
+        .where(and(eq(driveEnvApprovals.envId, envId), eq(driveEnvApprovals.scope, 'session'), or(isNull(driveEnvApprovals.daemonEpoch), ne(driveEnvApprovals.daemonEpoch, epoch)), or(isNull(driveEnvApprovals.expiresAt), gt(driveEnvApprovals.expiresAt, now))))
+        .returning({ id: driveEnvApprovals.id });
+      return rows.length;
     },
   };
 }

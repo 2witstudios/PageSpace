@@ -7,7 +7,7 @@ import { createBridgeConnection, type BridgeConnectionDeps, type BridgeSocket } 
 import type { AuditEntry } from '../audit-log.js';
 import type { DispatchResult } from '../dispatcher.js';
 
-const HELLO: HelloFrame = { type: 'hello', envId: 'env_1', capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, policyDigest: 'd', sig: 'AAAA' };
+const HELLO: HelloFrame = { type: 'hello', envId: 'env_1', capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, policyDigest: 'd', daemonEpoch: 'ep1', sig: 'AAAA' };
 const GRANT: Frame = { type: 'grant_exec', grant: { grantId: 'g1' }, sig: 'AAAA', cmd: 'x' };
 const PING: Frame = { type: 'ping', ts: 1 };
 

@@ -5,7 +5,7 @@
  *
  * - **hello** (machine → server, invariant 2): the first frame on every
  *   socket, signed by the machine key pinned at enrollment. Covers
- *   `{envId, capabilities, policyDigest}` — so a captured hello cannot be
+ *   `{envId, capabilities, policyDigest, daemonEpoch}` — so a captured hello cannot be
  *   replayed for another env, and neither the advertised capabilities nor the
  *   policy digest can be altered in flight.
  * - **result** (machine → server, invariant 7): every `exec_result`,
@@ -91,7 +91,7 @@ const encode = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.str
 // ---- hello -----------------------------------------------------------------
 
 /** Canonical bytes the machine signs for its hello; rebuilt field by field from the typed value. */
-export function encodeHelloForSigning(hello: Pick<HelloFrame, 'envId' | 'capabilities' | 'policyDigest'>): Uint8Array {
+export function encodeHelloForSigning(hello: Pick<HelloFrame, 'envId' | 'capabilities' | 'policyDigest' | 'daemonEpoch'>): Uint8Array {
   return encode({
     domain: HELLO_SIGNING_DOMAIN,
     envId: hello.envId,
@@ -102,6 +102,8 @@ export function encodeHelloForSigning(hello: Pick<HelloFrame, 'envId' | 'capabil
       checkpoint: hello.capabilities.checkpoint,
     },
     policyDigest: hello.policyDigest,
+    // The daemon's process epoch is a fact the MACHINE attests: under the signature, so the server may act on it.
+    daemonEpoch: hello.daemonEpoch,
   });
 }
 

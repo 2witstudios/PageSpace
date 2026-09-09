@@ -56,6 +56,7 @@ export function makeLocalRecord(over: Partial<DriveEnvLocalRecord> = {}): DriveE
     machineKeyFingerprint: null,
     serverKeyId: null,
     capabilities: null,
+    daemonEpoch: null,
     // A MINTED row always carries the dialog's explicit policy (GA wave 1);
     // the column's deny-all default is the backstop for a row some path
     // forgot. Tests that want the backstop set `{ ops: [] }` explicitly.
@@ -202,10 +203,10 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       return true;
     },
 
-    async recordHello({ envId, capabilities, now: at }) {
+    async recordHello({ envId, capabilities, daemonEpoch, now: at }) {
       const sibling = local.get(envId);
       if (!sibling || sibling.enrolledAt === null || sibling.revokedAt !== null) return false;
-      local.set(envId, { ...sibling, capabilities, lastSeenAt: at, updatedAt: at });
+      local.set(envId, { ...sibling, capabilities, daemonEpoch, lastSeenAt: at, updatedAt: at });
       return true;
     },
 

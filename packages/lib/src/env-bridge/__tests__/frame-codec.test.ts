@@ -8,7 +8,7 @@ const GRANT = { grantId: 'g1', envId: 'e1', principal: { userId: 'u', sessionId:
 /** One valid instance of every frame variant — the closed set, exhaustively. */
 const SAMPLES: Record<Frame['type'], Frame> = {
   // machine → server
-  hello: { type: 'hello', envId: 'e1', capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, policyDigest: 'abc', sig: B64 },
+  hello: { type: 'hello', envId: 'e1', capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, policyDigest: 'abc', daemonEpoch: 'ep1', sig: B64 },
   exec_result: { type: 'exec_result', grantId: 'g1', exitCode: 0, stdoutB64: B64, stderrB64: '', truncated: false, sig: B64 },
   fs_read_result: { type: 'fs_read_result', grantId: 'g1', found: true, contentB64: B64, sig: B64 },
   fs_write_result: { type: 'fs_write_result', grantId: 'g1', ok: true, sig: B64 },
@@ -55,7 +55,7 @@ function randomInt(r: () => number, max = 100_000): number {
 function generate(type: Frame['type'], r: () => number): Frame {
   const g = { ...GRANT, grantId: randomStr(r), nonce: randomStr(r), iat: randomInt(r), exp: randomInt(r) };
   switch (type) {
-    case 'hello': return { type, envId: randomStr(r), capabilities: { shell: r() > 0.5, pty: r() > 0.5, fs: r() > 0.5, checkpoint: false }, policyDigest: randomStr(r), sig: randomB64(r) || B64 };
+    case 'hello': return { type, envId: randomStr(r), capabilities: { shell: r() > 0.5, pty: r() > 0.5, fs: r() > 0.5, checkpoint: false }, policyDigest: randomStr(r), daemonEpoch: randomStr(r), sig: randomB64(r) || B64 };
     case 'exec_result': return { type, grantId: randomStr(r), exitCode: randomInt(r, 256), stdoutB64: randomB64(r), stderrB64: randomB64(r), truncated: r() > 0.5, sig: B64 };
     case 'fs_read_result': return r() > 0.5 ? { type, grantId: randomStr(r), found: true, contentB64: randomB64(r), sig: B64 } : { type, grantId: randomStr(r), found: false, sig: B64 };
     case 'fs_write_result': return r() > 0.5 ? { type, grantId: randomStr(r), ok: true, sig: B64 } : { type, grantId: randomStr(r), ok: false, error: randomStr(r), sig: B64 };

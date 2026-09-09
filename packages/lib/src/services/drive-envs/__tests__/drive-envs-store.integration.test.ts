@@ -847,15 +847,23 @@ describe('the local-env connection slice (t07) — recordHello / recordHeartbeat
   it('recordHello: given an enrolled, unrevoked machine, should persist capabilities + lastSeenAt (UTC wall-clock, non-UTC session) and answer true', async () => {
     const envId = await createLocal(true);
     const at = new Date(NOW.getTime() + 5_000);
-    expect(await store.recordHello({ envId, capabilities: CAPS, now: at })).toBe(true);
+    expect(await store.recordHello({ envId, capabilities: CAPS, daemonEpoch: 'ep_1', now: at })).toBe(true);
     const row = await rowOf(envId);
     expect(row?.capabilities).toEqual(CAPS);
     expect(row?.lastSeenAt?.getTime()).toBe(at.getTime());
   });
 
+  it('recordHello (Codex P2 #7): persists the daemon epoch the machine attested, and a later hello replaces it', async () => {
+    const envId = await createLocal(true);
+    await store.recordHello({ envId, capabilities: CAPS, daemonEpoch: 'ep_boot_1', now: NOW });
+    expect((await store.findLocalByEnvId(envId))?.daemonEpoch).toBe('ep_boot_1');
+    await store.recordHello({ envId, capabilities: CAPS, daemonEpoch: 'ep_boot_2', now: NOW });
+    expect((await store.findLocalByEnvId(envId))?.daemonEpoch).toBe('ep_boot_2');
+  });
+
   it('recordHello: given a machine that never enrolled, should change nothing and answer false', async () => {
     const envId = await createLocal(false);
-    expect(await store.recordHello({ envId, capabilities: CAPS, now: NOW })).toBe(false);
+    expect(await store.recordHello({ envId, capabilities: CAPS, daemonEpoch: 'ep_1', now: NOW })).toBe(false);
     const row = await rowOf(envId);
     expect(row?.capabilities).toBeNull();
     expect(row?.lastSeenAt).toBeNull();
@@ -864,7 +872,7 @@ describe('the local-env connection slice (t07) — recordHello / recordHeartbeat
   it('recordHello / recordHeartbeat: given a REVOKED machine, should change nothing and answer false (a revoked hello is not a heartbeat)', async () => {
     const envId = await createLocal(true);
     expect(await store.revokeLocal({ envId, now: NOW })).toBe(true);
-    expect(await store.recordHello({ envId, capabilities: CAPS, now: NOW })).toBe(false);
+    expect(await store.recordHello({ envId, capabilities: CAPS, daemonEpoch: 'ep_1', now: NOW })).toBe(false);
     expect(await store.recordHeartbeat({ envId, now: NOW })).toBe(false);
     const row = await rowOf(envId);
     expect(row?.capabilities).toBeNull();
@@ -873,7 +881,7 @@ describe('the local-env connection slice (t07) — recordHello / recordHeartbeat
 
   it('recordHeartbeat: should move lastSeenAt forward and nothing else', async () => {
     const envId = await createLocal(true);
-    await store.recordHello({ envId, capabilities: CAPS, now: NOW });
+    await store.recordHello({ envId, capabilities: CAPS, daemonEpoch: 'ep_1', now: NOW });
     const later = new Date(NOW.getTime() + 60_000);
     expect(await store.recordHeartbeat({ envId, now: later })).toBe(true);
     const row = await rowOf(envId);

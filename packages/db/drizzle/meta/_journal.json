@@ -2066,6 +2066,13 @@
       "when": 1788950361236,
       "tag": "0294_white_queen_noir",
       "breakpoints": true
+    },
+    {
+      "idx": 295,
+      "version": "7",
+      "when": 1788953223156,
+      "tag": "0295_opposite_prodigy",
+      "breakpoints": true
     }
   ]
 }

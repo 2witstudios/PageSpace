@@ -44,7 +44,7 @@ const hash: HashBytes = (bytes) => createHash('sha256').update(bytes).digest('he
 const signWith = (key: typeof machine, bytes: Uint8Array) => Buffer.from(nodeSign(null, bytes, key.privateKey)).toString('base64');
 
 const capabilities = { shell: true, pty: false, fs: true, checkpoint: false };
-const helloBody = { envId: 'env-1', capabilities, policyDigest: 'sha256:abc' };
+const helloBody = { envId: 'env-1', capabilities, policyDigest: 'sha256:abc' , daemonEpoch: 'ep1' };
 const signedHello = (over: Partial<typeof helloBody> = {}, key = machine): Extract<Frame, { type: 'hello' }> => {
   const body = { ...helloBody, ...over };
   return { type: 'hello', ...body, sig: signWith(key, encodeHelloForSigning(body)) };
@@ -89,8 +89,8 @@ describe('hello — the machine-signed first frame', () => {
   });
 
   it('given the same hello with fields in a different insertion order, should encode identical bytes', () => {
-    const a = encodeHelloForSigning({ envId: 'e', capabilities: { shell: true, pty: true, fs: false, checkpoint: false }, policyDigest: 'd' });
-    const b = encodeHelloForSigning({ policyDigest: 'd', capabilities: { checkpoint: false, fs: false, pty: true, shell: true }, envId: 'e' } as typeof helloBody);
+    const a = encodeHelloForSigning({ envId: 'e', capabilities: { shell: true, pty: true, fs: false, checkpoint: false }, policyDigest: 'd', daemonEpoch: 'ep' });
+    const b = encodeHelloForSigning({ daemonEpoch: 'ep', policyDigest: 'd', capabilities: { checkpoint: false, fs: false, pty: true, shell: true }, envId: 'e' } as typeof helloBody);
     expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true);
   });
 });
@@ -303,7 +303,7 @@ describe('frame direction — the closed set split by who may send what', () => 
   });
 
   it('should classify a grant/revoke/ping as server→machine and results/hello/pong as machine→server', () => {
-    expect(isMachineToServerFrame({ type: 'hello', envId: 'e', capabilities, policyDigest: '', sig: '' })).toBe(true);
+    expect(isMachineToServerFrame({ type: 'hello', envId: 'e', capabilities, policyDigest: '', daemonEpoch: 'ep', sig: '' })).toBe(true);
     expect(isMachineToServerFrame({ type: 'pong', ts: 1 })).toBe(true);
     expect(isMachineToServerFrame({ type: 'revoke', sig: '', issuedAt: 1 })).toBe(false);
     expect(isMachineToServerFrame({ type: 'grant_exec', grant: {}, sig: '', cmd: 'ls' })).toBe(false);
@@ -354,5 +354,12 @@ describe('GA wave 3 — STOP: the pause frame is server-signed under its OWN dom
       expect(verifyMachineResult({ frame: { ...tampered, sig: signed.sig } as MachineResultFrame, machinePublicKey: spki(machine), verify, hash })).toEqual({ ok: false, reason: 'bad_signature' });
     }
     expect(verifyMachineResult({ frame: signAck(ack, rogue), machinePublicKey: spki(machine), verify, hash })).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+});
+
+describe('GA wave 3 (Codex P2 #7) — the daemon epoch is under the hello signature', () => {
+  it('editing daemonEpoch after signing denies bad_signature; a hello without one is not a hello', () => {
+    const signed = signedHello();
+    expect(verifyHello({ hello: { ...signed, daemonEpoch: 'ep2' }, expectedEnvId: signed.envId, machinePublicKey: spki(machine), verify })).toEqual({ ok: false, reason: 'bad_signature' });
   });
 });

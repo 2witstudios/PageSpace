@@ -199,9 +199,11 @@ export async function POST(request: Request, context: Params) {
     // revoke. Visibility only: nothing here can widen what runs.
     if (output.outcome === 'allowed' && scope !== 'once') {
       const frozen = pending.pending.request;
+      // A session-scoped row is tied to the daemon process that holds it (its last hello's epoch, Codex P2 #7).
+      const epoch = scope === 'session' ? ((await (await getDriveEnvStore()).findLocalByEnvId(pending.envId))?.daemonEpoch ?? null) : null;
       const argv = frozen.op === 'exec' ? [frozen.cmd ?? '', ...(frozen.args ?? [])].join(' ') : frozen.paths.join(', ');
       try {
-        await rememberEnvApproval({ id: challengeId, envId: pending.envId, userId: auth.userId, op: frozen.op, summary: `${frozen.op}: ${argv}${frozen.op === 'exec' ? ` in ${frozen.cwd}` : ''}`, scope, createdAt: new Date(now), expiresAt: approvalExpiry(scope, now) === null ? null : new Date(approvalExpiry(scope, now)!) });
+        await rememberEnvApproval({ id: challengeId, envId: pending.envId, userId: auth.userId, op: frozen.op, summary: `${frozen.op}: ${argv}${frozen.op === 'exec' ? ` in ${frozen.cwd}` : ''}`, scope, daemonEpoch: epoch, createdAt: new Date(now), expiresAt: approvalExpiry(scope, now) === null ? null : new Date(approvalExpiry(scope, now)!) });
       } catch (error) {
         // The machine already ran it and remembered it; the click's answer does not depend on the mirror.
         loggers.api.error('Approval mirror write failed after an allowed click', error instanceof Error ? error : new Error(String(error)));

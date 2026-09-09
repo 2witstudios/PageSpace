@@ -94,6 +94,8 @@ export interface DriveEnvLocalRecord {
   machineKeyFingerprint: string | null;
   serverKeyId: string | null;
   capabilities: { shell: boolean; pty: boolean; fs: boolean; checkpoint: boolean } | null;
+  /** The daemon process the last hello came from (attested in the signed hello); NULL before the first. */
+  daemonEpoch: string | null;
   serverPolicy: { ops: string[]; checkpoint: boolean };
   bindPolicy: string;
   enrollmentCodeHash: string | null;
@@ -254,7 +256,7 @@ export interface DriveEnvStore {
    * the machine's advertised capabilities and a heartbeat, IFF enrolled and
    * not revoked — a revoked machine's hello changes nothing.
    */
-  recordHello(input: { envId: string; capabilities: NonNullable<DriveEnvLocalRecord['capabilities']>; now: Date }): Promise<boolean>;
+  recordHello(input: { envId: string; capabilities: NonNullable<DriveEnvLocalRecord['capabilities']>; daemonEpoch: string; now: Date }): Promise<boolean>;
   /** Heartbeat from the live socket (throttled by the route to once per heartbeat window). Same CAS as `recordHello`. */
   recordHeartbeat(input: { envId: string; now: Date }): Promise<boolean>;
   /**
@@ -616,6 +618,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     machineKeyFingerprint: driveEnvLocal.machineKeyFingerprint,
     serverKeyId: driveEnvLocal.serverKeyId,
     capabilities: driveEnvLocal.capabilities,
+    daemonEpoch: driveEnvLocal.daemonEpoch,
     serverPolicy: driveEnvLocal.serverPolicy,
     bindPolicy: driveEnvLocal.bindPolicy,
     enrollmentCodeHash: driveEnvLocal.enrollmentCodeHash,
@@ -748,10 +751,10 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       return updated.length === 1;
     },
 
-    async recordHello({ envId, capabilities, now: at }) {
+    async recordHello({ envId, capabilities, daemonEpoch, now: at }) {
       const updated = await db
         .update(driveEnvLocal)
-        .set({ capabilities, lastSeenAt: at, updatedAt: at })
+        .set({ capabilities, daemonEpoch, lastSeenAt: at, updatedAt: at })
         .where(and(eq(driveEnvLocal.envId, envId), sql`${driveEnvLocal.enrolledAt} IS NOT NULL`, isNull(driveEnvLocal.revokedAt)))
         .returning({ envId: driveEnvLocal.envId });
       return updated.length === 1;

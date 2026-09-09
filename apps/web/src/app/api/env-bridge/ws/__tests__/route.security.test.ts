@@ -21,7 +21,7 @@ vi.mock('@/lib/websocket/ws-security', () => ({
   validateMessageSize: vi.fn(() => ({ valid: true })),
   isSecureConnection: vi.fn(() => true),
 }));
-vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn(), getGrantAuditStore: vi.fn(), listUnacknowledgedEnvApprovalRevokes: vi.fn(async () => []), markEnvApprovalAcknowledged: vi.fn(async () => null) }));
+vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn(), getGrantAuditStore: vi.fn(), listUnacknowledgedEnvApprovalRevokes: vi.fn(async () => []), markEnvApprovalAcknowledged: vi.fn(async () => null), expireSessionEnvApprovalsForOtherEpoch: vi.fn(async () => 0) }));
 vi.mock('@/lib/websocket/env-activity-events', () => ({ broadcastEnvActivity: vi.fn() }));
 vi.mock('@pagespace/lib/auth/env-bridge-signing-key', () => ({ loadServerSigningKeyring: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -32,7 +32,7 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { getConnectionFingerprint, isSecureConnection, validateMessageSize } from '@/lib/websocket/ws-security';
-import { getDriveEnvStore, getGrantAuditStore, listUnacknowledgedEnvApprovalRevokes, markEnvApprovalAcknowledged } from '@/lib/drive-envs/drive-envs-runtime';
+import { expireSessionEnvApprovalsForOtherEpoch, getDriveEnvStore, getGrantAuditStore, listUnacknowledgedEnvApprovalRevokes, markEnvApprovalAcknowledged } from '@/lib/drive-envs/drive-envs-runtime';
 import { createGrantAuditFake } from '@/test/grant-audit-fake';
 import { broadcastEnvActivity } from '@/lib/websocket/env-activity-events';
 import { loadServerSigningKeyring } from '@pagespace/lib/auth/env-bridge-signing-key';
@@ -108,8 +108,8 @@ function request(over: { headers?: Record<string, string>; url?: string } = {}):
   } as unknown as NextRequest;
 }
 
-function signedHello(envId = ENV, key = machine, over: Partial<{ capabilities: typeof CAPS; policyDigest: string }> = {}): string {
-  const body = { envId, capabilities: over.capabilities ?? CAPS, policyDigest: over.policyDigest ?? 'sha256:policy' };
+function signedHello(envId = ENV, key = machine, over: Partial<{ capabilities: typeof CAPS; policyDigest: string; daemonEpoch: string }> = {}): string {
+  const body = { envId, capabilities: over.capabilities ?? CAPS, policyDigest: over.policyDigest ?? 'sha256:policy', daemonEpoch: over.daemonEpoch ?? 'ep_1' };
   return encodeFrame({ type: 'hello', ...body, sig: Buffer.from(nodeSign(null, encodeHelloForSigning(body), key.privateKey)).toString('base64') });
 }
 
@@ -406,7 +406,7 @@ describe('env-bridge ws route', () => {
   describe('the signed hello', () => {
     it('given a hello signed by the pinned machine key for THIS env, should authorize: recordHello(capabilities), state connected, and the first server frame is a ping (the ack)', async () => {
       const ws = await connectAuthorized();
-      expect(store.recordHello).toHaveBeenCalledWith({ envId: ENV, capabilities: CAPS, now: NOW });
+      expect(store.recordHello).toHaveBeenCalledWith({ envId: ENV, capabilities: CAPS, daemonEpoch: 'ep_1', now: NOW });
       expect(readEnvLiveConnection(ENV)).toBe('connected');
       expect(events()).toContain('env_bridge_connection_established');
       expect(ws.sent).toHaveLength(1);
@@ -594,6 +594,28 @@ describe('env-bridge ws route', () => {
       const ws = await connectAuthorized();
       expect(framesOf(ws).map((f) => f.type)).toEqual(['ping']);
       expect(events()).not.toContain('env_bridge_approval_revokes_replayed');
+    });
+  });
+
+  describe('Codex P2 #7 (review round 1) — the hello attests the daemon process; its epoch is stored and expires other processes\' session approvals', () => {
+    it('records daemonEpoch with the hello and asks the mirror to expire session rows of any OTHER epoch — once per hello, with the epoch the machine signed', async () => {
+      vi.mocked(expireSessionEnvApprovalsForOtherEpoch).mockResolvedValueOnce(2);
+      await connectAuthorized();
+      expect(store.recordHello).toHaveBeenCalledWith(expect.objectContaining({ envId: ENV, daemonEpoch: 'ep_1' }));
+      expect(expireSessionEnvApprovalsForOtherEpoch).toHaveBeenCalledWith({ envId: ENV, epoch: 'ep_1' });
+      expect(events()).toContain('env_bridge_session_approvals_expired');
+    });
+
+    it('a hello whose daemonEpoch was edited after signing is refused — the epoch is a fact the MACHINE attests', async () => {
+      const ws = socket();
+      await UPGRADE(ws, server, request());
+      const decoded = decodeFrame(signedHello(), { maxFrameBytes: 1 << 20 });
+      if (!decoded.ok || decoded.frame.type !== 'hello') throw new Error('hello');
+      ws.emit('message', Buffer.from(encodeFrame({ ...decoded.frame, daemonEpoch: 'ep_forged' })));
+      await flush();
+      expect(ws.close).toHaveBeenCalledWith(1008, 'Invalid hello');
+      expect(store.recordHello).not.toHaveBeenCalled();
+      expect(expireSessionEnvApprovalsForOtherEpoch).not.toHaveBeenCalled();
     });
   });
 

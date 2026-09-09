@@ -22,7 +22,7 @@ import { LOCAL_ENV_HEARTBEAT_WINDOW_MS } from '@pagespace/lib/services/drive-env
 import type { DriveEnvLocalRecord } from '@pagespace/lib/services/drive-envs/drive-envs-store';
 import { initialBridgeSession, reduceBridgeSession, type BridgeSessionState } from '@pagespace/lib/env-bridge/bridge-session';
 import { verifyHello, isMachineResultFrame, machineResultBindingId } from '@pagespace/lib/env-bridge/machine-signatures';
-import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
+import { expireSessionEnvApprovalsForOtherEpoch, getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
 import { getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { replayUnacknowledgedApprovalRevokes } from '@/lib/env-bridge/revoke';
 import { decodePinnedPublicKey, ed25519Verify } from '@/lib/env-bridge/crypto';
@@ -347,13 +347,21 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
       return;
     }
     const now = new Date();
-    const recorded = await (await getDriveEnvStore()).recordHello({ envId, capabilities: frame.capabilities, now });
+    const recorded = await (await getDriveEnvStore()).recordHello({ envId, capabilities: frame.capabilities, daemonEpoch: frame.daemonEpoch, now });
     if (!recorded) {
       // Revoked (or un-enrolled) between the upgrade and the hello: the CAS says no.
       refuse('env_bridge_hello_refused', 'enrollment no longer live', 'Environment revoked', 0.5);
       return;
     }
     if (client.readyState !== 1) return;
+    // Codex P2 #7: this hello attests the daemon PROCESS. Session-scoped approvals the mirror holds for any
+    // other process of this env died with that process — expire them now, so the account page never lists them.
+    try {
+      const expired = await expireSessionEnvApprovalsForOtherEpoch({ envId, epoch: frame.daemonEpoch });
+      if (expired > 0) dropFrame('env_bridge_session_approvals_expired', { expired, daemonEpoch: frame.daemonEpoch }, 0);
+    } catch (error) {
+      dropFrame('env_bridge_session_approvals_expire_error', { error: error instanceof Error ? error.message : String(error) }, 0.2);
+    }
     session = reduceBridgeSession(session, { type: 'hello_ack' }).state;
     markEnvAuthorized(client);
     markEnvLastSeenPersisted(client, now);

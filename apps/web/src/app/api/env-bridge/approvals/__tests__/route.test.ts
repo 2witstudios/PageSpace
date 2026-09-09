@@ -196,9 +196,13 @@ describe('GA wave 3 · leaf 5 — the MIRROR: a click that ran is recorded for v
     expect(call.expiresAt?.getTime()).toBe(NOW + 30 * 24 * 60 * 60 * 1000);
   });
 
-  it('given until_revoked, the mirror row never expires; given session, it carries no expiry either (the daemon process is its life)', async () => {
+  it('given until_revoked, the mirror row never expires; given session, it carries no expiry but the env\'s current daemon epoch (Codex P2 #7) — its life is that process', async () => {
     await post({ decision: 'allow', scope: 'until_revoked' });
-    expect(vi.mocked(rememberEnvApproval).mock.calls[0]![0].expiresAt).toBeNull();
+    expect(vi.mocked(rememberEnvApproval).mock.calls[0]![0]).toMatchObject({ expiresAt: null, daemonEpoch: null });
+    getPendingApprovalStore().remember(pendingEntry(), NOW);
+    sibling = { ...sibling!, daemonEpoch: 'ep_live' } as typeof sibling;
+    await post({ decision: 'allow', scope: 'session' });
+    expect(vi.mocked(rememberEnvApproval).mock.calls[1]![0]).toMatchObject({ scope: 'session', expiresAt: null, daemonEpoch: 'ep_live' });
   });
 
   it('given once, deny, or a machine answer that is not allowed (mismatch / expired / denied), NOTHING is mirrored — the machine remembered nothing', async () => {

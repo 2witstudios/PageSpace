@@ -137,6 +137,11 @@ export async function markEnvApprovalAcknowledged(input: { id: string; removed: 
   return (await getApprovalMirrorStore()).markAcknowledged({ id: input.id, removed: input.removed, now: new Date() });
 }
 
+/** A hello from daemon process `epoch` (Codex P2 #7): expire this env's session-scoped mirror rows held by any other process. */
+export async function expireSessionEnvApprovalsForOtherEpoch(input: { envId: string; epoch: string }): Promise<number> {
+  return (await getApprovalMirrorStore()).expireSessionRowsForOtherEpoch({ envId: input.envId, epoch: input.epoch, now: new Date() });
+}
+
 /** Revokes owed to the machine — what the socket route replays on the daemon's hello. */
 export async function listUnacknowledgedEnvApprovalRevokes(envId: string): Promise<DriveEnvApprovalRecord[]> {
   return (await getApprovalMirrorStore()).listUnacknowledgedRevokes(envId);

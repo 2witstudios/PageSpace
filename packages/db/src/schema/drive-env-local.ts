@@ -147,6 +147,16 @@ export const driveEnvLocal = pgTable('drive_env_local', {
   /** Last advertised capabilities (from `hello`). NULL until the first handshake. */
   capabilities: jsonb('capabilities').$type<DriveEnvLocalCapabilities>(),
 
+  /**
+   * The daemon PROCESS the last hello came from — a random id the daemon mints
+   * once per process and attests inside its signed hello (GA wave 3, Codex P2
+   * #7). A reconnect without a restart keeps it; a restart changes it, and a
+   * changed epoch is what expires the mirror's `session`-scoped approvals for
+   * this env (the daemon's own session rows died with the process). NULL until
+   * the first hello.
+   */
+  daemonEpoch: text('daemonEpoch'),
+
   /** The drive's allow-set for this env. Deny-by-default. */
   serverPolicy: jsonb('serverPolicy')
     .$type<DriveEnvLocalServerPolicy>()

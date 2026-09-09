@@ -38,8 +38,8 @@ async function seedLocalEnv(owner: string, name: string): Promise<string> {
   return id;
 }
 
-const remember = (id: string, over: Partial<{ envId: string; userId: string; scope: 'session' | '30d' | 'until_revoked'; expiresAt: Date | null; createdAt: Date }> = {}) =>
-  store.remember({ id, envId: over.envId ?? envId, userId: over.userId ?? ownerId, op: 'exec', summary: "exec: sh -c 'git status'", scope: over.scope ?? '30d', createdAt: over.createdAt ?? NOW, expiresAt: over.expiresAt === undefined ? new Date(NOW.getTime() + 30 * 86_400_000) : over.expiresAt });
+const remember = (id: string, over: Partial<{ envId: string; userId: string; scope: 'session' | '30d' | 'until_revoked'; expiresAt: Date | null; createdAt: Date; daemonEpoch: string | null }> = {}) =>
+  store.remember({ id, envId: over.envId ?? envId, userId: over.userId ?? ownerId, op: 'exec', summary: "exec: sh -c 'git status'", scope: over.scope ?? '30d', daemonEpoch: over.daemonEpoch, createdAt: over.createdAt ?? NOW, expiresAt: over.expiresAt === undefined ? new Date(NOW.getTime() + 30 * 86_400_000) : over.expiresAt });
 
 beforeAll(async () => {
   store = await createDbApprovalMirrorStore();
@@ -107,6 +107,27 @@ describe('the revoke owed to the machine', () => {
     await store.markRevoked({ id: 'ch_c', by: ownerId, now: new Date(LATER.getTime() + 2000) });
     await store.markAcknowledged({ id: 'ch_c', removed: 1, now: new Date(LATER.getTime() + 3000) });
     expect((await store.listUnacknowledgedRevokes(envId)).map((row) => row.id)).toEqual(['ch_b', 'ch_a']);
+  });
+});
+
+describe('Codex P2 #7 (review round 1) — session-scoped rows die with the daemon process', () => {
+  it('a hello from a DIFFERENT epoch expires this env\'s session rows (expiresAt = now); 30d rows and other envs are untouched; the same epoch expires nothing', async () => {
+    await remember('ch_session_old', { scope: 'session', expiresAt: null, daemonEpoch: 'ep_1' });
+    await remember('ch_session_unknown', { scope: 'session', expiresAt: null, daemonEpoch: null });
+    await remember('ch_30d', { scope: '30d' });
+    await remember('ch_theirs_session', { envId: otherEnvId, userId: otherOwnerId, scope: 'session', expiresAt: null, daemonEpoch: 'ep_1' });
+    expect(await store.expireSessionRowsForOtherEpoch({ envId, epoch: 'ep_1', now: LATER })).toBe(1);
+    expect((await store.listActiveForEnv({ envId, now: LATER, limit: 50 })).map((row) => row.id).sort()).toEqual(['ch_30d', 'ch_session_old']);
+    expect(await store.expireSessionRowsForOtherEpoch({ envId, epoch: 'ep_2', now: LATER })).toBe(1);
+    expect((await store.listActiveForEnv({ envId, now: LATER, limit: 50 })).map((row) => row.id)).toEqual(['ch_30d']);
+    expect((await store.findById('ch_session_old'))?.expiresAt?.getTime()).toBe(LATER.getTime());
+    expect((await store.listActiveForEnv({ envId: otherEnvId, now: LATER, limit: 50 })).map((row) => row.id)).toEqual(['ch_theirs_session']);
+    expect(await store.expireSessionRowsForOtherEpoch({ envId, epoch: 'ep_2', now: new Date(LATER.getTime() + 1) })).toBe(0);
+  });
+
+  it('remember stores the epoch on a session row only', async () => {
+    expect((await remember('ch_s', { scope: 'session', expiresAt: null, daemonEpoch: 'ep_9' })).daemonEpoch).toBe('ep_9');
+    expect((await remember('ch_d', { scope: '30d', daemonEpoch: 'ep_9' })).daemonEpoch).toBeNull();
   });
 });
 

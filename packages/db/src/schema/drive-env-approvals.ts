@@ -59,6 +59,15 @@ export const driveEnvApprovals = pgTable('drive_env_approvals', {
   /** The owner's choice on the card. `once` is never durable and never mirrored. */
   scope: text('scope').notNull(),
 
+  /**
+   * For a `session`-scoped row: the daemon process (its attested hello epoch)
+   * that holds it. The machine forgets session approvals when that process
+   * exits, so a hello from a DIFFERENT epoch expires every session row of
+   * this env (`expiresAt = now`) — the mirror never outlives what it mirrors
+   * (Codex P2 #7, review round 1). NULL for durable scopes.
+   */
+  daemonEpoch: text('daemonEpoch'),
+
   createdAt: timestamp('createdAt', { mode: 'date' }).notNull(),
   /** `null` = until revoked. Mirrors `approvalExpiry(scope, createdAt)` on the machine. */
   expiresAt: timestamp('expiresAt', { mode: 'date' }),
