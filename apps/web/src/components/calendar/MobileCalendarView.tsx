@@ -95,6 +95,11 @@ export function MobileCalendarView({
     () => parentDate ?? new Date()
   );
   const [pinnedDate, setPinnedDate] = useState<Date | null>(() => parentDate ?? new Date());
+  // The month the agenda window covers. Deliberately separate from
+  // `selectedDate`, which scroll-sync moves: deriving the window from it meant
+  // scrolling into the trailing days of a month rebuilt the entire list under
+  // the user's finger. Only explicit navigation moves the window.
+  const [windowDate, setWindowDate] = useState<Date>(() => parentDate ?? new Date());
   const hasScrolledOnce = useRef(false);
 
   const agendaRef = useRef<MobileAgendaHandle>(null);
@@ -109,6 +114,7 @@ export function MobileCalendarView({
     // onDateChange. Setters stay out of the updater -- StrictMode calls it twice.
     if (isSameDay(parentDate, selectedDate)) return;
     setSelectedDate(parentDate);
+    setWindowDate(parentDate);
     setPinnedDate(parentDate);
     setPendingScroll(parentDate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -128,63 +134,62 @@ export function MobileCalendarView({
     setPendingScroll(null);
   }, [pendingScroll, isLoading]);
 
-  // The window useCalendarData has actually fetched. Keyed on the month, not the
-  // date, so scroll-sync within a month does not hand the agenda a new array.
-  const monthKey = format(selectedDate, 'yyyy-MM');
+  // Matches the window useCalendarData fetches for this month. Keyed on the
+  // month so a same-month navigation does not hand the agenda a new array.
+  const windowKey = format(windowDate, 'yyyy-MM');
   const agendaDays = useMemo(
     () =>
       eachDayOfInterval({
-        start: startOfWeek(startOfMonth(selectedDate)),
-        end: endOfWeek(endOfMonth(selectedDate)),
+        start: startOfWeek(startOfMonth(windowDate)),
+        end: endOfWeek(endOfMonth(windowDate)),
       }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- monthKey is the identity of selectedDate that matters here
-    [monthKey]
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- windowKey is the identity of windowDate that matters here
+    [windowKey]
   );
 
+  /**
+   * `navigate` separates the two ways the date moves. A deliberate jump -- a
+   * strip tap, Today, the month picker, a swipe -- moves the window, tells the
+   * parent (which owns the fetch), pins the day so it survives being empty, and
+   * scrolls to it. Scroll-sync only slides the strip's highlight to keep up with
+   * the list; doing any of the rest of it would rebuild or re-scroll the agenda
+   * under the user's own gesture.
+   */
   const goToDate = useCallback(
-    (date: Date, { scroll, propagate = true }: { scroll: boolean; propagate?: boolean }) => {
+    (date: Date, { navigate }: { navigate: boolean }) => {
       setSelectedDate(date);
-      // The parent owns the fetch window, which is month-derived, so telling it
-      // about every day boundary a scroll crosses only buys a re-render of the
-      // whole tree mid-gesture.
-      if (propagate) handlers.onDateChange(date);
-      if (scroll) {
-        setPinnedDate(date);
-        setPendingScroll(date);
-      }
+      if (!navigate) return;
+      setWindowDate(date);
+      setPinnedDate(date);
+      setPendingScroll(date);
+      handlers.onDateChange(date);
     },
     [handlers]
   );
 
   const handleDateSelect = useCallback(
     (date: Date) => {
-      goToDate(date, { scroll: true });
+      goToDate(date, { navigate: true });
       setIsStripExpanded(false);
     },
     [goToDate]
   );
 
-  // Scrolling the agenda past a day boundary moves the strip, but must not
-  // scroll the agenda back -- that would fight the user's own gesture.
   const handleVisibleDateChange = useCallback(
-    (date: Date) =>
-      goToDate(date, {
-        scroll: false,
-        propagate: format(date, 'yyyy-MM') !== monthKey,
-      }),
-    [goToDate, monthKey]
+    (date: Date) => goToDate(date, { navigate: false }),
+    [goToDate]
   );
 
   const handleMonthSelect = useCallback(
     (date: Date) => {
-      goToDate(date, { scroll: true });
+      goToDate(date, { navigate: true });
       setIsMonthPickerOpen(false);
     },
     [goToDate]
   );
 
   const handleTodayClick = useCallback(() => {
-    goToDate(new Date(), { scroll: true });
+    goToDate(new Date(), { navigate: true });
   }, [goToDate]);
 
   const handleCreateEvent = useCallback(() => {
@@ -244,7 +249,7 @@ export function MobileCalendarView({
     const nextDate = isStripExpanded
       ? (step > 0 ? addMonths : subMonths)(selectedDate, 1)
       : (step > 0 ? addWeeks : subWeeks)(selectedDate, 1);
-    goToDate(nextDate, { scroll: true });
+    goToDate(nextDate, { navigate: true });
   }, [isStripExpanded, selectedDate, goToDate]);
 
   if (isLoading) {

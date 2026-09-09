@@ -99,6 +99,8 @@ export function MobileWeekStrip({
               key={day.toISOString()}
               onClick={() => onDateSelect(day)}
               aria-current={isSelected ? 'date' : undefined}
+              // The visible label is a bare number; say which date it is.
+              aria-label={format(day, 'EEEE, MMMM d')}
               className="flex flex-col items-center gap-0.5 rounded-lg py-1"
             >
               {!expanded && (
