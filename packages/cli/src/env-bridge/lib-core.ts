@@ -22,6 +22,8 @@ export { executionRequestForFrame, GRANT_FRAME_TYPES, grantRequestForFrame } fro
 export type { GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 export { decideExecution } from '@pagespace/lib/env-bridge/decide-execution';
 export type { DecideExecutionInput, ExecutionVerdict, NormalizedRequest } from '@pagespace/lib/env-bridge/decide-execution';
+export { APPROVAL_SCOPES, DEFAULT_APPROVAL_SCOPE, approvalExpiry, isDurableScope, parseApprovalsFile, serializeApprovalsFile } from '@pagespace/lib/env-bridge/decide-approval';
+export type { ApprovalScope, DurableApproval } from '@pagespace/lib/env-bridge/decide-approval';
 export { parseMachinePolicy } from '@pagespace/lib/env-bridge/policy-types';
 export type { AdvertisedCapabilities, MachinePolicy, ServerPolicy } from '@pagespace/lib/env-bridge/policy-types';
 export type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';

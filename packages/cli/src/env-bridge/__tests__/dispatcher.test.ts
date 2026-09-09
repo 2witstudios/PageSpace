@@ -9,12 +9,13 @@ import type { MachinePolicy } from '@pagespace/lib/env-bridge/policy-types';
 import type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
 import { createDispatcher, DAEMON_CAPABILITIES, type DispatcherDeps } from '../dispatcher.js';
 import { createDaemonNonceStore } from '../nonce-store.js';
+import { createApprovalsStore } from '../approvals-store.js';
 import { generateMachineKeypair, signWithMachineKey } from '../keypair.js';
 import { ed25519Verify, envBridgeHash } from '../crypto.js';
 import type { AuditEntry } from '../audit-log.js';
 import type { ExecRunner } from '../exec-runner.js';
 import type { FsRunner } from '../fs-runner.js';
-import type { AskPrompter } from '../ask.js';
+import type { AskInput, AskPrompter } from '../ask.js';
 
 // ---- a real server key and a real machine key -------------------------------
 const serverPair = generateKeyPairSync('ed25519');
@@ -269,7 +270,16 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
 
   describe('ask mode', () => {
     function askHarness(answer: boolean | (() => boolean), overrides: Partial<DispatcherDeps> = {}) {
-      const ask: AskPrompter & { calls: number } = { calls: 0, ask: async () => { ask.calls += 1; return typeof answer === 'function' ? answer() : answer; } };
+      const ask: AskPrompter & { calls: number; inputs: AskInput[] } = {
+        calls: 0,
+        inputs: [],
+        ask: async (input) => {
+          ask.calls += 1;
+          ask.inputs.push(input);
+          const approved = typeof answer === 'function' ? answer() : answer;
+          return approved ? { approved: true, scope: '30d' } : { approved: false };
+        },
+      };
       return { ...harness({ policy: () => ASK_POLICY, ask, ...overrides }), ask };
     }
 
@@ -285,7 +295,7 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
       const h = askHarness(true);
       expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { type: 'exec_result', exitCode: 0 } });
       expect(h.spawnRun).toHaveBeenCalledTimes(1);
-      expect(h.audits[0]?.verdict).toBe('allow');
+      expect(h.audits[0]?.verdict).toBe('allow:approved:30d');
     });
 
     it('added-1: verifyGrant is called EXACTLY once per grant even when the owner approves — the held Grant is reused, never re-verified', async () => {
@@ -317,7 +327,7 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
 
     it('added-5: the normalized request handed to the prompt is frozen — it cannot be mutated while the owner reads it', async () => {
       let seen: NormalizedRequest | null = null;
-      const ask: AskPrompter = { ask: async (input) => { seen = input.request; return false; } };
+      const ask: AskPrompter = { ask: async (input) => { seen = input.request; return { approved: false }; } };
       const h = harness({ policy: () => ASK_POLICY, ask });
       await h.dispatcher.handle(execFrame());
       expect(Object.isFrozen(seen)).toBe(true);
@@ -327,6 +337,122 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
     it('given an ask verdict with NO prompter available (headless), should deny `ask_unavailable` rather than run or hang', async () => {
       const h = harness({ policy: () => ASK_POLICY, ask: null });
       expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'ask_unavailable' } });
+    });
+  });
+
+  describe('GA wave 2 · leaf 1 — durable approvals keyed (envId, userId, op, subject), never the session', () => {
+    const BIN: Record<string, string> = { tool: '/usr/bin/tool', rm: '/bin/rm' };
+    function durableHarness(answer: boolean | (() => boolean), scope: 'once' | 'session' | '30d' | 'until_revoked' = '30d', overrides: Partial<DispatcherDeps> = {}) {
+      const fs = { content: null as string | null };
+      const writes: string[] = [];
+      const approvals = createApprovalsStore({
+        path: '/home/me/.pagespace/env-approvals.json',
+        uid: 501,
+        open: () => (fs.content === null ? null : { uid: 501, mode: 0o100600, content: fs.content }),
+        write: async (_p, content) => {
+          writes.push(content);
+          fs.content = content;
+        },
+        now: () => NOW,
+      });
+      const ask: AskPrompter & { calls: number } = {
+        calls: 0,
+        ask: async () => {
+          ask.calls += 1;
+          const approved = typeof answer === 'function' ? answer() : answer;
+          return approved ? { approved: true, scope } : { approved: false };
+        },
+      };
+      const ids = { approvalId: () => 'ap_1' };
+      return { ...harness({ policy: () => ASK_POLICY, ask, approvals, resolveArgv0: (name) => BIN[name] ?? null, ids, ...overrides }), ask, approvals, fs, writes };
+    }
+    const fromSession = (session: string, extra: Partial<Extract<GrantFrame, { type: 'grant_exec' }>> = {}) =>
+      signedGrant({ type: 'grant_exec', cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' }, ...extra }, { principal: { ...PRINCIPAL, sessionId: session, conversationId: `conv_${session}` } });
+
+    it('given an approval of `tool a` (30d), a later `tool b` from a NEW session and conversation runs with NO prompt, audited allow:approval:<id>', async () => {
+      const h = durableHarness(true);
+      expect(await h.dispatcher.handle(fromSession('s1'))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
+      expect(h.ask.calls).toBe(1);
+      expect(h.writes).toHaveLength(1);
+      expect(JSON.parse(h.writes[0]!)).toEqual({ version: 1, approvals: [{ approvalId: 'ap_1', envId: ENV_ID, userId: 'u1', op: 'exec', subject: 'exec:/usr/bin/tool', scope: '30d', createdAt: NOW, expiresAt: NOW + 30 * 24 * 3600 * 1000 }] });
+      expect(await h.dispatcher.handle(fromSession('s2', { args: ['b'] }))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
+      expect(h.ask.calls).toBe(1);
+      expect(h.audits[1]?.verdict).toBe('allow:approval:ap_1');
+      expect(h.spawnRun).toHaveBeenCalledTimes(2);
+    });
+
+    it('given an approval of `tool`, a later `rm` prompts again (subject differs) and a declined prompt runs nothing', async () => {
+      const h = durableHarness(() => h.ask.calls === 1);
+      await h.dispatcher.handle(fromSession('s1'));
+      expect(await h.dispatcher.handle(fromSession('s1', { cmd: 'rm', args: ['-rf', 'x'] }))).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'declined' } });
+      expect(h.ask.calls).toBe(2);
+      expect(h.spawnRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('given the prompt is answered with scope once, nothing is remembered: the same command from the same session prompts again', async () => {
+      const h = durableHarness(true, 'once');
+      await h.dispatcher.handle(fromSession('s1'));
+      await h.dispatcher.handle(fromSession('s1'));
+      expect(h.ask.calls).toBe(2);
+      expect(h.writes).toHaveLength(0);
+      expect(h.approvals.entries()).toEqual([]);
+    });
+
+    it('given scope session, the approval is remembered in this process only — nothing written', async () => {
+      const h = durableHarness(true, 'session');
+      await h.dispatcher.handle(fromSession('s1'));
+      await h.dispatcher.handle(fromSession('s2'));
+      expect(h.ask.calls).toBe(1);
+      expect(h.writes).toHaveLength(0);
+    });
+
+    it('given a request whose programs cannot be pinned down (`sh -c` with substitution), the prompt says so (subjects null) and NOTHING is remembered even on approval', async () => {
+      const h = durableHarness(true);
+      const frame = () => fromSession('s1', { cmd: 'sh', args: ['-c', 'tool $(rm -rf x)'] });
+      // `sh` resolves, so the request is well formed; its subjects are still null.
+      const withSh = { ...h, dispatcher: createDispatcher({ ...h.deps, resolveArgv0: (name) => ({ ...BIN, sh: '/bin/sh' })[name] ?? null }) };
+      await withSh.dispatcher.handle(frame());
+      await withSh.dispatcher.handle(frame());
+      expect(h.ask.calls).toBe(2);
+      expect(h.writes).toHaveLength(0);
+    });
+
+    it('given a durable approval in the FILE from an earlier daemon run, a fresh daemon runs the covered command with no prompt (a new chat does not re-prompt)', async () => {
+      const h = durableHarness(false);
+      h.fs.content = JSON.stringify({ version: 1, approvals: [{ approvalId: 'old', envId: ENV_ID, userId: 'u1', op: 'exec', subject: 'exec:/usr/bin/tool', scope: 'until_revoked', createdAt: 1, expiresAt: null }] });
+      expect(await h.dispatcher.handle(fromSession('s9'))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
+      expect(h.ask.calls).toBe(0);
+    });
+
+    it('given an approval for ANOTHER user or another env in the file, should still prompt (all four key parts)', async () => {
+      const h = durableHarness(false);
+      h.fs.content = JSON.stringify({ version: 1, approvals: [
+        { approvalId: 'o1', envId: ENV_ID, userId: 'u2', op: 'exec', subject: 'exec:/usr/bin/tool', scope: 'until_revoked', createdAt: 1, expiresAt: null },
+        { approvalId: 'o2', envId: 'env_other', userId: 'u1', op: 'exec', subject: 'exec:/usr/bin/tool', scope: 'until_revoked', createdAt: 1, expiresAt: null },
+      ] });
+      expect(await h.dispatcher.handle(fromSession('s9'))).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'declined' } });
+      expect(h.ask.calls).toBe(1);
+    });
+
+    it('given a file the daemon does not trust (writable by others), no approval in it counts', async () => {
+      const h = durableHarness(false, '30d', {});
+      const store = createApprovalsStore({ path: '/p', uid: 501, open: () => ({ uid: 501, mode: 0o100666, content: JSON.stringify({ version: 1, approvals: [{ approvalId: 'old', envId: ENV_ID, userId: 'u1', op: 'exec', subject: 'exec:/usr/bin/tool', scope: 'until_revoked', createdAt: 1, expiresAt: null }] }) }), write: async () => undefined, now: () => NOW });
+      const d = createDispatcher({ ...h.deps, approvals: store });
+      expect(await d.handle(fromSession('s9'))).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'declined' } });
+    });
+
+    it('an approval is written ONLY after the byte-compare allowed the request: a drift between prompt and answer (approval_mismatch) remembers nothing', async () => {
+      const probe = fakeProbe();
+      const h = durableHarness(() => { probe.existing[ROOT] = `${ROOT}-elsewhere`; probe.existing[`${ROOT}-elsewhere`] = `${ROOT}-elsewhere`; return true; }, '30d', { probe });
+      expect(await h.dispatcher.handle(fromSession('s1'))).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'approval_mismatch' } });
+      expect(h.writes).toHaveLength(0);
+      expect(h.approvals.entries()).toEqual([]);
+    });
+
+    it('a policy that PRE-APPROVES the op never consults approvals and audits plain allow', async () => {
+      const h = durableHarness(false, '30d', { policy: () => POLICY });
+      expect(await h.dispatcher.handle(fromSession('s1'))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
+      expect(h.audits[0]?.verdict).toBe('allow');
     });
   });
 

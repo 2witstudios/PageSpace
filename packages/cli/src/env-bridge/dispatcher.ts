@@ -49,6 +49,7 @@ import type { AuditLog } from './audit-log.js';
 import type { ExecRunner } from './exec-runner.js';
 import type { FsRunner } from './fs-runner.js';
 import type { AskPrompter } from './ask.js';
+import type { ApprovalsStore } from './approvals-store.js';
 
 /** What this daemon can do in M1: shell and files. PTY is M2; checkpoints are never assumed (invariant 12). */
 export const DAEMON_CAPABILITIES: AdvertisedCapabilities = { shell: true, pty: false, fs: true, checkpoint: false };
@@ -88,6 +89,16 @@ export interface DispatcherDeps {
   readonly audit: AuditLog;
   /** `null` when the daemon cannot prompt (headless); an `ask` verdict is then a deny. */
   readonly ask: AskPrompter | null;
+  /**
+   * Durable approvals (GA wave 2): consulted by `decideExecution` after
+   * normalisation, written ONLY after an owner's approval of a byte-compared
+   * request. Omitted = nothing is ever remembered.
+   */
+  readonly approvals?: ApprovalsStore;
+  /** The PATH walk (`command-resolver.ts`) that turns an exec's argv0 into the subject an approval is keyed on. */
+  readonly resolveArgv0?: (name: string) => string | null;
+  /** Id source for approvals the TERMINAL prompt writes (a chat click's approval takes its challenge id). */
+  readonly ids?: { approvalId(): string };
   readonly log: (line: string) => void;
   /** The socket frame limit; bounds what an fs_read may return. */
   readonly limits: FrameLimits;
@@ -151,6 +162,8 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     const grant = verdict.grant;
     if (grantPredatesDaemon(grant.iat, deps.startedAt)) return denied(grant.grantId, PREDATES_DAEMON_REASON, { grant, op: grant.op });
 
+    /** The audit word for an allow: how it came about. */
+    let allowVerdict = 'allow';
     const decideInput: DecideExecutionInput = {
       grant,
       request: executionRequestForFrame(frame),
@@ -158,6 +171,9 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       serverPolicy: SERVER_POLICY_CARRIED_BY_SIGNATURE,
       capabilities: DAEMON_CAPABILITIES,
       probe: deps.probe,
+      // Durable approvals are read from the machine's own file (and this
+      // process's session set) — never from anything the server sent.
+      ...(deps.approvals !== undefined && { approvals: { entries: deps.approvals.entries(), now: deps.now(), resolveArgv0: deps.resolveArgv0 ?? (() => null) } }),
     };
     let decision = gates.decideExecution(decideInput);
     const roots = decideInput.machinePolicy?.roots ?? [];
@@ -168,12 +184,21 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       // re-verified (its nonce is spent). The request the owner sees is frozen
       // and handed back unchanged as the approval.
       const shown = freezeRequest(decision.request);
-      const approved = await deps.ask.ask({ grantId: grant.grantId, principal: grant.principal, op: grant.op, request: shown });
-      if (!approved) return denied(grant.grantId, 'declined', { grant, op: grant.op, verdict: 'ask:declined' });
+      const subjects = decision.subjects;
+      const answer = await deps.ask.ask({ grantId: grant.grantId, principal: grant.principal, op: grant.op, request: shown, subjects });
+      if (!answer.approved) return denied(grant.grantId, 'declined', { grant, op: grant.op, verdict: 'ask:declined' });
       decision = gates.decideExecution({ ...decideInput, localApproval: { grantId: grant.grantId, approvedAt: deps.now(), request: shown } });
+      // Remembered ONLY once the byte-compare allowed it, and only under the
+      // subjects the owner was told about. `once` and null subjects remember nothing.
+      if (decision.kind === 'allow' && subjects !== null && answer.scope !== 'once' && deps.approvals !== undefined) {
+        await deps.approvals.remember({ approvalId: deps.ids?.approvalId() ?? `local_${grant.grantId}`, envId: deps.envId, userId: grant.principal.userId, op: grant.op, subjects, scope: answer.scope });
+      }
+      if (decision.kind === 'allow') decision = { ...decision, basis: { kind: 'fresh_approval' } };
+      allowVerdict = `allow:approved:${answer.scope}`;
     }
     if (decision.kind === 'deny') return denied(grant.grantId, decision.reason, { grant, op: grant.op });
     if (decision.kind !== 'allow') return denied(grant.grantId, 'ask_unresolved', { grant, op: grant.op });
+    if (decision.basis.kind === 'durable_approval') allowVerdict = `allow:approval:${decision.basis.approvalIds.join(',')}`;
 
     // Allow: the normalized request is the ONLY thing the runners ever see.
     const normalized = decision.request;
@@ -185,7 +210,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
           const ceiling = execOutputCeiling(deps.limits);
           const bounded = normalized.maxBytes > ceiling ? { ...normalized, maxBytes: ceiling, clamped: true } : normalized;
           const outcome = await deps.execRunner.run(bounded);
-          await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: 'allow', argsHash: grant.argsHash, exitCode: outcome.exitCode });
+          await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: allowVerdict, argsHash: grant.argsHash, exitCode: outcome.exitCode });
           return reply({ type: 'exec_result', grantId: grant.grantId, exitCode: outcome.exitCode, stdoutB64: outcome.stdout.toString('base64'), stderrB64: outcome.stderr.toString('base64'), truncated: outcome.truncated });
         }
         case 'fs_read': {
@@ -193,13 +218,13 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
           if (outcome.kind === 'unsupported') return denied(grant.grantId, `unsupported_${outcome.reason}`, { grant, op: grant.op });
           if (outcome.kind === 'too_large') return denied(grant.grantId, 'too_large', { grant, op: grant.op, verdict: `deny:too_large:${outcome.size}>${outcome.maxContentBytes}` });
           if (outcome.kind === 'error') return denied(grant.grantId, 'fs_error', { grant, op: grant.op, verdict: `deny:fs_error:${outcome.error}` });
-          await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: 'allow', argsHash: grant.argsHash, exitCode: null });
+          await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: allowVerdict, argsHash: grant.argsHash, exitCode: null });
           return reply({ type: 'fs_read_result', grantId: grant.grantId, found: outcome.found, ...(outcome.contentB64 !== undefined && { contentB64: outcome.contentB64 }) });
         }
         case 'fs_write': {
           const files = frame.type === 'grant_fs_write' ? frame.files.map((file) => ({ contentB64: file.contentB64, mode: file.mode ?? null })) : [];
           const outcome = await deps.fsRunner.write(normalized, files, { roots });
-          await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: outcome.ok ? 'allow' : `allow:write_failed:${outcome.error ?? ''}`, argsHash: grant.argsHash, exitCode: null });
+          await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: outcome.ok ? allowVerdict : `${allowVerdict}:write_failed:${outcome.error ?? ''}`, argsHash: grant.argsHash, exitCode: null });
           return reply({ type: 'fs_write_result', grantId: grant.grantId, ok: outcome.ok, ...(outcome.error !== undefined && { error: outcome.error }) });
         }
         case 'pty_open':

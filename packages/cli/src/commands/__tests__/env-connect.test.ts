@@ -3,11 +3,12 @@ import { EventEmitter } from 'node:events';
 import { createHash, generateKeyPairSync, sign as nodeSign } from 'node:crypto';
 import { encodeFrame, decodeFrame, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
 import { encodeRevokeForSigning, verifyHello } from '@pagespace/lib/env-bridge/machine-signatures';
-import { decodeBase64 } from '@pagespace/lib/env-bridge/grant';
+import { canonicalizeArgs, decodeBase64, encodeGrant, type Grant } from '@pagespace/lib/env-bridge/grant';
+import { grantRequestForFrame, type GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 import { createEnvConnectHandler, PID_HEARTBEAT_MS, pidFilePath, type EnvConnectHandlerDeps, type PidRecord } from '../env/connect.js';
 import { bridgeSocketUrl } from '../../env-bridge/secure-host.js';
 import { generateMachineKeypair, signWithMachineKey } from '../../env-bridge/keypair.js';
-import { ed25519Verify } from '../../env-bridge/crypto.js';
+import { ed25519Verify, envBridgeHash } from '../../env-bridge/crypto.js';
 import type { BridgeSocket } from '../../env-bridge/ws-client.js';
 import type { ExecRunner } from '../../env-bridge/exec-runner.js';
 import { machineProfileName, type HostCredential, type MachineHostCredential } from '../../credentials/serialize.js';
@@ -109,6 +110,7 @@ function harness(overrides: Partial<EnvConnectHandlerDeps> & { policy?: string |
   const pidWrites: Array<{ path: string; record: PidRecord }> = [];
   const pidRemoves: string[] = [];
   const auditLines: string[] = [];
+  const approvalWrites: Array<{ path: string; content: string }> = [];
   const signals: Array<(signal: string) => void> = [];
   const exit = vi.fn<(code: number) => void>();
   const execRunner: ExecRunner & { killed: number } = { killed: 0, run: async () => ({ exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), truncated: false, timedOut: false }), killAll() { this.killed += 1; }, liveCount: () => 0 };
@@ -123,7 +125,8 @@ function harness(overrides: Partial<EnvConnectHandlerDeps> & { policy?: string |
     pid: 4242,
     argv0: 'pagespace',
     platform: 'darwin',
-    openPolicy: () => {
+    openPolicy: (path) => {
+      if (path.endsWith('env-approvals.json')) return null;
       if (policyStat === null || policy === null) return null;
       return { uid: policyStat.uid, mode: policyStat.mode, content: policy };
     },
@@ -134,11 +137,13 @@ function harness(overrides: Partial<EnvConnectHandlerDeps> & { policy?: string |
     createFsRunner: () => ({ read: async () => ({ kind: 'read', found: false }), write: async () => ({ kind: 'write', ok: true }) }),
     createSocket: (url, headers) => { const s = new FakeSocket(url, headers); sockets.push(s); return s; },
     confirm: async () => false,
+    writeApprovals: async (path, content) => void approvalWrites.push({ path, content }),
+    approvalId: () => 'ap_test',
     onSignal: (handler) => void signals.push(handler),
     exit,
     ...rest,
   };
-  return { deps, store, sockets, pidWrites, pidRemoves, auditLines, signals, exit, execRunner, handler: createEnvConnectHandler(deps), socket: () => sockets[sockets.length - 1]! };
+  return { deps, store, sockets, pidWrites, pidRemoves, auditLines, approvalWrites, signals, exit, execRunner, handler: createEnvConnectHandler(deps), socket: () => sockets[sockets.length - 1]! };
 }
 
 const flush = () => vi.advanceTimersByTimeAsync(0);
@@ -184,6 +189,48 @@ describe('pagespace env connect <enrollmentId>', () => {
     expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_RUNTIME_ERROR);
     expect(c.err.text()).toMatch(/"ask" needs an interactive terminal/);
     expect(h.sockets).toHaveLength(0);
+  });
+
+  it('GA wave 2 · leaf 1: at start the daemon names the approvals file and how many approvals are in force (none ⇒ 0)', async () => {
+    const h = harness();
+    const c = ctx(false);
+    await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']));
+    expect(c.err.text()).toMatch(/Approvals \/home\/me\/\.pagespace\/env-approvals\.json: 0 in force/);
+  });
+
+  it('GA wave 2 · leaf 1: in ask mode, a durable approval in ~/.pagespace/env-approvals.json runs a covered command from a NEW session with NO terminal prompt; an uncovered one prompts', async () => {
+    const ASK = JSON.stringify({ mode: 'ask', principals: ['u1'], ops: [], roots: ['/home/me/proj'], envAllowlist: [] });
+    const APPROVALS = JSON.stringify({ version: 1, approvals: [{ approvalId: 'old', envId: 'env_1', userId: 'u1', op: 'exec', subject: 'exec:/usr/bin/true', scope: 'until_revoked', createdAt: 1, expiresAt: null }] });
+    const confirm = vi.fn(async () => false);
+    const runs: string[] = [];
+    const h = harness({
+      policy: ASK,
+      confirm,
+      openPolicy: (path) => ({ uid: UID, mode: 0o100600, content: path.endsWith('env-approvals.json') ? APPROVALS : ASK }),
+      createExecRunner: () => ({ run: async (request) => { runs.push(request.cmd ?? ''); return { exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), truncated: false, timedOut: false }; }, killAll: () => undefined, liveCount: () => 0 }),
+    });
+    const c = ctx(true);
+    await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']));
+    expect(c.err.text()).toMatch(/Approvals .*: 1 in force/);
+    await flush();
+    h.socket().open();
+    await flush();
+    h.socket().receive({ type: 'ping', ts: 1 }); // the ack
+    await flush();
+    const grantFor = (cmd: string, n: number) => {
+      const unsigned = { type: 'grant_exec' as const, cmd, args: [], cwd: '/home/me/proj', env: {} };
+      const request = grantRequestForFrame({ ...unsigned, grant: {}, sig: '' } as GrantFrame);
+      const grant: Grant = { grantId: `g${n}`, envId: 'env_1', principal: { userId: 'u1', sessionId: `brand-new-session-${n}`, conversationId: `new-chat-${n}` }, op: 'exec', argsHash: envBridgeHash(canonicalizeArgs(request.args)), iat: NOW - 1000, exp: NOW + 30_000, nonce: `n${n}` };
+      return { ...unsigned, grant: { ...grant, principal: { ...grant.principal } }, sig: Buffer.from(nodeSign(null, encodeGrant(grant), serverPair.privateKey)).toString('base64') } as unknown as Frame;
+    };
+    h.socket().receive(grantFor('/usr/bin/true', 1));
+    await flush();
+    expect(runs).toEqual(['/usr/bin/true']);
+    expect(confirm).not.toHaveBeenCalled();
+    h.socket().receive(grantFor('/usr/bin/false', 2));
+    await flush();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(runs).toEqual(['/usr/bin/true']);
   });
 
   it('R1: given NO policy file, should START anyway (deny-all), say why, write the pid file, mint a token and send a signed hello with an empty policy digest', async () => {

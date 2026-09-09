@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Approvals are remembered per program, with a scope you choose, in
+  `~/.pagespace/env-approvals.json`.** An `ask`-mode approval used to live in the daemon's memory
+  under (you, session, operation): a new chat asked again, and approving `git status` silently
+  covered every later `exec` in that session. It is now keyed on (environment, you, operation,
+  program) — for a shell command line, every program it names — for `once`, until the daemon
+  stops, `30 days` (the default) or `until revoked`. Approving `git status` covers `git push` from
+  a new chat tomorrow and never covers `rm`. A command line whose programs cannot be pinned down
+  (`$(…)`, `eval`, a nested `sh -c`, `find -exec`, `sudo`) is never remembered. The file follows the
+  policy file's trust rules (yours, not writable by others, read through one descriptor) and any
+  defect in it makes the daemon ask more, never less. `PAGESPACE_ENV_APPROVALS` overrides the path.
+
 - **`pagespace env enroll` writes a starter policy naming you as the only principal.** If
   `~/.pagespace/env-policy.json` (or `PAGESPACE_ENV_POLICY`) does not exist, enrolling creates it:
   `mode: ask`, no pre-approved operations, the directory you ran `enroll` in as the only root, and

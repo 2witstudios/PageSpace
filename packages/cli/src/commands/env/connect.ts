@@ -37,10 +37,12 @@ import type { CommandHandler } from '../../router/router.js';
 import { signWithMachineKey, type SignWithMachineKey } from '../../env-bridge/keypair.js';
 import { ed25519Verify, envBridgeHash } from '../../env-bridge/crypto.js';
 import { createAuditLog, defaultAuditPath } from '../../env-bridge/audit-log.js';
-import { createAskPrompter } from '../../env-bridge/ask.js';
+import { createAskPrompter, describeScope, describeSubject } from '../../env-bridge/ask.js';
+import { createApprovalsStore, defaultApprovalsPath, writeApprovalsFile } from '../../env-bridge/approvals-store.js';
+import { resolveCommand, type CommandResolverDeps } from '../../env-bridge/command-resolver.js';
+import { APPROVAL_SCOPES, type ApprovalScope } from '../../env-bridge/lib-core.js';
 import { createDispatcher, DAEMON_CAPABILITIES } from '../../env-bridge/dispatcher.js';
 import { createNodeExecRunner, type ExecRunner } from '../../env-bridge/exec-runner.js';
-import type { CommandResolverDeps } from '../../env-bridge/command-resolver.js';
 import { createFsRunner, type FsRunner } from '../../env-bridge/fs-runner.js';
 import { createDaemonNonceStore } from '../../env-bridge/nonce-store.js';
 import { createPathProbe } from '../../env-bridge/path-probe.js';
@@ -89,6 +91,12 @@ export interface EnvConnectHandlerDeps {
   readonly createFsRunner: () => FsRunner;
   readonly createSocket: SocketFactory;
   readonly confirm: (message: string) => Promise<boolean>;
+  /** How long a terminal approval is remembered (GA wave 2); omitted ⇒ the default scope. */
+  readonly chooseScope?: (subjects: readonly string[]) => Promise<ApprovalScope>;
+  /** The atomic 0600 writer for `~/.pagespace/env-approvals.json`. */
+  readonly writeApprovals: (path: string, content: string) => Promise<void>;
+  /** Id for an approval the terminal prompt writes. */
+  readonly approvalId: () => string;
   /** Register a handler for SIGINT / SIGTERM. */
   readonly onSignal: (handler: (signal: string) => void) => void;
   readonly exit: (code: number) => void;
@@ -158,7 +166,19 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
     };
     const execRunner = deps.createExecRunner(resolver);
     const fsRunner = deps.createFsRunner();
-    const ask = loaded.policy?.mode === 'ask' && ctx.isTTY ? createAskPrompter({ confirm: deps.confirm, write: (chunk) => ctx.stderr.write(chunk) }) : null;
+    const ask = loaded.policy?.mode === 'ask' && ctx.isTTY ? createAskPrompter({ confirm: deps.confirm, chooseScope: deps.chooseScope, write: (chunk) => ctx.stderr.write(chunk) }) : null;
+
+    // Durable approvals (GA wave 2): the machine's own file, through the same
+    // one-descriptor adapter and trust rules as the policy. Re-read at every
+    // decision; written only after an owner's byte-compared approval.
+    const approvalsPath = defaultApprovalsPath(ctx.env, deps.homedir);
+    const approvals = createApprovalsStore({ path: approvalsPath, uid: deps.uid, open: deps.openPolicy, write: deps.writeApprovals, now: deps.now, log });
+    const approvalsLoaded = approvals.reload();
+    ctx.stderr.write(
+      approvalsLoaded.reason === null || approvalsLoaded.reason === 'missing'
+        ? `Approvals ${approvalsPath}: ${approvalsLoaded.approvals.length} in force.\n`
+        : `Approvals ${approvalsPath}: ignored (${approvalsLoaded.reason}) — every non-pre-approved request will ask.\n`,
+    );
 
     const dispatcher = createDispatcher({
       envId: credential.envId,
@@ -178,6 +198,9 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
       fsRunner,
       audit,
       ask,
+      approvals,
+      resolveArgv0: (name) => resolveCommand(name, resolver),
+      ids: { approvalId: deps.approvalId },
       log,
       limits: DEFAULT_FRAME_LIMITS,
     });
@@ -292,6 +315,17 @@ async function clackConfirm(message: string): Promise<boolean> {
   return answer === true;
 }
 
+/** The scope picker after an approval; Ctrl-C here is a decline (the prompter treats a throw as one). */
+async function clackChooseScope(subjects: readonly string[]): Promise<ApprovalScope> {
+  const answer = await clack.select<ApprovalScope>({
+    message: `Remember this approval of ${subjects.map(describeSubject).join(', ')} for how long?`,
+    initialValue: '30d',
+    options: APPROVAL_SCOPES.map((scope) => ({ value: scope, label: describeScope(scope) })),
+  });
+  if (clack.isCancel(answer)) throw new Error('cancelled');
+  return answer;
+}
+
 export const envConnectHandler: CommandHandler = createEnvConnectHandler({
   createCredentialStore,
   fetch: (...args) => globalThis.fetch(...args),
@@ -310,6 +344,9 @@ export const envConnectHandler: CommandHandler = createEnvConnectHandler({
   createFsRunner: () => createFsRunner(),
   createSocket: (url, headers) => new WebSocket(url, { headers }),
   confirm: clackConfirm,
+  chooseScope: clackChooseScope,
+  writeApprovals: writeApprovalsFile,
+  approvalId: () => `local_${crypto.randomUUID()}`,
   onSignal: (handler) => {
     process.on('SIGINT', () => handler('SIGINT'));
     process.on('SIGTERM', () => handler('SIGTERM'));
