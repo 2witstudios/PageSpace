@@ -66,6 +66,11 @@ import { driveEnvs, sqlStringList } from './drive-envs';
  * `sessionId` and `conversationId` are plain text: they name principals the
  * daemon's JSONL also names, and an audit row must outlive the session it
  * records.
+ *
+ * **GDPR.** Art 15: exported whole under `localEnvironmentActivity`
+ * (`collectUserLocalEnvActivity`, rows where `userId` is the subject — the
+ * requester, not the machine owner). Art 17: `userId` SET NULL on erasure, as
+ * above; the row itself goes with its env.
  */
 export const DRIVE_ENV_GRANT_AUDIT_OPS = ['exec', 'fs_read', 'fs_write', 'pty_open'] as const;
 

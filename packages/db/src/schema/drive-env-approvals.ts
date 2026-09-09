@@ -36,6 +36,12 @@ import { driveEnvs, sqlStringList } from './drive-envs';
  * cascades with the env; `userId` (the principal the approval is for) is SET
  * NULL on erasure. `summary` is the request the click approved, rendered by
  * the server for a person — never output.
+ *
+ * **GDPR.** Art 15: exported whole under `localEnvironmentApprovals`
+ * (`collectUserLocalEnvApprovals`): a row is the subject's if they clicked it
+ * (`userId`) OR it stands on a machine they own (`drive_env_local.ownerId`),
+ * revoked and expired rows included. Art 17: `userId` SET NULL on erasure; the
+ * row goes with its env.
  */
 export const DRIVE_ENV_APPROVAL_SCOPES = ['session', '30d', 'until_revoked'] as const;
 

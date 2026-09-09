@@ -29,6 +29,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   machines with its status and activity, and every approval you gave in the chat — what a machine
   will run without asking — each revocable. A revoke the machine could not receive is delivered the
   next time it connects, before it runs anything, and you are told when the machine has confirmed.
+  **Your data export** (Settings → Privacy → Export) now carries two more files:
+  `local-environment-activity.json` (what your agent asked local machines to run, and how each
+  answered) and `local-environment-approvals.json` (approvals you gave, or that stand on a machine
+  you own, revoked and expired ones included).
 
 - **Local Environments: commands need your click in the chat; file work runs on its own
   (opt-in).** Two tiers now. **Reading and writing files** inside the folders you allowed runs

@@ -58,6 +58,7 @@ on:
       # the runner that is NAMED, so a later exclude-list edit cannot silently
       # orphan them. The path filter covers the code under test.
       - 'packages/lib/src/services/drive-envs/**'
+      - 'packages/lib/src/compliance/export/**'
       - 'packages/lib/src/env-bridge/**'
       - 'packages/db/src/schema/drive-env-*.ts'
       - 'apps/web/src/lib/env-bridge/**'
@@ -253,6 +254,18 @@ jobs:
       # CAS from one that silently matches nothing. This runs them for real.
       - name: Run agent-session store integration tests
         run: bun run --filter '@pagespace/lib' test:db -- src/services/agent-workspaces/__tests__/agent-sessions-store.integration.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
+      # The Art 15 collectors for the local-environment tables (GA wave 3):
+      # `drive_env_grant_audit` (what the subject's agent ran) and
+      # `drive_env_approvals` (what their machines run unasked). Selection is
+      # `userId = subject` for the first and `clicker OR machine owner` for the
+      # second — a join with an OR that a mocked query chain cannot tell from
+      # one that matches everything. This is the NAMED runner for that suite.
+      - name: Run local-environment Art 15 collector tests
+        run: bun run --filter '@pagespace/lib' test:db -- src/compliance/export/__tests__/local-environment-activity-export.integration.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
