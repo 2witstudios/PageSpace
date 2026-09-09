@@ -101,6 +101,10 @@ export function MobileCalendarView({
   // the user's finger. Only explicit navigation moves the window.
   const [windowDate, setWindowDate] = useState<Date>(() => parentDate ?? new Date());
   const hasScrolledOnce = useRef(false);
+  // What we last handed the parent. The echo guard must compare against this, not
+  // selectedDate: scroll-sync moves selectedDate *without* notifying the parent, so
+  // an incoming date equal to the scrolled-to day would be dismissed as our own echo.
+  const lastSentToParent = useRef<Date | null>(parentDate ?? null);
 
   const agendaRef = useRef<MobileAgendaHandle>(null);
 
@@ -112,27 +116,14 @@ export function MobileCalendarView({
     if (!parentDate) return;
     // A guard, not a trigger. The effect fires on a new parentDate only, and
     // this makes it a no-op for the echo of our own onDateChange.
-    if (isSameDay(parentDate, selectedDate)) return;
+    if (lastSentToParent.current && isSameDay(parentDate, lastSentToParent.current)) return;
+    lastSentToParent.current = parentDate;
     setSelectedDate(parentDate);
     setWindowDate(parentDate);
     setPinnedDate(parentDate);
     setPendingScroll(parentDate);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedDate is read as a guard; adding it would re-run this on every scroll-sync
   }, [parentDate]);
-
-  useEffect(() => {
-    if (!pendingScroll) return;
-    // Crossing into an uncached month swaps the agenda for a spinner, so the
-    // ref is null here. Keep the request and retry when loading finishes --
-    // clearing it unconditionally stranded the user on the month's first day.
-    const landed = agendaRef.current?.scrollToDate(
-      pendingScroll,
-      hasScrolledOnce.current ? 'smooth' : 'auto'
-    );
-    if (!landed) return;
-    hasScrolledOnce.current = true;
-    setPendingScroll(null);
-  }, [pendingScroll, isLoading]);
 
   // Matches the window useCalendarData fetches for this month. Keyed on the
   // month so a same-month navigation does not hand the agenda a new array.
@@ -146,6 +137,23 @@ export function MobileCalendarView({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- windowKey is the identity of windowDate that matters here
     [windowKey]
   );
+
+  useEffect(() => {
+    if (!pendingScroll) return;
+    // Crossing into an uncached month swaps the agenda for a spinner, so the
+    // ref is null here. Keep the request and retry when loading finishes --
+    // clearing it unconditionally stranded the user on the month's first day.
+    const landed = agendaRef.current?.scrollToDate(
+      pendingScroll,
+      hasScrolledOnce.current ? 'smooth' : 'auto'
+    );
+    if (!landed) return;
+    hasScrolledOnce.current = true;
+    setPendingScroll(null);
+    // Everything that decides whether the target day has a section yet. isLoading
+    // alone is not enough: SWR reports it false while revalidating over cached
+    // data, so a day that only appears once fresh events arrive never retried.
+  }, [pendingScroll, isLoading, events, tasks, showTasks, agendaDays]);
 
   /**
    * `navigate` separates the two ways the date moves. A deliberate jump -- a
@@ -162,6 +170,7 @@ export function MobileCalendarView({
       setWindowDate(date);
       setPinnedDate(date);
       setPendingScroll(date);
+      lastSentToParent.current = date;
       handlers.onDateChange(date);
     },
     [handlers]
@@ -199,6 +208,8 @@ export function MobileCalendarView({
     if (isToday(selectedDate)) {
       start.setMinutes(0, 0, 0);
       start.setHours(now.getHours() + 1);
+      // After 23:00 the "next hour" is tomorrow; keep the event on the day in view.
+      if (!isSameDay(start, selectedDate)) start.setHours(23, 0, 0, 0);
     } else {
       start.setHours(9, 0, 0, 0);
     }
@@ -246,11 +257,14 @@ export function MobileCalendarView({
     if (!direction) return;
 
     const step = direction === 'next' ? 1 : -1;
+    // The expanded grid shows windowDate's month, so page from that. Stepping
+    // from selectedDate skipped a month whenever scroll-sync had carried it into
+    // the trailing days of the next one.
     const nextDate = isStripExpanded
-      ? (step > 0 ? addMonths : subMonths)(selectedDate, 1)
+      ? (step > 0 ? addMonths : subMonths)(windowDate, 1)
       : (step > 0 ? addWeeks : subWeeks)(selectedDate, 1);
     goToDate(nextDate, { navigate: true });
-  }, [isStripExpanded, selectedDate, goToDate]);
+  }, [isStripExpanded, selectedDate, windowDate, goToDate]);
 
   if (isLoading) {
     return (

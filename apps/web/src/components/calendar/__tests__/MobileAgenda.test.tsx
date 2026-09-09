@@ -259,11 +259,8 @@ describe('MobileAgenda secondary line', () => {
     assert({
       given: 'an event with no location and no attendees',
       should: 'render no secondary line for it',
-      actual: [
-        screen.queryByText(/guests/),
-        screen.queryByText(/·/),
-      ].every((node) => node === null),
-      expected: true,
+      actual: screen.queryAllByText(/guests|·/).length,
+      expected: 0,
     });
   });
 });
@@ -327,6 +324,52 @@ describe('MobileAgenda empty window', () => {
     assert({
       given: 'a window with no events or tasks at all',
       should: 'offer to create an event rather than showing an empty list',
+      actual: screen.getByRole('button', { name: /Create Event/ }) !== null,
+      expected: true,
+    });
+  });
+});
+
+describe('MobileAgenda day boundaries', () => {
+  test('an event ending exactly at midnight does not appear the next morning', () => {
+    // getEventsForDay matches on `end >= dayStart`, so this event also matches
+    // the 11th; without the filter it showed there as an all-day-looking chip.
+    renderAgenda([
+      event({
+        title: 'Evening deploy',
+        startAt: new Date(2027, 2, 10, 22, 0).toISOString(),
+        endAt: new Date(2027, 2, 11, 0, 0).toISOString(),
+      }),
+    ]);
+
+    assert({
+      given: 'an event ending exactly at midnight',
+      should: 'appear on the day it ran, and only that day',
+      actual: screen.getAllByText('Evening deploy').length,
+      expected: 1,
+    });
+
+    assert({
+      given: 'an event ending exactly at midnight',
+      should: 'not put a section on the following day',
+      actual: screen.queryByText('Thu 11') === null,
+      expected: true,
+    });
+  });
+
+  test('a picked day survives a window with nothing in it', () => {
+    renderAgenda([], DAY);
+
+    assert({
+      given: 'an empty window with a picked day',
+      should: 'still render the picked day rather than replacing the list',
+      actual: screen.getByText('Wed 10') !== null,
+      expected: true,
+    });
+
+    assert({
+      given: 'an empty window with a picked day',
+      should: 'still offer to create an event',
       actual: screen.getByRole('button', { name: /Create Event/ }) !== null,
       expected: true,
     });

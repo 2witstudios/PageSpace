@@ -131,7 +131,15 @@ export const MobileAgenda = forwardRef<MobileAgendaHandle, MobileAgendaProps>(
     const groups = useMemo<AgendaDay[]>(() => {
       return days
         .map((date) => {
-          const dayEvents = getEventsForDay(events, date);
+          const dayStart = new Date(date);
+          dayStart.setHours(0, 0, 0, 0);
+          const dayEvents = getEventsForDay(events, date).filter(
+            // getEventsForDay matches on `end >= dayStart`, so a timed event
+            // ending exactly at midnight also matches the following day. It has
+            // no presence there -- and as a banner chip it would read as an
+            // all-day event the next morning.
+            (event) => event.allDay || new Date(event.endAt).getTime() > dayStart.getTime()
+          );
           return {
             date,
             key: dayKey(date),
@@ -150,9 +158,13 @@ export const MobileAgenda = forwardRef<MobileAgendaHandle, MobileAgendaProps>(
         );
     }, [days, events, tasks, showTasks, pinnedDate]);
 
-    const hasAnything = groups.some(
+    const hasContent = groups.some(
       (group) => group.banner.length > 0 || group.timed.length > 0 || group.tasks.length > 0
     );
+    // Name the window, not the scrolled date: scroll-sync can carry selectedDate
+    // into an adjacent month. The middle of the range is always in the window's
+    // own month, since the range is that month plus partial weeks either side.
+    const windowMonth = days.length > 0 ? days[Math.floor(days.length / 2)] : selectedDate;
 
     const registerDay = useCallback((key: string, node: HTMLElement | null) => {
       if (node) dayRefs.current.set(key, node);
@@ -205,33 +217,6 @@ export const MobileAgenda = forwardRef<MobileAgendaHandle, MobileAgendaProps>(
       };
     }, []);
 
-    if (!hasAnything) {
-      return (
-        <div className="flex flex-1 min-h-0 flex-col items-center justify-center p-8 text-center">
-          <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-4">
-            <Calendar className="w-8 h-8 text-muted-foreground" />
-          </div>
-          <h3 className="font-medium text-lg mb-1">Nothing scheduled</h3>
-          <p className="text-sm text-muted-foreground mb-4">
-            {format(selectedDate, 'MMMM yyyy')} is empty
-          </p>
-          <Button variant="outline" size="sm" onClick={onCreateEvent}>
-            <Plus className="h-4 w-4 mr-1" />
-            Create Event
-          </Button>
-          {showGoogleCalendarHint && (
-            <Link
-              href="/settings/integrations/google-calendar"
-              className="flex items-center gap-1.5 text-sm mt-6 text-muted-foreground/70 hover:text-primary transition-colors"
-            >
-              <Calendar className="h-4 w-4" />
-              Import from Google Calendar
-            </Link>
-          )}
-        </div>
-      );
-    }
-
     return (
       <div
         ref={scrollRef}
@@ -249,6 +234,35 @@ export const MobileAgenda = forwardRef<MobileAgendaHandle, MobileAgendaProps>(
             registerDay={registerDay}
           />
         ))}
+
+        {/* An empty window keeps the pinned day above rather than replacing the
+            list wholesale: the pick stays visible, and scrollToDate can still
+            succeed instead of leaving the request pending forever. */}
+        {!hasContent && (
+          <div className="flex flex-col items-center px-8 py-10 text-center">
+            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-muted">
+              <Calendar className="h-8 w-8 text-muted-foreground" />
+            </div>
+            <h3 className="mb-1 text-lg font-medium">Nothing scheduled</h3>
+            <p className="mb-4 text-sm text-muted-foreground">
+              {format(windowMonth, 'MMMM yyyy')} is empty
+            </p>
+            <Button variant="outline" size="sm" onClick={onCreateEvent}>
+              <Plus className="mr-1 h-4 w-4" />
+              Create Event
+            </Button>
+            {showGoogleCalendarHint && (
+              <Link
+                href="/settings/integrations/google-calendar"
+                className="mt-6 flex items-center gap-1.5 text-sm text-muted-foreground/70 transition-colors hover:text-primary"
+              >
+                <Calendar className="h-4 w-4" />
+                Import from Google Calendar
+              </Link>
+            )}
+          </div>
+        )}
+
         {/* Clearance so the last row can sit above the create button. */}
         <div className="h-20" aria-hidden="true" />
       </div>
