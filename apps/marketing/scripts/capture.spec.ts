@@ -3,7 +3,6 @@ import path from "path";
 import fs from "fs";
 import { CANVAS, DEVICES, shotsFor, capturePath } from "../src/lib/app-store-shots";
 
-const BASE_URL = "http://localhost:3004";
 const OUTPUT_DIR = path.join(__dirname, "..", "output");
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 
@@ -36,7 +35,7 @@ test.describe("App Store screenshots", () => {
         });
         const page = await context.newPage();
 
-        await page.goto(`${BASE_URL}/screenshots/${device}/${shot.slug}`, { waitUntil: "networkidle" });
+        await page.goto(`/screenshots/${device}/${shot.slug}`, { waitUntil: "networkidle" });
         await page.waitForTimeout(500);
 
         // Numbered so the intended upload order survives a re-render — App
