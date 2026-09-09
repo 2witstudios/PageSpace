@@ -162,6 +162,8 @@ export function TaskDetailSheet({
               checked={isCompleted}
               onCheckedChange={() => onToggleComplete(task)}
               className="mt-1 h-5 w-5"
+              disabled={!canEdit}
+              aria-label={`${isCompleted ? 'Reopen' : 'Complete'} ${task.title}`}
             />
             <div className="flex-1 min-w-0">
               {isEditingTitle ? (
@@ -191,7 +193,8 @@ export function TaskDetailSheet({
                 <button
                   type="button"
                   className="w-full text-left bg-transparent border-0 p-0"
-                  onClick={startEditTitle}
+                  onClick={canEdit ? startEditTitle : undefined}
+                  disabled={!canEdit}
                 >
                   <span
                     className={cn(
@@ -229,6 +232,7 @@ export function TaskDetailSheet({
               <Select
                 value={task.status}
                 onValueChange={(value) => onStatusChange(task, value)}
+                disabled={!canEdit}
               >
                 <SelectTrigger className="h-10 w-full">
                   <SelectValue>
@@ -257,6 +261,7 @@ export function TaskDetailSheet({
               <Select
                 value={task.priority}
                 onValueChange={(value) => onPriorityChange(task, value)}
+                disabled={!canEdit}
               >
                 <SelectTrigger className="h-10 w-full">
                   <SelectValue>
@@ -285,6 +290,7 @@ export function TaskDetailSheet({
               <DueDatePicker
                 currentDate={task.dueDate}
                 onSelect={(date) => onDueDateChange(task, date)}
+                disabled={!canEdit}
               />
             </div>
           </div>
@@ -298,6 +304,7 @@ export function TaskDetailSheet({
                   driveId={task.driveId}
                   assignees={task.assignees || []}
                   onUpdate={(assigneeIds) => onMultiAssigneeChange(task, assigneeIds)}
+                  disabled={!canEdit}
                 />
               </div>
             </div>
@@ -367,6 +374,8 @@ export function TaskDetailSheet({
               variant="outline"
               className="h-11 text-destructive hover:text-destructive hover:bg-destructive/10"
               onClick={handleDelete}
+              disabled={!canEdit}
+              aria-label="Delete task"
             >
               <Trash2 className="h-4 w-4" />
             </Button>

@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { toDashboardTask } from '../toDashboardTask';
+import { toDashboardTask } from '../to-dashboard-task';
 import type { TaskItem, TaskStatusConfig } from '../task-list-types';
 import { getStatusDisplay } from '@/components/tasks/task-helpers';
+import { isCompletedStatus } from '../task-list-types';
 
 const assert = ({ given, should, actual, expected }: {
   given: string; should: string; actual: unknown; expected: unknown;
@@ -86,6 +87,35 @@ describe('status resolution', () => {
       should: 'resolve through getStatusDisplay as done',
       actual: getStatusDisplay(adapted).group,
       expected: 'done',
+    });
+  });
+
+  // The row derives its checkbox from this group, while the filter, the table
+  // and the completion guard all ask isCompletedStatus. If the two disagree the
+  // row ticks a task the filter still calls active, and unticking it does
+  // nothing visible.
+  it('never calls a task done that isCompletedStatus calls active', () => {
+    const configs = [config('shipped', { group: 'done' }), config('wip', { group: 'in_progress' })];
+    // 'completed' is a DEFAULT done slug, but absent from this list's vocabulary.
+    const adapted = toDashboardTask(task({ id: 't1', status: 'completed' }), ctx, configs);
+    assert({
+      given: 'a default done slug that the list vocabulary does not define',
+      should: 'agree with isCompletedStatus rather than the default config',
+      actual: {
+        rowSaysDone: getStatusDisplay(adapted).group === 'done',
+        viewSaysDone: isCompletedStatus('completed', configs),
+      },
+      expected: { rowSaysDone: false, viewSaysDone: false },
+    });
+  });
+
+  it('falls back to the default label when a custom config has an empty name', () => {
+    const configs = [config('completed', { name: '', group: 'done' })];
+    assert({
+      given: 'a custom config whose name is empty',
+      should: 'use the default label instead of rendering an empty badge',
+      actual: toDashboardTask(task({ id: 't1', status: 'completed' }), ctx, configs).statusLabel,
+      expected: 'Done',
     });
   });
 });

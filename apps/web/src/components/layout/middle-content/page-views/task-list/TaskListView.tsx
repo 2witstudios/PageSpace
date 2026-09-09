@@ -52,6 +52,7 @@ import {
   FileText,
   GripVertical,
   Zap,
+  Bell,
 } from 'lucide-react';
 import {
   DndContext,
@@ -94,7 +95,7 @@ import {
 import { TaskCompactRow } from '@/components/tasks/TaskCompactRow';
 import { TaskDetailSheet } from '@/components/tasks/TaskDetailSheet';
 import { TaskFilterButton } from '@/components/tasks/TaskFilterSheet';
-import { toDashboardTask } from './toDashboardTask';
+import { toDashboardTask } from './to-dashboard-task';
 import { StatusConfigManager } from './StatusConfigManager';
 import { TaskAgentTriggersDialog } from './TaskAgentTriggersDialog';
 import { TaskListWorkflowsDialog } from './TaskListWorkflowsDialog';
@@ -306,7 +307,11 @@ function TaskListView({ page }: TaskListViewProps) {
   const narrowSearchRef = useRef<HTMLInputElement>(null);
   const wideSearchRef = useRef<HTMLInputElement>(null);
   const visibleSearchInput = () =>
-    [narrowSearchRef.current, wideSearchRef.current].find((el) => el?.offsetParent !== null) ?? null;
+    // `el != null` first: optional chaining on a null ref yields `undefined`,
+    // and `undefined !== null` is true — so a null ref would MATCH and this
+    // would hand back the missing input instead of the visible one.
+    [narrowSearchRef.current, wideSearchRef.current]
+      .find((el) => el != null && el.offsetParent !== null) ?? null;
   const newTaskInputRef = useRef<HTMLInputElement>(null);
   // The compact list tracks the OPEN TASK BY ID, not by object: the sheet stays
   // mounted across SWR revalidations, and holding the row itself would pin the
@@ -912,6 +917,14 @@ function TaskListView({ page }: TaskListViewProps) {
     return item ? toDashboardTask(item, listContext, statusConfigs) : null;
   }, [detailTaskId, data?.tasks, listContext, statusConfigs]);
 
+  // A task that stops resolving — deleted from another client, say — makes the
+  // sheet render nothing, and because it renders nothing it never fires
+  // onOpenChange, so the id would sit there and pop the sheet back open if a
+  // later revalidation restored the row. Drop the id instead.
+  useEffect(() => {
+    if (detailTaskId && !detailTask) setDetailTaskId(null);
+  }, [detailTaskId, detailTask]);
+
   /** Run a TaskItem-taking handler for a row the sheet identified by id. */
   const withTaskItem = (taskId: string, run: (item: TaskItem) => void) => {
     const item = data?.tasks.find((t) => t.id === taskId);
@@ -1087,7 +1100,11 @@ function TaskListView({ page }: TaskListViewProps) {
           <Button
             size="icon"
             className="h-10 w-10 shrink-0"
-            aria-label="New task"
+            // "Add task", not "New task": the wide toolbar's button is named
+            // "New Task" and both are in the DOM at once (one is CSS-hidden),
+            // so a matching accessible name makes every by-role lookup for it
+            // ambiguous — which is exactly how the task-list E2E selects it.
+            aria-label="Add task"
             onClick={() => {
               newTaskInputRef.current?.scrollIntoView({ block: 'nearest' });
               newTaskInputRef.current?.focus();
@@ -1235,11 +1252,24 @@ function TaskListView({ page }: TaskListViewProps) {
                 task={toDashboardTask(task, listContext, statusConfigs)}
                 onToggleComplete={() => taskHandlers.onToggleComplete(task)}
                 onTap={() => setDetailTaskId(task.id)}
+                canEdit={canEdit}
                 trailing={
-                  <SubTaskProgress
-                    task={task}
-                    className="shrink-0 text-xs text-muted-foreground tabular-nums"
-                  />
+                  <>
+                    {/* Parity with the table and the card this replaced: a task
+                        wired to an agent says so on the row, not only once the
+                        detail sheet is open. Indicator, not a control — the row
+                        opens the sheet, which is where triggers are edited. */}
+                    {(task.activeTriggerCount ?? 0) > 0 && (
+                      <Bell
+                        className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400"
+                        aria-label="Agent trigger configured"
+                      />
+                    )}
+                    <SubTaskProgress
+                      task={task}
+                      className="shrink-0 text-xs text-muted-foreground tabular-nums"
+                    />
+                  </>
                 }
               />
             </div>

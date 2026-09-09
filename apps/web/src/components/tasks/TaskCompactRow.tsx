@@ -14,6 +14,12 @@ export interface TaskCompactRowProps {
   onToggleComplete: (task: Task) => void;
   onTap: (task: Task) => void;
   /**
+   * Whether the viewer may change this task. Defaults to true: the dashboard
+   * lists tasks from many lists at once and has no single permission to apply,
+   * so it keeps the previous behaviour. A single-list surface passes its own.
+   */
+  canEdit?: boolean;
+  /**
    * Optional slot before the chevron. The task-list page view uses it for
    * sub-task progress, which the dashboard has no notion of.
    */
@@ -31,6 +37,7 @@ export const TaskCompactRow = memo(function TaskCompactRow({
   onToggleComplete,
   onTap,
   trailing,
+  canEdit = true,
 }: TaskCompactRowProps) {
   const isCompleted = getStatusDisplay(task).group === 'done';
   const dueDate = task.dueDate ? new Date(task.dueDate) : null;
@@ -55,6 +62,11 @@ export const TaskCompactRow = memo(function TaskCompactRow({
           checked={isCompleted}
           onCheckedChange={() => onToggleComplete(task)}
           className="h-5 w-5"
+          disabled={!canEdit}
+          // Names the row it belongs to, matching the table's checkbox
+          // (TaskRowCells). Without it the control announces as a bare
+          // "checkbox" and a screen reader cannot tell one row's from another's.
+          aria-label={`${isCompleted ? 'Reopen' : 'Complete'} ${task.title}`}
         />
       </div>
 

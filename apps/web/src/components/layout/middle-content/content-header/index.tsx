@@ -151,8 +151,12 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
             DropdownMenu unmounts the dialog when the menu closes.
             `min-w-0`, not `shrink-0`: a shrink-0 child of a flex-1 min-w-0 row
             overflows its parent instead of wrapping, so the cluster is allowed
-            to shrink and scroll within itself. */}
-        <div className="flex flex-nowrap items-center justify-end gap-1 @[400px]:gap-2 min-w-0 overflow-x-auto scrollbar-none">
+            to shrink and scroll within itself.
+            No `justify-end` either: the parent row's `justify-between` already
+            puts this on the right, and end-aligning an overflow container sends
+            the excess off the INLINE-START edge, where scrollLeft cannot reach
+            it — the controls would be clipped away permanently. */}
+        <div className="flex flex-nowrap items-center gap-1 @[400px]:gap-2 min-w-0 overflow-x-auto scrollbar-none">
           {pageIsDocument && <EditorToggles />}
           {pageIsDocument && page && <PageSetupButton pageId={page.id} />}
           {(pageIsDocument || pageIsSheet) && page && (

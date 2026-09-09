@@ -1,4 +1,5 @@
-import { DEFAULT_STATUS_CONFIG } from '@/lib/task-status-config';
+import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
+import { isCompletedStatus } from './task-list-types';
 import type { TaskItem, TaskStatusConfig } from './task-list-types';
 import type { Task } from '@/components/tasks/types';
 
@@ -32,8 +33,22 @@ export function toDashboardTask(
   const matchingConfig = statusConfigs.find((c) => c.slug === item.status);
   const defaultConfig = DEFAULT_STATUS_CONFIG[item.status];
 
-  const statusGroup = matchingConfig?.group ?? defaultConfig?.group ?? 'todo';
-  const statusLabel = matchingConfig?.name ?? defaultConfig?.label ?? item.status;
+  // Done-ness is decided by `isCompletedStatus`, the same rule the filter, the
+  // table and the completion guard use, so one view cannot disagree with itself.
+  // It matters for a slug that is absent from a list's custom configs but is a
+  // default done slug ("completed" on a list whose vocabulary is shipped/wip):
+  // resolving the group from DEFAULT_STATUS_CONFIG alone would tick and strike
+  // the row while the filter still listed it as active, and toggling it would
+  // then appear to do nothing.
+  const resolvedGroup: TaskStatusGroup = matchingConfig?.group ?? defaultConfig?.group ?? 'todo';
+  const statusGroup: TaskStatusGroup = isCompletedStatus(item.status, statusConfigs)
+    ? 'done'
+    : resolvedGroup === 'done'
+      ? 'todo'
+      : resolvedGroup;
+  // `||`, not `??`, to match the server: an empty config name falls through to
+  // the default label rather than rendering an empty badge.
+  const statusLabel = matchingConfig?.name || defaultConfig?.label || item.status;
   const statusColor =
     matchingConfig?.color ||
     defaultConfig?.color ||
