@@ -55,17 +55,20 @@ export interface Shot {
 
 export const SHOTS: Shot[] = [
   {
-    // Leads because it is the only frame that shows the whole proposition at
-    // once: two people, an agent answering as a participant, and an answer
-    // grounded in the workspace's own numbers rather than the open internet.
+    // Leads, and states the thesis the other six are evidence for -- taken off
+    // the landing hero, "Partner for any project, workspace for any team."
+    //
+    // It is also the only frame that proves the claim in the same breath: two
+    // people, an agent answering as a participant, and an answer built from
+    // the workspace's own numbers rather than the open internet.
     slug: "team",
     tag: "Together",
-    headline: ["Ask your team.", "And your agent."],
+    headline: ["Teams and agents,", "one workspace."],
   },
   {
     slug: "agent",
     tag: "Agents",
-    headline: ["Build your own", "expert."],
+    headline: ["An expert in", "your business."],
   },
   {
     // The honest version of "automate your SOPs" — a training checklist where
@@ -96,12 +99,14 @@ export const SHOTS: Shot[] = [
     headline: ["Change your site", "by asking."],
   },
   {
-    // Straight from the landing page — the promise is that the AI gets real
-    // access, and that the same permissions, restore points and audit trail
-    // apply to it as to people.
+    // Sells authorization, not the role editor. The claim a buyer needs is
+    // that giving an AI real access does not mean giving up access control:
+    // roles, per-page overrides and an audit trail bind an agent exactly as
+    // they bind a person. Naming the feature ("Full access. Your brakes.")
+    // described the control; naming the guarantee sells the category.
     slug: "permissions",
-    tag: "Control",
-    headline: ["Full access.", "Your brakes."],
+    tag: "Security",
+    headline: ["Permissions apply", "to the AI too."],
   },
 ];
 
