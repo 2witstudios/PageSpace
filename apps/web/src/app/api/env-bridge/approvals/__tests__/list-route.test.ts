@@ -85,10 +85,19 @@ describe('no code path sends an approval TO the machine (GA wave 2 invariant, se
     }
   });
 
-  it('the mirror store exposes no write that a request body could drive into an allow: its writers are remember (the click ran), markRevoked and markAcknowledged', () => {
+  it('the mirror store exposes no write that a request body could drive into an allow: its writers are remember (the click ran), markRevoked, markAcknowledged — and expireSessionRowsForOtherEpoch, which can only SHORTEN a row\'s life', () => {
     const source = readFileSync(path.join(LIB, 'services', 'drive-envs', 'approval-mirror-store.ts'), 'utf8');
     const methods = [...source.matchAll(/^  (?:async )?([a-zA-Z]+)\(/gm)].map((m) => m[1]);
-    expect(methods.sort()).toEqual(['findById', 'listActiveForEnv', 'listActiveForOwner', 'listUnacknowledgedRevokes', 'markAcknowledged', 'markRevoked', 'remember'].sort());
+    // expireSessionRowsForOtherEpoch (Codex P2 #7, review round 1) is a writer, but it sets `expiresAt = now` on session rows of
+    // another daemon process and nothing else: it never creates a row, never lengthens one, never clears a revoke — so no request
+    // body could drive it into an allow. The property this scan guards is "no write widens"; the body check below pins that shape.
+    expect(methods.sort()).toEqual(['expireSessionRowsForOtherEpoch', 'findById', 'listActiveForEnv', 'listActiveForOwner', 'listUnacknowledgedRevokes', 'markAcknowledged', 'markRevoked', 'remember'].sort());
+    const start = source.indexOf('async expireSessionRowsForOtherEpoch(');
+    expect(start).toBeGreaterThan(0);
+    const body = source.slice(start, source.indexOf('\n    },', start));
+    expect(body).toMatch(/\.update\(driveEnvApprovals\)\s*\.set\(\{ expiresAt: now \}\)/);
+    expect(body).toMatch(/eq\(driveEnvApprovals\.scope, 'session'\)/);
+    expect(body).not.toMatch(/insert\(|revokedAt|revokeAcknowledgedAt|expiresAt: null/);
   });
 
   it('the replay only ever sends `revoke` frames with an approvalId, keyed on rows the mirror already holds', () => {

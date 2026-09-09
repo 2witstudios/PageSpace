@@ -633,12 +633,15 @@ describe('env-bridge ws route', () => {
       const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'sleep', args: ['100'], timeoutMs: 120_000 }, principal: { userId: USER, sessionId: 'sess-1', conversationId: 'conv-1' } });
       await settleGate();
       expect(lastSent(ws).type).toBe('grant_exec');
+      // The handler is attached BEFORE the pong: `cancelGroup` rejects synchronously inside `onPong`, and a rejection
+      // with no handler at that instant is an Unhandled Rejection that fails the CI job (its `Errors` line) while every test passes.
+      const rejection = expect(pending).rejects.toMatchObject({ kind: 'paused', detail: { envId: ENV } });
       rows.set(ENV, rowFor({ pausedAt: new Date(NOW.getTime() + 1000) }));
       await vi.advanceTimersByTimeAsync(LOCAL_ENV_HEARTBEAT_WINDOW_MS);
       ws.emit('message', Buffer.from(encodeFrame({ type: 'pong', ts: Date.now() })));
       await flush();
       await settleGate();
-      await expect(pending).rejects.toMatchObject({ kind: 'paused', detail: { envId: ENV } });
+      await rejection;
       expect(store.recordHeartbeat).toHaveBeenCalledTimes(1);
       // The socket stays: Stop pauses grants, it does not disconnect the machine.
       expect(ws.close).not.toHaveBeenCalled();
