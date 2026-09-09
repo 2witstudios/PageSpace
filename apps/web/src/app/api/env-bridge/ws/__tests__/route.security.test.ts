@@ -44,6 +44,7 @@ import { clearAllEnvConnectionsForTesting, getEnvConnection, readEnvLiveConnecti
 import { getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { envBridgeHash } from '@/lib/env-bridge/crypto';
 import { ENV_BRIDGE_HELLO_TIMEOUT_MS, ENV_BRIDGE_PING_INTERVAL_MS } from '@/lib/env-bridge/ws-route-config';
+import { APPROVAL_REVOKE_ACK_TIMEOUT_MS } from '@/lib/env-bridge/revoke';
 import { UPGRADE, GET } from '../route';
 
 // ---- keys -------------------------------------------------------------------
@@ -544,6 +545,48 @@ describe('env-bridge ws route', () => {
       expect(after.indexOf('revoke')).toBeLessThan(after.indexOf('grant_exec'));
       expect(markEnvApprovalAcknowledged).toHaveBeenCalledWith({ id: 'ch_owed', removed: 1 });
       expect(events()).toContain('env_bridge_approval_revokes_replayed');
+    });
+
+    it('Codex P1 (review round 1) — given an owed revoke the machine does NOT ack, the env stays BLOCKED: the socket is closed 1008 revoke_pending, a later grant is refused typed revoke_pending with a refusal audit row (never hangs), and only a hello whose replay is acked opens the env again', async () => {
+      vi.mocked(listUnacknowledgedEnvApprovalRevokes).mockResolvedValue([{ id: 'ch_owed' }] as never);
+      const audit = createGrantAuditFake();
+      vi.mocked(getGrantAuditStore).mockResolvedValue(audit);
+      const ws = socket();
+      const upgrade = UPGRADE(ws, server, request());
+      await flush();
+      ws.emit('message', Buffer.from(signedHello()));
+      await flush();
+      await settleGate();
+      expect(framesOf(ws).map((f) => f.type)).toEqual(['ping', 'revoke']);
+      // No ack: the replay's deadline passes.
+      await vi.advanceTimersByTimeAsync(APPROVAL_REVOKE_ACK_TIMEOUT_MS + 1);
+      await upgrade;
+      await settleGate();
+      expect(ws.close).toHaveBeenCalledWith(1008, 'revoke_pending');
+      expect(events()).toContain('env_bridge_revoke_pending');
+      ws.emit('close', 1008, Buffer.from('revoke_pending'));
+      await flush();
+      // A grant while blocked: refused at once, typed, and audited as a refusal — not hung, not signed.
+      await expect(getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal: { userId: USER, sessionId: 'sess-1', conversationId: 'conv-1' } })).rejects.toMatchObject({ kind: 'revoke_pending', detail: { envId: ENV } });
+      expect(audit.rows.map((row) => row.verdict)).toEqual(['refused:revoke_pending']);
+      // The daemon reconnects (its own backoff): this hello's replay is ACKED, and the env opens.
+      const ws2 = socket();
+      const upgrade2 = UPGRADE(ws2, server, request());
+      await flush();
+      ws2.emit('message', Buffer.from(signedHello()));
+      await flush();
+      await settleGate();
+      expect(framesOf(ws2).map((f) => f.type)).toEqual(['ping', 'revoke']);
+      ws2.emit('message', Buffer.from(ackFor('ch_owed', 1)));
+      await flush();
+      await upgrade2;
+      await settleGate();
+      vi.mocked(listUnacknowledgedEnvApprovalRevokes).mockResolvedValue([]);
+      const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal: { userId: USER, sessionId: 'sess-1', conversationId: 'conv-1' } });
+      pending.catch(() => {});
+      await settleGate();
+      expect(framesOf(ws2).map((f) => f.type)).toContain('grant_exec');
+      expect(ws2.close).not.toHaveBeenCalled();
     });
 
     it('given nothing owed, the hello proceeds straight to the ping and no revoke is sent', async () => {

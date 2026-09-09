@@ -67,6 +67,12 @@ describe('createLocalEnvTransport', () => {
     await expect(pending).rejects.toMatchObject({ envId: ENV_ID, reason: 'paused' });
   });
 
+  it('Codex P1 (review round 1) — given the bridge client refuses because a revoke is still unacknowledged by the machine, should reject LocalEnvServerDeniedError reason revoke_pending', async () => {
+    sendGrant.mockRejectedValueOnce(new EnvBridgeError('revoke_pending', 'owed', { envId: ENV_ID, reason: 'revoke_pending' }));
+    const transport = createLocalEnvTransport({ principal: PRINCIPAL });
+    await expect(transport.sendGrant({ envId: ENV_ID, frame: FRAME })).rejects.toMatchObject({ envId: ENV_ID, reason: 'revoke_pending' });
+  });
+
   it('given any OTHER bridge failure (not_connected, timeout, unverified), should pass it through unchanged', async () => {
     const original = new EnvBridgeError('not_connected', 'no socket', { envId: ENV_ID });
     sendGrant.mockRejectedValueOnce(original);

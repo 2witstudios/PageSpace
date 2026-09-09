@@ -43,7 +43,10 @@ export const ASK_PENDING_PREFIX = 'ask_pending:';
  * with no server record would be exactly the silent degradation invariant 12
  * forbids, so the row comes first and its failure is the request's failure.
  */
-export type EnvBridgeFailureKind = CorrelationFailureKind | 'not_connected' | 'signing_key_unavailable' | 'ttl_too_long' | 'server_denied' | 'audit_unavailable' | 'paused';
+export type EnvBridgeFailureKind = CorrelationFailureKind | 'not_connected' | 'signing_key_unavailable' | 'ttl_too_long' | 'server_denied' | 'audit_unavailable' | 'paused' | 'revoke_pending';
+
+/** Every reason the server refuses to mint: `decideSign`'s, plus the replay debt (Codex P1, review round 1). */
+export type RefusalReason = SignDenyReason | 'revoke_pending';
 
 export class EnvBridgeError extends Error {
   constructor(
@@ -81,7 +84,7 @@ export interface EnvBridgeClientDeps {
   /** `LOCAL_ENVS_ENABLED` for this deployment, read per grant so a flag flip needs no restart. */
   readonly flagEnabled: () => boolean;
   /** Every refusal to sign is audited; this is the hook (production: the security audit log). */
-  readonly onSignRefused?: (info: { envId: string; op: string; reason: SignDenyReason; principal: GrantPrincipal }) => void;
+  readonly onSignRefused?: (info: { envId: string; op: string; reason: RefusalReason; principal: GrantPrincipal }) => void;
   /** The env's socket IFF authorized and open — `getAuthorizedEnvConnection`. */
   readonly getAuthorizedConnection: (envId: string) => WebSocket | undefined;
   readonly getSocketFacts: (ws: WebSocket) => EnvSocketFacts | undefined;
@@ -138,24 +141,51 @@ export class EnvBridgeClient {
 
   /** Per-env holds (GA wave 3, leaf 5): while one is set, `sendGrant` for that env waits for it — the reconnect replay of owed approval revokes runs BEFORE any grant is signed. */
   private readonly holds = new Map<string, Promise<void>>();
+  /**
+   * Envs whose last replay did NOT settle every owed revoke (Codex P1, review
+   * round 1). A hold releases into one of two states: open, or BLOCKED — and
+   * blocked means every grant is refused typed `revoke_pending` (audited as a
+   * refusal, never hung) until a later hello's replay is fully acknowledged.
+   * The machine may still hold an approval the owner revoked; nothing is
+   * signed for it meanwhile.
+   */
+  private readonly blocked = new Set<string>();
 
   /**
-   * Run `work` while holding every grant for `envId`. The hold is released
-   * whether `work` resolves or rejects; a grant that arrived during the hold
-   * proceeds afterwards. Holds do not nest: a second call replaces the first
-   * only after it settles.
+   * Run `work` while holding every grant for `envId`; `work` answers whether
+   * the env may OPEN. `true` releases the hold into open; `false` — or a
+   * throw, which is an unknown debt — releases it into BLOCKED. A grant that
+   * arrived during the hold proceeds, or is refused, afterwards. Holds do not
+   * nest: a second call replaces the first only after it settles.
    */
-  async withHold(envId: string, work: () => Promise<void>): Promise<void> {
+  async withHold(envId: string, work: () => Promise<boolean>): Promise<boolean> {
     const previous = this.holds.get(envId) ?? Promise.resolve();
-    const current = previous.then(work, work).catch((error: unknown) => {
-      log().error('Held work for env failed; releasing the hold', { envId, error: error instanceof Error ? error.message : String(error), action: 'hold_failed' });
-    });
+    let opened = false;
+    const current = previous
+      .then(work, work)
+      .then((ok) => {
+        opened = ok;
+      })
+      .catch((error: unknown) => {
+        opened = false;
+        log().error('Held work for env failed; the env stays blocked', { envId, error: error instanceof Error ? error.message : String(error), action: 'hold_failed' });
+      })
+      .then(() => {
+        if (opened) this.blocked.delete(envId);
+        else this.blocked.add(envId);
+      });
     this.holds.set(envId, current);
     try {
       await current;
     } finally {
       if (this.holds.get(envId) === current) this.holds.delete(envId);
     }
+    return opened;
+  }
+
+  /** Whether the env is refusing grants because a revoke it owes the machine is still unacknowledged. */
+  isBlocked(envId: string): boolean {
+    return this.blocked.has(envId);
   }
 
   /**
@@ -205,6 +235,13 @@ export class EnvBridgeClient {
     // A revoke owed to the machine is replayed on its hello (leaf 5); nothing is signed for the env until that has run.
     const hold = this.holds.get(input.envId);
     if (hold !== undefined) await hold;
+    // …and nothing is signed while the last replay left a revoke unacknowledged (Codex P1, review round 1): the machine may still hold what the owner revoked.
+    if (this.blocked.has(input.envId)) {
+      log().warn('Refused to sign: the environment owes the machine an unacknowledged approval revoke', { envId: input.envId, op, userId: input.principal.userId, action: 'sign_refused' });
+      this.deps.onSignRefused?.({ envId: input.envId, op, reason: 'revoke_pending', principal: input.principal });
+      await this.recordRefusal({ envId: input.envId, principal: input.principal, op, argsHash, summary, reason: 'revoke_pending', ownerId: sibling?.ownerId ?? null });
+      throw new EnvBridgeError('revoke_pending', `PageSpace refused to sign a ${op} grant for ${input.envId}: an approval revoke is still unacknowledged by the machine`, { envId: input.envId, op, reason: 'revoke_pending' });
+    }
 
     const ws = this.deps.getAuthorizedConnection(input.envId);
     const facts = ws ? this.deps.getSocketFacts(ws) : undefined;
@@ -288,7 +325,7 @@ export class EnvBridgeClient {
   }
 
   /** A refusal's row. Never throws: the refusal is the answer whatever the audit does. */
-  private async recordRefusal(input: { envId: string; principal: GrantPrincipal; op: GrantRequest['op']; argsHash: string; summary: string; reason: SignDenyReason; ownerId: string | null }): Promise<void> {
+  private async recordRefusal(input: { envId: string; principal: GrantPrincipal; op: GrantRequest['op']; argsHash: string; summary: string; reason: RefusalReason; ownerId: string | null }): Promise<void> {
     try {
       const row = await this.deps.grantAudit.recordRefusal({ envId: input.envId, principal: input.principal, op: input.op, argsHash: input.argsHash, summary: input.summary, reason: input.reason, now: new Date(this.deps.now()) });
       if (input.ownerId !== null) this.notifyActivity(row, input.ownerId);

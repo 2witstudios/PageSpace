@@ -237,14 +237,19 @@ export async function revokeLocalEnvApproval(input: { envId: string; approvalId:
  * first grant for that env is signed. A row is stamped acknowledged only on
  * the machine's `approval_revoke_result`; one that is still not acked stays
  * owed and is replayed on the next hello. Never throws.
+ *
+ * The caller decides what an unfinished replay means: `owed > acknowledged`
+ * leaves the env BLOCKED (grants refused `revoke_pending`, socket closed so
+ * the daemon reconnects and this runs again — Codex P1, review round 1).
  */
-export async function replayUnacknowledgedApprovalRevokes(input: { envId: string; enrollmentId: string; serverKeyId: string | null; ws: WebSocket; now?: number }): Promise<{ replayed: number; acknowledged: number }> {
+export async function replayUnacknowledgedApprovalRevokes(input: { envId: string; enrollmentId: string; serverKeyId: string | null; ws: WebSocket; now?: number }): Promise<{ owed: number; acknowledged: number }> {
   let rows: Awaited<ReturnType<typeof listUnacknowledgedEnvApprovalRevokes>>;
   try {
     rows = await listUnacknowledgedEnvApprovalRevokes(input.envId);
   } catch (error) {
+    // Fail closed: an unreadable ledger is an unknown debt. Reported as one owed and none acknowledged, so the env stays blocked (Codex P1, review round 1).
     log().error('Could not read owed approval revokes for replay', { envId: input.envId, error: error instanceof Error ? error.message : String(error), action: 'approval_replay_read_failed' });
-    return { replayed: 0, acknowledged: 0 };
+    return { owed: 1, acknowledged: 0 };
   }
   let acknowledged = 0;
   for (const row of rows) {
@@ -276,5 +281,5 @@ export async function replayUnacknowledgedApprovalRevokes(input: { envId: string
       log().warn('Approval revoke replay not acknowledged; still owed', { envId: input.envId, approvalId: row.id, outcome: outcome.kind, action: 'approval_replay_unacknowledged' });
     }
   }
-  return { replayed: rows.length, acknowledged };
+  return { owed: rows.length, acknowledged };
 }

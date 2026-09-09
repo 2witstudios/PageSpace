@@ -378,16 +378,38 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
     // is not delayed by it — the daemon dispatches `revoke` from every state.
     void getEnvBridgeClient().withHold(envId, async () => {
       const replay = await replayUnacknowledgedApprovalRevokes({ envId, enrollmentId: enrollment.enrollmentId, serverKeyId: enrollment.serverKeyId, ws: client });
-      if (replay.replayed > 0) {
+      if (replay.owed > 0) {
         auditRequest(request, {
           eventType: 'auth.token.revoked',
           userId,
           resourceType: RESOURCE_TYPE,
           resourceId: envId,
           riskScore: 0,
-          details: { originalEvent: 'env_bridge_approval_revokes_replayed', replayed: replay.replayed, acknowledged: replay.acknowledged },
+          details: { originalEvent: 'env_bridge_approval_revokes_replayed', owed: replay.owed, acknowledged: replay.acknowledged },
         });
       }
+      if (replay.acknowledged >= replay.owed) return true;
+      // A revoke the machine did not acknowledge (Codex P1, review round 1):
+      // the env stays BLOCKED — every grant refused typed `revoke_pending` —
+      // and this socket is closed so the daemon reconnects (its own backoff,
+      // no server-side loop) and the next hello replays again. Grants sign
+      // only once every owed revoke carries the machine's signed ack.
+      auditRequest(request, {
+        eventType: 'security.anomaly.detected',
+        userId,
+        resourceType: RESOURCE_TYPE,
+        resourceId: envId,
+        riskScore: 0.4,
+        details: { originalEvent: 'env_bridge_revoke_pending', owed: replay.owed, acknowledged: replay.acknowledged },
+      });
+      if (pingTimer) clearInterval(pingTimer);
+      try {
+        client.close(1008, 'revoke_pending');
+      } catch {
+        // already gone
+      }
+      unregisterEnvConnection(envId, client);
+      return false;
     });
     // The first server frame acknowledges the hello (the daemon maps it to hello_ack).
     sendPing();

@@ -319,7 +319,7 @@ describe('GA wave 3 · leaf 5 — the reconnect REPLAY of revokes the mirror sti
     await settle();
     expect(ws.sent).toHaveLength(2);
     getEnvBridgeClient().handleMachineResult(ws, ackFor('ch_owed2', 1));
-    expect(await pending).toEqual({ replayed: 2, acknowledged: 2 });
+    expect(await pending).toEqual({ owed: 2, acknowledged: 2 });
     expect(markEnvApprovalAcknowledged).toHaveBeenNthCalledWith(1, { id: 'ch_owed', removed: 2 });
     expect(markEnvApprovalAcknowledged).toHaveBeenNthCalledWith(2, { id: 'ch_owed2', removed: 1 });
   });
@@ -330,14 +330,14 @@ describe('GA wave 3 · leaf 5 — the reconnect REPLAY of revokes the mirror sti
     const pending = replayUnacknowledgedApprovalRevokes({ envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, ws });
     await settle();
     await vi.advanceTimersByTimeAsync(APPROVAL_REVOKE_ACK_TIMEOUT_MS + 1);
-    expect(await pending).toEqual({ replayed: 1, acknowledged: 0 });
+    expect(await pending).toEqual({ owed: 1, acknowledged: 0 });
     expect(markEnvApprovalAcknowledged).not.toHaveBeenCalled();
   });
 
   it('given nothing owed, sends nothing', async () => {
     const ws = owedSocket();
     vi.mocked(listUnacknowledgedEnvApprovalRevokes).mockResolvedValue([]);
-    expect(await replayUnacknowledgedApprovalRevokes({ envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, ws })).toEqual({ replayed: 0, acknowledged: 0 });
+    expect(await replayUnacknowledgedApprovalRevokes({ envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, ws })).toEqual({ owed: 0, acknowledged: 0 });
     expect(ws.sent).toHaveLength(0);
   });
 });
