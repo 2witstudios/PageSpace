@@ -25,8 +25,17 @@ vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
-vi.mock('@/lib/desktop-auth', () => ({
-  getDevicePlatformFields: vi.fn().mockResolvedValue({}),
+const { mockGetMagicLinkPlatformFields } = vi.hoisted(() => ({
+  mockGetMagicLinkPlatformFields: vi.fn(),
+}));
+
+vi.mock('@/lib/auth/magic-link-platform-fields', () => ({
+  getMagicLinkPlatformFields: () => mockGetMagicLinkPlatformFields(),
+}));
+
+vi.mock('@/lib/capacitor-bridge', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/capacitor-bridge')>()),
+  isCapacitorApp: () => false,
 }));
 
 import { MagicLinkForm } from '../MagicLinkForm';
@@ -56,6 +65,7 @@ const setupFetchMock = () => {
 describe('MagicLinkForm', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetMagicLinkPlatformFields.mockResolvedValue({});
   });
 
   describe('ToS gate', () => {
@@ -148,6 +158,30 @@ describe('MagicLinkForm', () => {
       const init = sendCall![1] as RequestInit;
       const body = JSON.parse(init.body as string) as Record<string, unknown>;
       expect(body).not.toHaveProperty('next');
+    });
+
+    it('given the native shell reports a device, sends platform + device fields so the link binds to this app', async () => {
+      mockGetMagicLinkPlatformFields.mockResolvedValue({
+        platform: 'ios',
+        deviceId: 'dev_ios_1',
+        deviceName: 'iOS App',
+      });
+      const fetchSpy = setupFetchMock();
+      render(<MagicLinkForm />);
+
+      await userEvent.type(screen.getByLabelText(/email/i), 'user@example.com');
+      await userEvent.click(screen.getByLabelText(/i agree/i));
+      await userEvent.click(screen.getByRole('button', { name: /sign-in link/i }));
+
+      const sendCall = fetchSpy.mock.calls.find(([url]) =>
+        typeof url === 'string' && url.includes('/api/auth/magic-link/send'),
+      );
+      expect(sendCall).toBeDefined();
+      const init = sendCall![1] as RequestInit;
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body).toEqual(
+        expect.objectContaining({ platform: 'ios', deviceId: 'dev_ios_1', deviceName: 'iOS App' }),
+      );
     });
   });
 });
