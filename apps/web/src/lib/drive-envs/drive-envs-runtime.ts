@@ -34,6 +34,7 @@ import {
   type DriveEnvRecord,
   type DriveEnvStore,
 } from '@pagespace/lib/services/drive-envs/drive-envs-store';
+import { createDbGrantAuditStore, type GrantAuditStore } from '@pagespace/lib/services/drive-envs/grant-audit-store';
 import {
   createDriveEnv,
   listDriveEnvs,
@@ -93,6 +94,14 @@ async function liveConnectionReader(): Promise<LiveConnectionReader> {
 export function getDriveEnvStore(): Promise<DriveEnvStore> {
   envStorePromise ??= createDbDriveEnvStore();
   return envStorePromise;
+}
+
+let grantAuditStorePromise: Promise<GrantAuditStore> | null = null;
+
+/** The server-side grant audit (GA wave 3) — one store, built on first use, the seam route tests mock. */
+export function getGrantAuditStore(): Promise<GrantAuditStore> {
+  grantAuditStorePromise ??= createDbGrantAuditStore();
+  return grantAuditStorePromise;
 }
 
 // ---------------------------------------------------------------------------

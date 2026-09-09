@@ -63,6 +63,7 @@ export * from './schema/agent-workspaces';
 export * from './schema/agent-workspace-nodes';
 export * from './schema/drive-envs';
 export * from './schema/drive-env-local';
+export * from './schema/drive-env-grant-audit';
 export * from './schema/dev-preview-services';
 export * from './schema/dev-preview-grants';
 
@@ -130,6 +131,7 @@ import * as agentWorkspaces from './schema/agent-workspaces';
 import * as agentWorkspaceNodes from './schema/agent-workspace-nodes';
 import * as driveEnvs from './schema/drive-envs';
 import * as driveEnvLocal from './schema/drive-env-local';
+import * as driveEnvGrantAudit from './schema/drive-env-grant-audit';
 import * as devPreviewServices from './schema/dev-preview-services';
 import * as devPreviewGrants from './schema/dev-preview-grants';
 
@@ -198,6 +200,7 @@ export const schema = {
   ...agentWorkspaceNodes,
   ...driveEnvs,
   ...driveEnvLocal,
+  ...driveEnvGrantAudit,
   ...devPreviewServices,
   ...devPreviewGrants,
 };

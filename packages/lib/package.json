@@ -153,6 +153,11 @@
       "import": "./dist/services/drive-envs/drive-envs-store.js",
       "require": "./dist/services/drive-envs/drive-envs-store.js"
     },
+    "./services/drive-envs/grant-audit-store": {
+      "types": "./dist/services/drive-envs/grant-audit-store.d.ts",
+      "import": "./dist/services/drive-envs/grant-audit-store.js",
+      "require": "./dist/services/drive-envs/grant-audit-store.js"
+    },
     "./drive-envs/env-sprite-key": {
       "types": "./dist/drive-envs/env-sprite-key.d.ts",
       "import": "./dist/drive-envs/env-sprite-key.js",

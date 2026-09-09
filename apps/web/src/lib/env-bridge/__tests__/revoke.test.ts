@@ -14,11 +14,12 @@ vi.mock('@pagespace/lib/auth/env-bridge-signing-key', () => ({ loadServerSigning
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
 // The signing gate refuses everything while the deployment flag is off; this suite is about a LIVE env's revoke.
 vi.mock('@pagespace/lib/services/drive-envs/local-envs-enabled', () => ({ isLocalEnvsEnabled: vi.fn(() => true) }));
-vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn() }));
+vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn(), getGrantAuditStore: vi.fn() }));
 
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { loadServerSigningKeyring } from '@pagespace/lib/auth/env-bridge-signing-key';
-import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
+import { getDriveEnvStore, getGrantAuditStore } from '@/lib/drive-envs/drive-envs-runtime';
+import { createGrantAuditFake } from '@/test/grant-audit-fake';
 import { decodeFrame } from '@pagespace/lib/env-bridge/frame-codec';
 import { encodeResultForSigning, machineResultBindingId, resultHashForFrame, verifyRevoke, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
 import { envBridgeHash } from '@/lib/env-bridge/crypto';
@@ -60,6 +61,7 @@ describe('revokeLocalEnv — all three legs through the production seams', () =>
   let store: { findLocalByEnvId: ReturnType<typeof vi.fn>; revokeLocal: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
+    vi.mocked(getGrantAuditStore).mockResolvedValue(createGrantAuditFake());
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     vi.clearAllMocks();

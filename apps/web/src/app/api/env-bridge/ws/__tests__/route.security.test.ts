@@ -21,7 +21,7 @@ vi.mock('@/lib/websocket/ws-security', () => ({
   validateMessageSize: vi.fn(() => ({ valid: true })),
   isSecureConnection: vi.fn(() => true),
 }));
-vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn() }));
+vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn(), getGrantAuditStore: vi.fn() }));
 vi.mock('@pagespace/lib/auth/env-bridge-signing-key', () => ({ loadServerSigningKeyring: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) },
@@ -31,7 +31,8 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { getConnectionFingerprint, isSecureConnection, validateMessageSize } from '@/lib/websocket/ws-security';
-import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
+import { getDriveEnvStore, getGrantAuditStore } from '@/lib/drive-envs/drive-envs-runtime';
+import { createGrantAuditFake } from '@/test/grant-audit-fake';
 import { loadServerSigningKeyring } from '@pagespace/lib/auth/env-bridge-signing-key';
 import { LOCAL_ENV_HEARTBEAT_WINDOW_MS } from '@pagespace/lib/services/drive-envs/drive-envs';
 import { decodeFrame, encodeFrame, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
@@ -156,6 +157,7 @@ describe('env-bridge ws route', () => {
       }),
     };
     vi.mocked(getDriveEnvStore).mockResolvedValue(store as never);
+    vi.mocked(getGrantAuditStore).mockResolvedValue(createGrantAuditFake());
     vi.mocked(sessionService.validateSession).mockResolvedValue(claimsFor() as never);
     vi.mocked(isLocalEnvsEnabled).mockReturnValue(true);
     vi.mocked(isSecureConnection).mockReturnValue(true);

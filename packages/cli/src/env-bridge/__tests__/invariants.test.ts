@@ -159,11 +159,13 @@ describe('daemon structural invariants', () => {
       expect(dispatcher).toMatch(/serverPolicy: SERVER_POLICY_CARRIED_BY_SIGNATURE,/);
     });
 
-    it('audit-log.ts no longer claims the server audits by grantId on its side: the join has one side until the visibility phase writes the other', () => {
+    it('audit-log.ts claims the server-side join again — and now names the table that makes it true (GA wave 3 wrote the other side)', () => {
       const docblock = auditLog.slice(0, auditLog.indexOf('import type'));
-      expect(docblock).not.toMatch(/server audits on its side/);
-      expect(docblock).not.toMatch(/so the two logs can be joined/);
-      expect(docblock).toMatch(/no server-side (audit )?row/i);
+      // The wave 1 wording ("no server-side row") is gone: it would be the lie now.
+      expect(docblock).not.toMatch(/no server-side (audit )?row/i);
+      expect(docblock).not.toMatch(/ONE side of that join/);
+      expect(docblock).toMatch(/drive_env_grant_audit/);
+      expect(docblock).toMatch(/joins? (to|the two)/);
       expect(docblock).toMatch(/grantId/);
     });
   });
