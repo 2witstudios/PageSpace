@@ -6,6 +6,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`pagespace env enroll` pre-approves the file operations the environment allows — and never
+  `exec`.** The starter policy's `ops` is now the server policy's file operations (`fs_read`,
+  `fs_write`), so file work inside the root runs without asking from the start; `exec` is never
+  written into it, whatever the environment allows, so every command reaches the prompt and each
+  program needs your approval the first time. When a policy file already exists, `enroll` keeps
+  it and prints the diff of what it would have written.
+
 - **Approvals are remembered per program, with a scope you choose, in
   `~/.pagespace/env-approvals.json`.** An `ask`-mode approval used to live in the daemon's memory
   under (you, session, operation): a new chat asked again, and approving `git status` silently

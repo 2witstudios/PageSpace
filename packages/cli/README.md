@@ -367,12 +367,15 @@ or one that is unreadable, invalid, wrongly owned or writable by others, means e
 denied** (`no_policy`); the daemon still connects so you can see the Environment and fix the file.
 `pagespace env policy` prints what is in force, or why the file is being ignored.
 
-**`env enroll` writes a starter policy for you** if none exists: `mode: ask`, no pre-approved ops,
-the directory you ran `enroll` in as the only root, and — the part that matters — `principals`
+**`env enroll` writes a starter policy for you** if none exists: `mode: ask`, the **file**
+operations the environment's server policy allows (`fs_read`, `fs_write`) pre-approved so file
+work inside the root runs without asking — **never `exec`**, however the environment is
+configured: every command reaches the prompt, and each program needs your approval the first time
+— the directory you ran `enroll` in as the only root, and — the part that matters — `principals`
 set to **your user id and nobody else's**. A machine is driven by its owner only: PageSpace will
 only ever bind the environment owner's sessions to it, and this file makes the machine refuse
 everyone else on its own, even if the server were wrong. An existing policy is never overwritten;
-if it does not name you, `enroll` says so. Naming other users in `principals` is honoured (it is
+`enroll` prints the diff of what it would have written, and if the file does not name you it says so. Naming other users in `principals` is honoured (it is
 your file), but `env policy` and `env connect` warn about it, because each user listed there can
 run commands as you.
 

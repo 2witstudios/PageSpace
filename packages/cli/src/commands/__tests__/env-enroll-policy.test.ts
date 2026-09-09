@@ -53,7 +53,7 @@ function memoryStore(): CredentialStore {
   };
 }
 
-const ENROLLED = { enrollmentId: 'enr_1', envId: 'env_1', serverKeyId: 'k1', serverPublicKey: 'U0VSVkVS', ownerId: OWNER };
+const ENROLLED = { enrollmentId: 'enr_1', envId: 'env_1', serverKeyId: 'k1', serverPublicKey: 'U0VSVkVS', ownerId: OWNER, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } };
 
 function deps(over: Partial<EnvEnrollHandlerDeps> & { existing?: OpenedPolicyFile | null; response?: Record<string, unknown> } = {}) {
   const { existing = null, response = ENROLLED, ...rest } = over;
@@ -84,7 +84,7 @@ describe('pagespace env enroll — scaffolds the policy with the OWNER as its on
     expect(d.writes).toHaveLength(1);
     expect(d.writes[0]!.path).toBe(`${HOME}/.pagespace/env-policy.json`);
     const policy = JSON.parse(d.writes[0]!.content) as Record<string, unknown>;
-    expect(policy).toEqual({ mode: 'ask', principals: [OWNER], ops: [], roots: [CWD], envAllowlist: [] });
+    expect(policy).toEqual({ mode: 'ask', principals: [OWNER], ops: ['fs_read', 'fs_write'], roots: [CWD], envAllowlist: [] });
     expect(c.out.text()).toContain(`${HOME}/.pagespace/env-policy.json`);
     expect(c.out.text()).toContain(OWNER);
   });
@@ -96,13 +96,71 @@ describe('pagespace env enroll — scaffolds the policy with the OWNER as its on
     expect(d.writes[0]!.path).toBe('/etc/ps/policy.json');
   });
 
-  it('given an EXISTING policy file, should never overwrite it — the owner\'s file is the owner\'s — and say it was kept', async () => {
-    const existing: OpenedPolicyFile = { uid: 501, mode: 0o100600, content: JSON.stringify({ mode: 'allowlist', principals: [OWNER], ops: ['fs_read'], roots: ['/srv'], envAllowlist: [] }) };
+  it('given an EXISTING policy file, should never overwrite it — the owner\'s file is the owner\'s — say it was kept, and print the diff of what it would have written', async () => {
+    const existing: OpenedPolicyFile = { uid: 501, mode: 0o100600, content: JSON.stringify({ mode: 'allowlist', principals: [OWNER], ops: ['fs_read'], roots: ['/srv'], envAllowlist: [] }, null, 2) + '\n' };
     const d = deps({ existing });
     const c = ctx();
     expect(await enroll(d, c)).toBe(EXIT_SUCCESS);
     expect(d.writes).toHaveLength(0);
     expect(c.out.text()).toMatch(/kept/i);
+    const out = c.out.text();
+    // Unified-style: lines only the existing file has are `-`, lines only the scaffold has are `+`.
+    expect(out).toMatch(/^-\s+"mode": "allowlist",$/m);
+    expect(out).toMatch(/^\+\s+"mode": "ask",$/m);
+    expect(out).toMatch(/^\+\s+"fs_write"$/m);
+    expect(out).toMatch(/^-\s+"\/srv"$/m);
+    expect(out).toMatch(new RegExp(`^\\+\\s+"${CWD}"$`, 'm'));
+  });
+
+  describe('GA wave 2 · leaf 3 — Tier A file ops headless, Tier B exec never', () => {
+    it('given a serverPolicy allowing fs_read only, should scaffold ops [fs_read]', async () => {
+      const d = deps({ response: { ...ENROLLED, serverPolicy: { ops: ['fs_read'], checkpoint: false } } });
+      const c = ctx();
+      expect(await enroll(d, c)).toBe(EXIT_SUCCESS);
+      expect((JSON.parse(d.writes[0]!.content) as { ops: string[] }).ops).toEqual(['fs_read']);
+    });
+
+    it('given a serverPolicy that ALLOWS exec, should NEVER write exec into the machine ops — exec reaches the ask verdict by construction', async () => {
+      const d = deps({ response: { ...ENROLLED, serverPolicy: { ops: ['exec', 'fs_write', 'fs_read'], checkpoint: false } } });
+      const c = ctx();
+      expect(await enroll(d, c)).toBe(EXIT_SUCCESS);
+      const policy = JSON.parse(d.writes[0]!.content) as { ops: string[] };
+      expect(policy.ops).toEqual(['fs_read', 'fs_write']);
+      expect(policy.ops).not.toContain('exec');
+      expect(c.out.text()).toMatch(/exec/);
+      expect(c.out.text()).toMatch(/ask/);
+    });
+
+    it('given a serverPolicy allowing only exec, should scaffold ops [] and say so', async () => {
+      const d = deps({ response: { ...ENROLLED, serverPolicy: { ops: ['exec'], checkpoint: false } } });
+      const c = ctx();
+      expect(await enroll(d, c)).toBe(EXIT_SUCCESS);
+      expect((JSON.parse(d.writes[0]!.content) as { ops: string[] }).ops).toEqual([]);
+    });
+
+    it('given a serverPolicy the strict shape refuses (unknown op, missing field, not an object), should scaffold ops [] — never guess', async () => {
+      for (const serverPolicy of [{ ops: ['fs_read', 'pty_open', 'root'], checkpoint: false }, { ops: ['fs_read'] }, 'fs_read', null, { ops: 'fs_read', checkpoint: false }]) {
+        const d = deps({ response: { ...ENROLLED, serverPolicy } });
+        const c = ctx();
+        expect(await enroll(d, c)).toBe(EXIT_SUCCESS);
+        expect((JSON.parse(d.writes[0]!.content) as { ops: string[] }).ops, JSON.stringify(serverPolicy)).toEqual([]);
+      }
+    });
+
+    it('given an older server that did not answer serverPolicy, should scaffold ops []', async () => {
+      const { serverPolicy: _omitted, ...withoutPolicy } = ENROLLED;
+      const d = deps({ response: withoutPolicy });
+      const c = ctx();
+      expect(await enroll(d, c)).toBe(EXIT_SUCCESS);
+      expect((JSON.parse(d.writes[0]!.content) as { ops: string[] }).ops).toEqual([]);
+    });
+
+    it('the scaffold is always mode ask with principals [owner] and mode 600 (the writer is the 0600 one), whatever the server policy', async () => {
+      const d = deps({ response: { ...ENROLLED, serverPolicy: { ops: ['exec', 'fs_read'], checkpoint: false } } });
+      const c = ctx();
+      await enroll(d, c);
+      expect(JSON.parse(d.writes[0]!.content)).toMatchObject({ mode: 'ask', principals: [OWNER] });
+    });
   });
 
   it('given an existing policy that does NOT name the owner, should keep it and WARN that the owner\'s own requests will be denied principal_not_allowed', async () => {

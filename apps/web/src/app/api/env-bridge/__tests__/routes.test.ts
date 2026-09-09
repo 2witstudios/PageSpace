@@ -61,11 +61,12 @@ describe('the cloud opt-in (invariant 11)', () => {
 
 describe('POST /api/env-bridge/enroll', () => {
   it('given a valid code and key, should pin and answer 200 with the server key to pin, auditing the pin', async () => {
-    vi.mocked(enrollLocalEnv).mockResolvedValue({ ok: true, envId: 'env_1', enrollmentId: ENROLLMENT, serverKeyId: 'k1', serverPublicKey: 'U0VSVkVS', ownerId: 'user_owner' });
+    vi.mocked(enrollLocalEnv).mockResolvedValue({ ok: true, envId: 'env_1', enrollmentId: ENROLLMENT, serverKeyId: 'k1', serverPublicKey: 'U0VSVkVS', ownerId: 'user_owner', serverPolicy: { ops: ['fs_read', 'exec'], checkpoint: false } });
     const response = await enroll(enrollReq());
     expect(response.status).toBe(200);
     // `ownerId` rides the answer so the enroller can scaffold `principals: [owner]` (D-6).
-    expect(await json(response)).toEqual({ enrollmentId: ENROLLMENT, envId: 'env_1', serverKeyId: 'k1', serverPublicKey: 'U0VSVkVS', ownerId: 'user_owner' });
+    // `serverPolicy` rides too (GA wave 2): the enroller scaffolds the FILE ops it allows into the machine policy — and never `exec`, whatever it says.
+    expect(await json(response)).toEqual({ enrollmentId: ENROLLMENT, envId: 'env_1', serverKeyId: 'k1', serverPublicKey: 'U0VSVkVS', ownerId: 'user_owner', serverPolicy: { ops: ['fs_read', 'exec'], checkpoint: false } });
     expect(enrollLocalEnv).toHaveBeenCalledWith(enrollBody);
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'auth.token.created', resourceId: 'env_1' }));
   });
