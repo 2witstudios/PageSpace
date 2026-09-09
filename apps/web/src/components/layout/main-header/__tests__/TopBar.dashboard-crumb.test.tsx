@@ -48,6 +48,24 @@ describe('TopBar — the way back to the dashboard', () => {
     expect(screen.getByText('Dashboard')).toBeInTheDocument();
   });
 
+  it('given a labelled control in the left group, should let that group wrap rather than overflow its neighbours', () => {
+    // The group is flex-1 and shrinkable, so it never forces the OUTER wrap —
+    // it narrows below its own content instead, and a child that refuses to
+    // shrink then overflows into the right-hand controls. Harmless while the
+    // only thing here was a 30px icon link; reachable at phone widths once the
+    // control carries a word. Walks up by flex-1 rather than by DOM position so
+    // this survives reordering.
+    renderTopBar();
+
+    let group: HTMLElement | null = screen.getByText('Dashboard');
+    while (group && !/\bflex-1\b/.test(group.className)) {
+      group = group.parentElement;
+    }
+
+    expect(group, 'expected a flex-1 ancestor group').not.toBeNull();
+    expect(group?.className).toMatch(/\bflex-wrap\b/);
+  });
+
   it('given the header renders, should not fall back to a lone slash as the route home', () => {
     // The old control's entire visible content, and the reason nobody found it.
     renderTopBar();

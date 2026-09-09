@@ -40,10 +40,14 @@ export default function DashboardCrumb() {
   );
 
   if (pathname === DASHBOARD_PATH) {
+    // Hidden below sm, unlike the link. This variant is orientation only —
+    // there is nowhere for it to go — so it is the one part of this control
+    // that costs phone-width header space without answering the question the
+    // control exists for. The link variant, which IS the way out, always shows.
     return (
       <span
         aria-current="page"
-        className="flex h-8 shrink-0 items-center gap-2 rounded-lg bg-primary-soft px-2.5 text-sm font-semibold text-foreground"
+        className="hidden h-8 shrink-0 items-center gap-2 rounded-lg bg-primary-soft px-2.5 text-sm font-semibold text-foreground sm:flex"
       >
         <LayoutGrid className="h-4 w-4 text-primary" aria-hidden="true" />
         Dashboard
@@ -67,9 +71,19 @@ export default function DashboardCrumb() {
 
       {/*
         Context, not a destination — and the first thing to go when space runs
-        out. Below sm the label on the button survives and this does not: a
-        drive name is what truncates into nonsense on a phone, and the page
-        below the header already names the drive.
+        out. Below sm the label on the button survives and this does not.
+
+        That ordering is the whole point: the label is the fix for the bug this
+        control exists to solve, so it is the last thing to drop, while a drive
+        name is what truncates into nonsense first.
+
+        The cost is real and worth naming — DriveSwitcher, the only other chrome
+        that says which drive you are in, sits in the left sidebar, which is a
+        sheet on a phone. So below sm the drive's name is not in persistent
+        chrome at all. It is still the right trade: at 390px the left group has
+        roughly 146px once the trailing controls are counted, and the nav toggle
+        and search button claim ~88px of that, so a crumb here would not fit
+        beside the label rather than merely being tight.
       */}
       {driveName ? (
         <>
@@ -78,7 +92,14 @@ export default function DashboardCrumb() {
           </span>
           <span className="hidden min-w-0 items-center gap-1.5 px-2 text-sm font-semibold text-foreground sm:flex">
             <Folder className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-            <span className="truncate">{driveName}</span>
+            {/*
+              title + a width cap, matching content-header/Breadcrumbs.tsx: a
+              truncated name is unrecoverable without the tooltip, and an
+              uncapped one competes with the search field for the same row.
+            */}
+            <span className="max-w-[160px] truncate" title={driveName}>
+              {driveName}
+            </span>
           </span>
         </>
       ) : null}

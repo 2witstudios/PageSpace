@@ -33,7 +33,15 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel, onReveal
   return (
     <header className="sticky top-0 z-50 pt-[env(safe-area-inset-top)] liquid-glass-thin border-b border-[var(--separator)] text-card-foreground shadow-[var(--shadow-ambient)] dark:shadow-none">
       <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 sm:px-4">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+        {/*
+          flex-wrap, not just min-w-0: this group is flex-1 and shrinkable, so
+          it never forces the OUTER wrap — it silently narrows below its
+          content instead, and any child that refuses to shrink then overflows
+          into the right-hand controls. That was invisible while the only thing
+          in here was a 30px icon link; a labelled control makes it reachable
+          at phone widths. Wrapping degrades to a second row instead.
+        */}
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
           <div className="flex items-center">
             <Button
               variant="ghost"

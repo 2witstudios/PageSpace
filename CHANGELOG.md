@@ -441,8 +441,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   it meant the drive you were already in. It now reads **Dashboard** in words. Inside a drive it
   becomes a bordered button with a back arrow, followed by the name of the drive you are in, so the
   header tells you both where you can go and where you are standing; on the dashboard itself it
-  stops being a button, because you are already there. On a phone the word stays and only the drive
-  name is dropped.
+  stops being a button, because you are already there. On a phone, where header room is tight, the
+  button keeps its word wherever it is a way out, and the drive name and the you-are-here marker
+  are the parts that drop.
 
 - **Android app: first internal-testing version identity, and the Android/iOS shell configs are now
   checked in CI (still not distributed)** — the Android build now identifies itself as version 1.4
