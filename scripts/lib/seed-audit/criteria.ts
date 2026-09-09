@@ -120,39 +120,96 @@ export function visibleText(root: Element): string {
   return visibleCharacters(root.textContent ?? '');
 }
 
-/** A DOM text node, per the DOM's own `Node.TEXT_NODE`. */
+/** DOM node types, per the DOM's own `Node` constants. */
 const TEXT_NODE = 3;
+const ELEMENT_NODE = 1;
+
+/**
+ * Elements that begin and end a line of prose. Whitespace BETWEEN two of them
+ * is the pretty-printer's; whitespace between two inline things is the
+ * author's. That is the whole distinction `interWordText` turns on, so the set
+ * is listed rather than inferred — happy-dom has no layout engine to ask.
+ */
+const BLOCK_ELEMENTS: ReadonlySet<string> = new Set([
+  'address', 'article', 'aside', 'blockquote', 'caption', 'col', 'colgroup', 'dd', 'details',
+  'div', 'dl', 'dt', 'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3',
+  'h4', 'h5', 'h6', 'header', 'hgroup', 'hr', 'iframe', 'li', 'main', 'nav', 'ol', 'p', 'pre',
+  'section', 'summary', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'ul',
+]);
+
+/** A run of document text, or the edge of a block. */
+type Segment = { boundary: true } | { boundary: false; text: string; verbatim: boolean };
 
 /**
  * Text with the spacing BETWEEN words kept and the spacing between BLOCKS
  * discarded — the weaker comparison behind the `whitespaceOnlyTextChange`
  * diagnostic.
  *
- * Collapsing the whole document's `textContent` to single spaces cannot do
- * this: in pretty-printed HTML the newline-and-indent between two `<p>` is
- * itself a text node, so `<p>a</p>\n  <p>b</p>` reads `a b` while the
- * schema's own `<p>a</p><p>b</p>` reads `ab`, and the diagnostic fires on
- * every pretty-printed page — saying "pretty-printed", not "a space was
- * lost", which is worse than not measuring at all.
+ * Collapsing the whole document's `textContent` cannot do this: in
+ * pretty-printed HTML the newline-and-indent between two `<p>` is itself a
+ * text node, so `<p>a</p>\n  <p>b</p>` reads `a b` while the schema's own
+ * `<p>a</p><p>b</p>` reads `ab`, and the diagnostic fires on every
+ * pretty-printed page — saying "pretty-printed", not "a space was lost".
  *
- * So the walk is per text node: a node that is entirely whitespace is
- * formatting between blocks and is dropped, and every other node keeps its
- * internal spacing collapsed to single spaces. `hello <em>world</em>` still
- * reads `hello world` and reports a real loss if that space disappears.
+ * Dropping every whitespace-only node is not the fix either, and gets the
+ * question backwards: in `a<span> </span>b` — the shape HTML pasted from Word
+ * and Docs is full of — that node IS the space between the words. Dropping it
+ * makes a page where the space SURVIVED read `ab`, identical to one where it
+ * was lost, so the single class of loss this function exists to see becomes
+ * the one it cannot see.
+ *
+ * So the rule is positional: a whitespace-only run is formatting when a block
+ * edge is on either side of it, and content when inline text is on both.
+ * Inside `<pre>`, where whitespace is the content, text is kept verbatim —
+ * otherwise a code block that lost every indent would read as unchanged, and
+ * `visibleText` (which strips all whitespace) cannot see that either.
+ *
+ * Known and deliberate: a non-breaking space is treated as a space, so an
+ * `&nbsp;` rewritten to U+0020 does not show up here. It is a diagnostic, not
+ * a criterion, and no verdict rests on it.
  */
 export function interWordText(root: Element): string {
-  const parts: string[] = [];
-  const walk = (node: Node): void => {
+  const segments: Segment[] = [];
+  const walk = (node: Node, verbatim: boolean): void => {
     if (node.nodeType === TEXT_NODE) {
-      const text = node.nodeValue ?? '';
-      // Entirely whitespace: the indentation between two blocks, not prose.
-      if (/\S/u.test(text)) parts.push(text.replace(/\s+/gu, ' '));
+      segments.push({ boundary: false, text: node.nodeValue ?? '', verbatim });
       return;
     }
-    for (const child of Array.from(node.childNodes)) walk(child);
+    // Comments and processing instructions carry no prose.
+    if (node.nodeType !== ELEMENT_NODE) return;
+
+    const tag = (node as Element).tagName.toLowerCase();
+    const isBlock = BLOCK_ELEMENTS.has(tag);
+    if (isBlock) segments.push({ boundary: true });
+    for (const child of Array.from(node.childNodes)) walk(child, verbatim || tag === 'pre');
+    if (isBlock) segments.push({ boundary: true });
   };
-  walk(root);
-  return parts.join('').trim();
+  walk(root, false);
+
+  const isFormatting = (index: number): boolean => {
+    const segment = segments[index];
+    if (segment.boundary || segment.verbatim || /\S/u.test(segment.text)) return false;
+    // The nearest thing on each side that is not itself blank space.
+    const meaningful = (from: number, step: number): Segment | undefined => {
+      for (let i = from; i >= 0 && i < segments.length; i += step) {
+        const candidate = segments[i];
+        if (candidate.boundary || /\S/u.test(candidate.text)) return candidate;
+      }
+      return undefined;
+    };
+    const before = meaningful(index - 1, -1);
+    const after = meaningful(index + 1, 1);
+    // Missing counts as a boundary: leading and trailing space is not between words.
+    return before === undefined || before.boundary || after === undefined || after.boundary;
+  };
+
+  return segments
+    .map((segment, index) => {
+      if (segment.boundary || isFormatting(index)) return '';
+      return segment.verbatim ? segment.text : segment.text.replace(/\s+/gu, ' ');
+    })
+    .join('')
+    .trim();
 }
 
 /**

@@ -164,12 +164,46 @@ describe('text (criterion 3)', () => {
     expect(interWordText(parse('<p>hello <em>world</em></p>'))).toBe('hello world');
   });
 
+  it('keeps a whitespace-only node that IS the space between two words', () => {
+    // `a<span> </span>b` is what pasting from Word and Docs produces. Dropping
+    // every whitespace-only node made this read `ab` — identical to a page
+    // where the space was genuinely lost, so the one loss the diagnostic
+    // exists to catch became the one it could not see.
+    expect(interWordText(parse('<p>a<span> </span>b</p>'))).toBe('a b');
+    expect(interWordText(parse('<p>ab</p>'))).toBe('ab');
+    expect(interWordText(parse('<p>a b</p>'))).toBe('a b');
+  });
+
+  it('keeps whitespace inside <pre> verbatim, where it is the content', () => {
+    // visibleText strips all whitespace, so criterion 3 cannot see indentation
+    // either — if this collapsed too, a code block that lost every indent would
+    // report as affirmatively clean.
+    const indented = interWordText(parse('<pre><code>if (x) {\n    y();\n}</code></pre>'));
+    const flattened = interWordText(parse('<pre><code>if (x) {\ny();\n}</code></pre>'));
+    expect(indented).toContain('    y();');
+    expect(indented).not.toBe(flattened);
+  });
+
+  it('ignores comments, which carry no prose', () => {
+    expect(interWordText(parse('<p>a<!--SECRET-->b</p>'))).toBe('ab');
+  });
+
   it('drops the whitespace BETWEEN blocks, so pretty-printing is not reported as a lost space', () => {
     // The newline-and-indent between two blocks is its own text node. Reading
     // the document's textContent instead would make these two differ, and the
     // diagnostic would fire on every pretty-printed page in the corpus.
-    expect(interWordText(parse('<p>a</p>\n  <p>b</p>'))).toBe(interWordText(parse('<p>a</p><p>b</p>')));
+    expect(interWordText(parse('<p>a</p>\n  <p>b</p>'))).toBe('ab');
+    expect(interWordText(parse('<p>a</p><p>b</p>'))).toBe('ab');
     expect(interWordText(parse('<ul>\n  <li>x</li>\n  <li>y</li>\n</ul>'))).toBe('xy');
+    expect(interWordText(parse('<ul><li>x</li><li>y</li></ul>'))).toBe('xy');
+    // Tables are the densest source of inter-block whitespace in stored HTML,
+    // and every level of one has to count as a block or the indentation
+    // between cells reads as prose.
+    const prettyTable =
+      '<table>\n  <tbody>\n    <tr>\n      <td>a</td>\n      <td>b</td>\n    </tr>\n  </tbody>\n</table>';
+    expect(interWordText(parse(prettyTable))).toBe('ab');
+    expect(interWordText(parse('<table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>'))).toBe('ab');
+    expect(interWordText(parse('<section>\n  <h2>t</h2>\n  <p>p</p>\n</section>'))).toBe('tp');
   });
 
   it('strips script, style, noscript and template before measuring — their text is not prose', () => {
@@ -481,12 +515,13 @@ describe('the accumulator and the report', () => {
 
   it('counts markdown-mode, empty, tagless and failed pages in the totals and fails the run on a failure', () => {
     const audit = createAuditAccumulator();
-    audit.recordMarkdownMode('md');
+    audit.recordMarkdownMode();
     audit.recordEmpty();
     audit.recordHtml('tagless', { ...audited(cleanAudit()), tagless: true });
     audit.recordHtml('broken', { status: 'failed', stage: 'parse', errorName: 'RangeError' });
     const snapshot = audit.snapshot();
     expect(snapshot.totals).toEqual({ documents: 4, audited: 2, markdownMode: 1, empty: 1, tagless: 1, failed: 1, divergent: 0 });
+    expect(snapshot.seed.whitespaceOnlyExamples).toEqual([]);
     expect(snapshot.taglessPages).toEqual([{ key: 'no HTML element', pages: 1, examplePageIds: ['tagless'] }]);
     expect(snapshot.failures).toEqual([{ key: 'parse: RangeError', pages: 1, examplePageIds: ['broken'] }]);
     expect(snapshot.seed.totals.lossy).toBe(0);
@@ -518,11 +553,15 @@ describe('the accumulator and the report', () => {
     // `<iframe>` has no node in the frozen schema, so dropping it closes the
     // gap around it: every visible character survives, the spacing does not.
     const spacing = '<p>a <iframe src="https://e.test/"></iframe> b</p>';
-    for (const id of ['ws_1', 'ws_2']) audit.recordHtml(id, auditPage(spacing, workspace));
+    for (const id of ['ws_1', 'ws_2', 'ws_3', 'ws_4', 'ws_5']) {
+      audit.recordHtml(id, auditPage(spacing, workspace));
+    }
     const snapshot = audit.snapshot();
-    expect(snapshot.seed.totals.whitespaceOnlyTextChange).toBe(2);
-    expect(snapshot.seed.whitespaceOnlyExamples).toEqual(['ws_1', 'ws_2']);
-    expect(formatAuditReport(snapshot, { partial: false })).toContain('e.g. ws_1 ws_2');
+    expect(snapshot.seed.totals.whitespaceOnlyTextChange).toBe(5);
+    // Capped like every other example list: enough to go and look at, not a
+    // transcript of who wrote what.
+    expect(snapshot.seed.whitespaceOnlyExamples).toEqual(['ws_1', 'ws_2', 'ws_3']);
+    expect(formatAuditReport(snapshot, { partial: false })).toContain('e.g. ws_1 ws_2 ws_3');
   });
 
   it('carries the tagless count into the header so a PASS cannot hide it', () => {

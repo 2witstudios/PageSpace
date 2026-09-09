@@ -119,7 +119,7 @@ async function main(): Promise<number> {
         if (!/\S/.test(page.content)) {
           audit.recordEmpty();
         } else if (page.contentMode === 'markdown') {
-          audit.recordMarkdownMode(page.id);
+          audit.recordMarkdownMode();
         } else {
           audit.recordHtml(page.id, auditPage(page.content, workspace));
         }

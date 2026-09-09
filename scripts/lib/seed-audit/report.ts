@@ -42,8 +42,10 @@ export interface ChainTallies {
   /**
    * Example pages for the whitespace-only diagnostic. It is not a criterion,
    * so it has no row in `criteriaFailures` — but a bare count is
-   * undiagnosable, and every other number in this report can be gone and
-   * looked at.
+   * undiagnosable, and this one describes a shape worth going and looking at.
+   * (`markdownMode` and `empty` are still bare counts: both are whole
+   * populations rather than findings, and a handful of ids says nothing about
+   * either.)
    */
   whitespaceOnlyExamples: string[];
   /** Presence-based construct drops, tag-qualified (`el:img`, `attr:p@style:text-align`). */
@@ -99,7 +101,7 @@ export interface AuditSnapshot {
 
 export interface AuditAccumulator {
   recordHtml(pageId: string, audit: PageAudit): void;
-  recordMarkdownMode(pageId: string): void;
+  recordMarkdownMode(): void;
   recordEmpty(): void;
   snapshot(): AuditSnapshot;
 }
@@ -157,7 +159,9 @@ export function censusKeyOf(key: string): string {
 /** The per-chain half of the accumulator: one of these for the seed chain, one for the census chain. */
 function createChainTallies() {
   const criteria: Tallies = new Map();
-  const whitespaceOnly: Tallies = new Map();
+  // A plain list, not a `Tallies` map: there is exactly one key, and the count
+  // it would carry already lives in `totals.whitespaceOnlyTextChange`.
+  const whitespaceOnlyExamples: string[] = [];
   const dropped: Tallies = new Map();
   const droppedCensus: Tallies = new Map();
   const additions: Tallies = new Map();
@@ -186,7 +190,7 @@ function createChainTallies() {
       if (isLossy(verdict)) totals.lossy += 1;
       if (verdict.whitespaceOnlyTextChange) {
         totals.whitespaceOnlyTextChange += 1;
-        tally(whitespaceOnly, 'spacing', pageId);
+        if (whitespaceOnlyExamples.length < MAX_EXAMPLE_PAGE_IDS) whitespaceOnlyExamples.push(pageId);
       }
 
       // Folded to content-free form; two keys can fold into one, and a page
@@ -201,7 +205,7 @@ function createChainTallies() {
       return {
         totals: { ...totals },
         criteriaFailures: rows(criteria),
-        whitespaceOnlyExamples: whitespaceOnly.get('spacing')?.examplePageIds ?? [],
+        whitespaceOnlyExamples: [...whitespaceOnlyExamples],
         droppedConstructs: rows(dropped),
         droppedConstructsCensusKeyed: rows(droppedCensus),
         unexpectedAdditions: rows(additions),

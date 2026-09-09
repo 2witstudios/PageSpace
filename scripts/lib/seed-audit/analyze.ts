@@ -142,7 +142,7 @@ interface Measured {
   constructs: Set<string>;
 }
 
-/** Everything the three criteria and the construct diff need from one parsed page, in one walk. */
+/** Everything the three criteria and the construct diff need from one parsed page, in one call. */
 function measure(root: Element): Measured {
   return {
     counts: countContent(root),
@@ -157,7 +157,7 @@ export function judgeChain(sourceRoot: Element, renderedRoot: Element, stable: b
   return judge(measure(sourceRoot), measure(renderedRoot), stable);
 }
 
-/** The three criteria over an already-measured source and rendering; `judgeChain` is the public form. */
+/** The three criteria and the whitespace diagnostic over an already-measured source and rendering; `judgeChain` is the public form. */
 function judge(source: Measured, rendered: Measured, stable: boolean): ChainResult {
   const textPreserved = source.text === rendered.text;
   return {
