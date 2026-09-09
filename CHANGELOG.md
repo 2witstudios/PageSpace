@@ -34,6 +34,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   answered) and `local-environment-approvals.json` (approvals you gave, or that stand on a machine
   you own, revoked and expired ones included).
 
+- **Local Environments: a security page that says exactly what you are agreeing to.**
+  [docs/security/local-environments](https://pagespace.ai/docs/security/local-environments) states
+  each guarantee the bridge makes when an agent runs on your own computer and, beside each one,
+  exactly where it stops — no sandbox around a command, approvals remembered per program, content
+  other people wrote steering your agent, no network control on your machine, and the parts of the
+  server-side record that are not shipped yet. Derived from the internal posture document
+  (`docs/security/local-environment-bridge.md`); it never reads better than that document does.
+
 - **Local Environments: commands need your click in the chat; file work runs on its own
   (opt-in).** Two tiers now. **Reading and writing files** inside the folders you allowed runs
   without asking from the moment you enrol — no terminal to babysit. **Running a command** always
