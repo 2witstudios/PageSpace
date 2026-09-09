@@ -5,7 +5,7 @@ import { getAppOrigin, getStartUrl } from './app-url';
 import { mainWindow, setMainWindow, isQuitting } from './state';
 import { injectDesktopStyles, injectDoubleClickHandler } from './window-injections';
 import { setupAutoUpdater } from './updater';
-import { classifyNavigation } from '../shared/navigation-guard';
+import { classifyNavigation, guardsRedirect } from '../shared/navigation-guard';
 import { APP_IDENTITY } from '../shared/current-app-identity';
 
 const storeAny = store as any;
@@ -127,7 +127,14 @@ export function createWindow(): void {
   };
 
   window.webContents.on('will-navigate', guardNavigation);
-  window.webContents.on('will-redirect', guardNavigation);
+  // `will-redirect` fires for subframes too (unlike `will-navigate`), and a
+  // subframe holds no preload bridge — see `guardsRedirect`. Without this the
+  // preview iframe's own redirect to its preview host was cancelled and
+  // opened as a system-browser tab on every Refresh.
+  window.webContents.on('will-redirect', (event, url, _isInPlace, isMainFrame) => {
+    if (!guardsRedirect(isMainFrame)) return;
+    guardNavigation(event, url);
+  });
 
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http://') || url.startsWith('https://')) {
