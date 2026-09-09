@@ -37,6 +37,7 @@ import {
   createAuditAccumulator,
   formatAuditReport,
 } from '../lib/seed-audit/report';
+import { contentFreeKey } from '@pagespace/editor/seed-fidelity';
 import { parseAuditArgs } from '../lib/seed-audit/options';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -333,6 +334,17 @@ describe('censusKeyOf', () => {
     // Fail closed, like contentFreeKey: a key it cannot decompose is not one
     // it can vouch for.
     expect(censusKeyOf('something-else')).toBe('text:unescaped-angle-bracket');
+  });
+
+  it('passes the unescaped-angle-bracket marker through, since folding produces it constantly', () => {
+    // The accumulator re-keys already-folded keys, and a folded key is often
+    // the marker — so this is a live path, not a defensive one.
+    expect(censusKeyOf(contentFreeKey('attr:@list@items=payroll.csv'))).toBe('text:unescaped-angle-bracket');
+    expect(censusKeyOf(contentFreeKey('el:secret-tag'))).toBe('text:unescaped-angle-bracket');
+    // …while a real construct still re-keys the way the census keys it.
+    expect(censusKeyOf(contentFreeKey('el:img'))).toBe('<img>');
+    expect(censusKeyOf(contentFreeKey('attr:p@style:text-align'))).toBe('style:text-align');
+    expect(censusKeyOf(contentFreeKey('attr:ul@data-type=taskList'))).toBe('attr:data-type=taskList');
   });
 });
 

@@ -142,8 +142,11 @@ export function censusKeyOf(key: string): string {
   if (element) return `<${element[1]}>`;
   const attribute = /^attr:[^@]+@(.+)$/u.exec(key);
   // Fail closed, for the same reason `contentFreeKey` does: a key this cannot
-  // decompose is one it cannot vouch for. Unreachable today — every key
-  // reaching here has already been folded — and kept so it stays unreachable.
+  // decompose is one it cannot vouch for. This branch is LIVE, not defensive —
+  // every key arriving here has already been folded, and a folded key is often
+  // the marker itself, which is neither an `el:` nor an `attr:` key. Returning
+  // the marker unchanged is the right answer for it and the safe answer for
+  // anything else.
   if (!attribute) return UNESCAPED_ANGLE_BRACKET_KEY;
   const rest = attribute[1];
   if (rest.startsWith('style:')) return rest;
