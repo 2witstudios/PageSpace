@@ -237,6 +237,26 @@ export function decodeBase64(value: string): Uint8Array | null {
   return new Uint8Array(Buffer.from(value, 'base64'));
 }
 
+const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Strict base64url → bytes; `null` for anything that is not well-formed
+ * base64url. WebAuthn speaks base64url everywhere (credential ids,
+ * `authenticatorData`, `clientDataJSON`, signatures, and the challenge inside
+ * client data), so the owner-approval gate needs this alongside the standard
+ * base64 the wire uses for keys and signatures. Unpadded, as WebAuthn emits:
+ * a length of `4n + 1` is impossible for real base64url and is refused.
+ */
+export function decodeBase64Url(value: string): Uint8Array | null {
+  if (value.length === 0 || value.length % 4 === 1 || !BASE64URL_RE.test(value)) return null;
+  return new Uint8Array(Buffer.from(value, 'base64url'));
+}
+
+/** Bytes → unpadded base64url, the encoding every WebAuthn field and derived challenge uses. */
+export function encodeBase64Url(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString('base64url');
+}
+
 /**
  * Length-then-XOR comparison that does not short-circuit on the first differing
  * character. Digests are not secrets, but the gate should not leak how much of

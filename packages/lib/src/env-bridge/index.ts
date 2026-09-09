@@ -27,3 +27,4 @@ export * from './enrollment';
 export * from './challenge';
 export * from './server-signing-key';
 export * from './machine-signatures';
+export * from './owner-approval';

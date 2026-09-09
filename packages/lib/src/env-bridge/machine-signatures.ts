@@ -48,6 +48,17 @@ export const REVOKE_SIGNING_DOMAIN = 'pagespace-env-bridge/revoke/v1';
 export const REVOKE_APPROVAL_SIGNING_DOMAIN = 'pagespace-env-bridge/revoke-approval/v1';
 /** STOP (GA wave 3): its own domain, so a pause can never be replayed as a revoke (of anything) nor a revoke as a pause. */
 export const PAUSE_SIGNING_DOMAIN = 'pagespace-env-bridge/pause/v1';
+/**
+ * The OWNER'S CLICK (hardening B): the domain the WebAuthn challenge a Tier B
+ * approval is signed over is derived under (`owner-approval.ts`). Distinct
+ * from the five above, so an assertion the owner produced for a click can
+ * never be replayed as a hello, a result, a revoke (of either kind) or a
+ * pause — nor any of those as a click. This one is not an Ed25519 message
+ * the server or the machine signs: it is the binding the OWNER'S
+ * authenticator signs, which is the whole point (the machine stops taking
+ * the server's word that a human was there).
+ */
+export const OWNER_APPROVAL_SIGNING_DOMAIN = 'pagespace-env-bridge/owner-approval/v1';
 
 export type { HelloFrame };
 export type RevokeFrame = Extract<Frame, { type: 'revoke' }>;
