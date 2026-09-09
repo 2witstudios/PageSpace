@@ -9,7 +9,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.integration.test.{js,ts}'],
-    setupFiles: ['./src/test/setup.ts'],
+    // `setup.integration.ts` = `setup.ts` + an afterAll that ends the pg pool this
+    // file's module copy of @pagespace/db/db opened (see that file for the 53300).
+    setupFiles: ['./src/test/setup.integration.ts'],
     fileParallelism: false,
     pool: 'forks',
     poolOptions: {

@@ -305,6 +305,10 @@ unprompted, not some approved list of programs. There is deliberately no executa
 one was considered for this release and not adopted, because a list of program names is easy to
 walk around (`sh -c …`, an interpreter, a script inside a root) and would suggest a guarantee the
 daemon cannot keep. If you want per-command review, use `ask` and leave `exec` out of `ops`.
+Because that one edit silently removes the click, the daemon is loud about it: `env connect` and
+`env policy` print `exec is allowlisted: commands run on this machine without a click — remove
+exec from ops to restore the approval prompt`, and `env connect` writes one audit line
+(`policy_warning:exec_allowlisted`) at start.
 
 A drive owner or admin creates a local Environment from the ordinary "New environment" step (choose
 **This computer** and name the machine) and is shown a **one-time enrollment code** (valid ten
@@ -341,7 +345,9 @@ env, single-use nonce and that the grant is bound to exactly this request **befo
 your policy, and runs nothing unless the policy allows it. Results are signed with the machine key
 so the server can verify them. Everything is appended to `~/.pagespace/env-audit.jsonl`
 (`PAGESPACE_ENV_AUDIT_LOG` to move it) as one JSON line per decision with the `grantId` the server
-also audits. Ctrl-C, `env disconnect` (which signals the running daemon's pid from
+also audits — the server keeps one row per grant it signs or refuses (`drive_env_grant_audit`),
+under the same id, and shows it to the Environment's owner as the machine's activity in
+PageSpace. Ctrl-C, `env disconnect` (which signals the running daemon's pid from
 `~/.pagespace/env-connect.<enrollmentId>.pid`), or a server-signed revoke stops it; a revoke also
 deletes the machine key. After a server restart it reconnects with exponential backoff.
 
@@ -357,6 +363,16 @@ provides, so on Windows it refuses to start with a clear message. `env enroll`, 
 and a short-lived bearer token, and the socket is `wss://`). Plain `http://` is accepted only for
 the loopback hosts used in local development (`localhost`, `127.0.0.1`, `::1`), matching the CLI's
 OAuth loopback policy. Token redemption refuses to follow redirects.
+
+**Stop, from PageSpace:** the Environment's owner can press **Stop** in PageSpace (the
+Environment's settings, or their account's Local environments page). The server then refuses to
+sign any grant for the Environment, and sends the daemon a server-signed `pause` frame — under its
+own signing domain, so it can never be replayed as a revoke. On a verified pause the daemon
+SIGKILLs every process group it started, forgets every request it had frozen for a click, writes
+`paused:killed:<n>` to the audit log, answers with a machine-signed `pause_result` carrying that
+count, and **stays connected** — the machine is not what is being stopped. **Resume** needs no
+frame: grants simply sign again, and a click for a request frozen before the Stop matches nothing.
+If the daemon was away when Stop was pressed, the pause is delivered on its next heartbeat.
 
 **Stopping it:** `env connect` writes its process identity (pid, start time, `argv0`) to
 `~/.pagespace/env-connect.<enrollmentId>.pid` and refreshes it periodically. `env disconnect`

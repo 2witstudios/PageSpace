@@ -5,7 +5,7 @@ import { useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ChevronLeft, Shield, Users, Brain, Cable, HardDrive, Trash2, SlashSquare, Globe } from 'lucide-react';
+import { ChevronLeft, Shield, Users, Brain, Cable, HardDrive, Trash2, SlashSquare, Globe, Laptop } from 'lucide-react';
 import { useDriveStore } from '@/hooks/useDrive';
 import { SettingsRow, type SettingsItem } from '@/app/settings/SettingsRow';
 
@@ -90,6 +90,13 @@ export default function DriveSettingsPage() {
               description: 'Workspace memory for AI',
               icon: Brain,
               href: `/dashboard/${driveId}/settings/context`,
+              available: true,
+            },
+            {
+              title: 'Environments',
+              description: 'Where sessions run; what a local machine may do, Stop and Revoke',
+              icon: Laptop,
+              href: `/dashboard/${driveId}/settings/environments`,
               available: true,
             },
             ...commandsItems,

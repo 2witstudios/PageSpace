@@ -24,7 +24,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrin
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
-import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
+import { getDriveEnvStore, markEnvApprovalAcknowledged, markEnvApprovalRevoked } from '@/lib/drive-envs/drive-envs-runtime';
 import { revokeLocalEnvApproval } from '@/lib/env-bridge/revoke';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -63,6 +63,12 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
       return NextResponse.json({ error: 'This environment has been revoked', reason: 'revoked' }, { status: 409 });
     }
     const machine = result.machine;
+    // The MIRROR (GA wave 3, leaf 5): the decision is recorded whatever the
+    // machine said — a revoke the socket could not deliver is a revoke OWED,
+    // replayed on the daemon's next hello before any grant is signed. The ack
+    // stamp lands only on the machine's SIGNED acknowledgement.
+    await markEnvApprovalRevoked({ id: approvalId, by: auth.userId });
+    if (machine.kind === 'acknowledged') await markEnvApprovalAcknowledged({ id: approvalId, removed: machine.removed });
     auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'drive_env', resourceId: envId, details: { route: 'drive-env-approvals', operation: 'revoke', approvalId, machine: machine.kind, ...(machine.kind === 'acknowledged' && { removed: machine.removed }) } });
     // 200 ONLY on the machine's signed ack (Codex P2 on #2583): the server never claims a revoke it cannot prove.
     if (machine.kind === 'acknowledged') return NextResponse.json({ revoked: true, machine: 'acknowledged', approvalId, removed: machine.removed });

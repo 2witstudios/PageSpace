@@ -39,7 +39,7 @@ describe('result-signer (invariant 7) — round-trips through the REAL lib verif
 });
 
 describe('signHello (invariant 2) — round-trips through the REAL lib verifyHello the socket route uses', () => {
-  const unsigned = { type: 'hello' as const, envId: 'env_1', capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, policyDigest: 'abc' };
+  const unsigned = { type: 'hello' as const, envId: 'env_1', capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, policyDigest: 'abc', daemonEpoch: 'ep1' };
 
   it('given an unsigned hello, should produce one verifyHello accepts for that env', () => {
     const hello = signHello(unsigned, deps);

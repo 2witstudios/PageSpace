@@ -1,12 +1,15 @@
 /**
  * The daemon's local audit trail (invariant 10): one JSON line per decision,
- * appended to `~/.pagespace/env-audit.jsonl`, keyed by `grantId` so that a
- * server-side record CAN be joined to it. Today there is no server-side row
- * per grant — the server logs and security-audits a refusal to sign, but
- * writes nothing at sign time or result time for a grant it did sign — so
- * this file is the ONE side of that join until the visibility phase of the
- * GA container writes the other. Append-only by construction: the sink only
- * ever appends, nothing here reads or rewrites.
+ * appended to `~/.pagespace/env-audit.jsonl`, keyed by `grantId` so that the
+ * server-side record joins to it. That record exists: since GA wave 3 the
+ * server writes one `drive_env_grant_audit` row per grant it signs (at sign
+ * time, updated when this machine's signed result lands) and one per grant it
+ * refuses to sign, keyed by the same `grantId` this file carries — so a line
+ * here and a row there describe the same request from both ends, and a
+ * real-Postgres test in `@pagespace/lib` joins the two on that id. The owner
+ * sees the server's half as the environment's activity panel; this file is
+ * the machine's half, under the owner's own account. Append-only by
+ * construction: the sink only ever appends, nothing here reads or rewrites.
  *
  * Audit I/O must never take the daemon down — a full disk is not a reason to
  * stop enforcing policy — so a failing sink is reported once and swallowed.

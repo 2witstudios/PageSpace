@@ -94,6 +94,8 @@ export interface DriveEnvLocalRecord {
   machineKeyFingerprint: string | null;
   serverKeyId: string | null;
   capabilities: { shell: boolean; pty: boolean; fs: boolean; checkpoint: boolean } | null;
+  /** The daemon process the last hello came from (attested in the signed hello); NULL before the first. */
+  daemonEpoch: string | null;
   serverPolicy: { ops: string[]; checkpoint: boolean };
   bindPolicy: string;
   enrollmentCodeHash: string | null;
@@ -107,6 +109,8 @@ export interface DriveEnvLocalRecord {
   lastSeenAt: Date | null;
   enrolledAt: Date | null;
   revokedAt: Date | null;
+  /** Stop (GA wave 3): set while the OWNER has paused the env's grants; NULL = running. */
+  pausedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -210,6 +214,8 @@ export interface DriveEnvStore {
   findLocalByEnvId(envId: string): Promise<DriveEnvLocalRecord | null>;
   /** Every sibling in the drive — what the listing joins. */
   listLocalFacts(driveId: string): Promise<DriveEnvLocalRecord[]>;
+  /** Every machine a user OWNS, across drives, with its env row — the account page's read (GA wave 3). Owner, never requester. */
+  listLocalByOwner(ownerId: string): Promise<Array<{ env: DriveEnvRecord; local: DriveEnvLocalRecord }>>;
   /**
    * Enroll: pin the machine key and consume the code, IFF the row is pending
    * (`enrolledAt IS NULL AND enrollmentCodeUsedAt IS NULL AND revokedAt IS
@@ -250,7 +256,7 @@ export interface DriveEnvStore {
    * the machine's advertised capabilities and a heartbeat, IFF enrolled and
    * not revoked — a revoked machine's hello changes nothing.
    */
-  recordHello(input: { envId: string; capabilities: NonNullable<DriveEnvLocalRecord['capabilities']>; now: Date }): Promise<boolean>;
+  recordHello(input: { envId: string; capabilities: NonNullable<DriveEnvLocalRecord['capabilities']>; daemonEpoch: string; now: Date }): Promise<boolean>;
   /** Heartbeat from the live socket (throttled by the route to once per heartbeat window). Same CAS as `recordHello`. */
   recordHeartbeat(input: { envId: string; now: Date }): Promise<boolean>;
   /**
@@ -263,6 +269,15 @@ export interface DriveEnvStore {
    * the service reads the row afterwards only to choose the honest answer.
    */
   setServerPolicy(input: { envId: string; ownerId: string; serverPolicy: { ops: string[]; checkpoint: boolean }; now: Date }): Promise<boolean>;
+  /**
+   * STOP / RESUME (GA wave 3): stamp or clear `pausedAt` IFF the caller is the
+   * row's OWNER and the env is not revoked — the same compare-and-set shape as
+   * `setServerPolicy` ([D-6]: Stop is the enrolling human's alone; drive
+   * admins keep Delete). Stop on an already-paused row keeps the FIRST stamp
+   * (the predicate excludes it from re-stamping) and still answers true —
+   * the row is in the requested state. False = not written.
+   */
+  setPaused(input: { envId: string; ownerId: string; paused: boolean; now: Date }): Promise<boolean>;
   /**
    * Revoke: stamp `revokedAt` IFF `revokedAt IS NULL` (Codex C4). False means
    * it was already revoked — the caller still completes the other two legs
@@ -603,6 +618,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     machineKeyFingerprint: driveEnvLocal.machineKeyFingerprint,
     serverKeyId: driveEnvLocal.serverKeyId,
     capabilities: driveEnvLocal.capabilities,
+    daemonEpoch: driveEnvLocal.daemonEpoch,
     serverPolicy: driveEnvLocal.serverPolicy,
     bindPolicy: driveEnvLocal.bindPolicy,
     enrollmentCodeHash: driveEnvLocal.enrollmentCodeHash,
@@ -615,6 +631,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     lastSeenAt: driveEnvLocal.lastSeenAt,
     enrolledAt: driveEnvLocal.enrolledAt,
     revokedAt: driveEnvLocal.revokedAt,
+    pausedAt: driveEnvLocal.pausedAt,
     createdAt: driveEnvLocal.createdAt,
     updatedAt: driveEnvLocal.updatedAt,
   };
@@ -663,6 +680,17 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
         .where(eq(driveEnvs.driveId, driveId))
         .limit(MAX_DRIVE_ENVS_LISTED);
       return rows as DriveEnvLocalRecord[];
+    },
+
+    async listLocalByOwner(ownerId) {
+      const rows = await db
+        .select({ env: driveEnvs, local: localSelection })
+        .from(driveEnvLocal)
+        .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId))
+        .where(eq(driveEnvLocal.ownerId, ownerId))
+        .orderBy(asc(driveEnvs.createdAt))
+        .limit(MAX_DRIVE_ENVS_LISTED);
+      return rows.map((row) => ({ env: row.env as DriveEnvRecord, local: row.local as DriveEnvLocalRecord }));
     },
 
     async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, enrollmentCodeHash, now: at }) {
@@ -723,10 +751,10 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       return updated.length === 1;
     },
 
-    async recordHello({ envId, capabilities, now: at }) {
+    async recordHello({ envId, capabilities, daemonEpoch, now: at }) {
       const updated = await db
         .update(driveEnvLocal)
-        .set({ capabilities, lastSeenAt: at, updatedAt: at })
+        .set({ capabilities, daemonEpoch, lastSeenAt: at, updatedAt: at })
         .where(and(eq(driveEnvLocal.envId, envId), sql`${driveEnvLocal.enrolledAt} IS NOT NULL`, isNull(driveEnvLocal.revokedAt)))
         .returning({ envId: driveEnvLocal.envId });
       return updated.length === 1;
@@ -737,6 +765,27 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
         .update(driveEnvLocal)
         .set({ lastSeenAt: at, updatedAt: at })
         .where(and(eq(driveEnvLocal.envId, envId), sql`${driveEnvLocal.enrolledAt} IS NOT NULL`, isNull(driveEnvLocal.revokedAt)))
+        .returning({ envId: driveEnvLocal.envId });
+      return updated.length === 1;
+    },
+
+    async setPaused({ envId, ownerId, paused, now: at }) {
+      if (paused) {
+        // Stamp only a RUNNING row; an already-paused one keeps its first stamp.
+        const updated = await db
+          .update(driveEnvLocal)
+          .set({ pausedAt: at, updatedAt: at })
+          .where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.ownerId, ownerId), isNull(driveEnvLocal.revokedAt), isNull(driveEnvLocal.pausedAt)))
+          .returning({ envId: driveEnvLocal.envId });
+        if (updated.length === 1) return true;
+        // Lost the CAS: already paused by this owner is still "paused" — answer from the row.
+        const [row] = await db.select({ pausedAt: driveEnvLocal.pausedAt }).from(driveEnvLocal).where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.ownerId, ownerId), isNull(driveEnvLocal.revokedAt))).limit(1);
+        return row !== undefined && row.pausedAt !== null;
+      }
+      const updated = await db
+        .update(driveEnvLocal)
+        .set({ pausedAt: null, updatedAt: at })
+        .where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.ownerId, ownerId), isNull(driveEnvLocal.revokedAt)))
         .returning({ envId: driveEnvLocal.envId });
       return updated.length === 1;
     },

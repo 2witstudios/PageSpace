@@ -107,6 +107,8 @@ const mockUserData = {
   streamState: [{ messageId: 'sm-1', conversationId: 'c-1', status: 'complete', parts: [] }],
   contentTags: [{ tagName: 'risk', pageId: 'p-1', pageTitle: 'Page', targetKind: 'page', anchor: null, anchorStatus: null, channelMessageId: null, aiMessageId: null, source: 'user', confidence: null }],
   localEnvironments: [{ envId: 'env-1', driveId: 'd-1', envName: 'my-mac', label: 'jono-macstudio', machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:abc', serverKeyId: 'k1', bindPolicy: 'owner', capabilities: null, enrolledAt: null, lastSeenAt: null, revokedAt: null, createdAt: new Date('2026-09-04T00:00:00.000Z'), updatedAt: new Date('2026-09-04T00:00:00.000Z') }],
+  localEnvironmentActivity: [{ id: 'ga-1', envId: 'env-1', grantId: 'g-1', sessionId: 's-1', conversationId: 'c-1', op: 'exec', argsHash: 'sha256:args', summary: "exec: sh -c 'git status' in /home/o/proj", verdict: 'completed', exitCode: 0, challengeId: null, approvalScope: null, ts: new Date('2026-09-09T12:00:00.000Z'), resultAt: new Date('2026-09-09T12:00:01.000Z') }],
+  localEnvironmentApprovals: [{ id: 'ch_1', envId: 'env-1', driveId: 'd-1', envName: 'my-mac', subject: 'both', op: 'exec', summary: "exec: sh -c 'git status' in /home/o/proj", scope: '30d', createdAt: new Date('2026-09-09T12:00:00.000Z'), expiresAt: new Date('2026-10-09T12:00:00.000Z'), revokedAt: null, revokeAcknowledgedAt: null, revokeRemoved: null }],
 };
 
 describe('GET /api/account/export', () => {

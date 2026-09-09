@@ -99,6 +99,12 @@ export interface LocalEnvFacts {
   enrolled: boolean;
   /** The row's server policy through the strict parser; deny-all when the row's value is refused or the row is gone. */
   serverPolicy: DriveEnvServerPolicyDTO;
+  /** `drive_env_local.ownerId` — who may drive it ([D-6]); `null` for a dead row (owner erased). */
+  ownerId: string | null;
+  /** What the machine advertised in its last hello; `null` before the first. */
+  capabilities: { shell: boolean; pty: boolean; fs: boolean; checkpoint: boolean } | null;
+  /** Stop (GA wave 3): `pausedAt IS NOT NULL` — the owner paused its grants. */
+  paused: boolean;
 }
 
 /** What a missing or unparseable stored policy projects as: the column's own backstop. */
@@ -122,7 +128,7 @@ export function toDriveEnvDTO(row: DriveEnvRecord, local?: LocalEnvFacts): Drive
     if (local === undefined) {
       throw new Error(`drive env ${row.id} is local but no drive_env_local facts were supplied to toDriveEnvDTO`);
     }
-    return { ...base, substrate: 'local', status: local.status, label: local.label, enrolled: local.enrolled, serverPolicy: local.serverPolicy };
+    return { ...base, substrate: 'local', status: local.status, label: local.label, enrolled: local.enrolled, serverPolicy: local.serverPolicy, ownerId: local.ownerId, capabilities: local.capabilities, paused: local.paused };
   }
   return { ...base, substrate: 'sprite', status: deriveDriveEnvStatus(row) };
 }
@@ -594,13 +600,16 @@ export function localFactsFor(row: DriveEnvRecord, sibling: DriveEnvLocalRecord 
   // `enrolled: true` for the dead row, deliberately: with no sibling there is
   // no code to re-issue, and `false` would offer the owner a "new code" that
   // the store must refuse as `not_found`.
-  if (!sibling) return { label: row.name, status: 'disconnected', enrolled: true, serverPolicy: DENY_ALL_SERVER_POLICY };
+  if (!sibling) return { label: row.name, status: 'disconnected', enrolled: true, serverPolicy: DENY_ALL_SERVER_POLICY, ownerId: null, capabilities: null, paused: false };
   return {
     label: sibling.label,
     status: deriveLocalEnvStatus({ enrolledAt: sibling.enrolledAt, revokedAt: sibling.revokedAt, lastSeenAt: sibling.lastSeenAt, liveConnection, now }),
     enrolled: sibling.enrolledAt !== null,
     // The same parser the signing gate uses, so the DTO never shows an op the server would refuse to sign.
     serverPolicy: toServerPolicyDto(parseServerPolicy(sibling.serverPolicy)),
+    ownerId: sibling.ownerId,
+    capabilities: sibling.capabilities === null ? null : { ...sibling.capabilities },
+    paused: sibling.pausedAt !== null,
   };
 }
 
@@ -673,6 +682,51 @@ export async function renameDriveEnv({
 // ---------------------------------------------------------------------------
 // Server policy (local envs) — owner-only, D-6
 // ---------------------------------------------------------------------------
+
+export interface SetLocalEnvPausedDeps {
+  store: Pick<DriveEnvStore, 'setPaused' | 'findLocalByEnvId'>;
+  now: () => Date;
+}
+
+export type SetLocalEnvPausedResult =
+  | { ok: true; paused: boolean }
+  | { ok: false; reason: 'not_found' }
+  | { ok: false; reason: 'not_owner'; ownerId: string }
+  | { ok: false; reason: 'revoked' };
+
+/**
+ * STOP / RESUME a local environment's grants (GA wave 3, leaf 3) — without
+ * deleting it or revoking its key. While paused, `decideSign` refuses every
+ * grant with the typed reason `paused` (wave 1 reserved the slot in the deny
+ * order); the caller fails the env's in-flight requests typed `paused` so
+ * nothing hangs to its timeout; Resume clears the stamp and the machine
+ * carries on with the identity and policy it already had.
+ *
+ * **Owner-only, by the row, not by a role** ([D-6]) — the same shape as
+ * `setLocalEnvServerPolicy`: the security claim is the store's compare-and-set
+ * on `(envId, ownerId, revokedAt IS NULL)`, and the read below runs only
+ * AFTER a lost CAS, only to choose the honest typed answer.
+ */
+export async function setLocalEnvPaused({
+  envId,
+  requesterId,
+  paused,
+  deps,
+}: {
+  envId: string;
+  /** The acting user — compared against the row's OWNER, never against a drive role. */
+  requesterId: string;
+  paused: boolean;
+  deps: SetLocalEnvPausedDeps;
+}): Promise<SetLocalEnvPausedResult> {
+  const written = await deps.store.setPaused({ envId, ownerId: requesterId, paused, now: deps.now() });
+  if (written) return { ok: true, paused };
+  const row = await deps.store.findLocalByEnvId(envId);
+  if (!row) return { ok: false, reason: 'not_found' };
+  if (row.revokedAt !== null) return { ok: false, reason: 'revoked' };
+  if (row.ownerId !== requesterId) return { ok: false, reason: 'not_owner', ownerId: row.ownerId };
+  return { ok: false, reason: 'not_found' };
+}
 
 export interface SetLocalEnvServerPolicyDeps {
   store: Pick<DriveEnvStore, 'setServerPolicy' | 'findLocalByEnvId'>;

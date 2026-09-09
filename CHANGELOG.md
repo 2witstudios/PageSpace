@@ -7,6 +7,33 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Local Environments: you can see what your computer is doing, and you can stop it (opt-in).**
+  Every request PageSpace signs for a local Environment — and every one it refuses — is now
+  recorded on the server under the same id the machine writes to its own audit log, so the two
+  finally join. The Environment's owner sees it live: **Running now** and **Recent** appear under
+  the Environment in the sidebar, on its settings page, and on the new account page, updating the
+  moment a command starts and the moment it ends. **Stop** pauses the Environment without deleting
+  it or revoking the machine: PageSpace signs nothing more for it, anything waiting fails at once
+  with a plain reason instead of timing out, and the machine kills what it was already running and
+  confirms it did — you are told exactly what the machine confirmed and nothing it did not.
+  **Resume** picks up where you left off. Only the person who enrolled the machine can stop it;
+  drive admins keep Delete and Revoke.
+
+- **Local Environments: two new settings pages (opt-in).** **Drive settings → Environments**
+  lists every environment; a local one opens to its status, who owns it, the three switches
+  (Read files, Write files, Run commands — the owner's alone; anyone else sees them read-only with
+  the owner named), what can *actually* run (the machine's advertised abilities ∩ your switches,
+  with the machine's own policy file stated as unknown to the server), its live activity, and
+  Stop / Resume and Revoke. An Environment that refuses a session because nothing is allowed now
+  points at this page. **Settings → Local environments** is yours across every drive: each of your
+  machines with its status and activity, and every approval you gave in the chat — what a machine
+  will run without asking — each revocable. A revoke the machine could not receive is delivered the
+  next time it connects, before it runs anything, and you are told when the machine has confirmed.
+  **Your data export** (Settings → Privacy → Export) now carries two more files:
+  `local-environment-activity.json` (what your agent asked local machines to run, and how each
+  answered) and `local-environment-approvals.json` (approvals you gave, or that stand on a machine
+  you own, revoked and expired ones included).
+
 - **Local Environments: commands need your click in the chat; file work runs on its own
   (opt-in).** Two tiers now. **Reading and writing files** inside the folders you allowed runs
   without asking from the moment you enrol — no terminal to babysit. **Running a command** always

@@ -82,6 +82,8 @@ const EMPTY: AllUserData = {
   streamState: [],
   contentTags: [],
   localEnvironments: [],
+    localEnvironmentActivity: [],
+    localEnvironmentApprovals: [],
 };
 
 describe('GDPR export table coverage', () => {
@@ -167,6 +169,8 @@ describe('GDPR export table coverage', () => {
       agentWorkspaces: 'agent-workspaces.json',
       streamState: 'stream-state.json',
       localEnvironments: 'local-environments.json',
+      localEnvironmentActivity: 'local-environment-activity.json',
+      localEnvironmentApprovals: 'local-environment-approvals.json',
       contentTags: 'content-tags.json',
     };
 
@@ -188,6 +192,16 @@ describe('GDPR export table coverage', () => {
     for (const table of ['agent_workspaces', 'agent_workspace_shells', 'ai_stream_sessions']) {
       expect(Object.keys(EXPORTED_TABLES), table).toContain(table);
     }
+  });
+
+  it('carries the local-environment tables the GA wave 3 CI run caught unregistered — as COLLECTORS, not exclusions', () => {
+    // Both are the subject's own personal data: what commands their agent ran on
+    // their machine, and what programs they approved. An Art 15 export that
+    // omits them is incomplete, so neither may ever move to the allowlist.
+    expect(EXPORTED_TABLES['drive_env_grant_audit']).toBe('localEnvironmentActivity');
+    expect(EXPORTED_TABLES['drive_env_approvals']).toBe('localEnvironmentApprovals');
+    expect(EXCLUDED_TABLES).not.toHaveProperty('drive_env_grant_audit');
+    expect(EXCLUDED_TABLES).not.toHaveProperty('drive_env_approvals');
   });
 
   it('reaches on Art 15 everything the Art 17 stream-state purge deletes', () => {

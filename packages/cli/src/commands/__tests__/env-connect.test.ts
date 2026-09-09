@@ -113,7 +113,7 @@ function harness(overrides: Partial<EnvConnectHandlerDeps> & { policy?: string |
   const approvalWrites: Array<{ path: string; content: string }> = [];
   const signals: Array<(signal: string) => void> = [];
   const exit = vi.fn<(code: number) => void>();
-  const execRunner: ExecRunner & { killed: number } = { killed: 0, run: async () => ({ exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), truncated: false, timedOut: false }), killAll() { this.killed += 1; }, liveCount: () => 0 };
+  const execRunner: ExecRunner & { killed: number } = { killed: 0, run: async () => ({ exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), truncated: false, timedOut: false }), killAll() { this.killed += 1; return 0; }, liveCount: () => 0 };
   const store = fakeStore();
   const deps: EnvConnectHandlerDeps = {
     createCredentialStore: () => store,
@@ -141,6 +141,7 @@ function harness(overrides: Partial<EnvConnectHandlerDeps> & { policy?: string |
     approvalId: () => 'ap_test',
     challengeId: () => 'ch_test',
     onSignal: (handler) => void signals.push(handler),
+    daemonEpoch: 'ep_test',
     exit,
     ...rest,
   };
@@ -220,7 +221,7 @@ describe('pagespace env connect <enrollmentId>', () => {
       policy: ASK,
       confirm,
       openPolicy: (path) => ({ uid: UID, mode: 0o100600, content: path.endsWith('env-approvals.json') ? APPROVALS : ASK }),
-      createExecRunner: () => ({ run: async (request) => { runs.push(request.cmd ?? ''); return { exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), truncated: false, timedOut: false }; }, killAll: () => undefined, liveCount: () => 0 }),
+      createExecRunner: () => ({ run: async (request) => { runs.push(request.cmd ?? ''); return { exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), truncated: false, timedOut: false }; }, killAll: () => 0, liveCount: () => 0 }),
     });
     const c = ctx(true);
     await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']));
@@ -318,6 +319,104 @@ describe('pagespace env connect <enrollmentId>', () => {
     expect(h.execRunner.killed).toBe(1);
     expect(h.pidRemoves).toEqual([pidFilePath(HOME, 'enr_1')]);
     expect(h.exit).toHaveBeenCalledWith(EXIT_SUCCESS);
+  });
+
+  /**
+   * STOP reaches the process (GA wave 3, leaf 3 amendment). The REAL exec
+   * runner spawns a real `sh -c 'exec sleep 30'` under a real temp root; a
+   * server-signed `pause` arrives; the daemon must SIGKILL the process group
+   * before it acks. Proof, in order: the pause_result is sent before the
+   * exec_result; that exec_result carries exit 137 (128 + SIGKILL) — the
+   * sleep did not finish on its own; and `kill -0` on the pid fails once the
+   * parent has reaped it. Real timers: a real child process is involved.
+   */
+  it('GA wave 3 · Stop: a running command is killed by a verified pause — exit 137 from SIGKILL, the pid gone, the signed pause_result sent before the exec_result', async () => {
+    vi.useRealTimers();
+    const { mkdtempSync, existsSync, readFileSync, realpathSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { createNodeExecRunner } = await import('../../env-bridge/exec-runner.js');
+    const { encodePauseForSigning } = await import('@pagespace/lib/env-bridge/machine-signatures');
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'ps-pause-')));
+    const pidFile = join(root, 'child.pid');
+    try {
+      const h = harness({
+        policy: JSON.stringify({ mode: 'allowlist', principals: ['u1'], ops: ['exec'], roots: [root], envAllowlist: [] }),
+        probe: { realpath: (path) => (existsSync(path) ? realpathSync(path) : null), isSymlink: () => false },
+        createExecRunner: (resolver) => createNodeExecRunner(resolver),
+      });
+      const c = ctx(false);
+      expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+      await new Promise((r) => setTimeout(r, 10));
+      h.socket().open();
+      await new Promise((r) => setTimeout(r, 10));
+      h.socket().receive({ type: 'ping', ts: 1 });
+      await new Promise((r) => setTimeout(r, 10));
+      const unsigned = { type: 'grant_exec' as const, cmd: '/bin/sh', args: ['-c', `echo $$ > ${pidFile}; exec sleep 30`], cwd: root, env: {}, timeoutMs: 60_000 };
+      const request = grantRequestForFrame({ ...unsigned, grant: {}, sig: '' } as GrantFrame);
+      const grant: Grant = { grantId: 'g_sleep', envId: 'env_1', principal: { userId: 'u1', sessionId: 's', conversationId: 'c' }, op: 'exec', argsHash: envBridgeHash(canonicalizeArgs(request.args)), iat: NOW - 1000, exp: NOW + 30_000, nonce: 'n_sleep' };
+      h.socket().receive({ ...unsigned, grant: { ...grant, principal: { ...grant.principal } }, sig: Buffer.from(nodeSign(null, encodeGrant(grant), serverPair.privateKey)).toString('base64') } as unknown as Frame);
+      const deadline = Date.now() + 5_000;
+      while (!existsSync(pidFile) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+      const pid = Number(readFileSync(pidFile, 'utf8').trim());
+      expect(Number.isInteger(pid) && pid > 0).toBe(true);
+      expect(() => process.kill(pid, 0)).not.toThrow();
+
+      const pausedAt = NOW + 500;
+      h.socket().receive({ type: 'pause', issuedAt: NOW, pausedAt, sig: Buffer.from(nodeSign(null, encodePauseForSigning({ envId: 'env_1', enrollmentId: 'enr_1', keyId: serverKeyId, issuedAt: NOW, pausedAt }), serverPair.privateKey)).toString('base64') });
+      const types = () => h.socket().sent.map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).filter((d) => d.ok).map((d) => (d as { frame: Frame }).frame);
+      const until = Date.now() + 5_000;
+      while (!types().some((f) => f.type === 'exec_result') && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+      const frames = types();
+      const ack = frames.findIndex((f) => f.type === 'pause_result');
+      const result = frames.findIndex((f) => f.type === 'exec_result');
+      expect(ack).toBeGreaterThanOrEqual(0);
+      expect(result).toBeGreaterThan(ack);
+      expect(frames[ack]).toMatchObject({ type: 'pause_result', envId: 'env_1', pausedAt, killed: 1 });
+      expect(frames[result]).toMatchObject({ type: 'exec_result', grantId: 'g_sleep', exitCode: 137 });
+      // Reaped by the daemon's own close handler: the pid no longer exists.
+      expect(() => process.kill(pid, 0)).toThrow();
+      expect(h.auditLines.some((line) => line.includes('"verdict":"paused:killed:1"'))).toBe(true);
+      // Still connected: Stop pauses grants, not the machine.
+      expect(h.socket().closed).toBeNull();
+      h.signals[0]!('SIGINT');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      vi.useFakeTimers();
+    }
+  }, 20_000);
+
+  it('Codex P2 #7 (review round 1): the hello carries this process\'s daemonEpoch under the signature, and a RECONNECT sends the same epoch', async () => {
+    const h = harness();
+    const c = ctx(false);
+    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+    await flush();
+    h.socket().open();
+    const first = decodeFrame(h.socket().sent[0]!, { maxFrameBytes: 1 << 20 });
+    expect(first).toMatchObject({ ok: true, frame: { type: 'hello', daemonEpoch: 'ep_test' } });
+    expect(verifyHello({ hello: (first as { frame: Extract<Frame, { type: 'hello' }> }).frame, expectedEnvId: 'env_1', machinePublicKey: decodeBase64(machine.publicKey)!, verify: ed25519Verify })).toEqual({ ok: true });
+    h.socket().emit('close', 1006, Buffer.from(''));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.sockets.length).toBeGreaterThan(1);
+    h.socket().open();
+    const again = decodeFrame(h.socket().sent[0]!, { maxFrameBytes: 1 << 20 });
+    expect(again).toMatchObject({ ok: true, frame: { type: 'hello', daemonEpoch: 'ep_test' } });
+    h.signals[0]!('SIGINT');
+  });
+
+  it('GA wave 3 · leaf 7: given mode allowlist with exec in ops (the harness default), the daemon prints the exec-allowlisted line at start and audits policy_warning:exec_allowlisted once; with exec absent it prints and audits nothing of the kind', async () => {
+    const h = harness();
+    const c = ctx(false);
+    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+    await flush();
+    expect(c.err.text()).toMatch(/exec is allowlisted: commands run on this machine without a click — remove exec from ops to restore the approval prompt/);
+    expect(h.auditLines.filter((line) => line.includes('"verdict":"policy_warning:exec_allowlisted"'))).toHaveLength(1);
+    const quiet = harness({ policy: JSON.stringify({ mode: 'allowlist', principals: ['u1'], ops: ['fs_read'], roots: ['/home/me/proj'], envAllowlist: [] }) });
+    const q = ctx(false);
+    expect(await quiet.handler(q.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+    await flush();
+    expect(q.err.text()).not.toMatch(/exec is allowlisted/);
+    expect(quiet.auditLines.some((line) => line.includes('policy_warning'))).toBe(false);
   });
 
   it('R7: a server-signed revoke deletes the machine key from the credential store, stops reconnecting, and exits non-zero with a message', async () => {

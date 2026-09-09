@@ -73,7 +73,7 @@ const LOCAL_BIND_REFUSAL_STATUS = {
  */
 const NO_SERVER_OPS_MESSAGE =
   'This environment\'s owner has not allowed it to run anything yet, so a session in it could do nothing. '
-  + 'Only the owner can change that: the environment\'s serverPolicy (PATCH /api/drives/{driveId}/envs/{envId} with { serverPolicy: { ops: [...] } }) names what PageSpace may ask the machine to do.';
+  + 'Only the owner can change that, under Drive settings → Environments (/dashboard/{driveId}/settings/environments): turn on Read files, Write files or Run commands for the machine.';
 
 /** Bound on the stored display label — rendered everywhere the session appears. */
 const MAX_SESSION_NAME_LENGTH = 120;

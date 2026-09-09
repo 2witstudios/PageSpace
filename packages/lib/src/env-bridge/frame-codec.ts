@@ -40,7 +40,8 @@ const capabilitiesSchema = z.object({
 
 // ---- machine → server -----------------------------------------------------
 
-const hello = z.object({ type: z.literal('hello'), envId: nonEmpty, capabilities: capabilitiesSchema, policyDigest: z.string(), sig: b64 });
+/** `daemonEpoch` (GA wave 3, Codex P2 #7): a random id per daemon PROCESS, attested inside the signed hello bytes — a restart changes it, a reconnect does not. */
+const hello = z.object({ type: z.literal('hello'), envId: nonEmpty, capabilities: capabilitiesSchema, policyDigest: z.string(), daemonEpoch: nonEmpty, sig: b64 });
 const execResult = z.object({ type: z.literal('exec_result'), grantId: nonEmpty, exitCode: z.number().int(), stdoutB64: b64, stderrB64: b64, truncated: z.boolean(), sig: b64 });
 const fsReadResult = z.object({ type: z.literal('fs_read_result'), grantId: nonEmpty, found: z.boolean(), contentB64: b64.optional(), sig: b64 });
 const fsWriteResult = z.object({ type: z.literal('fs_write_result'), grantId: nonEmpty, ok: z.boolean(), error: z.string().optional(), sig: b64 });
@@ -72,6 +73,14 @@ const ptyExit = z.object({ type: z.literal('pty_exit'), sessionId: nonEmpty, cod
 const pong = z.object({ type: z.literal('pong'), ts: nonNegInt });
 /** The machine's signed acknowledgement of an approval revoke (GA wave 2): exactly this many rows were deleted for this id. */
 const approvalRevokeResult = z.object({ type: z.literal('approval_revoke_result'), approvalId: nonEmpty, removed: nonNegInt, sig: b64 });
+/**
+ * The machine's signed acknowledgement of a STOP (GA wave 3): for the pause
+ * stamped at `pausedAt` on `envId`, this many in-flight process groups were
+ * killed. Carries the env so its binding id (`pause:<envId>:<pausedAt>`) is
+ * derivable from the frame alone; the server still refuses one arriving on
+ * another env's socket.
+ */
+const pauseResult = z.object({ type: z.literal('pause_result'), envId: nonEmpty, pausedAt: nonNegInt, killed: nonNegInt, sig: b64 });
 
 // ---- server → machine -----------------------------------------------------
 
@@ -109,10 +118,19 @@ const ptyKill = z.object({ type: z.literal('pty_kill'), sessionId: nonEmpty, sig
 /** `approvalId` present ⇒ revoke ONE durable approval on the machine (GA wave 2); absent ⇒ revoke the enrollment (delete the key). Signed under different domains, so neither can be turned into the other. */
 const revoke = z.object({ type: z.literal('revoke'), sig: b64, issuedAt: nonNegInt, reason: z.string().optional(), approvalId: nonEmpty.optional() });
 const ping = z.object({ type: z.literal('ping'), ts: nonNegInt });
+/**
+ * STOP (GA wave 3): server → machine, signed under its OWN domain
+ * (`pause/v1`) over `{envId, enrollmentId, keyId, issuedAt, pausedAt}` by the
+ * key the enrollment pinned — so a pause can never be replayed as a revoke
+ * nor a revoke as a pause. Carries no approval id and can add nothing: on a
+ * verified pause the daemon kills what it is running, drops its pending
+ * challenges, acks with `pause_result`, and STAYS connected.
+ */
+const pause = z.object({ type: z.literal('pause'), sig: b64, issuedAt: nonNegInt, pausedAt: nonNegInt });
 
 const frameSchema = z.discriminatedUnion('type', [
-  hello, execResult, fsReadResult, fsWriteResult, grantDenied, approvalRevokeResult, ptyOpened, ptyData, ptyExit, pong,
-  grantExec, grantFsRead, grantFsWrite, grantPtyOpen, ptyInput, ptyResize, ptyKill, revoke, ping,
+  hello, execResult, fsReadResult, fsWriteResult, grantDenied, approvalRevokeResult, pauseResult, ptyOpened, ptyData, ptyExit, pong,
+  grantExec, grantFsRead, grantFsWrite, grantPtyOpen, ptyInput, ptyResize, ptyKill, revoke, pause, ping,
 ]);
 
 export type Frame = z.infer<typeof frameSchema>;
@@ -122,8 +140,8 @@ export type FrameType = Frame['type'];
 
 /** The closed set. A `type` outside it is `unknown_type`, full stop. */
 export const FRAME_TYPES: ReadonlySet<FrameType> = new Set<FrameType>([
-  'hello', 'exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'approval_revoke_result', 'pty_opened', 'pty_data', 'pty_exit', 'pong',
-  'grant_exec', 'grant_fs_read', 'grant_fs_write', 'grant_pty_open', 'pty_input', 'pty_resize', 'pty_kill', 'revoke', 'ping',
+  'hello', 'exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'approval_revoke_result', 'pause_result', 'pty_opened', 'pty_data', 'pty_exit', 'pong',
+  'grant_exec', 'grant_fs_read', 'grant_fs_write', 'grant_pty_open', 'pty_input', 'pty_resize', 'pty_kill', 'revoke', 'pause', 'ping',
 ]);
 
 /**
@@ -133,10 +151,10 @@ export const FRAME_TYPES: ReadonlySet<FrameType> = new Set<FrameType>([
  * `exec_result` arriving from the server. Every frame type is in exactly one.
  */
 export const MACHINE_TO_SERVER_FRAME_TYPES: ReadonlySet<FrameType> = new Set<FrameType>([
-  'hello', 'exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'approval_revoke_result', 'pty_opened', 'pty_data', 'pty_exit', 'pong',
+  'hello', 'exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'approval_revoke_result', 'pause_result', 'pty_opened', 'pty_data', 'pty_exit', 'pong',
 ]);
 export const SERVER_TO_MACHINE_FRAME_TYPES: ReadonlySet<FrameType> = new Set<FrameType>([
-  'grant_exec', 'grant_fs_read', 'grant_fs_write', 'grant_pty_open', 'pty_input', 'pty_resize', 'pty_kill', 'revoke', 'ping',
+  'grant_exec', 'grant_fs_read', 'grant_fs_write', 'grant_pty_open', 'pty_input', 'pty_resize', 'pty_kill', 'revoke', 'pause', 'ping',
 ]);
 
 export function isMachineToServerFrame(frame: Frame): boolean {

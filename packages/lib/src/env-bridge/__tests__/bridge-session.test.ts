@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { reduceBridgeSession, initialBridgeSession, ENV_SUPERSEDED_CLOSE_CODE, ENV_SUPERSEDED_CLOSE_REASON, isSupersededClose, type BridgeSessionState, type BridgeEvent, type HelloFrame } from '../bridge-session';
 import type { Frame } from '../frame-codec';
 
-const HELLO: HelloFrame = { type: 'hello', envId: 'e1', capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, policyDigest: 'd', sig: 'AAAA' };
+const HELLO: HelloFrame = { type: 'hello', envId: 'e1', capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, policyDigest: 'd', daemonEpoch: 'ep1', sig: 'AAAA' };
 const GRANT_EXEC: Frame = { type: 'grant_exec', grant: { grantId: 'g1' }, sig: 'AAAA', cmd: 'ls', args: [] };
 const PING: Frame = { type: 'ping', ts: 1 };
 

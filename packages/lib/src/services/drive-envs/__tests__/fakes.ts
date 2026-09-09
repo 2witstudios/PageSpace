@@ -56,6 +56,7 @@ export function makeLocalRecord(over: Partial<DriveEnvLocalRecord> = {}): DriveE
     machineKeyFingerprint: null,
     serverKeyId: null,
     capabilities: null,
+    daemonEpoch: null,
     // A MINTED row always carries the dialog's explicit policy (GA wave 1);
     // the column's deny-all default is the backstop for a row some path
     // forgot. Tests that want the backstop set `{ ops: [] }` explicitly.
@@ -71,6 +72,7 @@ export function makeLocalRecord(over: Partial<DriveEnvLocalRecord> = {}): DriveE
     lastSeenAt: null,
     enrolledAt: null,
     revokedAt: null,
+    pausedAt: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...over,
@@ -159,6 +161,10 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       return [...local.values()].filter((sibling) => sibling.driveId === driveId);
     },
 
+    async listLocalByOwner(ownerId) {
+      return [...local.values()].filter((sibling) => sibling.ownerId === ownerId).flatMap((sibling) => { const env = rows.get(sibling.envId); return env ? [{ env, local: sibling }] : []; });
+    },
+
     async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, enrollmentCodeHash, now: at }) {
       const sibling = local.get(envId);
       // The real store's compare-and-set: only a pending, unrevoked row with an
@@ -197,10 +203,10 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       return true;
     },
 
-    async recordHello({ envId, capabilities, now: at }) {
+    async recordHello({ envId, capabilities, daemonEpoch, now: at }) {
       const sibling = local.get(envId);
       if (!sibling || sibling.enrolledAt === null || sibling.revokedAt !== null) return false;
-      local.set(envId, { ...sibling, capabilities, lastSeenAt: at, updatedAt: at });
+      local.set(envId, { ...sibling, capabilities, daemonEpoch, lastSeenAt: at, updatedAt: at });
       return true;
     },
 
@@ -216,6 +222,15 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       // CAS on `revokedAt IS NULL`: a second revoke is an answer (false), not a rewrite of the stamp.
       if (!sibling || sibling.revokedAt !== null) return false;
       local.set(envId, { ...sibling, revokedAt: at, updatedAt: at });
+      return true;
+    },
+
+    async setPaused({ envId, ownerId, paused, now: at }) {
+      const sibling = local.get(envId);
+      // The real store's CAS predicate, verbatim: owner AND not revoked; Stop keeps the first stamp.
+      if (!sibling || sibling.ownerId !== ownerId || sibling.revokedAt !== null) return false;
+      if (paused && sibling.pausedAt !== null) return true;
+      local.set(envId, { ...sibling, pausedAt: paused ? at : null, updatedAt: at });
       return true;
     },
 

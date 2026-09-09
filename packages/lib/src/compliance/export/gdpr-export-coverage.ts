@@ -108,6 +108,15 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   // key, fingerprint, connection times), selected by ownerId. The env it backs stays
   // excluded below as the drive's infrastructure; the device is the subject's.
   drive_env_local: 'localEnvironments',
+  // What the subject's agent ran — or was refused — on local machines (GA wave
+  // 3): the request as rendered for a person, the verdict, the exit code, when.
+  // Selected by the REQUESTER (`userId`); the same rows serve the machine
+  // owner's activity panel, but that is the owner-only route, not Art 15.
+  drive_env_grant_audit: 'localEnvironmentActivity',
+  // What a local machine will run without asking (the server's mirror of the
+  // machine's approvals file). The subject's on two grounds, both selected:
+  // they clicked the approval, or it stands on a machine they own.
+  drive_env_approvals: 'localEnvironmentApprovals',
   ai_stream_sessions: 'streamState',
   // The durable frame log — the same generated content `ai_stream_sessions.parts`
   // holds, in the form that replaces it once the frame-log writer lands and that

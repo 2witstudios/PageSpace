@@ -4,9 +4,10 @@
  * GET    → { env }                          — any accepted member of the drive
  * PATCH  { name } → { env }                 — drive OWNER or ADMIN
  * PATCH  { serverPolicy } → { env, serverPolicy } — the ENV OWNER only (D-6)
+ * PATCH  { paused } → { env, paused }       — the ENV OWNER only (D-6; Stop / Resume, GA wave 3)
  * DELETE ?force=true → { deleted }          — drive OWNER or ADMIN
  *
- * **Two PATCH fields, two rules, one per request.** A rename is drive
+ * **Three PATCH fields, three rules, one per request.** A rename is drive
  * administration, so it keeps the owner-or-admin gate. `serverPolicy` — what
  * PageSpace may ask a LOCAL machine to do, enforced at signing (GA wave 1) —
  * belongs to the human who enrolled the machine and to nobody else: the check
@@ -57,6 +58,7 @@ import {
   resolveEnvInDrive,
   revokeEnv,
   setEnvServerPolicy,
+  setEnvPaused,
   toDriveEnvDTO,
 } from '@/lib/drive-envs/drive-envs-runtime';
 
@@ -107,7 +109,53 @@ export async function PATCH(request: Request, context: { params: Promise<{ drive
     const body = await request.json().catch(() => null);
     const parsed = patchDriveEnvRequestSchema.safeParse(body);
     if (!parsed.success) {
-      return NextResponse.json({ error: 'Exactly one of a non-empty environment name or a server policy ({ ops: [exec | fs_read | fs_write], checkpoint: false }) is required' }, { status: 400 });
+      return NextResponse.json({ error: 'Exactly one of a non-empty environment name, a server policy ({ ops: [exec | fs_read | fs_write], checkpoint: false }), or paused (true | false) is required' }, { status: 400 });
+    }
+
+    // ---- paused: STOP / RESUME, the env OWNER only (D-6; GA wave 3). Pauses
+    // the env's grants without deleting it or revoking its key; a drive admin
+    // who did not enrol the machine keeps Delete and is refused here.
+    if (parsed.data.paused !== undefined) {
+      const env = await resolveEnvInDrive(envId, driveId);
+      if (!env) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+      if (env.substrate !== 'local') {
+        return NextResponse.json({ error: 'Only a local environment can be stopped', reason: 'not_local' }, { status: 409 });
+      }
+      const operation = parsed.data.paused ? 'pause' : 'resume';
+      const result = await setEnvPaused({ envId, requesterId: auth.userId, paused: parsed.data.paused });
+      if (!result.ok) {
+        if (result.reason === 'not_owner') {
+          auditRequest(request, {
+            eventType: 'authz.access.denied',
+            userId: auth.userId,
+            resourceType: 'drive_env',
+            resourceId: envId,
+            details: { route: 'drive-envs', operation, driveId, ownerId: result.ownerId },
+            riskScore: 0.4,
+          });
+          return NextResponse.json(
+            { error: `Only this machine's owner (the user who enrolled it, ${result.ownerId}) can stop or resume it — drive admins can delete or revoke it, but not drive it`, reason: 'not_owner', ownerId: result.ownerId },
+            { status: 403 },
+          );
+        }
+        if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+        return NextResponse.json({ error: 'This environment has been revoked', reason: 'revoked' }, { status: 409 });
+      }
+      // Honest about the MACHINE (as the approval revoke is): 200 only when it
+      // signed an ack (or on Resume, which needs none); 202 when the pause went
+      // out and was not acknowledged in time; `no_live_socket` means the
+      // replica holding the socket delivers it on its next heartbeat (within
+      // one ping interval). The grants are refused from this moment either way.
+      const machine = 'machine' in result ? result.machine : null;
+      auditRequest(request, {
+        eventType: 'data.write',
+        userId: auth.userId,
+        resourceType: 'drive_env',
+        resourceId: envId,
+        details: { route: 'drive-envs', operation, driveId, envId, ...(machine !== null && { machine: machine.kind, ...(machine.kind === 'acknowledged' && { killed: machine.killed }) }) },
+      });
+      const body = { env: await readEnvDTO(env), paused: result.paused, ...(machine !== null && { machine: machine.kind, ...(machine.kind === 'acknowledged' && { killed: machine.killed }) }) };
+      return NextResponse.json(body, { status: machine !== null && machine.kind === 'unacknowledged' ? 202 : 200 });
     }
 
     // ---- serverPolicy: the env OWNER only (D-6). No drive role is consulted:

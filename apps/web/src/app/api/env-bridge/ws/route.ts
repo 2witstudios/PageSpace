@@ -22,8 +22,9 @@ import { LOCAL_ENV_HEARTBEAT_WINDOW_MS } from '@pagespace/lib/services/drive-env
 import type { DriveEnvLocalRecord } from '@pagespace/lib/services/drive-envs/drive-envs-store';
 import { initialBridgeSession, reduceBridgeSession, type BridgeSessionState } from '@pagespace/lib/env-bridge/bridge-session';
 import { verifyHello, isMachineResultFrame, machineResultBindingId } from '@pagespace/lib/env-bridge/machine-signatures';
-import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
+import { expireSessionEnvApprovalsForOtherEpoch, getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
 import { getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
+import { replayUnacknowledgedApprovalRevokes } from '@/lib/env-bridge/revoke';
 import { decodePinnedPublicKey, ed25519Verify } from '@/lib/env-bridge/crypto';
 import { ENV_BRIDGE_HELLO_TIMEOUT_MS, ENV_BRIDGE_PING_INTERVAL_MS } from '@/lib/env-bridge/ws-route-config';
 
@@ -346,13 +347,21 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
       return;
     }
     const now = new Date();
-    const recorded = await (await getDriveEnvStore()).recordHello({ envId, capabilities: frame.capabilities, now });
+    const recorded = await (await getDriveEnvStore()).recordHello({ envId, capabilities: frame.capabilities, daemonEpoch: frame.daemonEpoch, now });
     if (!recorded) {
       // Revoked (or un-enrolled) between the upgrade and the hello: the CAS says no.
       refuse('env_bridge_hello_refused', 'enrollment no longer live', 'Environment revoked', 0.5);
       return;
     }
     if (client.readyState !== 1) return;
+    // Codex P2 #7: this hello attests the daemon PROCESS. Session-scoped approvals the mirror holds for any
+    // other process of this env died with that process — expire them now, so the account page never lists them.
+    try {
+      const expired = await expireSessionEnvApprovalsForOtherEpoch({ envId, epoch: frame.daemonEpoch });
+      if (expired > 0) dropFrame('env_bridge_session_approvals_expired', { expired, daemonEpoch: frame.daemonEpoch }, 0);
+    } catch (error) {
+      dropFrame('env_bridge_session_approvals_expire_error', { error: error instanceof Error ? error.message : String(error) }, 0.2);
+    }
     session = reduceBridgeSession(session, { type: 'hello_ack' }).state;
     markEnvAuthorized(client);
     markEnvLastSeenPersisted(client, now);
@@ -366,6 +375,49 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
       resourceId: envId,
       riskScore: 0,
       details: { originalEvent: 'env_bridge_connection_established', capabilities: frame.capabilities, policyDigest: frame.policyDigest },
+    });
+    // THE REPLAY (GA wave 3, leaf 5): every approval revoke the mirror still
+    // owes this machine goes out now, under a hold that keeps every grant for
+    // this env waiting until the machine has signed its acks — so a revoke
+    // made while the machine was away lands before the first grant is signed.
+    // The hold is installed SYNCHRONOUSLY here, in the same tick the socket
+    // became authorized, so no grant can slip between the two; the replay
+    // itself runs in the background and the ping (the daemon's hello_ack)
+    // is not delayed by it — the daemon dispatches `revoke` from every state.
+    void getEnvBridgeClient().withHold(envId, async () => {
+      const replay = await replayUnacknowledgedApprovalRevokes({ envId, enrollmentId: enrollment.enrollmentId, serverKeyId: enrollment.serverKeyId, ws: client });
+      if (replay.owed > 0) {
+        auditRequest(request, {
+          eventType: 'auth.token.revoked',
+          userId,
+          resourceType: RESOURCE_TYPE,
+          resourceId: envId,
+          riskScore: 0,
+          details: { originalEvent: 'env_bridge_approval_revokes_replayed', owed: replay.owed, acknowledged: replay.acknowledged },
+        });
+      }
+      if (replay.acknowledged >= replay.owed) return true;
+      // A revoke the machine did not acknowledge (Codex P1, review round 1):
+      // the env stays BLOCKED — every grant refused typed `revoke_pending` —
+      // and this socket is closed so the daemon reconnects (its own backoff,
+      // no server-side loop) and the next hello replays again. Grants sign
+      // only once every owed revoke carries the machine's signed ack.
+      auditRequest(request, {
+        eventType: 'security.anomaly.detected',
+        userId,
+        resourceType: RESOURCE_TYPE,
+        resourceId: envId,
+        riskScore: 0.4,
+        details: { originalEvent: 'env_bridge_revoke_pending', owed: replay.owed, acknowledged: replay.acknowledged },
+      });
+      if (pingTimer) clearInterval(pingTimer);
+      try {
+        client.close(1008, 'revoke_pending');
+      } catch {
+        // already gone
+      }
+      unregisterEnvConnection(envId, client);
+      return false;
     });
     // The first server frame acknowledges the hello (the daemon maps it to hello_ack).
     sendPing();
@@ -383,11 +435,40 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
     const metadata = getEnvConnectionMetadata(client);
     const now = new Date();
     const lastPersisted = metadata?.lastSeenPersistedAt?.getTime() ?? 0;
+    const store = await getDriveEnvStore();
     // Persist lastSeenAt at most once per heartbeat window — never on every ping.
     if (now.getTime() - lastPersisted >= LOCAL_ENV_HEARTBEAT_WINDOW_MS) {
       markEnvLastSeenPersisted(client, now);
-      const recorded = await (await getDriveEnvStore()).recordHeartbeat({ envId, now });
-      if (!recorded) refuse('env_bridge_heartbeat_refused', 'enrollment no longer live', 'Environment revoked', 0.5);
+      const recorded = await store.recordHeartbeat({ envId, now });
+      if (!recorded) {
+        refuse('env_bridge_heartbeat_refused', 'enrollment no longer live', 'Environment revoked', 0.5);
+        return;
+      }
+    }
+    // STOP reaches this replica here (GA wave 3): the owner's PATCH may have
+    // landed elsewhere, but the grants in flight AND the machine's socket are
+    // here. On EVERY pong (one row read per ping interval) a paused row fails
+    // the in-flight requests typed `paused` and delivers the signed `pause`
+    // to the machine — until it ACKS; `markEnvPauseAcked` is the guard — so a
+    // Stop made anywhere reaches the process within ENV_BRIDGE_PING_INTERVAL_MS.
+    // The socket stays: Stop pauses grants and kills processes, not the machine.
+    const sibling = await store.findLocalByEnvId(envId);
+    if (sibling?.pausedAt != null) {
+      const ended = getEnvBridgeClient().pauseEnv(envId);
+      if (ended > 0) dropFrame('env_bridge_paused_in_flight', { ended }, 0.1);
+      // Keyed on the ACK (Codex P1, review round 1): an unacknowledged delivery is retried on every pong until the machine signs for it.
+      if (metadata?.pauseAckedForMs !== sibling.pausedAt.getTime()) {
+        const { pauseLocalEnvMachine } = await import('@/lib/env-bridge/pause');
+        const delivered = await pauseLocalEnvMachine({ envId });
+        auditRequest(request, {
+          eventType: 'data.write',
+          userId,
+          resourceType: RESOURCE_TYPE,
+          resourceId: envId,
+          riskScore: 0,
+          details: { originalEvent: 'env_bridge_pause_delivered', pausedAt: sibling.pausedAt.toISOString(), machine: delivered.ok ? delivered.machine.kind : delivered.reason, ...(delivered.ok && delivered.machine.kind === 'acknowledged' && { killed: delivered.machine.killed }) },
+        });
+      }
     }
   };
 

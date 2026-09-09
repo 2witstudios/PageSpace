@@ -3,14 +3,14 @@ import { createHash, generateKeyPairSync, sign as nodeSign } from 'node:crypto';
 import { canonicalizeArgs, decodeBase64, encodeGrant, verifyGrant, type ApprovalIntent, type Grant } from '@pagespace/lib/env-bridge/grant';
 import { grantRequestForFrame, type GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 import { decideExecution, type NormalizedRequest } from '@pagespace/lib/env-bridge/decide-execution';
-import { encodeApprovalRevokeForSigning, encodeRevokeForSigning, verifyMachineResult, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
+import { encodePauseForSigning, encodeApprovalRevokeForSigning, encodeRevokeForSigning, verifyMachineResult, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
 import { execOutputCeiling, fsReadContentCeiling, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
 import type { MachinePolicy } from '@pagespace/lib/env-bridge/policy-types';
 import type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
 import { createDispatcher, DAEMON_CAPABILITIES, type DispatcherDeps } from '../dispatcher.js';
 import { createDaemonNonceStore } from '../nonce-store.js';
-import { createApprovalsStore } from '../approvals-store.js';
-import { createChallengeStore } from '../challenge-store.js';
+import { createApprovalsStore, type ApprovalsStore } from '../approvals-store.js';
+import { createChallengeStore, type ChallengeStore } from '../challenge-store.js';
 import { generateMachineKeypair, signWithMachineKey } from '../keypair.js';
 import { ed25519Verify, envBridgeHash } from '../crypto.js';
 import type { AuditEntry } from '../audit-log.js';
@@ -70,7 +70,7 @@ function fakeProbe(existing: Record<string, string> = { [ROOT]: ROOT, [`${ROOT}/
 function harness(overrides: Partial<DispatcherDeps> = {}) {
   const audits: AuditEntry[] = [];
   const spawnRun = vi.fn(async (request: NormalizedRequest) => ({ exitCode: 0, stdout: Buffer.from(`ran ${request.cmd}`), stderr: Buffer.alloc(0), truncated: false, timedOut: false }));
-  const execRunner: ExecRunner = { run: spawnRun, killAll: () => undefined, liveCount: () => 0 };
+  const execRunner: ExecRunner = { run: spawnRun, killAll: () => 0, liveCount: () => 0 };
   const fsRunner: FsRunner = { read: vi.fn(async () => ({ kind: 'read' as const, found: true, contentB64: 'aGk=' })), write: vi.fn(async () => ({ kind: 'write' as const, ok: true })) };
   const deps: DispatcherDeps = {
     envId: ENV_ID,
@@ -621,6 +621,120 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
       await h.dispatcher.handle(genuine);
       expect(await h.dispatcher.handle(genuine)).toMatchObject({ kind: 'reply', frame: { reason: 'replayed' } });
       expect(h.spawnRun).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('GA wave 3 · Stop — a verified `pause` kills what is running, drops every pending challenge, acks signed, and stays connected', () => {
+    const PAUSED_AT = NOW + 500;
+    const pauseFrame = (over: { pausedAt?: number; issuedAt?: number; keyId?: string; sig?: string } = {}): Frame => {
+      const issuedAt = over.issuedAt ?? NOW;
+      const pausedAt = over.pausedAt ?? PAUSED_AT;
+      return { type: 'pause', issuedAt, pausedAt, sig: over.sig ?? serverSign(encodePauseForSigning({ envId: ENV_ID, enrollmentId: ENROLLMENT_ID, keyId: over.keyId ?? serverKeyId, issuedAt, pausedAt })) };
+    };
+    function pauseHarness() {
+      let n = 0;
+      const challenges = createChallengeStore({ newId: () => `ch_${++n}` });
+      const killAll = vi.fn(() => 2);
+      const approvals = createApprovalsStore({ path: '/p', uid: 501, open: () => null, write: async () => undefined, now: () => NOW });
+      const h = harness({ policy: () => ASK_POLICY, ask: null, challenges, approvals, resolveArgv0: (name) => ({ tool: '/usr/bin/tool' })[name] ?? null });
+      h.deps.execRunner.killAll = killAll;
+      return { ...h, dispatcher: createDispatcher(h.deps), challenges, killAll };
+    }
+
+    it('given a pause signed by the pinned server key, should killAll, clear the challenges, audit paused:killed:<n>, and answer a machine-signed pause_result bound to the pause — NOT revoke_verified', async () => {
+      const h = pauseHarness();
+      expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_1' } });
+      expect(h.challenges.size()).toBe(1);
+      const result = await h.dispatcher.handle(pauseFrame());
+      expect(result).toMatchObject({ kind: 'paused', pausedAt: PAUSED_AT, killed: 2, dropped: 1, frame: { type: 'pause_result', envId: ENV_ID, pausedAt: PAUSED_AT, killed: 2 } });
+      expect(h.killAll).toHaveBeenCalledTimes(1);
+      expect(h.challenges.size()).toBe(0);
+      expect(h.audits.at(-1)).toMatchObject({ grantId: null, op: 'pause', verdict: 'paused:killed:2' });
+      const ack = (result as { frame: Frame }).frame;
+      expect(verified(ack)).toMatchObject({ ok: true });
+      expect(verified({ ...ack, killed: 0 } as Frame)).toEqual({ ok: false, reason: 'bad_signature' });
+    });
+
+    it('after a pause, a click naming a challenge frozen BEFORE it runs nothing — refused paused if its grant predates the pause, approval_mismatch if it is newer (the store was cleared); a fresh request after Resume is framed anew (no frame needed to resume)', async () => {
+      const h = pauseHarness();
+      await h.dispatcher.handle(execFrame());
+      await h.dispatcher.handle(pauseFrame());
+      const intent = { challengeId: 'ch_1', scope: '30d' as const, expiresAt: NOW + 30_000 };
+      const principal = { ...PRINCIPAL, sessionId: 'later', conversationId: 'later' };
+      const staleClick = signedGrant({ type: 'grant_exec', cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' } }, { approvalIntent: intent, principal });
+      expect(await h.dispatcher.handle(staleClick)).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'paused' } });
+      const newerClick = signedGrant({ type: 'grant_exec', cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' } }, { approvalIntent: intent, principal, iat: PAUSED_AT + 1, exp: PAUSED_AT + 30_000, nonce: 'n_click2', grantId: 'grant_click2' });
+      expect(await h.dispatcher.handle(newerClick)).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'approval_mismatch' } });
+      expect(h.spawnRun).not.toHaveBeenCalled();
+      // Resume is the server signing again: a request newer than the pause is a NEW question, under a new id.
+      expect(await h.dispatcher.handle(execFrame({ args: ['zzz'] }) && signedGrant({ type: 'grant_exec', cmd: 'tool', args: ['zzz'], cwd: ROOT, env: { CI: '1' } }, { iat: PAUSED_AT + 2, exp: PAUSED_AT + 30_000, nonce: 'n_fresh', grantId: 'grant_fresh' }))).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_2' } });
+    });
+
+    describe('Codex P1 #3 (review round 1) — the daemon LATCHES paused: a handler that resumes after an await never spawns, and only a newer verified grant clears it', () => {
+      function latchHarness(over: { policy?: MachinePolicy; approvals?: ApprovalsStore; challenges?: ChallengeStore; ask?: AskPrompter | null } = {}) {
+        const killAll = vi.fn(() => 0);
+        const h = harness({ policy: () => over.policy ?? ASK_POLICY, ask: over.ask ?? null, approvals: over.approvals, challenges: over.challenges, resolveArgv0: (name) => ({ tool: '/usr/bin/tool' })[name] ?? null });
+        h.deps.execRunner.killAll = killAll;
+        return { ...h, dispatcher: createDispatcher(h.deps), killAll };
+      }
+      const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>((r) => { resolve = r; }); return { promise, resolve }; };
+
+      it('given a pause lands while a handler awaits the TERMINAL prompt, the approval that arrives afterwards runs NOTHING (deny:paused, audited)', async () => {
+        const answer = deferred<{ approved: boolean; scope: 'once' }>();
+        const h = latchHarness({ ask: { ask: () => answer.promise } });
+        const pending = h.dispatcher.handle(execFrame());
+        await Promise.resolve();
+        expect(await h.dispatcher.handle(pauseFrame())).toMatchObject({ kind: 'paused' });
+        answer.resolve({ approved: true, scope: 'once' });
+        expect(await pending).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'paused' } });
+        expect(h.spawnRun).not.toHaveBeenCalled();
+        expect(h.audits.some((a) => a.verdict === 'deny:paused' && a.grantId === 'grant_1')).toBe(true);
+      });
+
+      it('given a pause lands while the CLICK path awaits the approval write, the frozen request runs NOTHING', async () => {
+        let n = 0;
+        const challenges = createChallengeStore({ newId: () => `ch_${++n}` });
+        const write = deferred<void>();
+        const approvals = createApprovalsStore({ path: '/p', uid: 501, open: () => null, write: () => write.promise, now: () => NOW });
+        const h = latchHarness({ approvals, challenges });
+        expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_1' } });
+        const click = signedGrant({ type: 'grant_exec', cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' } }, { approvalIntent: { challengeId: 'ch_1', scope: '30d', expiresAt: NOW + 30_000 }, principal: { ...PRINCIPAL, sessionId: 'later', conversationId: 'later' } });
+        const pending = h.dispatcher.handle(click);
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(await h.dispatcher.handle(pauseFrame())).toMatchObject({ kind: 'paused' });
+        write.resolve();
+        expect(await pending).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'paused' } });
+        expect(h.spawnRun).not.toHaveBeenCalled();
+      });
+
+      it('after a pause, an OLDER grant (issuedAt <= pausedAt) is refused paused before anything else; a NEWER verified grant runs — the server signs only when not paused, so that grant IS the resume', async () => {
+        const h = latchHarness({ policy: POLICY });
+        await h.dispatcher.handle(pauseFrame());
+        expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'paused' } });
+        expect(h.spawnRun).not.toHaveBeenCalled();
+        const newer = signedGrant({ type: 'grant_exec', cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' } }, { iat: PAUSED_AT + 1, exp: PAUSED_AT + 30_000, nonce: 'n_newer', grantId: 'grant_newer' });
+        expect(await h.dispatcher.handle(newer)).toMatchObject({ kind: 'reply', frame: { type: 'exec_result', grantId: 'grant_newer' } });
+        expect(h.spawnRun).toHaveBeenCalledTimes(1);
+        // Cleared: another grant newer than the pause runs too; one older than it still does not.
+        expect(await h.dispatcher.handle(signedGrant({ type: 'grant_exec', cmd: 'tool', args: ['b'], cwd: ROOT, env: { CI: '1' } }, { iat: PAUSED_AT + 2, exp: PAUSED_AT + 30_000, nonce: 'n_newer2', grantId: 'grant_newer2' }))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
+        expect(await h.dispatcher.handle(execFrame({ args: ['c'] }))).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'paused' } });
+      });
+    });
+
+    it.each([
+      ['a rogue key', () => pauseFrame({ keyId: 'other-key' })],
+      ['an edited pausedAt', () => ({ ...pauseFrame(), pausedAt: PAUSED_AT + 1 })],
+      ['a revoke signature riding a pause frame', () => ({ type: 'revoke' as const, issuedAt: NOW, sig: (pauseFrame() as Extract<Frame, { type: 'pause' }>).sig })],
+    ])('given %s, should drop it, kill NOTHING, clear NOTHING, and audit the drop', async (_label, make) => {
+      const h = pauseHarness();
+      await h.dispatcher.handle(execFrame());
+      const frame = make() as Frame;
+      const result = await h.dispatcher.handle(frame);
+      expect(result.kind).toBe('dropped');
+      expect(h.killAll).not.toHaveBeenCalled();
+      expect(h.challenges.size()).toBe(1);
+      expect(h.audits.at(-1)?.verdict).toMatch(/^dropped:(pause|revoke)_bad_signature$/);
     });
   });
 

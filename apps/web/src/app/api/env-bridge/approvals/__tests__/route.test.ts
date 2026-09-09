@@ -10,13 +10,17 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest:
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { api: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } }, logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) } }));
 vi.mock('@pagespace/lib/services/drive-envs/local-envs-enabled', () => ({ isLocalEnvsEnabled: vi.fn(() => true) }));
 vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthError: vi.fn(() => false) }));
-vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn() }));
+vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn(), rememberEnvApproval: vi.fn(async () => null), getApprovalMirrorStore: vi.fn(), markEnvApprovalRevoked: vi.fn(async () => null), markEnvApprovalAcknowledged: vi.fn(async () => null) }));
+vi.mock('@/lib/env-bridge/revoke', () => ({ revokeLocalEnvApproval: vi.fn() }));
+vi.mock('@/lib/auth/permissions', () => ({ isPrincipalDriveOwnerOrAdmin: vi.fn(async () => true) }));
 vi.mock('@/lib/env-bridge/bridge-client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/env-bridge/bridge-client')>();
   return { ...actual, getEnvBridgeClient: vi.fn() };
 });
 
-import { GET, POST } from '../[challengeId]/route';
+import { GET, POST, DELETE } from '../[challengeId]/route';
+import { revokeLocalEnvApproval } from '@/lib/env-bridge/revoke';
+import { getApprovalMirrorStore, markEnvApprovalAcknowledged, markEnvApprovalRevoked, rememberEnvApproval } from '@/lib/drive-envs/drive-envs-runtime';
 import { ENV_APPROVAL_STDERR_MAX_CHARS, ENV_APPROVAL_STDOUT_MAX_CHARS, requestEnvApprovalOutputSchema } from '@/lib/ai/tools/env-approval-tools';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
@@ -179,5 +183,81 @@ describe('POST deny', () => {
     expect(sendGrant).not.toHaveBeenCalled();
     expect(getPendingApprovalStore().size()).toBe(0);
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', details: expect.objectContaining({ operation: 'deny', challengeId: 'ch_1' }) }));
+  });
+});
+
+describe('GA wave 3 · leaf 5 — the MIRROR: a click that ran is recorded for visibility, never for allow', () => {
+  it('given Allow with a durable scope and the machine ran it, should mirror the approval under the challenge id with the env, the clicker, the op, a readable summary, the scope and its expiry', async () => {
+    const r = await post({ decision: 'allow', scope: '30d' });
+    expect(r.status).toBe(200);
+    expect(rememberEnvApproval).toHaveBeenCalledTimes(1);
+    expect(rememberEnvApproval).toHaveBeenCalledWith(expect.objectContaining({ id: 'ch_1', envId: ENV, userId: OWNER, op: 'exec', scope: '30d', summary: "exec: sh -c git status in /home/o/proj", createdAt: new Date(NOW) }));
+    const call = vi.mocked(rememberEnvApproval).mock.calls[0]![0];
+    expect(call.expiresAt?.getTime()).toBe(NOW + 30 * 24 * 60 * 60 * 1000);
+  });
+
+  it('given until_revoked, the mirror row never expires; given session, it carries no expiry but the env\'s current daemon epoch (Codex P2 #7) — its life is that process', async () => {
+    await post({ decision: 'allow', scope: 'until_revoked' });
+    expect(vi.mocked(rememberEnvApproval).mock.calls[0]![0]).toMatchObject({ expiresAt: null, daemonEpoch: null });
+    getPendingApprovalStore().remember(pendingEntry(), NOW);
+    sibling = { ...sibling!, daemonEpoch: 'ep_live' } as typeof sibling;
+    await post({ decision: 'allow', scope: 'session' });
+    expect(vi.mocked(rememberEnvApproval).mock.calls[1]![0]).toMatchObject({ scope: 'session', expiresAt: null, daemonEpoch: 'ep_live' });
+  });
+
+  it('given once, deny, or a machine answer that is not allowed (mismatch / expired / denied), NOTHING is mirrored — the machine remembered nothing', async () => {
+    await post({ decision: 'allow', scope: 'once' });
+    getPendingApprovalStore().remember(pendingEntry(), NOW);
+    await post({ decision: 'deny' });
+    getPendingApprovalStore().remember(pendingEntry(), NOW);
+    sendGrant.mockResolvedValueOnce({ type: 'grant_denied', grantId: 'g', reason: 'approval_mismatch', sig: 'c2ln' });
+    await post({ decision: 'allow', scope: '30d' });
+    expect(rememberEnvApproval).not.toHaveBeenCalled();
+  });
+
+  it('a mirror write that fails does not change the click\'s answer (the machine already ran it)', async () => {
+    vi.mocked(rememberEnvApproval).mockRejectedValueOnce(new Error('db down'));
+    const r = await post({ decision: 'allow', scope: '30d' });
+    expect(r.status).toBe(200);
+  });
+});
+
+describe('Codex P1 #5 (review round 1) — DELETE /api/env-bridge/approvals/[approvalId] is OWNER-scoped, never drive-scoped: an owner who left the drive can still revoke; a drive admin who is not the owner cannot', () => {
+  const del = (id = 'ch_1') => DELETE(new Request(`http://localhost/api/env-bridge/approvals/${id}`, { method: 'DELETE' }), ctx(id));
+  beforeEach(() => {
+    vi.mocked(getApprovalMirrorStore).mockResolvedValue({ findById: vi.fn(async (id: string) => (id === 'ch_1' ? { id: 'ch_1', envId: ENV, userId: OWNER } : null)) } as never);
+    vi.mocked(revokeLocalEnvApproval).mockResolvedValue({ ok: true, machine: { kind: 'acknowledged', removed: 2 } } as never);
+  });
+
+  it('given the machine OWNER (no drive membership consulted at all), should revoke through the same signed path, stamp the mirror, audit, and answer the machine\'s ack', async () => {
+    const r = await del();
+    expect(r.status).toBe(200);
+    expect(await json(r)).toMatchObject({ revoked: true, machine: 'acknowledged', approvalId: 'ch_1', removed: 2 });
+    expect(revokeLocalEnvApproval).toHaveBeenCalledWith({ envId: ENV, approvalId: 'ch_1', reason: `revoked_by_${OWNER}` });
+    expect(markEnvApprovalRevoked).toHaveBeenCalledWith({ id: 'ch_1', by: OWNER });
+    expect(markEnvApprovalAcknowledged).toHaveBeenCalledWith({ id: 'ch_1', removed: 2 });
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', userId: OWNER, resourceId: ENV, details: expect.objectContaining({ route: 'env-bridge/approvals', operation: 'revoke', approvalId: 'ch_1' }) }));
+  });
+
+  it('given a drive ADMIN who did not enrol the machine, should refuse 403 not_owner naming the owner, audit, and revoke nothing — drive administration buys nothing here', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: ADMIN } as never);
+    const r = await del();
+    expect(r.status).toBe(403);
+    expect(await json(r)).toMatchObject({ reason: 'not_owner', ownerId: OWNER });
+    expect(revokeLocalEnvApproval).not.toHaveBeenCalled();
+    expect(markEnvApprovalRevoked).not.toHaveBeenCalled();
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', userId: ADMIN }));
+  });
+
+  it('unacknowledged ⇒ 202 (decision stamped, ack not); no live socket ⇒ 409 (decision stamped); unknown approval ⇒ 404; flag off ⇒ 404', async () => {
+    vi.mocked(revokeLocalEnvApproval).mockResolvedValueOnce({ ok: true, machine: { kind: 'unacknowledged', reason: 'timeout' } } as never);
+    expect((await del()).status).toBe(202);
+    vi.mocked(revokeLocalEnvApproval).mockResolvedValueOnce({ ok: true, machine: { kind: 'no_live_socket' } } as never);
+    expect((await del()).status).toBe(409);
+    expect(markEnvApprovalRevoked).toHaveBeenCalledTimes(2);
+    expect(markEnvApprovalAcknowledged).not.toHaveBeenCalled();
+    expect((await del('ch_nope')).status).toBe(404);
+    vi.mocked(isLocalEnvsEnabled).mockReturnValue(false);
+    expect((await del()).status).toBe(404);
   });
 });

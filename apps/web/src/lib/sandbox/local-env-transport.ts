@@ -90,6 +90,13 @@ export function createLocalEnvTransport(options: { principal?: GrantPrincipal } 
                 const reason = typeof error.detail?.reason === 'string' ? error.detail.reason : 'server_denied';
                 throw new LocalEnvServerDeniedError(envId, reason);
               }
+              // Stop (GA wave 3): an in-flight request the OWNER paused is the
+              // server's refusal too, in the same typed word `decideSign` uses
+              // for a new one — the tool names "the owner stopped it", never a
+              // transport failure.
+              if (error instanceof EnvBridgeError && error.kind === 'paused') throw new LocalEnvServerDeniedError(envId, 'paused');
+              // An approval revoke the machine has not acknowledged (Codex P1, review round 1): the server's refusal, typed.
+              if (error instanceof EnvBridgeError && error.kind === 'revoke_pending') throw new LocalEnvServerDeniedError(envId, 'revoke_pending');
               throw error;
             }),
     // The AUTHORIZED socket only (invariant 6): a socket whose signed hello has

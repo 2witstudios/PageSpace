@@ -4,6 +4,7 @@
  *
  * GET   → { challengeId, envId, principal, expiresAt, request }   — the ENV OWNER only
  * POST  { decision: 'allow' | 'deny', scope? } → { outcome, … }   — the ENV OWNER only
+ * DELETE → revoke the durable approval this id names            — the ENV OWNER only, NO drive check (Codex P1 #5, review round 1)
  *
  * A machine that reached the `ask` verdict froze the exact normalised request
  * under a challenge id and answered `ask_pending:<id>`; the bridge client
@@ -40,7 +41,9 @@ import type { MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signa
 import { ENV_APPROVAL_SCOPES, ENV_APPROVAL_STDERR_MAX_CHARS, ENV_APPROVAL_STDOUT_MAX_CHARS, type RequestEnvApprovalOutput } from '@/lib/ai/tools/env-approval-tools';
 import { EnvBridgeError, getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { getPendingApprovalStore, type PendingEnvApproval } from '@/lib/env-bridge/pending-approvals';
-import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
+import { getApprovalMirrorStore, getDriveEnvStore, markEnvApprovalAcknowledged, markEnvApprovalRevoked, rememberEnvApproval } from '@/lib/drive-envs/drive-envs-runtime';
+import { revokeLocalEnvApproval } from '@/lib/env-bridge/revoke';
+import { approvalExpiry } from '@pagespace/lib/env-bridge/decide-approval';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -138,7 +141,8 @@ function outcomeOf(challengeId: string, scope: RequestEnvApprovalOutput['scope']
     case 'fs_read_result':
       return { challengeId, outcome: 'allowed', scope };
     case 'approval_revoke_result':
-      // Not an answer to a grant; a click can never be answered by a revoke ack.
+    case 'pause_result':
+      // Not an answer to a grant; a click can never be answered by an ack.
       return { challengeId, outcome: 'failed', error: 'unexpected_frame' };
     case 'grant_denied':
       if (reply.reason === 'approval_mismatch') return { challengeId, outcome: 'mismatch', error: reply.reason };
@@ -189,6 +193,22 @@ export async function POST(request: Request, context: Params) {
       return NextResponse.json(output, { status: 502 });
     }
     const output = outcomeOf(challengeId, scope, reply);
+    // The MIRROR (GA wave 3, leaf 5): the machine remembered this approval
+    // (it ran on a byte-compared match, under the challenge id, for every
+    // scope but `once`), so the server records what the owner can now see and
+    // revoke. Visibility only: nothing here can widen what runs.
+    if (output.outcome === 'allowed' && scope !== 'once') {
+      const frozen = pending.pending.request;
+      // A session-scoped row is tied to the daemon process that holds it (its last hello's epoch, Codex P2 #7).
+      const epoch = scope === 'session' ? ((await (await getDriveEnvStore()).findLocalByEnvId(pending.envId))?.daemonEpoch ?? null) : null;
+      const argv = frozen.op === 'exec' ? [frozen.cmd ?? '', ...(frozen.args ?? [])].join(' ') : frozen.paths.join(', ');
+      try {
+        await rememberEnvApproval({ id: challengeId, envId: pending.envId, userId: auth.userId, op: frozen.op, summary: `${frozen.op}: ${argv}${frozen.op === 'exec' ? ` in ${frozen.cwd}` : ''}`, scope, daemonEpoch: epoch, createdAt: new Date(now), expiresAt: approvalExpiry(scope, now) === null ? null : new Date(approvalExpiry(scope, now)!) });
+      } catch (error) {
+        // The machine already ran it and remembered it; the click's answer does not depend on the mirror.
+        loggers.api.error('Approval mirror write failed after an allowed click', error instanceof Error ? error : new Error(String(error)));
+      }
+    }
     auditRequest(request, {
       eventType: 'data.write',
       userId: auth.userId,
@@ -200,5 +220,55 @@ export async function POST(request: Request, context: Params) {
   } catch (error) {
     loggers.api.error('Failed to answer a pending environment approval', error instanceof Error ? error : new Error(String(error)));
     return NextResponse.json({ error: 'Failed to answer the pending approval' }, { status: 500 });
+  }
+}
+
+/**
+ * Revoke ONE durable approval from ACCOUNT settings (Codex P1 #5, review round
+ * 1). The id is the challenge id the click was answered under — what the
+ * machine's file keys the approval on and what the drive route's DELETE names
+ * too. OWNER-SCOPED, never drive-scoped: the reader checks
+ * `drive_env_local.ownerId` and nothing else, so an owner who has since left
+ * the drive can still revoke what their own machine will run, and a drive
+ * admin who is not the owner cannot — the account page must never offer a
+ * button that 403s for the person it is for. Rides the same signed revoke
+ * frame, the same ack, and the same mirror stamps as the drive route; same
+ * honest 200 / 202 / 409 shape.
+ */
+export async function DELETE(request: Request, context: Params) {
+  if (!isLocalEnvsEnabled()) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  try {
+    const { challengeId: approvalId } = await context.params;
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
+    if (isAuthError(auth)) return auth.error;
+
+    const mirrored = await (await getApprovalMirrorStore()).findById(approvalId);
+    if (!mirrored) return NextResponse.json({ error: 'No approval with this id' }, { status: 404 });
+    const sibling = await (await getDriveEnvStore()).findLocalByEnvId(mirrored.envId);
+    if (!sibling) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+
+    // The OWNER only. No drive membership is consulted: this is the owner's own machine, wherever it is enrolled.
+    if (sibling.ownerId !== auth.userId) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'drive_env', resourceId: mirrored.envId, details: { route: 'env-bridge/approvals', operation: 'revoke', approvalId, ownerId: sibling.ownerId }, riskScore: 0.3 });
+      return NextResponse.json({ error: `Only this machine's owner (the user who enrolled it, ${sibling.ownerId}) can revoke an approval on it from account settings`, reason: 'not_owner', ownerId: sibling.ownerId }, { status: 403 });
+    }
+
+    const result = await revokeLocalEnvApproval({ envId: mirrored.envId, approvalId, reason: `revoked_by_${auth.userId}` });
+    if (!result.ok) {
+      if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+      return NextResponse.json({ error: 'This environment has been revoked', reason: 'revoked' }, { status: 409 });
+    }
+    const machine = result.machine;
+    await markEnvApprovalRevoked({ id: approvalId, by: auth.userId });
+    if (machine.kind === 'acknowledged') await markEnvApprovalAcknowledged({ id: approvalId, removed: machine.removed });
+    auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'drive_env', resourceId: mirrored.envId, details: { route: 'env-bridge/approvals', operation: 'revoke', approvalId, machine: machine.kind, ...(machine.kind === 'acknowledged' && { removed: machine.removed }) } });
+    if (machine.kind === 'acknowledged') return NextResponse.json({ revoked: true, machine: 'acknowledged', approvalId, removed: machine.removed });
+    if (machine.kind === 'unacknowledged') {
+      return NextResponse.json({ revoked: false, reason: 'unacknowledged', machine: machine.reason, error: 'The revoke was sent, but the machine did not acknowledge it in time; it may still hold this approval. It will be asked again when it reconnects.' }, { status: 202 });
+    }
+    return NextResponse.json({ revoked: false, reason: machine.kind, machine: machine.kind, error: 'The machine is not connected right now; the revoke is recorded and will be delivered when it reconnects, before it runs anything.' }, { status: 409 });
+  } catch (error) {
+    loggers.api.error('Failed to revoke an environment approval from account settings', error instanceof Error ? error : new Error(String(error)));
+    return NextResponse.json({ error: 'Failed to revoke the approval' }, { status: 500 });
   }
 }

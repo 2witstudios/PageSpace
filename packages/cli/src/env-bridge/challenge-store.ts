@@ -55,6 +55,12 @@ export interface ChallengeStore {
   take(id: string, now: number): PendingChallenge | undefined;
   /** Forget challenges whose grants have expired. Called before every use. */
   evictExpired(now: number): void;
+  /**
+   * Forget EVERY pending challenge (a verified STOP, GA wave 3): a click that
+   * arrives for a request frozen before the pause must match nothing, so a
+   * grant after Resume can never ride a pre-pause question. @returns how many were dropped.
+   */
+  clear(): number;
   /** Live entries — for tests and a status line, never for a decision. */
   size(): number;
 }
@@ -112,6 +118,12 @@ export function createChallengeStore(deps: ChallengeStoreDeps): ChallengeStore {
       return entry;
     },
     evictExpired,
+    clear() {
+      const dropped = byId.size;
+      byId.clear();
+      byKey.clear();
+      return dropped;
+    },
     size: () => byId.size,
   };
 }

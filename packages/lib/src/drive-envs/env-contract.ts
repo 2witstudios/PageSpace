@@ -179,8 +179,94 @@ export const driveEnvDtoSchema = z.discriminatedUnion('substrate', [
     enrolled: z.boolean(),
     /** What PageSpace may ask this machine to do (`drive_env_local.serverPolicy`), as enforced at signing. The settings page reads it here. */
     serverPolicy: driveEnvServerPolicyDtoSchema,
+    /**
+     * The user who enrolled the machine (`drive_env_local.ownerId`) — the ONLY
+     * person who may drive, approve, stop or edit it ([D-6], invariant 13).
+     * Carried so a client can tell "this is my machine" from "this is a
+     * colleague's" without a second read: the sidebar shows the activity
+     * panel to the owner only, and the settings page renders read-only for
+     * everyone else, naming the owner. `null` for a dead local env whose
+     * owner was erased (Art 17 cascades the sibling away).
+     */
+    ownerId: z.string().min(1).nullable(),
+    /**
+     * What the machine ADVERTISED in its last `hello` (`drive_env_local.capabilities`);
+     * `null` until the first handshake. One of the three inputs to the
+     * effective capability (`intersectCapabilities`), which the settings page
+     * renders. Never a permission on its own.
+     */
+    capabilities: z.object({ shell: z.boolean(), pty: z.boolean(), fs: z.boolean(), checkpoint: z.boolean() }).nullable(),
+    /**
+     * STOP (GA wave 3): the owner paused this environment's grants. The
+     * server refuses to sign while this is true (`paused`); the key, policy
+     * and connection are untouched, and Resume reverses it. Owner-only to
+     * change (`PATCH { paused }`).
+     */
+    paused: z.boolean(),
   }),
 ]);
+
+/**
+ * One row of a local environment's ACTIVITY — the server side of the grant
+ * audit (`drive_env_grant_audit`, GA wave 3), as served to the machine's
+ * owner. `summary` is the request as the server sent it, never output;
+ * `verdict` is the table's closed vocabulary (`signed` = running now,
+ * `completed`, `denied:<reason>`, `ask_pending:<challengeId>`,
+ * `failed:<kind>`, `refused:<reason>`); `resultAt === null` with `signed` is
+ * "running on the machine right now". The same shape rides the live
+ * `env:activity` event, so a subscriber upserts by `id`.
+ */
+export const driveEnvActivityDtoSchema = z.object({
+  id: z.string().min(1),
+  envId: z.string().min(1),
+  /** NULL on a refused row — the server never minted one. */
+  grantId: z.string().min(1).nullable(),
+  /** The acting user; NULL once erased. */
+  userId: z.string().min(1).nullable(),
+  sessionId: z.string().min(1),
+  conversationId: z.string().min(1),
+  op: z.enum(GRANT_OPS),
+  summary: z.string(),
+  verdict: z.string().min(1),
+  exitCode: z.number().int().nullable(),
+  challengeId: z.string().min(1).nullable(),
+  approvalScope: z.string().min(1).nullable(),
+  ts: isoTimestamp,
+  resultAt: isoTimestamp.nullable(),
+});
+export type DriveEnvActivityDTO = z.infer<typeof driveEnvActivityDtoSchema>;
+
+/** The live event a machine's OWNER receives for every audit row written or updated (their own sessions room). */
+export const DRIVE_ENV_ACTIVITY_EVENT = 'env:activity';
+
+/**
+ * One durable approval as the server MIRRORS it (GA wave 3, leaf 5): what a
+ * machine will run without asking, as the owner's click recorded it. The
+ * machine's own file is the authority for allow; this is the view, and the
+ * `id` is what a revoke names. `driveId`/`envName`/`envLabel` ride the
+ * account-level listing so a row can link to its drive settings page; they
+ * are `null` on the env-scoped listing, where the caller already knows them.
+ */
+export const driveEnvApprovalDtoSchema = z.object({
+  id: z.string().min(1),
+  envId: z.string().min(1),
+  driveId: z.string().min(1).nullable(),
+  envName: z.string().min(1).nullable(),
+  envLabel: z.string().min(1).nullable(),
+  userId: z.string().min(1).nullable(),
+  op: z.string().min(1),
+  summary: z.string(),
+  scope: z.enum(['session', '30d', 'until_revoked']),
+  createdAt: isoTimestamp,
+  expiresAt: isoTimestamp.nullable(),
+  /** The owner's decision; the machine may still hold it until `revokeAcknowledgedAt`. */
+  revokedAt: isoTimestamp.nullable(),
+  /** The machine's SIGNED ack — the only proof the approval is gone from the machine. */
+  revokeAcknowledgedAt: isoTimestamp.nullable(),
+  /** Revoked by the owner, not yet acknowledged by the machine: listed, flagged, may still be held there. */
+  revokePending: z.boolean(),
+});
+export type DriveEnvApprovalDTO = z.infer<typeof driveEnvApprovalDtoSchema>;
 
 export type DriveEnvDTO = z.infer<typeof driveEnvDtoSchema>;
 
@@ -249,18 +335,20 @@ export const localEnvEnrollmentIssueSchema = z.object({
 });
 
 /**
- * PATCH body — exactly ONE of two fields, because they answer to two rules:
- * `name` is the rename (drive owner or admin), `serverPolicy` is the OWNER-ONLY
- * write of what PageSpace may ask the machine to do ([D-6]; GA wave 1). A body
- * carrying both could not be answered with one status code without a partial
- * write, so it is refused at the boundary.
+ * PATCH body — exactly ONE of three fields, because they answer to three
+ * rules: `name` is the rename (drive owner or admin), `serverPolicy` is the
+ * OWNER-ONLY write of what PageSpace may ask the machine to do ([D-6]; GA wave
+ * 1), and `paused` is the OWNER-ONLY Stop / Resume of its grants (GA wave 3).
+ * A body carrying more than one could not be answered with one status code
+ * without a partial write, so it is refused at the boundary.
  */
 export const patchDriveEnvRequestSchema = z
   .object({
     name: driveEnvNameSchema.optional(),
     serverPolicy: driveEnvServerPolicySchema.optional(),
+    paused: z.boolean().optional(),
   })
   .strict()
-  .refine((body) => (body.name === undefined) !== (body.serverPolicy === undefined), { message: 'Exactly one of name or serverPolicy is required' });
+  .refine((body) => [body.name, body.serverPolicy, body.paused].filter((field) => field !== undefined).length === 1, { message: 'Exactly one of name, serverPolicy or paused is required' });
 
 export type PatchDriveEnvRequest = z.infer<typeof patchDriveEnvRequestSchema>;

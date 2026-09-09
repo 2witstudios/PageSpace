@@ -27,6 +27,11 @@ import {
   isMachineResultFrame,
   MACHINE_RESULT_FRAME_TYPES,
   type MachineResultFrame,
+  PAUSE_SIGNING_DOMAIN,
+  encodePauseForSigning,
+  verifyPause,
+  pauseBindingId,
+  type PauseFrame,
 } from '../machine-signatures';
 
 const machine = generateKeyPairSync('ed25519');
@@ -39,7 +44,7 @@ const hash: HashBytes = (bytes) => createHash('sha256').update(bytes).digest('he
 const signWith = (key: typeof machine, bytes: Uint8Array) => Buffer.from(nodeSign(null, bytes, key.privateKey)).toString('base64');
 
 const capabilities = { shell: true, pty: false, fs: true, checkpoint: false };
-const helloBody = { envId: 'env-1', capabilities, policyDigest: 'sha256:abc' };
+const helloBody = { envId: 'env-1', capabilities, policyDigest: 'sha256:abc' , daemonEpoch: 'ep1' };
 const signedHello = (over: Partial<typeof helloBody> = {}, key = machine): Extract<Frame, { type: 'hello' }> => {
   const body = { ...helloBody, ...over };
   return { type: 'hello', ...body, sig: signWith(key, encodeHelloForSigning(body)) };
@@ -84,8 +89,8 @@ describe('hello — the machine-signed first frame', () => {
   });
 
   it('given the same hello with fields in a different insertion order, should encode identical bytes', () => {
-    const a = encodeHelloForSigning({ envId: 'e', capabilities: { shell: true, pty: true, fs: false, checkpoint: false }, policyDigest: 'd' });
-    const b = encodeHelloForSigning({ policyDigest: 'd', capabilities: { checkpoint: false, fs: false, pty: true, shell: true }, envId: 'e' } as typeof helloBody);
+    const a = encodeHelloForSigning({ envId: 'e', capabilities: { shell: true, pty: true, fs: false, checkpoint: false }, policyDigest: 'd', daemonEpoch: 'ep' });
+    const b = encodeHelloForSigning({ daemonEpoch: 'ep', policyDigest: 'd', capabilities: { checkpoint: false, fs: false, pty: true, shell: true }, envId: 'e' } as typeof helloBody);
     expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true);
   });
 });
@@ -97,6 +102,7 @@ const results: UnsignedResult = {
   fs_write_result: { type: 'fs_write_result', grantId: 'g3', ok: true },
   grant_denied: { type: 'grant_denied', grantId: 'g4', reason: 'policy_denied' },
   approval_revoke_result: { type: 'approval_revoke_result', approvalId: 'ch_9', removed: 1 },
+  pause_result: { type: 'pause_result', envId: 'e1', pausedAt: 1_800_000_000_000, killed: 1 },
 };
 
 function signResult(body: Omit<MachineResultFrame, 'sig'>, key = machine): MachineResultFrame {
@@ -186,7 +192,7 @@ describe('results — machine-signed over {grantId, resultHash} (invariant 7)', 
   });
 
   it('should name exactly the exec/fs/denied result frames — PTY frames and pong are outside this verifier by design ([D-2])', () => {
-    expect([...MACHINE_RESULT_FRAME_TYPES].sort()).toEqual(['approval_revoke_result', 'exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied']);
+    expect([...MACHINE_RESULT_FRAME_TYPES].sort()).toEqual(['approval_revoke_result', 'exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'pause_result']);
     expect(isMachineResultFrame({ type: 'pty_data', sessionId: 's', seq: 0, dataB64: '' })).toBe(false);
     expect(isMachineResultFrame({ type: 'pty_exit', sessionId: 's', code: 0 })).toBe(false);
     expect(isMachineResultFrame({ type: 'pong', ts: 1 })).toBe(false);
@@ -297,10 +303,63 @@ describe('frame direction — the closed set split by who may send what', () => 
   });
 
   it('should classify a grant/revoke/ping as server→machine and results/hello/pong as machine→server', () => {
-    expect(isMachineToServerFrame({ type: 'hello', envId: 'e', capabilities, policyDigest: '', sig: '' })).toBe(true);
+    expect(isMachineToServerFrame({ type: 'hello', envId: 'e', capabilities, policyDigest: '', daemonEpoch: 'ep', sig: '' })).toBe(true);
     expect(isMachineToServerFrame({ type: 'pong', ts: 1 })).toBe(true);
     expect(isMachineToServerFrame({ type: 'revoke', sig: '', issuedAt: 1 })).toBe(false);
     expect(isMachineToServerFrame({ type: 'grant_exec', grant: {}, sig: '', cmd: 'ls' })).toBe(false);
     expect(isMachineToServerFrame({ type: 'ping', ts: 1 })).toBe(false);
+  });
+});
+
+describe('GA wave 3 — STOP: the pause frame is server-signed under its OWN domain, and its ack is a machine result bound to pause:<envId>:<pausedAt>', () => {
+  const binding = { envId: 'env_1', enrollmentId: 'enr_1', keyId: 'srv-k1', issuedAt: 1_800_000_000_000 };
+  const pausedAt = 1_800_000_000_500;
+  const pauseFrame = (over: Partial<PauseFrame> = {}, key = server): PauseFrame => ({ type: 'pause', issuedAt: binding.issuedAt, pausedAt, sig: signWith(key, encodePauseForSigning({ ...binding, pausedAt })), ...over });
+  const verifyInput = (frame: PauseFrame) => ({ frame, ...binding, serverPublicKey: spki(server), verify });
+
+  it('should verify a pause signed by the pinned server key over {envId, enrollmentId, keyId, issuedAt, pausedAt}', () => {
+    expect(verifyPause(verifyInput(pauseFrame()))).toEqual({ ok: true });
+    expect(PAUSE_SIGNING_DOMAIN).not.toBe(REVOKE_SIGNING_DOMAIN);
+    expect(PAUSE_SIGNING_DOMAIN).not.toBe(REVOKE_APPROVAL_SIGNING_DOMAIN);
+  });
+
+  it.each([
+    ['pausedAt edited', (f: PauseFrame) => ({ ...f, pausedAt: pausedAt + 1 })],
+    ['issuedAt edited', (f: PauseFrame) => ({ ...f, issuedAt: binding.issuedAt + 1 })],
+    ['rogue key', () => pauseFrame({}, rogue)],
+  ])('given %s, should deny bad_signature', (_label, mutate) => {
+    expect(verifyPause(verifyInput(mutate(pauseFrame())))).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+
+  it('a pause signature can never verify as a revoke (of the enrollment or of an approval), nor a revoke signature as a pause — domain separation', () => {
+    const pauseSig = pauseFrame().sig;
+    const asRevoke = { type: 'revoke' as const, issuedAt: binding.issuedAt, sig: pauseSig };
+    expect(verifyRevoke({ frame: asRevoke, ...binding, serverPublicKey: spki(server), verify })).toEqual({ ok: false, reason: 'bad_signature' });
+    expect(verifyRevoke({ frame: { ...asRevoke, approvalId: 'ch_1' }, ...binding, serverPublicKey: spki(server), verify })).toEqual({ ok: false, reason: 'bad_signature' });
+    const revokeSig = signWith(server, encodeRevokeForSigning(binding));
+    expect(verifyPause(verifyInput({ type: 'pause', issuedAt: binding.issuedAt, pausedAt, sig: revokeSig }))).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+
+  it('the ack is signed over {envId, pausedAt, killed}, bound to pause:<envId>:<pausedAt>; editing any field or signing with a rogue key denies', () => {
+    const ack = { type: 'pause_result' as const, envId: 'env_1', pausedAt, killed: 2 };
+    const signAck = (body = ack, key = machine): MachineResultFrame => {
+      const frame = { ...body, sig: '' } as MachineResultFrame;
+      return { ...body, sig: signWith(key, encodeResultForSigning({ grantId: machineResultBindingId(frame), resultHash: resultHashForFrame(frame, hash) })) } as MachineResultFrame;
+    };
+    expect(machineResultBindingId({ ...ack, sig: '' } as MachineResultFrame)).toBe('pause:env_1:1800000000500');
+    expect(pauseBindingId('env_1', pausedAt)).toBe('pause:env_1:1800000000500');
+    expect(verifyMachineResult({ frame: signAck(), machinePublicKey: spki(machine), verify, hash })).toMatchObject({ ok: true });
+    const signed = signAck();
+    for (const tampered of [{ ...ack, killed: 0 }, { ...ack, pausedAt: pausedAt + 1 }, { ...ack, envId: 'env_2' }]) {
+      expect(verifyMachineResult({ frame: { ...tampered, sig: signed.sig } as MachineResultFrame, machinePublicKey: spki(machine), verify, hash })).toEqual({ ok: false, reason: 'bad_signature' });
+    }
+    expect(verifyMachineResult({ frame: signAck(ack, rogue), machinePublicKey: spki(machine), verify, hash })).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+});
+
+describe('GA wave 3 (Codex P2 #7) — the daemon epoch is under the hello signature', () => {
+  it('editing daemonEpoch after signing denies bad_signature; a hello without one is not a hello', () => {
+    const signed = signedHello();
+    expect(verifyHello({ hello: { ...signed, daemonEpoch: 'ep2' }, expectedEnvId: signed.envId, machinePublicKey: spki(machine), verify })).toEqual({ ok: false, reason: 'bad_signature' });
   });
 });

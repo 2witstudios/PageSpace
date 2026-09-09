@@ -14,11 +14,12 @@ vi.mock('@pagespace/lib/auth/env-bridge-signing-key', () => ({ loadServerSigning
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
 // The signing gate refuses everything while the deployment flag is off; this suite is about a LIVE env's revoke.
 vi.mock('@pagespace/lib/services/drive-envs/local-envs-enabled', () => ({ isLocalEnvsEnabled: vi.fn(() => true) }));
-vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn() }));
+vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn(), getGrantAuditStore: vi.fn(), listUnacknowledgedEnvApprovalRevokes: vi.fn(async () => []), markEnvApprovalAcknowledged: vi.fn(async () => null) }));
 
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { loadServerSigningKeyring } from '@pagespace/lib/auth/env-bridge-signing-key';
-import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
+import { getDriveEnvStore, getGrantAuditStore, listUnacknowledgedEnvApprovalRevokes, markEnvApprovalAcknowledged } from '@/lib/drive-envs/drive-envs-runtime';
+import { createGrantAuditFake } from '@/test/grant-audit-fake';
 import { decodeFrame } from '@pagespace/lib/env-bridge/frame-codec';
 import { encodeResultForSigning, machineResultBindingId, resultHashForFrame, verifyRevoke, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
 import { envBridgeHash } from '@/lib/env-bridge/crypto';
@@ -26,7 +27,7 @@ import { parseServerSigningKeyring, type SigningKeyPrimitives } from '@pagespace
 import { clearAllEnvConnectionsForTesting, getEnvConnection, markEnvAuthorized, registerEnvConnection } from '@/lib/websocket/ws-env-connections';
 import { getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { ed25519Verify } from '@/lib/env-bridge/crypto';
-import { revokeLocalEnv, buildRevokeFrame, ENV_REVOKED_CLOSE_CODE, ENV_REVOKED_CLOSE_REASON, revokeLocalEnvApproval, APPROVAL_REVOKE_ACK_TIMEOUT_MS } from '../revoke';
+import { revokeLocalEnv, buildRevokeFrame, ENV_REVOKED_CLOSE_CODE, ENV_REVOKED_CLOSE_REASON, revokeLocalEnvApproval, replayUnacknowledgedApprovalRevokes, APPROVAL_REVOKE_ACK_TIMEOUT_MS } from '../revoke';
 
 const primitives: SigningKeyPrimitives = {
   importPrivateKey: (pkcs8) => {
@@ -56,16 +57,17 @@ function socket(): FakeSocket {
 }
 
 describe('revokeLocalEnv — all three legs through the production seams', () => {
-  let row: { envId: string; enrollmentId: string; serverKeyId: string | null; revokedAt: Date | null; serverPolicy: { ops: string[]; checkpoint: boolean } } | null;
+  let row: { envId: string; enrollmentId: string; serverKeyId: string | null; revokedAt: Date | null; pausedAt: Date | null; serverPolicy: { ops: string[]; checkpoint: boolean } } | null;
   let store: { findLocalByEnvId: ReturnType<typeof vi.fn>; revokeLocal: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
+    vi.mocked(getGrantAuditStore).mockResolvedValue(createGrantAuditFake());
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     vi.clearAllMocks();
     clearAllEnvConnectionsForTesting();
     // The sibling `sendGrant` consults before signing (decideSign): live, and allowing the op under test.
-    row = { envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, revokedAt: null, serverPolicy: { ops: ['exec', 'fs_read', 'fs_write'], checkpoint: false } };
+    row = { envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, revokedAt: null, pausedAt: null, serverPolicy: { ops: ['exec', 'fs_read', 'fs_write'], checkpoint: false } };
     store = {
       findLocalByEnvId: vi.fn(async () => row),
       revokeLocal: vi.fn(async ({ now }: { now: Date }) => {
@@ -274,5 +276,68 @@ describe('GA wave 2 · leaf 8 — revoking ONE approval rides the signed revoke 
     expect(await revokeLocalEnvApproval({ envId: ENV, approvalId: 'ch_1', reason: 'owner' })).toEqual({ ok: false, reason: 'not_found' });
     row = { envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, revokedAt: NOW };
     expect(await revokeLocalEnvApproval({ envId: ENV, approvalId: 'ch_1', reason: 'owner' })).toEqual({ ok: false, reason: 'revoked' });
+  });
+});
+
+describe('GA wave 3 · leaf 5 — the reconnect REPLAY of revokes the mirror still owes the machine', () => {
+  let row: { envId: string; enrollmentId: string; serverKeyId: string | null; revokedAt: Date | null; pausedAt: Date | null; serverPolicy: { ops: string[]; checkpoint: boolean } } | null;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    clearAllEnvConnectionsForTesting();
+    row = { envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, revokedAt: null, pausedAt: null, serverPolicy: { ops: ['exec'], checkpoint: false } };
+    vi.mocked(getDriveEnvStore).mockResolvedValue({ findLocalByEnvId: vi.fn(async () => row) } as never);
+    vi.mocked(loadServerSigningKeyring).mockReturnValue(ring);
+    vi.mocked(listUnacknowledgedEnvApprovalRevokes).mockResolvedValue([{ id: 'ch_owed' }, { id: 'ch_owed2' }] as never);
+    vi.mocked(markEnvApprovalAcknowledged).mockClear();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const owedSocket = () => {
+    const ws = socket();
+    registerEnvConnection(ENV, ws, { userId: 'u', sessionId: 's', enrollmentId: 'enr_a', machinePublicKey: machinePublicKeyB64, serverKeyId: currentId, sessionExpiresAt: new Date(NOW.getTime() + 3600_000) });
+    markEnvAuthorized(ws);
+    return ws;
+  };
+  const ackFor = (approvalId: string, removed: number): MachineResultFrame => {
+    const body = { type: 'approval_revoke_result' as const, approvalId, removed };
+    const frame = { ...body, sig: '' } as MachineResultFrame;
+    const resultHash = resultHashForFrame(frame, envBridgeHash);
+    return { ...body, sig: Buffer.from(nodeSign(null, encodeResultForSigning({ grantId: machineResultBindingId(frame), resultHash }), machine.privateKey)).toString('base64') } as MachineResultFrame;
+  };
+  const settle = async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); };
+
+  it('sends a signed approval revoke for EVERY owed row over THIS socket, in order, and stamps each acknowledged only on the machine\'s signed ack', async () => {
+    const ws = owedSocket();
+    const pending = replayUnacknowledgedApprovalRevokes({ envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, ws });
+    await settle();
+    expect(ws.sent).toHaveLength(1);
+    const first = decodeFrame(ws.sent[0]!, { maxFrameBytes: 65536 });
+    if (!first.ok || first.frame.type !== 'revoke') throw new Error('no revoke');
+    expect(first.frame.approvalId).toBe('ch_owed');
+    getEnvBridgeClient().handleMachineResult(ws, ackFor('ch_owed', 2));
+    await settle();
+    expect(ws.sent).toHaveLength(2);
+    getEnvBridgeClient().handleMachineResult(ws, ackFor('ch_owed2', 1));
+    expect(await pending).toEqual({ owed: 2, acknowledged: 2 });
+    expect(markEnvApprovalAcknowledged).toHaveBeenNthCalledWith(1, { id: 'ch_owed', removed: 2 });
+    expect(markEnvApprovalAcknowledged).toHaveBeenNthCalledWith(2, { id: 'ch_owed2', removed: 1 });
+  });
+
+  it('given no ack in time, the row stays owed (NOT stamped) and the replay reports it; the next hello will try again', async () => {
+    const ws = owedSocket();
+    vi.mocked(listUnacknowledgedEnvApprovalRevokes).mockResolvedValue([{ id: 'ch_owed' }] as never);
+    const pending = replayUnacknowledgedApprovalRevokes({ envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, ws });
+    await settle();
+    await vi.advanceTimersByTimeAsync(APPROVAL_REVOKE_ACK_TIMEOUT_MS + 1);
+    expect(await pending).toEqual({ owed: 1, acknowledged: 0 });
+    expect(markEnvApprovalAcknowledged).not.toHaveBeenCalled();
+  });
+
+  it('given nothing owed, sends nothing', async () => {
+    const ws = owedSocket();
+    vi.mocked(listUnacknowledgedEnvApprovalRevokes).mockResolvedValue([]);
+    expect(await replayUnacknowledgedApprovalRevokes({ envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, ws })).toEqual({ owed: 0, acknowledged: 0 });
+    expect(ws.sent).toHaveLength(0);
   });
 });
