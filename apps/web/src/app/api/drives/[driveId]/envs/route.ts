@@ -161,7 +161,8 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     if (local && result.enrollment) {
       return NextResponse.json(
         {
-          env: toDriveEnvDTO(result.env, { label: local.label, status: 'disconnected', enrolled: false, serverPolicy: local.serverPolicy }),
+          // A freshly minted machine: the caller owns it, nothing advertised yet, not paused.
+          env: toDriveEnvDTO(result.env, { label: local.label, status: 'disconnected', enrolled: false, serverPolicy: local.serverPolicy, ownerId: auth.userId, capabilities: null, paused: false }),
           enrollment: { enrollmentId: result.enrollment.enrollmentId, code: result.enrollment.code, expiresAt: result.enrollment.expiresAt.toISOString() },
         },
         { status: 201 },
