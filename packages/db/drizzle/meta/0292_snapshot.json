@@ -1,6 +1,6 @@
 {
-  "id": "6ae2e4ba-d49e-47e5-91d0-ecc364d92011",
-  "prevId": "8e1a0897-95bd-4239-ac86-114337e5880b",
+  "id": "095d8c33-2071-48ec-8779-6fcb623b22f5",
+  "prevId": "f58398cf-f397-4947-9e9f-1a2e605a08c1",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -11783,6 +11783,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "regions": {
+          "name": "regions",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "createdAt": {
           "name": "createdAt",
           "type": "timestamp",
@@ -23187,6 +23193,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "daemonEpoch": {
+          "name": "daemonEpoch",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "serverPolicy": {
           "name": "serverPolicy",
           "type": "jsonb",
@@ -23215,6 +23227,12 @@
         },
         "revokedAt": {
           "name": "revokedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pausedAt": {
+          "name": "pausedAt",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
@@ -23502,6 +23520,176 @@
         "drive_env_grant_audit_grant_id_refused_check": {
           "name": "drive_env_grant_audit_grant_id_refused_check",
           "value": "(\"drive_env_grant_audit\".\"grantId\" IS NULL) = (\"drive_env_grant_audit\".\"verdict\" LIKE 'refused:%')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.drive_env_approvals": {
+      "name": "drive_env_approvals",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "envId": {
+          "name": "envId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "op": {
+          "name": "op",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "summary": {
+          "name": "summary",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "daemonEpoch": {
+          "name": "daemonEpoch",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revokedAt": {
+          "name": "revokedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revokedBy": {
+          "name": "revokedBy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revokeAcknowledgedAt": {
+          "name": "revokeAcknowledgedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revokeRemoved": {
+          "name": "revokeRemoved",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "drive_env_approvals_env_idx": {
+          "name": "drive_env_approvals_env_idx",
+          "columns": [
+            {
+              "expression": "envId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "createdAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "drive_env_approvals_user_idx": {
+          "name": "drive_env_approvals_user_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "createdAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "drive_env_approvals_envId_drive_envs_id_fk": {
+          "name": "drive_env_approvals_envId_drive_envs_id_fk",
+          "tableFrom": "drive_env_approvals",
+          "tableTo": "drive_envs",
+          "columnsFrom": [
+            "envId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "drive_env_approvals_userId_users_id_fk": {
+          "name": "drive_env_approvals_userId_users_id_fk",
+          "tableFrom": "drive_env_approvals",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "drive_env_approvals_scope_check": {
+          "name": "drive_env_approvals_scope_check",
+          "value": "\"drive_env_approvals\".\"scope\" IN ('session', '30d', 'until_revoked')"
+        },
+        "drive_env_approvals_ack_needs_revoke_check": {
+          "name": "drive_env_approvals_ack_needs_revoke_check",
+          "value": "\"drive_env_approvals\".\"revokeAcknowledgedAt\" IS NULL OR \"drive_env_approvals\".\"revokedAt\" IS NOT NULL"
         }
       },
       "isRLSEnabled": false

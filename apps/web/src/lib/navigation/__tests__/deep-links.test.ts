@@ -79,4 +79,61 @@ describe('resolveDeepLink', () => {
     // would extend that surface before the binding exists.
     expect(resolveDeepLink('pagespace://auth-exchange?code=stolen')).toBeNull();
   });
+
+  describe('magic links requested from the app', () => {
+    it('routes a claimed magic link to the in-app redemption page', () => {
+      expect(resolveDeepLink('https://pagespace.ai/auth/magic-link/ps_magic_abc')).toEqual({
+        kind: 'route',
+        path: '/auth/magic-link/ps_magic_abc',
+      });
+    });
+
+    it('carries `next` through, re-encoded, because the page forwards it to the server', () => {
+      expect(
+        resolveDeepLink('https://pagespace.ai/auth/magic-link/ps_magic_abc?next=%2Fdashboard%2Fd1'),
+      ).toEqual({
+        kind: 'route',
+        path: '/auth/magic-link/ps_magic_abc?next=%2Fdashboard%2Fd1',
+      });
+    });
+
+    it('drops every query param other than `next`', () => {
+      expect(resolveDeepLink('https://pagespace.ai/auth/magic-link/ps_magic_abc?utm=x#f')).toEqual({
+        kind: 'route',
+        path: '/auth/magic-link/ps_magic_abc',
+      });
+    });
+
+    it('tolerates a trailing slash', () => {
+      expect(resolveDeepLink('https://pagespace.ai/auth/magic-link/ps_magic_abc/')).toEqual({
+        kind: 'route',
+        path: '/auth/magic-link/ps_magic_abc',
+      });
+    });
+
+    it('does not treat a multi-segment path as a token', () => {
+      expect(resolveDeepLink('https://pagespace.ai/auth/magic-link/a/b')).toEqual({
+        kind: 'external',
+        url: 'https://pagespace.ai/auth/magic-link/a/b',
+      });
+    });
+
+    it('hands a malformed escape back to the browser instead of throwing', () => {
+      expect(resolveDeepLink('https://pagespace.ai/auth/magic-link/%')).toEqual({
+        kind: 'external',
+        url: 'https://pagespace.ai/auth/magic-link/%',
+      });
+    });
+
+    it('leaves the rest of /auth alone — only the magic-link page is claimed', () => {
+      expect(resolveDeepLink('https://pagespace.ai/auth/signin')).toEqual({
+        kind: 'external',
+        url: 'https://pagespace.ai/auth/signin',
+      });
+    });
+
+    it('still refuses a lookalike host', () => {
+      expect(resolveDeepLink('https://pagespace.ai.evil.example/auth/magic-link/ps_magic_abc')).toBeNull();
+    });
+  });
 });

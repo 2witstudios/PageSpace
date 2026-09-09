@@ -409,9 +409,3 @@
     font-style: italic;
   }
 }
-
-/* Floating orb animations */
-@keyframes auth-preview-float {
-  0%, 100% { transform: translateY(0px) rotateY(-4deg); }
-  50% { transform: translateY(-8px) rotateY(-4deg); }
-}

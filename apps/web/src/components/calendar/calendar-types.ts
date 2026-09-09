@@ -187,6 +187,7 @@ export const TASK_OVERLAY_STYLE = {
   bg: 'bg-muted/30',
   border: 'border-l-muted-foreground/50 border-dashed',
   text: 'text-muted-foreground italic',
+  dot: 'bg-muted-foreground/50',
   opacity: 'opacity-70',
 };
 
@@ -231,6 +232,26 @@ export function isSameDay(date1: Date, date2: Date): boolean {
     date1.getMonth() === date2.getMonth() &&
     date1.getFullYear() === date2.getFullYear()
   );
+}
+
+/**
+ * A horizontal swipe only counts when it clears a minimum distance AND dominates
+ * the vertical component -- otherwise a vertical scroll that drifts sideways
+ * silently changes the day mid-gesture.
+ */
+const MIN_SWIPE_DISTANCE = 50;
+const AXIS_DOMINANCE_RATIO = 1.5;
+
+export function resolveSwipeDirection({
+  dx,
+  dy,
+}: {
+  dx: number;
+  dy: number;
+}): 'next' | 'previous' | null {
+  if (Math.abs(dx) < MIN_SWIPE_DISTANCE) return null;
+  if (Math.abs(dx) <= Math.abs(dy) * AXIS_DOMINANCE_RATIO) return null;
+  return dx > 0 ? 'next' : 'previous';
 }
 
 // Helper to get events for a specific day

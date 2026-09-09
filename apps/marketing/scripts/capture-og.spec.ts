@@ -8,12 +8,12 @@ import path from "path";
  * testimonials. Run against a dev server:
  *
  *   bun run dev            (port 3004)
- *   bun run capture:og     (or BASE_URL=http://localhost:3104 bun run capture:og)
+ *   bun run capture:og     (or BASE_URL=http://localhost:3004 bun run capture:og)
  *
  * Output is the Open Graph / Twitter large-card size, 1200x630, captured at
  * 2x and downsampled by the browser for crisp text.
  */
-const BASE_URL = process.env.BASE_URL ?? "http://localhost:3004";
+const BASE_URL = process.env.BASE_URL ?? "http://localhost:3005";
 const OUT = path.join(__dirname, "..", "public", "og-image.png");
 const W = 1200;
 const H = 630;
@@ -37,7 +37,11 @@ test("capture og-image.png from the home hero", async ({ browser }) => {
   await page.addStyleTag({
     content: `.lp .hero{min-height:${H}px;display:grid;align-items:center;padding:0 !important}.lp .hero-in{width:100%}`,
   });
-  await page.waitForTimeout(800);
+  // The hero plays its agent run on load (HeroDemo), so a fixed wait would bake
+  // a half-drawn window into the social card for every page on the site. Wait
+  // for the demo's own completion signal instead.
+  await page.waitForSelector('[data-demo="done"]', { timeout: 15_000 });
+  await page.waitForTimeout(300);
   await page.locator(".lp .hero").screenshot({ path: OUT, type: "png" });
   await context.close();
 });

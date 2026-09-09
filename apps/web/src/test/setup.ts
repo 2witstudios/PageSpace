@@ -19,6 +19,11 @@ vi.mock('next/navigation', () => ({
   })),
   usePathname: vi.fn(() => '/'),
   useSearchParams: vi.fn(() => new URLSearchParams()),
+  // Route params default to empty rather than being absent: a component that
+  // reads them is a plain consumer of this module, and leaving the hook
+  // undefined here turns "this test doesn't care about the route" into a
+  // TypeError thrown from any ancestor that happens to render one.
+  useParams: vi.fn(() => ({})),
 }))
 
 // jsdom does not implement ResizeObserver or IntersectionObserver.
@@ -50,6 +55,24 @@ if (typeof window !== 'undefined') {
 // throws in its mount effect the instant it renders.
 if (typeof window !== 'undefined' && !window.HTMLElement.prototype.scrollIntoView) {
   window.HTMLElement.prototype.scrollIntoView = () => {};
+}
+
+// jsdom does not implement Element.scrollTo (only the window-level no-op that
+// warns). Any component that scrolls a container imperatively -- the mobile
+// calendar agenda scrolls to the selected day -- throws on the bare call.
+// Move scrollTop so the element still reports a plausible position afterwards.
+if (typeof window !== 'undefined' && !window.Element.prototype.scrollTo) {
+  const scrollToStub = function (
+    this: Element,
+    optionsOrX?: ScrollToOptions | number,
+    y?: number
+  ) {
+    const top =
+      typeof optionsOrX === 'object' && optionsOrX !== null ? optionsOrX.top : y;
+    if (typeof top === 'number') this.scrollTop = top;
+  };
+  window.Element.prototype.scrollTo =
+    scrollToStub as unknown as typeof window.Element.prototype.scrollTo;
 }
 
 // jsdom does not implement the Pointer Events capture methods. Radix Select's

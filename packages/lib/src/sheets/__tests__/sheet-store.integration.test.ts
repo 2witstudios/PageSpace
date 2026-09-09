@@ -16,7 +16,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
-import { eq, and, sql, inArray } from '@pagespace/db/operators';
+import { eq, and, gt, sql, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { pages } from '@pagespace/db/schema/core';
 import { sheetTabs, sheetRows, sheetRangeDeps, sheetChanges } from '@pagespace/db/schema';
@@ -34,7 +34,10 @@ import {
   copySheetRows,
   listTabs,
   sheetMatchingRowsByPage,
+  applyFormatOps,
+  readTabFormatting,
 } from '../store';
+import { SheetFormatError } from '../format-request';
 import type { StoredRow } from '../projection';
 import { parseSheetContent, serializeSheetContent } from '../io';
 import { sheetCellsMatchIlike, sheetCellsMatchRegex } from '../search-sql';
@@ -95,6 +98,134 @@ const matchingRowsFor = async (
 
 const cellAt = (rows: StoredRow[], rowIndex: number, column: string) =>
   rows.find((row) => row.rowIndex === rowIndex)?.cells[column];
+
+
+const BOLD = { bold: true };
+
+/** A rule the format tests add; its own constant so the block is self-contained. */
+const FORMAT_RULE = {
+  id: 'over-100',
+  kind: 'cell' as const,
+  ranges: ['A1:A9'],
+  condition: { operator: 'greaterThan' as const, value: '100' },
+  format: { background: '#fee2e2' },
+};
+
+const REGION = {
+  id: 'orders',
+  name: 'Orders',
+  range: 'A1:D',
+  headerRows: 1,
+  columns: [{ column: 'C', role: 'currency' as const, currency: 'USD' }],
+};
+
+type StoreExecutor = NonNullable<Parameters<typeof applyFormatOps>[3]>;
+
+/**
+ * `exec` with the FIRST call to `method` held until `hook` resolves.
+ *
+ * Drizzle builders are thenables, so the hold goes in `then`: the query is
+ * built as normal and only its execution waits. This is what makes a
+ * concurrency test deterministic — the transaction is paused at exactly the
+ * statement whose timing matters, and another connection does its work in
+ * the gap.
+ */
+function holdFirst(
+  exec: StoreExecutor,
+  method: 'insert' | 'update',
+  hook: () => Promise<void>
+): StoreExecutor {
+  let held = false;
+  const gate = (query: object): object =>
+    new Proxy(query, {
+      get(target, prop) {
+        const value: unknown = Reflect.get(target, prop);
+        if (prop === 'then') {
+          return (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
+            hook().then(() => target).then(resolve, reject);
+        }
+        if (typeof value === 'function') {
+          return (...args: unknown[]) => gate((value as (...inner: unknown[]) => object).apply(target, args));
+        }
+        return value;
+      },
+    });
+
+  return new Proxy(exec, {
+    get(target, prop) {
+      const value: unknown = Reflect.get(target, prop);
+      if (prop === method && typeof value === 'function' && !held) {
+        return (...args: unknown[]) => {
+          held = true;
+          return gate((value as (...inner: unknown[]) => object).apply(target, args));
+        };
+      }
+      return value;
+    },
+  }) as StoreExecutor;
+}
+
+const holdBeforeInsert = (exec: StoreExecutor, hook: () => Promise<void>) => holdFirst(exec, 'insert', hook);
+const holdBeforeUpdate = (exec: StoreExecutor, hook: () => Promise<void>) => holdFirst(exec, 'update', hook);
+
+/**
+ * Resolves once ANOTHER connection is waiting on a `sheet_tabs` lock while
+ * `pending` is still unsettled — so a test that releases a held transaction
+ * after this knows the other writer really was blocked behind it, rather than
+ * having quietly finished first and turned the race into a sequence.
+ */
+async function waitForLockWaiter(pending: Promise<unknown>, timeoutMs = 10_000): Promise<void> {
+  let settled = false;
+  void pending.then(() => { settled = true; }, () => { settled = true; });
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (settled) throw new Error('The other writer finished before it was seen waiting on the lock');
+    const result = await db.execute(
+      sql`SELECT count(*)::int AS waiting FROM pg_stat_activity
+          WHERE pid <> pg_backend_pid() AND wait_event_type = 'Lock' AND query ILIKE '%sheet_tabs%'`
+    );
+    if (Number((result.rows[0] as { waiting: number }).waiting) > 0) return;
+    if (Date.now() > deadline) throw new Error('No transaction ever waited on the sheet_tabs lock');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+/**
+ * Counts `UPDATE` statements against one tab row, by trigger. A stored value
+ * cannot tell one statement from four; a row-level trigger can.
+ */
+async function countTabUpdates(tabId: string) {
+  const suffix = tabId.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  const table = `fmt_audit_${suffix}`;
+  const fn = `fmt_audit_fn_${suffix}`;
+  const trigger = `fmt_audit_trg_${suffix}`;
+
+  await db.execute(sql.raw(`CREATE TABLE ${table} (n serial PRIMARY KEY)`));
+  await db.execute(
+    sql.raw(
+      `CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$
+       BEGIN
+         IF NEW.id = '${tabId}' THEN INSERT INTO ${table} DEFAULT VALUES; END IF;
+         RETURN NEW;
+       END $$`
+    )
+  );
+  await db.execute(
+    sql.raw(`CREATE TRIGGER ${trigger} AFTER UPDATE ON sheet_tabs FOR EACH ROW EXECUTE FUNCTION ${fn}()`)
+  );
+
+  return {
+    count: async () => {
+      const result = await db.execute(sql.raw(`SELECT count(*)::int AS n FROM ${table}`));
+      return Number((result.rows[0] as { n: number }).n);
+    },
+    drop: async () => {
+      await db.execute(sql.raw(`DROP TRIGGER IF EXISTS ${trigger} ON sheet_tabs`));
+      await db.execute(sql.raw(`DROP FUNCTION IF EXISTS ${fn}()`));
+      await db.execute(sql.raw(`DROP TABLE IF EXISTS ${table}`));
+    },
+  };
+}
 
 describe('sheet store (integration)', () => {
   // Row-scoped, and after rather than before: every sheet table cascades from
@@ -505,6 +636,63 @@ describe('sheet store (integration)', () => {
       const rows = await readRows(tabId, { limit: 100 });
       expect(cellAt(rows, 2, 'A')?.value).toBe(5);
       expect(new Set(rows.map((row) => row.rowIndex)).size).toBe(rows.length);
+    });
+
+    it('re-anchors regions so their formatting follows the rows that moved', async () => {
+      // Regions are absolute coordinates. Without a shift, deleting rows above a
+      // bounded region leaves its formatting a row below its data, and the total
+      // treatment lands on whatever row slid into that number — formatting that
+      // describes the wrong cells.
+      const { pageId, ownerId } = await makeSheet();
+      await appendRows(
+        { pageId },
+        Array.from({ length: 20 }, (_, index) => ({ A: String(index) })),
+        { userId: ownerId }
+      );
+      await applyFormatOps(
+        { pageId },
+        [
+          {
+            type: 'setRegions',
+            regions: [
+              { id: 'table', range: 'A5:C20', headerRows: 1, totalRows: [20] },
+              { id: 'open', range: 'A5:C' },
+            ],
+          },
+        ],
+        { userId: ownerId }
+      );
+
+      // Remove the two rows above the region (0-based 0..1).
+      await deleteRows({ pageId }, 0, 2, { userId: ownerId });
+
+      const after = await readTabFormatting({ pageId });
+      const bounded = after?.regions.find((region) => region.id === 'table');
+      const open = after?.regions.find((region) => region.id === 'open');
+
+      expect(bounded?.range).toBe('A3:C18');
+      expect(bounded?.totalRows).toEqual([18]);
+      // An open region has no end to move; it still reaches the extent.
+      expect(open?.range).toBe('A3:C');
+    });
+
+    it('drops a region the delete consumed entirely', async () => {
+      const { pageId, ownerId } = await makeSheet();
+      await appendRows(
+        { pageId },
+        Array.from({ length: 12 }, (_, index) => ({ A: String(index) })),
+        { userId: ownerId }
+      );
+      await applyFormatOps(
+        { pageId },
+        [{ type: 'setRegions', regions: [{ id: 'doomed', range: 'A5:C8' }] }],
+        { userId: ownerId }
+      );
+
+      await deleteRows({ pageId }, 4, 4, { userId: ownerId });
+
+      const after = await readTabFormatting({ pageId });
+      expect(after?.regions).toEqual([]);
     });
   });
 
@@ -1169,6 +1357,659 @@ describe('sheet store (integration)', () => {
         .from(sheetRows)
         .where(eq(sheetRows.pageId, pageId));
       expect(count).toBe(0);
+    });
+  });
+
+  describe('applyFormatOps', () => {
+
+    /** Rows 0..count-1, each with one cell, inserted directly and back-dated. */
+    async function seedRows(tabId: string, pageId: string, count: number) {
+      const stale = new Date(Date.now() - 60_000);
+      const CHUNK = 500;
+      for (let start = 0; start < count; start += CHUNK) {
+        const values = [];
+        for (let rowIndex = start; rowIndex < Math.min(count, start + CHUNK); rowIndex++) {
+          values.push({
+            tabId,
+            pageId,
+            rowIndex,
+            cells: { A: { raw: String(rowIndex), value: rowIndex, type: 'number' as const } },
+            updatedAt: stale,
+          });
+        }
+        await db.insert(sheetRows).values(values);
+      }
+    }
+
+    /** How many of a tab's rows were written since `marker`. */
+    const rowsWrittenSince = async (tabId: string, marker: Date) => {
+      const [{ count }] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(sheetRows)
+        .where(and(eq(sheetRows.tabId, tabId), gt(sheetRows.updatedAt, marker)));
+      return count;
+    };
+
+    const revisionOf = async (pageId: string) => {
+      const [row] = await db
+        .select({ revision: pages.revision, stateHash: pages.stateHash })
+        .from(pages)
+        .where(eq(pages.id, pageId));
+      return row;
+    };
+
+    it('formats one row of a 50,000-row sheet by writing one row', { timeout: 30_000 }, async () => {
+      // Kills: selecting or persisting rows by anything other than the plan's
+      // row indexes. "A1 is bold" afterwards is identical under a whole-sheet
+      // rewrite, so the assertion is on the MECHANISM — the reported count and
+      // the number of rows whose `updatedAt` moved.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 50_000 });
+      await seedRows(tabId, pageId, 50_000);
+      const marker = new Date();
+
+      const result = await applyFormatOps(
+        { pageId },
+        [{ type: 'setCellFormat', range: 'A1:H1', patch: BOLD }],
+        { userId: ownerId }
+      );
+
+      expect(result.rowsTouched).toBe(1);
+      expect(result.cellsFormatted).toBe(8);
+      expect(await rowsWrittenSince(tabId, marker)).toBe(1);
+
+      const rows = await readRows(tabId, { limit: 2 });
+      expect(cellAt(rows, 0, 'A')?.format).toEqual(BOLD);
+      expect(cellAt(rows, 0, 'H')?.format).toEqual(BOLD);
+      // The value the row already held survives beside the new format.
+      expect(cellAt(rows, 0, 'A')?.value).toBe(0);
+    });
+
+    it('formats C2:C5001 by writing exactly those 5,000 rows', async () => {
+      // Kills: a span read that over-reaches (rows 5002+ untouched) and a
+      // per-row write that misses part of a chunked range.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 6_000 });
+      await seedRows(tabId, pageId, 6_000);
+      const marker = new Date();
+
+      const result = await applyFormatOps(
+        { pageId },
+        [{ type: 'setCellFormat', range: 'C2:C5001', patch: { italic: true } }],
+        { userId: ownerId }
+      );
+
+      expect(result.rowsTouched).toBe(5_000);
+      expect(await rowsWrittenSince(tabId, marker)).toBe(5_000);
+
+      const [{ untouched }] = await db
+        .select({ untouched: sql<number>`count(*)::int` })
+        .from(sheetRows)
+        .where(
+          and(
+            eq(sheetRows.tabId, tabId),
+            sql`${sheetRows.rowIndex} >= 5001`,
+            gt(sheetRows.updatedAt, marker)
+          )
+        );
+      expect(untouched).toBe(0);
+    });
+
+    it('keeps a concurrent value write to the same row, as a real transaction pair', async () => {
+      // Kills: `persistRows` in replace mode, or any write that upserts a
+      // whole `cells` object rather than the columns this call touched.
+      //
+      // The interleaving that loses the update: the row does not exist yet,
+      // so there is no row lock to take; the format write reads nothing, a
+      // `setCells` to column A of the same row commits, and then the format
+      // write upserts column C. Sequentially those two calls prove nothing —
+      // the second reads the first's row. So the format write runs inside an
+      // open transaction whose first `sheet_rows` insert is held back until
+      // the value write has committed on another connection.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
+
+      let valueWrite: Promise<unknown> | null = null;
+      const gated = await db.transaction(async (tx) =>
+        applyFormatOps(
+          { pageId },
+          [{ type: 'setCellFormat', range: 'C5', patch: BOLD }],
+          { userId: ownerId },
+          holdBeforeInsert(tx, async () => {
+            valueWrite ??= setCells({ pageId }, [{ address: 'A5', value: 'kept' }], { userId: ownerId });
+            await valueWrite;
+          })
+        )
+      );
+      expect(gated.rowsTouched).toBe(1);
+      await valueWrite;
+
+      const rows = await readRows(tabId, { limit: 10 });
+      expect(cellAt(rows, 4, 'A')?.value).toBe('kept');
+      expect(cellAt(rows, 4, 'C')?.format).toEqual(BOLD);
+    });
+
+    it('composes a value write and a format write to the SAME empty cell in either order', async () => {
+      // Kills: a column-level merge. An empty cell has no row to lock, so a
+      // value write and a format write to it can both read nothing and both
+      // upsert; if the cell object under the column is replaced whole, the
+      // second commit either drops the format or overwrites the just-entered
+      // value with `raw: ''`. Both orders are forced, the same way as above.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
+
+      // Format commits second.
+      let value: Promise<unknown> | null = null;
+      await db.transaction(async (tx) =>
+        applyFormatOps(
+          { pageId },
+          [{ type: 'setCellFormat', range: 'C5', patch: BOLD }],
+          { userId: ownerId },
+          holdBeforeInsert(tx, async () => {
+            value ??= setCells({ pageId }, [{ address: 'C5', value: '=1+1' }], { userId: ownerId });
+            await value;
+          })
+        )
+      );
+      await value;
+      let cell = cellAt(await readRows(tabId, { limit: 10 }), 4, 'C');
+      expect(cell).toMatchObject({ raw: '=1+1', value: 2, type: 'number', format: BOLD });
+
+      // Value commits second — `setCells`'s own merge must leave the format.
+      // A different row: row 5 now exists, so a write to it would take its
+      // lock and the held transaction would block the one it is waiting for.
+      let format: Promise<unknown> | null = null;
+      await db.transaction(async (tx) =>
+        setCells(
+          { pageId },
+          [{ address: 'D7', value: 'typed' }],
+          { userId: ownerId },
+          holdBeforeInsert(tx, async () => {
+            format ??= applyFormatOps({ pageId }, [{ type: 'setCellFormat', range: 'D7', patch: { italic: true } }], { userId: ownerId });
+            await format;
+          })
+        )
+      );
+      await format;
+      cell = cellAt(await readRows(tabId, { limit: 10 }), 6, 'D');
+      expect(cell).toMatchObject({ raw: 'typed', value: 'typed', format: { italic: true } });
+    });
+
+    it('does not bump the revision or log when a request changes nothing', async () => {
+      // Kills: an unconditional `touchPage`. A retried or redundant request —
+      // the width a column already has, a bold that is already bold — is not
+      // an edit, and bumping for it forces an open editor into a conflict over
+      // a sheet that did not move.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
+      const ops = [
+        { type: 'setCellFormat' as const, range: 'A1:B2', patch: BOLD },
+        { type: 'setColumnWidth' as const, column: 'B', width: 240 },
+      ];
+      await applyFormatOps({ pageId }, ops, { userId: ownerId });
+      const before = await revisionOf(pageId);
+      const logged = (await db.select({ id: sheetChanges.id }).from(sheetChanges).where(eq(sheetChanges.tabId, tabId))).length;
+
+      const again = await applyFormatOps({ pageId }, ops, { userId: ownerId });
+
+      expect(again.rowsTouched).toBe(0);
+      expect(again.cellsFormatted).toBe(0);
+      expect(again.tabFieldsChanged).toEqual([]);
+      expect(await revisionOf(pageId)).toEqual(before);
+      expect((await db.select({ id: sheetChanges.id }).from(sheetChanges).where(eq(sheetChanges.tabId, tabId))).length).toBe(logged);
+    });
+
+    it('setConditionalRules with the list the tab already holds is not a write', async () => {
+      // The AI tool's replaceAll sends the final list on every call, including
+      // a retry, so a rule added concurrently is removed under the lock. That
+      // is only acceptable because an identical list is compared as JSON and
+      // bumps nothing — the case a retry depends on.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
+      const second = { ...FORMAT_RULE, id: 'second', ranges: ['B1:B9'] };
+      const first = await applyFormatOps(
+        { pageId },
+        [{ type: 'setConditionalRules', rules: [FORMAT_RULE, second] }],
+        { userId: ownerId }
+      );
+      expect(first.tabFieldsChanged).toEqual(['conditionalFormats']);
+      // The delta is computed under the lock from what the tab held THEN.
+      expect(first.ruleIdsAdded.sort()).toEqual(['over-100', 'second']);
+      expect(first.ruleIdsRemoved).toEqual([]);
+      const before = await revisionOf(pageId);
+      const logged = (await db.select({ id: sheetChanges.id }).from(sheetChanges).where(eq(sheetChanges.tabId, tabId))).length;
+
+      const again = await applyFormatOps(
+        { pageId },
+        [{ type: 'setConditionalRules', rules: [FORMAT_RULE, second] }],
+        { userId: ownerId }
+      );
+      expect(again.tabFieldsChanged).toEqual([]);
+      expect(again.ruleIdsAdded).toEqual([]);
+      expect(again.ruleIdsRemoved).toEqual([]);
+      expect(await revisionOf(pageId)).toEqual(before);
+      expect((await db.select({ id: sheetChanges.id }).from(sheetChanges).where(eq(sheetChanges.tabId, tabId))).length).toBe(logged);
+
+      // A list that drops one: the removed id is reported from the locked read.
+      const dropped = await applyFormatOps({ pageId }, [{ type: 'setConditionalRules', rules: [second] }], { userId: ownerId });
+      expect(dropped.ruleIdsRemoved).toEqual(['over-100']);
+      expect(dropped.ruleIdsAdded).toEqual([]);
+      await applyFormatOps({ pageId }, [{ type: 'setConditionalRules', rules: [FORMAT_RULE, second] }], { userId: ownerId });
+
+      // Reversed is a change: later rules win.
+      const reversed = await applyFormatOps(
+        { pageId },
+        [{ type: 'setConditionalRules', rules: [second, FORMAT_RULE] }],
+        { userId: ownerId }
+      );
+      expect(reversed.tabFieldsChanged).toEqual(['conditionalFormats']);
+      const tab = (await getTab({ pageId }))!;
+      expect((tab.conditionalFormats as { id: string }[]).map((rule) => rule.id)).toEqual(['second', 'over-100']);
+    });
+
+    it('leaves a formula cell’s raw, value and type untouched', async () => {
+      // Kills: fabricating a `StoredCell` instead of spreading the loaded one.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
+      await setCells({ pageId }, [
+        { address: 'B1', value: '1' },
+        { address: 'B2', value: '2' },
+        { address: 'B3', value: '3' },
+        { address: 'A1', value: '=SUM(B1:B9)' },
+      ], { userId: ownerId });
+
+      await applyFormatOps(
+        { pageId },
+        [{ type: 'setCellFormat', range: 'A1', patch: { number: { kind: 'currency', currency: 'USD' } } }],
+        { userId: ownerId }
+      );
+
+      const cell = cellAt(await readRows(tabId, { limit: 1 }), 0, 'A');
+      expect(cell?.raw).toBe('=SUM(B1:B9)');
+      expect(cell?.value).toBe(6);
+      expect(cell?.type).toBe('number');
+      expect(cell?.format).toEqual({ number: { kind: 'currency', currency: 'USD' } });
+    });
+
+    it('formats an empty cell so it projects as a format and not as a cell', async () => {
+      // Kills: writing an empty cell with any `raw` other than '', which the
+      // projection would then surface as content.
+      const { pageId, ownerId } = await makeSheet({ rowCount: 10 });
+
+      await applyFormatOps(
+        { pageId },
+        [{ type: 'setCellFormat', range: 'D9', patch: { background: '#fee2e2' } }],
+        { userId: ownerId }
+      );
+
+      const sheet = (await readSheetData({ pageId }))!;
+      expect(sheet.formats?.D9).toEqual({ background: '#fee2e2' });
+      expect(sheet.cells.D9).toBeUndefined();
+    });
+
+    it('clears a format into a tombstone the projection ignores', async () => {
+      // Documents, rather than fixes, the `{ raw: '' }` left behind: the jsonb
+      // merge cannot delete a key, and the alternative is the lost update the
+      // merge exists to prevent.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
+      await applyFormatOps({ pageId }, [{ type: 'setCellFormat', range: 'D9', patch: BOLD }], { userId: ownerId });
+
+      const cleared = await applyFormatOps(
+        { pageId },
+        [{ type: 'clearCellFormat', range: 'D9' }],
+        { userId: ownerId }
+      );
+      expect(cleared.cellsFormatted).toBe(1);
+
+      expect(cellAt(await readRows(tabId, { fromRow: 8, limit: 1 }), 8, 'D')).toEqual({ raw: '' });
+      const sheet = (await readSheetData({ pageId }))!;
+      expect(sheet.formats?.D9).toBeUndefined();
+      expect(sheet.cells.D9).toBeUndefined();
+
+      // Clearing a cell that never existed writes nothing at all.
+      const noop = await applyFormatOps({ pageId }, [{ type: 'clearCellFormat', range: 'E9' }], { userId: ownerId });
+      expect(noop.rowsTouched).toBe(0);
+    });
+
+    it('writes every tab-level change of one call in one UPDATE and one revision bump', async () => {
+      // Kills: a per-op `UPDATE sheet_tabs`, and a per-op `touchPage`. An
+      // editor holding the sheet open sees one conflict per revision bump, so
+      // N bumps for one request is N conflicts. The count is taken by a
+      // trigger: a stored value cannot distinguish one statement from four.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 20, columnCount: 6 });
+      const audit = await countTabUpdates(tabId);
+      const before = await revisionOf(pageId);
+
+      try {
+        const result = await applyFormatOps(
+          { pageId },
+          [
+            { type: 'setColumnWidth', column: 'B', width: 240 },
+            { type: 'setFrozen', rows: 1, columns: null },
+            { type: 'addConditionalRule', rule: FORMAT_RULE },
+            { type: 'setRegions', regions: [REGION] },
+          ],
+          { userId: ownerId }
+        );
+
+        expect(result.tabFieldsChanged.sort()).toEqual(
+          ['columnWidths', 'conditionalFormats', 'frozenRows', 'regions'].sort()
+        );
+        expect(result.regionIdsAdded).toEqual([REGION.id]);
+        expect(result.regionIdsRemoved).toEqual([]);
+        expect(await audit.count()).toBe(1);
+      } finally {
+        await audit.drop();
+      }
+
+      const after = await revisionOf(pageId);
+      expect(after.revision).toBe(before.revision + 1);
+
+      const tab = (await getTab({ pageId }))!;
+      expect(tab.columnWidths).toEqual({ B: 240 });
+      expect(tab.frozenRows).toBe(1);
+      expect(tab.conditionalFormats).toEqual([FORMAT_RULE]);
+      expect(tab.regions).toEqual([REGION]);
+    });
+
+    it('bumps the page revision and stateHash — the silent-revert guard', async () => {
+      // Kills: a missing `touchPage`. Without it `replaceFromDocument` from a
+      // stale editor passes its revision check and rewrites every tab-level
+      // field from the old document, reverting the formatting.
+      const { pageId, ownerId } = await makeSheet({ rowCount: 10 });
+      const before = await revisionOf(pageId);
+
+      await applyFormatOps({ pageId }, [{ type: 'setCellFormat', range: 'A1', patch: BOLD }], { userId: ownerId });
+
+      const after = await revisionOf(pageId);
+      expect(after.revision).toBe(before.revision + 1);
+      expect(after.stateHash).not.toBe(before.stateHash);
+    });
+
+    it('refuses before writing anything, so a bad op bumps nothing', async () => {
+      // Kills: validating after a lock or a write. The plan throws first.
+      const { pageId, ownerId } = await makeSheet({ rowCount: 10 });
+      const before = await revisionOf(pageId);
+
+      await expect(
+        applyFormatOps(
+          { pageId },
+          [
+            { type: 'setCellFormat', range: 'A1', patch: BOLD },
+            { type: 'removeConditionalRule', id: 'missing' },
+          ],
+          { userId: ownerId }
+        )
+      ).rejects.toBeInstanceOf(SheetFormatError);
+
+      expect((await revisionOf(pageId)).revision).toBe(before.revision);
+      expect((await readSheetData({ pageId }))?.formats).toBeUndefined();
+    });
+
+    it('materialises an unmigrated sheet with the document’s rows intact', async () => {
+      // Kills: `getTab` where `ensureTab` belongs — the write would throw for
+      // every sheet nobody had backfilled — and a materialisation that loses
+      // the document's content.
+      const { pageId, ownerId } = await makeUnmigratedSheet(
+        '#%PAGESPACE_SHEETDOC v1\npage_id = "x"\n\n[[sheets]]\nname = "Sheet1"\norder = 0\n\n[sheets.meta]\nrowCount = 5\ncolumnCount = 3\n\n[sheets.cells.A1]\nvalue = "existing"\n'
+      );
+
+      await applyFormatOps({ pageId }, [{ type: 'setCellFormat', range: 'B1', patch: BOLD }], { userId: ownerId });
+
+      const tab = await getTab({ pageId });
+      expect(tab).not.toBeNull();
+      const rows = await readRows(tab!.id, { limit: 10 });
+      expect(cellAt(rows, 0, 'A')?.value).toBe('existing');
+      expect(cellAt(rows, 0, 'B')?.format).toEqual(BOLD);
+    });
+
+    it('lands both rules when two calls add different ones concurrently', async () => {
+      // Kills: skipping the tab `FOR UPDATE`, and taking it but writing the
+      // rule list planned BEFORE it — either way the second writer overwrites
+      // the first's rule with a list that never had it.
+      //
+      // Deterministic rather than a `Promise.all` race: the first call is
+      // held just before its `UPDATE sheet_tabs`, with the tab lock already
+      // taken, until the second call is observed waiting on that lock.
+      const { pageId, ownerId } = await makeSheet({ rowCount: 20 });
+      // A different RANGE, not just a different id: the store refuses a rule
+      // whose content matches one already on the tab (SheetDuplicateRuleError,
+      // keyed by everything but `id`), and this case is about the lock, not
+      // the dedup — two distinct rules must both land.
+      const second = { ...FORMAT_RULE, id: 'second', ranges: ['B1:B9'] };
+
+      let other: Promise<unknown> | null = null;
+      await db.transaction(async (tx) =>
+        applyFormatOps(
+          { pageId },
+          [{ type: 'addConditionalRule', rule: FORMAT_RULE }],
+          { userId: ownerId },
+          holdBeforeUpdate(tx, async () => {
+            other ??= applyFormatOps({ pageId }, [{ type: 'addConditionalRule', rule: second }], { userId: ownerId });
+            await waitForLockWaiter(other);
+          })
+        )
+      );
+      await other;
+
+      const tab = (await getTab({ pageId }))!;
+      expect((tab.conditionalFormats as { id: string }[]).map((rule) => rule.id).sort()).toEqual(
+        ['over-100', 'second']
+      );
+    });
+
+    it('refuses under the lock when a concurrent call took the rule id first', async () => {
+      // Kills: writing the pre-lock plan (which would silently overwrite the
+      // first rule with a same-id twin) and any re-plan that does not refuse.
+      // The second call passes validation on its snapshot, waits on the tab
+      // lock, and is refused by the plan it makes once it holds it.
+      const { pageId, ownerId } = await makeSheet({ rowCount: 20 });
+
+      let other: Promise<unknown> | null = null;
+      await db.transaction(async (tx) =>
+        applyFormatOps(
+          { pageId },
+          [{ type: 'addConditionalRule', rule: FORMAT_RULE }],
+          { userId: ownerId },
+          holdBeforeUpdate(tx, async () => {
+            other ??= applyFormatOps(
+              { pageId },
+              [{ type: 'addConditionalRule', rule: { ...FORMAT_RULE, format: { bold: true } } }],
+              { userId: ownerId }
+            );
+            await waitForLockWaiter(other);
+          })
+        )
+      );
+
+      await expect(other).rejects.toBeInstanceOf(SheetFormatError);
+      expect((await getTab({ pageId }))?.conditionalFormats).toEqual([FORMAT_RULE]);
+    });
+
+    it('treats a set that is cleared again in the same request as no change', async () => {
+      // Kills: staging patches per step rather than from the net change —
+      // which would create a tombstone row, bump the revision and log an
+      // entry whose before and after agree.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
+      const before = await revisionOf(pageId);
+
+      const result = await applyFormatOps(
+        { pageId },
+        [
+          { type: 'setCellFormat', range: 'B2', patch: BOLD },
+          { type: 'clearCellFormat', range: 'B2' },
+        ],
+        { userId: ownerId }
+      );
+
+      expect(result).toMatchObject({ cellsFormatted: 0, rowsTouched: 0 });
+      expect(await revisionOf(pageId)).toEqual(before);
+      expect(await readRows(tabId, { limit: 10 })).toEqual([]);
+    });
+
+    it('does not count freezing nothing on a tab that stores a zero freeze', async () => {
+      // The document path stores `frozenRows: 0`; `setFrozen` normalises 0 to
+      // "none". They must compare equal or the request counts as an edit.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 10 });
+      await db.update(sheetTabs).set({ frozenRows: 0, frozenColumns: 0 }).where(eq(sheetTabs.id, tabId));
+      const before = await revisionOf(pageId);
+
+      const result = await applyFormatOps({ pageId }, [{ type: 'setFrozen', rows: 0, columns: null }], { userId: ownerId });
+
+      expect(result.tabFieldsChanged).toEqual([]);
+      expect(await revisionOf(pageId)).toEqual(before);
+    });
+
+    it('re-evaluates open-ended range formulas when the extent grows', async () => {
+      // `rowCount` is an input to a formula over an open range —
+      // `evaluateClosure` resolves `rect.rowEnd ?? rowCount - 1` — and a
+      // format write past the extent grows it, so a stored total would be
+      // wrong and presented as correct.
+      //
+      // HONEST SCOPE: the parser rejects `A:A` today (see `deps.ts`), so no
+      // formula can put an open edge into `sheet_range_deps` through the
+      // write path. The edge is seeded directly, and the input the recompute
+      // must pick up is a row past the extent whose value the stale
+      // materialisation never saw. What this kills: skipping the open-edge
+      // query, skipping the closure walk, or evaluating with the old extent
+      // (which would never load row 10).
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 3, columnCount: 3 });
+      await setCells({ pageId }, [
+        { address: 'A1', value: '1' },
+        { address: 'A2', value: '2' },
+        { address: 'A3', value: '3' },
+        { address: 'B1', value: '=SUM(A1:A10)' },
+      ], { userId: ownerId });
+      expect(cellAt(await readRows(tabId, { limit: 1 }), 0, 'B')?.value).toBe(6);
+
+      // A row past the extent, and the open edge the parser cannot yet write.
+      await db.insert(sheetRows).values({
+        tabId,
+        pageId,
+        rowIndex: 9,
+        cells: { A: { raw: '100', value: 100, type: 'number' } },
+      });
+      await db.delete(sheetRangeDeps).where(eq(sheetRangeDeps.tabId, tabId));
+      await db.insert(sheetRangeDeps).values({
+        tabId,
+        formulaAddress: 'B1',
+        rowStart: 0,
+        rowEnd: null,
+        colStart: 0,
+        colEnd: 0,
+      });
+
+      // No growth: no recompute, and the stale total stands.
+      const inside = await applyFormatOps(
+        { pageId },
+        [{ type: 'setCellFormat', range: 'C3', patch: BOLD }],
+        { userId: ownerId }
+      );
+      expect(inside.recomputed).toEqual([]);
+      expect(cellAt(await readRows(tabId, { limit: 1 }), 0, 'B')?.value).toBe(6);
+
+      // Growth: the formula is re-evaluated against the taller sheet.
+      const grown = await applyFormatOps(
+        { pageId },
+        [{ type: 'setCellFormat', range: 'C10', patch: BOLD }],
+        { userId: ownerId }
+      );
+      expect(grown.rowCount).toBe(10);
+      expect(grown.recomputed).toEqual(['B1']);
+      expect((await getTab({ pageId }))?.rowCount).toBe(10);
+      expect(cellAt(await readRows(tabId, { limit: 1 }), 0, 'B')?.value).toBe(106);
+    });
+
+    it('round-trips regions through the document and back', async () => {
+      // Kills: writing regions somewhere the projection does not read, or a
+      // shape the parser drops on the way back in.
+      const { pageId, ownerId } = await makeSheet({ rowCount: 20, columnCount: 6 });
+
+      await applyFormatOps({ pageId }, [{ type: 'setRegions', regions: [REGION] }], { userId: ownerId });
+
+      const document = (await readSheetDocument(pageId))!;
+      expect(parseSheetContent(document).regions).toEqual([REGION]);
+
+      await replaceFromDocument({ pageId }, document, { userId: ownerId });
+
+      expect((await readTabFormatting({ pageId }))?.regions).toEqual([REGION]);
+    });
+
+    it('logs a large range as one summary entry and a small one per cell', async () => {
+      // Kills: per-cell log rows past `CHANGE_LOG_SUMMARY_THRESHOLD` — the
+      // write amplification the row store removed, back in the audit trail.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 1_000 });
+
+      await applyFormatOps({ pageId }, [{ type: 'setCellFormat', range: 'A1:A600', patch: BOLD }], { userId: ownerId });
+      const bulk = await db
+        .select({ address: sheetChanges.address, after: sheetChanges.after })
+        .from(sheetChanges)
+        .where(and(eq(sheetChanges.tabId, tabId), eq(sheetChanges.op, 'format')));
+      expect(bulk).toHaveLength(1);
+      expect(bulk[0].address).toBeNull();
+      expect(bulk[0].after).toMatchObject({ cells: 600, firstAddress: 'A1', lastAddress: 'A600' });
+
+      await applyFormatOps({ pageId }, [{ type: 'setCellFormat', range: 'B1:B2', patch: BOLD }], { userId: ownerId });
+      const small = await db
+        .select({ address: sheetChanges.address, before: sheetChanges.before, after: sheetChanges.after })
+        .from(sheetChanges)
+        .where(and(eq(sheetChanges.tabId, tabId), inArray(sheetChanges.address, ['B1', 'B2'])));
+      expect(small.map((entry) => entry.address).sort()).toEqual(['B1', 'B2']);
+      expect(small[0].before).toBeNull();
+      expect(small[0].after).toEqual(BOLD);
+    });
+  });
+
+  describe('readTabFormatting', () => {
+    it('returns null for an unmigrated sheet without materialising it', async () => {
+      // A read must never write. The `null` alone passes vacuously — a read
+      // that materialised and then failed would also return it — so the
+      // assertion that matters is that no tab row appeared.
+      const { pageId } = await makeUnmigratedSheet(
+        '#%PAGESPACE_SHEETDOC v1\npage_id = "x"\n\n[[sheets]]\nname = "Sheet1"\norder = 0\n\n[sheets.meta]\nrowCount = 5\ncolumnCount = 3\n\n[sheets.cells.A1]\nvalue = "existing"\n'
+      );
+
+      expect(await readTabFormatting({ pageId }, { ranges: ['A1:C5'] })).toBeNull();
+
+      const tabs = await db.select({ id: sheetTabs.id }).from(sheetTabs).where(eq(sheetTabs.pageId, pageId));
+      expect(tabs).toHaveLength(0);
+    });
+
+    it('returns tab fields, parsed rules and regions, and per-cell formats inside the ranges', async () => {
+      // Kills: returning the raw rule column (the bogus entry would come back
+      // and be written again by any caller that round-trips), and returning
+      // formats outside the requested rectangles.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 20, columnCount: 6 });
+      await applyFormatOps(
+        { pageId },
+        [
+          { type: 'setCellFormat', range: 'B2:C3', patch: BOLD },
+          { type: 'setCellFormat', range: 'E9', patch: { italic: true } },
+          { type: 'setColumnFormat', column: 'A', patch: { align: 'right' } },
+          { type: 'setRowHeight', row: 2, height: 40 },
+          { type: 'setFrozen', rows: 1, columns: 1 },
+          { type: 'setRegions', regions: [REGION] },
+        ],
+        { userId: ownerId }
+      );
+      await db
+        .update(sheetTabs)
+        .set({ conditionalFormats: [FORMAT_RULE, { id: 'bogus', kind: 'formula', formula: '' }] })
+        .where(eq(sheetTabs.id, tabId));
+
+      const formatting = (await readTabFormatting({ pageId }, { ranges: ['B2:B9', 'C3'] }))!;
+
+      expect(formatting.conditionalFormats).toEqual([FORMAT_RULE]);
+      expect(formatting.regions).toEqual([REGION]);
+      expect(formatting.columnFormats).toEqual({ A: { align: 'right' } });
+      expect(formatting.rowHeights).toEqual({ '2': 40 });
+      expect(formatting.frozenRows).toBe(1);
+      expect(formatting.frozenColumns).toBe(1);
+      // B2, B3 and C3 are inside; C2 is outside both ranges and E9 is far away.
+      expect(Object.keys(formatting.cellFormats).sort()).toEqual(['B2', 'B3', 'C3']);
+      expect(formatting.cellFormats.B2).toEqual(BOLD);
+
+      // No ranges: no per-cell read at all.
+      expect((await readTabFormatting({ pageId }))?.cellFormats).toEqual({});
+    });
+
+    it('refuses a range it cannot address or that is too large to expand', async () => {
+      const { pageId } = await makeSheet({ rowCount: 20 });
+      await expect(readTabFormatting({ pageId }, { ranges: ['A0:B2'] })).rejects.toBeInstanceOf(SheetFormatError);
+      await expect(readTabFormatting({ pageId }, { ranges: ['A1:ZZ50000'] })).rejects.toThrow(/cells between them/);
     });
   });
 });

@@ -65,7 +65,7 @@ export interface MagicLinkPorts {
   createTokenAndPersist: (input: {
     userId: string;
     expiresAt: Date;
-    platform?: 'web' | 'desktop' | 'ios';
+    platform?: 'web' | 'desktop' | 'ios' | 'android';
     deviceId?: string;
     deviceName?: string;
     // Invite token bound to this magic-link at mint time. Persisted in the
@@ -78,6 +78,13 @@ export interface MagicLinkPorts {
     email: string;
     token: string;
     next?: string;
+    // Which shell asked for the link, and which device. The adapter picks the
+    // URL from the pair: a native shell that named a device gets a universal
+    // link that opens the app, everything else the plain verify endpoint.
+    // Both are needed because a link is only device-bound when both are
+    // present, and that must be the same judgement the token metadata made.
+    platform?: 'web' | 'desktop' | 'ios' | 'android';
+    deviceId?: string;
   }) => Promise<void>;
 }
 

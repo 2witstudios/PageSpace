@@ -534,6 +534,10 @@
    forcing its track wide. */
 .lp .appwin-outer { min-width: 0; }
 
+/* HeroDemo is a behaviour wrapper, never a box — display:contents keeps the
+   window's layout exactly as it was before it was wrapped. */
+.lp .hero-demo { display: contents; }
+
 @media (max-width: 600px) {
   .lp .hero-in { padding: 0 16px; }
   /* portrait crop of a landscape image: bias left so the copy stays on the
@@ -543,4 +547,96 @@
 
 @media (prefers-reduced-motion: reduce) {
   .lp .slide { transition: none; }
+}
+
+
+/* ---------------------------------------------------------------------------
+   Entrance — "the approach"
+
+   A deliberate ~2.4s open: the black lifts, the nebula falls away from a hard
+   push-in, and the copy pulls into focus ahead of the product. Pure CSS, no
+   library, no hydration dependency.
+
+   The push-in is the whole effect. A few percent of scale reads as a rendering
+   artefact; 16% over two and a half seconds reads as a camera. It is also the
+   cheapest drama available here, because `transform` on an already-composited
+   layer costs nothing per frame and — unlike opacity — does not touch LCP.
+
+   Everything still resolves to its resting state rather than a forwards fill,
+   so a browser that runs none of these keyframes shows the finished page. That
+   is what makes the opaque curtain safe to use at all.
+
+   The one property deliberately never animated is `.hero-bg`'s opacity: it is
+   the LCP element, Chrome does not count a transparent element as painted, and
+   fading it would push LCP out by the full duration. Painting an opaque curtain
+   *over* it does not, because occlusion is not the element's own opacity.
+   --------------------------------------------------------------------------- */
+
+/* Holds at full black for the first fifth, so the lift reads as intentional
+   rather than as a slow page. */
+@keyframes lp-curtain {
+  0%, 18% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* Focus pull: the copy arrives out of focus and settles. Blur is what makes
+   this feel photographic instead of like a sliding div. */
+@keyframes lp-focus {
+  from { opacity: 0; transform: translateY(26px); filter: blur(12px); }
+  to { opacity: 1; transform: none; filter: blur(0); }
+}
+
+/* The product lands in frame — further out, and no blur: a full-width blurred
+   screenshot is expensive to composite and reads as a smear, not a focus pull. */
+@keyframes lp-land {
+  from { opacity: 0; transform: translateY(46px) scale(0.965); }
+  to { opacity: 1; transform: none; }
+}
+
+/* The camera. Long, heavily eased, and still drifting after the copy is
+   readable — the page is usable well before the motion stops. */
+@keyframes lp-approach {
+  from { transform: scale(1.16); }
+  to { transform: none; }
+}
+
+.lp .lp-curtain {
+  position: fixed;
+  inset: 0;
+  z-index: 100; /* over the sticky z-50 navbar */
+  background: #010305;
+  opacity: 0;
+  pointer-events: none; /* can never swallow a click, even at full opacity */
+  animation: lp-curtain 1150ms cubic-bezier(0.4, 0, 0.2, 1) backwards;
+}
+
+.lp .hero .hero-bg {
+  animation: lp-approach 2600ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+.lp .hero-h,
+.lp .hero-sub,
+.lp .hero-cta {
+  animation: lp-focus 900ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+.lp .hero-h { animation-delay: 420ms; }
+.lp .hero-sub { animation-delay: 600ms; }
+.lp .hero-cta { animation-delay: 760ms; }
+
+.lp .appwin-outer {
+  animation: lp-land 1150ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation-delay: 900ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Every resting state is already the finished state, so dropping the
+     animations lands on a correct, fully visible page — curtain invisible. */
+  .lp .lp-curtain,
+  .lp .hero .hero-bg,
+  .lp .hero-h,
+  .lp .hero-sub,
+  .lp .hero-cta,
+  .lp .appwin-outer {
+    animation: none;
+  }
 }

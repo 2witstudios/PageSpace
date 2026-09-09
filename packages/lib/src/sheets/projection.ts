@@ -14,6 +14,7 @@
 import type { StoredCell, CellFormat } from '@pagespace/db/schema';
 import type { SheetData, SheetEvaluation, CellFormat as LibCellFormat } from './types';
 import { parseConditionalRules } from './conditional';
+import { parseRegions } from './regions';
 import {
   MAX_ADDRESSABLE_ROW,
   MAX_ADDRESSABLE_COLUMN,
@@ -72,6 +73,7 @@ export interface StoredTab {
    * boundary that decides what is a rule.
    */
   conditionalFormats?: unknown[] | null;
+  regions?: unknown[] | null;
 }
 
 /** The stored form of one row. */
@@ -140,6 +142,9 @@ export function sheetDataFromRows(tab: StoredTab, rows: readonly StoredRow[]): S
   if (tab.columnFormats) sheet.columnFormats = tab.columnFormats;
   const conditionalFormats = parseConditionalRules(tab.conditionalFormats ?? undefined);
   if (conditionalFormats) sheet.conditionalFormats = conditionalFormats;
+
+  const regions = parseRegions(tab.regions ?? undefined);
+  if (regions) sheet.regions = regions;
   if (tab.columnWidths) sheet.columnWidths = tab.columnWidths;
   if (tab.rowHeights) sheet.rowHeights = tab.rowHeights;
   if (tab.frozenRows != null) sheet.frozenRows = tab.frozenRows;
@@ -264,6 +269,7 @@ export function rowsFromSheetData(sheet: SheetData, tabIndex = 0): MaterializedT
       // Without this a save through the row store would drop every rule the
       // sheet carries, which is silent data loss rather than a missing feature.
       conditionalFormats: sheet.conditionalFormats ?? null,
+      regions: sheet.regions ?? null,
     },
     rows,
     cellDeps,

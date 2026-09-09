@@ -20,7 +20,8 @@ import { useAuthCSRF } from "@/hooks/useAuthCSRF";
 import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
 import { isOnPrem } from "@/lib/deployment-mode";
 import { resolveSigninNext } from "@/lib/auth/resolve-signin-next";
-import { detectInAppBrowser, getPreferredBrowserName } from "@/lib/auth/browser-detection";
+import { getPreferredBrowserName } from "@/lib/auth/browser-detection";
+import { useInAppBrowserNotice } from "@/hooks/useInAppBrowserNotice";
 import { useSigninRecovery } from "./useSigninRecovery";
 
 // Shared loading shell: the Suspense fallback (searchParams boundary) and the in-flight
@@ -40,7 +41,7 @@ function AuthLoading() {
 
 function SignInForm() {
   const [showMagicLink, setShowMagicLink] = useState(false);
-  const [inAppInfo, setInAppInfo] = useState<{ isInApp: boolean; appName: string | undefined }>({ isInApp: false, appName: undefined });
+  const inAppInfo = useInAppBrowserNotice();
   const searchParams = useSearchParams();
   const { csrfToken, refreshToken } = useAuthCSRF();
   const inviteToken = searchParams.get('invite') ?? undefined;
@@ -134,13 +135,12 @@ function SignInForm() {
     }
   }, [searchParams]);
 
+  // A genuine in-app browser cannot complete Google's web OAuth, so open the
+  // magic-link form for it. The Capacitor shell never reports in-app (native
+  // Google works there), so this leaves the app's sign-in screen alone.
   useEffect(() => {
-    const result = detectInAppBrowser();
-    if (result.isInApp) {
-      setInAppInfo({ isInApp: true, appName: result.appName });
-      setShowMagicLink(true);
-    }
-  }, []);
+    if (inAppInfo.isInApp) setShowMagicLink(true);
+  }, [inAppInfo.isInApp]);
 
   // While silent recovery is in flight, show a minimal loading state rather than the form,
   // so a user who is about to be auto-redirected never sees the form flash.

@@ -16,6 +16,7 @@
     "lint": "turbo lint",
     "lint:scripts": "eslint --config scripts/eslint.config.mjs scripts",
     "typecheck": "turbo typecheck",
+    "typecheck:scripts": "turbo build --filter=@pagespace/db --filter=@pagespace/editor && tsc -p scripts/tsconfig.json",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run --filter '@pagespace/db' db:migrate",
     "db:generate:admin": "bun run --filter '@pagespace/db' db:generate:admin",
@@ -36,6 +37,7 @@
     "build:desktop:coder": "bun run --filter 'desktop' build:coder",
     "package:desktop:coder": "bun run --filter 'desktop' package:coder",
     "check:fetch": "node scripts/check-fetch-auth.js",
+    "collab:seed-audit": "bun scripts/collab-seed-audit.ts",
     "knip": "knip",
     "knip:fix": "knip --fix",
     "knip:check": "node scripts/knip-ratchet.mjs",
@@ -48,6 +50,7 @@
   },
   "devDependencies": {
     "@pagespace/db": "workspace:*",
+    "@pagespace/editor": "workspace:*",
     "@pagespace/lib": "workspace:*",
     "@paralleldrive/cuid2": "^2.2.2",
     "@faker-js/faker": "^9.3.0",

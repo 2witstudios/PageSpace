@@ -1,2 +1,0 @@
-ALTER TABLE "drive_env_local" DROP CONSTRAINT "drive_env_local_bind_policy_check";--> statement-breakpoint
-ALTER TABLE "drive_env_local" ADD CONSTRAINT "drive_env_local_bind_policy_check" CHECK ("drive_env_local"."bindPolicy" IN ('owner'));

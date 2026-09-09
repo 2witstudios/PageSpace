@@ -22,6 +22,14 @@ const CLAIMED_HOST = 'pagespace.ai';
  */
 const INVITE_PATH = /^\/invite\/([^/]+)\/?$/;
 
+/**
+ * A magic link requested from the app — see
+ * `apps/web/src/app/auth/magic-link/[token]/page.tsx`. Same shape as an
+ * invite: one opaque segment. The page also reads `?next=`, so that one query
+ * param is carried through (the server re-validates it against its allowlist).
+ */
+const MAGIC_LINK_PATH = /^\/auth\/magic-link\/([^/]+)\/?$/;
+
 export type DeepLinkTarget =
   /** An in-app route. Navigate with the router — never `window.location`. */
   | { kind: 'route'; path: string }
@@ -57,6 +65,18 @@ export function resolveDeepLink(rawUrl: string): DeepLinkTarget | null {
       return { kind: 'route', path: `/invite/${encodeURIComponent(decodeURIComponent(invite[1]))}` };
     } catch {
       // Not a token we could have issued. Let the browser render the error.
+      return { kind: 'external', url: url.toString() };
+    }
+  }
+
+  const magicLink = MAGIC_LINK_PATH.exec(url.pathname);
+  if (magicLink) {
+    try {
+      const token = encodeURIComponent(decodeURIComponent(magicLink[1]));
+      const next = url.searchParams.get('next');
+      const query = next ? `?next=${encodeURIComponent(next)}` : '';
+      return { kind: 'route', path: `/auth/magic-link/${token}${query}` };
+    } catch {
       return { kind: 'external', url: url.toString() };
     }
   }

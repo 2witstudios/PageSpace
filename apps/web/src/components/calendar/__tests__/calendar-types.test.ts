@@ -6,6 +6,7 @@ import {
   getDriveCalendarColor,
   resolveEventColor,
   getEventColors,
+  resolveSwipeDirection,
 } from '../calendar-types';
 import type { CalendarEvent, EventColorConfig } from '../calendar-types';
 
@@ -173,6 +174,54 @@ describe('resolveEventColor', () => {
       should: 'fall back to the per-event color',
       actual: color,
       expected: getEventColors('deadline'),
+    });
+  });
+});
+
+describe('resolveSwipeDirection', () => {
+  test('deliberate horizontal swipes', () => {
+    assert({
+      given: 'a leftward swipe past the threshold',
+      should: 'advance to the next day',
+      actual: resolveSwipeDirection({ dx: 80, dy: 10 }),
+      expected: 'next',
+    });
+
+    assert({
+      given: 'a rightward swipe past the threshold',
+      should: 'go back to the previous day',
+      actual: resolveSwipeDirection({ dx: -80, dy: 10 }),
+      expected: 'previous',
+    });
+  });
+
+  test('gestures that must not change the day', () => {
+    assert({
+      given: 'a vertical scroll that drifts sideways',
+      should: 'not change the day',
+      actual: resolveSwipeDirection({ dx: 60, dy: 200 }),
+      expected: null,
+    });
+
+    assert({
+      given: 'a tap, which moves nothing',
+      should: 'not replay a previous gesture',
+      actual: resolveSwipeDirection({ dx: 0, dy: 0 }),
+      expected: null,
+    });
+
+    assert({
+      given: 'a horizontal drag below the minimum distance',
+      should: 'not change the day',
+      actual: resolveSwipeDirection({ dx: 30, dy: 0 }),
+      expected: null,
+    });
+
+    assert({
+      given: 'a diagonal drag where neither axis dominates',
+      should: 'not change the day',
+      actual: resolveSwipeDirection({ dx: 60, dy: 60 }),
+      expected: null,
     });
   });
 });

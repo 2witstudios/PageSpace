@@ -12,6 +12,7 @@ import { CodeBlockNode } from './code-block-node.js';
 import { BlockId } from './block-id.js';
 import { CommentMark, InsertionMark, DeletionMark } from './collab-marks.js';
 import { ImageNode } from './image-node.js';
+import { djb2 } from './djb2.js';
 
 /**
  * Node-safe by contract: no React, no `document`/`window` at module-eval
@@ -369,12 +370,7 @@ export function projectSchema(schema: Schema): { nodes: ProjectedSpec[]; marks: 
  * server, future seed scripts).
  */
 export function hashProjection(projection: unknown): string {
-  const json = JSON.stringify(projection);
-  let hash = 5381;
-  for (let i = 0; i < json.length; i += 1) {
-    hash = (hash * 33 + json.charCodeAt(i)) | 0;
-  }
-  return (hash >>> 0).toString(16);
+  return djb2(JSON.stringify(projection)).toString(16);
 }
 
 /**

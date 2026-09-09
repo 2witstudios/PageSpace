@@ -1,5 +1,5 @@
 {
-  "id": "8e1a0897-95bd-4239-ac86-114337e5880b",
+  "id": "f58398cf-f397-4947-9e9f-1a2e605a08c1",
   "prevId": "344c3f38-c462-49b2-806a-d461be5402ad",
   "version": "7",
   "dialect": "postgresql",
@@ -11783,6 +11783,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "regions": {
+          "name": "regions",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "createdAt": {
           "name": "createdAt",
           "type": "timestamp",
@@ -23302,7 +23308,7 @@
         },
         "drive_env_local_bind_policy_check": {
           "name": "drive_env_local_bind_policy_check",
-          "value": "\"drive_env_local\".\"bindPolicy\" IN ('owner')"
+          "value": "\"drive_env_local\".\"bindPolicy\" IN ('owner', 'admins', 'members')"
         }
       },
       "isRLSEnabled": false

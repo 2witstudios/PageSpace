@@ -1,7 +1,7 @@
 import { DOMSerializer, type Node as PmNode } from 'prosemirror-model';
 import type * as Y from 'yjs';
 import { collabSchema, yDocToPmDoc } from './collab-document.js';
-import { withDomWorkspace } from './dom-workspace.js';
+import { withDomWorkspace, type DomWorkspace } from './dom-workspace.js';
 import { assertProjectable } from './projection-errors.js';
 
 /**
@@ -37,6 +37,7 @@ export function yDocToHtml(yDoc: Y.Doc): string {
  */
 let cachedNames: { nodes: ReadonlySet<string>; marks: ReadonlySet<string> } | undefined;
 
+/** The frozen schema's node and mark names, memoised — what the HTML projection is allowed to contain. */
 function projectableNames(): { nodes: ReadonlySet<string>; marks: ReadonlySet<string> } {
   const schema = collabSchema();
   cachedNames ??= {
@@ -48,15 +49,23 @@ function projectableNames(): { nodes: ReadonlySet<string>; marks: ReadonlySet<st
 
 /** `yDocToHtml` over an already-materialised ProseMirror document. */
 export function pmDocToHtml(doc: PmNode): string {
+  return withDomWorkspace((workspace) => pmDocToHtmlIn(doc, workspace));
+}
+
+/**
+ * `pmDocToHtml` into a caller-owned workspace. For callers that render many
+ * documents in one run (the seed fidelity audit renders four per page over
+ * thousands of pages): a window per call is ~2 ms and a quarter-megabyte
+ * that is not collectable until the event loop turns.
+ */
+export function pmDocToHtmlIn(doc: PmNode, workspace: DomWorkspace): string {
   const known = projectableNames();
   assertProjectable(doc, 'html', known.nodes, known.marks);
-  return withDomWorkspace((workspace) => {
-    const target = workspace.empty();
-    DOMSerializer.fromSchema(collabSchema()).serializeFragment(
-      doc.content,
-      { document: workspace.document },
-      target,
-    );
-    return target.innerHTML;
-  });
+  const target = workspace.empty();
+  DOMSerializer.fromSchema(collabSchema()).serializeFragment(
+    doc.content,
+    { document: workspace.document },
+    target,
+  );
+  return target.innerHTML;
 }

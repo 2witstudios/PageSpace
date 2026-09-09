@@ -1,0 +1,41 @@
+{
+  // Typechecks the seed fidelity audit. `scripts/` is in no other TypeScript
+  // project — the root tsconfig includes only `types/**`, and `turbo
+  // typecheck` visits workspace packages, which this directory is not — so
+  // until this file existed nothing in CI typechecked any of it, and the audit
+  // added ~900 lines into that blind spot.
+  //
+  // DELIBERATELY NOT the whole directory. Thirteen files here do not currently
+  // typecheck: most use bun-only globals (`import.meta.main`, `Bun`) that
+  // `@types/node` does not declare, the rest are real mismatches (a drizzle
+  // insert overload, `Duplex` vs `Socket`, `KeyObject` vs `PrivateKeyInput`)
+  // plus one untyped `.mjs` import. `exclude` cannot drop them, because the
+  // suites in `__tests__/` import them and pull them back into the program, so
+  // a directory-wide gate would have to exclude those tests too — a bigger
+  // hole than the one it closes. Fixing all thirteen means editing a dozen
+  // unrelated scripts, which does not belong in the PR that added this file.
+  // Widening `include` to `**/*.ts` is the follow-up, and the reason it is not
+  // done here is recorded so the next reader does not rediscover it.
+  //
+  // `moduleResolution: "bundler"` because bun runs these directly and resolves
+  // the workspace packages' `exports` maps; the root tsconfig's `"node"` mode
+  // ignores `exports` and cannot see a `@pagespace/*` subpath.
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022", "dom"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": [
+    "collab-seed-audit.ts",
+    "lib/seed-audit/**/*.ts",
+    "__tests__/collab-seed-audit*.test.ts"
+  ]
+}

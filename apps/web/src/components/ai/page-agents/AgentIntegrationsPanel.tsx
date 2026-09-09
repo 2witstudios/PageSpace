@@ -8,9 +8,10 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Plug2, AlertCircle } from 'lucide-react';
+import { Plug2, AlertCircle, Webhook } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAgentGrants, useUserConnections, useDriveConnections } from '@/hooks/useIntegrations';
+import { PageWebhooksDialog } from '@/components/shared/PageWebhooksDialog';
 import { IntegrationStatusBadge } from '@/components/integrations/IntegrationStatusBadge';
 import { post, put, del } from '@/lib/auth/auth-fetch';
 import type { SafeConnection, SafeGrant } from '@/components/integrations/types';
@@ -200,213 +201,259 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-lg">
-          <Plug2 className="h-4 w-4" />
-          Integration Tools
-        </CardTitle>
-        <CardDescription>
-          Enable external integrations and choose which of their tools the agent can use.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <div className="space-y-3">
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-12 w-full" />
-          </div>
-        ) : error ? (
-          <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
-            <AlertCircle className="h-4 w-4" />
-            <span>Failed to load integrations</span>
-          </div>
-        ) : allConnections.length === 0 ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
-            <AlertCircle className="h-4 w-4 flex-shrink-0" />
-            <span>
-              No integrations available. Connect integrations in Settings &rarr; Integrations.
-            </span>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {allConnections.map((connection) => {
-              const grant = grantByConnectionId.get(connection.id);
-              const isEnabled = !!grant;
-              const isActive = connection.status === 'active';
-              const tools = grant ? getProviderTools(grant) : [];
-              const allowed = grant ? getEffectiveAllowed(grant, tools) : new Set<string>();
-              const bundles = grant ? getProviderBundles(grant) : [];
-              const activeBundle = grant ? activeBundleId(bundles, tools, allowed) : null;
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Plug2 className="h-4 w-4" />
+            Integration Tools
+          </CardTitle>
+          <CardDescription>
+            Enable external integrations and choose which of their tools the agent can use.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="space-y-3">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          ) : error ? (
+            <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
+              <AlertCircle className="h-4 w-4" />
+              <span>Failed to load integrations</span>
+            </div>
+          ) : allConnections.length === 0 ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+              <AlertCircle className="h-4 w-4 flex-shrink-0" />
+              <span>
+                No integrations available. Connect integrations in Settings &rarr; Integrations.
+              </span>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {allConnections.map((connection) => {
+                const grant = grantByConnectionId.get(connection.id);
+                const isEnabled = !!grant;
+                const isActive = connection.status === 'active';
+                const tools = grant ? getProviderTools(grant) : [];
+                const allowed = grant ? getEffectiveAllowed(grant, tools) : new Set<string>();
+                const bundles = grant ? getProviderBundles(grant) : [];
+                const activeBundle = grant ? activeBundleId(bundles, tools, allowed) : null;
 
-              return (
-                <div key={connection.id} className="border rounded-lg">
-                  <div className="flex items-center justify-between p-3">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="p-1.5 rounded-full bg-muted flex-shrink-0">
-                        <Plug2 className="h-3.5 w-3.5 text-muted-foreground" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium truncate">{connection.name}</span>
-                          <IntegrationStatusBadge status={connection.status} />
-                          {connection.visibility && (
-                            <Badge variant="outline" className="text-[10px] px-1 py-0">
-                              {connection.visibility === 'private' ? 'User' : 'Drive'}
-                            </Badge>
-                          )}
+                return (
+                  <div key={connection.id} className="border rounded-lg">
+                    <div className="flex items-center justify-between p-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="p-1.5 rounded-full bg-muted flex-shrink-0">
+                          <Plug2 className="h-3.5 w-3.5 text-muted-foreground" />
                         </div>
-                        {connection.provider && (
-                          <p className="text-xs text-muted-foreground">{connection.provider.name}</p>
-                        )}
-                      </div>
-                    </div>
-                    <Switch
-                      checked={isEnabled}
-                      disabled={!isActive || toggling === connection.id}
-                      onCheckedChange={(checked) => handleToggle(connection, checked)}
-                      aria-label={`Enable ${connection.name} integration`}
-                    />
-                  </div>
-
-                  {grant && (
-                    <div className="border-t px-3 py-3 space-y-3 bg-muted/30">
-                      <div className="flex items-center justify-between">
-                        <Label htmlFor={`readonly-${instanceId}-${grant.id}`} className="text-xs">
-                          Read-only mode
-                        </Label>
-                        <Switch
-                          id={`readonly-${instanceId}-${grant.id}`}
-                          checked={grant.readOnly}
-                          disabled={updatingGrant === grant.id}
-                          onCheckedChange={(readOnly) => handleUpdateGrant(grant, { readOnly })}
-                        />
-                      </div>
-
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <Label className="text-xs">Tools</Label>
-                          {bundles.length === 0 && (
-                            <div className="flex space-x-2">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                disabled={updatingGrant === grant.id || tools.length === 0}
-                                onClick={() => handleSelectAllTools(grant)}
-                              >
-                                Select All
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                disabled={updatingGrant === grant.id || tools.length === 0}
-                                onClick={() => handleDeselectAllTools(grant)}
-                              >
-                                Deselect All
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-
-                        {bundles.length > 0 && (
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            {bundles.map((bundle) => (
-                              <Button
-                                key={bundle.id}
-                                type="button"
-                                size="sm"
-                                variant={activeBundle === bundle.id ? 'default' : 'outline'}
-                                disabled={updatingGrant === grant.id || tools.length === 0}
-                                onClick={() => handleApplyBundle(grant, bundle)}
-                                title={bundle.description}
-                              >
-                                {bundle.name}
-                              </Button>
-                            ))}
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant={allowed.size === 0 ? 'default' : 'outline'}
-                              disabled={updatingGrant === grant.id || tools.length === 0}
-                              onClick={() => handleDeselectAllTools(grant)}
-                            >
-                              None
-                            </Button>
-                            {activeBundle === null && allowed.size > 0 && (
-                              <Badge variant="secondary" className="text-[10px]">
-                                Custom
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium truncate">{connection.name}</span>
+                            <IntegrationStatusBadge status={connection.status} />
+                            {connection.visibility && (
+                              <Badge variant="outline" className="text-[10px] px-1 py-0">
+                                {connection.visibility === 'private' ? 'User' : 'Drive'}
                               </Badge>
                             )}
                           </div>
-                        )}
-
-                        {tools.length === 0 ? (
-                          <p className="text-xs text-muted-foreground py-2">
-                            This integration does not expose any tools.
-                          </p>
-                        ) : (
-                          <>
-                            <p className="text-xs text-muted-foreground">
-                              {capabilitySummary(tools, allowed, grant.readOnly)}
-                            </p>
-                            <div className="space-y-3">
-                              {CATEGORY_ORDER.map((category) => {
-                                const toolsInCategory = tools.filter((t) => t.category === category);
-                                if (toolsInCategory.length === 0) return null;
-                                return (
-                                  <div key={category} className="space-y-1">
-                                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                                      {CATEGORY_LABELS[category]}
-                                    </p>
-                                    {toolsInCategory.map((tool) => {
-                                      const id = `tool-${instanceId}-${grant.id}-${tool.id}`;
-                                      return (
-                                        <div
-                                          key={tool.id}
-                                          className="flex items-start space-x-3 p-2 rounded-lg hover:bg-muted/50"
-                                        >
-                                          <Checkbox
-                                            id={id}
-                                            checked={allowed.has(tool.id)}
-                                            disabled={updatingGrant === grant.id}
-                                            onCheckedChange={(checked) =>
-                                              handleToggleTool(grant, tool.id, checked === true)
-                                            }
-                                            className="mt-1"
-                                          />
-                                          <div className="flex-1">
-                                            <label
-                                              htmlFor={id}
-                                              className="text-sm font-medium cursor-pointer"
-                                            >
-                                              {tool.name}
-                                            </label>
-                                            <p className="text-xs text-muted-foreground">
-                                              {tool.description}
-                                            </p>
-                                          </div>
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                            <p className="text-xs text-muted-foreground">
-                              Selected {allowed.size} of {tools.length} tools
-                            </p>
-                          </>
-                        )}
+                          {connection.provider && (
+                            <p className="text-xs text-muted-foreground">{connection.provider.name}</p>
+                          )}
+                        </div>
                       </div>
+                      <Switch
+                        checked={isEnabled}
+                        disabled={!isActive || toggling === connection.id}
+                        onCheckedChange={(checked) => handleToggle(connection, checked)}
+                        aria-label={`Enable ${connection.name} integration`}
+                      />
                     </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
+
+                    {grant && (
+                      <div className="border-t px-3 py-3 space-y-3 bg-muted/30">
+                        <div className="flex items-center justify-between">
+                          <Label htmlFor={`readonly-${instanceId}-${grant.id}`} className="text-xs">
+                            Read-only mode
+                          </Label>
+                          <Switch
+                            id={`readonly-${instanceId}-${grant.id}`}
+                            checked={grant.readOnly}
+                            disabled={updatingGrant === grant.id}
+                            onCheckedChange={(readOnly) => handleUpdateGrant(grant, { readOnly })}
+                          />
+                        </div>
+
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <Label className="text-xs">Tools</Label>
+                            {bundles.length === 0 && (
+                              <div className="flex space-x-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={updatingGrant === grant.id || tools.length === 0}
+                                  onClick={() => handleSelectAllTools(grant)}
+                                >
+                                  Select All
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={updatingGrant === grant.id || tools.length === 0}
+                                  onClick={() => handleDeselectAllTools(grant)}
+                                >
+                                  Deselect All
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+
+                          {bundles.length > 0 && (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {bundles.map((bundle) => (
+                                <Button
+                                  key={bundle.id}
+                                  type="button"
+                                  size="sm"
+                                  variant={activeBundle === bundle.id ? 'default' : 'outline'}
+                                  disabled={updatingGrant === grant.id || tools.length === 0}
+                                  onClick={() => handleApplyBundle(grant, bundle)}
+                                  title={bundle.description}
+                                >
+                                  {bundle.name}
+                                </Button>
+                              ))}
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={allowed.size === 0 ? 'default' : 'outline'}
+                                disabled={updatingGrant === grant.id || tools.length === 0}
+                                onClick={() => handleDeselectAllTools(grant)}
+                              >
+                                None
+                              </Button>
+                              {activeBundle === null && allowed.size > 0 && (
+                                <Badge variant="secondary" className="text-[10px]">
+                                  Custom
+                                </Badge>
+                              )}
+                            </div>
+                          )}
+
+                          {tools.length === 0 ? (
+                            <p className="text-xs text-muted-foreground py-2">
+                              This integration does not expose any tools.
+                            </p>
+                          ) : (
+                            <>
+                              <p className="text-xs text-muted-foreground">
+                                {capabilitySummary(tools, allowed, grant.readOnly)}
+                              </p>
+                              <div className="space-y-3">
+                                {CATEGORY_ORDER.map((category) => {
+                                  const toolsInCategory = tools.filter((t) => t.category === category);
+                                  if (toolsInCategory.length === 0) return null;
+                                  return (
+                                    <div key={category} className="space-y-1">
+                                      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                        {CATEGORY_LABELS[category]}
+                                      </p>
+                                      {toolsInCategory.map((tool) => {
+                                        const id = `tool-${instanceId}-${grant.id}-${tool.id}`;
+                                        return (
+                                          <div
+                                            key={tool.id}
+                                            className="flex items-start space-x-3 p-2 rounded-lg hover:bg-muted/50"
+                                          >
+                                            <Checkbox
+                                              id={id}
+                                              checked={allowed.has(tool.id)}
+                                              disabled={updatingGrant === grant.id}
+                                              onCheckedChange={(checked) =>
+                                                handleToggleTool(grant, tool.id, checked === true)
+                                              }
+                                              className="mt-1"
+                                            />
+                                            <div className="flex-1">
+                                              <label
+                                                htmlFor={id}
+                                                className="text-sm font-medium cursor-pointer"
+                                              >
+                                                {tool.name}
+                                              </label>
+                                              <p className="text-xs text-muted-foreground">
+                                                {tool.description}
+                                              </p>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <p className="text-xs text-muted-foreground">
+                                Selected {allowed.size} of {tools.length} tools
+                              </p>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <IncomingWebhooksCard pageId={pageId} />
+    </div>
+  );
+}
+
+/**
+ * Incoming webhooks — an EXTERNAL service calling this agent, which is what
+ * makes it an integration rather than page chrome. It used to be an icon button
+ * in the AI_CHAT page's own header; that header is gone (it carried a duplicate
+ * copy of the pane bar's Chat/History/Settings tabs), and this is where it
+ * belongs. Living here also gives the agents CONSOLE a webhooks entry point,
+ * which it never had.
+ *
+ * Still the shared dialog rather than an inline panel: `PageWebhooksDialog`
+ * parks a revealed secret in module state keyed on its own open/close, and
+ * `ChannelView` renders the same component — one behaviour, one implementation.
+ */
+function IncomingWebhooksCard({ pageId }: { pageId: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <Webhook className="h-4 w-4" />
+          Incoming Webhooks
+        </CardTitle>
+        <CardDescription>
+          Give an external service a URL that starts a conversation with this agent.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {/* `type="button"` is load-bearing, not decoration: this card renders
+            INSIDE PageAgentSettingsTab's <form>, where a typeless button
+            defaults to submit and would save the whole agent config on the way
+            to opening a dialog. */}
+        <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>
+          Manage webhooks
+        </Button>
+        {/* Owner/admin is enforced inside the dialog, which explains the
+            requirement rather than hiding the feature — the same reason the
+            header button it replaces was deliberately ungated. */}
+        <PageWebhooksDialog open={open} onOpenChange={setOpen} pageId={pageId} pageType="AI_CHAT" />
       </CardContent>
     </Card>
   );

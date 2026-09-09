@@ -112,6 +112,19 @@ const FIELD_SCHEMAS = new Map<string, z.ZodType>([
 ]);
 
 /**
+ * The field names a `CellFormat` may carry, derived from the schemas above so
+ * there is only ever one list.
+ *
+ * Exported for the write path: `cellFormatSchema` is a plain `z.object`, so it
+ * *strips* an unknown key and reports success — which makes a typo like `bolt`
+ * a request that validates and formats nothing. A caller that wants to refuse
+ * one instead has to check the keys itself, and it must check against this list
+ * rather than a hand-copied one, or adding a field here would silently start
+ * being rejected there.
+ */
+export const CELL_FORMAT_FIELDS: ReadonlySet<string> = new Set(FIELD_SCHEMAS.keys());
+
+/**
  * Keys never carried through, whatever a stored document says. Passing these
  * on would let a crafted sheet reach `Object.prototype` through the spreads in
  * `resolveCellFormat` and `setCellFormats`.
@@ -169,16 +182,29 @@ export function isEmptyFormat(format: CellFormat | undefined): boolean {
 }
 
 /**
- * Merge a column default with a cell's own format, the cell winning per-field.
- * Exposed so callers resolve precedence identically everywhere.
+ * Merge the layers of a cell's presentation, weakest first:
+ *
+ *     column default  <  region-derived  <  the cell's own format
+ *
+ * A column default is a blanket statement about a column, a region says what an
+ * area *is*, and an explicit cell format is someone pointing at one cell — so
+ * each is more specific than the last, and more specific wins per field.
+ *
+ * (Conditional rules sit above all three, and are merged by the evaluator
+ * rather than here, because they depend on the cell's computed value.)
+ *
+ * Exposed so callers resolve precedence identically everywhere; a second
+ * implementation is how the grid and an export come to disagree.
  */
 export function resolveCellFormat(
   cellFormat: CellFormat | undefined,
-  columnFormat: CellFormat | undefined
+  columnFormat: CellFormat | undefined,
+  regionFormat?: CellFormat | undefined
 ): CellFormat | undefined {
-  if (!columnFormat) return cellFormat;
-  if (!cellFormat) return columnFormat;
-  return { ...columnFormat, ...cellFormat };
+  if (!columnFormat && !regionFormat) return cellFormat;
+  if (!cellFormat && !regionFormat) return columnFormat;
+  if (!cellFormat && !columnFormat) return regionFormat;
+  return { ...columnFormat, ...regionFormat, ...cellFormat };
 }
 
 const clampDecimals = (decimals: number | undefined, fallback: number): number => {

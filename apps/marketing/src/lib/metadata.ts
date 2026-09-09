@@ -165,7 +165,7 @@ export const siteMetadata: Metadata = {
   category: "technology",
 };
 
-export const LEGAL_LAST_UPDATED = "July 5, 2026";
+export const LEGAL_LAST_UPDATED = "September 9, 2026";
 
 /**
  * Pre-defined metadata for common pages

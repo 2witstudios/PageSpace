@@ -33,7 +33,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { isSheetType, createRegionResolver, parseRegions, parseConditionalRules } from '@pagespace/lib/sheets/sheet';
 import { queryRows, listTabs, getTab } from '@pagespace/lib/sheets/store';
 import { SHEET_FILTER_OPS, SheetQueryError, type SheetWhere } from '@pagespace/lib/sheets/query';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
@@ -49,11 +49,16 @@ import {
   SheetTabNotFoundError,
   columnsInRows,
   compareColumnLabels,
+  buildSheetFormatting,
+  createConditionalResolver,
+  explicitCellFormats,
   loadSheetWindow,
   renderSheetTableWithinBudget,
   toSheetViewRow,
   toTabSummaries,
   TABLE_CELL_CHAR_LIMIT,
+  MAX_FORMATTING_CHARS,
+  type SheetFormatting,
   type SheetTabSummary,
   type SheetViewRow,
 } from './sheet-view';
@@ -150,6 +155,9 @@ export const sheetReadTools = {
       'Returns at most ' + MAX_SHEET_READ_ROWS + ' rows per call — page with startRow (range) or offset (filtered). ' +
       'That cap is on ROW COUNT, not response size: rows carry full cell text, so on a wide sheet or one with long values ' +
       'use select to name the columns you need rather than a large limit. ' +
+      'Cells whose display differs from their stored value also carry the machine value in "unformatted" — ' +
+      'read 1200 from there rather than parsing "$1,200.00". ' +
+      'Pass includeFormatting to also see how the sheet is styled. ' +
       'Prefer this over read_page for any sheet with real data in it. Omit pageId to read the sheet currently in view.',
     inputSchema: z.object({
       pageId: z.string().optional().describe('The unique ID of the SHEET page. Defaults to the page currently in view if omitted.'),
@@ -183,9 +191,20 @@ export const sheetReadTools = {
         .max(64)
         .optional()
         .describe('Only return these columns. Works on both range and filtered reads. Omit for every column each row has.'),
+      includeFormatting: z
+        .boolean()
+        .optional()
+        .describe(
+          'Also return how the sheet is STYLED: its regions (declared table structure — headers, column ' +
+          'roles, totals — which you can write straight back), frozen rows/columns, column widths and ' +
+          'formats, explicit per-cell formats within the rows returned, and a one-line summary of each ' +
+          'conditional rule. Off by default. Ask for it before changing a sheet\'s formatting, so you ' +
+          'build on what is there instead of over it. Works on unmigrated sheets too — their ' +
+          'formatting is read from the stored document.'
+        ),
     }),
     execute: async (
-      { pageId: pageIdArg, tabIndex, startRow, limit, offset, where, orderBy, select },
+      { pageId: pageIdArg, tabIndex, startRow, limit, offset, where, orderBy, select, includeFormatting },
       { experimental_context: context }
     ) => {
       const toolContext = context as ToolExecutionContext;
@@ -279,6 +298,7 @@ export const sheetReadTools = {
             // presented as a smaller one.
             select: selectColumns,
             documentContent: page.content,
+            includeFormatting,
           });
 
           if (window.documentIsNotASheet) {
@@ -311,6 +331,8 @@ export const sheetReadTools = {
             hasMore: window.hasMore,
             nextStartRow: window.nextFromRow !== null ? window.nextFromRow + 1 : null,
             select: selectColumns,
+            includeFormatting,
+            formatting: window.formatting,
           });
         }
 
@@ -390,7 +412,20 @@ export const sheetReadTools = {
         // it: column formats are never denormalised onto a cell, so omitting
         // them made ONE cell render two ways depending on which branch reached
         // it — `$1,200.00` from a range read, `1200` from a filtered one.
-        const rows = result.rows.map((row) => toSheetViewRow(row.rowIndex, row.cells, undefined, tab.columnFormats));
+        // The same presentation the positional path resolves — column defaults
+        // AND region-derived formats. A filtered read that resolved fewer
+        // layers would render one cell two ways depending on how it was found,
+        // which is the divergence this module exists to remove.
+        // Omitted rather than a no-op resolver when there are no regions, for
+        // the reason `loadSheetWindow` gives: resolving one needs the column
+        // index, so an empty resolver still decodes a label per cell.
+        const regions = parseRegions(tab.regions);
+        const presentation = {
+          columnFormats: tab.columnFormats,
+          ...(regions ? { regionAt: createRegionResolver(regions, tab.rowCount) } : {}),
+          conditionalAt: createConditionalResolver(parseConditionalRules(tab.conditionalFormats)),
+        };
+        const rows = result.rows.map((row) => toSheetViewRow(row.rowIndex, row.cells, undefined, presentation));
 
         return buildResult({
           page,
@@ -406,6 +441,23 @@ export const sheetReadTools = {
           matchedRows: result.total,
           nextOffset: result.hasMore ? (offset ?? 0) + rows.length : null,
           select: selectColumns,
+          includeFormatting,
+          // Emitted on the filtered path too. "Is this matching row already
+          // styled?" is a legitimate question — arguably the more common one,
+          // since a filtered read is how an agent finds the rows it is about to
+          // restyle — and the budget is what keeps it affordable.
+          ...(includeFormatting
+            ? {
+                formatting: buildSheetFormatting(
+                  tab,
+                  explicitCellFormats(
+                    result.rows,
+                    selectColumns ? new Set(selectColumns.map((column) => column.toUpperCase())) : undefined,
+                  ),
+                  result.rows.map((row) => row.rowIndex + 1),
+                ),
+              }
+            : {}),
         });
       } catch (error) {
         // A bad column letter or an `in` with no values is the caller's
@@ -490,12 +542,16 @@ interface BuildResultParams {
   select?: string[];
   /** Why a range read came back with nothing, when it did. */
   emptyReason?: string;
+  /** Whether the caller asked for the formatting block at all. */
+  includeFormatting?: boolean;
+  formatting?: SheetFormatting;
 }
 
 function buildResult(params: BuildResultParams) {
   const {
     page, mode, tabIndex, tabName, rowCount, columnCount, tabs,
     materialized, rows, hasMore, matchedRows, nextStartRow, nextOffset, select, emptyReason,
+    includeFormatting, formatting,
   } = params;
 
   // With `select`, the projected columns are the answer even when every
@@ -544,6 +600,10 @@ function buildResult(params: BuildResultParams) {
     // Saying so is the difference between a bounded rendering and a silent one.
     ...(rendered.rowsShown < rows.length && { tableRowsShown: rendered.rowsShown }),
     ...(rendered.truncatedCells > 0 && { tableTruncatedCells: rendered.truncatedCells }),
+    // Only when asked for, so a default read is byte-for-byte what it was
+    // before this existed. An empty block is a real answer — "this sheet has no
+    // formatting" — so this cannot collapse to a truthiness check on the block.
+    ...(includeFormatting ? { formatting: formatting ?? {} } : {}),
     ...(emptyReason && { emptyReason }),
     summary: emptyReason
       ? `Sheet "${page.title}" has ${rowCount} rows x ${columnCount} columns. ${emptyReason}`
@@ -562,6 +622,13 @@ function buildResult(params: BuildResultParams) {
       ...(rendered.truncatedCells > 0
         ? [
             `${rendered.truncatedCells} cell value(s) are cut at ${TABLE_CELL_CHAR_LIMIT} characters in "table" — read them from "rows", which always carries the full text.`,
+          ]
+        : []),
+      ...(formatting?.formattingTruncated
+        ? [
+            `"formatting.cellFormats" is capped at ${MAX_FORMATTING_CHARS} characters and left out ` +
+            `${formatting.formattingTruncated.droppedCells} cell(s) — a cell missing from it is not ` +
+            'proof that it has no format. Read a narrower row range or use select to see the rest.',
           ]
         : []),
       'Values shown here carry the sheet\'s display formatting; where and orderBy compare the UNFORMATTED value underneath, so filter on 1200 rather than "$1,200.00".',
