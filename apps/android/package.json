@@ -11,7 +11,8 @@
     "sync": "bun x cap sync android",
     "update": "bun x cap update android",
     "add-platform": "bun x cap add android",
-    "run": "bun x cap run android"
+    "run": "bun x cap run android",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@capawesome/capacitor-badge": "^7.0.0",
