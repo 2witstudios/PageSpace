@@ -41,13 +41,19 @@ vi.mock('swr', () => ({
   mutate: (...args: unknown[]) => mockMutate(...args),
 }));
 
-vi.mock('../useResolvedAgent', () => ({
-  useResolvedAgent: () => ({
-    agent: { id: 'agent-1', title: 'My Agent', driveId: 'drive-1', driveName: 'Drive' },
+const DEFAULT_AGENT = { id: 'agent-1', title: 'My Agent', driveId: 'drive-1', driveName: 'Drive' };
+const resolvedAgent = vi.hoisted(() => ({
+  current: {
+    agent: { id: 'agent-1', title: 'My Agent', driveId: 'drive-1', driveName: 'Drive' } as
+      | { id: string; title: string; driveId: string; driveName: string }
+      | null,
     isLoading: false,
-    error: undefined,
+    error: undefined as Error | undefined,
     retry: vi.fn(),
-  }),
+  },
+}));
+vi.mock('../useResolvedAgent', () => ({
+  useResolvedAgent: () => resolvedAgent.current,
 }));
 
 vi.mock('../chat/SessionChat', () => ({
@@ -244,6 +250,7 @@ beforeEach(() => {
   // leak into whichever test happens to run next.
   mockUseSWR.mockReturnValue({ data: undefined });
   mockUseAgentConfig.mockReturnValue({ config: null, setConfig: vi.fn() });
+  resolvedAgent.current = { agent: DEFAULT_AGENT, isLoading: false, error: undefined, retry: vi.fn() };
   resolvedConversation.current = { resolved: null, isLoading: true };
   authState.current = { user: { id: 'user-1', role: 'user' }, isLoading: false };
   conversationsState.current = {
@@ -663,6 +670,27 @@ describe('AgentPageView', () => {
     render(<AgentPageView page={pageFixture()} />);
 
     expect(screen.queryByLabelText('Open in Agents')).not.toBeInTheDocument();
+  });
+
+  it('keeps the bar — and so Settings — when the AGENT record fails to load', async () => {
+    // The old page header's tabs made this work for free: Settings is keyed by
+    // `page`, not by the agent record, so a user whose agent could not be
+    // fetched could still open Settings and fix it. Dropping the header must
+    // not take that away, so the error replaces the CHAT BODY only.
+    resolvedAgent.current = {
+      agent: null,
+      isLoading: false,
+      error: new Error('nope'),
+      retry: vi.fn(),
+    };
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    expect(screen.getByTestId('agent-page-view-error')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: /settings/i }));
+    expect(await screen.findByTestId('page-agent-settings-tab')).toBeInTheDocument();
+    expect(screen.queryByTestId('agent-page-view-error')).not.toBeInTheDocument();
   });
 
   it('contains NONE of the removed chrome: no status chip, no Add shell, no history popover', async () => {

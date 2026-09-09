@@ -545,26 +545,6 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
         <div className="flex h-full items-center justify-center">
           <Loader2 className="size-4 animate-spin text-muted-foreground" />
         </div>
-      ) : !agent ? (
-        // Loading FINISHED and there is still no agent — SWR stops retrying
-        // after a genuine failure, so a combined guard would leave the user
-        // watching a spinner that never resolves.
-        <div
-          data-testid="agent-page-view-error"
-          role="alert"
-          className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center"
-        >
-          <AlertCircle className="size-5 text-muted-foreground" />
-          <div className="space-y-1">
-            <p className="text-sm font-medium">Couldn&apos;t load this agent</p>
-            <p className="text-xs text-muted-foreground">
-              {agentError?.message ?? 'The agent could not be found, or you no longer have access to it.'}
-            </p>
-          </div>
-          <Button variant="outline" size="sm" onClick={retryAgent}>
-            Try again
-          </Button>
-        </div>
       ) : (
         // A session-less conversation gets no pane GRID — but it wears the
         // same bar the grid's panes do, tab strip included. Binding is
@@ -585,15 +565,16 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
                     but the branch is also where a bound conversation lands when
                     `canUseSessions` is false, and a hardcoded `false` would then
                     state something untrue about it. */}
-                <PaneSessionIdentity name={agent.title} bound={current.sessionId !== null} />
+                <PaneSessionIdentity name={agent?.title ?? page.title} bound={current.sessionId !== null} />
                 <PaneChatTabStrip
                   activeTab={activeTab}
                   onSelectTab={setActiveTab}
-                  // This branch always has a real agent page behind it (the
-                  // `!agent` case returned above), so Settings always applies —
-                  // unlike a grid pane, which can be showing the Assistant.
+                  // Always: this page IS an agent page, so Settings always
+                  // applies — unlike a grid pane, which can be showing the
+                  // Assistant. It applies even when the agent record failed to
+                  // load, since Settings is keyed by `page`, not by `agent`.
                   showSettings
-                  agentTitle={agent.title}
+                  agentTitle={agent?.title ?? page.title}
                 />
               </div>
             }
@@ -624,13 +605,42 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
           />
           <div className="min-h-0 flex-1 overflow-hidden">
             {activeTab === 'chat' ? (
-              <SessionChat
-                sessionId={null}
-                agent={agent}
-                conversationId={current.conversationId}
-                context="page"
-                isReadOnly={isReadOnly}
-              />
+              agent ? (
+                <SessionChat
+                  sessionId={null}
+                  agent={agent}
+                  conversationId={current.conversationId}
+                  context="page"
+                  isReadOnly={isReadOnly}
+                />
+              ) : (
+                // Loading FINISHED and there is still no agent — SWR stops
+                // retrying after a genuine failure, so a combined guard would
+                // leave the user watching a spinner that never resolves.
+                //
+                // The error replaces the CHAT BODY only; the bar above it
+                // stays. Settings is keyed by `page`, not by the agent record
+                // that failed to load, so it still works — and a broken agent
+                // is precisely when a user needs to reach it. Before the page
+                // header was removed its tabs did this for free; losing it
+                // here would have been a real regression, not cosmetic.
+                <div
+                  data-testid="agent-page-view-error"
+                  role="alert"
+                  className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center"
+                >
+                  <AlertCircle className="size-5 text-muted-foreground" />
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">Couldn&apos;t load this agent</p>
+                    <p className="text-xs text-muted-foreground">
+                      {agentError?.message ?? 'The agent could not be found, or you no longer have access to it.'}
+                    </p>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={retryAgent}>
+                    Try again
+                  </Button>
+                </div>
+              )
             ) : activeTab === 'history' ? (
               <PageAgentHistoryTab
                 conversations={conversations}
