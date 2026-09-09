@@ -594,10 +594,11 @@ async function restoreDmMessage(messageId: string): Promise<number> {
 }
 
 /**
- * How many message ids to name per attachment-capture statement. Postgres caps
- * a statement at 65535 bind parameters and a retention sweep can cover far more
- * tombstones than that, so the capture is chunked even though the delete that
- * follows it is predicate-based and unbounded.
+ * How many rows one statement in the purge may name — message ids in the
+ * attachment capture, released (fileId, conversationId) pairs in the orphan
+ * link cleanup. Postgres caps a statement at 65535 bind parameters and a
+ * retention sweep can cover far more tombstones than that, so both are chunked
+ * even though the DELETE between them is predicate-based and unbounded.
  */
 const ATTACHMENT_CAPTURE_CHUNK = 500;
 
@@ -693,10 +694,20 @@ async function purgeInactiveMessages(olderThan: Date): Promise<number> {
         conversationId: directMessages.conversationId,
       });
 
-    if (purgedAttachmentPairs.length > 0) {
+    // Both statements below inline the released pairs as a VALUES list, which
+    // is two bind parameters per pair — so the pairs are chunked for the same
+    // reason the capture above is. Sorted by fileId first, so chunk boundaries
+    // do not break the ascending file_conversations lock order this module
+    // shares with insertDmMessageWithAttachment.
+    const sortedPairs = [...purgedAttachmentPairs].sort((a, b) =>
+      a.fileId < b.fileId ? -1 : a.fileId > b.fileId ? 1 : 0
+    );
+
+    for (let i = 0; i < sortedPairs.length; i += ATTACHMENT_CAPTURE_CHUNK) {
+      const pairChunk = sortedPairs.slice(i, i + ATTACHMENT_CAPTURE_CHUNK);
       const pairValues = () =>
         sql.join(
-          purgedAttachmentPairs.map((pair) => sql`(${pair.fileId}, ${pair.conversationId})`),
+          pairChunk.map((pair) => sql`(${pair.fileId}, ${pair.conversationId})`),
           sql`, `
         );
 

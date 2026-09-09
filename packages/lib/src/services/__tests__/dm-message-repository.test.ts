@@ -396,6 +396,77 @@ describe('dmMessageRepository.purgeInactiveMessages', () => {
     });
   });
 
+  it('splits the orphan-link cleanup across statements instead of naming every pair at once', async () => {
+    // The capture is chunked, but the two statements that follow it inline the
+    // released pairs as a VALUES list — two bind parameters per pair. A large
+    // retention sweep would hit the same 65535 ceiling there, and the failure
+    // is an opaque 08P01 rather than anything that names the cause.
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+    const SWEEP = 600;
+
+    testDbState.seed(
+      'directMessages',
+      Array.from({ length: SWEEP }, (_, i) => ({
+        id: `stale-${i}`,
+        conversationId: 'conv-1',
+        senderId: 'u-1',
+        isActive: false,
+        deletedAt: old,
+        parentId: null,
+        fileId: null,
+      })),
+    );
+    testDbState.seed(
+      'directMessageAttachments',
+      Array.from({ length: SWEEP }, (_, i) => ({
+        id: `att-${i}`,
+        messageId: `stale-${i}`,
+        fileId: `file-${String(i).padStart(4, '0')}`,
+        position: 0,
+      })),
+    );
+    testDbState.seed(
+      'fileConversations',
+      Array.from({ length: SWEEP }, (_, i) => ({
+        fileId: `file-${String(i).padStart(4, '0')}`,
+        conversationId: 'conv-1',
+      })),
+    );
+
+    await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    // Every released link is gone — chunking must not lose a pair at a
+    // boundary — and no statement named more than one chunk's worth.
+    const deleteStatements = testDbState
+      .executes()
+      .filter((marker) => /DELETE\s+FROM\s+file_conversations/i.test(marker.strings.join(' ')))
+      .map((marker) => {
+        const join = marker.values.find(
+          (value): value is { __sqlJoin: true; items: unknown[] } =>
+            typeof value === 'object' && value !== null && '__sqlJoin' in value,
+        );
+        return join ? join.items.length : 0;
+      });
+
+    assert({
+      given: '600 released (file, conversation) pairs in one sweep',
+      should: 'delete every orphaned link, across two bounded statements rather than one unbounded one',
+      actual: {
+        remainingLinks: testDbState.count('fileConversations'),
+        statements: deleteStatements.length,
+        largestStatement: Math.max(0, ...deleteStatements),
+        pairsNamed: deleteStatements.reduce((sum, n) => sum + n, 0),
+      },
+      expected: {
+        remainingLinks: 0,
+        statements: 2,
+        largestStatement: 500,
+        pairsNamed: SWEEP,
+      },
+    });
+  });
+
   it('keeps a file_conversations link that a live message still references through an attachment row, not the legacy column', async () => {
     // The data-loss case this change had to close. A message can now carry
     // several files, and only the FIRST is mirrored into the legacy
