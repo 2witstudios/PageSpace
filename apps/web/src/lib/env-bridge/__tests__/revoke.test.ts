@@ -12,6 +12,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({ logger: { child: () => 
 vi.mock('@pagespace/lib/auth/session-service', () => ({ sessionService: { revokeResourceSessions: vi.fn(async () => 2), validateSession: vi.fn() } }));
 vi.mock('@pagespace/lib/auth/env-bridge-signing-key', () => ({ loadServerSigningKeyring: vi.fn() }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
+// The signing gate refuses everything while the deployment flag is off; this suite is about a LIVE env's revoke.
+vi.mock('@pagespace/lib/services/drive-envs/local-envs-enabled', () => ({ isLocalEnvsEnabled: vi.fn(() => true) }));
 vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn() }));
 
 import { sessionService } from '@pagespace/lib/auth/session-service';
