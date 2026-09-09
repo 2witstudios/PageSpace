@@ -2,6 +2,7 @@
 
 import { useLayoutEffect, type ReactNode } from "react";
 import { useAnimate } from "motion/react";
+import { shouldRewindHeroDemo } from "./hero-demo-rewind";
 
 /**
  * Plays the agent run the hero window already depicts.
@@ -45,6 +46,14 @@ const REST = "translateY(0px)";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Module scope, so it is false for exactly one mount per document: the
+ * hydration of the server-rendered window. Every later mount in the same
+ * document is a client-side navigation back to `/`, which is a different
+ * situation entirely — see the cutoff in the layout effect.
+ */
+let hasHydratedOnce = false;
+
 export function HeroDemo({ children }: { children: ReactNode }) {
   const [scope, animate] = useAnimate<HTMLDivElement>();
 
@@ -56,6 +65,21 @@ export function HeroDemo({ children }: { children: ReactNode }) {
     // finished frame, so still raise the done flag: it means "the hero is
     // showing its final state", which keeps the OG capture honest either way.
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      root.dataset.demo = "done";
+      return;
+    }
+
+    // Don't rewind a window the user is already looking at — see
+    // shouldRewindHeroDemo for why late hydration makes that a visible flash.
+    const isHydration = !hasHydratedOnce;
+    hasHydratedOnce = true;
+    if (
+      !shouldRewindHeroDemo({
+        isHydration,
+        elapsedMs: performance.now(),
+        windowLandedMs: WINDOW_LANDED,
+      })
+    ) {
       root.dataset.demo = "done";
       return;
     }
