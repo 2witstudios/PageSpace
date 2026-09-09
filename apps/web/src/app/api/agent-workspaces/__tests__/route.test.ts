@@ -1,5 +1,8 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { SERVER_POLICY_TOGGLES } from '@/components/settings/EnvironmentEditor';
 
 const {
   mockAuthenticateRequest,
@@ -967,7 +970,7 @@ describe('POST /api/agent-workspaces — spawn ceiling (review M6/F4)', () => {
     expect(mockCreateConversationInSession).not.toHaveBeenCalled();
   });
 
-  it('given no_server_ops (GA wave 1), should answer 409 with a message that states the fact — the owner has not allowed anything — and names the API field', async () => {
+  it('given no_server_ops, should answer 409 with a message that states the fact and points at Drive settings → Environments — a page that EXISTS in this tree — naming only the toggles that page renders (GA wave 3 restores the pointer Codex P1 on #2582 removed)', async () => {
     mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
     mockCountActiveSessionsForOwner.mockResolvedValue(0);
     mockSpawnSession.mockResolvedValue({ ok: false, reason: 'env_bind_refused', refusal: 'no_server_ops' });
@@ -975,11 +978,19 @@ describe('POST /api/agent-workspaces — spawn ceiling (review M6/F4)', () => {
     expect(response.status).toBe(409);
     const body = (await response.json()) as { error: string; refusal: string };
     expect(body.refusal).toBe('no_server_ops');
-    // The FACT, not a pointer to a page that does not exist yet (Codex P1): the owner has not allowed anything; the API field for a technical reader.
-    expect(body.error).not.toMatch(/Drive settings/);
     expect(body.error).toMatch(/owner/i);
     expect(body.error).toMatch(/not allowed it to run anything/);
-    expect(body.error).toContain('serverPolicy');
+    // The pointer names a route, and that route has a page file in this tree.
+    const routeMatch = body.error.match(/\(\/dashboard\/\{driveId\}\/settings\/([a-z-]+)\)/);
+    expect(routeMatch).not.toBeNull();
+    const pageFile = path.join(__dirname, '..', '..', '..', 'dashboard', '[driveId]', 'settings', routeMatch![1]!, 'page.tsx');
+    expect(existsSync(pageFile), `the message names a page that does not exist: ${pageFile}`).toBe(true);
+    expect(body.error).toMatch(/Drive settings → Environments/);
+    // Only the toggles that page renders may be named.
+    for (const label of SERVER_POLICY_TOGGLES.map((toggle) => toggle.label)) expect(body.error).toContain(label);
+    const named = body.error.match(/turn on (.+?) for the machine/)![1]!.split(/,| or /).map((part) => part.trim()).filter(Boolean);
+    expect(new Set(named)).toEqual(new Set(SERVER_POLICY_TOGGLES.map((toggle) => toggle.label)));
+    expect(body.error).not.toContain('serverPolicy');
   });
 
   it('429s on the ATOMIC backstop when a concurrent spawn wins the race the pre-check missed (review #2261/2)', async () => {
