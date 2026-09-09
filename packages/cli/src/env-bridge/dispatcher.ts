@@ -85,6 +85,13 @@ export interface DispatcherDeps {
   readonly nonces: DaemonNonceStore;
   readonly policy: () => MachinePolicy | null;
   readonly probe: PathProbe;
+  /**
+   * The mode an existing file already has (`path-probe.ts`, `createStatMode`).
+   * `decideExecution` calls it only for an `fs_write` that names no mode, and
+   * only on a confined path, to answer "will this file be executable after the
+   * write?" — the Codex P1 door into the same bypass hardening A closes.
+   */
+  readonly statMode?: (path: string) => number | null;
   readonly execRunner: ExecRunner;
   readonly fsRunner: FsRunner;
   readonly audit: AuditLog;
@@ -238,6 +245,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       serverPolicy: SERVER_POLICY_CARRIED_BY_SIGNATURE,
       capabilities: DAEMON_CAPABILITIES,
       probe: deps.probe,
+      ...(deps.statMode !== undefined && { statMode: deps.statMode }),
       // Durable approvals are read from the machine's own file (and this
       // process's session set) — never from anything the server sent. Always
       // consulted (an absent store is an empty set) so an `ask` verdict

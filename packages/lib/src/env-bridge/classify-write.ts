@@ -23,6 +23,26 @@
  * puts a human in front of the obvious vectors; it is not a boundary. Only OS
  * confinement would be one.
  *
+ * THE MODE THAT MATTERS IS THE RESULTING ONE. `fs-runner.ts` chmods only when
+ * the request NAMES a mode, so a mode-less write to an existing file leaves
+ * that file's permissions untouched. Classifying on the requested mode alone
+ * therefore left the whole bypass open by a second door: overwrite a file that
+ * is ALREADY `0o755` — `bin/tool`, `scripts/deploy.sh`, a hook that exists —
+ * name no mode, and the replacement runs as the owner at its next invocation
+ * with no click anywhere. So the question this module asks is "will this file
+ * be executable AFTER the write?": the requested mode when there is one,
+ * otherwise the mode the file already has. Note the direction — an explicit
+ * non-executable mode over an existing executable file is NOT escalated,
+ * because the chmod will strip the bit. (Codex P1 on the first cut of this
+ * module.)
+ *
+ * The existing mode is INJECTED (`sensitiveWrites`' third argument), never
+ * looked up here: this module has no I/O, and the probe is the one thing in
+ * its neighbourhood that touches a filesystem. The caller is responsible for
+ * calling it only on a CONFINED real path, never on one an attacker named.
+ * A probe that throws or returns `null` means "no existing file" — it can only
+ * ever add knowledge, and is never what makes a write look safe.
+ *
  * MATCHING RULES.
  *   - By path SEGMENT, never substring: `my-package.json.bak` and `notMakefile`
  *     are ordinary files with unlucky names.
@@ -50,6 +70,12 @@ export interface ClassifyWriteInput {
   readonly path: string;
   /** The POSIX mode requested for it, or `null` when the request named none. */
   readonly mode: number | null;
+  /**
+   * The mode the file ALREADY has on disk, or `null` when it does not exist or
+   * could not be read. Consulted only when the request names no mode, because
+   * that is exactly when the runner leaves the existing permissions alone.
+   */
+  readonly existingMode?: number | null;
 }
 
 /** Directories whose contents are VCS internals: hooks, config, filters. Nothing legitimate needs an agent in here. */
@@ -100,7 +126,10 @@ export function classifyWrite(input: ClassifyWriteInput): WriteClassification {
   if (name !== undefined && PACKAGE_MANIFESTS.has(name)) return sensitive('package_manifest');
   if (segments.some((segment) => CI_DIRS.has(segment)) || hasAdjacent(segments, '.github', 'workflows') || (name !== undefined && CI_FILES.has(name))) return sensitive('ci_config');
   if (name !== undefined && TOOL_CONFIG.has(name)) return sensitive('tool_config');
-  if (input.mode !== null && (input.mode & EXECUTABLE_BITS) !== 0) return sensitive('executable_bit');
+  // The EFFECTIVE resulting mode: what the request asks for, or — when it asks
+  // for nothing — what the file already is, because the runner will not chmod.
+  const effectiveMode = input.mode ?? input.existingMode ?? null;
+  if (effectiveMode !== null && (effectiveMode & EXECUTABLE_BITS) !== 0) return sensitive('executable_bit');
   return { sensitive: false };
 }
 
@@ -117,16 +146,32 @@ export interface SensitiveWrite {
  * what "sensitive" meant for a given request.
  *
  * `modes` is index-aligned with `paths` (A1); a path with no entry is treated
- * as having named no mode.
+ * as having named no mode. `statMode` answers "what mode does this file have
+ * already" for the paths that named none — injected, called only here, and a
+ * throw is caught and read as "no existing file" so a broken or unreadable
+ * probe can never crash a decision nor make an executable write look ordinary.
  */
-export function sensitiveWrites(paths: readonly string[], modes: readonly (number | null)[] | undefined): SensitiveWrite[] {
+export function sensitiveWrites(paths: readonly string[], modes: readonly (number | null)[] | undefined, statMode?: (path: string) => number | null): SensitiveWrite[] {
   const found: SensitiveWrite[] = [];
   for (let index = 0; index < paths.length; index += 1) {
     const path = paths[index] as string;
-    const verdict = classifyWrite({ path, mode: modes?.[index] ?? null });
+    const mode = modes?.[index] ?? null;
+    // Only ask about a file whose mode the write would LEAVE ALONE.
+    const existingMode = mode === null ? existingModeOf(path, statMode) : null;
+    const verdict = classifyWrite({ path, mode, existingMode });
     if (verdict.sensitive) found.push({ path, reason: verdict.reason });
   }
   return found;
+}
+
+/** The probe's answer, or `null` for "no existing file" — a throw is the same answer, never a crash. */
+function existingModeOf(path: string, statMode: ((path: string) => number | null) | undefined): number | null {
+  if (statMode === undefined) return null;
+  try {
+    return statMode(path);
+  } catch {
+    return null;
+  }
 }
 
 /**

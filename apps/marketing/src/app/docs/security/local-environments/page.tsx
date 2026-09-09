@@ -107,8 +107,12 @@ Each guarantee is followed by its exact limit.
   you, with no approval anywhere. So a write your machine can recognise as one of those — inside
   \`.git/\`, \`.hg/\` or \`.svn/\`; a shell startup file; a \`Makefile\`, \`justfile\` or
   \`.vscode/tasks.json\`; a package manifest such as \`package.json\` or \`Cargo.toml\`; a CI
-  config; \`.pre-commit-config.yaml\`, \`.gitattributes\` or \`conftest.py\`; or *any* file being
-  given an executable bit — stops and asks you, on the same card, naming the file and why.
+  config; \`.pre-commit-config.yaml\`, \`.gitattributes\` or \`conftest.py\`; or *any* file that will
+  be executable once the write lands — stops and asks you, on the same card, naming the file and
+  why. That last one counts files that are executable **already**: a write that names no
+  permissions leaves the existing ones alone, so overwriting \`bin/tool\` or
+  \`scripts/deploy.sh\` asks too, because the replacement would run as you the next time anything
+  invokes it.
   Approving one covers that **file**, not the whole folder. *Limit, and it is a real one: this
   list can never be complete. A write to ordinary source code that you later build or run is
   still a command, and no list of filenames catches that. It raises the cost of the obvious
@@ -185,7 +189,7 @@ machine confirms, PageSpace signs nothing at all for that environment. There is 
 **A file write can be a command, and the list of writes we recognise can never be complete.**
 Your machine now stops and asks about a write to the places a file most obviously becomes a
 command — version-control hooks, shell startup files, build files, package manifests, CI
-configs, anything made executable. That closes the plainest version of this: before it, an
+configs, and anything that will be executable afterwards — including a file that already is. That closes the plainest version of this: before it, an
 instruction on a shared page could have your own agent write a git hook inside a declared folder
 with no click at all, and your next commit would run it. It does not close the general case. A
 write to ordinary source code in a project you later build or run is still a command, and no

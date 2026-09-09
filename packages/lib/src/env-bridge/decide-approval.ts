@@ -80,6 +80,13 @@ export interface ApprovalMatchDeps {
   readonly resolveArgv0: (name: string) => string | null;
   /** The machine policy's roots — the subjects of file operations. */
   readonly roots: readonly string[];
+  /**
+   * The mode a file already has, for deciding whether an `fs_write` is
+   * sensitive and therefore keyed on the FILE rather than the root. The same
+   * (memoised) probe `decideExecution` classifies with, so the subject and the
+   * escalation can never disagree about one request. See `classify-write.ts`.
+   */
+  readonly statMode?: (path: string) => number | null;
 }
 
 export type ApprovalMatch = 'covered' | 'ask' | 'expired';
@@ -300,7 +307,7 @@ export function approvalSubjects(request: NormalizedRequest, deps: ApprovalMatch
       // same root. When any file in the request is sensitive, EVERY path in it
       // becomes its own subject, so what the approval covers is exactly the
       // set of files the owner was shown.
-      if (sensitiveWrites(request.paths, request.writeModes).length > 0) {
+      if (sensitiveWrites(request.paths, request.writeModes, deps.statMode).length > 0) {
         const subjects: string[] = [];
         for (const path of request.paths) {
           const subject = `file:${path}`;

@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import { generateKeyPairSync, sign as nodeSign, verify as nodeVerify, createPublicKey, createHash } from 'node:crypto';
 import type { Ed25519Verify, HashBytes } from '../grant';
-import type { Frame } from '../frame-codec';
+import type { Frame, PendingApproval } from '../frame-codec';
 import { FRAME_TYPES, MACHINE_TO_SERVER_FRAME_TYPES, SERVER_TO_MACHINE_FRAME_TYPES, isMachineToServerFrame } from '../frame-codec';
 import {
   encodeHelloForSigning,
@@ -115,7 +115,7 @@ const PENDING = { challengeId: 'ch_1', expiresAt: 1_800_000_060_000, request: { 
 
 /** A pending WRITE and the machine's own per-file findings (hardening A7). */
 const WRITE_FILES = [{ path: '/home/u/proj/.git/hooks/pre-commit', mode: 0o644, bytes: 12, reason: 'vcs_metadata' as const }];
-const WRITE_PENDING = {
+const WRITE_PENDING: PendingApproval = {
   challengeId: 'ch_1',
   expiresAt: 1_800_000_060_000,
   request: { op: 'fs_write' as const, cwd: '/home/u/proj', paths: [WRITE_FILES[0]!.path], writeModes: [0o644], env: {}, timeoutMs: 1000, maxBytes: 1024, clamped: false },
@@ -159,7 +159,11 @@ describe('GA wave 2 — a grant_denied carrying a PENDING frozen request is sign
   });
 
   it('given a pending WRITE signed as sent, should verify and carry every per-file finding into the signed payload', () => {
-    const frame = signResult({ ...denied, pending: WRITE_PENDING });
+    // Not an inline literal: `Omit<MachineResultFrame, 'sig'>` collapses a
+    // union to its COMMON keys, so a fresh literal carrying `pending` trips
+    // the excess-property check even though `grant_denied` has that field.
+    const deniedWrite = { ...denied, pending: WRITE_PENDING };
+    const frame = signResult(deniedWrite);
     expect(verifyMachineResult({ frame, machinePublicKey: spki(machine), verify, hash })).toMatchObject({ ok: true });
     expect(resultPayloadForFrame(frame)).toMatchObject({ pending: WRITE_PENDING });
   });

@@ -251,8 +251,12 @@ means your next ordinary `git commit` runs it, as you, with no approval anywhere
 daemon can recognise as one of those — anything inside `.git/`, `.hg/` or `.svn/`; a shell startup
 file; a `Makefile`, `justfile` or `.vscode/tasks.json`; a package manifest like `package.json` or
 `Cargo.toml`; a CI config; `.pre-commit-config.yaml`, `.gitattributes` or `conftest.py`; or *any*
-file being given an executable bit — stops and asks you, in this terminal or on the chat card,
-naming the file and why. Approving one covers **that file**, never the whole root. Ordinary writes
+file that will be executable once the write lands — stops and asks you, in this terminal or on the
+chat card, naming the file and why. "Will be executable" is the resulting mode, not the requested
+one: a write that names no mode does not change permissions, so overwriting a file that is
+*already* executable (`bin/tool`, `scripts/deploy.sh`) asks too — the replacement would run as you
+the next time anything invokes it. A write that explicitly asks for a non-executable mode over an
+executable file does not ask: the permission bit is being removed, not kept. Approving one covers **that file**, never the whole root. Ordinary writes
 are unaffected and still run without a prompt.
 
 Know the limit of that, because it is a real one: **the list can never be complete.** A write to

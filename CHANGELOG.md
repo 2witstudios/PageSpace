@@ -14,8 +14,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   approval anywhere. So a write your machine recognises as one of those — inside `.git/`, `.hg/`
   or `.svn/`; a shell startup file; a `Makefile`, `justfile` or `.vscode/tasks.json`; a package
   manifest like `package.json` or `Cargo.toml`; a CI config; `.pre-commit-config.yaml`,
-  `.gitattributes` or `conftest.py`; or *any* file being given an executable bit — now stops and
-  asks you on the same approval card commands use, naming the file and why. Nothing is written
+  `.gitattributes` or `conftest.py`; or *any* file that will be executable once the write lands —
+  now stops and asks you on the same approval card commands use, naming the file and why. That
+  includes files that are executable *already*: a write naming no permissions leaves the existing
+  ones alone, so overwriting `bin/tool` or `scripts/deploy.sh` asks too. Nothing is written
   until you click, approving one covers that **file** rather than the whole folder, and ordinary
   writes are unaffected. Setuid, setgid and sticky modes are refused outright rather than put in
   front of you, and one write can no longer carry an unbounded number of files. Be clear about

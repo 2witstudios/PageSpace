@@ -49,7 +49,7 @@ import { createDispatcher, DAEMON_CAPABILITIES } from '../../env-bridge/dispatch
 import { createNodeExecRunner, type ExecRunner } from '../../env-bridge/exec-runner.js';
 import { createFsRunner, type FsRunner } from '../../env-bridge/fs-runner.js';
 import { createDaemonNonceStore } from '../../env-bridge/nonce-store.js';
-import { createPathProbe } from '../../env-bridge/path-probe.js';
+import { createPathProbe, createStatMode } from '../../env-bridge/path-probe.js';
 import { defaultPolicyPath, describePolicyRefusal, loadMachinePolicy, openPolicyFile, type OpenedPolicyFile, describePolicyWarnings } from '../../env-bridge/policy.js';
 import { signHello } from '../../env-bridge/result-signer.js';
 import { mintBridgeToken } from '../../env-bridge/token.js';
@@ -91,6 +91,8 @@ export interface EnvConnectHandlerDeps {
   readonly appendAuditLine: (path: string, line: string) => Promise<void>;
   readonly pidFile: PidFileStore;
   readonly probe: PathProbe;
+  /** The mode an existing file already has — the sensitive-write classifier's "will this still be executable?" (Codex P1 on hardening A). */
+  readonly statMode: (path: string) => number | null;
   readonly createExecRunner: (resolver: CommandResolverDeps) => ExecRunner;
   readonly createFsRunner: () => FsRunner;
   readonly createSocket: SocketFactory;
@@ -224,6 +226,7 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
       nonces: createDaemonNonceStore(),
       policy: () => loaded.policy,
       probe: deps.probe,
+      statMode: deps.statMode,
       execRunner,
       fsRunner,
       audit,
@@ -375,6 +378,7 @@ export const envConnectHandler: CommandHandler = createEnvConnectHandler({
   appendAuditLine,
   pidFile: nodePidFile,
   probe: createPathProbe(),
+  statMode: createStatMode(),
   createExecRunner: createNodeExecRunner,
   createFsRunner: () => createFsRunner(),
   createSocket: (url, headers) => new WebSocket(url, { headers }),

@@ -172,6 +172,16 @@ export interface DecideExecutionInput {
   readonly serverPolicy: ServerPolicy;
   readonly capabilities: AdvertisedCapabilities;
   readonly probe: PathResolver;
+  /**
+   * The mode a file ALREADY has, for the sensitive-write classifier (Codex P1
+   * on hardening A). Injected like `probe`, and called ONLY for `fs_write`,
+   * ONLY after confinement, and only for a path whose write names no mode —
+   * so it always runs on a resolved real path inside a root, never on one the
+   * request named. `null` (or a throw) means "no existing file". Omitted: the
+   * classifier sees requested modes only, which is strictly less knowledge and
+   * never more permission.
+   */
+  readonly statMode?: (path: string) => number | null;
   readonly localApproval?: LocalApproval;
   /**
    * The durable approvals in force on this machine (GA wave 2). Consulted
@@ -186,6 +196,19 @@ export interface ApprovalConsultation extends Omit<ApprovalMatchDeps, 'roots'> {
   readonly entries: readonly DurableApproval[];
   /** ms since epoch, from the adapter's clock. */
   readonly now: number;
+}
+
+/** One answer per path per decision; `undefined` in stays `undefined` out, so no probe means no stat. */
+function memoizeStatMode(statMode: ((path: string) => number | null) | undefined): ((path: string) => number | null) | undefined {
+  if (statMode === undefined) return undefined;
+  const seen = new Map<string, number | null>();
+  return (path) => {
+    const cached = seen.get(path);
+    if (cached !== undefined || seen.has(path)) return cached ?? null;
+    const mode = statMode(path);
+    seen.set(path, mode);
+    return mode;
+  };
 }
 
 function deny(reason: ExecDenyReason): ExecutionVerdict {
@@ -314,7 +337,11 @@ export function decideExecution(input: DecideExecutionInput): ExecutionVerdict {
    * the deny order. Computed on the CONFINED paths — the file that would
    * actually be written, not the one that was named.
    */
-  const sensitive = op === 'fs_write' ? sensitiveWrites(paths, normalized.writeModes) : [];
+  // Memoised so the classifier and the approval SUBJECT (`approvalSubjects`,
+  // which asks the same question) see one answer per path per decision: one
+  // stat, and no window in which the two could disagree about a file.
+  const statMode = memoizeStatMode(input.statMode);
+  const sensitive = op === 'fs_write' ? sensitiveWrites(paths, normalized.writeModes, statMode) : [];
   const ask = (subjects: readonly string[] | null): ExecutionVerdict =>
     sensitive.length > 0
       ? { kind: 'ask', reason: 'sensitive_write', request: normalized, subjects, sensitive }
@@ -335,7 +362,7 @@ export function decideExecution(input: DecideExecutionInput): ExecutionVerdict {
   // what would run now, not what was asked for. Every subject the request
   // names must be covered; `expired` and `ask` both fall through to asking.
   if (approvals !== undefined) {
-    const approvalDeps: ApprovalMatchDeps = { resolveArgv0: approvals.resolveArgv0, roots };
+    const approvalDeps: ApprovalMatchDeps = { resolveArgv0: approvals.resolveArgv0, roots, statMode };
     const coverage = findApprovalCoverage(approvals.entries, grant, normalized, approvals.now, approvalDeps);
     if (coverage.match === 'covered') return { kind: 'allow', request: normalized, basis: { kind: 'durable_approval', approvalIds: coverage.approvalIds } };
     return ask(coverage.subjects);

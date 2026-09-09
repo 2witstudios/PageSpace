@@ -882,6 +882,22 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
       expect(frame.pending?.request.writeModes).toBeUndefined();
     });
 
+    it('Codex P1: given a mode-less overwrite of an ALREADY executable file, should freeze it for the click and write NOTHING — the runner would not have chmodded, so the file stays a command', async () => {
+      const h = chat({ statMode: (path: string) => (path === `${ROOT}/file` ? 0o755 : null) });
+      const result = await h.dispatcher.handle(signedGrant({ type: 'grant_fs_write', files: [{ path: `${ROOT}/file`, contentB64: HOOK }] }));
+      expect(result).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'ask_pending:ch_1' } });
+      const frame = (result as { frame: Frame }).frame as Extract<Frame, { type: 'grant_denied' }>;
+      expect(frame.pending?.files).toEqual([{ path: `${ROOT}/file`, mode: null, bytes: 12, reason: 'executable_bit' }]);
+      expect(h.fsRunner.write).not.toHaveBeenCalled();
+    });
+
+    it('Codex P1: given the same write over a NON-executable file, should still run headless — no Tier A regression', async () => {
+      const h = chat({ policy: () => POLICY, statMode: () => 0o644 });
+      const result = await h.dispatcher.handle(signedGrant({ type: 'grant_fs_write', files: [{ path: `${ROOT}/file`, contentB64: HOOK }] }));
+      expect(result).toMatchObject({ kind: 'reply', frame: { type: 'fs_write_result', ok: true } });
+      expect(h.fsRunner.write).toHaveBeenCalledTimes(1);
+    });
+
     it('given the owner CLICKS the sensitive write, should run it — escalation is a question, and the answer is honoured', async () => {
       const approvals = createApprovalsStore({ path: '/p', uid: 501, open: () => null, write: async () => undefined, now: () => NOW });
       const h = chat({ approvals });

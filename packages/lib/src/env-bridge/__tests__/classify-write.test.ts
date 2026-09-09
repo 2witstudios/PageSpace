@@ -8,7 +8,7 @@
  * stays ordinary (Tier A must not regress into a click on every write).
  */
 import { describe, it, expect } from 'vitest';
-import { classifyWrite, SENSITIVE_WRITE_REASONS, type SensitiveWriteReason } from '../classify-write';
+import { classifyWrite, sensitiveWrites, SENSITIVE_WRITE_REASONS, type SensitiveWriteReason } from '../classify-write';
 
 const ROOT = '/home/u/proj';
 const classify = (path: string, mode: number | null = null) => classifyWrite({ path, mode });
@@ -105,5 +105,71 @@ describe('classifyWrite — a write that can become a command asks the owner (ha
       if (verdict.sensitive) reached.add(verdict.reason);
     }
     expect([...reached].sort()).toEqual([...SENSITIVE_WRITE_REASONS].sort());
+  });
+});
+
+describe('the EFFECTIVE resulting mode, not the requested one (Codex P1 on the first cut of A2)', () => {
+  /**
+   * `fs-runner.ts` chmods only when the request NAMES a mode; a mode-less write
+   * to an existing file leaves that file's permissions exactly as they were.
+   * So classifying on the requested mode alone left the whole bypass open by a
+   * second door: overwrite `bin/tool`, which is already 0o755, name no mode,
+   * and the replacement runs as the owner at its next invocation with no click
+   * anywhere. The question is "will this file be executable AFTER the write?"
+   */
+  it('given a mode-less write to an EXISTING executable file, should escalate executable_bit', () => {
+    expect(classifyWrite({ path: `${ROOT}/bin/tool`, mode: null, existingMode: 0o755 })).toEqual({ sensitive: true, reason: 'executable_bit' });
+    expect(classifyWrite({ path: `${ROOT}/scripts/deploy.sh`, mode: null, existingMode: 0o700 })).toEqual({ sensitive: true, reason: 'executable_bit' });
+  });
+
+  it('given a mode-less write to an existing NON-executable file, should stay headless', () => {
+    expect(classifyWrite({ path: `${ROOT}/src/index.ts`, mode: null, existingMode: 0o644 })).toEqual({ sensitive: false });
+  });
+
+  it('given a mode-less write to a NEW file (no existing mode), should stay headless', () => {
+    expect(classifyWrite({ path: `${ROOT}/src/new.ts`, mode: null, existingMode: null })).toEqual({ sensitive: false });
+    expect(classifyWrite({ path: `${ROOT}/src/new.ts`, mode: null })).toEqual({ sensitive: false });
+  });
+
+  it('given an explicit NON-executable mode over an existing executable file, should stay headless — the request wins, because the chmod will strip the bit', () => {
+    expect(classifyWrite({ path: `${ROOT}/bin/tool`, mode: 0o644, existingMode: 0o755 })).toEqual({ sensitive: false });
+  });
+
+  it('given an explicit executable mode on a new file, should still escalate (unchanged)', () => {
+    expect(classifyWrite({ path: `${ROOT}/bin/new`, mode: 0o755, existingMode: null })).toEqual({ sensitive: true, reason: 'executable_bit' });
+  });
+
+  it('given a path reason AND an inherited executable bit, should still name the path reason', () => {
+    expect(classifyWrite({ path: `${ROOT}/.git/hooks/pre-commit`, mode: null, existingMode: 0o755 })).toEqual({ sensitive: true, reason: 'vcs_metadata' });
+  });
+});
+
+describe('sensitiveWrites — the existing mode comes from an injected probe, and a broken probe is never a silent allow', () => {
+  const paths = [`${ROOT}/bin/tool`, `${ROOT}/src/a.ts`];
+
+  it('should ask the probe for each path and escalate the one that stays executable', () => {
+    const asked: string[] = [];
+    const probe = (path: string) => {
+      asked.push(path);
+      return path.endsWith('/bin/tool') ? 0o755 : 0o644;
+    };
+    expect(sensitiveWrites(paths, [null, null], probe)).toEqual([{ path: `${ROOT}/bin/tool`, reason: 'executable_bit' }]);
+    expect(asked).toEqual(paths);
+  });
+
+  it('given a probe that THROWS, should treat the file as absent — never crash, and never let an executable through unseen', () => {
+    const throwing = () => {
+      throw new Error('EACCES');
+    };
+    expect(() => sensitiveWrites(paths, [null, null], throwing)).not.toThrow();
+    expect(sensitiveWrites(paths, [null, null], throwing)).toEqual([]);
+    // A REQUESTED executable bit is still caught with the same broken probe:
+    // the probe only ever adds knowledge, it is never what makes a write safe.
+    expect(sensitiveWrites(paths, [0o755, null], throwing)).toEqual([{ path: `${ROOT}/bin/tool`, reason: 'executable_bit' }]);
+  });
+
+  it('given no probe at all, should behave exactly as before (requested modes only)', () => {
+    expect(sensitiveWrites(paths, [null, null], undefined)).toEqual([]);
+    expect(sensitiveWrites(paths, [0o755, null], undefined)).toEqual([{ path: `${ROOT}/bin/tool`, reason: 'executable_bit' }]);
   });
 });

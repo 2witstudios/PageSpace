@@ -393,6 +393,68 @@ describe('decideExecution — the daemon is the policy enforcement point (invari
       expect(verdict.subjects).toEqual([`file:${hook}`]);
     });
 
+    describe('the EXISTING mode counts, because a mode-less write does not chmod (Codex P1)', () => {
+      const executables = new Set([`${ROOT}/bin/tool`]);
+      const statMode = (path: string) => (executables.has(path) ? 0o755 : path === `${ROOT}/src/a.ts` ? 0o644 : null);
+
+      it('given a mode-less write over an EXISTING executable file, should escalate — the replacement runs as the owner at its next invocation', () => {
+        const verdict = write([`${ROOT}/bin/tool`], undefined, { statMode });
+        if (verdict.kind !== 'ask' || verdict.reason !== 'sensitive_write') throw new Error('expected a sensitive_write ask');
+        expect(verdict.sensitive).toEqual([{ path: `${ROOT}/bin/tool`, reason: 'executable_bit' }]);
+        // And it is keyed on that FILE, so approving it never covers the next executable.
+        expect(verdict.subjects).toEqual([`file:${ROOT}/bin/tool`]);
+      });
+
+      it('given a mode-less write over an existing NON-executable file, or a brand-new one, should still run headless', () => {
+        expect(write([`${ROOT}/src/a.ts`], undefined, { statMode })).toMatchObject({ kind: 'allow', basis: { kind: 'preapproved_op' } });
+        expect(write([`${ROOT}/src/brand-new.ts`], undefined, { statMode })).toMatchObject({ kind: 'allow', basis: { kind: 'preapproved_op' } });
+      });
+
+      it('given an explicit non-executable mode over an existing executable file, should run headless — the chmod strips the bit', () => {
+        expect(write([`${ROOT}/bin/tool`], [0o644], { statMode })).toMatchObject({ kind: 'allow', basis: { kind: 'preapproved_op' } });
+      });
+
+      it('should ask the probe ONLY for fs_write, only after confinement, and only about paths whose write names no mode', () => {
+        const asked: string[] = [];
+        const recording = (path: string) => {
+          asked.push(path);
+          return null;
+        };
+        write([`${ROOT}/src/a.ts`, `${ROOT}/src/b.ts`], [0o644, null], { statMode: recording });
+        // Only the mode-less path, and by its CONFINED name.
+        expect(asked).toEqual([`${ROOT}/src/b.ts`]);
+        asked.length = 0;
+        decide({ grant: { ...grant, op: 'fs_read' }, request: { op: 'fs_read', paths: [`${ROOT}/src/a.ts`] }, probe, approvals, statMode: recording });
+        expect(asked).toEqual([]);
+        asked.length = 0;
+        decide({ request, probe, approvals, statMode: recording });
+        expect(asked).toEqual([]);
+      });
+
+      it('should ask the probe at most ONCE per path, even though the classifier and the approval subject both need the answer', () => {
+        const asked: string[] = [];
+        const counting = (path: string) => {
+          asked.push(path);
+          return 0o755;
+        };
+        write([`${ROOT}/bin/tool`], undefined, { statMode: counting });
+        expect(asked).toEqual([`${ROOT}/bin/tool`]);
+      });
+
+      it('given a probe that THROWS, should not throw, and should still escalate a REQUESTED executable bit', () => {
+        const throwing = () => {
+          throw new Error('EACCES');
+        };
+        expect(() => write([`${ROOT}/bin/tool`], undefined, { statMode: throwing })).not.toThrow();
+        expect(write([`${ROOT}/bin/tool`], undefined, { statMode: throwing })).toMatchObject({ kind: 'allow' });
+        expect(write([`${ROOT}/bin/tool`], [0o755], { statMode: throwing })).toMatchObject({ kind: 'ask', reason: 'sensitive_write' });
+      });
+
+      it('given no probe at all, should behave exactly as it did before it existed', () => {
+        expect(write([`${ROOT}/bin/tool`])).toMatchObject({ kind: 'allow', basis: { kind: 'preapproved_op' } });
+      });
+    });
+
     it('given a DENY-worthy sensitive write (a path outside every root), should still deny — deny beats ask', () => {
       expect(write(['/etc/.git/hooks/pre-commit'])).toEqual({ kind: 'deny', reason: 'path_denied' });
     });
