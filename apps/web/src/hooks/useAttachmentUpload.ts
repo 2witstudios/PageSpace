@@ -31,6 +31,8 @@ interface UseAttachmentUploadReturn {
   uploadFiles: (files: File[]) => Promise<void>;
   clearAttachment: () => void;
   removeAttachment: (id: string) => void;
+  /** Put files back in the composer after a send failed. */
+  restoreAttachments: (restored: FileAttachment[]) => void;
 }
 
 export function useAttachmentUpload({
@@ -112,6 +114,22 @@ export function useAttachmentUpload({
     [uploadUrl]
   );
 
+  /**
+   * Return files to the composer when the send that consumed them failed.
+   *
+   * The composer clears optimistically on send, so a rejected POST used to
+   * discard the upload — tolerable when that meant one file, wasteful now that
+   * a send can carry ten. The bytes are already in S3; what is lost is the
+   * chips, and re-attaching means re-uploading all of them.
+   *
+   * Skips the restore if the user has already started attaching something new,
+   * so a late failure cannot overwrite a fresh selection.
+   */
+  const restoreAttachments = useCallback((restored: FileAttachment[]) => {
+    if (restored.length === 0) return;
+    setAttachments((prev) => (prev.length > 0 ? prev : restored));
+  }, []);
+
   const uploadFile = useCallback(
     async (file: File) => {
       await uploadFiles([file]);
@@ -134,5 +152,6 @@ export function useAttachmentUpload({
     uploadFiles,
     clearAttachment,
     removeAttachment,
+    restoreAttachments,
   };
 }

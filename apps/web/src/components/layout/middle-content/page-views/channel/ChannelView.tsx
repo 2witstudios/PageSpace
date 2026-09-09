@@ -401,6 +401,10 @@ function ChannelView({ page }: ChannelViewProps) {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       console.error('Error sending message:', error);
       toast.error('Failed to send message. Please try again.');
+      // Put the files back too. They are already in S3, but the composer
+      // cleared on send, so without this a failed ten-photo send would make the
+      // user pick and re-upload all ten.
+      channelInputRef.current?.restoreAttachments(attachments);
       // Restore the quote chip so the user's retry still carries the quote
       // they originally selected; without this the failed-send recovery would
       // silently strip the quote context.

@@ -473,6 +473,9 @@ export default function InboxDMPage() {
       console.error('Error sending message:', error);
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setInputValue(content);
+      // Put the files back too — the composer cleared them on send, and they
+      // would otherwise have to be picked and re-uploaded.
+      chatInputRef.current?.restoreAttachments(attachments);
       // Restore the quote chip so the user's retry still carries the quote
       // they originally selected; without this the failed-send recovery would
       // silently strip the quote context.
