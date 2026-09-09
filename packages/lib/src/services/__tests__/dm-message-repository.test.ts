@@ -325,11 +325,12 @@ describe('dmMessageRepository.purgeInactiveMessages', () => {
 
   it('purges a large sweep without exceeding the bind-parameter ceiling', async () => {
     // Postgres caps a statement at 65535 bind parameters, and a retention
-    // sweep can cover far more tombstones than that. The lock, the legacy-pair
-    // capture and the DELETE are all predicate-based and name no ids at all;
-    // only the attachment capture names them, and it is chunked well under the
-    // ceiling. An unbounded id list would turn a large sweep into an opaque
-    // 08P01 protocol error.
+    // sweep can cover far more tombstones than that. The message lock, the
+    // legacy-pair capture and the DELETE are predicate-based and name no ids
+    // at all. Two things do name rows — the attachment capture here, and the
+    // orphan-link statements further down, which the sibling test covers —
+    // and both are chunked well under the ceiling. An unbounded list in
+    // either would turn a large sweep into an opaque 08P01 protocol error.
     //
     // Asserting on the purge's RESULT cannot see any of that: an unchunked
     // `inArray(directMessages.id, doomedIds)` returns exactly the same rows
