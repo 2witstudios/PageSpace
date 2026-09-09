@@ -354,6 +354,24 @@ export async function applyPageMutation({
           if (!reanchored.ok) {
             throw new Error(`reanchorPageTags returned ${reanchored.error}`);
           }
+
+          // SURFACE THE DEGRADED OUTCOMES. The sweep can succeed while still
+          // failing to forward-port: an anchor whose hash did not describe the
+          // predecessor, or a page whose projection format changed underneath
+          // us, both fall back to quote repair — a real result, but a weaker
+          // one than an exact port, and previously invisible. The summary was
+          // computed and then discarded here, so nothing anywhere could tell a
+          // degraded page from a healthy one.
+          //
+          // Logged only when something actually degraded, so an ordinary save
+          // stays silent.
+          const { repairedStaleHash, repairedFormatFlip, orphaned } = reanchored.data;
+          if (repairedStaleHash > 0 || repairedFormatFlip > 0 || orphaned > 0) {
+            loggers.api.warn('Content tag anchors degraded during a page mutation', {
+              pageId,
+              ...reanchored.data,
+            });
+          }
         });
       } catch (error) {
         loggers.api.error(

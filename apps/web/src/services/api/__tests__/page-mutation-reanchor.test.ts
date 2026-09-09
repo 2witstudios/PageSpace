@@ -21,9 +21,10 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockReanchor = vi.fn(async () => ({ ok: true as const, data: { considered: 0, updated: 0, orphaned: 0, skippedStaleHash: 0, skippedFormatFlip: 0 } }));
+const mockReanchor = vi.fn(async () => ({ ok: true as const, data: { considered: 0, updated: 0, orphaned: 0, repairedStaleHash: 0, repairedFormatFlip: 0 } }));
 const mockSyncMentions = vi.fn(async () => undefined);
 const mockLogError = vi.fn();
+const mockLogWarn = vi.fn();
 
 /**
  * The row `applyPageMutation` reads before it writes.
@@ -90,7 +91,7 @@ vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), and: vi.fn() }));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'id', revision: 'revision' } }));
 vi.mock('@pagespace/lib/tags/tag-service', () => ({ reanchorPageTags: (...a: unknown[]) => mockReanchor(...(a as [])) }));
 vi.mock('@/services/api/page-mention-service', () => ({ syncMentions: (...a: unknown[]) => mockSyncMentions(...(a as [])) }));
-vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { api: { error: (...a: unknown[]) => mockLogError(...(a as [])), warn: vi.fn(), info: vi.fn() } } }));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { api: { error: (...a: unknown[]) => mockLogError(...(a as [])), warn: (...a: unknown[]) => mockLogWarn(...(a as [])), info: vi.fn() } } }));
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({ logActivityWithTx: vi.fn(async () => undefined) }));
 vi.mock('@pagespace/lib/monitoring/change-group', () => ({ inferChangeGroupType: vi.fn(() => 'edit'), createChangeGroupId: vi.fn(() => 'cg-1') }));
 vi.mock('@pagespace/lib/services/page-version-service', () => ({ computePageStateHash: vi.fn(() => 'hash'), createPageVersion: vi.fn(async () => undefined) }));
@@ -117,6 +118,7 @@ describe('applyPageMutation re-anchors content tags', () => {
   beforeEach(() => {
     mockReanchor.mockClear();
     mockLogError.mockClear();
+    mockLogWarn.mockClear();
     // `transaction.transaction` is a module-level spy, so its call count
     // ACCUMULATES across cases. Without this clear, the savepoint assertion
     // below ("called exactly once") holds only while its test happens to run
@@ -175,5 +177,26 @@ describe('applyPageMutation re-anchors content tags', () => {
 
     expect(savepointRolledBack.value, 'the savepoint must unwind so the outer tx survives').toBe(true);
     expect(mockLogError).toHaveBeenCalled();
+  });
+
+  it('warns when anchors degraded, and stays silent when they did not', async () => {
+    // A sweep can SUCCEED while still failing to forward-port: a stale hash or
+    // a changed projection format both fall back to quote repair, which is a
+    // real result but a weaker one. That outcome used to be computed and then
+    // discarded here, so nothing could tell a degraded page from a healthy one.
+    mockReanchor.mockResolvedValueOnce({
+      ok: true as const,
+      data: { considered: 3, updated: 3, orphaned: 1, repairedStaleHash: 2, repairedFormatFlip: 0 },
+    } as never);
+
+    await applyPageMutation({ ...baseInput, updates: { content: 'degraded edit' } } as never);
+    expect(mockLogWarn).toHaveBeenCalledTimes(1);
+    const [, meta] = mockLogWarn.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(meta.repairedStaleHash).toBe(2);
+    expect(meta.orphaned).toBe(1);
+
+    mockLogWarn.mockClear();
+    await applyPageMutation({ ...baseInput, updates: { content: 'clean edit' } } as never);
+    expect(mockLogWarn, 'an ordinary save must not log').not.toHaveBeenCalled();
   });
 });
