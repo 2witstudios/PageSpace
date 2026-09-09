@@ -158,7 +158,7 @@ export function MessageAttachments({ message }: MessageAttachmentsProps) {
                 <ChevronLeft className="h-4 w-4" />
               </button>
               <span className="text-xs tabular-nums text-muted-foreground">
-                {lightboxIndex + 1} / {images.length}
+                {`${lightboxIndex + 1} / ${images.length}`}
               </span>
               <button
                 type="button"
