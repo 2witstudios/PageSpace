@@ -526,23 +526,29 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
           used to stack a second, full-size copy of those tabs above the grid,
           addressing the same conversation the host pane's bar already did. */}
       {current.sessionId && canUseSessions ? (
-        <AgentPanes
-          key={current.sessionId}
-          sessionId={current.sessionId}
-          driveId={panesDriveId}
-          initialConversation={{
-            conversationId: current.conversationId,
-            agentPageId: page.id,
-            name: 'Conversation',
-          }}
-          chatContext="page"
-          hostConversationId={current.conversationId}
-          isReadOnly={isReadOnly}
-          onSessionEnded={() => void handleCreateNew({ isRecovery: true })}
-          onConversationClosed={handleConversationClosed}
-        />
+        // `AgentPanes` renders a fragment and `SessionPanes` sizes itself
+        // `h-full`, so the flex context is the CALLER's job — the removed
+        // `TabsContent` used to supply it, and the agents console wraps it the
+        // same way. Without this the grid has no height to resolve against.
+        <div className="flex min-h-0 flex-1 flex-col">
+          <AgentPanes
+            key={current.sessionId}
+            sessionId={current.sessionId}
+            driveId={panesDriveId}
+            initialConversation={{
+              conversationId: current.conversationId,
+              agentPageId: page.id,
+              name: 'Conversation',
+            }}
+            chatContext="page"
+            hostConversationId={current.conversationId}
+            isReadOnly={isReadOnly}
+            onSessionEnded={() => void handleCreateNew({ isRecovery: true })}
+            onConversationClosed={handleConversationClosed}
+          />
+        </div>
       ) : agentLoading ? (
-        <div className="flex h-full items-center justify-center">
+        <div className="flex min-h-0 flex-1 items-center justify-center">
           <Loader2 className="size-4 animate-spin text-muted-foreground" />
         </div>
       ) : (
@@ -554,7 +560,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
         // reachable for a session-bound conversation and unreachable for every
         // older one. `group/pane` so the bar's actions reveal on hover exactly
         // as they do in the grid.
-        <div className="group/pane flex h-full min-h-0 flex-col">
+        <div className="group/pane flex min-h-0 flex-1 flex-col">
           <PaneBar
             // No sibling panes here, so there is no focus state to indicate.
             isActive={false}
