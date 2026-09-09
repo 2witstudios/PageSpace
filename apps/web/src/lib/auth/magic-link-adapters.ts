@@ -67,8 +67,9 @@ export const buildMagicLinkPorts = (): MagicLinkPorts => ({
     const { token, hash, tokenPrefix } = generateToken('ps_magic');
     const metadataObj: Record<string, unknown> = {};
     const boundDevice = boundDevicePlatform(platform, deviceId);
-    if (boundDevice && deviceId) {
+    if (boundDevice) {
       metadataObj.platform = boundDevice;
+      // Non-null whenever boundDevice is — that is what the predicate decides.
       metadataObj.deviceId = deviceId;
       if (deviceName) metadataObj.deviceName = deviceName;
     }

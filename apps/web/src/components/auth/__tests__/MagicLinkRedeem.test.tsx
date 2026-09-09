@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 
@@ -187,10 +188,17 @@ describe('MagicLinkRedeem', () => {
   });
 
   it('redeems exactly once across React strict-mode double effects', async () => {
+    // Rendered inside StrictMode on purpose: RTL does not add it, and without
+    // it this test passes with the `started` guard deleted — which is exactly
+    // the guard that keeps a single-use token from being spent twice.
     mockIsCapacitorApp.mockReturnValue(false);
     fetchSpy.mockResolvedValue(okResponse({ redirectTo: '/dashboard?auth=success', isNewUser: false, user: null }));
 
-    render(<MagicLinkRedeem token="ps_magic_abc" />);
+    render(
+      <StrictMode>
+        <MagicLinkRedeem token="ps_magic_abc" />
+      </StrictMode>,
+    );
 
     await waitFor(() => expect(mockReplace).toHaveBeenCalled());
     expect(fetchSpy).toHaveBeenCalledTimes(1);

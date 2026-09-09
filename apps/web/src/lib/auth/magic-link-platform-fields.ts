@@ -32,6 +32,15 @@ export async function getMagicLinkPlatformFields(): Promise<MagicLinkPlatformFie
   const platform = getPlatform();
   if (platform === 'web') return {};
 
-  const deviceId = await getPlatformStorage().getDeviceId();
-  return { platform, deviceId, deviceName: NATIVE_DEVICE_NAME[platform] };
+  // A secure store that cannot answer is not a reason to refuse the user a
+  // sign-in link — the same judgement `MagicLinkRedeem` makes on the redeem
+  // side. Without a device id the link simply is not device-bound, so it
+  // arrives as an ordinary browser link that still works.
+  try {
+    const deviceId = await getPlatformStorage().getDeviceId();
+    return { platform, deviceId, deviceName: NATIVE_DEVICE_NAME[platform] };
+  } catch (error) {
+    console.warn('[magic-link] could not read the device id; sending an unbound link', error);
+    return {};
+  }
 }

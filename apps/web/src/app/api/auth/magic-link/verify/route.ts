@@ -48,13 +48,21 @@ import {
  * shape the response. Device metadata is normalised once into a closed union —
  * a platform the switch does not name gets nothing.
  *
- * A device token is minted ONLY for a device that is actually redeeming, never
- * for the one that merely asked. Minting is a rotation
- * (`atomicValidateOrCreateDeviceToken` overwrites the stored hash), so minting
- * on behalf of an absent device would invalidate the credential that device is
- * still holding — and on iOS the Keychain bearer is the only credential, so
- * that would sign the phone out whenever its own link was opened in a browser,
- * which is the common case.
+ * Minting a device token is a ROTATION —
+ * `atomicValidateOrCreateDeviceToken` overwrites the stored hash of the
+ * existing row — so minting on behalf of a device that is not making the
+ * request invalidates the credential that device is still holding. A mobile
+ * shell must therefore prove it is the redeemer before anything is minted for
+ * it: on iOS the Keychain bearer is the only credential it has, so minting at
+ * binding time would sign the phone out whenever its own link was opened in a
+ * browser — the common case, not the edge case.
+ *
+ * Desktop is the deliberate exception, unchanged from before this door
+ * existed: its handoff has always ridden the emailed GET, so any browser that
+ * opens a desktop-bound link rotates that desktop's token. That is a
+ * pre-existing wart (the Electron app recovers because it also holds a cookie
+ * session), and narrowing it is a separate change from this one — it would
+ * alter desktop sign-in, which this PR does not touch.
  */
 
 const verifyTokenSchema = z.object({
@@ -157,24 +165,12 @@ export async function GET(req: Request) {
       });
     }
 
-    // Log auth event
-    trackAuthEvent(result.userId, 'magic_link_login', {
-      ip: clientIP,
-      isNewUser: result.isNewUser,
-      userAgent: req.headers.get('user-agent'),
-    });
-
     const effectiveRedirectPath = await applyPasskeyFunnel(result.userId, result.redirectPath);
     const redirectUrl = new URL(effectiveRedirectPath, baseUrl);
     redirectUrl.searchParams.set('auth', 'success');
     applyRedirectParams(redirectUrl, result.redirectParams);
 
-    auditRequest(req, {
-      eventType: 'auth.login.success',
-      userId: result.userId,
-      sessionId: result.sessionId,
-      details: { method: 'magic_link' },
-    });
+    recordLoginSuccess({ req, result, clientIP, platform: undefined });
     loggers.auth.info('Magic link login successful', {
       userId: result.userId,
       isNewUser: result.isNewUser,
@@ -272,7 +268,7 @@ export async function POST(req: Request) {
 /**
  * Verify the token, sign the user in, and describe what each door may hand
  * out. Every access decision is here; nothing below the switch on
- * `confirmedDevice.platform` grants a device anything the switch did not name.
+ * `handoffDevice.platform` grants a device anything the switch did not name.
  */
 async function redeemMagicLink({
   req,
@@ -352,8 +348,8 @@ async function redeemMagicLink({
   }
 
   const deviceMeta = normalizeDeviceMeta(parsedMeta);
-  const confirmedDevice = confirmRedeemingDevice(deviceMeta, door);
-  if (deviceMeta && !confirmedDevice) {
+  const handoffDevice = handoffDeviceFor(deviceMeta, door);
+  if (deviceMeta && !handoffDevice) {
     loggers.auth.info('Magic link redeemed away from the device it was minted for', {
       userId,
       platform: deviceMeta.platform,
@@ -367,7 +363,7 @@ async function redeemMagicLink({
   // cross-device email link cannot identify the device, so the helper falls
   // back to the legacy all-web-session revoke. Admin-console sessions are scoped
   // separately and left intact.
-  await revokeSessionsForLogin(userId, confirmedDevice?.deviceId, 'magic_link_login', 'magic-link');
+  await revokeSessionsForLogin(userId, handoffDevice?.deviceId, 'magic_link_login', 'magic-link');
 
   // Mark email as verified (idempotent for existing users)
   try {
@@ -383,7 +379,7 @@ async function redeemMagicLink({
     type: 'user',
     scopes: ['*'],
     expiresInMs: SESSION_DURATION_MS,
-    deviceId: confirmedDevice?.deviceId,
+    deviceId: handoffDevice?.deviceId,
     createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
   });
 
@@ -490,7 +486,7 @@ async function redeemMagicLink({
   // degrades to the cookie session, never to no session.
   let handoff: Handoff = { kind: 'none' };
   let user: PublicUser | null = null;
-  if (confirmedDevice) {
+  if (handoffDevice) {
     try {
       const userRow = await authRepository.findUserById(userId);
       if (userRow) {
@@ -504,18 +500,18 @@ async function redeemMagicLink({
         const { deviceToken } = await validateOrCreateDeviceToken({
           providedDeviceToken: undefined,
           userId,
-          deviceId: confirmedDevice.deviceId,
-          platform: confirmedDevice.platform,
+          deviceId: handoffDevice.deviceId,
+          platform: handoffDevice.platform,
           tokenVersion: userRow.tokenVersion,
           deviceName:
-            confirmedDevice.deviceName ||
+            handoffDevice.deviceName ||
             req.headers.get('user-agent') ||
-            defaultDeviceName(confirmedDevice.platform),
+            defaultDeviceName(handoffDevice.platform),
           userAgent: req.headers.get('user-agent') || undefined,
           ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
         });
 
-        switch (confirmedDevice.platform) {
+        switch (handoffDevice.platform) {
           case 'desktop': {
             const exchangeCode = await createExchangeCode({
               sessionToken,
@@ -525,15 +521,15 @@ async function redeemMagicLink({
               userId,
               createdAt: Date.now(),
             });
-            handoff = { kind: 'desktop', deviceId: confirmedDevice.deviceId, exchangeCode };
+            handoff = { kind: 'desktop', deviceId: handoffDevice.deviceId, exchangeCode };
             break;
           }
           case 'ios':
           case 'android':
             handoff = {
               kind: 'native',
-              platform: confirmedDevice.platform,
-              deviceId: confirmedDevice.deviceId,
+              platform: handoffDevice.platform,
+              deviceId: handoffDevice.deviceId,
               deviceToken,
             };
             break;
@@ -542,7 +538,7 @@ async function redeemMagicLink({
     } catch (error) {
       loggers.auth.warn('Failed to create device handoff for magic link', {
         userId,
-        platform: confirmedDevice.platform,
+        platform: handoffDevice.platform,
         error: error instanceof Error ? error.message : String(error),
       });
       // Fall through to the cookie session, and do not report a user the
@@ -586,18 +582,29 @@ function normalizeDeviceMeta(parsed: MagicLinkMetadata | null): DeviceMagicLinkM
 }
 
 /**
- * Is the client making THIS request the device the link was minted for?
+ * Which device, if any, this request may have a handoff minted for.
  *
- * The one place that question is answered, because minting a device token is a
- * rotation: answering "yes" for a device that is not here destroys the
- * credential it still holds. `null` means no device handoff at all — the
- * redeemer still gets the ordinary cookie session.
+ * The one place that decision is made, because minting rotates the stored
+ * hash. `null` means no device handoff at all — the redeemer still gets the
+ * ordinary cookie session.
  *
- * Desktop is unchanged from before this door existed: its handoff is the
- * exchange code on the emailed GET, which only the desktop app can complete.
- * A mobile shell has to prove itself by presenting the device id it holds.
+ * The two platforms answer it differently, and the difference is the point:
+ *
+ * - A **mobile shell must prove it is the redeemer**, by presenting the device
+ *   id it holds. Nothing is minted for a phone that is not making the request.
+ * - **Desktop does not prove anything**, and is eligible on any browser that
+ *   opens the emailed link. That is the pre-existing behaviour, kept
+ *   deliberately: the exchange code has always ridden the emailed GET. It is
+ *   weaker than the mobile rule — see the note at the top of this file.
+ *
+ * `deviceId` is the mobile proof, so it is load-bearing here in a way it was
+ * not before: whoever holds both the magic-link token and the bound device id
+ * can obtain that device's bearer tokens. Both come from the same place (the
+ * app that requested the link), the token is single-use and short-lived, and
+ * no endpoint echoes a device id back to a caller — but a future change that
+ * exposed device ids would weaken this, and should reckon with it here.
  */
-function confirmRedeemingDevice(
+function handoffDeviceFor(
   deviceMeta: DeviceMagicLinkMetadata | null,
   door: Door,
 ): DeviceMagicLinkMetadata | null {

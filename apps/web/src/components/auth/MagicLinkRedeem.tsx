@@ -30,6 +30,10 @@ const ERROR_MESSAGES: Record<string, string> = {
   magic_link_expired: 'This sign-in link has expired. Request a new one to continue.',
   magic_link_used: 'This sign-in link has already been used. Request a new one to continue.',
   account_suspended: 'This account has been suspended.',
+  // A failure on our side says nothing about the link. Telling the user it is
+  // invalid would send them to request a replacement that fails the same way.
+  server_error: 'Something went wrong on our end. Open the link again in a moment.',
+  session_error: 'Something went wrong on our end. Open the link again in a moment.',
 };
 
 const FALLBACK_MESSAGE = 'This sign-in link is not valid. Request a new one to continue.';
@@ -56,9 +60,11 @@ export function MagicLinkRedeem({ token, next }: { token: string; next?: string 
     // Once only, and deliberately without an "unmounted" guard around the
     // navigation: the token is single-use, so a second run would spend a token
     // that is already gone, and a run that completed but refused to navigate
-    // would strand the user on this page with nothing left to retry. React 18
-    // makes a setState after unmount a no-op, and the only thing that unmounts
-    // this component is the navigation below.
+    // would strand the user on this page with nothing left to retry. A
+    // setState after unmount is a no-op in React 18+, so the worst case if the
+    // user does navigate away first is a redirect they asked for a moment ago.
+    // The ref survives StrictMode's mount/unmount/mount, which is what keeps
+    // the token from being spent twice.
     if (started.current) return;
     started.current = true;
 

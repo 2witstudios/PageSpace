@@ -1,5 +1,10 @@
 import { MagicLinkRedeem } from '@/components/auth/MagicLinkRedeem';
 
+interface MagicLinkPageProps {
+  params: Promise<{ token: string }>;
+  searchParams: Promise<{ next?: string | string[] }>;
+}
+
 /**
  * Where a magic link requested from the iOS / Android app lands.
  *
@@ -14,13 +19,7 @@ import { MagicLinkRedeem } from '@/components/auth/MagicLinkRedeem';
  * Mirrors `/invite/[token]`: params are a single opaque segment, and the
  * resolver in `lib/navigation/deep-links.ts` only routes that shape.
  */
-export default async function MagicLinkPage({
-  params,
-  searchParams,
-}: {
-  params: Promise<{ token: string }>;
-  searchParams: Promise<{ next?: string | string[] }>;
-}) {
+export default async function MagicLinkPage({ params, searchParams }: MagicLinkPageProps) {
   const { token } = await params;
   const { next } = await searchParams;
   const nextPath = typeof next === 'string' ? next : undefined;

@@ -95,7 +95,9 @@ vi.mock('@/lib/auth/cookie-config', () => ({
 }));
 
 vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
-  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue(null),
+  // Shape matters: the route reads `.created`, so a bare null would make every
+  // test here take the provisioning catch instead of the real path.
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'home-drive', created: false }),
 }));
 
 vi.mock('@/lib/repositories/auth-repository', () => ({

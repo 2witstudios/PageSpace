@@ -128,7 +128,9 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
 vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
-  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue(null),
+  // Shape matters: the route reads `.created`, so a bare null would make every
+  // test here take the provisioning catch instead of the real path.
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'home-drive', created: false }),
 }));
 vi.mock('@/lib/auth/native-invite-acceptance', () => ({
   consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({ kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null }),

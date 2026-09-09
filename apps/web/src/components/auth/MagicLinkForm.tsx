@@ -27,7 +27,7 @@ export interface MagicLinkFormProps {
 export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}) {
   // Resolved after mount, never during render — the shell is a `window` fact
   // the server does not have.
-  const { isNative } = useCapacitor();
+  const { isIOS } = useCapacitor();
   const formRef = useRef<HTMLFormElement>(null);
   const [email, setEmail] = useState('');
   const [acceptedTos, setAcceptedTos] = useState(false);
@@ -196,7 +196,11 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
         <p className="text-center text-xs text-muted-foreground">
           The link expires in 5 minutes. Check your spam folder if you don&apos;t see it.
         </p>
-        {isNative && (
+        {/* iOS only, deliberately: the promise is true exactly where the app
+            can receive the link. Android registers no https intent-filter yet
+            (see apps/android/README.md), so its tap opens Chrome and signs
+            Chrome in — telling an Android user otherwise would be a lie. */}
+        {isIOS && (
           <p className="text-center text-xs text-muted-foreground">
             Open the link on this device and it will sign you in here.
           </p>

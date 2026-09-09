@@ -97,7 +97,9 @@ vi.mock('@/lib/auth/cookie-config', () => ({
 }));
 
 vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
-  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue(null),
+  // Shape matters: the route reads `.created`, so a bare null would make every
+  // test here take the provisioning catch instead of the real path.
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'home-drive', created: false }),
 }));
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
@@ -382,7 +384,7 @@ describe('POST /api/auth/magic-link/verify — links with no device binding', ()
     const body = await json(await redeem({ token: 'ps_magic_valid', deviceId: 'dev-mac' }));
 
     expect(body).not.toHaveProperty('sessionToken');
-    expect(body).not.toHaveProperty('exchangeCode');
+    expect(body).not.toHaveProperty('deviceToken');
     expect(body.redirectTo).toBe('/dashboard?auth=success');
   });
 });
