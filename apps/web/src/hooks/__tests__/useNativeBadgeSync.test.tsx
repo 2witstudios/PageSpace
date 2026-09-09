@@ -1,0 +1,335 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { renderHook, act, waitFor } from '@testing-library/react';
+
+const { mockBadgeSet, mockCheckPermissions, mockFetchNotifications } = vi.hoisted(() => ({
+  mockBadgeSet: vi.fn().mockResolvedValue(undefined),
+  mockCheckPermissions: vi.fn().mockResolvedValue({ display: 'granted' }),
+  mockFetchNotifications: vi.fn().mockResolvedValue(undefined),
+}));
+
+type MockCapacitorState = {
+  isNative: boolean;
+  platform: 'ios' | 'android' | 'web';
+  isIOS: boolean;
+  isAndroid: boolean;
+  isIPad: boolean;
+  capabilities: { secureStore: boolean; nativeAuth: boolean; push: boolean; badge: boolean };
+  isReady: boolean;
+};
+
+const IOS_STATE: MockCapacitorState = {
+  isNative: true,
+  platform: 'ios',
+  isIOS: true,
+  isAndroid: false,
+  isIPad: false,
+  capabilities: { secureStore: true, nativeAuth: true, push: true, badge: true },
+  isReady: true,
+};
+
+const ANDROID_STATE: MockCapacitorState = {
+  isNative: true,
+  platform: 'android',
+  isIOS: false,
+  isAndroid: true,
+  isIPad: false,
+  capabilities: { secureStore: true, nativeAuth: true, push: true, badge: true },
+  isReady: true,
+};
+
+const WEB_STATE: MockCapacitorState = {
+  isNative: false,
+  platform: 'web',
+  isIOS: false,
+  isAndroid: false,
+  isIPad: false,
+  capabilities: { secureStore: false, nativeAuth: false, push: false, badge: false },
+  isReady: true,
+};
+
+let mockCapacitorState: MockCapacitorState = IOS_STATE;
+
+vi.mock('@/hooks/useCapacitor', () => ({
+  useCapacitor: () => mockCapacitorState,
+}));
+
+// isCapacitorApp() is what useAppStateRecovery uses internally to pick its Capacitor
+// vs. web resume path — forcing it false makes the test drive resume via
+// document.visibilitychange (jsdom has no real Capacitor bridge to fire appStateChange).
+// It lives on the bridge, so it has to be mocked there: mocking it on
+// @/hooks/useCapacitor would be dead and the suite would pass only by accident,
+// until some later test stubs window.Capacitor and silently flips the branch.
+// Spread the real module: auth-fetch (reached via useNotificationStore) also
+// imports getPlatform from here, and a bare factory would leave it undefined.
+vi.mock('@/lib/capacitor-bridge', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/capacitor-bridge')>()),
+  isCapacitorApp: () => false,
+}));
+
+vi.mock('@capawesome/capacitor-badge', () => ({
+  Badge: { set: mockBadgeSet, checkPermissions: mockCheckPermissions },
+}));
+
+import { useNativeBadgeSync } from '../useNativeBadgeSync';
+import { useNotificationStore } from '@/stores/useNotificationStore';
+
+/** Drive useAppStateRecovery's web visibilitychange resume path. */
+const backgroundThenResume = async () => {
+  Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+  await act(async () => {
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+
+  Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+  await act(async () => {
+    document.dispatchEvent(new Event('visibilitychange'));
+    await Promise.resolve();
+  });
+};
+
+describe('useNativeBadgeSync', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockBadgeSet.mockResolvedValue(undefined);
+    mockCheckPermissions.mockResolvedValue({ display: 'granted' });
+    mockFetchNotifications.mockResolvedValue(undefined);
+    mockCapacitorState = IOS_STATE;
+    useNotificationStore.setState({
+      notifications: [],
+      unreadCount: 0,
+      hasHydrated: true,
+      fetchNotifications: mockFetchNotifications,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('never calls Badge.set on a platform without the badge capability', async () => {
+    mockCapacitorState = WEB_STATE;
+    useNotificationStore.setState({ unreadCount: 3 });
+
+    renderHook(() => useNativeBadgeSync());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockBadgeSet).not.toHaveBeenCalled();
+  });
+
+  it('projects count 0 on mount when iOS and unreadCount is 0', async () => {
+    renderHook(() => useNativeBadgeSync());
+
+    await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 0 }));
+  });
+
+  it('regression: never calls Badge.set when badge permission is not granted (prompt), to avoid Badge.set itself triggering the first-ever authorization request', async () => {
+    mockCheckPermissions.mockResolvedValue({ display: 'prompt' });
+    useNotificationStore.setState({ unreadCount: 3 });
+
+    renderHook(() => useNativeBadgeSync());
+    await waitFor(() => expect(mockCheckPermissions).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockBadgeSet).not.toHaveBeenCalled();
+  });
+
+  it('regression: never calls Badge.set when badge permission is denied', async () => {
+    mockCheckPermissions.mockResolvedValue({ display: 'denied' });
+    useNotificationStore.setState({ unreadCount: 3 });
+
+    renderHook(() => useNativeBadgeSync());
+    await waitFor(() => expect(mockCheckPermissions).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockBadgeSet).not.toHaveBeenCalled();
+  });
+
+  it('calls Badge.set once permission checks as granted', async () => {
+    mockCheckPermissions.mockResolvedValue({ display: 'granted' });
+    useNotificationStore.setState({ unreadCount: 3 });
+
+    renderHook(() => useNativeBadgeSync());
+
+    await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 3 }));
+  });
+
+  it('regression: does not project the default unreadCount 0 before the store has hydrated (cold launch)', async () => {
+    // Simulates cold launch: the store still holds its default unreadCount 0
+    // and the initial server fetch (kicked off elsewhere, e.g. NotificationBell)
+    // hasn't resolved yet. Projecting here would incorrectly zero a
+    // possibly-nonzero native badge left over from a prior session.
+    useNotificationStore.setState({ unreadCount: 0, hasHydrated: false });
+
+    renderHook(() => useNativeBadgeSync());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockBadgeSet).not.toHaveBeenCalled();
+  });
+
+  it('regression: once hydration completes with a real count of 0 (e.g. mark-all-read before the initial fetch resolved), still projects 0', async () => {
+    // The gate must be on hydration, not on the count value — projecting 0
+    // is the whole point of this feature (it's how the badge clears), so a
+    // hydrated 0 must always reach Badge.set, unlike an unhydrated 0.
+    useNotificationStore.setState({ unreadCount: 0, hasHydrated: false });
+    renderHook(() => useNativeBadgeSync());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockBadgeSet).not.toHaveBeenCalled();
+
+    act(() => {
+      useNotificationStore.setState({ unreadCount: 0, hasHydrated: true });
+    });
+
+    await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 0 }));
+  });
+
+  it('regression: projects the real count once hydration completes after a cold launch', async () => {
+    useNotificationStore.setState({ unreadCount: 0, hasHydrated: false });
+    renderHook(() => useNativeBadgeSync());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockBadgeSet).not.toHaveBeenCalled();
+
+    // The store's own initial fetch (elsewhere in the app) resolves with the real count.
+    act(() => {
+      useNotificationStore.setState({ unreadCount: 4, hasHydrated: true });
+    });
+
+    await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 4 }));
+  });
+
+  it('projects unreadCount 3 on mount', async () => {
+    useNotificationStore.setState({ unreadCount: 3 });
+
+    renderHook(() => useNativeBadgeSync());
+
+    await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 3 }));
+  });
+
+  it('re-projects when the count changes from 3 to 0', async () => {
+    useNotificationStore.setState({ unreadCount: 3 });
+    renderHook(() => useNativeBadgeSync());
+    await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 3 }));
+
+    act(() => {
+      useNotificationStore.getState().setUnreadCount(0);
+    });
+
+    await waitFor(() => expect(mockBadgeSet).toHaveBeenLastCalledWith({ count: 0 }));
+  });
+
+  it('on app resume, refreshes the store from the server and re-projects the refreshed count', async () => {
+    useNotificationStore.setState({ unreadCount: 1 });
+    renderHook(() => useNativeBadgeSync());
+    await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 1 }));
+
+    mockFetchNotifications.mockImplementation(async () => {
+      useNotificationStore.setState({ unreadCount: 5 });
+    });
+
+    await backgroundThenResume();
+
+    expect(mockFetchNotifications).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mockBadgeSet).toHaveBeenLastCalledWith({ count: 5 }));
+  });
+
+  it('swallows a Badge.set failure without throwing, but logs it', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockBadgeSet.mockRejectedValueOnce(new Error('not supported on this device'));
+    useNotificationStore.setState({ unreadCount: 2 });
+
+    expect(() => renderHook(() => useNativeBadgeSync())).not.toThrow();
+    await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 2 }));
+    await waitFor(() => expect(consoleError).toHaveBeenCalled());
+
+    consoleError.mockRestore();
+  });
+
+  it('projects on Android, whose capability row now has badge: true', async () => {
+    mockCapacitorState = ANDROID_STATE;
+    useNotificationStore.setState({ unreadCount: 3 });
+
+    renderHook(() => useNativeBadgeSync());
+
+    await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 3 }));
+  });
+
+  it('regression: does NOT run the iOS authorization gate on Android — the hazard it guards is iOS-only, and the Android plugin declares no backing permission', async () => {
+    mockCapacitorState = ANDROID_STATE;
+    // Even a non-granted read must not suppress the Android badge.
+    mockCheckPermissions.mockResolvedValue({ display: 'denied' });
+    useNotificationStore.setState({ unreadCount: 2 });
+
+    renderHook(() => useNativeBadgeSync());
+
+    await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 2 }));
+    expect(mockCheckPermissions).not.toHaveBeenCalled();
+  });
+
+  it('regression: still gates on iOS — the conditional must narrow the gate to iOS, not remove it', async () => {
+    mockCapacitorState = IOS_STATE;
+    mockCheckPermissions.mockResolvedValue({ display: 'prompt' });
+    useNotificationStore.setState({ unreadCount: 2 });
+
+    renderHook(() => useNativeBadgeSync());
+
+    await waitFor(() => expect(mockCheckPermissions).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockBadgeSet).not.toHaveBeenCalled();
+  });
+
+  it('on Android, a launcher that rejects the write fails silently — logged, never thrown', async () => {
+    mockCapacitorState = ANDROID_STATE;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockBadgeSet.mockRejectedValue(new Error('Badge is not supported on this launcher'));
+    useNotificationStore.setState({ unreadCount: 4 });
+
+    expect(() => renderHook(() => useNativeBadgeSync())).not.toThrow();
+
+    await waitFor(() => expect(consoleError).toHaveBeenCalled());
+    consoleError.mockRestore();
+  });
+
+  it('regression: does not project before the store has hydrated on Android either', async () => {
+    mockCapacitorState = ANDROID_STATE;
+    useNotificationStore.setState({ unreadCount: 0, hasHydrated: false });
+
+    renderHook(() => useNativeBadgeSync());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockBadgeSet).not.toHaveBeenCalled();
+  });
+
+  it('stops projecting after unmount', async () => {
+    useNotificationStore.setState({ unreadCount: 1 });
+    const { unmount } = renderHook(() => useNativeBadgeSync());
+    await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 1 }));
+
+    unmount();
+    mockBadgeSet.mockClear();
+
+    act(() => {
+      useNotificationStore.getState().setUnreadCount(9);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockBadgeSet).not.toHaveBeenCalled();
+  });
+});

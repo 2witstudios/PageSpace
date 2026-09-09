@@ -2,7 +2,7 @@
 
 import { createClientLogger } from '@/lib/logging/client-logger';
 import { getPlatformStorage, type PlatformStorage, type StoredSession } from './platform-storage';
-import { isCapacitorApp, getPlatform } from '@/lib/capacitor-bridge';
+import { isNativeApp } from '@/lib/capacitor-bridge';
 
 interface FetchOptions extends RequestInit {
   skipAuth?: boolean;
@@ -119,9 +119,12 @@ class AuthFetch {
       this.initializePowerListeners();
     }
 
-    // Initialize iOS lifecycle handling
-    if (isCapacitorApp() && getPlatform() === 'ios') {
-      this.initializeIOSLifecycle();
+    // Initialize native-shell lifecycle handling. `@capacitor/app` fires
+    // `appStateChange` on every Capacitor platform, and a backgrounded Android
+    // app expires its session exactly the way a backgrounded iOS one does — so
+    // this asks "is this a native shell?", not "is this iOS?".
+    if (isNativeApp()) {
+      this.initializeNativeLifecycle();
     }
   }
 
@@ -194,14 +197,14 @@ class AuthFetch {
   }
 
   /**
-   * Initialize iOS app lifecycle handling for session management.
+   * Initialize native app lifecycle handling for session management.
    * Handles background/foreground transitions and proactive session refresh.
    */
-  private async initializeIOSLifecycle(): Promise<void> {
+  private async initializeNativeLifecycle(): Promise<void> {
     // Dynamic import to avoid bundling Capacitor in web builds
     const capacitorApp = await import('@capacitor/app').catch(() => null);
     if (!capacitorApp) {
-      this.logger.warn('[iOS] Failed to load @capacitor/app - skipping lifecycle setup');
+      this.logger.warn('[Native] Failed to load @capacitor/app - skipping lifecycle setup');
       return;
     }
     const { App } = capacitorApp;
@@ -210,27 +213,50 @@ class AuthFetch {
     App.addListener('appStateChange', async ({ isActive }: { isActive: boolean }) => {
       if (!isActive) {
         backgroundTime = Date.now();
-        this.logger.debug('[iOS] App backgrounded', { time: backgroundTime });
+        this.logger.debug('[Native] App backgrounded', { time: backgroundTime });
       } else {
         const duration = backgroundTime ? Date.now() - backgroundTime : 0;
         backgroundTime = null;
         this.clearSessionCache();
-        this.logger.debug('[iOS] App foregrounded', { backgroundDurationMs: duration });
+        this.logger.debug('[Native] App foregrounded', { backgroundDurationMs: duration });
 
-        // If backgrounded for more than 5 minutes, proactively refresh session
+        // If backgrounded for more than 5 minutes, proactively refresh session.
+        //
+        // Deliberately does NOT sign the user out when that refresh reports
+        // `shouldLogout`. This is the *proactive* path — no request has been
+        // refused — so a refresh that fails for want of a device token proves
+        // nothing about the session. `refreshBearerSession` returns
+        // `shouldLogout: true` the moment there is no device token to present,
+        // and on Android that is the ordinary state of a live cookie session:
+        // magic-link sign-in mints a device token only for desktop
+        // (`api/auth/magic-link/verify/route.ts`), the OAuth handoff cookie never
+        // reaches the WebView, and `useAuth`'s lazy device registration returns
+        // early for Capacitor. Acting on it here tore such a user off their page
+        // to /auth/signin on every foreground, where recovery immediately bounced
+        // them back — a remount and a lost editor buffer, on repeat.
+        //
+        // Only the server can say a session is over, and the next request asks:
+        // a 401 there runs the reactive path, which dispatches `auth:expired`
+        // behind its own `isAuthenticated` guard. The cache clear above is what
+        // makes that next request use fresh credentials, and it has already run.
         if (duration > 5 * 60 * 1000) {
-          this.logger.info('[iOS] Long background period detected, refreshing session', {
+          this.logger.info('[Native] Long background period detected, refreshing session', {
             durationMin: Math.round(duration / 60000),
           });
-          const result = await this.refreshAuthSession();
-          if (!result.success && result.shouldLogout) {
-            window.dispatchEvent(new CustomEvent('auth:expired'));
+          // `allowSignOut: false` is the whole point — see the note above, and
+          // the parameter's own doc. Removing the dispatch from THIS function
+          // alone achieved nothing: `refreshAuthSession` dispatches internally.
+          const result = await this.refreshAuthSession({ allowSignOut: false });
+          if (!result.success) {
+            this.logger.info('[Native] Proactive refresh did not renew the session; leaving it to the next request', {
+              shouldLogout: result.shouldLogout,
+            });
           }
         }
       }
     });
 
-    this.logger.info('[iOS] Lifecycle listeners initialized');
+    this.logger.info('[Native] Lifecycle listeners initialized');
   }
 
   /**
@@ -289,50 +315,12 @@ class AuthFetch {
 
     const storage = this.getStorage();
 
-    // Prepare headers
-    let headers = { ...fetchOptions.headers };
-
-    if (storage.usesBearer()) {
-      // Bearer token authentication (Desktop, iOS, Android)
-      try {
-        const sessionToken = await this.getSessionTokenWithTimeout(storage, url);
-        if (sessionToken) {
-          headers = {
-            ...headers,
-            'Authorization': `Bearer ${sessionToken}`,
-          };
-          this.logger.debug(`${storage.platform}: Using Bearer token authentication`, { url });
-        } else {
-          this.logger.warn(`${storage.platform}: No session token available for Bearer token`, { url });
-        }
-      } catch (error) {
-        this.logger.error(`${storage.platform}: Failed to get session token for Bearer token`, {
-          url,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    } else {
-      // Web: Use cookie-based authentication with CSRF protection
-      // Include device token for device tracking and "Revoke All Others" functionality
-      const session = await storage.getStoredSession();
-      if (session?.deviceToken) {
-        headers = {
-          ...headers,
-          'X-Device-Token': session.deviceToken,
-        };
-        this.logger.debug('Web: Using device token for authentication', { url });
-      }
-
-      if (storage.supportsCSRF() && this.requiresCSRFToken(url, fetchOptions.method)) {
-        const token = await this.getCSRFToken();
-        if (token) {
-          headers = {
-            ...headers,
-            'X-CSRF-Token': token,
-          };
-        }
-      }
-    }
+    // Prepare headers. `baseHeaders` is the caller's own set; credentials are
+    // layered over a fresh copy of it on the first attempt and on each retry, so
+    // a retry can never inherit a credential the new attempt did not choose.
+    const baseHeaders = { ...fetchOptions.headers };
+    let credentials = await this.buildAuthCredentials(storage, url, fetchOptions.method, 'initial');
+    let headers = { ...baseHeaders, ...credentials.headers };
 
     // Make the initial request
     // Note: Desktop uses 'include' to receive cookies on login, but sends them as Bearer token
@@ -364,47 +352,8 @@ class AuthFetch {
       if (refreshSuccess) {
         this.logger.info('Token refresh successful, retrying original request', { url });
 
-        if (storage.usesBearer()) {
-          // Bearer platforms: Get fresh token (cache was already cleared in refreshToken())
-          try {
-            const freshSession = storage.platform === 'desktop'
-              ? await this.getSessionFromElectron()
-              : await storage.getSessionToken();
-            if (freshSession) {
-              headers = {
-                ...headers,
-                'Authorization': `Bearer ${freshSession}`,
-              };
-              this.logger.debug(`${storage.platform}: Updated Bearer token after refresh`, { url });
-            } else {
-              this.logger.warn(`${storage.platform}: No fresh session token available after refresh`, { url });
-            }
-          } catch (error) {
-            this.logger.error(`${storage.platform}: Failed to get fresh session token after refresh`, {
-              url,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        } else {
-          // Web: Re-add device token and get fresh CSRF token if needed
-          const session = await storage.getStoredSession();
-          if (session?.deviceToken) {
-            headers = {
-              ...headers,
-              'X-Device-Token': session.deviceToken,
-            };
-          }
-
-          if (storage.supportsCSRF() && this.requiresCSRFToken(url, fetchOptions.method)) {
-            const token = await this.getCSRFToken(true);
-            if (token) {
-              headers = {
-                ...headers,
-                'X-CSRF-Token': token,
-              };
-            }
-          }
-        }
+        credentials = await this.buildAuthCredentials(storage, url, fetchOptions.method, 'refresh');
+        headers = { ...baseHeaders, ...credentials.headers };
 
         // Retry the original request with fresh credentials
         response = await fetch(url, {
@@ -417,8 +366,12 @@ class AuthFetch {
       }
     }
 
-    // Handle CSRF token errors (403) - refresh CSRF token and retry once (Web only)
-    const needsCSRF = storage.supportsCSRF() && this.requiresCSRFToken(url, fetchOptions.method);
+    // Handle CSRF token errors (403) - refresh CSRF token and retry once.
+    // Gated on whether THIS request was actually sent with cookie credentials,
+    // not on what the platform prefers: a bearer request is exempt from CSRF
+    // server-side (`lib/auth/index.ts` `hasBearerAuth`), so retrying one with a
+    // fresh token could only repeat the same failure.
+    const needsCSRF = credentials.viaCookie && this.requiresCSRFToken(url, fetchOptions.method);
     if (response.status === 403 && needsCSRF && maxRetries > 0) {
       const errorBody = await response.clone().json().catch(() => ({}));
 
@@ -444,6 +397,130 @@ class AuthFetch {
     }
 
     return response;
+  }
+
+  /**
+   * The bearer token to present, or `null` when this platform has none right now.
+   *
+   * The two stages read differently on purpose. On the initial attempt,
+   * `getSessionTokenWithTimeout` supplies the session cache and the 3s guard
+   * against a Keychain or IPC read that hangs on cold start. On the retry after a
+   * refresh, the cache has just been cleared by `refreshToken()` and the token is
+   * read straight through — the same call the pre-refactor post-refresh branch
+   * made, kept identical so a refreshed desktop or iOS session picks up its new
+   * token exactly as it did before.
+   */
+  private async readBearerToken(
+    storage: PlatformStorage,
+    url: string,
+    stage: 'initial' | 'refresh',
+  ): Promise<string | null> {
+    if (stage === 'initial') {
+      return this.getSessionTokenWithTimeout(storage, url);
+    }
+    return storage.platform === 'desktop'
+      ? this.getSessionFromElectron()
+      : storage.getSessionToken();
+  }
+
+  /**
+   * The credentials this request should carry, and how it is authenticating.
+   *
+   * A platform's `usesBearer()` is a *preference*, not a guarantee that a bearer
+   * token exists. Android reports it while every session is still a cookie one
+   * created by the in-WebView web flow, and a desktop/iOS cold start can reach
+   * here before the secure store answers. Deciding CSRF from the preference sent
+   * those requests with neither a bearer token nor `X-CSRF-Token`, and the server
+   * enforces CSRF exactly when a session request carries no bearer
+   * (`lib/auth/index.ts`, `requireCSRF && isSessionAuth && !hasBearerAuth`) —
+   * so every mutation answered 403 `CSRF_TOKEN_MISSING`.
+   *
+   * So the rule here mirrors the server's: attach a bearer token if one can be
+   * had, and otherwise send exactly what a cookie-authenticated request needs —
+   * the device token and, for mutations, a CSRF token. `getCSRFToken()` is
+   * cached behind an in-flight promise, so the fallback costs one fetch per
+   * session, and it stops costing anything at all on a platform the moment
+   * native sign-in gives it a bearer token.
+   *
+   * `viaCookie` reports which of the two it did, so the 403 CSRF retry can key
+   * off what this request actually sent rather than what the platform prefers.
+   */
+  private async buildAuthCredentials(
+    storage: PlatformStorage,
+    url: string,
+    method: string | undefined,
+    stage: 'initial' | 'refresh',
+  ): Promise<{ headers: Record<string, string>; viaCookie: boolean }> {
+    if (storage.usesBearer()) {
+      try {
+        const sessionToken = await this.readBearerToken(storage, url, stage);
+
+        if (sessionToken) {
+          this.logger.debug(`${storage.platform}: Using Bearer token authentication`, { url, stage });
+          return { headers: { 'Authorization': `Bearer ${sessionToken}` }, viaCookie: false };
+        }
+
+        this.logger.warn(`${storage.platform}: No session token available for Bearer token`, { url, stage });
+      } catch (error) {
+        this.logger.error(`${storage.platform}: Failed to get session token for Bearer token`, {
+          url,
+          stage,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // Cookie-based authentication with CSRF protection. Reached by web always,
+    // and by a bearer platform whenever it has no bearer token to present.
+    const headers: Record<string, string> = {};
+
+    // Include device token for device tracking and "Revoke All Others"
+    // functionality. A store fault is logged and dropped rather than thrown:
+    // `AndroidStorage.getStoredSession` rejects on a broken keystore, and a
+    // request that can still authenticate by cookie must not be turned into an
+    // exception because the device *marker* was unreadable.
+    //
+    // On a bearer platform that reached here, this is the second store read of
+    // the request: the token attempt above already read the session, and
+    // `getSessionTokenWithTimeout` caches only a non-null token, so nothing
+    // memoizes the miss. Deliberately not optimized — the two reads share no
+    // path on desktop (its token comes from a different IPC call than its
+    // session, behind the session cache and the concurrent-IPC dedup), so
+    // collapsing them means restructuring the one branch this change most needs
+    // to leave alone. It costs one extra bridge round-trip per request, only in
+    // the transitional state where a native platform has no bearer token, and it
+    // disappears the moment native sign-in lands: the bearer branch then returns
+    // before this code, from a cache, on every request after the first.
+    //
+    // Bounded, like every other native-store read in this class. Before this
+    // change the line was reachable only by `WebStorage`, where it is a
+    // synchronous localStorage read; it is now reachable by iOS, Android and
+    // desktop whenever no bearer token is available, and a Capacitor or Electron
+    // bridge call can hang rather than reject. Unbounded, a hung Keychain on iOS
+    // cold launch would leave every `fetchWithAuth` promise pending forever —
+    // with no 401 and so no recovery path — after the bearer read had already
+    // timed out on that same bridge.
+    try {
+      const { session } = await this.getStoredSessionWithTimeout(storage);
+      if (session?.deviceToken) {
+        headers['X-Device-Token'] = session.deviceToken;
+        this.logger.debug(`${storage.platform}: Using device token for authentication`, { url });
+      }
+    } catch (error) {
+      this.logger.warn(`${storage.platform}: Failed to read stored session for device token`, {
+        url,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    if (this.requiresCSRFToken(url, method)) {
+      const token = await this.getCSRFToken(stage === 'refresh');
+      if (token) {
+        headers['X-CSRF-Token'] = token;
+      }
+    }
+
+    return { headers, viaCookie: true };
   }
 
   private async queueRequest(url: string, options?: FetchOptions): Promise<Response> {
@@ -622,10 +699,28 @@ class AuthFetch {
         return { success: false, shouldLogout: false };
       }
 
+      // Checked before the device info is read: no device token is a definitive
+      // "must re-authenticate", and there is nothing to learn from a bridge call
+      // for a session we are about to abandon.
+      if (!session?.deviceToken) {
+        this.logger.warn(`${storage.platform}: No device token - must re-authenticate`);
+        return { success: false, shouldLogout: true };
+      }
+
       const info = await storage.getDeviceInfo();
 
-      if (!session?.deviceToken || !info.deviceId) {
-        this.logger.warn(`${storage.platform}: No device token - must re-authenticate`);
+      // The token and the id it is bound to must come from the SAME read.
+      // `/api/auth/device/refresh` enforces strict binding and answers a
+      // mismatched pair 401 as a stolen token, after which `clearSession()`
+      // below destroys both credentials — so pairing the session's token with
+      // whatever `getDeviceInfo()` independently reports is a forced sign-out
+      // waiting on a race. Every `PlatformStorage` returns the binding in
+      // `session.deviceId`; `info.deviceId` is the fallback for a session that
+      // names none (a legacy web-flow session on Android can).
+      const deviceId = session.deviceId || info.deviceId;
+
+      if (!deviceId) {
+        this.logger.warn(`${storage.platform}: No device id - must re-authenticate`);
         return { success: false, shouldLogout: true };
       }
 
@@ -642,7 +737,7 @@ class AuthFetch {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             deviceToken: session.deviceToken,
-            deviceId: info.deviceId,
+            deviceId,
             platform: storage.platform,
             userAgent: info.userAgent,
             appVersion: info.appVersion,
@@ -659,7 +754,10 @@ class AuthFetch {
           await storage.storeSession({
             sessionToken: data.sessionToken,
             csrfToken: data.csrfToken || null,
-            deviceId: info.deviceId,
+            // Must move with the request body above: persisting a different id
+            // than the one just sent would record a session naming an id the
+            // token is not bound to — the same divergence, one refresh later.
+            deviceId,
             deviceToken: data.deviceToken || session.deviceToken,
           });
           this.clearSessionCache();
@@ -930,7 +1028,18 @@ class AuthFetch {
     return { kind: 'result', result: { success: true, shouldLogout: false } };
   }
 
-  async refreshAuthSession(): Promise<SessionRefreshResult> {
+  /**
+   * @param options.allowSignOut Whether a `shouldLogout` result may dispatch
+   *   `auth:expired` — which tears the user out of the app and back to sign-in.
+   *   Defaults true, which is right for every *reactive* caller: they run after a
+   *   request has been refused, so the server has already said the session is
+   *   over. A **proactive** caller (a timer, an app-foreground handler) must pass
+   *   false. Nothing has been refused there, and `refreshBearerSession` reports
+   *   `shouldLogout: true` merely for want of a device token — the ordinary state
+   *   of a live cookie session on Android.
+   */
+  async refreshAuthSession(options?: { allowSignOut?: boolean }): Promise<SessionRefreshResult> {
+    const { allowSignOut = true } = options ?? {};
     // CRITICAL FIX: Use the same deduplication as refreshToken() to prevent race conditions
     // Previously this called doRefresh() directly, allowing concurrent refreshes when:
     // 1. auth-fetch's internal refreshToken() is triggered by 401
@@ -1006,7 +1115,11 @@ class AuthFetch {
         });
       }
 
-      if (result.shouldLogout && typeof window !== 'undefined') {
+      // `allowSignOut` gates this, and the `isAuthenticated` check does not
+      // substitute for it: that guard exists to stop a *new* user looping, and a
+      // proactive refresh's false positive lands on a user who is very much
+      // authenticated.
+      if (allowSignOut && result.shouldLogout && typeof window !== 'undefined') {
         // Only dispatch auth:expired if user WAS authenticated (prevents loop for new users)
         const { useAuthStore } = await import('@/stores/useAuthStore');
         if (useAuthStore.getState().isAuthenticated) {

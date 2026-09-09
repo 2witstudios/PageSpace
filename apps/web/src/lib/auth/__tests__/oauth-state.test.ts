@@ -50,6 +50,18 @@ describe('verifyOAuthState', () => {
     expect(result.status === 'valid' && result.data.shell).toBeUndefined();
   });
 
+  // Phase B of the Android parity epic. Before this, 'android' was not a value
+  // the platform enum could take, so a signed state naming it was rejected as
+  // malformed at the callback — which is why no server path could ever emit the
+  // `pagespace://` handoff for Android and the custom-scheme intent filter
+  // shipped inert.
+  it('round-trips android as a platform', () => {
+    const state = createState({ platform: 'android', timestamp: Date.now() });
+    const result = verifyOAuthState(state);
+    expect(result.status).toBe('valid');
+    expect(result.status === 'valid' && result.data.platform).toBe('android');
+  });
+
   it('rejects a shell value that is not a known app', () => {
     const state = createState({ platform: 'desktop', shell: 'evil', timestamp: Date.now() });
     expect(verifyOAuthState(state).status).not.toBe('valid');
@@ -114,10 +126,13 @@ describe('verifyOAuthState', () => {
     expect(result.status).toBe('malformed');
   });
 
+  // Was `platform: 'android'`. Android is a supported client as of Phase B of
+  // the Android parity epic (see the round-trip test above), so this now guards
+  // the rule rather than a value that has since become legal.
   it('returns malformed for state with unknown platform value', () => {
     const state = createState({
       returnUrl: '/dashboard',
-      platform: 'android',
+      platform: 'symbian',
       timestamp: Date.now(),
     });
     const result = verifyOAuthState(state);

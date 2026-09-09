@@ -1,4 +1,4 @@
-import type { WebSocket, WebSocketServer } from 'ws';
+import type { RawData, WebSocket, WebSocketServer } from 'ws';
 import type { NextRequest } from 'next/server';
 import {
   registerEnvConnection,
@@ -84,8 +84,36 @@ const DRIVE_ENV_RESOURCE = 'drive_env';
  * that set (invariant 6). Refusals are audited and, where the protocol requires, the socket is
  * closed with a reason.
  */
+/** How many frames may arrive before the `hello` handler exists. One `hello` is all the protocol allows; the rest is slack for a retry, not a queue. */
+const MAX_EARLY_FRAMES = 4;
+
 export async function UPGRADE(client: WebSocket, server: WebSocketServer, request: NextRequest) {
   const requestUrl = request.url;
+
+  // The socket is already flowing when this function is entered, and the daemon
+  // sends its `hello` the instant `open` fires — but the real `message` listener
+  // cannot be attached until the token is validated and the enrollment row is
+  // read, two awaits later. Anything that arrives in between is emitted with no
+  // listener and dropped by the EventEmitter, and the handshake then times out
+  // 10 s later with the frame never having been seen. Route tests never caught
+  // it because they attach their listeners synchronously.
+  //
+  // So: buffer from the first synchronous instant, and drain into the real
+  // handler once it exists. The cap is small and pre-auth on purpose — one
+  // `hello` is all the protocol allows before authorization, and an unauthorized
+  // client that floods is closed rather than allowed to grow this array.
+  const earlyFrames: RawData[] = [];
+  let earlyOverflow = false;
+  let ready = false;
+  // Assigned once the real handler below exists. ONE listener, installed here
+  // and never swapped: `off`/`removeListener` are not part of the socket
+  // surface this route is written against.
+  let handleMessage: (data: RawData) => void = () => {};
+  client.on('message', (data: RawData) => {
+    if (ready) { handleMessage(data); return; }
+    if (earlyFrames.length >= MAX_EARLY_FRAMES) { earlyOverflow = true; return; }
+    earlyFrames.push(data);
+  });
 
   // SECURITY CHECK 0 (bridge): the cloud opt-in. Off ⇒ nothing here exists.
   if (!isLocalEnvsEnabled()) {
@@ -390,7 +418,7 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
   };
 
   // Handle incoming messages
-  client.on('message', (data) => {
+  handleMessage = (data: RawData) => {
     try {
       // SECURITY CHECK 5: Validate message size
       const sizeValidation = validateMessageSize(data);
@@ -459,7 +487,32 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
         details: { originalEvent: 'ws_message_parse_error', error: error instanceof Error ? error.message : String(error) },
       });
     }
-  });
+  };
+
+  // The real handler exists now: go live, then hand over anything that arrived
+  // during the two awaits above, in order.
+  ready = true;
+  if (earlyOverflow) {
+    auditRequest(request, {
+      eventType: 'authz.access.denied',
+      userId,
+      resourceType: RESOURCE_TYPE,
+      resourceId: envId,
+      riskScore: 0.4,
+      details: { originalEvent: 'env_bridge_preauth_flood', bufferedFrames: earlyFrames.length },
+    });
+    // Clean up HERE: `registerEnvConnection` and `helloTimer` have both already
+    // run, and the `close` listener that would normally undo them is installed
+    // below this return. Without this the dead socket sits in the env registry
+    // until the five-minute stale sweep — so `isConnected(envId)` answers true
+    // for a socket nobody is on, and a real exec is routed into nothing — and
+    // the hello timer later fires a second refusal against a closed client.
+    clearTimeout(helloTimer);
+    unregisterEnvConnection(envId, client);
+    client.close(1008, 'Too many frames before hello');
+    return;
+  }
+  for (const buffered of earlyFrames.splice(0)) handleMessage(buffered);
 
   // Handle client disconnect
   client.on('close', (code, reason) => {

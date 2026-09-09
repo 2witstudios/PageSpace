@@ -4,10 +4,15 @@ import type { SandboxServiceInfo } from '../../sandbox-host';
 import {
   classifyDetectedDevServer,
   isHttpPortSlotFree,
+  describeHttpPortSlot,
   planDevServerService,
   describeServiceState,
+  SPRITE_URL_UNRESOLVABLE_MESSAGE,
   resolveDevPreviewHolder,
   HTTP_PORT_BUSY_MESSAGE,
+  requiresPreviewApproval,
+  isPreviewApproved,
+  KNOWN_DEV_SERVER_PORTS,
   type DevPreviewHolderRef,
   type DevPreviewRow,
   type PlanDevServerServiceInput,
@@ -32,6 +37,8 @@ function relayRow(targetPort: number, overrides: Partial<DevPreviewRow> = {}): D
     relayServiceName: targetPort === SPRITE_HTTP_PORT ? null : PREVIEW_RELAY_SERVICE_NAME,
     detectedAt: new Date('2026-09-05T11:00:00.000Z'),
     stoppedByUserAt: null,
+    approvedPort: null,
+    approvedAt: null, selectedByUserAt: null,
     ...overrides,
   };
 }
@@ -178,10 +185,28 @@ describe('isHttpPortSlotFree — "is 8080 free: no relay, no user process"', () 
       expected: false,
     });
     assert({
-      given: 'a listener on 8080 whose pid differs from the running relay',
-      should: 'not be free',
-      actual: isHttpPortSlotFree({ listeners: [{ port: 8080, pid: 9 }], relay: relayService(5173, { pid: 42 }) }),
+      given: 'a PROBED listener on 8080 whose pid differs from the running relay',
+      should: 'not be free — a fresh pid that is not the relay is a user process',
+      actual: isHttpPortSlotFree({ listeners: [{ port: 8080, pid: 9 }], relay: relayService(5173, { pid: 42 }), listenerSource: 'probe' }),
       expected: false,
+    });
+  });
+
+  it('a running relay owns 8080 whatever a WATCH pid says — that pid can be stale', () => {
+    // Production, first re-pick: the relay restarted as pid 4698, the watch
+    // snapshot still said pid 11264, and the pane read "held by another
+    // process (pid 11264)". The channel never reports a re-bind it missed.
+    assert({
+      given: 'relay running as pid 4698, watch snapshot says pid 11264 on 8080',
+      should: 'attribute the slot to the relay',
+      actual: describeHttpPortSlot({ listeners: [{ port: 8080, pid: 11264 }], relay: relayService(3000, { pid: 4698 }) }),
+      expected: 'relay',
+    });
+    assert({
+      given: 'the same disagreement from a PROBE',
+      should: 'attribute it to a user process',
+      actual: describeHttpPortSlot({ listeners: [{ port: 8080, pid: 11264 }], relay: relayService(3000, { pid: 4698 }), listenerSource: 'probe' }),
+      expected: 'user-process',
     });
   });
 });
@@ -230,12 +255,18 @@ describe('planDevServerService', () => {
     });
   });
 
-  it('refuses when a foreign pid holds 8080 even though the relay claims to be running', () => {
+  it('refuses when a PROBED foreign pid holds 8080 even though the relay claims to be running — but not on a watch pid', () => {
     assert({
-      given: 'relay running as pid 42, but pid 9 listens on 8080',
+      given: 'relay running as pid 42, but a probe says pid 9 listens on 8080',
       should: 'refuse with http-port-busy — the relay is not the one being served',
-      actual: planDevServerService(planInput({ detected: detected(5173), row: relayRow(5173), relay: relayService(5173, { pid: 42 }), listeners: [{ port: 8080, pid: 9 }] })),
+      actual: planDevServerService(planInput({ detected: detected(5173), row: relayRow(5173), relay: relayService(5173, { pid: 42 }), listeners: [{ port: 8080, pid: 9 }], listenerSource: 'probe' })),
       expected: { action: 'refuse', reason: 'http-port-busy', targetPort: 5173 },
+    });
+    assert({
+      given: 'the same disagreement from the watch snapshot',
+      should: 'NOT refuse — the pid may be the relay\'s previous incarnation',
+      actual: planDevServerService(planInput({ detected: detected(5173), row: relayRow(5173), relay: relayService(5173, { pid: 42 }), listeners: [{ port: 8080, pid: 9 }] })).action,
+      expected: 'none',
     });
   });
 
@@ -269,7 +300,10 @@ describe('planDevServerService', () => {
   });
 
   it('re-points the relay when the dev server moves ports', () => {
-    const plan = planDevServerService(planInput({ detected: detected(3000), row: relayRow(5173), relay: relayService(5173) }));
+    // `listenerSource: 'probe'` says HOW we know 5173 is gone. The fixture's
+    // `detected()` marks every port 'unlisted', so without it the thrash guard
+    // now (correctly) holds a target whose absence nothing has established.
+    const plan = planDevServerService(planInput({ detected: detected(3000), row: relayRow(5173), relay: relayService(5173), listenerSource: 'probe' }));
     assert({
       given: 'row=5173 relay live, next dev detected on 3000',
       should: 'plan replace-relay from 5173 with the 3000 service',
@@ -294,7 +328,7 @@ describe('planDevServerService', () => {
         row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 8080, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null },
       },
     });
-    const plan = planDevServerService(planInput({ detected: detected(8080, 5), row: relayRow(5173), relay: relayService(5173, { status: 'failed' }) }));
+    const plan = planDevServerService(planInput({ detected: detected(8080, 5), row: relayRow(5173), relay: relayService(5173, { status: 'failed' }), listenerSource: 'probe' }));
     assert({
       given: 'the user moved to 8080 while a dead 5173 relay is still defined',
       should: 'plan record-direct and remove the relay',
@@ -390,7 +424,7 @@ describe('resolveDevPreviewHolder — the holder is whoever OWNS the sprite poin
   it('has two sessions in one env converge on ONE row intent', () => {
     const envHolder = resolveDevPreviewHolder({ id: 'ws-1', envId: 'env-1' });
     const first = planDevServerService(planInput({ holder: envHolder, detected: detected(5173) }));
-    const second = planDevServerService(planInput({ holder: resolveDevPreviewHolder({ id: 'ws-2', envId: 'env-1' }), row: first.action === 'start-relay' ? { ...first.row, stoppedByUserAt: null } : null, relay: relayService(5173), detected: detected(5173) }));
+    const second = planDevServerService(planInput({ holder: resolveDevPreviewHolder({ id: 'ws-2', envId: 'env-1' }), row: first.action === 'start-relay' ? { ...first.row, stoppedByUserAt: null, approvedPort: null, approvedAt: null, selectedByUserAt: null } : null, relay: relayService(5173), detected: detected(5173) }));
     assert({ given: 'session ws-1 detecting 5173 in env-1', should: 'write an env-keyed row', actual: first.action === 'start-relay' ? first.row.holder : first.action, expected: { kind: 'env', id: 'env-1' } });
     assert({ given: 'session ws-2 then detecting the same server', should: 'find the env row already relaying and write nothing new', actual: second, expected: { action: 'none', reason: 'already-relaying', staleRowIgnored: false } });
   });
@@ -407,16 +441,41 @@ describe('planDevServerService — thrash guard', () => {
   });
 
   it('replaces freely once the current target stopped listening, or when the newcomer is a known dev port', () => {
-    const gone = planDevServerService(planInput({ row: relayRow(5173), relay: relayService(5173), listeners: [{ port: 8080, pid: 42 }], detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' } }));
-    assert({ given: 'row=5173 no longer bound, unlisted 9230 opens', should: 'replace the relay', actual: gone.action, expected: 'replace-relay' });
+    // The guard no longer applies (5173 is gone), so 9230 becomes the target —
+    // but an unlisted target is not SHARED without a person's say-so, so the
+    // plan is to record it and take the old relay down, not to re-point it.
+    const gone = planDevServerService(planInput({ row: relayRow(5173), relay: relayService(5173), listeners: [{ port: 8080, pid: 42 }], listenerSource: 'probe', detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' } }));
+    assert({ given: 'row=5173 no longer bound, unlisted 9230 opens', should: 'take the target but await approval, removing the old relay', actual: [gone.action, gone.action === 'await-approval' && gone.removeRelay], expected: ['await-approval', true] });
+    const approvedGone = planDevServerService(planInput({ row: relayRow(5173, { approvedPort: 9230 }), relay: relayService(5173), listeners: [{ port: 8080, pid: 42 }], listenerSource: 'probe', detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' } }));
+    assert({ given: 'the same move with 9230 already approved', should: 'replace the relay', actual: approvedGone.action, expected: 'replace-relay' });
     const known = planDevServerService(planInput({ row: relayRow(5173), relay: relayService(5173), listeners: [{ port: 5173, pid: 1 }], detected: { kind: 'dev-server', port: 3000, likelihood: 'known-dev-port' } }));
     assert({ given: 'row=5173 still bound, known 3000 opens', should: 'replace the relay', actual: known.action, expected: 'replace-relay' });
     const unlistedCurrent = planDevServerService(planInput({ row: relayRow(7777), relay: relayService(7777), listeners: [{ port: 7777, pid: 1 }], detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' } }));
-    assert({ given: 'row=7777 (unlisted) still bound, unlisted 9230 opens', should: 'replace (only a KNOWN current target is defended)', actual: unlistedCurrent.action, expected: 'replace-relay' });
+    assert({ given: 'row=7777 (unapproved, unlisted) still bound, unlisted 9230 opens', should: 'move to 9230 — an unapproved target is not worth defending', actual: unlistedCurrent.action, expected: 'await-approval' });
+    // But an APPROVED unlisted target IS defended: otherwise a `node --inspect`
+    // bind would knock a working, explicitly-shared preview back into
+    // needs-approval and make the user agree to it a second time.
+    const approvedCurrent = planDevServerService(planInput({ row: relayRow(7777, { approvedPort: 7777 }), relay: relayService(7777), listeners: [{ port: 7777, pid: 1 }], detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' } }));
+    assert({ given: 'row=7777 APPROVED and still bound, unlisted 9230 opens', should: 'keep the working preview', actual: [approvedCurrent.action, approvedCurrent.action === 'none' && approvedCurrent.reason], expected: ['none', 'current-target-preferred'] });
   });
 });
 
 describe('describeServiceState', () => {
+  it('a sandbox whose URL cannot resolve is down, NOT repairable, and says so — whatever the relay and listeners say', () => {
+    assert({
+      given: 'a live relay row and a listening target, but urlRoutable: false',
+      should: 'be down with the unresolvable-URL sentence and repairable: false',
+      actual: describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(5173), relay: relayService(5173), listeners: [{ port: 5173, pid: 7 }, { port: 8080, pid: 42 }], urlRoutable: false }),
+      expected: { status: 'down', targetPort: 5173, via: 'relay', error: 'sprite-url-unresolvable', repairable: false, message: SPRITE_URL_UNRESOLVABLE_MESSAGE },
+    });
+    assert({
+      given: 'the same with urlRoutable omitted',
+      should: 'be live — the default has nothing to say',
+      actual: describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(5173), relay: relayService(5173), listeners: [{ port: 5173, pid: 7 }, { port: 8080, pid: 42 }] }).status,
+      expected: 'live',
+    });
+  });
+
   it('reports none / instance-unknown / stale before anything live is consulted', () => {
     assert({ given: 'no row', should: 'be none', actual: describeServiceState({ liveInstanceId: INSTANCE, row: null, relay: null, listeners: null }).status, expected: 'none' });
     assert({
@@ -460,20 +519,20 @@ describe('describeServiceState', () => {
     assert({
       given: 'relay running but the snapshot shows 5173 no longer bound',
       should: 'be down via relay (the dev server exited)',
-      actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: relayService(5173), listeners: [{ port: 8080, pid: 42 }] }).status,
+      actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: relayService(5173), listeners: [{ port: 8080, pid: 42 }], listenerSource: 'probe' }).status,
       expected: 'down',
     });
     assert({
       given: 'relay failed with an error and no stop intent',
       should: 'be down carrying the error',
       actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: relayService(5173, { status: 'failed', error: 'exited with code 1' }), listeners: [] }),
-      expected: { status: 'down', targetPort: 5173, via: 'relay', error: 'exited with code 1', message: 'The preview relay for port 5173 is not running (exited with code 1).' },
+      expected: { status: 'down', targetPort: 5173, via: 'relay', error: 'exited with code 1', repairable: true, message: 'The preview relay for port 5173 is not running (exited with code 1).' },
     });
     assert({
       given: 'a relay row but no relay defined',
       should: 'be down with a null error',
       actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: null, listeners: [] }),
-      expected: { status: 'down', targetPort: 5173, via: 'relay', error: null, message: 'The preview relay for port 5173 is not defined on this sandbox.' },
+      expected: { status: 'down', targetPort: 5173, via: 'relay', error: null, repairable: true, message: 'The preview relay for port 5173 is not defined on this sandbox.' },
     });
   });
 
@@ -483,7 +542,7 @@ describe('describeServiceState', () => {
       given: 'row=5173 but the (single-named) relay service is running for 3000 — a replace whose row write was lost',
       should: 'be down naming the mismatch, not live',
       actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: relayService(3000), listeners: null }),
-      expected: { status: 'down', targetPort: 5173, via: 'relay', error: null, message: 'The preview relay on this sandbox forwards to a different port than 5173; it will be re-pointed on the next reconcile.' },
+      expected: { status: 'down', targetPort: 5173, via: 'relay', error: null, repairable: true, message: 'The preview relay on this sandbox forwards to a different port than 5173; it will be re-pointed on the next reconcile.' },
     });
     assert({
       given: 'the same mismatch while the relay is starting',
@@ -508,29 +567,310 @@ describe('describeServiceState', () => {
       expected: { status: 'blocked', targetPort: 5173, message: HTTP_PORT_BUSY_MESSAGE },
     });
     assert({
-      given: 'a relay row, relay RUNNING as pid 42, pid 9 on 8080',
-      should: 'still be blocked — a running relay that lost the bind is not serving',
-      actual: describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(5173), relay: relayService(5173, { pid: 42 }), listeners: [{ port: 8080, pid: 9 }] }).status,
+      given: 'a relay row, relay RUNNING as pid 42, a PROBE says pid 9 on 8080',
+      should: 'still be blocked — a fresh pid that is not the relay is a stranger on the slot',
+      actual: describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(5173), relay: relayService(5173, { pid: 42 }), listeners: [{ port: 8080, pid: 9 }], listenerSource: 'probe' }).status,
       expected: 'blocked',
+    });
+    assert({
+      given: 'the same, but the pid comes from the WATCH snapshot',
+      should: 'NOT be blocked — a relay that lost its bind exits and stops being running; a stale watch pid is the relay\'s previous incarnation (production, first re-pick)',
+      actual: describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(5173), relay: relayService(5173, { pid: 42 }), listeners: [{ port: 8080, pid: 9 }] }).status,
+      expected: 'live',
     });
   });
 
   it('describes a direct 8080 preview from the listener snapshot alone', () => {
     const row = relayRow(8080);
     assert({ given: 'direct row, 8080 bound', should: 'be live via direct', actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: null, listeners: [{ port: 8080, pid: 5 }] }), expected: { status: 'live', targetPort: 8080, via: 'direct', message: 'Serving port 8080 directly.' } });
-    assert({ given: 'direct row, snapshot shows 8080 unbound', should: 'be down via direct', actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: null, listeners: [] }).status, expected: 'down' });
+    assert({ given: 'direct row, snapshot shows 8080 unbound', should: 'be down via direct', actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: null, listeners: [], listenerSource: 'probe' }).status, expected: 'down' });
     assert({ given: 'direct row, no snapshot', should: 'be live (nothing contradicts the row)', actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: null, listeners: null }).status, expected: 'live' });
     assert({
       given: 'direct row, but a leftover relay is still running on 8080',
       should: 'be down naming the leftover relay (same slot-holder read as the relay branch)',
       actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: relayService(5173), listeners: [{ port: 8080, pid: 42 }] }),
-      expected: { status: 'down', targetPort: 8080, via: 'direct', error: null, message: 'A leftover preview relay still holds port 8080; it will be removed on the next reconcile.' },
+      expected: { status: 'down', targetPort: 8080, via: 'direct', error: null, repairable: true, message: 'A leftover preview relay still holds port 8080; it will be removed on the next reconcile.' },
     });
+  });
+
+  /**
+   * `down.repairable` is a PROMISE ABOUT THE PLANNER, so it is asserted
+   * against the planner rather than restated: for every `down` a reconcile
+   * can reach, run the exact plan a resume would run (`detected: null`, same
+   * row, same relay, same snapshot) and require `repairable` to equal
+   * "this plan does something". A `none` plan (`already-direct` /
+   * `already-relaying`) is a Restart button that provably no-ops.
+   */
+  it('a target the WATCH channel cannot see is not "gone" — it is unknown, and renders as recorded', () => {
+    // The bug this pins, verified against a real sprite: `ports/watch` never
+    // reports a Next.js dev server's bind at all. Reading that silence as
+    // absence made `describeServiceState` announce "the dev server on port
+    // 3000 is not listening any more" about a server that was serving fine —
+    // and `repairable: false` took away the one control that might have
+    // helped. A snapshot proves what IS bound and nothing about what is not.
+    const invisible = describeServiceState({
+      liveInstanceId: INSTANCE,
+      row: relayRow(3000),
+      relay: relayService(3000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+    });
+    assert({
+      given: 'a live relay whose target is missing from a WATCH snapshot',
+      should: 'stay live — absence was never observed, only unreported',
+      actual: invisible.status,
+      expected: 'live',
+    });
+
+    // The counterweight: a PROBE is complete, so its silence IS evidence.
+    const probed = describeServiceState({
+      liveInstanceId: INSTANCE,
+      row: relayRow(3000),
+      relay: relayService(3000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+      listenerSource: 'probe',
+    });
+    assert({
+      given: 'the same inputs from an authoritative probe',
+      should: 'be down — here the absence really was observed',
+      actual: probed.status,
+      expected: 'down',
+    });
+  });
+
+  it('a USER-PINNED target outranks any detection, however likely-looking', () => {
+    // The thrash guard only shields against UNLISTED newcomers, which is
+    // right for a target detection chose. A pinned target is different: the
+    // person already answered the question, so even a textbook dev port
+    // yields to it. Without this, a user who picked 9000 in the ports pane
+    // would lose it the moment vite came up on 5173.
+    const known = planDevServerService(planInput({
+      row: relayRow(9000, { approvedPort: 9000, selectedByUserAt: NOW }),
+      relay: relayService(9000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+      detected: { kind: 'dev-server', port: 5173, likelihood: 'known-dev-port' },
+    }));
+    assert({
+      given: 'a pinned 9000 when a KNOWN dev port opens',
+      should: 'keep the pinned target',
+      actual: [known.action, known.action === 'none' && known.reason],
+      expected: ['none', 'user-selected-target'],
+    });
+
+    // It yields to exactly one thing: a probe proving the pinned port is gone.
+    const gone = planDevServerService(planInput({
+      row: relayRow(9000, { approvedPort: 9000, selectedByUserAt: NOW }),
+      relay: relayService(9000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+      listenerSource: 'probe',
+      detected: { kind: 'dev-server', port: 5173, likelihood: 'known-dev-port' },
+    }));
+    assert({
+      given: 'a PROBE proving the pinned port stopped listening',
+      should: 'release the pin and take the newcomer',
+      actual: gone.action,
+      expected: 'replace-relay',
+    });
+
+    // And an UNPINNED row behaves as before — the pin is not a blanket freeze.
+    const unpinned = planDevServerService(planInput({
+      row: relayRow(9000, { approvedPort: 9000 }),
+      relay: relayService(9000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+      detected: { kind: 'dev-server', port: 5173, likelihood: 'known-dev-port' },
+    }));
+    assert({
+      given: 'the same case with no pin',
+      should: 'let the known dev port take over',
+      actual: unpinned.action,
+      expected: 'replace-relay',
+    });
+  });
+
+  it('the thrash guard protects a target the watch channel cannot see', () => {
+    // Same root cause, worse consequence: the guard required a POSITIVE
+    // sighting of the current target, so for an invisible port it never
+    // fired, and the next unlisted bind silently replaced a preview the user
+    // had explicitly chosen.
+    const held = planDevServerService(planInput({
+      row: relayRow(9000, { approvedPort: 9000 }),
+      relay: relayService(9000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+      detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' },
+    }));
+    assert({
+      given: 'an approved target absent from a WATCH snapshot when another unlisted port opens',
+      should: 'keep the current target — nothing established that it went away',
+      actual: [held.action, held.action === 'none' && held.reason],
+      expected: ['none', 'current-target-preferred'],
+    });
+
+    const released = planDevServerService(planInput({
+      row: relayRow(9000, { approvedPort: 9000 }),
+      relay: relayService(9000),
+      listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }],
+      listenerSource: 'probe',
+      detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' },
+    }));
+    assert({
+      given: 'the same case where a PROBE proves the target is gone',
+      should: 'release the guard and take the newcomer',
+      actual: released.action,
+      expected: 'await-approval',
+    });
+  });
+
+  it('repairable says exactly whether a reconcile\'s plan would change anything', () => {
+    const cases: { name: string; row: DevPreviewRow; relay: SandboxServiceInfo | null; listeners: readonly { port: number; pid?: number }[] }[] = [
+      { name: 'relay crashed', row: relayRow(5173), relay: relayService(5173, { status: 'failed', error: 'boom' }), listeners: [{ port: 5173, pid: 7 }] },
+      { name: 'relay undefined', row: relayRow(5173), relay: null, listeners: [{ port: 5173, pid: 7 }] },
+      { name: 'relay pointed elsewhere', row: relayRow(5173), relay: relayService(3000), listeners: [{ port: 5173, pid: 7 }] },
+      { name: 'relay running, target gone', row: relayRow(5173), relay: relayService(5173), listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }] },
+      { name: 'direct row, leftover relay on 8080', row: relayRow(SPRITE_HTTP_PORT), relay: relayService(5173), listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }] },
+      { name: 'direct row, server gone', row: relayRow(SPRITE_HTTP_PORT), relay: null, listeners: [] },
+    ];
+    for (const { name, row, relay, listeners } of cases) {
+      const state = describeServiceState({ liveInstanceId: INSTANCE, row, relay, listeners, listenerSource: 'probe' });
+      expect(state.status, `${name} should be down`).toBe('down');
+      if (state.status !== 'down') continue;
+      const plan = planDevServerService(planInput({ row, relay, listeners, detected: null }));
+      assert({
+        given: name,
+        should: 'mark repairable iff the resume\'s own plan is not a no-op',
+        actual: [state.repairable, plan.action === 'none' ? `none:${plan.reason}` : plan.action],
+        expected: [plan.action !== 'none', plan.action === 'none' ? `none:${plan.reason}` : plan.action],
+      });
+    }
   });
 
   it('has no public-exposure state anywhere in its vocabulary', () => {
     const state = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(5173), relay: relayService(5173), listeners: null });
     expect(JSON.stringify(state).toLowerCase()).not.toContain('public');
     expect(Object.keys(state)).not.toContain('url');
+  });
+});
+
+describe('sharing an UNLISTED port is a decision, not a default', () => {
+  it('draws the line at the known dev-server ports, and nowhere else', () => {
+    for (const port of KNOWN_DEV_SERVER_PORTS) {
+      assert({ given: `port ${port}`, should: 'need no approval — running the tool IS the ask', actual: requiresPreviewApproval(port), expected: false });
+    }
+    for (const port of [9000, 7777, 9230, 4444, 1]) {
+      assert({ given: `port ${port}`, should: 'need approval', actual: requiresPreviewApproval(port), expected: true });
+    }
+    assert({ given: 'no row at all', should: 'never count as approved', actual: isPreviewApproved(null, 9000), expected: false });
+    assert({ given: 'approval for another port', should: 'not carry over — approval is per PORT', actual: isPreviewApproved({ approvedPort: 9000 }, 9001), expected: false });
+    assert({ given: 'approval for this port', should: 'count', actual: isPreviewApproved({ approvedPort: 9000 }, 9000), expected: true });
+  });
+
+  it('a fresh unlisted detection is RECORDED but never relayed — the row it writes serves nothing', () => {
+    const plan = planDevServerService(planInput({ detected: { kind: 'dev-server', port: 9000, likelihood: 'unlisted' } }));
+    assert({
+      given: 'a dev server on 9000 with no approval',
+      should: 'await approval, writing a row with NO relay',
+      actual: plan,
+      expected: {
+        action: 'await-approval',
+        targetPort: 9000,
+        removeRelay: false,
+        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 9000, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null },
+      },
+    });
+  });
+
+  it('the approval unlocks exactly the port it names, and the relay starts on the next plan', () => {
+    const approved = planDevServerService(planInput({ row: relayRow(9000, { relayServiceName: null, approvedPort: 9000 }), detected: { kind: 'dev-server', port: 9000, likelihood: 'unlisted' } }));
+    assert({ given: '9000 approved', should: 'create the relay', actual: [approved.action, approved.action === 'start-relay' && approved.via], expected: ['start-relay', 'create'] });
+
+    // The server moved to another unlisted port: the old approval does not
+    // travel with it, so exposure stops until the user agrees again.
+    const moved = planDevServerService(planInput({ row: relayRow(9000, { approvedPort: 9000 }), relay: relayService(9000), listeners: [{ port: 8080, pid: 42 }], listenerSource: 'probe', detected: { kind: 'dev-server', port: 9001, likelihood: 'unlisted' } }));
+    assert({ given: 'an approved 9000 moving to 9001', should: 'await approval again AND remove the 9000 relay', actual: [moved.action, moved.action === 'await-approval' && moved.removeRelay], expected: ['await-approval', true] });
+  });
+
+  it('never asks about 8080 or a known port, and asks BEFORE the slot questions', () => {
+    const direct = planDevServerService(planInput({ detected: detected(8080, 5), listeners: [{ port: 8080, pid: 5 }] }));
+    assert({ given: 'the server on 8080 itself', should: 'record directly — 8080 is a known dev port', actual: direct.action, expected: 'record-direct' });
+    const known = planDevServerService(planInput({ detected: detected(5173) }));
+    assert({ given: 'vite on 5173', should: 'start the relay with no approval', actual: known.action, expected: 'start-relay' });
+
+    // A held slot and an unknown snapshot are both answers about STARTING
+    // something. Nothing is being started here, so neither is the honest reason.
+    const busy = planDevServerService(planInput({ detected: { kind: 'dev-server', port: 9000, likelihood: 'unlisted' }, listeners: [{ port: 8080, pid: 99 }] }));
+    assert({ given: 'an unlisted port while a stranger holds 8080', should: 'still be await-approval, not http-port-busy', actual: busy.action, expected: 'await-approval' });
+    const blind = planDevServerService(planInput({ detected: { kind: 'dev-server', port: 9000, likelihood: 'unlisted' }, listenersKnown: false }));
+    assert({ given: 'an unlisted port with no listener snapshot', should: 'still be await-approval, not slot-unknown', actual: blind.action, expected: 'await-approval' });
+  });
+
+  it('a LIVE relay that already forwards to the target survives an unknown listener snapshot', () => {
+    // The guard exists to refuse a START planned blind. This relay is not a
+    // start: it is already running and already pointed at 5173, and it is
+    // itself what holds 8080 — so the question the guard asks is answered
+    // without a snapshot. Refusing here told a user whose preview was
+    // ALREADY SERVING that it would start shortly.
+    const serving = planDevServerService(planInput({ row: relayRow(5173), relay: relayService(5173), listenersKnown: false }));
+    assert({
+      given: 'a live relay on the row target with no listener snapshot',
+      should: 'be a no-op, not refused as slot-unknown',
+      actual: [serving.action, serving.action === 'none' && serving.reason],
+      expected: ['none', 'already-relaying'],
+    });
+
+    // Same relay, row does not name it: recording the row touches no process,
+    // so it also needs no snapshot.
+    const unrecorded = planDevServerService(planInput({ row: null, relay: relayService(5173), detected: detected(5173), listenersKnown: false }));
+    assert({
+      given: 'a live matching relay the row does not know about, snapshot unknown',
+      should: 'record it rather than refuse',
+      actual: [unrecorded.action, unrecorded.action === 'start-relay' && unrecorded.via],
+      expected: ['start-relay', 'already-running'],
+    });
+
+    // The counterweight: a relay that is NOT alive has to be started, which
+    // is a real process start on 8080, so it still waits for a snapshot.
+    const dead = planDevServerService(planInput({ row: relayRow(5173), relay: relayService(5173, { status: 'failed' }), listenersKnown: false }));
+    assert({
+      given: 'a matching but DEAD relay with no listener snapshot',
+      should: 'still refuse, because restarting it is a real start',
+      actual: [dead.action, dead.action === 'refuse' && dead.reason],
+      expected: ['refuse', 'slot-unknown'],
+    });
+  });
+
+  it('a STOP still outranks approval — the user switching it off is never overridden by a pending decision', () => {
+    const stopped = planDevServerService(planInput({ row: relayRow(9000, { relayServiceName: null, stoppedByUserAt: NOW }), detected: { kind: 'dev-server', port: 9000, likelihood: 'unlisted' } }));
+    assert({ given: 'an unlisted port on a switched-off preview', should: 'stay off', actual: [stopped.action, stopped.action === 'none' && stopped.reason], expected: ['none', 'user-stopped'] });
+  });
+
+  it('describeServiceState says needs-approval, and says STARTING once approved but not yet relayed', () => {
+    const waiting = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null }), relay: null, listeners: null });
+    assert({ given: 'a recorded but unapproved 9000', should: 'be needs-approval naming the port', actual: [waiting.status, waiting.status === 'needs-approval' && waiting.targetPort], expected: ['needs-approval', 9000] });
+    expect(waiting.message).toContain('9000');
+
+    // DOWN, not "starting…": the relay is created in the same call that
+    // records the consent, so a row in this shape means that create did not
+    // happen and nothing necessarily retries it. `down` is what keeps the
+    // Restart control on screen; "starting" would promise an arrival that
+    // never comes.
+    const approved = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, approvedPort: 9000 }), relay: null, listeners: null });
+    assert({ given: 'approved but no relay was created', should: 'read as down and stay recoverable', actual: [approved.status, approved.status === 'down' && approved.via], expected: ['down', 'relay'] });
+
+    // The relay was planned and REFUSED because a stranger holds 8080. Saying
+    // "starting…" would be a lie that never resolves and would hide the one
+    // thing the user can act on.
+    const held = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, approvedPort: 9000 }), relay: null, listeners: [{ port: 8080, pid: 99 }] });
+    assert({ given: 'approved while a user process holds 8080', should: 'say the port is busy, not "starting"', actual: [held.status, held.message], expected: ['blocked', HTTP_PORT_BUSY_MESSAGE] });
+    // With no snapshot the slot is UNKNOWN, which is not evidence of a problem.
+    assert({ given: 'approved with no listener snapshot', should: 'stay down rather than invent a blockage', actual: describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, approvedPort: 9000 }), relay: null, listeners: null }).status, expected: 'down' });
+
+    // A row can reach the relay-less branch with an ORDINARY dev-server port:
+    // a stop records that the relay is gone, and the resume clears the stop
+    // before the relay is re-created. That must not demand consent for a port
+    // that never needed any — the whole Share affordance would appear on a
+    // vite server the user has been previewing all along.
+    const resumedKnownPort = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(5173, { relayServiceName: null }), relay: null, listeners: null });
+    assert({ given: 'a known dev port whose relay was stopped and then resumed', should: 'read as down — recoverable in one click — never as needs-approval', actual: resumedKnownPort.status, expected: 'down' });
+
+    const off = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, stoppedByUserAt: NOW }), relay: null, listeners: null });
+    assert({ given: 'a switched-off unapproved preview', should: 'read as stopped, not as a pending decision', actual: off.status, expected: 'stopped' });
   });
 });

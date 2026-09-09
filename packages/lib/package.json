@@ -983,6 +983,16 @@
       "import": "./dist/services/sandbox/preview/dev-preview-contract.js",
       "require": "./dist/services/sandbox/preview/dev-preview-contract.js"
     },
+    "./services/sandbox/preview/dev-preview-lock": {
+      "types": "./dist/services/sandbox/preview/dev-preview-lock.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-lock.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-lock.js"
+    },
+    "./services/sandbox/preview/dev-preview-reconcile": {
+      "types": "./dist/services/sandbox/preview/dev-preview-reconcile.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-reconcile.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-reconcile.js"
+    },
     "./services/sandbox/preview/dev-preview-status": {
       "types": "./dist/services/sandbox/preview/dev-preview-status.d.ts",
       "import": "./dist/services/sandbox/preview/dev-preview-status.js",
@@ -1017,6 +1027,11 @@
       "types": "./dist/services/sandbox/sandbox-client/sprite-sandbox-host.d.ts",
       "import": "./dist/services/sandbox/sandbox-client/sprite-sandbox-host.js",
       "require": "./dist/services/sandbox/sandbox-client/sprite-sandbox-host.js"
+    },
+    "./services/sandbox/sandbox-client/local-env-sandbox-host": {
+      "types": "./dist/services/sandbox/sandbox-client/local-env-sandbox-host.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/local-env-sandbox-host.js",
+      "require": "./dist/services/sandbox/sandbox-client/local-env-sandbox-host.js"
     },
     "./services/sandbox/sandbox-client/sandbox-host-adapter": {
       "types": "./dist/services/sandbox/sandbox-client/sandbox-host-adapter.d.ts",

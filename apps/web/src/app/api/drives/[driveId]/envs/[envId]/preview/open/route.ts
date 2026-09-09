@@ -25,7 +25,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, isPrincipalDriveMember } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isPrincipalDriveMember, isSessionAuthResult } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
@@ -41,6 +41,9 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
     const { driveId, envId } = await context.params;
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return signInOrDeny(request, auth.error);
+    // `allow: ['session']` already excludes every other principal; narrowing
+    // makes that a type fact so `sessionId` is read, never asserted.
+    if (!isSessionAuthResult(auth)) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
     if (!isAllowedPreviewOpen(request)) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `env:${envId}`, details: { route: ROUTE, reason: 'cross-site-embed' }, riskScore: 0.6 });
@@ -52,7 +55,7 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
     }
     if (!(await resolveEnvInDrive(envId, driveId))) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
 
-    const opened = await openPreviewForUser({ authorizeAs: { kind: 'env', id: envId }, userId: auth.userId });
+    const opened = await openPreviewForUser({ authorizeAs: { kind: 'env', id: envId }, userId: auth.userId, sessionId: auth.sessionId });
     if (!opened.ok) {
       if (opened.reason === 'not-authorized') {
         auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `env:${envId}`, details: { route: ROUTE, reason: opened.detail ?? 'not-authorized' } });

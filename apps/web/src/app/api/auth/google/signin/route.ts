@@ -15,7 +15,7 @@ import { generatePKCE } from '@pagespace/lib/auth/pkce';
 // bouncing users with oauth_error after they complete provider auth.
 const googleSigninSchema = z.object({
   returnUrl: z.string().max(2048).optional(),
-  platform: z.enum(['web', 'desktop', 'ios']).optional(),
+  platform: z.enum(['web', 'desktop', 'ios', 'android']).optional(),
   shell: z.enum(DESKTOP_SHELLS).optional(),
   deviceId: z.string().min(1).max(128).optional(),
   deviceName: z.string().max(255).optional(),

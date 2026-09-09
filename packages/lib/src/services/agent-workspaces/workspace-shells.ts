@@ -20,7 +20,7 @@
  * module executes those verdicts.
  */
 
-import type { SandboxHost } from '../sandbox/sandbox-host';
+import { LocalEnvUnsupportedError, type SandboxHost } from '../sandbox/sandbox-host';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
 import { planSpawnShell, planKillTarget } from '../../agent-workspaces/plan-spawn-worker';
 import type { ShellAgentType, ShellDTO } from '../../agent-workspaces/shells-contract';
@@ -169,7 +169,9 @@ export interface KillSessionShellDeps {
 export type KillSessionShellResult =
   /** `killed: false` means there was nothing left to kill — see the 404-as-success note below. */
   | { ok: true; killed: boolean }
-  | { ok: false; reason: 'error' };
+  | { ok: false; reason: 'error' }
+  /** The machine's substrate has no stream surface to kill through — see {@link KillShellProcessResult}. Kept distinct from `error` so a caller does not advise a retry that can never succeed. */
+  | { ok: false; reason: 'unsupported' };
 
 /**
  * What {@link killShellProcess} learned. `ok: false` means we learned NOTHING —
@@ -179,7 +181,18 @@ export type KillSessionShellResult =
  * launched" and "its sandbox is gone" are the same fact to every caller, which
  * is that no process of this shell's is left to worry about.
  */
-export type KillShellProcessResult = { ok: true } | { ok: false; reason: 'error' };
+export type KillShellProcessResult =
+  | { ok: true }
+  | { ok: false; reason: 'error' }
+  /**
+   * The machine's substrate has no interactive-stream surface on this seam, so
+   * there is no `killSession` to call — a LOCAL environment (invariant 12:
+   * `stream: false` is advertised, never faked). Deliberately NOT `ok: true`:
+   * success here means "the process is confirmed gone", and every caller acts
+   * on it by dropping the row that is the only thing pointing at it. Saying
+   * so about a process this seam cannot reach would orphan it.
+   */
+  | { ok: false; reason: 'unsupported' };
 
 /**
  * THE PTY HALF, on its own — the only part of a kill that leaves the database.
@@ -223,12 +236,25 @@ export async function killShellProcess({
   // A vanished sandbox has nothing left running; the row is still dropped.
   if (!handle) return { ok: true };
 
+  // The substrate has no stream surface at all, so no id here was ever opened
+  // through it. Answered from the advertised capability rather than from the
+  // refusal below purely so the reason is named before anything is attempted.
+  //
+  // `=== false` rather than `!`: only a handle that DECLARES it cannot stream
+  // is refused here. An absent declaration is not a claim, and treating it as
+  // one would refuse every handle a caller built dynamically — the type makes
+  // the field required, so a real host that forgot it fails at compile time,
+  // which is where that mistake belongs. The typed error below is the net
+  // that catches a handle which refuses without having advertised it.
+  if (handle.capabilities?.stream === false) return { ok: false, reason: 'unsupported' };
+
   try {
     // The kill-by-id endpoint reaches this session whether or not we hold a
     // live stream to it, and is idempotent against an already-dead id — so
     // anything that throws here is a real unknown, not "already gone".
     await handle.killSession(row.spriteExecId);
-  } catch {
+  } catch (error) {
+    if (error instanceof LocalEnvUnsupportedError) return { ok: false, reason: 'unsupported' };
     return { ok: false, reason: 'error' };
   }
   return { ok: true };

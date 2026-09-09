@@ -84,7 +84,7 @@ const workspaceNodeJoinRowSchema = z.object({
   nodeType: z.enum(['root', 'split', 'pane']).nullable(),
   axis: z.enum(['row', 'column']).nullable(),
   fraction: z.number().nullable(),
-  targetKind: z.enum(['chat', 'terminal', 'page']).nullable(),
+  targetKind: z.enum(['chat', 'terminal', 'page', 'ports']).nullable(),
   targetId: z.string().min(1).nullable(),
 });
 

@@ -22,6 +22,71 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!--
+                No https App Links filter here, deliberately. Do not add one back
+                without reading the "Deep links" section of apps/android/README.md
+                first: android:autoVerify="true" only removes an unverified app
+                from link resolution on API 31+, and minSdkVersion is 23, so on
+                API 23-30 the filter would put PageSpace in the disambiguation
+                chooser. No assetlinks.json can match a SHIPPED build (there is
+                no release signing certificate; a debug one can be verified
+                locally, which does not help a user's device) and nothing routes
+                appUrlOpen, so picking it there drops the invite or auth token —
+                landing on /dashboard from a cold start, or doing nothing visible
+                at all if the app is already running, since Bridge.onNewIntent
+                notifies plugins without reloading the WebView.
+            -->
+
+            <!--
+                Custom scheme, mirroring CFBundleURLSchemes `pagespace` on iOS.
+                It needs no domain verification and no assetlinks.json, so the
+                registration takes effect as soon as the app is installed, on
+                every supported API level.
+
+                Not live yet. This is the OAuth handoff target the Google and
+                Apple callback routes redirect to
+                (`pagespace://auth-exchange?code=...`), but only on their
+                `platform === 'ios'` branch, and oauth-state.ts types platform as
+                z.enum(['web','desktop','ios']) — 'android' is not a value it can
+                take, so nothing redirects here for Android. Registering the
+                scheme now means the manifest is not the blocker when the native
+                auth phase teaches that path about Android.
+
+                READ BEFORE MAKING IT LIVE. Registration is not ownership: any
+                other installed app may declare the same `pagespace://` VIEW
+                filter and be offered in the chooser or set as the user's default
+                handler. (No browser competes for the scheme, which is not the
+                same as no app competing for it.) And
+                /api/auth/desktop/exchange authenticates nothing but possession
+                of the one-time code — it takes { code } alone, with no PKCE
+                verifier and no binding to the app that started the flow, then
+                answers with sessionToken, csrfToken and deviceToken. So the
+                moment a server path emits that redirect for Android, an app that
+                wins the scheme can redeem the code for the user's session. Bind
+                the exchange first — an app-held PKCE verifier, or a return
+                channel a competing app cannot claim. Shipping this filter is
+                fine meanwhile; it is inert while nothing redirects to it. The
+                same weakness is live on iOS, which does take the deep-link
+                branch.
+
+                MainActivity is already launchMode="singleTask", so an incoming
+                link reaches the running task through onNewIntent; BridgeActivity
+                forwards that to Bridge.onNewIntent, and @capacitor/app's
+                AppPlugin.handleOnNewIntent turns an ACTION_VIEW intent into an
+                `appUrlOpen` event. No second task is started.
+
+                Note what that does NOT do: Bridge.onNewIntent only notifies
+                plugins, never loadUrl. So on a warm start the WebView stays on
+                whatever route it was showing — the event fires into a void while
+                no listener exists. Only a cold launch loads the start URL.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="pagespace" />
+            </intent-filter>
+
         </activity>
 
         <provider
@@ -38,4 +103,24 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+        Notification delivery. Declaring this is what makes a runtime request
+        possible at all: on API 33+ (targetSdk is 36) POST_NOTIFICATIONS is a
+        dangerous permission that starts out not granted, and an undeclared
+        dangerous permission cannot be requested — the request resolves denied
+        without ever showing a dialog, so every FCM message would be dropped
+        silently.
+
+        The runtime request itself is issued by @capacitor/push-notifications'
+        requestPermissions(), driven from usePushNotifications.ts. On API 32 and
+        below that plugin resolves "granted" without asking, because
+        notifications were not permission-gated then; maxSdkVersion is therefore
+        deliberately absent — the OS ignores the declaration on those levels.
+
+        This grants the ability to POST a notification, not to receive data.
+        A data-only FCM message still reaches MessagingService while the
+        permission is denied; only the visible notification is suppressed.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>

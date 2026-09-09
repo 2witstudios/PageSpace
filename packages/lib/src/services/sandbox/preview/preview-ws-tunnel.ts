@@ -54,6 +54,18 @@ export interface TunnelWebSocketUpgradeInput {
   request?: UpgradeRequestFn;
   handshakeTimeoutMs?: number;
   idleTimeoutMs?: number;
+  /**
+   * A HARD CEILING on how long an established tunnel may live, whatever the
+   * traffic. The idle cut alone is not enough: HMR chatter resets it forever,
+   * so a socket authorized once at upgrade could outlive the credential that
+   * opened it — the session revoked, the member removed from the drive, the
+   * preview switched off — while the HTTP half refuses on the very next
+   * request. Tying the ceiling to the cookie's own expiry makes the socket no
+   * longer-lived than the thing that authorized it; the client reconnects
+   * through the full gather, which is where all of those checks live.
+   * Omitted ⇒ no ceiling (the pure unit surfaces).
+   */
+  maxLifetimeMs?: number;
   /** Fired once when the tunnel is fully closed, whatever the reason. */
   onClose?: (summary: TunnelSummary) => void;
 }
@@ -103,6 +115,7 @@ export function tunnelWebSocketUpgrade(input: TunnelWebSocketUpgradeInput): void
     token,
     handshakeTimeoutMs = PREVIEW_PROXY_LIMITS.upstreamHeadersTimeoutMs,
     idleTimeoutMs = PREVIEW_PROXY_LIMITS.streamIdleTimeoutMs,
+    maxLifetimeMs,
   } = input;
   const request = input.request ?? (upstreamUrl.protocol === 'https:' ? https.request : http.request);
   const startedAt = Date.now();
@@ -173,7 +186,12 @@ export function tunnelWebSocketUpgrade(input: TunnelWebSocketUpgradeInput): void
       upstreamSocket.write(head);
     }
 
+    let ceiling: ReturnType<typeof setTimeout> | null = null;
     const closeBoth = () => {
+      if (ceiling !== null) {
+        clearTimeout(ceiling);
+        ceiling = null;
+      }
       clientSocket.destroy();
       upstreamSocket.destroy();
       finish('established', 101);
@@ -185,6 +203,12 @@ export function tunnelWebSocketUpgrade(input: TunnelWebSocketUpgradeInput): void
     // (a test's PassThrough) simply has no idle cut.
     armIdleTimeout(clientSocket, idleTimeoutMs, closeBoth);
     upstreamSocket.setTimeout(idleTimeoutMs, closeBoth);
+    // The ceiling. `unref` so a pending timer cannot hold a process open, and
+    // cleared by `closeBoth` through `onClosed` below.
+    if (maxLifetimeMs !== undefined && maxLifetimeMs > 0) {
+      ceiling = setTimeout(closeBoth, maxLifetimeMs);
+      (ceiling as unknown as { unref?: () => void }).unref?.();
+    }
     clientSocket.on('error', closeBoth);
     upstreamSocket.on('error', closeBoth);
     clientSocket.on('close', closeBoth);

@@ -31,6 +31,8 @@ export const envDevPreviewPath = (driveId: string, envId: string): string =>
 
 /** The actions route for a status path — one derivation, so a caller can never pair them wrongly. */
 export const devPreviewActionsPath = (statusPath: string): string => `${statusPath}/actions`;
+/** The on-demand port probe — POST, because it can wake a paused sprite and a GET that wakes is unsafe by HTTP semantics. */
+export const devPreviewPortsPath = (statusPath: string): string => `${statusPath}/ports`;
 
 /**
  * `fetchJSON`, not a hand-rolled `fetchWithAuth` + `ok` check: the
@@ -106,7 +108,10 @@ export function devPreviewRefreshInterval({
  *    an error is cached, so without a retry policy one transient 500 would
  *    stop the status forever. `onErrorRetry` re-asks at the same disciplined
  *    interval (never faster, never past the idle stop), keeping the last
- *    good answer on screen meanwhile.
+ *    good answer on screen meanwhile. Hidden or offline at fire time it does
+ *    not request — and does not give up either: it re-arms and asks again,
+ *    because with an error cached and `revalidateOnFocus: false` this timer
+ *    is the ONLY thing that can unfreeze the status.
  *
  * The interval callback is memoized: SWR restarts its timer whenever that
  * function's identity changes, so an inline arrow in a component that
@@ -140,13 +145,53 @@ export function useDevPreviewStatus(
     () => devPreviewRefreshInterval({ polling, pauseWhenIdle, idleStreak: idleStreak.current, intervalMs }),
     [polling, pauseWhenIdle, intervalMs],
   );
+  // SWR applies `refreshWhenHidden`/`refreshWhenOffline` to its OWN interval
+  // timer, not to a retry we schedule, and it cannot cancel ours on unmount.
+  // So the retry re-asks the same conditions AT FIRE TIME (still polling? tab
+  // visible? online?) and the pending timer is cleared when the hook goes away
+  // or its policy changes — otherwise a hidden tab or a collapsed row would
+  // keep calling the status route after everything else had stopped.
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearRetry = useCallback(() => {
+    if (retryTimer.current !== null) {
+      clearTimeout(retryTimer.current);
+      retryTimer.current = null;
+    }
+  }, []);
   const onErrorRetry = useCallback<NonNullable<SWRConfiguration['onErrorRetry']>>(
     (_error, _key, _config, revalidate, { retryCount }) => {
-      const ms = nextInterval();
-      if (ms > 0) setTimeout(() => void revalidate({ retryCount }), ms);
+      const schedule = (): void => {
+        const ms = nextInterval();
+        // 0 is the DISCIPLINED stop — `polling: false`, or the idle pause.
+        // Dropping the timer there is correct: the policy that re-arms it
+        // (expand, pane closed) re-renders the hook.
+        if (ms <= 0) return;
+        clearRetry();
+        retryTimer.current = setTimeout(() => {
+          retryTimer.current = null;
+          const visible = typeof document === 'undefined' || document.visibilityState !== 'hidden';
+          const online = typeof navigator === 'undefined' || navigator.onLine !== false;
+          // HIDDEN OR OFFLINE IS A REASON TO WAIT, NEVER A REASON TO GIVE UP.
+          // This timer is the ONLY thing that can un-freeze the status once an
+          // error is cached: SWR skips interval revalidation while it holds
+          // one, and `revalidateOnFocus: false` means coming back to the tab
+          // revalidates nothing. Dropping it here left the status frozen at
+          // the last good answer until a manual `mutate()` or a remount. So
+          // re-arm at the same disciplined interval and re-ask next time —
+          // no request is made while hidden or offline, which is the property
+          // `refreshWhenHidden: false` was protecting in the first place.
+          if (!visible || !online) {
+            schedule();
+            return;
+          }
+          if (nextInterval() > 0) void revalidate({ retryCount });
+        }, ms);
+      };
+      schedule();
     },
-    [nextInterval],
+    [nextInterval, clearRetry],
   );
+  useEffect(() => clearRetry, [clearRetry, key, polling, pauseWhenIdle, intervalMs]);
 
   const { data, error, isLoading, mutate } = useSWR<{ preview: DevPreviewStatusDTO }>(
     key,

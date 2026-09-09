@@ -898,6 +898,27 @@ describe('kill_shell', () => {
     const tools = createSessionTools(deps);
     const result = await run(tools.kill_shell, { shellId: SHELL.shellId }, contextOptions());
     expect(result).toEqual(expect.objectContaining({ success: false, reason: 'error' }));
+    expect((result as { error: string }).error).toContain('Retry');
+  });
+
+  /**
+   * The MODEL reads the sentence, not the reason code. A substrate with no
+   * interactive-stream surface (a local environment) refuses permanently, so
+   * telling the model to retry instructs a loop it can never break out of —
+   * the same defect as collapsing two distinct refusals into one word, except
+   * this one actively causes the wasted work.
+   */
+  it('given a substrate with NO terminal support, should tell the model not to retry — not "its process may still be running"', async () => {
+    const deps = makeDeps({ killShell: vi.fn(async () => ({ ok: false as const, reason: 'unsupported' })) });
+    const tools = createSessionTools(deps);
+
+    const result = await run(tools.kill_shell, { shellId: SHELL.shellId }, contextOptions());
+
+    expect(result).toEqual(expect.objectContaining({ success: false, reason: 'unsupported' }));
+    const error = (result as { error: string }).error;
+    expect(error).toContain('no terminal support');
+    expect(error).toContain('Do not retry');
+    expect(error).not.toContain('may still be running');
   });
 });
 

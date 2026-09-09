@@ -155,6 +155,15 @@ export const driveEnvDtoSchema = z.discriminatedUnion('substrate', [
     status: z.enum(DRIVE_ENV_LOCAL_STATUSES),
     /** Human name of the machine. */
     label: z.string().min(1),
+    /**
+     * Whether a machine has pinned its key. `false` is the AWAITING-ENROLLMENT
+     * row: the one state in which a drive owner may ask for a fresh one-time
+     * code (`POST …/envs/<id>/enrollment-code`). Carried as a fact rather than
+     * folded into `status`, because a never-enrolled env and an enrolled one
+     * whose machine is asleep are both `'disconnected'`, and only this
+     * distinguishes them.
+     */
+    enrolled: z.boolean(),
   }),
 ]);
 

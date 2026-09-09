@@ -86,10 +86,27 @@ export type PreviewForwardDecision =
         | 'instance-unknown'
         | 'stale-instance'
         | 'stopped-by-user'
+        | 'needs-approval'
         | 'http-port-busy'
         | 'preview-down'
         | 'preview-starting'
-        | 'wake-denied';
+        | 'wake-denied'
+        /**
+         * The machine's substrate has no dev-preview surface at all — a LOCAL
+         * environment (the user's own computer) advertises `preview: false`
+         * and its `urlInfo`/`powerState`/`services` members refuse with a
+         * typed error. Distinct from `preview-down`, which means a machine
+         * that HAS the surface is not serving on it: this one will never
+         * become available, so a client must not retry.
+         */
+        | 'preview-unsupported'
+        /**
+         * The sprite exists and may be serving, but its URL cannot resolve:
+         * the name it was created under, plus the platform's org suffix,
+         * exceeds a DNS label. Structural — no retry, no wake, no repair
+         * short of recreating the sandbox under the current name budget.
+         */
+        | 'sprite-url-unresolvable';
       /** Suggested HTTP status; the caller's not-found/denied policy may collapse it. */
       status: 403 | 404 | 409 | 502 | 503;
       /** Human copy for the response body — never a sprite name, URL or token. */
@@ -118,10 +135,17 @@ export function decidePreviewForward(input: PreviewForwardInput): PreviewForward
       return { kind: 'refuse', reason: 'stale-instance', status: 409, message: state.message };
     case 'stopped':
       return { kind: 'refuse', reason: 'stopped-by-user', status: 409, message: state.message };
+    case 'needs-approval':
+      // The one line that makes BOTH proxy tiers refuse an unshared port.
+      // The switch is exhaustive, so this cannot be forgotten: adding the
+      // state without this case does not compile.
+      return { kind: 'refuse', reason: 'needs-approval', status: 409, message: state.message };
     case 'blocked':
       return { kind: 'refuse', reason: 'http-port-busy', status: 409, message: state.message };
     case 'down':
-      return { kind: 'refuse', reason: 'preview-down', status: 502, message: state.message };
+      // A URL DNS cannot answer is structural, not a relay that is down:
+      // named so a client never retries or wakes for it.
+      return { kind: 'refuse', reason: state.error === 'sprite-url-unresolvable' ? 'sprite-url-unresolvable' : 'preview-down', status: 502, message: state.message };
     case 'starting':
       return { kind: 'refuse', reason: 'preview-starting', status: 503, message: state.message };
     case 'live':

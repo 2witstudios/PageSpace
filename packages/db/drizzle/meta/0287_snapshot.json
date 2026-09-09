@@ -1,5 +1,5 @@
 {
-  "id": "380a967c-5d07-4b92-97ab-31403e4140f6",
+  "id": "e42391fc-8a22-4ace-9842-a9180bd33521",
   "prevId": "4165033d-c951-4c0a-b31c-ffc91068a962",
   "version": "7",
   "dialect": "postgresql",
@@ -11783,12 +11783,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "regions": {
-          "name": "regions",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
         "createdAt": {
           "name": "createdAt",
           "type": "timestamp",
@@ -23509,6 +23503,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "sessionId": {
+          "name": "sessionId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "expiresAt": {
           "name": "expiresAt",
           "type": "timestamp",
@@ -23558,6 +23558,19 @@
           "tableTo": "users",
           "columnsFrom": [
             "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "dev_preview_grants_sessionId_sessions_id_fk": {
+          "name": "dev_preview_grants_sessionId_sessions_id_fk",
+          "tableFrom": "dev_preview_grants",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "sessionId"
           ],
           "columnsTo": [
             "id"

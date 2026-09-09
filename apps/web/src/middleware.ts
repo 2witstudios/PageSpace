@@ -16,6 +16,7 @@ import {
 import { isCanvasPreviewRoute } from '@/app/api/canvas/_shared/previewRoute';
 import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { parsePreviewHost, rewritePreviewHostPath } from '@pagespace/lib/services/sandbox/preview/preview-host';
+import { DEV_PREVIEW_PATH_HEADER } from '@/lib/dev-preview/preview-path-header';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/url-utils';
 import { logSecurityEvent } from '@/lib/logging/edge-logger';
 import {
@@ -153,7 +154,13 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     if (previewHolder !== null) {
       const rewritten = new URL(req.url);
       rewritten.pathname = rewritePreviewHostPath(previewHolder, pathname);
-      return NextResponse.rewrite(rewritten);
+      // The handler sees the ORIGINAL pathname after a rewrite, not this one,
+      // and cannot tell a mount-shaped preview path from a mount-carrying
+      // request by shape — so hand it the original explicitly. Overwrites
+      // any client-sent value: on a preview host this header is ours.
+      const requestHeaders = new Headers(req.headers);
+      requestHeaders.set(DEV_PREVIEW_PATH_HEADER, pathname);
+      return NextResponse.rewrite(rewritten, { request: { headers: requestHeaders } });
     }
 
     // Non-cloud route blocking (defense-in-depth)
@@ -327,6 +334,14 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     // no auth function at all — confirmed by reading each route.ts directly.
     // `/api/contact` is the public marketing contact form (ContactForm.tsx), unauthenticated
     // by design.
+    // `/api/env-bridge/*` is the local-environment bridge: a MACHINE, which by design has
+    // no session and never will (invariant 2 — machine-held identity). Each route carries its
+    // own non-session credential and refuses without it: `enroll` presents the one-time
+    // enrollment code, `token` a challenge signed by the pinned machine key, and `ws` a Bearer
+    // `env:bridge` token whose scope, resourceType and resourceId it re-checks. Same rationale
+    // as `/api/mcp/` above. Without this the session gate answers 401 before any of them runs
+    // and the entire bridge is unreachable — route tests never saw it because they invoke the
+    // handlers directly, and the exit-gate run found it on the first real enrollment.
     if (
       pathname.startsWith('/api/auth/csrf') ||
       pathname.startsWith('/api/auth/login-csrf') ||
@@ -342,6 +357,7 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       pathname.startsWith('/api/avatar/') ||
       pathname.startsWith('/api/provisioning-status/') ||
       pathname.startsWith('/api/mcp/') ||
+      pathname.startsWith('/api/env-bridge/') ||
       pathname.startsWith('/api/drives') ||
       pathname.startsWith('/api/cron/') ||
       pathname === '/api/oauth/authorize' ||

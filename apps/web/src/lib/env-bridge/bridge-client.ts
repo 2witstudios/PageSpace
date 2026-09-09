@@ -14,13 +14,14 @@
 import type { WebSocket } from 'ws';
 import { encodeFrame } from '@pagespace/lib/env-bridge/frame-codec';
 import type { GrantPrincipal } from '@pagespace/lib/env-bridge/grant';
+import type { UnsignedGrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 import type { MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
 import type { ServerSigningKeyring } from '@pagespace/lib/env-bridge/server-signing-key';
 import { logger } from '@pagespace/lib/logging/logger-config';
 import { loadServerSigningKeyring } from '@pagespace/lib/auth/env-bridge-signing-key';
 import { getAuthorizedEnvConnection, getEnvConnectionMetadata, onEnvConnectionLost } from '@/lib/websocket/ws-env-connections';
 import { RequestCorrelator, CorrelationError, grantCorrelatorTimeoutMs, type CorrelationFailureKind } from './correlator';
-import { signGrantFrame, type GrantIdSource, type UnsignedGrantFrame } from './grant-signer';
+import { signGrantFrame, type GrantIdSource } from './grant-signer';
 import { verifyResultFromMachine } from './result-verifier';
 
 export type EnvBridgeFailureKind = CorrelationFailureKind | 'not_connected' | 'signing_key_unavailable' | 'ttl_too_long';

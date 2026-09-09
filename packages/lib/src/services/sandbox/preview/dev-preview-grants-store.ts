@@ -29,11 +29,13 @@ export interface MintedPreviewGrant {
 export interface ConsumedPreviewGrant {
   holder: DevPreviewHolderRef;
   userId: string;
+  /** The session that minted the grant — carried into the cookie so revocation can be enforced per request. */
+  sessionId: string;
   cookieExpiresAt: Date;
 }
 
 export interface DevPreviewGrantsStore {
-  mint(input: { holder: DevPreviewHolderRef; userId: string; now: Date }): Promise<MintedPreviewGrant>;
+  mint(input: { holder: DevPreviewHolderRef; userId: string; sessionId: string; now: Date }): Promise<MintedPreviewGrant>;
   /** The grant's claims if THIS call redeemed it; null if it does not exist, is expired, or was already redeemed. */
   consume(input: { id: string; now: Date }): Promise<ConsumedPreviewGrant | null>;
 }
@@ -50,7 +52,7 @@ const GRANT_ID_SHAPE = /^[A-Za-z0-9_-]{43}$/;
 
 export function createDbDevPreviewGrantsStore(): DevPreviewGrantsStore {
   return {
-    async mint({ holder, userId, now }) {
+    async mint({ holder, userId, sessionId, now }) {
       const id = generatePreviewGrantId();
       const expiresAt = new Date(now.getTime() + PREVIEW_GRANT_TTL_MS);
       const cookieExpiresAt = new Date(now.getTime() + PREVIEW_COOKIE_TTL_MS);
@@ -59,6 +61,7 @@ export function createDbDevPreviewGrantsStore(): DevPreviewGrantsStore {
         holderKind: holder.kind,
         holderId: holder.id,
         userId,
+        sessionId,
         expiresAt,
         cookieExpiresAt,
         createdAt: now,
@@ -85,11 +88,12 @@ export function createDbDevPreviewGrantsStore(): DevPreviewGrantsStore {
           holderKind: devPreviewGrants.holderKind,
           holderId: devPreviewGrants.holderId,
           userId: devPreviewGrants.userId,
+          sessionId: devPreviewGrants.sessionId,
           cookieExpiresAt: devPreviewGrants.cookieExpiresAt,
         });
       if (!row) return null;
       const kind = row.holderKind === 'workspace' ? 'workspace' : 'env';
-      return { holder: { kind, id: row.holderId }, userId: row.userId, cookieExpiresAt: row.cookieExpiresAt };
+      return { holder: { kind, id: row.holderId }, userId: row.userId, sessionId: row.sessionId, cookieExpiresAt: row.cookieExpiresAt };
     },
   };
 }

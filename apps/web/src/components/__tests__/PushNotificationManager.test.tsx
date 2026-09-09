@@ -22,6 +22,7 @@ const defaultPushState = {
   isRegistered: false,
   isLoading: false,
   error: null,
+  hasPreviouslyDenied: false,
   requestPermission: vi.fn().mockResolvedValue(true),
   registerToken: vi.fn().mockResolvedValue(true),
   unregisterToken: vi.fn().mockResolvedValue(undefined),
@@ -108,6 +109,23 @@ describe('PushNotificationManager', () => {
     mockUsePushNotifications.mockReturnValue({
       ...defaultPushState,
       permissionStatus: 'denied',
+      requestPermission,
+      registerToken,
+    });
+
+    render(<PushNotificationManager />);
+
+    expect(requestPermission).not.toHaveBeenCalled();
+    expect(registerToken).not.toHaveBeenCalled();
+  });
+
+  it("regression: Android's 'prompt-with-rationale' does not re-prompt — the OS would still allow the dialog, so only this branch stops the every-launch nag", async () => {
+    const requestPermission = vi.fn().mockResolvedValue(false);
+    const registerToken = vi.fn().mockResolvedValue(false);
+    mockUsePushNotifications.mockReturnValue({
+      ...defaultPushState,
+      permissionStatus: 'prompt-with-rationale',
+      hasPreviouslyDenied: true,
       requestPermission,
       registerToken,
     });

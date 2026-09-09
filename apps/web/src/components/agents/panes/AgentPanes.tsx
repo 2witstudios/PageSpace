@@ -92,6 +92,7 @@ import {
 } from './workspace-conversations';
 import PaneChat from './PaneChat';
 import PagePaneView from './PagePaneView';
+import { PortsPane } from '@/components/dev-preview/PortsPane';
 import Shell from '../shell/Shell';
 
 export interface AgentPanesProps {
@@ -1479,6 +1480,15 @@ export default function AgentPanes({
     [bindPane, sessionId],
   );
 
+  // A port was picked in the picker — the SELECT is already posted there —
+  // so this pane becomes the preview. The target is the workspace itself:
+  // one sandbox has one preview, so the pane addresses the workspace, not the
+  // port. Synchronous like a page: nothing is minted here.
+  const handlePickPort = useCallback(
+    (nodeId: string) => bindPane(sessionId, nodeId, { kind: 'ports', id: sessionId }),
+    [bindPane, sessionId],
+  );
+
   const paneLabel = useCallback((node: PaneNode) => titleOf(targetIndex, node), [targetIndex]);
 
   const renderPane = ({
@@ -1578,6 +1588,11 @@ export default function AgentPanes({
               onPickShell={() => void handlePickShell(node.id)}
               onReattachShell={(shellId) => handleReattachShell(node.id, shellId)}
               onPickPage={(pageId) => handlePickPage(node.id, pageId)}
+              sessionId={sessionId}
+              onPickPort={() => handlePickPort(node.id)}
+              // The same signal as `autoFocus`: a picker THIS client just
+              // split into probes on open; a persisted one waits for Scan.
+              probePortsOnOpen={tree?.pendingPickerNodeId === node.id}
             />
           ) : surface.surface === 'loading' ? (
             <div className="flex h-full items-center justify-center">
@@ -1585,6 +1600,8 @@ export default function AgentPanes({
             </div>
           ) : surface.surface === 'page' ? (
             <PagePaneView pageId={surface.pageId} />
+          ) : surface.surface === 'ports' ? (
+            <PortsPane workspaceId={surface.workspaceId} />
           ) : surface.surface === 'terminal' ? (
             <Shell key={surface.shellId} shellId={surface.shellId} name={titleOf(targetIndex, node)} />
           ) : null}

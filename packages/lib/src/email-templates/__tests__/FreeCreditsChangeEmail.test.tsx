@@ -10,6 +10,7 @@ const PROPS = {
   minTopup: '$5',
   planUrl: 'https://app.pagespace.ai/settings/plan',
   usageUrl: 'https://app.pagespace.ai/settings/usage',
+  unsubscribeUrl: 'https://app.pagespace.ai/api/notifications/unsubscribe/ps_unsub_abc',
   postalAddress: 'PageSpace, 1 Example St, Springfield, IL 62704',
 };
 
@@ -64,13 +65,19 @@ describe('FreeCreditsChangeEmail', () => {
     expect(html).toMatch(/includes[\s\S]{0,40}15[\s\S]{0,40}credits per month/);
   });
 
-  it('is a relationship notice, so it renders NO unsubscribe link', async () => {
-    // A change to an existing plan is a relationship message under CAN-SPAM, and it
-    // must reach every affected account — there is no opt-out to offer.
+  it('given an unsubscribe URL, should render the opt-out link', async () => {
+    // The send script skips anyone already opted out of PRODUCT_UPDATE and gives
+    // everyone it does mail a working one-click opt-out.
     const html = await render();
 
+    expect(html).toContain('/api/notifications/unsubscribe/ps_unsub_abc');
+    expect(html).toContain('Unsubscribe');
+  });
+
+  it('given no unsubscribe URL, should omit the link rather than render a dead one', async () => {
+    const html = await render({ unsubscribeUrl: undefined });
+
     expect(html).not.toContain('Unsubscribe');
-    expect(html).not.toContain('/api/notifications/unsubscribe/');
   });
 
   it('given a postal address, should print it in the footer; given none, should omit it', async () => {

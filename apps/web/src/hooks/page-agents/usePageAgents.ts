@@ -39,6 +39,12 @@ export interface DriveWithAgents {
   agents: AgentSummary[];
   /** Whether THIS requester can use the sandbox in this drive (payer tier + actor edit access + kill switch). */
   sandboxEligible: boolean;
+  /**
+   * Whether this deployment offers LOCAL environments (`LOCAL_ENVS_ENABLED`,
+   * server-side). Ridden per drive the way `sandboxEligible` is, so the spawn
+   * palette resolves it from the drive entry it already reads; absent = off.
+   */
+  localEnvsEnabled: boolean;
 }
 
 /**

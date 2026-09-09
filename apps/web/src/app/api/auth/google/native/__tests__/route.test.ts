@@ -636,7 +636,7 @@ describe('POST /api/auth/google/native', () => {
       expect(body.error).toBe('Google sign-in not configured');
     });
 
-    it('given missing GOOGLE_OAUTH_IOS_CLIENT_ID, should return 500', async () => {
+    it('given missing GOOGLE_OAUTH_IOS_CLIENT_ID, should return 500 for an iOS token', async () => {
       delete process.env.GOOGLE_OAUTH_IOS_CLIENT_ID;
 
       const request = createNativeRequest(validNativePayload);
@@ -645,6 +645,40 @@ describe('POST /api/auth/google/native', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Google sign-in not configured');
+    });
+
+    // The Android SDK is configured with the WEB client id and its token carries
+    // the web client as the audience, so an Android-only deployment need never
+    // register an iOS OAuth client. Requiring one made native Google sign-in
+    // unusable there — reachable for the first time now that a client can send
+    // `platform: 'android'`.
+    it('given missing GOOGLE_OAUTH_IOS_CLIENT_ID, should still accept an Android token', async () => {
+      delete process.env.GOOGLE_OAUTH_IOS_CLIENT_ID;
+
+      const request = createNativeRequest({ ...validNativePayload, platform: 'android' });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+    });
+
+    it('given an Android token, should not accept the iOS client as an audience', async () => {
+      const request = createNativeRequest({ ...validNativePayload, platform: 'android' });
+      await POST(request);
+
+      expect(mockVerifyIdToken).toHaveBeenCalledWith({
+        idToken: 'valid-google-id-token',
+        audience: ['test-web-client-id'],
+      });
+    });
+
+    it('given an iOS token, should keep accepting either client as an audience', async () => {
+      const request = createNativeRequest(validNativePayload);
+      await POST(request);
+
+      expect(mockVerifyIdToken).toHaveBeenCalledWith({
+        idToken: 'valid-google-id-token',
+        audience: ['test-web-client-id', 'test-ios-client-id'],
+      });
     });
   });
 

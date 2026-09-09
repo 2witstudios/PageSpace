@@ -94,6 +94,8 @@ export interface LocalEnvFacts {
   label: string;
   /** Derived from `lastSeenAt` + the socket registry — never stored. */
   status: DriveEnvLocalStatus;
+  /** `drive_env_local.enrolledAt IS NOT NULL` — a machine has pinned its key. */
+  enrolled: boolean;
 }
 
 export function toDriveEnvDTO(row: DriveEnvRecord, local?: LocalEnvFacts): DriveEnvDTO {
@@ -110,7 +112,7 @@ export function toDriveEnvDTO(row: DriveEnvRecord, local?: LocalEnvFacts): Drive
     if (local === undefined) {
       throw new Error(`drive env ${row.id} is local but no drive_env_local facts were supplied to toDriveEnvDTO`);
     }
-    return { ...base, substrate: 'local', status: local.status, label: local.label };
+    return { ...base, substrate: 'local', status: local.status, label: local.label, enrolled: local.enrolled };
   }
   return { ...base, substrate: 'sprite', status: deriveDriveEnvStatus(row) };
 }
@@ -260,8 +262,63 @@ export async function createDriveEnv({
 }
 
 // ---------------------------------------------------------------------------
-// Local env identity: enroll → challenge → redeem
+// Local env identity: re-issue the code → enroll → challenge → redeem
 // ---------------------------------------------------------------------------
+
+export interface ReissueLocalEnvEnrollmentCodeDeps {
+  store: Pick<DriveEnvStore, 'findLocalByEnvId' | 'reissueEnrollmentCode'>;
+  now: () => Date;
+  identity: Pick<LocalEnvIdentityDeps, 'random' | 'hash'>;
+}
+
+export type ReissueLocalEnvEnrollmentCodeResult =
+  | { ok: true; enrollment: LocalEnvEnrollmentIssue }
+  /** No `drive_env_local` row: a Sprite env, an unknown id, or a local env whose owner was erased. */
+  | { ok: false; reason: 'not_found' }
+  /** A machine already pinned its key. Re-opening it to a second key would be a takeover, so this is final. */
+  | { ok: false; reason: 'already_enrolled' }
+  | { ok: false; reason: 'revoked' };
+
+/**
+ * A fresh one-time enrollment code for a local env whose machine has NOT
+ * enrolled yet (Local Environments epic, M3).
+ *
+ * The code hash is written at creation and the code shown once; a closed
+ * dialog, a lost clipboard or the ten-minute expiry used to leave the env
+ * permanently unenrollable. This replaces the hash and expiry (and clears any
+ * used stamp) under the SAME issuance the create path uses — the enrollment id
+ * is untouched, so the daemon's `enroll <enrollmentId> <code>` shape is the
+ * same command with a new code.
+ *
+ * **The security claim is the store's compare-and-set**, not the pre-read:
+ * `enrolledAt IS NULL AND revokedAt IS NULL` is the predicate of the UPDATE,
+ * so a machine that enrols between this read and this write wins, and no
+ * second key can ever be admitted to an enrolled env. The pre-read only
+ * chooses the honest typed answer without a write; a lost CAS re-reads and
+ * answers from the row as it now is, never with a code it did not store.
+ */
+export async function reissueLocalEnvEnrollmentCode({
+  envId,
+  deps,
+}: {
+  envId: string;
+  deps: ReissueLocalEnvEnrollmentCodeDeps;
+}): Promise<ReissueLocalEnvEnrollmentCodeResult> {
+  const refusalFor = (row: DriveEnvLocalRecord | null): ReissueLocalEnvEnrollmentCodeResult => {
+    if (!row) return { ok: false, reason: 'not_found' };
+    if (row.revokedAt !== null) return { ok: false, reason: 'revoked' };
+    return { ok: false, reason: 'already_enrolled' };
+  };
+  const row = await deps.store.findLocalByEnvId(envId);
+  if (!row || row.revokedAt !== null || row.enrolledAt !== null) return refusalFor(row);
+
+  const now = deps.now();
+  const issued = issueEnrollmentCode({ random: deps.identity.random, hash: deps.identity.hash, now: now.getTime() });
+  const expiresAt = new Date(issued.exp);
+  const stored = await deps.store.reissueEnrollmentCode({ envId, enrollmentCodeHash: issued.codeHash, enrollmentCodeExpiresAt: expiresAt, now });
+  if (!stored) return refusalFor(await deps.store.findLocalByEnvId(envId));
+  return { ok: true, enrollment: { enrollmentId: row.enrollmentId, code: issued.code, expiresAt } };
+}
 
 export interface LocalEnvIdentityServiceDeps {
   store: Pick<DriveEnvStore, 'findLocalByEnrollmentId' | 'pinMachineKey' | 'setChallenge' | 'consumeChallenge'>;
@@ -330,10 +387,13 @@ export async function enrollLocalDriveEnv({
     machinePublicKey: machinePublicKey as string,
     machineKeyFingerprint: deps.identity.fingerprint(spki),
     serverKeyId: deps.identity.signingKey.keyId,
+    // The hash this call VERIFIED, so a re-issue that replaced it in the
+    // meantime makes this pin lose rather than admit a superseded code.
+    enrollmentCodeHash: row.enrollmentCodeHash,
     now,
   });
-  // The CAS lost: a concurrent enrollment (or revoke) landed between the read
-  // and the write. Honest answer, nothing pinned twice.
+  // The CAS lost: a concurrent enrollment, revoke or re-issue landed between
+  // the read and the write. Honest answer, nothing pinned twice.
   if (!pinned) return { ok: false, reason: 'race' };
 
   return {
@@ -511,10 +571,14 @@ function localFactsFor(row: DriveEnvRecord, sibling: DriveEnvLocalRecord | undef
   // No sibling: the owner was erased (Art 17 cascades the machine's identity
   // facts) and the env row survives as the drive's dead local env. It is
   // listed — disconnected, under its own name — rather than hidden or thrown.
-  if (!sibling) return { label: row.name, status: 'disconnected' };
+  // `enrolled: true` for the dead row, deliberately: with no sibling there is
+  // no code to re-issue, and `false` would offer the owner a "new code" that
+  // the store must refuse as `not_found`.
+  if (!sibling) return { label: row.name, status: 'disconnected', enrolled: true };
   return {
     label: sibling.label,
     status: deriveLocalEnvStatus({ enrolledAt: sibling.enrolledAt, revokedAt: sibling.revokedAt, lastSeenAt: sibling.lastSeenAt, liveConnection, now }),
+    enrolled: sibling.enrolledAt !== null,
   };
 }
 

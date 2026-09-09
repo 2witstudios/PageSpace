@@ -75,6 +75,8 @@ import type {
   WriteFileEntry,
 } from './types';
 import { SandboxProvisionError, type SandboxCreateOptions } from '../sandbox-options';
+import { loggers } from '../../../logging/logger-config';
+import { MAX_LABEL_LENGTH } from '../../../validators/custom-domain';
 
 /** Thrown when a command exceeds the policy's per-run wall-clock cap. */
 export class SandboxCommandTimeoutError extends Error {
@@ -611,6 +613,27 @@ function toBuffer(chunk: Buffer | string): Buffer {
 }
 
 /**
+ * Pure: locate a `<sentinel> <exit-code>` line in collected stdout. Returns the
+ * stdout BEFORE that line and the parsed code, or null when the sentinel has not
+ * arrived yet (or arrived without a numeric code — treated as not-yet, so a
+ * partial chunk boundary cannot fake a result).
+ */
+export function findSentinel(stdout: string, sentinel: string): { stdout: string; exitCode: number } | null {
+  const lines = stdout.split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!line.startsWith(sentinel)) continue;
+    const code = Number(line.slice(sentinel.length).trim());
+    if (!Number.isInteger(code)) return null;
+    // Only a COMPLETE line counts: a sentinel at the very end with no newline
+    // may still be mid-chunk (the code could be `12` of `127`).
+    if (i === lines.length - 1) return null;
+    return { stdout: lines.slice(0, i).join('\n'), exitCode: code };
+  }
+  return null;
+}
+
+/**
  * Run a command through the SDK's `spawn` (structured `file` + `args[]`, never a
  * host-side shell string) and buffer its output. Faithfully replicates the SDK's
  * own `execFile` collection — stdout/stderr `data` listeners with a `maxBuffer`
@@ -631,6 +654,7 @@ export function runSpawned(
   command: SpriteCommandLike,
   maxBytes: number,
   timeoutMs: number | undefined,
+  stdoutSentinel?: string,
 ): Promise<SandboxRunResult> {
   const maxBuffer = maxBytes > 0 ? maxBytes : DEFAULT_MAX_OUTPUT_BYTES;
   return new Promise<SandboxRunResult>((resolve, reject) => {
@@ -688,6 +712,20 @@ export function runSpawned(
       // Output proves the connection opened, even if the 'spawn' event was missed.
       opened = true;
       stdoutLen = collect(stdoutChunks, chunk, stdoutLen);
+      if (stdoutSentinel === undefined || settled) return;
+      // THE SENTINEL SHORT-CIRCUIT (see `RunCommandArgs.stdoutSentinel`): the
+      // runtime holds the socket open 5–10s after exit, and `exit` arrives only
+      // on close. A caller that ends its command with `<sentinel> <code>` has
+      // told us everything the close would; take it now and kill the lingering
+      // socket ourselves. The sentinel line is stripped from the result.
+      const found = findSentinel(Buffer.concat(stdoutChunks).toString('utf8'), stdoutSentinel);
+      if (found === null) return;
+      try {
+        command.kill('SIGKILL');
+      } catch {
+        // Best-effort: the socket closes on its own within the runtime's grace.
+      }
+      succeed({ exitCode: found.exitCode, stdout: found.stdout, stderr: Buffer.concat(stderrChunks).toString('utf8') });
     });
     command.stderr.on('data', (chunk) => {
       opened = true;
@@ -867,8 +905,9 @@ function runSpawnedWithWakeRetry(
   spawnFn: () => SpriteCommandLike,
   maxBytes: number,
   timeoutMs: number | undefined,
+  stdoutSentinel?: string,
 ): Promise<SandboxRunResult> {
-  return withWakeRetry(() => runSpawned(spawnFn(), maxBytes, timeoutMs));
+  return withWakeRetry(() => runSpawned(spawnFn(), maxBytes, timeoutMs, stdoutSentinel));
 }
 
 /** Reject if `p` has not settled within `ms` — the Sprite filesystem API uses a
@@ -1167,6 +1206,55 @@ export function withKillSession<T extends { name: string; client: { baseURL: str
   });
 }
 
+/**
+ * The longest Sprite NAME that still yields a URL DNS can resolve.
+ *
+ * The API accepts names up to a full DNS label (63), but the sprite's URL is
+ * `<name>-<org>.sprites.app` — the platform appends the org suffix to the
+ * SAME label and never checks the sum. Our keys are 72-char HMAC hex; sliced
+ * to 63 they produced 69-char labels (`pgs-env-…-bskrl`) that `dig` refuses
+ * outright ("label too long"), so no preview ever reached a sprite. 15 is
+ * reserved for `-<org>`: the observed suffix is `-` + 5 chars, and the rest
+ * is headroom for a longer one, not a guess about its format. 48 chars is
+ * the 8-char prefix plus 40 hex — 160 bits of the digest, still
+ * collision-free for our keys.
+ */
+export const SPRITE_NAME_MAX = MAX_LABEL_LENGTH - 15;
+/** The budget before {@link SPRITE_NAME_MAX} — the API's own limit; kept ONLY to resume sprites created under it. */
+export const LEGACY_SPRITE_NAME_MAX = MAX_LABEL_LENGTH;
+
+/**
+ * Pure: the Sprite name for a session/env key — deterministic, so the same
+ * key always resumes the same sprite. `max` is the legacy budget only where
+ * `getOrCreate` looks for a sprite created before the current one.
+ */
+export function spriteNameFor(key: string, max: number = SPRITE_NAME_MAX): string {
+  return key.slice(0, max);
+}
+
+/** Legacy names already reported this process — one line per sprite, not per attach. */
+const legacyResumesLogged = new Set<string>();
+
+/**
+ * The budget above is an assumption about the org suffix; this is where it
+ * is CHECKED, on the one path that sees the platform's answer — the URL it
+ * hands back for a sprite just created. An overflow is logged as an error
+ * for the operator (raise the reserve), never thrown at the user: the
+ * sandbox itself works, and the proxy refuses its URL by name anyway.
+ */
+export function checkSpriteUrlLabelFits(sprite: Pick<SpriteInstanceLike, 'name' | 'url'>): boolean {
+  if (!sprite.url) return true;
+  let label: string;
+  try {
+    label = new URL(sprite.url).hostname.split('.')[0] ?? '';
+  } catch {
+    return true;
+  }
+  if (label.length <= MAX_LABEL_LENGTH) return true;
+  loggers.ai.error('sprite URL label exceeds a DNS label — SPRITE_NAME_MAX reserves too little for the org suffix', undefined, { spriteName: sprite.name, labelLength: label.length });
+  return false;
+}
+
 function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): ExecutableSandbox {
   return {
     sandboxId: sprite.name,
@@ -1179,7 +1267,7 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
     // identity is unknown — both of which the caller must treat as "unproven".
     egressPolicyToken,
 
-    async runCommand({ cmd, args = [], cwd, env, timeoutMs, maxBytes }: RunCommandArgs): Promise<SandboxRunResult> {
+    async runCommand({ cmd, args = [], cwd, env, timeoutMs, maxBytes, stdoutSentinel }: RunCommandArgs): Promise<SandboxRunResult> {
       // spawn (arg array), never a host-side shell string. The untrusted command
       // runs under the Sprite's own `sh -c`, contained by the VM. Re-spawned per
       // attempt so a cold-start wake drop reconnects on a fresh WebSocket.
@@ -1190,7 +1278,7 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
       const spawnFn = cwd === undefined
         ? () => sprite.spawn(cmd, args, { env })
         : () => sprite.spawn(...spawnWithSelfHealingCwd({ command: cmd, args, cwd }), { env });
-      return runSpawnedWithWakeRetry(spawnFn, maxBytes ?? 0, timeoutMs);
+      return runSpawnedWithWakeRetry(spawnFn, maxBytes ?? 0, timeoutMs, stdoutSentinel);
     },
 
     async writeFiles(files: WriteFileEntry[]): Promise<void> {
@@ -1282,6 +1370,16 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
       });
     },
   };
+}
+
+/** `getSprite`, with a genuine not-found folded to `null`; every other error (auth, rate limit, outage) surfaces. */
+async function getSpriteIfExists(sdk: SpritesSdk, name: string): Promise<SpriteInstanceLike | null> {
+  try {
+    return await sdk.getSprite(name);
+  } catch (error) {
+    if (isSpriteNotFoundError(error)) return null;
+    throw error;
+  }
 }
 
 /**
@@ -1669,22 +1767,31 @@ export function createSpritesSandboxClient({
       // genuine not-found. Auth/rate-limit/outage errors from getSprite surface
       // rather than spawning a duplicate Sprite under a name that may still be live.
       //
-      // The Sprites API enforces a 63-char name limit (DNS label). Our session
-      // keys are 72-char HMAC hex strings; truncate to 63 before hitting the API.
-      // The full key stays as the DB session key — only the Sprites name is short.
-      const spriteName = name.slice(0, 63);
+      // The Sprite NAME is the key cut to `SPRITE_NAME_MAX` (see the constant);
+      // the full key stays as the DB session key. The name is not persisted
+      // anywhere — every attach re-derives it — so a sprite created under the
+      // old, longer budget must still be found by THAT name, or every existing
+      // env and session would silently land on a fresh, empty VM. Hence two
+      // lookups, and a create only when neither exists — under the short name.
+      const spriteName = spriteNameFor(name);
+      const legacyName = spriteNameFor(name, LEGACY_SPRITE_NAME_MAX);
       try {
-        let sprite: SpriteInstanceLike;
-        let fresh = false;
-        try {
-          sprite = await sdk.getSprite(spriteName);
-        } catch (error) {
-          if (!isSpriteNotFoundError(error)) throw error;
-          // Caps (RAM / vCPUs / storage / region) come from the resolved policy and
-          // are set explicitly per Sprite rather than relying on the quota defaults.
-          sprite = await sdk.createSprite(spriteName, options.caps);
-          fresh = true;
+        const existing =
+          (await getSpriteIfExists(sdk, spriteName))
+          ?? (name.length > SPRITE_NAME_MAX ? await getSpriteIfExists(sdk, legacyName) : null);
+        if (existing !== null && existing.name === legacyName && legacyName !== spriteName && !legacyResumesLogged.has(legacyName)) {
+          // Resumed on a name whose URL cannot resolve: the sandbox works
+          // (shell, files, services) but cannot be previewed until it is
+          // recreated. Logged once per name per process, so the legacy
+          // population can be watched without a line per attach.
+          legacyResumesLogged.add(legacyName);
+          loggers.ai.info('sprite resumed by legacy name — its URL is not resolvable', { spriteName, legacyName });
         }
+        const fresh = existing === null;
+        // Caps (RAM / vCPUs / storage / region) come from the resolved policy and
+        // are set explicitly per Sprite rather than relying on the quota defaults.
+        const sprite: SpriteInstanceLike = existing ?? (await sdk.createSprite(spriteName, options.caps));
+        if (fresh) checkSpriteUrlLabelFits(sprite);
         // Lock down egress only when THIS VM is not already proven to be running
         // THIS policy — see the file header and `../egress-lockdown.ts`. The proof
         // is a token over (Sprite instance id, policy hash): a warm resume of the
@@ -1712,7 +1819,8 @@ export function createSpritesSandboxClient({
             sleep,
           });
         }
-        // wrap sets sandboxId = sprite.name = spriteName (truncated). The token is
+        // wrap sets sandboxId = sprite.name (the short name, or the legacy one it
+        // resumed on — `get` reconnects by whichever was recorded). The token is
         // now CONFIRMED for this VM (freshly applied, or already proven) — the
         // caller records it, and it is what lets the next hand-back skip the push.
         return wrap(sprite, desiredToken);
@@ -1731,12 +1839,8 @@ export function createSpritesSandboxClient({
       // We do NOT reapply egress here: the policy persists across hibernation
       // (the platform's configure-once model), and a dropped first wake is
       // recovered by runCommand's cold-start retry.
-      try {
-        return wrap(await sdk.getSprite(sandboxId));
-      } catch (error) {
-        if (isSpriteNotFoundError(error)) return null;
-        throw error;
-      }
+      const sprite = await getSpriteIfExists(sdk, sandboxId);
+      return sprite === null ? null : wrap(sprite);
     },
 
     async stop({ sandboxId }) {

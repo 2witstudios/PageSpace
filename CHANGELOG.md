@@ -18,6 +18,40 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   tables declared, ranges touched and rules added, with a swatch per colour, so you can see what
   changed without opening the sheet. The spreadsheets skill now teaches all of this; the
   workspace-tool count in the docs goes from 81 to 83.
+- **Local Environments: create one from the app, get your enrollment code, and get a new one if
+  you lose it (opt-in)** — a local Environment (your own computer, reached through the bridge) is
+  now a choice in the ordinary "New environment" step rather than something only an API call could
+  make. On a deployment with `LOCAL_ENVS_ENABLED`, a drive owner or admin picks **This computer**,
+  names the machine, and is shown the one-time enrollment code beside the exact two commands to run
+  on it — `pagespace env enroll …` then `pagespace env connect …`, with this deployment's address
+  filled in — plus when the code expires and, in plain words, what enrolling agrees to: everything
+  runs as you, with no sandbox, and in `ask` mode one approval covers every later command of that
+  kind for that session. Closing that step used to be a dead end: the code was shown once and
+  could never be recovered, so the Environment had to be deleted and made again. Now the row reads
+  **Awaiting enrollment** and its menu offers **Show a new code**, which replaces the previous one;
+  the server refuses, for good, once a machine has enrolled, so a lost code can never let a second
+  machine take over an enrolled Environment. Local Environments show a laptop and the machine's
+  name in the sidebar and in the "where should it run?" list, so a computer is never mistaken for a
+  cloud sandbox. Creating a cloud Environment is unchanged. Still off by default.
+
+- **Android app: it can now ask for notification permission and register for push (not yet
+  distributed)** — the server has been able to send an Android push since the FCM sender landed, but
+  no Android build could receive one: the app declared no notification permission and the shared
+  registration code was gated to iOS. Android now declares `POST_NOTIFICATIONS`, asks for it at
+  runtime, and registers its FCM token the same way iOS does. If you say no, that is remembered —
+  the prompt does not come back on every launch — and if you later turn notifications on in system
+  settings, the next time you open the app it picks up where it left off. The app icon can also carry an unread badge on Android now, where the
+  launcher supports one (many do not, and those simply show nothing). **Nobody can see any of this
+  yet:** there is still no Android release build and no distribution, and none of it has been run on
+  a real device — this is the client half of the loop being closed, not a shipped feature.
+
+- **Android app: a failed load now offers a Retry instead of a dead end (not yet distributed)** —
+  the Android shell had no bundled error screen, so launching without connectivity left the WebView
+  on Chrome's own error page with nothing to do. It now falls back to a PageSpace screen with a
+  working Retry button, matching iOS. Nobody can see this yet: the Android app has no release build
+  and is not distributed, so this lands as groundwork for the build that will be. Opening a
+  `pagespace.ai` web link from elsewhere still opens your browser, unchanged.
+
 - **Dev-server preview: see the app you're building, live, from inside its session (ships dark)** —
   when a dev server (Vite, Next, anything that binds a port) starts inside an agent session or a
   drive Environment, PageSpace notices and shows one quiet line in that session's header or beneath
@@ -32,9 +66,32 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   server again a moment later. Reading the status never wakes a sleeping sandbox. One thing to know
   about your own dev server: the preview reaches it through PageSpace's hostname, so a server that
   checks the `Host` header (Vite 6 and newer do) needs that hostname allowed — for Vite, add the
-  preview domain to `server.allowedHosts`. Off by default: the whole surface is absent until
-  `DEV_PREVIEW_ENABLED` is set with a dedicated `DEV_PREVIEW_APEX`, which needs the preview-origin
-  ops work (wildcard DNS, certificate, and the Caddy block) to land first.
+  preview domain to `server.allowedHosts`. **Sharing an unusual port is your call:** a server on a
+  usual dev-server port (Vite, Next, Astro, Django and friends) is previewed as soon as it is
+  detected, but anything else — an admin panel on :9000, a debug listener — is only *named*
+  ("Dev server detected on :9000 — not shared yet") until you open the pane, read who would be able
+  to reach it, and press Share. The port you press Share on is the port that gets shared: if the
+  server has moved since the screen was drawn, PageSpace says so rather than sharing the new one.
+  Approval is per port and per sandbox, so a rebuilt sandbox asks again. **Signing out ends the
+  preview:** the preview page is tied to the session that opened it, so signing out or revoking a
+  device cuts it off on its very next request instead of letting it linger. Off by default: the
+  whole surface is absent until `DEV_PREVIEW_ENABLED` is set with a dedicated `DEV_PREVIEW_APEX`,
+  which needs the preview-origin ops work (wildcard DNS, certificate, and the Caddy block) to land
+  first.
+- **Local Environments: an agent can now reach your own computer (opt-in groundwork)** — the two
+  ends built so far are joined. An agent session bound to a local Environment whose machine is
+  connected now runs its commands and reads and writes its files on that machine, through the same
+  tools it uses everywhere else — nothing about the agent changes. Two refusals are kept apart
+  where you will see them, because they have different owners: "no connected machine — run
+  `pagespace env connect`" is yours to fix in seconds, while "the machine owner's policy does not
+  allow you to run code here" can only be changed by whoever enrolled it, and retrying will not
+  help. What a local Environment cannot do, it now says plainly instead of pretending: terminal
+  panes, dev-server previews and filesystem checkpoints are refused with a reason rather than
+  quietly appearing empty — and because a checkpoint is the safety net taken before a destructive
+  batch of commands, a batch that would need one is refused outright rather than run without it.
+  Closing a session bound to a local Environment never touches the computer: nothing is shut down,
+  nothing is billed, and the machine's own `env disconnect` and Ctrl-C still win. Still off by
+  default (`LOCAL_ENVS_ENABLED`), and still no local terminals.
 - **Local Environments: the bridge daemon — `pagespace env connect` (opt-in groundwork)** — an
   enrolled computer can now actually serve its Environment. Running `pagespace env connect` on it
   keeps a live, outbound-only connection to PageSpace and answers requests to run a command or
@@ -369,8 +426,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   to a paid plan, which includes a monthly allowance that rolls over. The credits card, the plan
   comparison, the out-of-credits message, and the pricing, FAQ, terms, and docs pages now say
   "5 credits to start" for Free rather than "5/month", and free accounts no longer show a
-  "Renews" date. Every Free account receives a one-time email explaining the change, quoting
-  the exact balance they keep, and pointing to top-ups and the Pro plan.
+  "Renews" date. Free accounts receive a one-time email explaining the change, quoting the
+  exact balance they keep and pointing to top-ups and the Pro plan; anyone who has turned
+  product-update email off is skipped, and the notice carries a one-click unsubscribe link.
 
 - **Dark mode is now a lighter charcoal instead of near-black** — every dark surface (page,
   sidebar, cards, popovers, menus, borders, and the glass panels) moved up one step so text no

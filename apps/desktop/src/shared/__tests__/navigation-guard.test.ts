@@ -5,6 +5,7 @@ import {
   isAllowedAppUrl,
   isTrustedSenderUrl,
   classifyNavigation,
+  guardsRedirect,
 } from '../navigation-guard';
 
 describe('isAllowedNavigation', () => {
@@ -160,5 +161,16 @@ describe('isTrustedSenderUrl', () => {
     expect(isTrustedSenderUrl('https://evil.com', appOrigin)).toBe(false);
     expect(isTrustedSenderUrl('http://pagespace.ai', appOrigin)).toBe(false);
     expect(isTrustedSenderUrl('file:///offline.html', appOrigin)).toBe(false);
+  });
+});
+
+describe('guardsRedirect', () => {
+  it('judges the main frame, and an event that does not say (fail closed)', () => {
+    expect(guardsRedirect(true)).toBe(true);
+    expect(guardsRedirect(undefined)).toBe(true);
+  });
+
+  it('exempts a subframe — it holds no preload bridge, and the preview frame must follow its own redirect', () => {
+    expect(guardsRedirect(false)).toBe(false);
   });
 });

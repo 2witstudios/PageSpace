@@ -6,7 +6,7 @@
  * the caller's disclosure.
  */
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { SWRConfig } from 'swr';
 
 const mockFetchJSON = vi.hoisted(() => vi.fn());
@@ -26,12 +26,15 @@ function status(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
     holder: { kind: 'workspace', id: 'ws1' },
     canManage: true,
     sandbox: 'attached',
+    detection: 'watching',
     state: { status: 'live', targetPort: 5173, via: 'relay', message: 'Relaying port 8080 to your dev server on port 5173.' },
     slot: { known: false },
     openPath: '/api/agent-workspaces/ws1/preview/open',
     canOpen: true,
     canStop: true,
     canResume: false,
+    canApprove: false,
+    spriteInstanceId: null,
     detectedAt: '2026-09-06T11:00:00.000Z',
     ...over,
   };
@@ -104,6 +107,22 @@ describe('DevPreviewAffordance', () => {
     expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
   });
 
+  test('an UNSHARED port still gets its line — detection is not exposure — but the verb is "Details", never "Preview"', async () => {
+    preview = status({
+      canOpen: false,
+      canStop: true,
+      canResume: false,
+      canApprove: true,
+      state: { status: 'needs-approval', targetPort: 9000, message: 'A dev server is running on port 9000. It is not a usual dev-server port, so it is not being shared until you say so.' },
+    });
+    renderAffordance();
+    await screen.findByText('Dev server detected on :9000 — not shared yet');
+    expect(screen.getByRole('button', { name: 'Details' })).toBeInTheDocument();
+    // Sharing is never a click on a row in a list: the decision lives in the
+    // pane, which is the surface that states who would be able to see it.
+    expect(screen.queryByRole('button', { name: /Share/ })).toBeNull();
+  });
+
   test('an unknown status renders neutral copy and "Details" rather than crashing the row', async () => {
     preview = status({ canOpen: false, state: { status: 'teleporting', message: 'from the future' } as unknown as DevPreviewStatusDTO['state'] });
     renderAffordance();
@@ -111,10 +130,26 @@ describe('DevPreviewAffordance', () => {
     expect(screen.getByRole('button', { name: 'Details' })).toBeInTheDocument();
   });
 
-  test('polls only while ACTIVE: a collapsed row fetches once and then never again', async () => {
-    renderAffordance({ active: false });
-    await waitFor(() => expect(mockFetchJSON).toHaveBeenCalledTimes(1));
-    await new Promise((r) => setTimeout(r, 60));
-    expect(mockFetchJSON).toHaveBeenCalledTimes(1);
+  test('polls only while ACTIVE — proved across a FULL poll interval, so wiring `active` as always-on would fail this', async () => {
+    // The affordance polls on a 15s interval; a 60ms wall-clock wait would
+    // pass even if `active` were ignored. Fake timers advance past three
+    // intervals, and the ACTIVE case is the positive control that proves the
+    // advance actually drives SWR.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const collapsed = renderAffordance({ active: false });
+      await vi.waitFor(() => expect(mockFetchJSON).toHaveBeenCalledTimes(1));
+      await act(async () => { await vi.advanceTimersByTimeAsync(45_000); });
+      expect(mockFetchJSON).toHaveBeenCalledTimes(1);
+      collapsed.unmount();
+
+      mockFetchJSON.mockClear();
+      renderAffordance({ active: true });
+      await vi.waitFor(() => expect(mockFetchJSON).toHaveBeenCalledTimes(1));
+      await act(async () => { await vi.advanceTimersByTimeAsync(45_000); });
+      expect(mockFetchJSON.mock.calls.length).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

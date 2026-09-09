@@ -23,7 +23,7 @@ const deps = (overrides: Partial<PaneScopeAuthorityDeps> = {}): PaneScopeAuthori
   ...overrides,
 });
 
-const scopeOf = (kind: 'chat' | 'terminal' | 'page', targetId: string | null) => ({
+const scopeOf = (kind: 'chat' | 'terminal' | 'page' | 'ports', targetId: string | null) => ({
   kind,
   targetId,
 });
@@ -134,5 +134,14 @@ describe('an unbound picker pane', () => {
       await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('chat', null) }, d),
     ).toBe(true);
     expect(d.findConversation).not.toHaveBeenCalled();
+  });
+});
+
+describe('ports scopes', () => {
+  it('authorizes only when the target IS this workspace — containment is the whole rule', async () => {
+    const d = deps();
+    expect(await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('ports', WORKSPACE) }, d)).toBe(true);
+    // A ports pane must not point at some other session's sandbox.
+    expect(await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('ports', OTHER_WORKSPACE) }, d)).toBe(false);
   });
 });

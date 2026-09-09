@@ -312,9 +312,14 @@ export const useAuthStore = create<AuthState>()(
             const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
             const headers: Record<string, string> = {};
 
-            // Check for iOS Capacitor app
-            const { isCapacitorApp, getPlatform } = await import('@/lib/capacitor-bridge');
-            const isIOS = isCapacitorApp() && getPlatform() === 'ios';
+            // Ask the resolved storage adapter, not the platform: it already
+            // encodes whether this platform authenticates with a bearer token.
+            // Desktop is handled by its own branch below (it reads through
+            // Electron IPC and pre-warms the cache differently), so this covers
+            // the native shells only.
+            const { getPlatformStorage } = await import('@/lib/auth/platform-storage');
+            const storage = getPlatformStorage();
+            const usesBearerToken = !isDesktop && storage.usesBearer();
 
             if (isDesktop && window.electron) {
               const sessionToken = await window.electron.auth.getSessionToken();
@@ -375,25 +380,35 @@ export const useAuthStore = create<AuthState>()(
                 const { warmSessionCache } = await import('@/lib/auth/auth-fetch');
                 warmSessionCache(sessionToken);
               }
-            } else if (isIOS) {
-              // iOS: Get session token from Keychain
-              const { getSessionToken } = await import('@/lib/ios-google-auth');
-              const sessionToken = await getSessionToken();
-
-              if (!sessionToken) {
-                console.log('[AUTH_STORE] iOS: No session token in Keychain - user not logged in');
-                set({
-                  user: null,
-                  isAuthenticated: false,
-                  isLoading: false,
-                });
-                return;
+            } else if (usesBearerToken) {
+              // Native shells: get the session token from the secure store.
+              let sessionToken: string | null = null;
+              try {
+                sessionToken = await storage.getSessionToken();
+              } catch (error) {
+                // A store fault is not proof the user is signed out — the
+                // adapters throw rather than answer `null` precisely so this
+                // cannot be mistaken for one. Fall through to the cookie check
+                // below, which asks the server instead of guessing.
+                console.error('[AUTH_STORE] Secure-store read failed during session load', error);
               }
 
-              headers['Authorization'] = `Bearer ${sessionToken}`;
-              // Pre-warm auth-fetch cache so subsequent fetchWithAuth calls skip Keychain
-              const { warmSessionCache } = await import('@/lib/auth/auth-fetch');
-              warmSessionCache(sessionToken);
+              if (sessionToken) {
+                headers['Authorization'] = `Bearer ${sessionToken}`;
+                // Pre-warm auth-fetch cache so subsequent fetchWithAuth calls skip the store
+                const { warmSessionCache } = await import('@/lib/auth/auth-fetch');
+                warmSessionCache(sessionToken);
+              } else {
+                // No bearer token is NOT the same as "not signed in". Every
+                // Android session today is a cookie session left by the
+                // in-WebView web flow, and `AndroidStorage.getSessionToken()`
+                // returns null for exactly that case. Declaring the user logged
+                // out here would sign every Android user out on cold launch; the
+                // `/api/auth/me` call below settles it with the cookies the
+                // WebView already holds, and its existing 401 branch handles a
+                // genuinely absent session.
+                console.log(`[AUTH_STORE] ${storage.platform}: No session token in secure store - falling back to cookie session check`);
+              }
             }
 
             const response = await fetch('/api/auth/me', {

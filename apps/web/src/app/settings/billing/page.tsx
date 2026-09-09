@@ -24,6 +24,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { InvoiceList, type Invoice } from '@/components/billing/InvoiceList';
 import { UpcomingInvoice } from '@/components/billing/UpcomingInvoice';
 import { BillingAddressForm, type BillingAddress } from '@/components/billing/BillingAddressForm';
+import { BillingGuard } from '@/components/billing/BillingGuard';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { getPlan, getPlanFromPriceId, type SubscriptionTier } from '@/lib/subscription/plans';
 import { post } from '@/lib/auth/auth-fetch';
@@ -50,7 +51,7 @@ interface UpcomingInvoiceData {
   } | null;
 }
 
-export default function BillingPage() {
+function BillingPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isReady, hideBilling } = useBillingVisibility();
@@ -455,5 +456,19 @@ export default function BillingPage() {
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Every section on this page is billing, so on iOS the route rendered as a bare
+ * "Billing" header over nothing — and still fetched `/api/stripe/*` on mount.
+ * Guarding the whole route (the pattern `/settings/plan` already uses) redirects
+ * instead, and stops the child mounting at all so those fetches never fire.
+ */
+export default function BillingPage() {
+  return (
+    <BillingGuard>
+      <BillingPageContent />
+    </BillingGuard>
   );
 }

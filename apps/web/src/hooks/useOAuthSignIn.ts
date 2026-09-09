@@ -47,7 +47,7 @@ export interface PostNativeAuthRedirectInput {
 }
 
 /**
- * Decide where to land a user after a successful native (iOS) OAuth flow.
+ * Decide where to land a user after a successful native (iOS/Android) OAuth flow.
  *
  * Precedence: invite-consumed drive > returnUrl > new-user welcome > /dashboard.
  * Pure function — extracted so the redirect logic can be tested without
@@ -201,13 +201,20 @@ export function useOAuthSignIn({ onStart, onError, inviteToken, returnUrl }: Use
 
     try {
       const { isNativeGoogleAuthAvailable, signInWithGoogle: nativeSignIn } =
-        await import('@/lib/ios-google-auth');
+        await import('@/lib/native-google-auth');
 
       if (isNativeGoogleAuthAvailable()) {
         const result = await nativeSignIn({
           ...(inviteToken && { inviteToken }),
           ...(returnUrl && { returnUrl }),
         });
+        // Deliberately no fall-through to web OAuth on a native failure. There
+        // is no working web OAuth inside either native shell — iOS ends on
+        // Google's `disallowed_useragent` page in the WebView, Android leaves for
+        // the external browser and drops the session in the wrong cookie jar, and
+        // the `pagespace://auth-exchange` handoff that would close the gap has no
+        // `appUrlOpen` consumer on either platform. Falling through would trade a
+        // visible error inside a working app for a silent dead end outside it.
         if (result.success) {
           await handleNativeSuccess(result);
         } else if (result.error !== 'Sign-in cancelled') {
@@ -232,13 +239,14 @@ export function useOAuthSignIn({ onStart, onError, inviteToken, returnUrl }: Use
 
     try {
       const { isNativeAppleAuthAvailable, signInWithApple: nativeSignIn } =
-        await import('@/lib/ios-apple-auth');
+        await import('@/lib/native-apple-auth');
 
       if (isNativeAppleAuthAvailable()) {
         const result = await nativeSignIn({
           ...(inviteToken && { inviteToken }),
           ...(returnUrl && { returnUrl }),
         });
+        // See the Google branch: no fall-through on a native failure.
         if (result.success) {
           await handleNativeSuccess(result);
         } else if (result.error !== 'Sign-in cancelled') {

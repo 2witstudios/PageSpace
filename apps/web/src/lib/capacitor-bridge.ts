@@ -55,13 +55,17 @@ const PLATFORM_CAPABILITIES: Record<
   }),
   // PageSpaceSecureStoragePlugin (registered in MainActivity.java as
   // "PageSpaceKeychain"), @capgo/capacitor-social-login (Google only),
-  // Firebase Messaging via the Gradle build. The badge plugin is not yet in
-  // apps/android/package.json.
+  // Firebase Messaging via the Gradle build, @capawesome/capacitor-badge.
+  //
+  // `badge: true` states that the plugin is a declared dependency and the shared
+  // code path is wired, not that every device will show a count: the Android
+  // badge is drawn by the launcher, and launchers that do not implement one
+  // ignore or reject the write. useNativeBadgeSync treats that as a no-op.
   android: Object.freeze({
     secureStore: true,
     nativeAuth: true,
     push: true,
-    badge: false,
+    badge: true,
   }),
   // A plain browser tab has none of these.
   web: Object.freeze({
@@ -179,9 +183,9 @@ export function isNativeApp(): boolean {
  * `platform-storage` that cannot call `useCapacitor()`. Components should
  * prefer `useCapacitor().capabilities`.
  *
- * @public Published API of the capability bridge. The call sites that consume
- * it (secure storage, push registration, badge sync) land in later leaves of
- * the Android parity epic, so knip cannot see a consumer yet.
+ * @public Published API of the capability bridge. `platform-storage` selects
+ * its implementation through this, `useAuth` gates its logout cleanup on it,
+ * and `native-google-auth` gates its secure-store reads on it.
  */
 export function hasNativeCapability(capability: NativeCapability): boolean {
   return PLATFORM_CAPABILITIES[getPlatform()][capability];
@@ -205,9 +209,9 @@ export function getNativeCapabilities(): Readonly<
  * Note this is finer-grained than `hasNativeCapability('nativeAuth')`: Android
  * has nativeAuth but cannot drive Apple.
  *
- * @public Published API of the capability bridge. Its consumer is the native
- * auth module generalization leaf of the Android parity epic, so knip cannot
- * see a consumer yet.
+ * @public Published API of the capability bridge. Consumed by
+ * `native-google-auth.ts` and `native-apple-auth.ts`, which is where the
+ * Google/Apple asymmetry actually matters.
  */
 export function supportsNativeAuthProvider(
   provider: NativeAuthProvider

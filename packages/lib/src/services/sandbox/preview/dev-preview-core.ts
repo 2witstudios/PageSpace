@@ -116,6 +116,21 @@ export interface DevPreviewRow {
   relayServiceName: string | null;
   detectedAt: Date;
   stoppedByUserAt: Date | null;
+  /**
+   * The port a person explicitly agreed to share, or `null` for none. Named
+   * by PORT rather than a boolean so approval is per-port by construction: a
+   * dev server that moves to another unlisted port is a new decision, not an
+   * inherited one. See {@link requiresPreviewApproval}.
+   */
+  approvedPort: number | null;
+  /** When that consent was given; `null` exactly when `approvedPort` is. */
+  approvedAt: Date | null;
+  /**
+   * When a person PICKED this port out of the ports pane, or `null` if the
+   * target was found by detection. A pinned target is not a guess for the
+   * detector to revise — see the guard in {@link planDevServerService}.
+   */
+  selectedByUserAt: Date | null;
 }
 
 /**
@@ -181,6 +196,41 @@ export const NON_HTTP_SERVICE_PORTS: ReadonlySet<number> = new Set([
 export const KNOWN_DEV_SERVER_PORTS: ReadonlySet<number> = new Set([
   1234, 3000, 3001, 4000, 4200, 4321, 5000, 5173, 5174, 8000, 8080, 8081, 8888,
 ]);
+
+/**
+ * Pure: does offering THIS port need a person to say yes first?
+ *
+ * Starting the relay is the act of exposure — from that moment the port is
+ * reachable by everyone the holder's preview is reachable by, which for an
+ * env is every accepted member of the drive. Detection is not exposure and
+ * is deliberately unchanged: an unlisted port is still detected, still named
+ * in the affordance, still explicable. What it does not do any more is
+ * publish itself.
+ *
+ * The line is {@link KNOWN_DEV_SERVER_PORTS}: a port whose default owner is a
+ * dev server (vite, next, astro, django…) is what the user asked for by
+ * running the tool, and auto-relaying it is the feature working. Anything
+ * else — an admin UI on 9000, a debug listener, a colleague's service — is a
+ * guess, and a guess that exposes something is one a person makes.
+ *
+ * This is the ONLY home for the rule. It deliberately does not live in SQL:
+ * the port list is TypeScript, and duplicating it into a CHECK would
+ * guarantee drift. The security property is structural anyway — the sprite
+ * URL routes to 8080 alone, so a row with no relay serves nothing at all.
+ */
+export function requiresPreviewApproval(port: number): boolean {
+  return !KNOWN_DEV_SERVER_PORTS.has(port);
+}
+
+/** Pure: has a person approved sharing exactly this port on this row? */
+export function isPreviewApproved(row: Pick<DevPreviewRow, 'approvedPort'> | null, port: number): boolean {
+  return row !== null && row.approvedPort === port;
+}
+
+/** Pure: may this row's target be relayed right now — either it needs no approval, or it has one. */
+export function isPreviewShareable(row: Pick<DevPreviewRow, 'approvedPort'> | null, port: number): boolean {
+  return !requiresPreviewApproval(port) || isPreviewApproved(row, port);
+}
 
 export type DevServerClassification =
   | {
@@ -254,6 +304,51 @@ export interface HttpPortSlotInput {
   listeners: readonly ListeningPort[];
   /** The relay service as reported now, or null when none is defined. */
   relay: SandboxServiceInfo | null;
+  /**
+   * Where `listeners` came from (see {@link ListenerSource}). Decides whether
+   * a listener's PID may contradict a running relay: a `watch` pid can be
+   * STALE — the relay restarted under a new pid and the channel never said
+   * so (seen in production: the first re-pick rendered a healthy relay as
+   * "held by another process (pid <old relay>)") — so only a fresh `probe`
+   * pid may. Defaults to `'watch'`.
+   */
+  listenerSource?: ListenerSource;
+}
+
+/**
+ * WHERE a listener set came from, because that decides what its SILENCE means.
+ *
+ *  - `'watch'` — the `ports/watch` channel. **Positive-only evidence.** It
+ *    proves what IS bound and NOTHING about what is not: verified against a
+ *    real sprite, the channel never reports a Next.js dev server's bind at
+ *    all (`ss` shows `*:3000` LISTENING, the channel stays silent, while
+ *    python over IPv4 and IPv6, node grandchildren and TTY-session binds are
+ *    all reported). Reading absence here as "not listening" told a user their
+ *    working preview was down.
+ *  - `'probe'` — an authoritative `ss` read of the sprite. Complete, so
+ *    absence IS evidence of absence.
+ *
+ * Defaults to `'watch'` everywhere, which is the conservative reading: a
+ * caller that has not said where its data came from does not get to infer a
+ * negative from it.
+ */
+export type ListenerSource = 'watch' | 'probe';
+
+/**
+ * Pure: is `port` listening — `true`, `false`, or `null` for "cannot say".
+ *
+ * The `null` is the whole point. Only a complete source may answer `false`;
+ * a `watch` source that lacks the port has not observed it, which is not the
+ * same as having observed its absence.
+ */
+export function isPortListening(
+  listeners: readonly ListeningPort[] | null,
+  port: number,
+  source: ListenerSource = 'watch',
+): boolean | null {
+  if (listeners === null) return null;
+  if (listeners.some((entry) => entry.port === port)) return true;
+  return source === 'probe' ? false : null;
 }
 
 export type HttpPortSlotHolder = 'none' | 'relay' | 'user-process';
@@ -264,18 +359,23 @@ export type HttpPortSlotHolder = 'none' | 'relay' | 'user-process';
  * `=== 'none'`; the UI asks this fuller form so it can say which of the two
  * holders is in the way and how to release it, instead of surfacing a 409.
  *
- * A listener whose pid matches a live relay — or whose pid is unknown while a
- * relay is live — is the relay; any other listener is a user process. A live
- * relay with no listener in the snapshot still holds the slot (the snapshot
- * may predate its bind). Misattributing a user process to the relay is
- * self-correcting: the planned relay fails to bind, lands in `failed`, and
- * the next call sees a non-live relay beside a listener.
+ * A live relay holds the slot: a `running` relay bound 8080 or it would have
+ * failed, so a listener beside it is the relay itself — even when the
+ * snapshot's pid disagrees, because a `watch` pid may be stale (the relay
+ * restarted; the channel never reported it). Only a fresh `probe` pid that
+ * differs from the relay's names a user process. No live relay and a
+ * listener is a user process; a live relay with no listener in the snapshot
+ * still holds the slot (the snapshot may predate its bind). Misattributing
+ * a user process to the relay is self-correcting: the planned relay fails
+ * to bind, lands in `failed`, and the next call sees a non-live relay beside
+ * a listener.
  */
-export function describeHttpPortSlot({ listeners, relay }: HttpPortSlotInput): HttpPortSlotHolder {
+export function describeHttpPortSlot({ listeners, relay, listenerSource = 'watch' }: HttpPortSlotInput): HttpPortSlotHolder {
   const listener = listeners.find((entry) => entry.port === SPRITE_HTTP_PORT);
   const relayAlive = isRelayAlive(relay);
   if (!listener) return relayAlive ? 'relay' : 'none';
   if (!relayAlive) return 'user-process';
+  if (listenerSource !== 'probe') return 'relay';
   const pidsAgree = listener.pid === undefined || relay.pid === undefined || listener.pid === relay.pid;
   return pidsAgree ? 'relay' : 'user-process';
 }
@@ -312,6 +412,35 @@ export interface PlanDevServerServiceInput {
   relay: SandboxServiceInfo | null;
   /** Ports currently bound in the sprite. */
   listeners: readonly ListeningPort[];
+  /**
+   * Whether {@link PlanDevServerServiceInput.listeners} is a CURRENT snapshot
+   * of the sprite, or merely what the caller happens to hold. Default `true`
+   * — the detector plans on a frame it just observed. A caller reconciling
+   * without a live `ports/watch` snapshot (a user's resume while the watcher
+   * is starting up or reconnecting) passes `false`, and a plan that would
+   * START a relay is refused rather than made against an empty listener set:
+   * "unknown" must never be read as "8080 is free", the same rule
+   * `describeServiceState`'s `listeners: null` obeys. Nothing else changes —
+   * a direct 8080 row needs no relay, and stopping never needs the slot.
+   */
+  listenersKnown?: boolean;
+  /**
+   * Where {@link PlanDevServerServiceInput.listeners} came from; defaults to
+   * `'watch'`. Orthogonal to {@link PlanDevServerServiceInput.listenersKnown}:
+   * that one says whether a snapshot is in hand at all, this one says what
+   * the snapshot's SILENCE is worth (see {@link ListenerSource}).
+   *
+   * Deliberately NOT used to gate "is 8080 free". Requiring a probe there
+   * would be the stricter rule, but the detector's only source is the watch
+   * channel, so it would refuse `slot-unknown` on every reconcile and no
+   * relay would ever start on its own — the feature would stop working for
+   * every framework in order to be correct about one. The weaker inference
+   * stays, and it is self-correcting in the way this module already documents:
+   * a relay planned onto an occupied 8080 fails to bind, lands `failed`, and
+   * the next call sees a non-live relay beside a listener. A wrong "down" had
+   * no such correction, which is why that one is fixed and this one is not.
+   */
+  listenerSource?: ListenerSource;
   /** Chosen by the effects layer after probing the sprite; `'node'` is the verified default. */
   relayRuntime?: PreviewRelayRuntime;
   now: Date;
@@ -345,6 +474,21 @@ export type DevServerServicePlan =
       row: DevPreviewRowIntent;
     }
   | {
+      /**
+       * An UNLISTED port is the target and nobody has agreed to share it.
+       * Record the detection — so the UI can name the port and offer the
+       * decision — but start NOTHING, and take down a relay left over from a
+       * previous target, because that relay is exposure the user did not ask
+       * to keep. `row.relayServiceName` is null, which is what makes the
+       * sprite serve nothing: the URL routes to 8080 alone.
+       */
+      action: 'await-approval';
+      targetPort: number;
+      /** `services.remove(...)` first — a relay for the PREVIOUS target must not outlive it. */
+      removeRelay: boolean;
+      row: DevPreviewRowIntent;
+    }
+  | {
       /** The user switched the preview off and the relay is still up: `services.stop(relayServiceName)`. */
       action: 'stop-relay';
       relayServiceName: string;
@@ -374,7 +518,8 @@ export type DevServerServicePlan =
          * unlisted port is offered again the moment the current target stops
          * listening, or if the user re-points explicitly.
          */
-        | 'current-target-preferred';
+        | 'current-target-preferred'
+        | 'user-selected-target';
       /** True when a row for a DIFFERENT instance was present and ignored — the UI's "needs re-creating" signal. */
       staleRowIgnored: boolean;
     }
@@ -384,7 +529,14 @@ export type DevServerServicePlan =
         /** No instance id ⇒ no proof ⇒ no plan. */
         | 'instance-unknown'
         /** Something that is not our relay holds 8080 — the honest fallback is "run your server on 8080". */
-        | 'http-port-busy';
+        | 'http-port-busy'
+        /**
+         * A relay would have to be started, but no current listener snapshot
+         * proves 8080 is free. Refusing costs a retry; planning against an
+         * assumed-empty set would start a relay that may fail to bind and
+         * leave a state nobody can explain.
+         */
+        | 'slot-unknown';
       targetPort?: number;
     };
 
@@ -406,13 +558,44 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
     return { action: 'none', reason: 'user-stopped', staleRowIgnored };
   }
 
-  // Thrash guard: a fresh UNLISTED port must not displace a KNOWN dev-port
-  // target that is still serving. Everything else — a known port, or any port
-  // once the current target is gone — replaces freely.
+  // Thrash guard: a fresh UNLISTED port must not displace a target that is
+  // still serving — either a KNOWN dev port, or an unlisted one a person has
+  // APPROVED. Without the second half, a `node --inspect` bind would knock a
+  // working, explicitly-shared preview back into needs-approval and make the
+  // user agree to it all over again. Everything else — a known port, or any
+  // port once the current target is gone — replaces freely.
+  // A port the USER PICKED is not a guess to be revised. The thrash guard
+  // below only shields against UNLISTED newcomers, which is right for a
+  // detected target — a known dev port appearing is usually the real one. A
+  // pinned target is different: the person already answered the question the
+  // detector is trying to answer, so ANY newcomer yields to it, whatever its
+  // likelihood. It releases on exactly one condition — a PROBE proving the
+  // pinned port is gone — because only a probe can establish that, and the
+  // channel that would otherwise "prove" it cannot see the very servers
+  // people pick by hand.
   if (
     detected !== null && row !== null && detected.port !== row.targetPort
-    && detected.likelihood === 'unlisted' && KNOWN_DEV_SERVER_PORTS.has(row.targetPort)
-    && listeners.some((entry) => entry.port === row.targetPort)
+    && row.selectedByUserAt !== null
+    && isPortListening(listeners, row.targetPort, input.listenerSource) !== false
+  ) {
+    return { action: 'none', reason: 'user-selected-target', staleRowIgnored };
+  }
+
+  //
+  // The presence clause asks "is the current target STILL listening", and it
+  // must accept "cannot say" as a yes. It used to require a positive sighting
+  // in the listener set, which inverted the guard for exactly the ports it
+  // most needed to protect: a target the `ports/watch` channel cannot see
+  // (every Next.js dev server) is absent from every snapshot, so the guard
+  // never fired and the next unlisted bind — a `node --inspect`, a second
+  // worker — silently replaced a preview the user had explicitly chosen.
+  // Only a KNOWN-absent target (`false`, which only a probe can produce)
+  // releases it.
+  if (
+    detected !== null && row !== null && detected.port !== row.targetPort
+    && detected.likelihood === 'unlisted'
+    && isPreviewShareable(row, row.targetPort)
+    && isPortListening(listeners, row.targetPort, input.listenerSource) !== false
   ) {
     return { action: 'none', reason: 'current-target-preferred', staleRowIgnored };
   }
@@ -424,6 +607,20 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
   const detectedAt = detected ? now : row?.detectedAt ?? now;
   if (targetPort === null) return { action: 'none', reason: 'nothing-detected', staleRowIgnored };
 
+  // ONE row shape, three plans. Only `relayServiceName` differs between them,
+  // and the approval and intent guards must be identical in all three — which
+  // is exactly the kind of thing three hand-copied literals stop being.
+  const rowFor = (relayServiceName: string | null): DevPreviewRowIntent => ({
+    holder,
+    spriteInstanceId: liveInstanceId,
+    sandboxId,
+    targetPort,
+    relayServiceName,
+    detectedAt,
+    stoppedByUserAt: null,
+    basedOnStoppedByUserAt: row?.stoppedByUserAt ?? null,
+  });
+
   if (targetPort === SPRITE_HTTP_PORT) {
     // The user's own server on 8080 — reachable through the URL as-is. A relay
     // that is still defined is a leftover from an earlier target and must go.
@@ -433,33 +630,54 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
     return {
       action: 'record-direct',
       removeRelay: relay !== null,
-      row: { holder, spriteInstanceId: liveInstanceId, sandboxId, targetPort, relayServiceName: null, detectedAt, stoppedByUserAt: null, basedOnStoppedByUserAt: row?.stoppedByUserAt ?? null },
+      row: rowFor(null),
     };
   }
 
-  if (describeHttpPortSlot({ listeners, relay }) === 'user-process') {
+  // CONSENT BEFORE EXPOSURE, and before the slot questions: nothing is being
+  // started here, so `http-port-busy` and `slot-unknown` would both be
+  // dishonest answers to "why is my preview not up?".
+  if (!isPreviewShareable(row, targetPort)) {
+    return {
+      action: 'await-approval',
+      targetPort,
+      removeRelay: relay !== null,
+      row: rowFor(null),
+    };
+  }
+
+  if (describeHttpPortSlot({ listeners, relay, listenerSource: input.listenerSource }) === 'user-process') {
     return { action: 'refuse', reason: 'http-port-busy', targetPort };
   }
 
   const service = buildPreviewRelaySpec({ targetPort, runtime: relayRuntime });
-  const rowIntent: DevPreviewRowIntent = {
-    holder,
-    spriteInstanceId: liveInstanceId,
-    sandboxId,
-    targetPort,
-    relayServiceName: service.name,
-    detectedAt,
-    stoppedByUserAt: null,
-    basedOnStoppedByUserAt: row?.stoppedByUserAt ?? null,
-  };
+  const rowIntent = rowFor(service.name);
 
+  // A relay that is ALREADY LIVE and already forwards to `targetPort` is
+  // decided BEFORE the unknown-slot guard, and must stay that way: neither
+  // answer below starts anything, and the question the guard exists to ask —
+  // "is 8080 free?" — has an answer that needs no snapshot, because this
+  // relay is itself the thing holding it. Ordering these the other way round
+  // refused a preview that was already serving, told the user it would start
+  // shortly, and (via `describeServiceState`) made a `down` that the planner
+  // was supposed to answer `already-relaying` for report a plan of `refuse`.
+  if (relay !== null && relayServiceMatches(relay, service) && isRelayAlive(relay)) {
+    if (row?.targetPort === targetPort) return { action: 'none', reason: 'already-relaying', staleRowIgnored };
+    // Relay is right and live but the row does not say so (a lost write, or
+    // a row from a previous target): record it without touching the process.
+    return { action: 'start-relay', via: 'already-running', service, row: rowIntent };
+  }
+
+  // Everything from here DOES mutate the sprite — a start, a re-point, a
+  // create — and the slot can only be called free from a CURRENT snapshot.
+  // This refuses only a start planned blind.
+  if (input.listenersKnown === false) {
+    return { action: 'refuse', reason: 'slot-unknown', targetPort };
+  }
+
+  // Matching but not alive: restarting it is a real process start, so it
+  // waits for the guard above.
   if (relay !== null && relayServiceMatches(relay, service)) {
-    if (isRelayAlive(relay)) {
-      if (row?.targetPort === targetPort) return { action: 'none', reason: 'already-relaying', staleRowIgnored };
-      // Relay is right and live but the row does not say so (a lost write, or
-      // a row from a previous target): record it without touching the process.
-      return { action: 'start-relay', via: 'already-running', service, row: rowIntent };
-    }
     return { action: 'start-relay', via: 'start', service, row: rowIntent };
   }
   if (relay !== null) {
@@ -485,6 +703,22 @@ export interface DescribeServiceStateInput {
    * the sprite and a wake is billed (spike §6). Rendering must be free.
    */
   listeners: readonly ListeningPort[] | null;
+  /**
+   * Where {@link DescribeServiceStateInput.listeners} came from. Defaults to
+   * `'watch'`, whose silence proves nothing — see {@link ListenerSource}. A
+   * target missing from a watch snapshot is therefore rendered as it was
+   * RECORDED, not as `down`: this module used to answer "the dev server on
+   * port N is not listening any more" about a server that was serving
+   * perfectly well, for every framework the channel cannot see.
+   */
+  listenerSource?: ListenerSource;
+  /**
+   * Whether the sprite's URL can exist in DNS — its name plus the org suffix
+   * must fit one label (`SPRITE_NAME_MAX`). Defaults to true, "nothing to
+   * say"; the status gather answers from the name, the access gather from
+   * the URL itself.
+   */
+  urlRoutable?: boolean;
 }
 
 export type DevPreviewServiceState =
@@ -492,9 +726,34 @@ export type DevPreviewServiceState =
   | { status: 'instance-unknown'; message: string }
   | { status: 'stale'; targetPort: number; message: string }
   | { status: 'stopped'; targetPort: number; stoppedAt: Date; message: string }
+  | { status: 'needs-approval'; targetPort: number; message: string }
   | { status: 'starting'; targetPort: number; via: 'relay'; message: string }
   | { status: 'live'; targetPort: number; via: 'relay' | 'direct'; message: string }
-  | { status: 'down'; targetPort: number; via: 'relay' | 'direct'; error: string | null; message: string }
+  | {
+      status: 'down';
+      targetPort: number;
+      via: 'relay' | 'direct';
+      error: string | null;
+      message: string;
+      /**
+       * Whether a RECONCILE (the `resume` user action, or the detector's next
+       * frame) can actually repair this. `down` covers two different
+       * situations and only one of them is ours to fix:
+       *
+       *  - `true` — the RELAY is the broken part: crashed, undefined,
+       *    pointing at the wrong port, or holding 8080 in front of a direct
+       *    row. {@link planDevServerService} answers `start-relay`,
+       *    `replace-relay` or `record-direct`, so one reconcile repairs it
+       *    and a Restart control is worth offering.
+       *  - `false` — the USER'S SERVER is the broken part: the direct row's
+       *    8080 server, or a relay's target, stopped listening. The planner
+       *    answers `already-direct` / `already-relaying` — nothing to do —
+       *    so a reconcile changes nothing and the status comes back down
+       *    with the same button. Only starting the dev server again fixes
+       *    it, and saying so is more honest than a control that no-ops.
+       */
+      repairable: boolean;
+    }
   | { status: 'blocked'; targetPort: number; message: string };
 
 /** Pure: does this relay service forward to `targetPort`, under either runtime? */
@@ -503,12 +762,35 @@ function relayTargets(relay: SandboxServiceInfo, targetPort: number): boolean {
   return (['node', 'socat'] as const).some((runtime) => relayServiceMatches(relay, buildPreviewRelaySpec({ targetPort, runtime })));
 }
 
+/** The copy for a detected-but-unshared port — the ONE place it is worded. */
+export function needsApprovalMessage(targetPort: number): string {
+  return `A dev server is running on port ${targetPort}. It is not a usual dev-server port, so it is not being shared until you say so.`;
+}
+
+/**
+ * Shown when the sandbox is live but nothing is watching its ports, so the
+ * status on screen may lag.
+ *
+ * It lives HERE, in the pure core, rather than beside the status model that
+ * produces it, because the preview PANE renders it — and importing a value
+ * from `dev-preview-status.ts` drags that module's whole dependency graph
+ * (the grant signer's `node:crypto`, the store's database client) into the
+ * browser bundle. `tsc` is perfectly happy with that; `next build` is not.
+ * The core imports nothing but types, which is what makes it safe to reach
+ * for from client code.
+ */
+export const DETECTION_UNAVAILABLE_MESSAGE = 'Dev-server detection is not running right now, so this status may be out of date.';
+
 /** The honest fallback copy for a held slot — the ONE place it is worded. */
 export const HTTP_PORT_BUSY_MESSAGE =
   `Port ${SPRITE_HTTP_PORT} is already in use by something that is not the preview relay. Run your dev server on port ${SPRITE_HTTP_PORT} to preview it, or free the port.`;
 
+/** A sandbox whose URL cannot exist in DNS — the ONE place it is worded (the pane, the proxy and the status all say this). */
+export const SPRITE_URL_UNRESOLVABLE_MESSAGE =
+  'This sandbox was created with a name too long for a preview URL. Create a new environment or session to preview it.';
+
 /** Pure: the row folded with the live service read, as one UI-consumable status. */
-export function describeServiceState({ liveInstanceId, row, relay, listeners }: DescribeServiceStateInput): DevPreviewServiceState {
+export function describeServiceState({ liveInstanceId, row, relay, listeners, listenerSource = 'watch', urlRoutable = true }: DescribeServiceStateInput): DevPreviewServiceState {
   if (row === null) return { status: 'none', message: 'No dev server has been detected in this sandbox yet.' };
   if (liveInstanceId === null) {
     return { status: 'instance-unknown', message: 'The sandbox could not be identified, so its preview state cannot be shown.' };
@@ -529,9 +811,63 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners }: 
     };
   }
 
-  const targetListening = listeners === null ? null : listeners.some((entry) => entry.port === row.targetPort);
+  // Nothing below can help a sandbox whose URL no resolver will answer: the
+  // relay may be up and the server serving, and the proxy still cannot reach
+  // them. Said here, before the frame is ever opened, and NOT repairable —
+  // the fix is a new sandbox, which no button on this pane performs.
+  if (!urlRoutable) {
+    return {
+      status: 'down',
+      targetPort: row.targetPort,
+      via: row.relayServiceName === null ? 'direct' : 'relay',
+      error: 'sprite-url-unresolvable',
+      repairable: false,
+      message: SPRITE_URL_UNRESOLVABLE_MESSAGE,
+    };
+  }
 
-  const holder = describeHttpPortSlot({ listeners: listeners ?? [], relay });
+  const targetListening = isPortListening(listeners, row.targetPort, listenerSource);
+
+  const holder = describeHttpPortSlot({ listeners: listeners ?? [], relay, listenerSource });
+
+  // Detected, recorded, and serving NOTHING — no relay for a non-8080 target
+  // means the sprite URL (which routes to 8080 alone) reaches nothing. Three
+  // reasons land here and they read very differently to a user.
+  if (row.relayServiceName === null && row.targetPort !== SPRITE_HTTP_PORT) {
+    // SHAREABLE, not APPROVED. A row can reach this branch with a perfectly
+    // ordinary dev-server port — a stopped preview records that its relay is
+    // no longer running, and the resume that follows clears the stop before
+    // the relay is re-created. Asking `isPreviewApproved` there would demand
+    // consent for port 5173, which needs none, and offer a Share button for a
+    // port that was never withheld.
+    if (!isPreviewShareable(row, row.targetPort)) {
+      return { status: 'needs-approval', targetPort: row.targetPort, message: needsApprovalMessage(row.targetPort) };
+    }
+    // The slot is TAKEN: the relay was planned and refused, and no future
+    // reconcile gets further while the port is held. Asked BEFORE the case
+    // below, and only when a snapshot actually proves it (`listeners: null`
+    // leaves the slot unknown, which is not evidence of a problem).
+    if (holder === 'user-process') return { status: 'blocked', targetPort: row.targetPort, message: HTTP_PORT_BUSY_MESSAGE };
+    // DOWN, not "starting…". A relay is normally created in the same call that
+    // clears the stop or records the consent, so this shape means that create
+    // did NOT happen — the slot could not be proven free, the holder's lock
+    // was contended, the call failed. Nothing necessarily converges it: the
+    // sweep only handles rows that are still switched OFF, and the detector
+    // needs a port frame a dev server that is already listening will not
+    // emit. Saying "starting" would promise an arrival that never comes and
+    // would take away the one control that fixes it — `down` is what puts the
+    // Restart button back.
+    return {
+      status: 'down',
+      targetPort: row.targetPort,
+      via: 'relay',
+      error: null,
+      // Ours to fix, and the reason this branch says `down` at all: the row
+      // names no relay, so a reconcile plans `start-relay` via `create`.
+      repairable: true,
+      message: `The preview relay for port ${row.targetPort} is not defined on this sandbox.`,
+    };
+  }
 
   if (row.relayServiceName === null) {
     // Direct: the user's server on 8080 is the whole path, so the slot holder
@@ -539,10 +875,13 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners }: 
     // way round: a user process is what we want here, a live relay is a
     // leftover that has taken the port from under the user's server.
     if (holder === 'relay') {
-      return { status: 'down', targetPort: row.targetPort, via: 'direct', error: null, message: `A leftover preview relay still holds port ${SPRITE_HTTP_PORT}; it will be removed on the next reconcile.` };
+      // Ours to fix: the reconcile plans `record-direct` with `removeRelay`.
+      return { status: 'down', targetPort: row.targetPort, via: 'direct', error: null, repairable: true, message: `A leftover preview relay still holds port ${SPRITE_HTTP_PORT}; it will be removed on the next reconcile.` };
     }
     if (targetListening === false) {
-      return { status: 'down', targetPort: row.targetPort, via: 'direct', error: null, message: `Nothing is listening on port ${SPRITE_HTTP_PORT} any more.` };
+      // NOT ours to fix: the planner answers `already-direct`. Only the user
+      // starting their server on 8080 again brings this back.
+      return { status: 'down', targetPort: row.targetPort, via: 'direct', error: null, repairable: false, message: `Nothing is listening on port ${SPRITE_HTTP_PORT} any more.` };
     }
     return { status: 'live', targetPort: row.targetPort, via: 'direct', message: `Serving port ${SPRITE_HTTP_PORT} directly.` };
   }
@@ -550,7 +889,8 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners }: 
   if (holder === 'user-process') return { status: 'blocked', targetPort: row.targetPort, message: HTTP_PORT_BUSY_MESSAGE };
 
   if (relay === null || relay.name !== row.relayServiceName) {
-    return { status: 'down', targetPort: row.targetPort, via: 'relay', error: null, message: `The preview relay for port ${row.targetPort} is not defined on this sandbox.` };
+    // Ours to fix: the reconcile creates (or replaces) the relay.
+    return { status: 'down', targetPort: row.targetPort, via: 'relay', error: null, repairable: true, message: `The preview relay for port ${row.targetPort} is not defined on this sandbox.` };
   }
   // The relay has ONE name, so the name proves nothing about WHERE it forwards.
   // A replace whose service call landed but whose row write did not leaves the
@@ -559,23 +899,29 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners }: 
   // The runtime is not on the row, so either runtime's spec for this port is
   // accepted; anything else is a relay for another port.
   if (!relayTargets(relay, row.targetPort)) {
-    return { status: 'down', targetPort: row.targetPort, via: 'relay', error: null, message: `The preview relay on this sandbox forwards to a different port than ${row.targetPort}; it will be re-pointed on the next reconcile.` };
+    // Ours to fix: the reconcile plans `replace-relay`.
+    return { status: 'down', targetPort: row.targetPort, via: 'relay', error: null, repairable: true, message: `The preview relay on this sandbox forwards to a different port than ${row.targetPort}; it will be re-pointed on the next reconcile.` };
   }
   if (relay.status === 'starting') {
     return { status: 'starting', targetPort: row.targetPort, via: 'relay', message: `Starting the preview relay for port ${row.targetPort}…` };
   }
   if (relay.status === 'running') {
     if (targetListening === false) {
-      return { status: 'down', targetPort: row.targetPort, via: 'relay', error: null, message: `The dev server on port ${row.targetPort} is not listening any more.` };
+      // NOT ours to fix: the relay is up and correct, so the planner answers
+      // `already-relaying`. The user's dev server has to come back first.
+      return { status: 'down', targetPort: row.targetPort, via: 'relay', error: null, repairable: false, message: `The dev server on port ${row.targetPort} is not listening any more.` };
     }
     return { status: 'live', targetPort: row.targetPort, via: 'relay', message: `Relaying port ${SPRITE_HTTP_PORT} to your dev server on port ${row.targetPort}.` };
   }
   // failed / stopped / stopping / unknown — with no stopped-by-user intent this is a crash, whatever the platform calls it (§4).
+  // Ours to fix: a defined, correctly-pointed relay that is not running is
+  // exactly what `start-relay` via `'start'` restarts.
   return {
     status: 'down',
     targetPort: row.targetPort,
     via: 'relay',
     error: relay.error ?? null,
+    repairable: true,
     message: `The preview relay for port ${row.targetPort} is not running${relay.error ? ` (${relay.error})` : ''}.`,
   };
 }

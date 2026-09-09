@@ -638,3 +638,41 @@ describe('ending a session that a concurrent admission REOPENED', () => {
     expect(result.status).toBe('ok');
   });
 });
+
+// -----------------------------------------------------------------------------
+// A ports pane's target resolves to a CONSTANT entry — it has no row to join.
+// Without this `snapshot.targets` omitted it, and `list_panes` reported the
+// pane as unresolved (`name: ''`) while the grid labelled it "Ports".
+// -----------------------------------------------------------------------------
+describe('ports pane targets', () => {
+  it('a bound ports pane appears in snapshot.targets as a constant "Ports" entry addressed to this workspace', async () => {
+    const workspaceId = await createWorkspace();
+    await seedTree(workspaceId, [root]);
+    const before = await readWorkspaceNodeSnapshot(db, workspaceId);
+    const result = await applyWorkspaceNodeWrite({
+      workspaceId,
+      baseRev: before.rev,
+      put: [{ nodeType: 'pane', id: 'pane-ports', parentId: 'root', position: 0, target: { kind: 'ports', id: workspaceId } }],
+      drop: [],
+      viewerId: ownerIds[0],
+    });
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') return;
+    expect(result.snapshot.targets).toContainEqual({ id: workspaceId, kind: 'ports', title: 'Ports', lastMessageAt: null, agentPageId: null });
+  });
+
+  it('a ports pane pointing at ANOTHER workspace is refused — the target must be this one', async () => {
+    const workspaceA = await createWorkspace();
+    const workspaceB = await createWorkspace();
+    await seedTree(workspaceA, [root]);
+    const before = await readWorkspaceNodeSnapshot(db, workspaceA);
+    const result = await applyWorkspaceNodeWrite({
+      workspaceId: workspaceA,
+      baseRev: before.rev,
+      put: [{ nodeType: 'pane', id: 'pane-ports', parentId: 'root', position: 0, target: { kind: 'ports', id: workspaceB } }],
+      drop: [],
+      viewerId: ownerIds[0],
+    });
+    expect(result.status).not.toBe('ok');
+  });
+});

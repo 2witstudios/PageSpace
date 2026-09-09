@@ -46,6 +46,8 @@
  * Public exposure is a separate task with its own containment ruling.
  */
 
+import { MAX_LABEL_LENGTH } from '../../../validators/custom-domain';
+
 export interface PreviewProxyLimits {
   maxRequestBodyBytes: number;
   maxResponseBodyBytes: number;
@@ -83,6 +85,32 @@ export function assertTrustedPreviewUpstream(url: URL): void {
   if (url.protocol !== 'https:' || !url.hostname.endsWith(SPRITE_URL_HOST_SUFFIX) || url.hostname === SPRITE_URL_HOST_SUFFIX.slice(1)) {
     throw new Error('preview upstream is not a sprite URL — refusing to forward');
   }
+  if (!isRoutableSpriteUrl(url)) {
+    throw new Error('preview upstream host has a label longer than a DNS label allows — refusing to forward');
+  }
+}
+
+/**
+ * Pure: can this sprite URL exist in DNS at all? The platform builds a
+ * sprite's URL as `<name>-<org>.sprites.app` without checking that the first
+ * label fits; a sprite named to the API's own 63-char limit gets a 69-char
+ * label that no resolver will answer (`dig`: "label too long"). A request
+ * to such a URL fails as `fetch failed` — the one failure that must be named
+ * before the fetch, because nothing downstream can recover it. `null` (no
+ * URL yet) and an unparsable string are "nothing to say", not unroutable.
+ */
+export function isRoutableSpriteUrl(url: URL | string | null): boolean {
+  let parsed: URL | null = null;
+  if (url instanceof URL) parsed = url;
+  else if (url !== null) {
+    try {
+      parsed = new URL(url);
+    } catch {
+      parsed = null;
+    }
+  }
+  if (parsed === null) return true;
+  return parsed.hostname.split('.').every((label) => label.length >= 1 && label.length <= MAX_LABEL_LENGTH);
 }
 
 /**

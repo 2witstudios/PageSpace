@@ -222,8 +222,83 @@ ordinary status text or, with `--show-token`, exactly the one `PAGESPACE_TOKEN=�
 
 ## `pagespace env` — this machine as a local environment
 
-A drive owner or admin can create an Environment with `substrate: "local"` and is shown a
-**one-time enrollment code** (valid ten minutes, single use). On the machine:
+### What you are agreeing to
+
+`pagespace env connect` lets PageSpace run commands and read and write files **on this computer,
+under your own user account**. Nothing runs unless a policy file you own allows it, and in `ask`
+mode you see the exact command before it runs. Two things follow from approving one, and the
+second surprises people:
+
+- It runs with your privileges, exactly as if you had typed it into this terminal yourself. It can
+  read any file you can read, change any file you can change, reach anything on your network that
+  you can reach, and use any credential sitting in your home directory. There is no sandbox
+  around it.
+- You see the **first** command of each kind, and approving it covers **every later command of
+  that kind for the rest of that session, unseen**. The approval is remembered per user, session
+  and operation — not per command — so after you approve one `exec`, the next `exec` from that
+  same user and session runs with no prompt at all, whatever it is.
+
+The `roots` in your policy file confine the paths an agent can **name** — the working directory it
+asks for, and the files it asks to read or write. They do **not** confine what a program does once
+it has started. A command approved with a working directory inside a root can still read
+`/etc/passwd`, your SSH keys, or anything else your account can reach; it just cannot *ask* the
+daemon to open them. Actually confining a running process needs operating-system sandboxing,
+which this daemon does not do.
+
+So the question at the prompt is not "may this touch that folder". It is "may this, and everything
+like it for the rest of this session, run as me". Answer it the way you would answer a stranger
+asking for your shell for the afternoon. Two practical consequences:
+
+- Run the daemon as an ordinary user, never as root, and prefer a machine — or a separate account —
+  that does not hold secrets you would not hand to whoever is driving the agent.
+- `principals` is the list of PageSpace users allowed to drive this machine. Keep it short, and
+  treat adding a name to it as the same decision as giving that person your shell.
+
+What the daemon does guarantee is narrower than "safe", and worth knowing exactly:
+
+- It **never listens on a port** — it dials out to PageSpace and nothing can dial in.
+- It **denies by default**. No policy file, an unreadable one, or one anybody else can write means
+  every request is refused.
+- Every request carries a **server-signed grant** bound to that exact command or path list: it is
+  single-use, expires within a minute, and cannot be replayed or edited in flight.
+- Your policy is checked **after** the grant and independently of it. A request PageSpace considers
+  allowed is still refused here if your policy does not allow it.
+- Every decision — allowed, denied, declined — is appended to `~/.pagespace/env-audit.jsonl`.
+- Revoking the environment in PageSpace **deletes this machine's key** and stops the daemon;
+  Ctrl-C and `pagespace env disconnect` stop it too, and kill anything it started.
+
+One consequence of the two facts above, worth seeing once before you pick a mode: an agent that
+reads a file on this machine can be *steered* by what that file says — a README, a dependency's
+source, a downloaded document can all contain text aimed at the agent rather than at you. If the
+agent then runs a command, and you have already approved an `exec` in that session, **that command
+runs without a prompt**. This is inherent to agents reading content nobody vetted, not a defect in
+this daemon; the defences that apply here are the ordinary ones — keep `principals` short, keep
+`ops` narrow, stop the daemon when you are not using it, and read
+`~/.pagespace/env-audit.jsonl` when you want to know what actually ran.
+
+### The three modes, in practice
+
+- **`deny`** — nothing runs, ever. The daemon still connects, so the Environment shows as connected.
+- **`ask`** — the safe default to start with. An operation listed in `ops` runs without asking;
+  anything else stops and prompts you in this terminal, showing the exact command, working
+  directory, paths, environment and limits. As above, approving covers further requests for that
+  same operation from the same user and session while the daemon runs — those later commands are
+  never shown to you — but not forever, and not for other people. Declining refuses that request
+  and asks again next time. `ask` needs a terminal: a headless machine cannot use it.
+- **`allowlist`** — only the operations in `ops` run; everything else is denied with no prompt.
+
+**`allowlist` allowlists operations, not executables.** `ops` holds `exec`, `fs_read` and
+`fs_write` — so putting `exec` in it under `allowlist` mode means *any* command may run
+unprompted, not some approved list of programs. There is deliberately no executable allowlist:
+one was considered for this release and not adopted, because a list of program names is easy to
+walk around (`sh -c …`, an interpreter, a script inside a root) and would suggest a guarantee the
+daemon cannot keep. If you want per-command review, use `ask` and leave `exec` out of `ops`.
+
+A drive owner or admin creates a local Environment from the ordinary "New environment" step (choose
+**This computer** and name the machine) and is shown a **one-time enrollment code** (valid ten
+minutes, single use) beside these exact commands. Losing the code is not fatal: until a machine has
+enrolled, the Environment's menu in the sidebar offers **Show a new code**, which replaces the old
+one. Once a machine has enrolled, no new code can ever be issued for that Environment. On the machine:
 
 ```text
 pagespace env enroll <enrollmentId> <code> [--host <url>]
@@ -297,15 +372,19 @@ denied** (`no_policy`); the daemon still connects so you can see the Environment
 }
 ```
 
-- `mode` — `ask`: ops listed in `ops` run without prompting, anything else prompts in the terminal
-  (once per user + session + op; needs a TTY, so a headless machine must use another mode).
-  `allowlist`: only ops in `ops` run; anything else is denied. `deny`: nothing runs.
+- `mode` — see "The three modes, in practice" above. In short: `ask` prompts for anything not in
+  `ops` and needs a TTY; `allowlist` runs only what is in `ops` and never prompts; `deny` runs
+  nothing.
 - `principals` — PageSpace user ids allowed to drive this machine. A request from anyone else is
-  denied `principal_not_allowed`, whatever the server thinks.
-- `ops` — any of `exec`, `fs_read`, `fs_write` (`pty_open` is reserved for a later release).
+  denied `principal_not_allowed`, whatever the server thinks. Each of these users can run commands
+  as you on this machine, subject to `mode` and `ops`.
+- `ops` — any of `exec`, `fs_read`, `fs_write` (`pty_open` is reserved for a later release). These
+  are operation kinds, not programs: `exec` covers every command, and there is no per-executable
+  allowlist.
 - `roots` — absolute directories every working directory and every file path must resolve inside
-  (symlinks are resolved; `..` is refused). Note that roots confine the paths an agent *names*, not
-  what a command does once it runs.
+  (symlinks are resolved; `..` is refused). Roots confine the paths an agent can *name*. They do
+  not confine a command once it is running: an approved `exec` with its cwd inside a root still
+  runs as you and can read anything you can read. See "What you are agreeing to" above.
 - `envAllowlist` — environment variable names the server may set for a command. Loader and
   interpreter hooks (`LD_*`, `DYLD_*`, `PATH`, `NODE_OPTIONS`, …) are refused even if listed.
 - `maxBytes` / `maxTimeoutMs` — caps on captured output and wall-clock per command; a request that

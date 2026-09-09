@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { derivePreviewCookieKey, signPreviewCookie, PREVIEW_COOKIE_NAME } from '@pagespace/lib/services/sandbox/preview/preview-grant';
+import { DEV_PREVIEW_PATH_HEADER } from '@/lib/dev-preview/preview-path-header';
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -45,7 +46,7 @@ const HOLDER: Holder = { kind: 'env', id: 'env1' };
 const consume = vi.fn();
 
 function cookie(holder: Holder = HOLDER, expiresAt = Date.now() + 60_000): string {
-  return `${PREVIEW_COOKIE_NAME}=${signPreviewCookie({ holder, userId: 'u1', expiresAt }, KEY)}`;
+  return `${PREVIEW_COOKIE_NAME}=${signPreviewCookie({ holder, userId: 'u1', sessionId: 'sess1', expiresAt }, KEY)}`;
 }
 
 function req(path: string, init: { host?: string; method?: string; body?: string; headers?: Record<string, string> } = {}): NextRequest {
@@ -84,12 +85,12 @@ describe('the host must be a preview host naming the holder in the path', () => 
 describe('the handshake: /__pagespace/auth', () => {
   it('consumes the grant, installs the host-only cookie, and redirects to /', async () => {
     const cookieExpiresAt = new Date(Date.now() + 3600_000);
-    consume.mockResolvedValue({ holder: HOLDER, userId: 'u1', cookieExpiresAt });
+    consume.mockResolvedValue({ holder: HOLDER, userId: 'u1', sessionId: 'sess1', cookieExpiresAt });
     const res = await GET(req('/__pagespace/auth?grant=g1'), ctx());
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toBe('/');
     const set = res.headers.get('set-cookie') ?? '';
-    expect(set).toMatch(new RegExp(`^${PREVIEW_COOKIE_NAME}=v1\\.`));
+    expect(set).toMatch(new RegExp(`^${PREVIEW_COOKIE_NAME}=v2\\.`));
     expect(set).toContain('Secure; HttpOnly; SameSite=None; Partitioned');
     expect(set).not.toMatch(/domain=/i);
     expect(consume).toHaveBeenCalledWith({ id: 'g1', now: expect.any(Date) });
@@ -98,7 +99,7 @@ describe('the handshake: /__pagespace/auth', () => {
   it('refuses an unknown/used grant and a grant minted for another host, and audits both', async () => {
     consume.mockResolvedValueOnce(null);
     expect((await GET(req('/__pagespace/auth?grant=g1'), ctx())).status).toBe(403);
-    consume.mockResolvedValueOnce({ holder: { kind: 'env', id: 'env2' }, userId: 'u1', cookieExpiresAt: new Date() });
+    consume.mockResolvedValueOnce({ holder: { kind: 'env', id: 'env2' }, userId: 'u1', sessionId: 'sess1', cookieExpiresAt: new Date() });
     expect((await GET(req('/__pagespace/auth?grant=g2'), ctx())).status).toBe(403);
     expect(vi.mocked(auditRequest).mock.calls.map((c) => (c[1].details as { reason: string }).reason)).toEqual(['grant-invalid', 'grant-holder-mismatch']);
   });
@@ -111,7 +112,7 @@ describe('the handshake: /__pagespace/auth', () => {
 
   it('answers 503 when the cookie key is not configured — BEFORE consuming the single-use grant', async () => {
     vi.mocked(getPreviewCookieKey).mockReturnValue(Buffer.alloc(0));
-    consume.mockResolvedValue({ holder: HOLDER, userId: 'u1', cookieExpiresAt: new Date(Date.now() + 1000) });
+    consume.mockResolvedValue({ holder: HOLDER, userId: 'u1', sessionId: 'sess1', cookieExpiresAt: new Date(Date.now() + 1000) });
     expect((await GET(req('/__pagespace/auth?grant=g1'), ctx())).status).toBe(503);
     expect(consume).not.toHaveBeenCalled();
   });
@@ -189,8 +190,43 @@ describe('authorize + decide, per request', () => {
     const res = await POST(req('/api/items?x=%2F', { method: 'POST', body: 'b', headers: { cookie: cookie(), 'content-type': 'text/plain' } }), ctx());
     expect(res).toBe(upstream);
     expect(forwardPreviewRequest).toHaveBeenCalledWith(expect.objectContaining({ pathAndQuery: '/api/items?x=%2F', spriteUrl: 'https://ps-x-org.sprites.app', token: 'org-token', appOrigin: 'https://app.pagespace.ai' }));
-    expect(resolvePreviewTargetForRequest).toHaveBeenCalledWith(HOLDER, 'u1');
+    // The SESSION travels grant → cookie → gather; without it revocation could
+    // not reach a live preview at all.
+    expect(resolvePreviewTargetForRequest).toHaveBeenCalledWith(HOLDER, 'u1', 'sess1');
     expect(loggers.security.info).toHaveBeenCalledWith('dev-preview.access', expect.objectContaining({ outcome: 'forwarded', status: 201, wake: true, method: 'POST', path: '/api/items' }));
+  });
+
+  it('a session that is GONE re-auths instead of dead-ending — a rotation is the usual cause, and the user is still signed in', async () => {
+    // Device refresh mints a replacement session and grace-expires the old
+    // one, on a desktop unlock or an app foregrounding. Without this the frame
+    // sits on a bare 404 for the rest of the cookie's life while the dashboard
+    // around it reports the preview healthy.
+    vi.mocked(resolvePreviewTargetForRequest).mockResolvedValue({
+      decision: { kind: 'refuse', reason: 'not-authorized', status: 404, message: 'Not found', detail: 'session_revoked' },
+      authorization: { allowed: false, reason: 'session_revoked' },
+    });
+    const framed = await GET(req('/', { headers: { cookie: cookie(), 'sec-fetch-dest': 'iframe' } }), ctx());
+    expect(framed.status).toBe(401);
+    expect(framed.headers.get('content-type')).toContain('text/html');
+    // The stale cookie must go, or the re-auth page's re-mint races it.
+    expect(framed.headers.get('set-cookie') ?? '').toMatch(new RegExp(`^${PREVIEW_COOKIE_NAME}=;`));
+
+    // A subresource cannot render a page, but it still clears the cookie so
+    // the frame's next navigation re-auths rather than piling up 404s.
+    const subresource = await GET(req('/main.js', { headers: { cookie: cookie(), 'sec-fetch-dest': 'script' } }), ctx());
+    expect(subresource.status).toBe(404);
+    expect(subresource.headers.get('set-cookie') ?? '').toMatch(new RegExp(`^${PREVIEW_COOKIE_NAME}=;`));
+
+    // Every OTHER refusal is unchanged — a stopped preview is not a re-auth,
+    // and clearing the cookie there would make the user redo the handshake for
+    // something they switched off themselves.
+    vi.mocked(resolvePreviewTargetForRequest).mockResolvedValue({
+      decision: { kind: 'refuse', reason: 'stopped-by-user', status: 409, message: 'switched off' },
+      authorization: { allowed: true, driveId: 'd', wakeSubject: { driveId: 'd', ownerId: 'o' }, sandboxId: 's' },
+    });
+    const stopped = await GET(req('/', { headers: { cookie: cookie(), 'sec-fetch-dest': 'iframe' } }), ctx());
+    expect(stopped.status).toBe(409);
+    expect(stopped.headers.get('set-cookie')).toBeNull();
   });
 
   it('turns forwarder failures into 413/502/504 and logs them as limit/upstream outcomes', async () => {
@@ -200,5 +236,62 @@ describe('authorize + decide, per request', () => {
     vi.mocked(forwardPreviewRequest).mockResolvedValueOnce({ kind: 'upstream-error', status: 504, reason: 'headers timeout' });
     expect((await GET(req('/', { headers: { cookie: cookie() } }), ctx())).status).toBe(504);
     expect(vi.mocked(loggers.security.warn).mock.calls.map((c) => (c[1] as { outcome: string }).outcome)).toEqual(['limit-exceeded', 'upstream-error']);
+  });
+});
+
+describe('after the middleware rewrite the handler sees the ORIGINAL pathname', () => {
+  // Production shape: the browser asked the preview host for `/`; the
+  // middleware rewrote it onto the mount and stamped the original pathname
+  // on the request, but `request.nextUrl.pathname` inside the handler is
+  // still `/` (Next 15.5, self-hosted). The route must not demand the mount
+  // — the first real preview 404'd on every path — and must not guess the
+  // path by shape either: it takes the stamped one.
+  const rawReq = (path: string, headers: Record<string, string> = {}): NextRequest => {
+    const h = new Headers(headers);
+    h.set('host', HOST);
+    h.set(DEV_PREVIEW_PATH_HEADER, path.split('?')[0]);
+    return new NextRequest(`https://${HOST}${path}`, { headers: h });
+  };
+  const forwardable = () => {
+    vi.mocked(resolvePreviewTargetForRequest).mockResolvedValue({ decision: { kind: 'forward', wake: false }, authorization: { allowed: true, driveId: 'd', wakeSubject: { driveId: 'd', ownerId: 'o' }, sandboxId: 's' }, spriteUrl: 'https://ps-x-org.sprites.app', handle: {} as never });
+    vi.mocked(forwardPreviewRequest).mockResolvedValue({ kind: 'response', response: new Response('ok'), upstreamStatus: 200 });
+  };
+
+  it('reaches the cookie stage for `/` with no mount in the path — 401 no-cookie, not 404', async () => {
+    const res = await GET(rawReq('/'), ctx());
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ reason: 'no-cookie' });
+  });
+
+  it('forwards the original path and query verbatim: `/` and a Next chunk', async () => {
+    forwardable();
+    expect((await GET(rawReq('/', { cookie: cookie() }), ctx())).status).toBe(200);
+    expect(forwardPreviewRequest).toHaveBeenLastCalledWith(expect.objectContaining({ pathAndQuery: '/' }));
+    expect((await GET(rawReq('/_next/static/a.js?v=1', { cookie: cookie() }), ctx())).status).toBe(200);
+    expect(forwardPreviewRequest).toHaveBeenLastCalledWith(expect.objectContaining({ pathAndQuery: '/_next/static/a.js?v=1' }));
+    expect(loggers.security.info).toHaveBeenLastCalledWith('dev-preview.access', expect.objectContaining({ outcome: 'forwarded', path: '/_next/static/a.js' }));
+  });
+
+  it('a preview path that LOOKS like the mount, or like a sibling of it, is forwarded verbatim — never stripped, never refused', async () => {
+    forwardable();
+    const mountShaped = `/api/dev-preview/host/${HOLDER.kind}/${HOLDER.id}/assets/app.js`;
+    expect((await GET(rawReq(mountShaped, { cookie: cookie() }), ctx())).status).toBe(200);
+    expect(forwardPreviewRequest).toHaveBeenLastCalledWith(expect.objectContaining({ pathAndQuery: mountShaped }));
+    const sibling = `/api/dev-preview/host/${HOLDER.kind}/${HOLDER.id}-assets`;
+    expect((await GET(rawReq(sibling, { cookie: cookie() }), ctx())).status).toBe(200);
+    expect(forwardPreviewRequest).toHaveBeenLastCalledWith(expect.objectContaining({ pathAndQuery: sibling }));
+  });
+
+  it('a stamped path that is not a path is ignored — the mount-stripping fallback decides', async () => {
+    forwardable();
+    const res = await GET(req('/items', { headers: { cookie: cookie(), [DEV_PREVIEW_PATH_HEADER]: 'https://evil.example/x' } }), ctx());
+    expect(res.status).toBe(200);
+    expect(forwardPreviewRequest).toHaveBeenLastCalledWith(expect.objectContaining({ pathAndQuery: '/items' }));
+  });
+
+  it('still strips the mount when the request carries it itself and nothing is stamped', async () => {
+    forwardable();
+    expect((await GET(req('/items?x=1', { headers: { cookie: cookie() } }), ctx())).status).toBe(200);
+    expect(forwardPreviewRequest).toHaveBeenLastCalledWith(expect.objectContaining({ pathAndQuery: '/items?x=1' }));
   });
 });

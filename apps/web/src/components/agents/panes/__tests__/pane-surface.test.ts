@@ -51,3 +51,11 @@ describe('resolvePaneSurface', () => {
     expect(resolvePaneSurface(foreign, false)).toEqual({ surface: 'loading' });
   });
 });
+
+describe('ports', () => {
+  it('a ports binding resolves synchronously to the ports surface, carrying the workspace id', () => {
+    // Like a page: nothing is minted, so it is reachable on the very first
+    // render after the bind — and the surface itself probes nothing on mount.
+    expect(resolvePaneSurface(node({ kind: 'ports', id: 'ws-1' }), false)).toEqual({ surface: 'ports', workspaceId: 'ws-1' });
+  });
+});

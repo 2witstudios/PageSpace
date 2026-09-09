@@ -156,7 +156,7 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     if (local && result.enrollment) {
       return NextResponse.json(
         {
-          env: toDriveEnvDTO(result.env, { label: local.label, status: 'disconnected' }),
+          env: toDriveEnvDTO(result.env, { label: local.label, status: 'disconnected', enrolled: false }),
           enrollment: { enrollmentId: result.enrollment.enrollmentId, code: result.enrollment.code, expiresAt: result.enrollment.expiresAt.toISOString() },
         },
         { status: 201 },

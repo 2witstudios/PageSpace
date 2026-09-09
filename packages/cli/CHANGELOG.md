@@ -2,6 +2,27 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- **The `pagespace env` documentation now states, in plain words and before the commands, what
+  approving a local-environment request actually permits.** Approving a command lets it run under
+  your own user account, with your privileges, as if you had typed it into your own terminal: it
+  can read anything you can read and change anything you can change, and there is no sandbox
+  around it. It also says, where the decision is actually made rather than forty lines below it,
+  that an `ask` approval is remembered per user, session and operation — **not** per command — so
+  you see the first command of each kind and approving it covers every later one of that kind in
+  that session, unseen. The `roots` in `env-policy.json` confine the paths an agent can *name* —
+  the working directory it asks for and the files it asks to open — not what a program does once
+  it has started. A short note explains the chain those two facts make possible: a file the agent
+  reads on your machine can carry text that steers the agent, and with an approval already cached
+  the resulting command runs without a prompt. The README also now says outright that `allowlist` mode allowlists **operations**
+  (`exec`, `fs_read`, `fs_write`), not executables, and that no per-executable allowlist exists;
+  `exec` in `ops` under `allowlist` means any command runs unprompted. Behaviour is unchanged —
+  this is the boundary the daemon has always had, written down where the person deciding whether
+  to run `env connect` will read it.
+
 ## [1.9.0] — 2026-09-06
 
 ### Added

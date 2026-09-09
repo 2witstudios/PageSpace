@@ -4,6 +4,10 @@ import {
   createSpritesSandboxClient,
   isSpriteGoneStatus,
   isSpriteNotFoundError,
+  spriteNameFor,
+  SPRITE_NAME_MAX,
+  LEGACY_SPRITE_NAME_MAX,
+  checkSpriteUrlLabelFits,
   classifyProvisionError,
   planProvisionFailure,
   readSessionInfoId,
@@ -18,6 +22,8 @@ import {
   type SpriteCommandLike,
   type SpriteFsLike,
   type SpriteCheckpointStreamLike,
+  runSpawned,
+  findSentinel,
 } from '../sprites';
 import { SandboxProvisionError } from '../../sandbox-options';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
@@ -398,6 +404,70 @@ describe('spawnWithSelfHealingCwd (pure)', () => {
     should: 'keep it a positional arg (the arg-array no-injection invariant holds)',
     actual: spawnWithSelfHealingCwd({ command: 'bash', args: [], cwd: '/workspace; rm -rf /' })[1].slice(2),
     expected: ['sh', '/workspace; rm -rf /', 'bash'],
+  });
+});
+
+describe('sprite names fit the URL label', () => {
+  const KEY = `pgs-env-${'a'.repeat(64)}`; // a real key: 8-char prefix + 64 hex
+
+  it('cuts the key to SPRITE_NAME_MAX so `<name>-<org>.sprites.app` stays a legal DNS label; the legacy name is the old 63', () => {
+    expect(SPRITE_NAME_MAX).toBe(48);
+    expect(spriteNameFor(KEY)).toHaveLength(48);
+    expect(spriteNameFor(KEY)).toBe(spriteNameFor(KEY));
+    expect(spriteNameFor(KEY, LEGACY_SPRITE_NAME_MAX)).toHaveLength(63);
+    // Room for a `-` plus an org suffix of up to 14 chars inside 63.
+    expect(`${spriteNameFor(KEY)}-bskrl`.length).toBeLessThanOrEqual(63);
+    expect(`${spriteNameFor(KEY, LEGACY_SPRITE_NAME_MAX)}-bskrl`.length).toBeGreaterThan(63);
+  });
+
+  function sdkWith(existing: string[]) {
+    const { sdk, calls, sprite } = makeSdk({
+      getSprite: async (name) => {
+        if (!existing.includes(name)) throw Object.assign(new Error('sprite not found'), { status: 404 });
+        return { ...sprite, name };
+      },
+    });
+    return { sdk, calls };
+  }
+
+  it('resumes by the short name when it exists — no legacy lookup, no create', async () => {
+    const { sdk, calls } = sdkWith([spriteNameFor(KEY)]);
+    const handle = await createSpritesSandboxClient({ sdk }).getOrCreate({ name: KEY, options });
+    expect(handle.sandboxId).toBe(spriteNameFor(KEY));
+    expect(calls.created).toEqual([]);
+  });
+
+  it('resumes a sprite created under the LEGACY 63-char name — its disk and sessions, not a fresh VM — and creates nothing', async () => {
+    const { sdk, calls } = sdkWith([spriteNameFor(KEY, LEGACY_SPRITE_NAME_MAX)]);
+    const handle = await createSpritesSandboxClient({ sdk }).getOrCreate({ name: KEY, options });
+    expect(handle.sandboxId).toBe(spriteNameFor(KEY, LEGACY_SPRITE_NAME_MAX));
+    expect(calls.created).toEqual([]);
+  });
+
+  it('creates under the SHORT name when neither exists', async () => {
+    const { sdk, calls } = sdkWith([]);
+    const handle = await createSpritesSandboxClient({ sdk }).getOrCreate({ name: KEY, options });
+    expect(calls.created).toEqual([spriteNameFor(KEY)]);
+    expect(handle.sandboxId).toBe('session-key'); // makeSdk's fake returns its fixed sprite on create
+  });
+
+  it('checks the URL the platform returns for a FRESH sprite: a label over 63 is reported (the reserve is too small), a fitting one is not', () => {
+    const long = { name: 'x', url: `https://${'a'.repeat(64)}.sprites.app` };
+    const ok = { name: 'x', url: `https://${'a'.repeat(48)}-bskrl.sprites.app` };
+    expect(checkSpriteUrlLabelFits(long)).toBe(false);
+    expect(checkSpriteUrlLabelFits(ok)).toBe(true);
+    expect(checkSpriteUrlLabelFits({ name: 'x' })).toBe(true);
+    expect(checkSpriteUrlLabelFits({ name: 'x', url: 'not a url' })).toBe(true);
+  });
+
+  it('a non-not-found error from the legacy lookup surfaces instead of creating a duplicate', async () => {
+    const { sdk } = makeSdk({
+      getSprite: async (name) => {
+        if (name === spriteNameFor(KEY)) throw Object.assign(new Error('sprite not found'), { status: 404 });
+        throw Object.assign(new Error('rate limited'), { status: 429 });
+      },
+    });
+    await expect(createSpritesSandboxClient({ sdk }).getOrCreate({ name: KEY, options })).rejects.toThrow();
   });
 });
 
@@ -1696,5 +1766,42 @@ describe('withKillSession', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('runSpawned — the stdout sentinel short-circuit', () => {
+  // Measured 2026-09-08: the Sprites runtime holds an exec socket open ~5s on a
+  // fresh sprite and ~10s on a long-lived one AFTER the process exits, and the
+  // SDK emits `exit` only on close. A command that ends with `<sentinel> <code>`
+  // must therefore resolve on that LINE, without waiting for a close that a
+  // 5s cap can never see.
+  it('resolves on the sentinel line for a command whose socket never closes, strips the line, reports the code, and kills the socket', async () => {
+    const command = fakeCommand({ stdout: ['LISTEN 0 511 *:3000 *:*\n', '__END__ 0\n'], hang: true });
+    const result = await runSpawned(command, 0, 2_000, '__END__');
+    expect(result).toEqual({ exitCode: 0, stdout: 'LISTEN 0 511 *:3000 *:*', stderr: '' });
+    expect(command.killed).toEqual(['SIGKILL']);
+  });
+
+  it('carries a non-zero code through the sentinel', async () => {
+    const command = fakeCommand({ stdout: ['__END__ 127\n'], hang: true });
+    expect((await runSpawned(command, 0, 2_000, '__END__')).exitCode).toBe(127);
+  });
+
+  it('is inert without a sentinel: the same hanging command still runs to the timeout', async () => {
+    const command = fakeCommand({ stdout: ['__END__ 0\n'], hang: true });
+    await expect(runSpawned(command, 0, 50)).rejects.toThrow(/timed out/);
+  });
+});
+
+describe('findSentinel', () => {
+  it('needs a COMPLETE line — a sentinel at the end of a chunk with no newline is not yet an answer', () => {
+    // `12` might be the first two bytes of `127`.
+    expect(findSentinel('out\n__END__ 12', '__END__')).toBeNull();
+    expect(findSentinel('out\n__END__ 127\n', '__END__')).toEqual({ stdout: 'out', exitCode: 127 });
+  });
+
+  it('ignores a sentinel with no numeric code, and returns the stdout BEFORE the line', () => {
+    expect(findSentinel('__END__ nope\n', '__END__')).toBeNull();
+    expect(findSentinel('a\nb\n__END__ 0\ntrailing\n', '__END__')).toEqual({ stdout: 'a\nb', exitCode: 0 });
   });
 });

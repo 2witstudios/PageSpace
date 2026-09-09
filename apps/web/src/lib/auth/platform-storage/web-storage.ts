@@ -46,7 +46,4 @@ export class WebStorage implements PlatformStorage {
     return false;
   }
 
-  supportsCSRF() {
-    return true;
-  }
 }

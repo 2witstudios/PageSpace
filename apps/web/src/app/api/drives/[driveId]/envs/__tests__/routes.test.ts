@@ -28,6 +28,7 @@ vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
   deleteEnv: vi.fn(),
   revokeEnv: vi.fn(),
   rebuildEnv: vi.fn(),
+  reissueEnvEnrollmentCode: vi.fn(),
   resolveEnvInDrive: vi.fn(),
   toDriveEnvDTO: vi.fn((row: { id: string; driveId: string; name: string }) => ({
     id: row.id,
@@ -41,6 +42,7 @@ vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
 import { GET as listEnvs, POST as createEnv } from '../route';
 import { GET as readEnv, PATCH as patchEnv, DELETE as deleteEnvRoute } from '../[envId]/route';
 import { POST as rebuildEnvRoute } from '../[envId]/rebuild/route';
+import { POST as reissueCodeRoute } from '../[envId]/enrollment-code/route';
 import { isPrincipalDriveMember, isPrincipalDriveOwnerOrAdmin, authenticateRequestWithOptions } from '@/lib/auth';
 import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import {
@@ -48,6 +50,7 @@ import {
   deleteEnv,
   listEnvsInDrive,
   rebuildEnv,
+  reissueEnvEnrollmentCode,
   renameEnv,
   resolveEnvInDrive,
   revokeEnv,
@@ -382,5 +385,79 @@ describe('DELETE /envs/[envId] on a LOCAL env — revoke first (Codex C4), then 
     const response = await del();
     expect(response.status).toBe(409);
     expect(revokeEnv).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('POST /envs/[envId]/enrollment-code — a fresh one-time code for a machine that has not enrolled (M3)', () => {
+  const localRow = { ...envRow, name: 'mac', substrate: 'local' };
+  const codeReq = () => req(`http://localhost/api/drives/${DRIVE_ID}/envs/${ENV_ID}/enrollment-code`, { method: 'POST' });
+  const expiresAt = new Date('2026-09-07T10:10:00.000Z');
+
+  beforeEach(() => {
+    vi.mocked(isLocalEnvsEnabled).mockReturnValue(true);
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+  });
+
+  it('given a plain member, should refuse — the same bar as every other env write', async () => {
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(false);
+    const response = await reissueCodeRoute(codeReq(), envParams);
+    expect(response.status).toBe(403);
+    expect(reissueEnvEnrollmentCode).not.toHaveBeenCalled();
+  });
+
+  it('given LOCAL_ENVS_ENABLED is off, should answer 501 and mint nothing', async () => {
+    vi.mocked(isLocalEnvsEnabled).mockReturnValue(false);
+    const response = await reissueCodeRoute(codeReq(), envParams);
+    expect(response.status).toBe(501);
+    expect(reissueEnvEnrollmentCode).not.toHaveBeenCalled();
+  });
+
+  it('given an env that is not in this drive, should answer 404 without minting', async () => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(null);
+    const response = await reissueCodeRoute(codeReq(), envParams);
+    expect(response.status).toBe(404);
+    expect(reissueEnvEnrollmentCode).not.toHaveBeenCalled();
+  });
+
+  it('given a Sprite env, should answer 409 not_local — there is no code to re-issue', async () => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue({ ...envRow, substrate: 'sprite' } as never);
+    const response = await reissueCodeRoute(codeReq(), envParams);
+    expect(response.status).toBe(409);
+    expect((await response.json()).reason).toBe('not_local');
+    expect(reissueEnvEnrollmentCode).not.toHaveBeenCalled();
+  });
+
+  it('given an admin and a pending local env, should answer 201 with the new code ONCE (expiry as ISO) and audit the write', async () => {
+    vi.mocked(reissueEnvEnrollmentCode).mockResolvedValue({ ok: true, enrollment: { enrollmentId: 'enr_1', code: 'ABCDEFGHJKMNPQRSTVWX', expiresAt } });
+    const response = await reissueCodeRoute(codeReq(), envParams);
+    expect(response.status).toBe(201);
+    expect(reissueEnvEnrollmentCode).toHaveBeenCalledWith({ envId: ENV_ID });
+    expect(await response.json()).toEqual({ enrollment: { enrollmentId: 'enr_1', code: 'ABCDEFGHJKMNPQRSTVWX', expiresAt: expiresAt.toISOString() } });
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'data.write', details: expect.objectContaining({ operation: 'reissue-enrollment-code', envId: ENV_ID }) }),
+    );
+  });
+
+  it('given a machine ALREADY enrolled, should answer 409 already_enrolled — final, never a new code', async () => {
+    vi.mocked(reissueEnvEnrollmentCode).mockResolvedValue({ ok: false, reason: 'already_enrolled' });
+    const response = await reissueCodeRoute(codeReq(), envParams);
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { reason: string; enrollment?: unknown };
+    expect(body.reason).toBe('already_enrolled');
+    expect(body.enrollment).toBeUndefined();
+  });
+
+  it('given a revoked enrollment, should answer 410 revoked', async () => {
+    vi.mocked(reissueEnvEnrollmentCode).mockResolvedValue({ ok: false, reason: 'revoked' });
+    const response = await reissueCodeRoute(codeReq(), envParams);
+    expect(response.status).toBe(410);
+    expect((await response.json()).reason).toBe('revoked');
+  });
+
+  it('given the sibling row is gone (owner erased), should answer 404', async () => {
+    vi.mocked(reissueEnvEnrollmentCode).mockResolvedValue({ ok: false, reason: 'not_found' });
+    const response = await reissueCodeRoute(codeReq(), envParams);
+    expect(response.status).toBe(404);
   });
 });
