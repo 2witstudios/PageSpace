@@ -65,8 +65,11 @@ const dmMessageWith = {
       sizeBytes: true,
     },
   },
+  // Shaped exactly like `reactions` above — a bare nested `with`. The rows
+  // carry `position`; ordering is applied where they are consumed rather than
+  // in this shared clause, which is `as const` and so cannot contextually type
+  // an orderBy callback.
   attachments: {
-    columns: { id: true, fileId: true, attachmentMeta: true, position: true },
     with: {
       file: {
         columns: {
@@ -76,7 +79,6 @@ const dmMessageWith = {
         },
       },
     },
-    orderBy: [asc(directMessageAttachments.position)],
   },
   reactions: {
     with: {
@@ -354,7 +356,13 @@ async function recomputeConversationLastMessage(
   }
 
   const derived = deriveConversationLastMessage(
-    newest ? { ...newest, attachmentMeta: previewAttachments } : null
+    newest
+      ? {
+          createdAt: newest.createdAt,
+          content: newest.content,
+          attachmentMeta: previewAttachments,
+        }
+      : null
   );
 
   await tx
@@ -847,7 +855,10 @@ export type InsertDmThreadReplyResult =
   | {
       kind: 'ok';
       reply: DmMessageRow;
+      /** The reply's attachment rows, so the caller need not re-read them. */
+      replyAttachments: DmMessageAttachmentRow[];
       mirror: DmMessageRow | null;
+      mirrorAttachments: DmMessageAttachmentRow[];
       rootId: string;
       replyCount: number;
       lastReplyAt: Date;
@@ -931,7 +942,7 @@ async function insertDmThreadReply(
       })
       .returning();
 
-    await insertDmAttachmentRows(tx, reply.id, input.attachments);
+    const replyAttachments = await insertDmAttachmentRows(tx, reply.id, input.attachments);
 
     const [updatedParent] = await tx
       .update(directMessages)
@@ -959,6 +970,7 @@ async function insertDmThreadReply(
       .onConflictDoNothing();
 
     let mirror: DmMessageRow | null = null;
+    let mirrorAttachments: DmMessageAttachmentRow[] = [];
     if (input.alsoSendToParent) {
       const [mirrorRow] = await tx
         .insert(directMessages)
@@ -972,7 +984,7 @@ async function insertDmThreadReply(
         })
         .returning();
       // The mirror is a distinct message row and needs its own attachment rows.
-      await insertDmAttachmentRows(tx, mirrorRow.id, input.attachments);
+      mirrorAttachments = await insertDmAttachmentRows(tx, mirrorRow.id, input.attachments);
       mirror = mirrorRow;
       // The mirror is a top-level row and behaves like a regular send —
       // recompute the conversation preview from it (#2153). A thread-only
@@ -984,7 +996,9 @@ async function insertDmThreadReply(
     return {
       kind: 'ok',
       reply,
+      replyAttachments,
       mirror,
+      mirrorAttachments,
       rootId: input.parentId,
       replyCount: updatedParent.replyCount,
       // We just SET lastReplyAt = reply.createdAt above, so the RETURNING value

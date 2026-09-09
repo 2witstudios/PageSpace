@@ -21,6 +21,8 @@ export interface MessageAttachmentLike {
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
   file?: FileRelation | null;
+  /** Display order within its message. Absent on a legacy single attachment. */
+  position?: number;
 }
 
 export interface MessageWithAttachment extends MessageAttachmentLike {
@@ -40,7 +42,12 @@ export interface MessageWithAttachment extends MessageAttachmentLike {
  */
 export function getAttachments(m: MessageWithAttachment): MessageAttachmentLike[] {
   if (m.attachments && m.attachments.length > 0) {
-    return m.attachments.filter(hasAttachment);
+    // Sort here rather than in the repositories' shared `with` clause: that
+    // clause is `as const`, which cannot contextually type an orderBy
+    // callback, and a row's position is the display order the sender chose.
+    return [...m.attachments]
+      .filter(hasAttachment)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
   }
   return hasAttachment(m) ? [m] : [];
 }

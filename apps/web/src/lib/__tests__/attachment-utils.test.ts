@@ -37,6 +37,25 @@ describe('getAttachments', () => {
     });
   });
 
+  it('orders by position, not by the order the rows arrived', () => {
+    // The repositories' shared `with` clause cannot carry an orderBy, so the
+    // database is free to hand these back in any order. Position is the order
+    // the sender chose, and it is the only thing that may decide the layout.
+    const message: MessageWithAttachment = {
+      attachments: [
+        { id: 'a-3', fileId: 'f-3', attachmentMeta: meta('third.png'), position: 2 },
+        { id: 'a-1', fileId: 'f-1', attachmentMeta: meta('first.png'), position: 0 },
+        { id: 'a-2', fileId: 'f-2', attachmentMeta: meta('second.png'), position: 1 },
+      ],
+    };
+    assert({
+      given: 'attachment rows returned out of order',
+      should: 'render them in the order the sender attached them',
+      actual: getAttachments(message).map((a) => a.fileId),
+      expected: ['f-1', 'f-2', 'f-3'],
+    });
+  });
+
   it('falls back to the legacy columns on a pre-migration message', () => {
     const message: MessageWithAttachment = { fileId: 'f-9', attachmentMeta: meta('old.png') };
     assert({

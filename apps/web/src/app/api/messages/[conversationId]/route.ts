@@ -359,7 +359,8 @@ export async function POST(
       if (
         result.kind === 'not_found' ||
         result.kind === 'wrong_owner' ||
-        result.kind === 'not_linked'
+        result.kind === 'not_linked' ||
+        result.kind === 'too_many_attachments'
       ) {
         return attachmentValidationErrorResponse(request, result.kind, {
           userId,
@@ -383,6 +384,11 @@ export async function POST(
         resourceType: 'dm_thread_reply',
         resourceId: result.reply.id,
       });
+
+      // insertDmThreadReply returns the bare inserted row, so — as on the
+      // top-level path — the attachment rows have to be put back on before
+      // the payload goes out over the socket or the response.
+      const replyPayload = { ...result.reply, attachments: result.replyAttachments };
 
       // Mirror row, when present, behaves as a top-level message — it bumps
       // the conversation preview/inbox just like a regular send.
@@ -428,7 +434,7 @@ export async function POST(
             // sender retire exactly its own optimistic row instead of guessing
             // from (content, fileId), which cannot tell two attachment-only
             // messages apart.
-            payload: clientNonce ? { ...result.reply, clientNonce } : result.reply,
+            payload: { ...replyPayload, ...(clientNonce ? { clientNonce } : {}) },
           });
           await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
             method: 'POST',
@@ -443,7 +449,7 @@ export async function POST(
               event: 'new_dm_message',
               // A different row than the one optimistically inserted, so it
               // deliberately carries no nonce.
-              payload: result.mirror,
+              payload: { ...result.mirror, attachments: result.mirrorAttachments },
             });
             await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
               method: 'POST',
@@ -534,7 +540,7 @@ export async function POST(
       }
 
       return NextResponse.json({
-        message: clientNonce ? { ...result.reply, clientNonce } : result.reply,
+        message: { ...replyPayload, ...(clientNonce ? { clientNonce } : {}) },
       });
     }
 

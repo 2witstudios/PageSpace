@@ -19,7 +19,7 @@ import {
   channelThreadFollowers,
   type ChannelMessageAiMeta,
 } from '@pagespace/db/schema/chat';
-import { files, type AttachmentMeta } from '@pagespace/db/schema/storage';
+import { files } from '@pagespace/db/schema/storage';
 import { MAX_MESSAGE_ATTACHMENTS, type MessageAttachmentInput } from './attachment-upload-core';
 import { decryptField } from '../encryption/field-crypto';
 import { deriveLatestTimestamp } from './message-derived-state';
@@ -76,8 +76,11 @@ const messageWith = {
       sizeBytes: true,
     },
   },
+  // Shaped exactly like `reactions` above — a bare nested `with`. The rows
+  // carry `position`; ordering is applied where they are consumed rather than
+  // in this shared clause, which is `as const` and so cannot contextually type
+  // an orderBy callback.
   attachments: {
-    columns: { id: true, fileId: true, attachmentMeta: true, position: true },
     with: {
       file: {
         columns: {
@@ -87,7 +90,6 @@ const messageWith = {
         },
       },
     },
-    orderBy: [asc(channelMessageAttachments.position)],
   },
   reactions: {
     with: {
