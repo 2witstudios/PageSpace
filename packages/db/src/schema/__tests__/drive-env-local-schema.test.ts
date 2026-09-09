@@ -12,8 +12,6 @@
  * `src/__tests__/drive-env-local.integration.test.ts`. Runs without a database.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { getTableConfig, PgDialect } from 'drizzle-orm/pg-core';
@@ -140,7 +138,7 @@ describe('drive_env_local — the 1:1 sibling holding a local env\'s connection 
   });
 
   it('the one allowed credential-shaped column carries PUBLIC keys only — a field that could hold private material would have to be added here first', () => {
-    const source = readFileSync(join(import.meta.dirname, '..', 'drive-env-local.ts'), 'utf8');
+    const source = readFileSync(path.join(import.meta.dirname, '..', 'drive-env-local.ts'), 'utf8');
     const shape = source.slice(source.indexOf('export interface DriveEnvLocalOwnerCredentials'));
     const body = shape.slice(0, shape.indexOf('}\n'));
     // Exactly these fields, and nothing that reads like a secret.
