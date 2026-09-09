@@ -65,6 +65,15 @@ import {
  * alter desktop sign-in, which this PR does not touch.
  */
 
+/** Verification failures, as the codes the doors report to the client. */
+const VERIFY_ERROR_CODES: Record<string, string> = {
+  TOKEN_EXPIRED: 'magic_link_expired',
+  TOKEN_ALREADY_USED: 'magic_link_used',
+  TOKEN_NOT_FOUND: 'invalid_token',
+  USER_SUSPENDED: 'account_suspended',
+  VALIDATION_FAILED: 'invalid_token',
+};
+
 const verifyTokenSchema = z.object({
   token: z.string().min(1, 'Token is required'),
 });
@@ -287,15 +296,7 @@ async function redeemMagicLink({
   const result = await verifyMagicLinkToken({ token });
 
   if (!result.ok) {
-    const errorMap: Record<string, string> = {
-      'TOKEN_EXPIRED': 'magic_link_expired',
-      'TOKEN_ALREADY_USED': 'magic_link_used',
-      'TOKEN_NOT_FOUND': 'invalid_token',
-      'USER_SUSPENDED': 'account_suspended',
-      'VALIDATION_FAILED': 'invalid_token',
-    };
-
-    const errorCode = errorMap[result.error.code] || 'invalid_token';
+    const errorCode = VERIFY_ERROR_CODES[result.error.code] || 'invalid_token';
     loggers.auth.warn('Magic link verification failed', {
       error: result.error.code,
       ip: clientIP,
@@ -460,14 +461,14 @@ async function redeemMagicLink({
 
   // Determine the landing path — kind-specific overrides win, then fall back
   // to the shared helper so new-user provisioning and `next` still work.
-  const redirectPath =
-    inviteResult?.kind === 'connection'
-      ? '/dashboard/connections'
-      : inviteResult?.kind === 'page' && invitedDriveId && inviteResult.invitedPageId
-        ? `/dashboard/${invitedDriveId}/pages/${inviteResult.invitedPageId}`
-        : resolvePostLoginRedirectPath({
-            provisionedDriveId, next: safeNext, invitedDriveId,
-          });
+  let redirectPath: string;
+  if (inviteResult?.kind === 'connection') {
+    redirectPath = '/dashboard/connections';
+  } else if (inviteResult?.kind === 'page' && invitedDriveId && inviteResult.invitedPageId) {
+    redirectPath = `/dashboard/${invitedDriveId}/pages/${inviteResult.invitedPageId}`;
+  } else {
+    redirectPath = resolvePostLoginRedirectPath({ provisionedDriveId, next: safeNext, invitedDriveId });
+  }
 
   const redirectParams: Record<string, string> = {};
   if (inviteResult?.kind === 'connection') {
@@ -568,11 +569,10 @@ async function redeemMagicLink({
  * not know, a row with no deviceId — is not a device binding at all.
  */
 function normalizeDeviceMeta(parsed: MagicLinkMetadata | null): DeviceMagicLinkMetadata | null {
-  if (!parsed || !parsed.deviceId) return null;
+  if (!parsed?.deviceId) return null;
   const deviceName = parsed.deviceName !== undefined ? { deviceName: parsed.deviceName } : {};
   switch (parsed.platform) {
     case 'desktop':
-      return { platform: 'desktop', deviceId: parsed.deviceId, ...deviceName };
     case 'ios':
     case 'android':
       return { platform: parsed.platform, deviceId: parsed.deviceId, ...deviceName };
