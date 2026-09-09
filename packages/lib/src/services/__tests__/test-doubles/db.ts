@@ -514,6 +514,8 @@ interface SelectWhere extends Thenable<Row[]> {
 
 interface SelectOrdered {
   limit: (n: number) => Promise<Row[]>;
+  for: (mode: string) => Promise<Row[]>;
+  then: ReturnType<typeof makeThen<Row[]>>;
 }
 
 const makeThen = <T>(produce: () => T) =>
@@ -823,6 +825,14 @@ function makeSelectBuilder(state: DbState, cols?: Record<string, ColumnRef>): Se
           },
           orderBy: (...orders) => ({
             limit: async (n) => buildResult(sortRows(filter(), orders).slice(0, n)),
+            // Real drizzle allows FOR UPDATE after ORDER BY, and the repositories
+            // rely on it: locking several file rows in a deterministic order is
+            // what stops two concurrent multi-attachment sends from deadlocking.
+            for: async (mode: string) => {
+              state.recordFor(table.__name, mode);
+              return buildResult(sortRows(filter(), orders));
+            },
+            then: makeThen<Row[]>(() => buildResult(sortRows(filter(), orders))),
           }),
           then: makeThen<Row[]>(() => buildResult(filter())),
         };

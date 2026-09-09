@@ -12,9 +12,9 @@ import { sheetTabs, sheetRows } from '@pagespace/db/schema/sheets';
 import { aiUsageLogs, activityLogs, systemLogs, apiMetrics, errorLogs, errorResolutions } from '@pagespace/db/schema/monitoring';
 import { files, filePages } from '@pagespace/db/schema/storage';
 import { driveMembers } from '@pagespace/db/schema/members';
-import { channelMessages } from '@pagespace/db/schema/chat';
+import { channelMessages, channelMessageAttachments } from '@pagespace/db/schema/chat';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
-import { directMessages, dmConversations } from '@pagespace/db/schema/social';
+import { directMessages, dmConversations, directMessageAttachments } from '@pagespace/db/schema/social';
 import { taskLists, taskItems } from '@pagespace/db/schema/tasks';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { notifications } from '@pagespace/db/schema/notifications';
@@ -126,6 +126,18 @@ export interface UserMessageExport {
   /** Assistant-row lifecycle state ('ai_chat'/'conversation' sources only) — explains an
    * empty-content row as a still-streaming or interrupted placeholder rather than data loss. */
   status?: 'streaming' | 'complete' | 'interrupted';
+  /**
+   * Files the subject attached to this message ('channel'/'direct_message'
+   * sources). The filename a person chose is their data, and a message can
+   * carry several, so exporting only the message body would leave the batch
+   * out of a subject access request entirely.
+   */
+  attachments?: Array<{
+    fileId: string | null;
+    originalName: string | null;
+    mimeType: string | null;
+    size: number | null;
+  }>;
 }
 
 export interface UserFileExport {
@@ -668,6 +680,45 @@ export async function collectUserSheets(
   return out;
 }
 
+/**
+ * Group a message table's attachment rows by messageId.
+ *
+ * Shared by the channel and DM branches because the two attachment tables are
+ * mirrors of each other; keeping one reader means an Art 15 gap cannot open on
+ * one surface while the other stays correct.
+ */
+async function collectAttachments(
+  database: DB,
+  table: typeof channelMessageAttachments | typeof directMessageAttachments,
+  messageIds: string[],
+): Promise<Map<string, NonNullable<UserMessageExport['attachments']>>> {
+  const byMessage = new Map<string, NonNullable<UserMessageExport['attachments']>>();
+  if (messageIds.length === 0) return byMessage;
+
+  const rows = await database
+    .select({
+      messageId: table.messageId,
+      fileId: table.fileId,
+      attachmentMeta: table.attachmentMeta,
+      position: table.position,
+    })
+    .from(table)
+    .where(inArray(table.messageId, messageIds));
+
+  for (const row of [...rows].sort((a, b) => a.position - b.position)) {
+    const list = byMessage.get(row.messageId) ?? [];
+    list.push({
+      fileId: row.fileId,
+      originalName: row.attachmentMeta?.originalName ?? null,
+      mimeType: row.attachmentMeta?.mimeType ?? null,
+      size: row.attachmentMeta?.size ?? null,
+    });
+    byMessage.set(row.messageId, list);
+  }
+
+  return byMessage;
+}
+
 export async function collectUserMessages(database: DB, userId: string): Promise<UserMessageExport[]> {
   const result: UserMessageExport[] = [];
 
@@ -682,6 +733,15 @@ export async function collectUserMessages(database: DB, userId: string): Promise
     .from(channelMessages)
     .where(eq(channelMessages.userId, userId));
 
+  // Attachment rows carry the filename the subject chose, which is their data
+  // and lives in no other table. Fetched per batch rather than per message so
+  // a prolific subject does not turn the export into N+1 queries.
+  const channelAttachmentsByMessage = await collectAttachments(
+    database,
+    channelMessageAttachments,
+    channelMsgs.map((msg) => msg.id),
+  );
+
   for (const msg of channelMsgs) {
     result.push({
       id: msg.id,
@@ -689,6 +749,7 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       content: msg.content,
       pageId: msg.pageId,
       createdAt: msg.createdAt,
+      attachments: channelAttachmentsByMessage.get(msg.id) ?? [],
     });
   }
 
@@ -787,6 +848,16 @@ export async function collectUserMessages(database: DB, userId: string): Promise
     .from(directMessages)
     .where(eq(directMessages.senderId, userId));
 
+  // Only the SENT branch carries attachments: a received message's filename is
+  // the other participant's data, and Art 15(4) says the subject's access right
+  // must not adversely affect the rights of others — the same reasoning the
+  // conversation branch above applies to other authors' rows.
+  const dmAttachmentsByMessage = await collectAttachments(
+    database,
+    directMessageAttachments,
+    sentDms.map((msg) => msg.id),
+  );
+
   for (const msg of sentDms) {
     result.push({
       id: msg.id,
@@ -797,6 +868,7 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       isActive: msg.isActive,
       deletedAt: msg.deletedAt,
       createdAt: msg.createdAt,
+      attachments: dmAttachmentsByMessage.get(msg.id) ?? [],
     });
   }
 
