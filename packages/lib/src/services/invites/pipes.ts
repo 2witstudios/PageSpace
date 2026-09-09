@@ -210,6 +210,8 @@ export const requestMagicLink =
       email: input.email,
       token,
       ...(input.next !== undefined && input.inviteToken === undefined && { next: input.next }),
+      ...(input.platform !== undefined && { platform: input.platform }),
+      ...(input.deviceId !== undefined && { deviceId: input.deviceId }),
     });
 
     return { ok: true, data: undefined };
