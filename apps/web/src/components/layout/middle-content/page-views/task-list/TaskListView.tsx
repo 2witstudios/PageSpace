@@ -1100,11 +1100,10 @@ function TaskListView({ page }: TaskListViewProps) {
           <Button
             size="icon"
             className="h-10 w-10 shrink-0"
-            // "Add task", not "New task": the wide toolbar's button is named
-            // "New Task" and both are in the DOM at once (one is CSS-hidden),
-            // so a matching accessible name makes every by-role lookup for it
-            // ambiguous — which is exactly how the task-list E2E selects it.
-            aria-label="Add task"
+            // Same name as the wide toolbar's labelled button: it is the same
+            // action, and only one of the two is ever in the accessibility tree
+            // (the other is `display: none`), so they cannot be confused.
+            aria-label="New Task"
             onClick={() => {
               newTaskInputRef.current?.scrollIntoView({ block: 'nearest' });
               newTaskInputRef.current?.focus();
