@@ -155,3 +155,16 @@ describe('signGrantFrame — window and identity', () => {
     expect(Object.keys(a.frame.grant).sort()).toEqual(['argsHash', 'envId', 'exp', 'grantId', 'iat', 'nonce', 'op', 'principal']);
   });
 });
+
+describe('GA wave 2 — approvalIntent is signed into the grant', () => {
+  it('given an approvalIntent, the wire grant carries it and the daemon gate verifies it under the pinned key; without one, no key is added', () => {
+    const intent = { challengeId: 'ch_1', scope: 'until_revoked' as const, expiresAt: NOW + 30_000 };
+    const signed = signGrantFrame({ frame: frames.grant_exec, envId: 'env-1', principal, serverKeyId: currentId, keyring: ring, now: NOW, ids, approvalIntent: intent });
+    if (!signed.ok) throw new Error(signed.reason);
+    expect(signed.frame.grant).toMatchObject({ approvalIntent: intent });
+    expect(gate(signed.frame)).toMatchObject({ ok: true, grant: { approvalIntent: intent } });
+    const plain = signGrantFrame({ frame: frames.grant_exec, envId: 'env-1', principal, serverKeyId: currentId, keyring: ring, now: NOW, ids });
+    if (!plain.ok) throw new Error(plain.reason);
+    expect('approvalIntent' in plain.frame.grant).toBe(false);
+  });
+});

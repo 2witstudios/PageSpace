@@ -20,7 +20,7 @@
  * Pure apart from the injected id source: the byte layout comes from
  * `encodeGrant` (never re-implemented here), the clock is a parameter.
  */
-import { canonicalizeArgs, encodeGrant, GRANT_MAX_TTL_MS, type Grant, type GrantPrincipal, type HashBytes } from '@pagespace/lib/env-bridge/grant';
+import { canonicalizeArgs, encodeGrant, GRANT_MAX_TTL_MS, type ApprovalIntent, type Grant, type GrantPrincipal, type HashBytes } from '@pagespace/lib/env-bridge/grant';
 import { grantRequestForFrame, type GrantFrame, type UnsignedGrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 import type { ServerSigningKeyring } from '@pagespace/lib/env-bridge/server-signing-key';
 import { envBridgeHash } from './crypto';
@@ -44,6 +44,13 @@ export interface SignGrantFrameInput {
   readonly ids: GrantIdSource;
   /** Defaults to the bridge's SHA-256; injectable for tests that pair the signer with a differently-hashing gate. */
   readonly hash?: HashBytes;
+  /**
+   * The owner's click (GA wave 2): signed INTO the grant under the same pinned
+   * key, so the daemon verifies it with the key it already holds and it can
+   * neither be forged nor moved onto another grant. Present only on the grant
+   * a click re-issues.
+   */
+  readonly approvalIntent?: ApprovalIntent;
 }
 
 export type SignGrantFrameResult =
@@ -78,6 +85,9 @@ export function signGrantFrame(input: SignGrantFrameInput): SignGrantFrameResult
     iat: input.now,
     exp: input.now + ttlMs,
     nonce: input.ids.nonce(),
+    ...(input.approvalIntent !== undefined && {
+      approvalIntent: { challengeId: input.approvalIntent.challengeId, scope: input.approvalIntent.scope, expiresAt: input.approvalIntent.expiresAt },
+    }),
   };
   const sig = Buffer.from(key.sign(encodeGrant(grant))).toString('base64');
 
@@ -92,6 +102,7 @@ export function signGrantFrame(input: SignGrantFrameInput): SignGrantFrameResult
     iat: grant.iat,
     exp: grant.exp,
     nonce: grant.nonce,
+    ...(grant.approvalIntent !== undefined && { approvalIntent: { ...grant.approvalIntent } }),
   };
   return { ok: true, frame: { ...input.frame, grant: wireGrant, sig } as GrantFrame, grant, keyId: key.keyId };
 }

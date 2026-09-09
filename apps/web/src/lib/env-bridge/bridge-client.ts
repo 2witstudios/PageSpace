@@ -13,7 +13,7 @@
  */
 import type { WebSocket } from 'ws';
 import { encodeFrame } from '@pagespace/lib/env-bridge/frame-codec';
-import type { GrantPrincipal } from '@pagespace/lib/env-bridge/grant';
+import type { ApprovalIntent, GrantPrincipal } from '@pagespace/lib/env-bridge/grant';
 import { grantRequestForFrame, type GrantFrame, type UnsignedGrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 import { decideSign, type SignDenyReason } from '@pagespace/lib/env-bridge/decide-sign';
 import { parseServerPolicy } from '@pagespace/lib/env-bridge/policy-types';
@@ -27,6 +27,10 @@ import { getAuthorizedEnvConnection, getEnvConnectionMetadata, onEnvConnectionLo
 import { RequestCorrelator, CorrelationError, grantCorrelatorTimeoutMs, type CorrelationFailureKind } from './correlator';
 import { signGrantFrame, type GrantIdSource } from './grant-signer';
 import { verifyResultFromMachine } from './result-verifier';
+import { getPendingApprovalStore, type PendingApprovalStore } from './pending-approvals';
+
+/** The reason prefix a daemon answers with while a request waits for its owner's click. */
+export const ASK_PENDING_PREFIX = 'ask_pending:';
 
 export type EnvBridgeFailureKind = CorrelationFailureKind | 'not_connected' | 'signing_key_unavailable' | 'ttl_too_long' | 'server_denied';
 
@@ -68,6 +72,8 @@ export interface EnvBridgeClientDeps {
   readonly ids: GrantIdSource;
   /** Observability hook for a result that failed verification (audit/log). */
   readonly onUnverified?: (info: { envId: string; grantId: string; frameType: MachineResultFrame['type']; reason: string }) => void;
+  /** Where a daemon's `ask_pending` answer is remembered for the owner's click (GA wave 2). Omitted = the process-wide store. */
+  readonly pendingApprovals?: PendingApprovalStore;
 }
 
 export type MachineResultDisposition = 'delivered' | 'unverified' | 'dropped_unknown_grant' | 'dropped_unregistered_socket' | 'dropped_wrong_env';
@@ -93,7 +99,7 @@ export class EnvBridgeClient {
    * chokepoint because the grant IS the capability — refusing to mint beats
    * asking a daemon we do not control to refuse what we minted.
    */
-  async sendGrant(input: { envId: string; frame: UnsignedGrantFrame; principal: GrantPrincipal }): Promise<MachineResultFrame> {
+  async sendGrant(input: { envId: string; frame: UnsignedGrantFrame; principal: GrantPrincipal; approvalIntent?: ApprovalIntent }): Promise<MachineResultFrame> {
     // The op is the same projection the signer and the daemon's gate use on
     // the frame as sent (grant/sig are envelope, so placeholders change nothing).
     const op = grantRequestForFrame({ ...input.frame, grant: {}, sig: '' } as GrantFrame).op;
@@ -125,18 +131,33 @@ export class EnvBridgeClient {
       keyring: this.deps.keyring(),
       now: this.deps.now(),
       ids: this.deps.ids,
+      ...(input.approvalIntent !== undefined && { approvalIntent: input.approvalIntent }),
     });
     if (!signed.ok) throw new EnvBridgeError(signed.reason, `Cannot sign grant for ${input.envId}: ${signed.reason}`, { envId: input.envId, serverKeyId: facts.serverKeyId });
 
     const timeoutMs = grantCorrelatorTimeoutMs(signed.frame);
     log().info('Sending grant to local environment', { envId: input.envId, grantId: signed.grant.grantId, op: signed.grant.op, keyId: signed.keyId, timeoutMs, action: 'send_grant' });
     try {
-      return await this.deps.correlator.open({
+      const result = await this.deps.correlator.open({
         id: signed.grant.grantId,
         group: input.envId,
         timeoutMs,
         send: () => ws.send(encodeFrame(signed.frame)),
       });
+      // The machine froze the request for its owner's click (GA wave 2):
+      // remember what re-issuing it needs, under the id the machine chose,
+      // for as long as the machine itself will hold it (the grant's exp).
+      // Only a VERIFIED reply reaches here, so `pending` is what the machine
+      // signed. A reply whose id and reason disagree is not remembered.
+      if (result.type === 'grant_denied' && result.reason.startsWith(ASK_PENDING_PREFIX) && result.pending !== undefined) {
+        const challengeId = result.reason.slice(ASK_PENDING_PREFIX.length);
+        if (challengeId.length > 0 && challengeId === result.pending.challengeId) {
+          const store = this.deps.pendingApprovals ?? getPendingApprovalStore();
+          const remembered = store.remember({ challengeId, envId: input.envId, frame: input.frame, principal: signed.grant.principal, expiresAt: signed.grant.exp, pending: result.pending, createdAt: this.deps.now() }, this.deps.now());
+          log().info('Local environment is waiting for its owner\'s approval', { envId: input.envId, grantId: signed.grant.grantId, challengeId, remembered, action: 'approval_pending' });
+        }
+      }
+      return result;
     } catch (error) {
       if (error instanceof CorrelationError) throw new EnvBridgeError(error.kind, error.message, { ...error.detail, envId: input.envId });
       throw error;
