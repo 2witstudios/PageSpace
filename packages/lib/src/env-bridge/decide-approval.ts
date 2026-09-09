@@ -9,10 +9,13 @@
  *     (envId, userId, op, subject)
  *
  * where the SUBJECT is the thing the owner actually looked at: for `exec`, the
- * resolved program (`exec:/usr/bin/git`); for `fs_read` / `fs_write`, the
- * policy root the paths resolve inside (`root:/home/u/proj`). Never a session,
- * never a conversation. Approving `git status` covers `git push` from a new
- * chat tomorrow and does NOT cover `rm -rf`.
+ * resolved program (`exec:/usr/bin/git`); for `fs_read` and an ordinary
+ * `fs_write`, the policy root the paths resolve inside (`root:/home/u/proj`);
+ * for an fs_write the classifier escalated, the specific FILE
+ * (`file:/home/u/proj/.git/hooks/pre-commit`, hardening A3) — approving one
+ * git hook must never cover every future write under that root. Never a
+ * session, never a conversation. Approving `git status` covers `git push` from
+ * a new chat tomorrow and does NOT cover `rm -rf`.
  *
  * `sh -c <script>`. The bash tool always sends `sh -c "<command line>"`, so
  * the program is not `sh` — it is every program the script names. The lexer
@@ -65,7 +68,7 @@ export interface DurableApproval {
   readonly envId: string;
   readonly userId: string;
   readonly op: GrantOp;
-  /** `exec:<resolved program>`, `builtin:<name>` or `root:<policy root>`. */
+  /** `exec:<resolved program>`, `builtin:<name>`, `root:<policy root>`, or `file:<path>` for a sensitive write (A3). */
   readonly subject: string;
   readonly scope: ApprovalScope;
   readonly createdAt: number;
@@ -318,18 +321,14 @@ export function approvalSubjects(request: NormalizedRequest, deps: ApprovalMatch
 
 /** The policy root every path resolves inside — the subject of an ordinary file operation. */
 function rootSubjects(paths: readonly string[], deps: ApprovalMatchDeps): readonly string[] | null {
-  {
-    {
-      const subjects: string[] = [];
-      for (const path of paths) {
-        const root = deps.roots.find((candidate) => isInsideRoot(path, candidate));
-        if (root === undefined) return null;
-        const subject = `root:${root}`;
-        if (!subjects.includes(subject)) subjects.push(subject);
-      }
-      return subjects.length === 0 ? null : subjects;
-    }
+  const subjects: string[] = [];
+  for (const path of paths) {
+    const root = deps.roots.find((candidate) => isInsideRoot(path, candidate));
+    if (root === undefined) return null;
+    const subject = `root:${root}`;
+    if (!subjects.includes(subject)) subjects.push(subject);
   }
+  return subjects.length === 0 ? null : subjects;
 }
 
 // ---- matching ---------------------------------------------------------------
