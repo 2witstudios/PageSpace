@@ -38,8 +38,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   [docs/security/local-environments](https://pagespace.ai/docs/security/local-environments) states
   each guarantee the bridge makes when an agent runs on your own computer and, beside each one,
   exactly where it stops — no sandbox around a command, approvals remembered per program, content
-  other people wrote steering your agent, no network control on your machine, and the parts of the
-  server-side record that are not shipped yet. Derived from the internal posture document
+  other people wrote steering your agent, no network control on your machine, and the log on your
+  own machine still being best-effort. Derived from the internal posture document
   (`docs/security/local-environment-bridge.md`); it never reads better than that document does.
 
 - **Local Environments: commands need your click in the chat; file work runs on its own

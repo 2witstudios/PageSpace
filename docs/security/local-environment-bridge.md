@@ -2,9 +2,9 @@
 
 **Status:** DRAFT FOR REVIEW — the internal record for the auditor, the DPO, the operator,
 and the founder deciding whether to set `LOCAL_ENVS_ENABLED=true` in cloud. Written against
-integration branch `pu/local-env-ga` at `18d98c06e` (waves 1 and 2 merged). Every claim below
+integration branch `pu/local-env-ga` at `ea7357bb0` (waves 1, 2 and 3 merged). Every claim below
 names the file that makes it true; a claim the merged code does not yet make is marked
-**PENDING (wave 3)** and must not be read as done. The customer-facing page
+**PENDING** and must not be read as done. The only PENDING work left is the exit gate. The customer-facing page
 (`apps/marketing/src/app/docs/security/local-environments/page.tsx`) is derived from this
 document and may not say anything this one does not.
 
@@ -51,8 +51,11 @@ supports:
 > to the folders you declared. **Running a command is not confined**: a command you approve
 > runs as you, with your credentials and your network, and the approval is remembered per
 > program, not per command line. There is no operating-system sandbox and no network egress
-> control on your machine. PageSpace records every refusal to sign; per-request server-side
-> audit rows, a live activity view and a Stop button are not yet shipped."
+> control on your machine. Every request PageSpace signs, and every one it refuses, is recorded
+> on the server under the same id the machine writes to its own log, and a request that cannot
+> be recorded is not sent. The owner sees that record live and can Stop the machine, which kills
+> what it is already running — and PageSpace calls it stopped only on the machine's own
+> signature."
 
 The rest of this document is the evidence for the second claim and the reasons the first
 cannot be made.
@@ -192,10 +195,14 @@ designed.
 | Revocation, server side | `packages/lib/src/services/drive-envs/local-env-revoke.ts` and `apps/web/src/lib/env-bridge/revoke.ts`: stamp `revokedAt` (CAS), revoke every `env:bridge` session, close the live socket 1008; `decideSign` and the token route refuse the enrollment from then on | **Yes, immediate and unconditional.** DELETE on a local env revokes the machine first (`envs/[envId]/route.ts`). |
 | Revocation, machine side | the signed `revoke` frame (`revoke.ts`, `buildRevokeFrame`) is pushed only over a live socket **on this replica**; the daemon deletes its key on a verified frame (`ws-client.ts` reducer effect `deleteKey`); Ctrl-C and `env disconnect` kill every process group the daemon started (`exec-runner.ts`, `killAll`) | **Best-effort, and reported as such** (`notifyMachineOfRevoke` returns `no_live_socket` when the machine is offline or held by another replica). In that case the machine keeps an inert key: every reconnect is refused (`token/route.ts`, `revoked` → 410) and the daemon retries forever until stopped locally. The key is removed only by hand. |
 | Audit, machine side | `packages/cli/src/env-bridge/audit-log.ts` (one JSON line per decision, keyed by `grantId`) | **Yes, but fail-open**: a failed write is swallowed and reported once to daemon stderr. Register entry R-1. |
-| Audit, server side, per grant | `bridge-client.ts` writes a security-audit row for every **refusal** to sign (`onSignRefused`); a signed grant and its result are logged (`log().info`) but **no audit row is written** | **PENDING (wave 3)** — task `t3teevsx30jqvacj3powgvcj`. Until then the `grantId` join has one side. |
-| Stop (pause grants without deleting) | `decide-sign.ts` reserves `paused` in its deny order; nothing sets it | **PENDING (wave 3)** — task `xv7v1fc1ulrvgt95jthf9o0j`. |
-| Live activity view; settings pages | none on the branch | **PENDING (wave 3)** — tasks `pum3d9hbs4iy2tbu1yc9nbmj`, `zjcss63e97g524qcm1mh53lf`, `f3t9pbw8yhi2gathd0k6334j`. |
-| Effective-capability display (`intersectCapabilities`) | `packages/lib/src/env-bridge/intersect-capabilities.ts` | **Not load-bearing.** Zero production callers on the branch; the three-way check runs inline in `decideExecution`. Informational only when the settings page lands. |
+| Audit, server side, per grant | `packages/db/src/schema/drive-env-grant-audit.ts` (its own table, not the hash-chained log, because a row is written at sign and UPDATED at result); `packages/lib/src/services/drive-envs/grant-audit-store.ts`; written by `bridge-client.ts` (`recordSign` before the frame goes out, `recordRefusal`, `recordResult`) | **Yes, and fail-CLOSED at sign time.** A sign-time row that cannot be written throws `audit_unavailable` and **the grant is never sent** (`bridge-client.ts`, the `recordSign` try/catch: "Grant audit row could not be written; grant NOT sent"). The result-time update cannot un-run anything, so its failure is logged and the row stays `signed`. `resultAt IS NULL` on a signed row is exactly "running now". The `grantId` join now has both sides. |
+| Stop / Resume | `PATCH .../envs/[envId]` with `{ paused }`, env owner only (`apps/web/src/app/api/drives/[driveId]/envs/[envId]/route.ts`); `setEnvPaused` stamps `pausedAt`, which `decide-sign.ts` now consumes as its reserved `paused` deny; `apps/web/src/lib/env-bridge/pause.ts` signs a `pause` frame under its OWN domain (`pause/v1`, over `{envId, enrollmentId, keyId, issuedAt, pausedAt}`) so it can never be replayed as a revoke; the daemon kills every process group it started, drops every pending challenge, and acks with a machine-signed `pause_result { envId, pausedAt, killed }` (`packages/cli/src/env-bridge/dispatcher.ts`) | **Yes.** The daemon also latches: `pausedAt` is recorded before anything is killed and every grant whose `iat` is at or before it is refused `paused`, re-checked after every await and immediately before any runner (`dispatcher.ts`, `predatesPause`). A grant issued after the pause is itself the proof of Resume. **Limit:** a Stop issued on a replica that does not hold the socket returns `no_live_socket` and is re-sent by the holding replica on its next heartbeat, so a cross-replica Stop is bounded by one ping interval (`ENV_BRIDGE_PING_INTERVAL_MS`, 30 s); and an unacknowledged send is reported as unacknowledged, never as stopped. |
+| Live activity view | `apps/web/src/lib/websocket/env-activity-events.ts` — one `env:activity` event per audit row, at sign and again at result, fanned out to exactly ONE room: `user:<ownerId>:sessions`. Read routes `GET .../envs/[envId]/activity` and `GET /api/env-bridge/activity`, both owner-only by the row; UI in `apps/web/src/components/agents/EnvActivityPanel.tsx` | **Yes.** The payload names a command (`summary`), so the audience is the machine's owner and no drive room ever — the live feed is deliberately no wider than the owner-only read. |
+| Settings surface | Drive settings → Environments (`apps/web/src/app/dashboard/[driveId]/settings/environments/page.tsx`, the page a `no_server_ops` refusal points at: status, the three switches, effective capability, activity, Stop/Resume, Revoke); Account → Local environments (`apps/web/src/app/settings/local-envs/page.tsx`): every machine the caller owns across every drive, its activity, and every approval in force, each revocable | **Yes.** The account routes (`GET /api/env-bridge/machines`, `/approvals`, `/activity`) are owner-only *by construction* — they select on `drive_env_local.ownerId = caller` and take no id to check. This is [D-5] subsumed. |
+| Approval mirror and the revoke that cannot be lost | `packages/db/src/schema/drive-env-approvals.ts`, `packages/lib/src/services/drive-envs/approval-mirror-store.ts` (visibility and revocation only — a source-scan test pins that nothing here can send an approval TO a machine); an owner's revoke is `revokePending` until the machine's SIGNED ack, and `listUnacknowledgedRevokes` is replayed on the daemon's next hello before any grant for that env is signed (`ws/route.ts`) | **Yes, and it BLOCKS.** While a replay leaves a revoke unacknowledged the env is refused every grant, typed `revoke_pending` (`bridge-client.ts`), so the window in which a machine still holds what the owner revoked is never a window in which it is asked to use it. |
+| Session approvals die with the process | `daemonEpoch` — a random id per daemon PROCESS, attested inside the signed `hello` bytes (`packages/lib/src/env-bridge/machine-signatures.ts`, `frame-codec.ts`); `expireSessionEnvApprovalsForOtherEpoch` on hello (`ws/route.ts`) | **Yes.** A restart changes the epoch and expires every session-scoped approval the mirror held for the old one; a reconnect does not. |
+| The exec-allowlisted warning ([D-7]) | `packages/lib/src/env-bridge/policy-warnings.ts` (`exec_allowlisted`), printed by `env connect` (and audited there as `policy_warning:exec_allowlisted`) and by `env policy` | **Yes, for `allowlist` mode.** See R-11: the warning fires on `mode === 'allowlist' && ops.includes('exec')`, but `decideExecution` treats `exec` in `ops` as pre-approved **in `ask` mode too** (`decide-execution.ts`, `preapproved`), and that combination is not warned about. |
+| Effective-capability display (`intersectCapabilities`) | `packages/lib/src/env-bridge/intersect-capabilities.ts`, shown on the drive settings Environments page | **Informational, never load-bearing.** The enforcing three-way check runs inline in `decideExecution`; this is the display of it, and the page states the machine's own policy file as unknown to the server. |
 | OS confinement of `exec` | none | **Does not exist.** Post-GA task `bos8qmmwx4kkbx7v7huw3hhi`. |
 | Egress control on the machine | none | **Does not exist.** Owned by the confinement task. |
 
@@ -242,6 +249,16 @@ The approval-revoke route (`.../envs/[envId]/approvals/[approvalId]/route.ts`, D
 env PATCH/DELETE routes are not flag-gated themselves; they act on rows that can only exist
 when the flag was on, and they refuse a non-local env.
 
+## Wire-protocol note (wave 3)
+
+The signed `hello` now **requires** `daemonEpoch` (`frame-codec.ts`: the field is
+non-optional in the schema, and `machine-signatures.ts` folds it into the signed bytes). A
+daemon built before wave 3 does not send it, so its hello fails to decode and it **cannot
+connect**. This is a breaking protocol change with no negotiation and no version fallback.
+It is acceptable only because `LOCAL_ENVS_ENABLED` is off in every deployment, so no
+enrolled machine exists anywhere to break; it would not be acceptable after GA. Once the
+flag is on, any later change to the hello bytes needs a version field and a migration path.
+
 ## Per-decision rationale
 
 - **[D-1] `exec` is policy-gated, not path-confined.** Confining a running process is a
@@ -272,7 +289,9 @@ machine itself froze and signed (`challenge-store.ts`, `env-approval-tools.ts`,
 plainly: (a) once a program is approved, a later steered command that runs only approved
 programs runs with no click, with whatever arguments the steered agent chose (the README says
 this to the user; `decide-approval.ts` is the code); (b) the click asks the owner to judge a
-command line, and a hostile command line can be made to look ordinary. Not a mitigation:
+command line, and a hostile command line can be made to look ordinary; and (c) an owner who
+puts `exec` in their machine `ops` removes the click for that machine entirely, which [D-7]'s
+warning announces in `allowlist` mode but not in `ask` mode. Not a mitigation:
 agent-human permission parity, because the owner can read the shared pages too. The injection
 case is the one exit-gate test that proves the verdict rather than asserting it
 (task `banj4poxtulz6g68ai42y666`).
@@ -317,11 +336,16 @@ whoever is driving the agent.
   `request_env_approval` tool; owner-only click re-issues a grant with a signed
   `approvalIntent`; daemon byte-compares; server may only revoke an approval, and reports
   `revoked: true` only on the machine's signed ack.
-- **Wave 3 — PENDING.** Server-side audit rows at sign and result time
-  (`t3teevsx30jqvacj3powgvcj`); live activity panel (`pum3d9hbs4iy2tbu1yc9nbmj`); Stop
-  (`xv7v1fc1ulrvgt95jthf9o0j`); drive settings `environments/` (`zjcss63e97g524qcm1mh53lf`);
-  account settings `local-envs/` (`f3t9pbw8yhi2gathd0k6334j`); approval list route
-  (`l591znd3socx6rweetwjtyc3` — the DELETE half exists on the branch).
+- **Wave 3 — merged (#2585, `ea7357bb0`).** `drive_env_grant_audit` written at sign (fail-closed:
+  no row, no grant) and updated at result; live activity to the owner's room only; Stop and
+  Resume, signed under their own domain, killing process groups on the machine and acked with a
+  signed `pause_result`, with a daemon-side latch refusing every grant issued at or before the
+  pause; drive settings → Environments and account → Local environments, with owner-scoped
+  account routes; the approval mirror with `revokePending` and a reconnect replay that BLOCKS
+  the env (typed `revoke_pending`) until the machine acks; session approvals tied to a signed
+  `daemonEpoch`; the exec-allowlisted warning ([D-7]). GDPR export gains
+  `local-environment-activity.json` and `local-environment-approvals.json`
+  (`packages/lib/src/compliance/export/gdpr-export.ts`).
 - **Exit gate — PENDING.** Re-scope the P-family negatives and add the injection test
   (`banj4poxtulz6g68ai42y666`); run all 26 plus injection against a production build and record
   (`kwf7rgkes4q9olq3ytpou16w`; report on `ukqmwy41zkf192hwgh6sqsxf`).
@@ -331,15 +355,15 @@ whoever is driving the agent.
 | # | Risk | Likelihood | Impact | Owner | Task |
 |---|---|---|---|---|---|
 | R-1 | **Fail-open daemon audit write.** `audit-log.ts` swallows a failed append and reports only the first failure ever, to the stderr of a long-running daemon nobody watches; commands keep running with no local record (invariants 10 and 12). | Low (disk full, permissions) | Medium: the machine-side half of the `grantId` join goes missing silently | CLI daemon | `nn1j0oto0kyobukvb75lzjqo` (page `ko4jaad5qdeyc3yp5fjdpe4f`) |
-| R-2 | **No server-side audit row per grant.** Only refusals to sign are audited; a signed grant and its result are logged, not audited. The join the README promises the user has one side. | Certain until wave 3 | Medium: no operator-side record of what ran | apps/web | `t3teevsx30jqvacj3powgvcj` |
+| R-2 | **CLOSED (wave 3).** `drive_env_grant_audit` carries a row per signed grant and per refusal, updated at result time, and the sign-time write fails CLOSED — no row, no grant (`bridge-client.ts`). The `grantId` join has both sides. *Residual:* the result-time update is best-effort, so a row can stay `signed` after the work finished if that update fails; "running now" can over-report, never under-report. | — | — | Closed | #2585 |
 | R-3 | **No OS confinement of `exec`.** A command runs as the user with the user's files, credentials and network. This is the verdict's "less safe than Codex". | Certain by design ([D-1]) | High | Post-GA | `bos8qmmwx4kkbx7v7huw3hhi` |
 | R-4 | **Open egress.** No network control on the machine. Exfiltration bounded only by the click and by what the owner keeps on that machine. | Certain by design | High | Post-GA (with R-3) | `bos8qmmwx4kkbx7v7huw3hhi` |
 | R-5 | **Approval scope is the program, not the command line.** An approved program runs with any arguments, from any of the owner's chats, for up to 30 days by default; a steered agent needs no click for it. Interpreters and shells approved as programs widen this to everything. | Medium | High | CLI daemon / pure core | `ux594fzl6w6rydlvhz2hsndq` (recorded superseded by the re-key, page `xylo4nv27udrajb21aws6p3u`; the program-level residual stays open here) |
 | R-6 | **Cross-user prompt injection.** Shared-drive content steers the owner's agent into asking for a command; owner-only binding does not close this. | Medium on any shared drive | High | Product (Tier B click) + exit gate | `banj4poxtulz6g68ai42y666` (injection test) |
-| R-7 | **No Stop.** Pausing an environment's grants without deleting it does not exist; the only kill switches are revoke (destructive, the machine deletes its key) and stopping the daemon locally. | Certain until wave 3 | Medium | apps/web | `xv7v1fc1ulrvgt95jthf9o0j` |
+| R-7 | **CLOSED (wave 3), with one bound.** Stop pauses the env (server signs nothing more), kills the machine's running process groups, and is reported stopped only on the machine's signed `pause_result`; the daemon latch refuses grants issued at or before the pause. *Residual:* a Stop issued on a replica that does not hold the socket is delivered by the holding replica on its next heartbeat, so worst-case delivery is one 30 s ping interval, and an unacknowledged send says so rather than claiming the machine stopped. | Low | Medium | apps/web | #2585 |
 | R-8 | **Re-enrol after revoke.** A revoked env cannot take a new machine (`enrollment-code/route.ts` answers 410 and says to delete and recreate); the server policy goes with the row, and approvals on the machine are keyed to the old env id so they no longer apply. | Low | Low (usability; no security loss) | Follow-up | page `m3cqduvg8pfl9zi7hn3okouf` |
 | R-9 | **Unattended daemon.** The daemon is a terminal process today; making it a service (post-GA) deepens the unattended property that Tier B exists for. | — | — | Post-GA, after activity panel and Stop | page `h083wifv1p56fytihplpkf6p` |
-| R-11 | **Owner-disabled exec click.** An owner who edits `exec` into machine `ops` (or runs `allowlist` with `exec`) turns the Tier B click off for that machine; every command then runs unprompted as the owner. Honoured by design (owner's machine, deliberate edit). | Low | High | The owner | Mitigation: a connect-time and `env policy` warning when `exec` is in machine ops — **PENDING (wave 3)** until it lands |
+| R-11 | **Owner-disabled exec click — mitigation partly shipped.** An owner who edits `exec` into machine `ops` turns the Tier B click off for that machine; every command then runs unprompted as the owner. Honoured by design (owner's machine, deliberate edit). [D-7] now prints a loud warning at `env connect` (audited `policy_warning:exec_allowlisted`) and `env policy` — **but only for `mode: 'allowlist'`**. `decideExecution` treats `exec` in `ops` as pre-approved in `ask` mode too, and that combination is NOT warned about. | Low | High | The owner; the warning gap is a follow-up | Warning shipped #2585 (`policy-warnings.ts`); `ask`-mode gap open |
 | R-10 | **Exit gate not yet re-run.** Several P-family negatives assumed server refusals that only exist since wave 1; the 26 negatives and the injection test have not been run on the GA build. | Certain until run | High: the verdict is asserted, not proven | Point guard | `banj4poxtulz6g68ai42y666`, `kwf7rgkes4q9olq3ytpou16w` |
 
 ## Flag-on checklist
@@ -347,9 +371,11 @@ whoever is driving the agent.
 Each item is a command whose output is the evidence, or a task that must read Done. Run from
 the repository root on the commit being deployed.
 
-1. Wave 3 merged: tasks `t3teevsx30jqvacj3powgvcj` and `xv7v1fc1ulrvgt95jthf9o0j` are Done, and
-   `grep -n "paused" apps/web/src/lib/env-bridge/bridge-client.ts` shows the Stop flag fed
-   into `decideSign`.
+1. Wave 3 is present on the deployed commit — all four checks print a match:
+   `psql "$DATABASE_URL" -c "\d drive_env_grant_audit" | head -1`;
+   `grep -c "audit_unavailable" apps/web/src/lib/env-bridge/bridge-client.ts` (fail-closed sign);
+   `grep -c "pausedAt" packages/lib/src/env-bridge/decide-sign.ts apps/web/src/lib/env-bridge/pause.ts`;
+   `grep -c "daemonEpoch" packages/lib/src/env-bridge/frame-codec.ts`.
 2. Exit gate recorded: tasks `banj4poxtulz6g68ai42y666` and `kwf7rgkes4q9olq3ytpou16w` are Done
    with the report on `ukqmwy41zkf192hwgh6sqsxf`.
 3. Migration 0291 applied on the target database:
