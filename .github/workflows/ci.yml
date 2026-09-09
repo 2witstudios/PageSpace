@@ -422,5 +422,16 @@ jobs:
       - name: Run TypeScript check
         run: bun run typecheck
 
+      # `scripts/` is not a workspace package, so neither `turbo lint` nor
+      # `turbo typecheck` above ever visits it — until these two steps, the
+      # only CI coverage that directory had was its vitest run. The typecheck
+      # is scoped to the seed fidelity audit; see scripts/tsconfig.json for the
+      # thirteen pre-existing failures that keep it from covering the rest yet.
+      - name: Run ESLint (scripts)
+        run: bun run lint:scripts
+
+      - name: Run TypeScript check (scripts)
+        run: bun run typecheck:scripts
+
       - name: Knip (unused code gate)
         run: bun run knip:check

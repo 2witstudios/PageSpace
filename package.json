@@ -16,6 +16,7 @@
     "lint": "turbo lint",
     "lint:scripts": "eslint --config scripts/eslint.config.mjs scripts",
     "typecheck": "turbo typecheck",
+    "typecheck:scripts": "turbo build --filter=@pagespace/db --filter=@pagespace/editor && tsc -p scripts/tsconfig.json",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run --filter '@pagespace/db' db:migrate",
     "db:generate:admin": "bun run --filter '@pagespace/db' db:generate:admin",
