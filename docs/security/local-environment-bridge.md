@@ -346,9 +346,19 @@ whoever is driving the agent.
   `daemonEpoch`; the exec-allowlisted warning ([D-7]). GDPR export gains
   `local-environment-activity.json` and `local-environment-approvals.json`
   (`packages/lib/src/compliance/export/gdpr-export.ts`).
-- **Exit gate — PENDING.** Re-scope the P-family negatives and add the injection test
-  (`banj4poxtulz6g68ai42y666`); run all 26 plus injection against a production build and record
-  (`kwf7rgkes4q9olq3ytpou16w`; report on `ukqmwy41zkf192hwgh6sqsxf`).
+- **Exit gate — RUN, 2026-09-09. 40 checks, 40 PASS, 0 SKIP.** Re-scoped row by row against the
+  merged code (several rows asserted refusals that only exist since wave 1, and several could not
+  fire in the shape the page described), then run against a **production standalone build of this
+  branch** with a real UTC Postgres, the CLI built from this tree driving a real enrolled machine,
+  and a real browser for every click. Report on `ukqmwy41zkf192hwgh6sqsxf`; harness and re-scope
+  table in `scripts/env-bridge-exit-gate/`. Both leaf tasks
+  (`banj4poxtulz6g68ai42y666`, `kwf7rgkes4q9olq3ytpou16w`) are Done.
+  **The injection case passes**, in both arms: the model declined the injected `curl … | sh` when
+  it met it unprompted, and — the arm that proves the mechanism rather than the model — when the
+  agent was asked to run the page's command, the machine froze it under a challenge, the card
+  rendered the literal command, and the daemon's audit for that run carried one `ask_pending` and
+  **zero** `allow` lines. The run found one defect, fixed on this branch: a `DELETE` refused
+  `409 live_sessions` had already revoked the machine (`llb2x2c5rew97nxg9xkio7u1`; register R-12).
 
 ## Residual-risk register
 
@@ -364,7 +374,8 @@ whoever is driving the agent.
 | R-8 | **Re-enrol after revoke.** A revoked env cannot take a new machine (`enrollment-code/route.ts` answers 410 and says to delete and recreate); the server policy goes with the row, and approvals on the machine are keyed to the old env id so they no longer apply. | Low | Low (usability; no security loss) | Follow-up | page `m3cqduvg8pfl9zi7hn3okouf` |
 | R-9 | **Unattended daemon.** The daemon is a terminal process today; making it a service (post-GA) deepens the unattended property that Tier B exists for. | — | — | Post-GA, after activity panel and Stop | page `h083wifv1p56fytihplpkf6p` |
 | R-11 | **Owner-disabled exec click — mitigation partly shipped.** An owner who edits `exec` into machine `ops` turns the Tier B click off for that machine; every command then runs unprompted as the owner. Honoured by design (owner's machine, deliberate edit). [D-7] now prints a loud warning at `env connect` (audited `policy_warning:exec_allowlisted`) and `env policy` — **but only for `mode: 'allowlist'`**. `decideExecution` treats `exec` in `ops` as pre-approved in `ask` mode too, and that combination is NOT warned about. | Low | High | The owner; the warning gap is a follow-up | Warning shipped #2585 (`policy-warnings.ts`); `ask`-mode gap open |
-| R-10 | **Exit gate not yet re-run.** Several P-family negatives assumed server refusals that only exist since wave 1; the 26 negatives and the injection test have not been run on the GA build. | Certain until run | High: the verdict is asserted, not proven | Point guard | `banj4poxtulz6g68ai42y666`, `kwf7rgkes4q9olq3ytpou16w` |
+| R-10 | **CLOSED (2026-09-09).** The gate was re-scoped against the merged code and run on a production build of this branch: 40 checks, 40 PASS, 0 SKIP, including both arms of the injection case. The verdict is proven, not asserted. | — | — | — | `ukqmwy41zkf192hwgh6sqsxf` (report), `banj4poxtulz6g68ai42y666`, `kwf7rgkes4q9olq3ytpou16w` (Done) |
+| R-12 | **A destructive side effect on a REFUSED request.** This feature pairs a guard with an irreversible REMOTE effect in four places — env revoke, env delete, Stop, and approval revoke — and the effect is a signed frame that changes state on someone's computer (a deleted key, a SIGKILLed process group, a forgotten approval). Where the guard is evaluated beside the effect rather than with it, a refusal the caller reads as "nothing happened" can leave the machine changed and unrecoverable: `DELETE …/envs/[envId]` did exactly that until 2026-09-09, revoking the machine and every session before the `409 live_sessions` guard had a say, and per R-8 the surviving row could then never take a new machine. Structural, not a slip: the irreversible half is remote and cannot be rolled back with the transaction. | Was certain on that route; now guarded | High — silent, and unrecoverable without re-enrolment | The env routes | **Mitigated**: the effect runs as the delete transaction's `beforeDelete`, under the row lock, after the guard passes, so guard and effect are one critical section (`drive-envs-store.ts`, `deleteIfUnoccupied`). The other three were checked at the same commit and do NOT have it — Stop sends its signed `pause` only after the owner-only CAS has won (`setEnvPaused`), and both approval-revoke routes check `drive_env_local.ownerId` before `revokeLocalEnvApproval`. Any new pairing must use the same shape. `llb2x2c5rew97nxg9xkio7u1` (Done) |
 
 ## Flag-on checklist
 
@@ -377,7 +388,8 @@ the repository root on the commit being deployed.
    `grep -c "pausedAt" packages/lib/src/env-bridge/decide-sign.ts apps/web/src/lib/env-bridge/pause.ts`;
    `grep -c "daemonEpoch" packages/lib/src/env-bridge/frame-codec.ts`.
 2. Exit gate recorded: tasks `banj4poxtulz6g68ai42y666` and `kwf7rgkes4q9olq3ytpou16w` are Done
-   with the report on `ukqmwy41zkf192hwgh6sqsxf`.
+   with the report on `ukqmwy41zkf192hwgh6sqsxf`. **Satisfied 2026-09-09**: both Done; the report
+   carries all 40 `GATE` lines, 40 PASS / 0 SKIP, from a production build of this branch.
 3. Migration 0291 applied on the target database:
    `psql "$DATABASE_URL" -c "\d drive_env_local" | grep bind_policy_check` shows
    `CHECK ("bindPolicy" IN ('owner'))`.
@@ -394,12 +406,22 @@ the repository root on the commit being deployed.
    prints nothing.
 8. Flag off is really off, before turning it on:
    `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<host>/api/env-bridge/enroll -d '{}'`
-   prints `404`.
+   prints `404`. **Satisfied locally 2026-09-09** — gate rows `N11a/b/c`, all three bridge entry
+   points `404` with the flag unset, and `N10`: a well-formed `POST /envs {substrate:'local'}`
+   answers `501`, while a Sprite env still creates (`201`), so the flag gates local envs and not
+   the feature. Re-run against the deployment host before the flag goes on there.
 9. The customer page is live and says nothing this document does not:
    `curl -s -o /dev/null -w '%{http_code}\n' https://pagespace.ai/docs/security/local-environments`
-   prints `200`.
+   prints `200`. **Not satisfiable before deploy** — the marketing app has to ship this page first;
+   the gate cannot answer it from a local run.
 10. Set `LOCAL_ENVS_ENABLED=true`; then repeat item 8 and expect `400` (the route now exists and
-    rejects an empty body), and enrol one machine end to end per the README.
+    rejects an empty body), and enrol one machine end to end per the README. **Satisfied locally
+    2026-09-09** — gate row `F02` is that `400` from the same route, and steps 1–5 of the runbook
+    are one machine enrolled end to end: key pinned, signed `hello` accepted, capabilities
+    persisted, a session bound carrying `envId` with the Sprite columns NULL, a file written and
+    read back on the machine's own filesystem, a command run through the owner's click (`exit 0`),
+    and a >30 s command that completed in 35 s rather than being aborted. Repeat on the
+    deployment host.
 
 ## Out of scope
 
