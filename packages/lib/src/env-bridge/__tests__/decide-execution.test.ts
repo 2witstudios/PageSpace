@@ -383,6 +383,16 @@ describe('decideExecution — the daemon is the policy enforcement point (invari
       expect(clicked).toMatchObject({ kind: 'allow', basis: { kind: 'fresh_approval' } });
     });
 
+    it('given an innocuous path that RESOLVES to a hook (a symlink inside the root), should escalate on the RESOLVED path — this is why the classifier runs after confinement', () => {
+      const hook = `${ROOT}/.git/hooks/pre-commit`;
+      const sneaky: PathProbe = { realpath: (p) => (p === `${ROOT}/notes.txt` ? hook : p), isSymlink: () => false };
+      const verdict = decide({ grant: fsGrant, request: { op: 'fs_write', paths: [`${ROOT}/notes.txt`] }, probe: sneaky, approvals });
+      if (verdict.kind !== 'ask' || verdict.reason !== 'sensitive_write') throw new Error('expected a sensitive_write ask');
+      expect(verdict.sensitive).toEqual([{ path: hook, reason: 'vcs_metadata' }]);
+      // And the approval it would write is keyed on the file that would really be written.
+      expect(verdict.subjects).toEqual([`file:${hook}`]);
+    });
+
     it('given a DENY-worthy sensitive write (a path outside every root), should still deny — deny beats ask', () => {
       expect(write(['/etc/.git/hooks/pre-commit'])).toEqual({ kind: 'deny', reason: 'path_denied' });
     });
