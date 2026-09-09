@@ -367,8 +367,3 @@ export function parseApprovalsFile(input: unknown): DurableApproval[] | null {
   const parsed = approvalsFileSchema.safeParse(input);
   return parsed.success ? parsed.data.approvals : null;
 }
-
-/** The canonical serialisation the daemon writes (pretty, trailing newline). */
-export function serializeApprovalsFile(approvals: readonly DurableApproval[]): string {
-  return `${JSON.stringify({ version: APPROVALS_FILE_VERSION, approvals: approvals.filter((a) => isDurableScope(a.scope)) }, null, 2)}\n`;
-}

@@ -120,8 +120,8 @@ describe('POST allow — the click re-issues a grant over IDENTICAL args carryin
     expect(sendGrant).not.toHaveBeenCalled();
   });
 
-  it('given the MACHINE answers approval_mismatch / approval_expired / approval_unknown, should relay the typed outcome (never 200 allowed)', async () => {
-    for (const [reason, outcome, status] of [['approval_mismatch', 'mismatch', 409], ['approval_expired', 'expired', 410], ['approval_unknown', 'unknown', 409]] as const) {
+  it('given the MACHINE answers approval_mismatch / approval_expired / any other refusal, should relay the typed outcome (never 200 allowed)', async () => {
+    for (const [reason, outcome, status] of [['approval_mismatch', 'mismatch', 409], ['approval_expired', 'expired', 410], ['declined', 'failed', 409]] as const) {
       resetPendingApprovalStoreForTesting();
       getPendingApprovalStore().remember(pendingEntry(), NOW);
       sendGrant.mockResolvedValueOnce({ type: 'grant_denied', grantId: 'g', reason, sig: 'c2ln' });

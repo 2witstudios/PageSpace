@@ -21,7 +21,8 @@
  * grant carrying a server-signed `approvalIntent { challengeId, scope,
  * expiresAt }`. The MACHINE looks the frozen request up by that id,
  * byte-compares the re-issued request against it, and runs only on a match
- * (`approval_mismatch` otherwise). This route can only ask the machine to
+ * (`approval_mismatch` otherwise — including for a challenge the machine
+ * never froze). This route can only ask the machine to
  * honour a question the machine itself framed; it cannot introduce a request.
  *
  * **After the challenge TTL ⇒ `approval_expired`** (410): the frozen request
@@ -131,7 +132,6 @@ function outcomeOf(challengeId: string, scope: RequestEnvApprovalOutput['scope']
     case 'grant_denied':
       if (reply.reason === 'approval_mismatch') return { challengeId, outcome: 'mismatch', error: reply.reason };
       if (reply.reason === 'approval_expired') return { challengeId, outcome: 'expired', error: reply.reason };
-      if (reply.reason === 'approval_unknown') return { challengeId, outcome: 'unknown', error: reply.reason };
       return { challengeId, outcome: 'failed', error: reply.reason };
   }
 }

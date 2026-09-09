@@ -16,8 +16,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   PageSpace chat; your Allow re-issues the identical request with a server-signed intent that
   the daemon verifies with the key it already holds, byte-compares against what it froze, and
   only then remembers (under the scope you picked) and runs. A click can only ever unblock a
-  request this machine framed itself; anything else is refused as `approval_mismatch`,
-  `approval_expired` or `approval_unknown` and written to the audit log with the grant id.
+  request this machine framed itself; anything else is refused as `approval_mismatch` or
+  `approval_expired` and written to the audit log with the grant id.
 
 - **`ask` mode works without a terminal: the question goes to the PageSpace chat.** A request that
   is not pre-approved and not covered by a remembered approval is frozen under a challenge and

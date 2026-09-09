@@ -31,7 +31,7 @@
  */
 import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { approvalExpiry, isDurableScope, parseApprovalsFile, serializeApprovalsFile, type ApprovalScope, type DurableApproval, type GrantOp } from './lib-core.js';
+import { APPROVALS_FILE_VERSION, approvalExpiry, isDurableScope, parseApprovalsFile, type ApprovalScope, type DurableApproval, type GrantOp } from './lib-core.js';
 import type { OpenedPolicyFile, PolicyLoadReason } from './policy.js';
 
 export const APPROVALS_FILE_NAME = 'env-approvals.json';
@@ -80,6 +80,11 @@ export interface ApprovalsStore {
   revoke(approvalId: string): Promise<number>;
   /** Drop expired rows from the file. @returns rows removed. */
   prune(now: number): Promise<number>;
+}
+
+/** The canonical serialisation the daemon writes (pretty, trailing newline); only durable scopes ever reach the file. */
+export function serializeApprovalsFile(approvals: readonly DurableApproval[]): string {
+  return `${JSON.stringify({ version: APPROVALS_FILE_VERSION, approvals: approvals.filter((a) => isDurableScope(a.scope)) }, null, 2)}\n`;
 }
 
 export function defaultApprovalsPath(env: Readonly<Record<string, string | undefined>>, homedir: string): string {

@@ -37,8 +37,6 @@ export const requestEnvApprovalInputSchema = z.object({
     .describe('The challengeId from the local_approval_required tool result, verbatim.'),
 });
 
-export type RequestEnvApprovalInput = z.infer<typeof requestEnvApprovalInputSchema>;
-
 /** The scopes the owner may choose on the card; mirrors `APPROVAL_SCOPES` in the pure core. */
 export const ENV_APPROVAL_SCOPES = ['once', 'session', '30d', 'until_revoked'] as const;
 export type EnvApprovalScope = (typeof ENV_APPROVAL_SCOPES)[number];

@@ -92,13 +92,46 @@ describe('daemon structural invariants', () => {
       expect(store).not.toMatch(/fetch\(|from 'ws'|Frame\b/);
     });
 
-    it('the dispatcher writes an approval in exactly TWO places, both after a byte-compared allow (a terminal answer, a click that matched) — never from a revoke or any other frame', () => {
+    it('(a) the ONLY writer to the approvals store is the daemon\'s own remember() after a byte-compared allow (the terminal prompt, the click that matched) — no frame handler and no code path passes server-supplied data into approvals.remember()', () => {
       const writes = [...dispatcher.matchAll(/approvals\.remember\(/g)];
       expect(writes).toHaveLength(2);
+      // Both sit inside handleGrant, AFTER the second decideExecution (the byte-compare) allowed, and BEFORE handleRevoke.
+      const handleGrantStart = dispatcher.indexOf('const handleGrant');
       const revokeStart = dispatcher.indexOf('const handleRevoke');
-      for (const w of writes) expect(w.index).toBeLessThan(revokeStart);
+      for (const w of writes) {
+        expect(w.index).toBeGreaterThan(handleGrantStart);
+        expect(w.index).toBeLessThan(revokeStart);
+        const preceding = dispatcher.slice(handleGrantStart, w.index);
+        expect(preceding).toMatch(/localApproval: \{ grantId: grant\.grantId, approvedAt: (deps\.now\(\)|now), request: (shown|frozen\.request) \}/);
+        expect(preceding).toMatch(/kind (===|!==) 'allow'/);
+      }
+      // What is remembered comes from the daemon's OWN state (the verdict's subjects, the frozen challenge), never from the frame or the grant.
+      for (const w of writes) {
+        const call = dispatcher.slice(w.index, dispatcher.indexOf(';', w.index));
+        expect(call).toMatch(/subjects(: frozen\.subjects)?,/);
+        expect(call).not.toMatch(/frame\.|grant\.args|request\./);
+      }
       expect(dispatcher.slice(revokeStart)).not.toMatch(/remember\(/);
       expect(dispatcher.slice(revokeStart)).toMatch(/approvals\.revoke\(frame\.approvalId\)/);
+      // No other daemon file writes approvals at all.
+      for (const file of daemonFiles) {
+        if (name(file) === 'env-bridge/dispatcher.ts' || name(file) === 'env-bridge/approvals-store.ts') continue;
+        expect(read(file), name(file)).not.toMatch(/\.remember\(/);
+      }
+    });
+
+    it('(b) the frame codec has NO frame type that can ADD an approval — the only approval-shaped frame is `revoke` with `approvalId`', () => {
+      const codec = readFileSync(join(HERE, '..', '..', '..', 'lib', 'src', 'env-bridge', 'frame-codec.ts'), 'utf8');
+      const types = [...codec.matchAll(/z\.literal\('([a-z_]+)'\)/g)].map((m) => m[1]);
+      expect(types.length).toBeGreaterThan(10);
+      expect(types.filter((t) => /approv|allow|remember/.test(t as string))).toEqual([]);
+      // `approvalId` appears exactly once in the codec: on the revoke schema. `approvalIntent` never does — it lives inside the opaque grant, parsed only by verifyGrant.
+      const approvalIdLines = codec.split('\n').filter((line) => line.includes('approvalId') && !line.trimStart().startsWith('/**') && !line.trimStart().startsWith('*'));
+      expect(approvalIdLines).toHaveLength(1);
+      expect(approvalIdLines[0]).toMatch(/z\.literal\('revoke'\)/);
+      expect(codec).not.toMatch(/approvalIntent/);
+      // And the daemon never routes a frame by an approval-shaped type.
+      expect(dispatcher).not.toMatch(/frame\.type === '(approve|approval|allow)/);
     });
 
     it('decideExecution is fed the machine\'s own approvals (deps.approvals) and nothing carried by the grant or the frame', () => {

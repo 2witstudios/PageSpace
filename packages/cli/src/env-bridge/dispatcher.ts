@@ -217,11 +217,14 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       // (already done above — `decision.request`), and byte-compare the two
       // through the existing LocalApproval path. Only a match writes the
       // durable approval and runs. A server that "recorded" an approval, a
-      // guessed id, or a click over different bytes all stop here.
+      // guessed id, or a click over different bytes all stop here as
+      // approval_mismatch.
       const intent = grant.approvalIntent;
       const now = deps.now();
       const frozen = deps.challenges?.peek(intent.challengeId, now);
-      if (frozen === undefined) return denied(grant.grantId, 'approval_unknown', { grant, op: grant.op, verdict: `deny:approval_unknown:${intent.challengeId}` });
+      // No such frozen request on THIS machine: the click matches nothing the
+      // machine framed — including a challenge the server made up.
+      if (frozen === undefined) return denied(grant.grantId, 'approval_mismatch', { grant, op: grant.op, verdict: `deny:approval_mismatch:unknown_challenge:${intent.challengeId}` });
       if (intent.expiresAt < now || frozen.exp < now) return denied(grant.grantId, 'approval_expired', { grant, op: grant.op });
       if (frozen.grant.principal.userId !== grant.principal.userId || frozen.grant.op !== grant.op) {
         return denied(grant.grantId, 'approval_mismatch', { grant, op: grant.op, verdict: `deny:approval_mismatch:principal:${intent.challengeId}` });

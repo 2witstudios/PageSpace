@@ -566,12 +566,18 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
       expect(await h.dispatcher.handle(click())).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
     });
 
-    it('given a click for a challenge the daemon never froze (a guessed id, or an approval the SERVER "recorded"), should deny approval_unknown and run nothing', async () => {
+    it('COMPROMISED SERVER: a server-signed grant carrying an approvalIntent whose challengeId this daemon has NEVER frozen (the server manufacturing a "covered" request out of thin air) ⇒ approval_mismatch, nothing executes, NOTHING is remembered', async () => {
       const h = clickHarness();
-      expect(await h.dispatcher.handle(click({}, { challengeId: 'ch_never' }))).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'approval_unknown' } });
-      expect(h.audits[0]?.verdict).toBe('deny:approval_unknown:ch_never');
+      // Nothing pending on the machine at all; the server presents a valid signature, a valid intent, a policy-allowed op.
+      expect(h.challenges.size()).toBe(0);
+      expect(await h.dispatcher.handle(click({}, { challengeId: 'ch_never' }))).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'approval_mismatch' } });
+      expect(h.audits[0]?.verdict).toBe('deny:approval_mismatch:unknown_challenge:ch_never');
       expect(h.spawnRun).not.toHaveBeenCalled();
       expect(h.writes).toHaveLength(0);
+      expect(h.deps.approvals!.entries()).toEqual([]);
+      // And it stays that way on a retry with a different scope or id: the file is authoritative for allow.
+      expect(await h.dispatcher.handle(click({}, { challengeId: 'ch_never_2', scope: 'until_revoked' }))).toMatchObject({ kind: 'reply', frame: { reason: 'approval_mismatch' } });
+      expect(h.deps.approvals!.entries()).toEqual([]);
     });
 
     it('given a click after the intent expiry or after the challenge TTL, should deny approval_expired', async () => {
@@ -582,7 +588,7 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
       const late = clickHarness({ now: () => now });
       await late.dispatcher.handle(execFrame());
       now = NOW + 31_000; // past the frozen grant's exp: the challenge is evicted (the click's own grant is fresh)
-      expect(await late.dispatcher.handle(click({}, { expiresAt: NOW + 60_000 }, PRINCIPAL, { iat: now - 1000, exp: now + 30_000 }))).toMatchObject({ kind: 'reply', frame: { reason: 'approval_unknown' } });
+      expect(await late.dispatcher.handle(click({}, { expiresAt: NOW + 60_000 }, PRINCIPAL, { iat: now - 1000, exp: now + 30_000 }))).toMatchObject({ kind: 'reply', frame: { reason: 'approval_mismatch' } });
       expect(h.spawnRun).not.toHaveBeenCalled();
       expect(late.spawnRun).not.toHaveBeenCalled();
     });
@@ -667,7 +673,7 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
       const before = h.approvals.entries().length;
       await h.dispatcher.handle(approvalRevoke('ch_9'));
       await h.dispatcher.handle(execFrame({ cmd: 'rm' }));
-      expect(await h.dispatcher.handle(signedGrant({ type: 'grant_exec', cmd: 'tool', cwd: ROOT }, { approvalIntent: { challengeId: 'server_recorded', scope: 'until_revoked', expiresAt: NOW + 30_000 } }))).toMatchObject({ kind: 'reply', frame: { reason: 'approval_unknown' } });
+      expect(await h.dispatcher.handle(signedGrant({ type: 'grant_exec', cmd: 'tool', cwd: ROOT }, { approvalIntent: { challengeId: 'server_recorded', scope: 'until_revoked', expiresAt: NOW + 30_000 } }))).toMatchObject({ kind: 'reply', frame: { reason: 'approval_mismatch' } });
       expect(h.approvals.entries().length).toBe(before);
       expect(h.spawnRun).toHaveBeenCalledTimes(1); // only rm (covered by ch_2)
     });
