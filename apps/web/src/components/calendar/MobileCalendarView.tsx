@@ -117,6 +117,11 @@ export function MobileCalendarView({
     // A guard, not a trigger. The effect fires on a new parentDate only, and
     // this makes it a no-op for the echo of our own onDateChange.
     // Suppress only a true echo: same day we sent AND we have not drifted since.
+    // This relies on CalendarView's `onDateChange: setCurrentDate` being a plain
+    // synchronous setState, so React batches it with our own setSelectedDate and
+    // this closure sees the new value. If it ever becomes debounced, awaited or
+    // routed through the URL, scroll-sync will move selectedDate first and the
+    // echo will re-pin and re-scroll the agenda under the user's finger.
     // At the instant of the echo `selectedDate` still equals what we sent, so this
     // is exactly as tight as before; once scroll-sync has moved on, a same-day
     // re-selection (a second deep link into that day) syncs again.
@@ -230,6 +235,12 @@ export function MobileCalendarView({
 
     const end = new Date(start);
     end.setHours(end.getHours() + 1);
+    // Keep the end inside the day too. An event ending at 00:00 satisfies
+    // spansDays(), so it would render as a banner chip with no times -- the same
+    // thing the midnight filter in MobileAgenda exists to prevent.
+    if (!isSameDay(end, start)) {
+      end.setTime(new Date(start).setHours(23, 59, 0, 0));
+    }
     handlers.onEventCreate(start, end);
   }, [selectedDate, handlers]);
 

@@ -392,5 +392,12 @@ describe('MobileAgenda day boundaries', () => {
       actual: screen.getByRole('button', { name: /Create Event/ }) !== null,
       expected: true,
     });
+
+    assert({
+      given: 'a picked empty day inside an empty window',
+      should: 'say "Nothing scheduled" once, not once per surface',
+      actual: screen.queryAllByText('Nothing scheduled').length,
+      expected: 1,
+    });
   });
 });
