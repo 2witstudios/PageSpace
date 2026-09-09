@@ -220,17 +220,49 @@ describe('parseApprovalsFile — strict; ANY defect ⇒ null (empty), never a pa
 });
 
 describe('trimTrailing — the loop that replaced two `[…]+$` regexes (CodeQL js/polynomial-redos on #2583)', () => {
-  it('trims only trailing characters in the set, and a 100k-char run resolves in bounded time with the same result', () => {
+  it('trims only trailing characters in the set', () => {
     expect(trimTrailing('ls)', ')}')).toBe('ls');
     expect(trimTrailing('ls)}))', ')}')).toBe('ls');
     expect(trimTrailing(')ls', ')}')).toBe(')ls');
     expect(trimTrailing('/home/u/proj///', '/')).toBe('/home/u/proj');
     expect(trimTrailing('', ')')).toBe('');
-    const run = `ls${')'.repeat(100_000)}`;
+  });
+
+  /**
+   * WHAT THIS ROW IS FOR, and what it is not.
+   *
+   * The regression it guards is catastrophic backtracking in a `[…]+$` regex.
+   * That does not make a long input "a bit slower" — it makes it take minutes,
+   * or never finish. So the assertion is a generous absolute ceiling, not a
+   * millisecond figure: the gap between the linear loop (microseconds) and the
+   * failure mode (unbounded) is enormous, and anything in between is the
+   * runner being busy.
+   *
+   * It previously asserted `< 200ms` and failed CI at 207ms on a loaded
+   * runner — measuring the runner, not the code. It also measured the WRONG
+   * INPUT: a run of `)` at the end MATCHES `(?:[)}]+)+$` immediately, so a
+   * backtracking implementation would have passed it. Backtracking explodes on
+   * inputs that FAIL to match, so that is what these use — a long run followed
+   * by one character outside the set.
+   */
+  it('a long run that FAILS to match resolves at once — this is a backtracking guard, not a benchmark', () => {
+    const tail = `${')'.repeat(50_000)}x`;
     const started = performance.now();
+    // Unchanged: the last character is not in the trim set.
+    expect(trimTrailing(`ls${tail}`, ')}')).toBe(`ls${tail}`);
+    expect(trimTrailing(`${ROOT}${'/'.repeat(50_000)}x`, '/')).toBe(`${ROOT}${'/'.repeat(50_000)}x`);
+    // The command call site the first regex lived at, on the same shape. (The
+    // roots call site cannot take a failing shape and still confine, so it is
+    // covered by the matching row below and by the structural row.)
+    expect(shellCommandWords(`(ls${tail}`)).toEqual([`ls${tail}`]);
+    // Microseconds in practice; a backtracking implementation does not return.
+    expect(performance.now() - started).toBeLessThan(5_000);
+  });
+
+  it('and a long run that DOES match still trims to the same answer', () => {
+    const run = `ls${')'.repeat(100_000)}`;
     expect(trimTrailing(run, ')}')).toBe('ls');
     expect(shellCommandWords(`(${run}`)).toEqual(['ls']);
-    expect(performance.now() - started).toBeLessThan(200);
     expect(approvalSubjects(fsRead(`${ROOT}/a`), { ...deps, roots: [`${ROOT}${'/'.repeat(100_000)}`] })).toEqual([`root:${ROOT}${'/'.repeat(100_000)}`]);
   });
 

@@ -346,3 +346,67 @@ describe('GA wave 2 — approvalIntent: the owner\'s click rides the re-issued g
     expect(verdict).toEqual({ ok: false, reason: 'malformed' });
   });
 });
+
+/**
+ * B3 — the assertion the owner's click carries rides INSIDE `approvalIntent`,
+ * which is already inside `encodeGrant`'s canonical bytes, so the server's
+ * signature covers it and it cannot be swapped or stripped in flight.
+ */
+describe('hardening B — the approval intent carries the assertion', () => {
+  const ASSERTION = { credentialId: 'cred-a', authenticatorData: 'YXV0aA', clientDataJSON: 'Y2xpZW50', signature: 'c2ln' };
+  const intentOf = (extra: Record<string, unknown> = {}) => ({ challengeId: 'chal_1', scope: 'once' as const, expiresAt: 1_000, ...extra }) as NonNullable<Grant['approvalIntent']>;
+
+  it('NO REGRESSION: a grant with no approvalIntent encodes to exactly the bytes it always had', () => {
+    const grant = makeGrant();
+    const encoded = new TextDecoder().decode(encodeGrant(grant));
+    expect(encoded).not.toContain('approvalIntent');
+    expect(JSON.parse(encoded)).toEqual({
+      grantId: grant.grantId,
+      envId: grant.envId,
+      principal: grant.principal,
+      op: grant.op,
+      argsHash: grant.argsHash,
+      iat: grant.iat,
+      exp: grant.exp,
+      nonce: grant.nonce,
+    });
+  });
+
+  it('an intent WITHOUT an assertion encodes exactly as it did before the field existed', () => {
+    const encoded = new TextDecoder().decode(encodeGrant({ ...makeGrant(), approvalIntent: intentOf() }));
+    expect(JSON.parse(encoded).approvalIntent).toEqual({ challengeId: 'chal_1', scope: 'once', expiresAt: 1_000 });
+    expect(encoded).not.toContain('assertion');
+  });
+
+  it('an intent WITH an assertion puts all four fields under the signature, in a fixed order', () => {
+    const encoded = new TextDecoder().decode(encodeGrant({ ...makeGrant(), approvalIntent: intentOf({ assertion: ASSERTION }) }));
+    expect(JSON.parse(encoded).approvalIntent.assertion).toEqual(ASSERTION);
+    // Rebuilt field by field, so the caller's insertion order cannot change the signed message.
+    const shuffled = { signature: 'c2ln', clientDataJSON: 'Y2xpZW50', authenticatorData: 'YXV0aA', credentialId: 'cred-a' };
+    expect(encodeGrant({ ...makeGrant(), approvalIntent: intentOf({ assertion: shuffled }) })).toEqual(encodeGrant({ ...makeGrant(), approvalIntent: intentOf({ assertion: ASSERTION }) }));
+  });
+
+  it('changing ONE byte of the assertion changes the signed bytes — it cannot be swapped in flight', () => {
+    const withAssertion = encodeGrant({ ...makeGrant(), approvalIntent: intentOf({ assertion: ASSERTION }) });
+    const tampered = encodeGrant({ ...makeGrant(), approvalIntent: intentOf({ assertion: { ...ASSERTION, signature: 'c2lo' } }) });
+    expect(withAssertion).not.toEqual(tampered);
+    // …and stripping it is a different message too, so a captured click cannot be downgraded to an unproven one.
+    expect(withAssertion).not.toEqual(encodeGrant({ ...makeGrant(), approvalIntent: intentOf() }));
+  });
+
+  it.each<[string, unknown]>([
+    ['a non-object assertion', 'nope'],
+    ['a missing signature', { credentialId: 'a', authenticatorData: 'b', clientDataJSON: 'c' }],
+    ['an empty credential id', { ...ASSERTION, credentialId: '' }],
+    ['an extra field riding along', { ...ASSERTION, isAdmin: true }],
+  ])('verifyGrant refuses a grant whose assertion is %s as MALFORMED — the schema is strict', (_label, assertion) => {
+    const grant = { ...makeGrant(), approvalIntent: intentOf({ assertion }) };
+    expect(run(grant)).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('verifies a grant whose intent carries a well-formed assertion, and hands the assertion back untouched', () => {
+    const grant = { ...makeGrant(), approvalIntent: intentOf({ assertion: ASSERTION }) };
+    const verdict = run(grant);
+    expect(verdict.ok && verdict.grant.approvalIntent?.assertion).toEqual(ASSERTION);
+  });
+});

@@ -339,10 +339,27 @@ export async function reissueLocalEnvEnrollmentCode({
   return { ok: true, enrollment: { enrollmentId: row.enrollmentId, code: issued.code, expiresAt } };
 }
 
+/**
+ * Where the owner's passkeys come from at enrolment, and the WebAuthn identity
+ * assertions must be made under (hardening B, leaf B1). Injected rather than
+ * imported so the enrolment service stays free of the passkey store and the
+ * environment, and so the pinning is testable without a browser.
+ */
+export interface OwnerCredentialSource {
+  /** The relying-party id (`WEBAUTHN_RP_ID`). */
+  readonly rpId: string;
+  /** The origin (`WEBAUTHN_ORIGIN`). */
+  readonly origin: string;
+  /** The owner's registered credentials — public keys only. An owner with none yields `[]`, which pins an empty set. */
+  list(ownerId: string): Promise<readonly { credentialId: string; publicKeyCose: string }[]>;
+}
+
 export interface LocalEnvIdentityServiceDeps {
   store: Pick<DriveEnvStore, 'findLocalByEnrollmentId' | 'pinMachineKey' | 'setChallenge' | 'consumeChallenge'>;
   now: () => Date;
   identity: LocalEnvIdentityDeps;
+  /** The owner's passkeys, pinned once at enrolment (leaf B1). */
+  ownerCredentials: OwnerCredentialSource;
   /**
    * Mint the socket token for a proven machine. The policy is the whole
    * contract; the row facts say WHOSE token it is (the machine's owner) and
@@ -363,8 +380,25 @@ export type EnrollLocalDriveEnvResult =
    * `serverPolicy` rides it so the enroller can scaffold the FILE ops PageSpace may ask for into the machine policy
    * (GA wave 2, Tier A) — the enroller never writes `exec` into machine `ops`, whatever this says (Tier B).
    */
-  | { ok: true; envId: string; enrollmentId: string; serverKeyId: string; serverPublicKey: string; ownerId: string; serverPolicy: { ops: string[]; checkpoint: boolean } }
-  | { ok: false; reason: 'not_found' | 'revoked' | 'already_enrolled' | 'bad_public_key' | 'race' | EnrollmentCodeDenyReason };
+  | {
+      ok: true;
+      envId: string;
+      enrollmentId: string;
+      serverKeyId: string;
+      serverPublicKey: string;
+      ownerId: string;
+      serverPolicy: { ops: string[]; checkpoint: boolean };
+      /**
+       * The owner's passkeys for the machine to PIN (hardening B, leaf B1) —
+       * public keys only, plus the rpId and origin an assertion must be made
+       * under. This is the answer to "how does the machine know a human
+       * clicked": from here on it verifies an assertion itself instead of
+       * taking the server's word. An empty `credentials` means the owner has
+       * no passkey, and the machine will say so and refuse chat approvals.
+       */
+      ownerCredentials: { rpId: string; origin: string; credentials: { credentialId: string; publicKeyCose: string }[] };
+    }
+  | { ok: false; reason: 'not_found' | 'revoked' | 'already_enrolled' | 'bad_public_key' | 'race' | 'owner_credentials_unavailable' | EnrollmentCodeDenyReason };
 
 /**
  * The machine presents the one-time code and its freshly generated PUBLIC key;
@@ -383,7 +417,7 @@ export async function enrollLocalDriveEnv({
   code: unknown;
   /** Base64 SPKI DER, as the daemon sent it. */
   machinePublicKey: unknown;
-  deps: Pick<LocalEnvIdentityServiceDeps, 'store' | 'now' | 'identity'>;
+  deps: Pick<LocalEnvIdentityServiceDeps, 'store' | 'now' | 'identity' | 'ownerCredentials'>;
 }): Promise<EnrollLocalDriveEnvResult> {
   const row = await deps.store.findLocalByEnrollmentId(enrollmentId);
   if (!row) return { ok: false, reason: 'not_found' };
@@ -406,11 +440,31 @@ export async function enrollLocalDriveEnv({
   });
   if (!verdict.ok) return { ok: false, reason: verdict.reason };
 
+  // The owner's passkeys are read BEFORE the code is spent, and a failure to
+  // read them REFUSES the enrolment (hardening B, leaf B1): pinning an empty
+  // set because the store hiccuped would leave an owner who does have a
+  // passkey permanently unable to approve in chat, with nothing to explain
+  // it. An owner with genuinely none pins `[]` and is told so at the terminal.
+  let credentials: readonly { credentialId: string; publicKeyCose: string }[];
+  try {
+    credentials = await deps.ownerCredentials.list(row.ownerId);
+  } catch {
+    return { ok: false, reason: 'owner_credentials_unavailable' };
+  }
+  const ownerCredentials = {
+    rpId: deps.ownerCredentials.rpId,
+    origin: deps.ownerCredentials.origin,
+    credentials: credentials.map((credential) => ({ credentialId: credential.credentialId, publicKeyCose: credential.publicKeyCose })),
+  };
+
   const pinned = await deps.store.pinMachineKey({
     envId: row.envId,
     machinePublicKey: machinePublicKey as string,
     machineKeyFingerprint: deps.identity.fingerprint(spki),
     serverKeyId: deps.identity.signingKey.keyId,
+    // Written in the SAME update as the machine key: one trust-on-first-use
+    // moment for both directions of the bridge, and no later path adds one.
+    ownerCredentials,
     // The hash this call VERIFIED, so a re-issue that replaced it in the
     // meantime makes this pin lose rather than admit a superseded code.
     enrollmentCodeHash: row.enrollmentCodeHash,
@@ -428,6 +482,7 @@ export async function enrollLocalDriveEnv({
     serverPublicKey: Buffer.from(deps.identity.signingKey.publicKey).toString('base64'),
     ownerId: row.ownerId,
     serverPolicy: { ops: [...row.serverPolicy.ops], checkpoint: row.serverPolicy.checkpoint },
+    ownerCredentials,
   };
 }
 

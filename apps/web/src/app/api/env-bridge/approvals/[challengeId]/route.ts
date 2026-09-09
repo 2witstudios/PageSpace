@@ -44,6 +44,9 @@ import { getPendingApprovalStore, type PendingEnvApproval } from '@/lib/env-brid
 import { getApprovalMirrorStore, getDriveEnvStore, markEnvApprovalAcknowledged, markEnvApprovalRevoked, rememberEnvApproval } from '@/lib/drive-envs/drive-envs-runtime';
 import { revokeLocalEnvApproval } from '@/lib/env-bridge/revoke';
 import { approvalExpiry } from '@pagespace/lib/env-bridge/decide-approval';
+import { approvalAssertionSchema } from '@pagespace/lib/env-bridge/grant';
+import { deriveOwnerApprovalChallenge } from '@pagespace/lib/env-bridge/owner-approval';
+import { envBridgeSha256 } from '@/lib/env-bridge/crypto';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -52,13 +55,26 @@ const bodySchema = z
   .object({
     decision: z.enum(['allow', 'deny']),
     scope: z.enum(ENV_APPROVAL_SCOPES).optional(),
+    /**
+     * The owner's WebAuthn assertion (hardening B, leaf B3). Deliberately
+     * added to a `.strict()` schema — an unknown field is a 400 here, so this
+     * had to be opened on purpose.
+     *
+     * The server RELAYS it and does not verify it. That is not an oversight
+     * and it is not the step-up flow's shape: the party that must be
+     * convinced a human clicked is the MACHINE, and a check performed here
+     * would be exactly the server-attestation this whole change exists to
+     * remove. Optional at this layer so the machine — not this route — is
+     * what refuses a click without one, with its own typed reason.
+     */
+    assertion: approvalAssertionSchema.optional(),
   })
   .strict();
 
 type Params = { params: Promise<{ challengeId: string }> };
 
 /** The pending entry and the sibling it belongs to, or the response that ends the request. */
-async function loadForOwner(request: Request, challengeId: string, userId: string, now: number): Promise<{ ok: true; pending: PendingEnvApproval; ownerId: string } | { ok: false; response: Response }> {
+async function loadForOwner(request: Request, challengeId: string, userId: string, now: number): Promise<{ ok: true; pending: PendingEnvApproval; ownerId: string; sibling: NonNullable<LocalSibling> } | { ok: false; response: Response }> {
   const pending = getPendingApprovalStore().get(challengeId, now);
   if (!pending) {
     auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'drive_env_approval', resourceId: challengeId, details: { route: 'env-bridge/approvals', reason: 'unknown_or_expired' } });
@@ -87,7 +103,34 @@ async function loadForOwner(request: Request, challengeId: string, userId: strin
       ),
     };
   }
-  return { ok: true, pending, ownerId: sibling.ownerId };
+  return { ok: true, pending, ownerId: sibling.ownerId, sibling };
+}
+
+/** The row's pinned owner credentials, as `drive_env_local` stores them. */
+type LocalSibling = Awaited<ReturnType<Awaited<ReturnType<typeof getDriveEnvStore>>['findLocalByEnvId']>>;
+
+/**
+ * The WebAuthn options the card runs `startAuthentication` with. `available:
+ * false` means the machine pinned nothing (or an empty set): the card must
+ * say the approval has to be answered in the terminal instead, because the
+ * daemon will refuse a chat click on this machine (leaf B5).
+ */
+function webauthnOptionsFor(sibling: LocalSibling, challengeId: string, envId: string, request: PendingEnvApproval['pending']['request']) {
+  const pinned = sibling?.ownerCredentials ?? null;
+  const credentials = pinned?.credentials ?? [];
+  return {
+    available: credentials.length > 0,
+    rpId: pinned?.rpId ?? null,
+    /**
+     * ONE CHALLENGE PER SCOPE. The challenge binds the scope (Codex P1 on
+     * #2599) and the owner picks the scope on the card, after this response —
+     * so the card signs the one matching its selection. Deriving all four here
+     * keeps the browser free of hashing, and a card that signs the wrong one
+     * simply fails on the machine rather than approving anything.
+     */
+    challenges: Object.fromEntries(ENV_APPROVAL_SCOPES.map((scope) => [scope, deriveOwnerApprovalChallenge({ envId, challengeId, request, scope }, envBridgeSha256)])) as Record<(typeof ENV_APPROVAL_SCOPES)[number], string>,
+    allowCredentials: credentials.map((credential) => ({ id: credential.credentialId, type: 'public-key' as const })),
+  };
 }
 
 export async function GET(request: Request, context: Params) {
@@ -98,7 +141,7 @@ export async function GET(request: Request, context: Params) {
     if (isAuthError(auth)) return auth.error;
     const loaded = await loadForOwner(request, challengeId, auth.userId, Date.now());
     if (!loaded.ok) return loaded.response;
-    const { pending } = loaded;
+    const { pending, sibling } = loaded;
     auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'drive_env', resourceId: pending.envId, details: { route: 'env-bridge/approvals', operation: 'read', challengeId } });
     return NextResponse.json({
       challengeId,
@@ -113,6 +156,15 @@ export async function GET(request: Request, context: Params) {
       // word the server or the model composed.
       ...(pending.pending.files !== undefined && { files: pending.pending.files }),
       scopes: ENV_APPROVAL_SCOPES,
+      // What the card needs to run the WebAuthn ceremony (hardening B). The
+      // challenge is DERIVED from the frozen request, never random, and the
+      // machine recomputes it from the request IT froze — so a wrong
+      // challenge here cannot make anything run, it only fails the click.
+      // `allowCredentials` is the set the MACHINE pinned at enrolment, not
+      // every passkey the owner has: offering a key registered since would
+      // have them touch one the daemon then refuses, with nothing to explain
+      // it.
+      webauthn: webauthnOptionsFor(sibling, challengeId, pending.envId, pending.pending.request),
     });
   } catch (error) {
     loggers.api.error('Failed to read a pending environment approval', error instanceof Error ? error : new Error(String(error)));
@@ -152,6 +204,10 @@ function outcomeOf(challengeId: string, scope: RequestEnvApprovalOutput['scope']
     case 'grant_denied':
       if (reply.reason === 'approval_mismatch') return { challengeId, outcome: 'mismatch', error: reply.reason };
       if (reply.reason === 'approval_expired') return { challengeId, outcome: 'expired', error: reply.reason };
+      if (reply.reason === 'approval_unproven') {
+        // Say what to fix, because the question is still answerable.
+        return { challengeId, outcome: 'failed', error: 'approval_unproven: the machine could not verify that you clicked. Approve in the terminal running "pagespace env connect", or — if this machine has no passkey pinned — register one and re-enrol it. The request is still pending until it expires.' };
+      }
       return { challengeId, outcome: 'failed', error: reply.reason };
   }
 }
@@ -181,23 +237,44 @@ export async function POST(request: Request, context: Params) {
     }
 
     const scope = parsed.data.scope ?? '30d';
-    // Spent before the re-issue: one click answers one question, whatever the machine says next.
+    /**
+     * Spent before the re-issue, so two concurrent clicks cannot both run —
+     * but RESTORED below when the machine's answer is not a decision (Codex on
+     * #2599). A proof the machine could not use is a recoverable error, and
+     * burning the question turns it into a dead end: the owner would be told
+     * "unproven" with nothing left to retry against, and the daemon still
+     * holds its own challenge (it only spends one on a verified allow), so the
+     * two would disagree until the TTL.
+     */
     store.take(challengeId, now);
+    /** Put the question back exactly as it was, for anything that is not the owner's decision. */
+    const restorePending = () => {
+      if (pending.expiresAt > Date.now()) store.remember(pending, Date.now());
+    };
     let reply: MachineResultFrame;
     try {
       reply = await getEnvBridgeClient().sendGrant({
         envId: pending.envId,
         frame: pending.frame,
         principal: pending.principal,
-        approvalIntent: { challengeId, scope, expiresAt: pending.expiresAt },
+        // The assertion rides INSIDE the intent, so the grant signature covers
+        // it — relayed intact, never verified-and-discarded here.
+        approvalIntent: { challengeId, scope, expiresAt: pending.expiresAt, ...(parsed.data.assertion !== undefined && { assertion: parsed.data.assertion }) },
       });
     } catch (error) {
+      // The machine never answered, so the owner never decided: the question stands.
+      restorePending();
       const kind = error instanceof EnvBridgeError ? error.kind : 'error';
       auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'drive_env', resourceId: pending.envId, details: { route: 'env-bridge/approvals', operation: 'allow', challengeId, scope, outcome: 'failed', error: kind } });
       const output: RequestEnvApprovalOutput = { challengeId, outcome: 'failed', scope, error: kind };
       return NextResponse.json(output, { status: 502 });
     }
     const output = outcomeOf(challengeId, scope, reply);
+    // `approval_unproven` means the machine could not USE the proof — no
+    // passkey pinned, a cancelled or malformed assertion, a scope it was not
+    // made for. The owner has not answered anything, and the daemon has not
+    // spent its challenge either, so neither does this.
+    if (reply.type === 'grant_denied' && reply.reason === 'approval_unproven') restorePending();
     // The MIRROR (GA wave 3, leaf 5): the machine remembered this approval
     // (it ran on a byte-compared match, under the challenge id, for every
     // scope but `once`), so the server records what the owner can now see and

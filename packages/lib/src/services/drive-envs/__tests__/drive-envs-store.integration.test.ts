@@ -646,10 +646,10 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
 
   it('pinMachineKey: should enroll ONCE — the second attempt loses the compare-and-set, and a revoked row cannot be enrolled at all', async () => {
     const { envId } = await createLocal();
-    const pin = { envId, machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:fp', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW };
+    const pin = { envId, machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: NOW };
     expect(await store.pinMachineKey(pin)).toBe(true);
     const [row] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
-    expect(row).toMatchObject({ machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:fp', serverKeyId: 'k1', enrollmentCodeHash: null });
+    expect(row).toMatchObject({ machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: null });
     expect(row?.enrolledAt?.getTime()).toBe(NOW.getTime());
     expect(row?.enrollmentCodeUsedAt?.getTime()).toBe(NOW.getTime());
     expect(await store.pinMachineKey({ ...pin, machinePublicKey: 'pk2' })).toBe(false);
@@ -674,7 +674,7 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
   it('pinMachineKey: given the code was RE-ISSUED after an enrollment verified the old one, the pin bound to the OLD hash must lose and change nothing; the new hash pins (Codex P1 on #2564)', async () => {
     const { envId } = await createLocal();
     expect(await store.reissueEnrollmentCode({ envId, enrollmentCodeHash: 'hash2', enrollmentCodeExpiresAt: new Date(NOW.getTime() + 600_000), now: NOW })).toBe(true);
-    const stale = { envId, machinePublicKey: 'pk-old', machineKeyFingerprint: 'fp-old', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW };
+    const stale = { envId, machinePublicKey: 'pk-old', machineKeyFingerprint: 'fp-old', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: NOW };
     expect(await store.pinMachineKey(stale)).toBe(false);
     const [row] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
     expect(row).toMatchObject({ enrolledAt: null, machinePublicKey: null, enrollmentCodeHash: 'hash2', enrollmentCodeUsedAt: null });
@@ -684,7 +684,7 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
 
   it('reissueEnrollmentCode: given an ENROLLED row, should lose the compare-and-set and change nothing — a pinned machine is never re-opened to a second key', async () => {
     const { envId } = await createLocal();
-    expect(await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW })).toBe(true);
+    expect(await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: NOW })).toBe(true);
     const [before] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
     expect(await store.reissueEnrollmentCode({ envId, enrollmentCodeHash: 'hash2', enrollmentCodeExpiresAt: new Date(NOW.getTime() + 600_000), now: new Date(NOW.getTime() + 1) })).toBe(false);
     const [after] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
@@ -703,7 +703,7 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
   it('setChallenge: should refuse before enrollment, then store the nonce, replacing a previous one and clearing its consumption', async () => {
     const { envId } = await createLocal();
     expect(await store.setChallenge({ envId, nonce: 'n1', expiresAt: NOW, now: NOW })).toBe(false);
-    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW });
+    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: NOW });
     expect(await store.setChallenge({ envId, nonce: 'n1', expiresAt: NOW, now: NOW })).toBe(true);
     expect(await store.consumeChallenge({ envId, nonce: 'n1', now: NOW })).toBe(true);
     expect(await store.setChallenge({ envId, nonce: 'n2', expiresAt: NOW, now: NOW })).toBe(true);
@@ -717,7 +717,7 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
   // cluster whose session timezone is not UTC, where a `now()` would drift.
   async function enrolledLocal() {
     const { envId } = await createLocal();
-    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW });
+    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: NOW });
     return envId;
   }
   const LIVE = new Date(NOW.getTime() + 60_000);
@@ -794,7 +794,7 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
 
   it('consumeChallenge: given the enrollment was REVOKED after the challenge was issued, should lose the compare-and-set — revocation wins the race, nothing mints', async () => {
     const { envId } = await createLocal();
-    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW });
+    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: NOW });
     await store.setChallenge({ envId, nonce: 'n1', expiresAt: NOW, now: NOW });
     await db.update(driveEnvLocal).set({ revokedAt: NOW }).where(eq(driveEnvLocal.envId, envId));
     expect(await store.consumeChallenge({ envId, nonce: 'n1', now: NOW })).toBe(false);
@@ -805,7 +805,7 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
 
   it('consumeChallenge: should consume exactly the outstanding nonce ONCE, stamping lastSeenAt; a wrong nonce or a replay loses', async () => {
     const { envId } = await createLocal();
-    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW });
+    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: NOW });
     await store.setChallenge({ envId, nonce: 'n1', expiresAt: NOW, now: NOW });
     expect(await store.consumeChallenge({ envId, nonce: 'wrong', now: NOW })).toBe(false);
     const later = new Date(NOW.getTime() + 5_000);
@@ -832,7 +832,7 @@ describe('the local-env connection slice (t07) — recordHello / recordHeartbeat
       local: { ownerId: payerId, label: 'jono-macstudio', enrollmentId, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(NOW.getTime() + 600_000), serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } },
     });
     if (!created.ok) throw new Error(created.reason);
-    if (enroll) await store.pinMachineKey({ envId: created.env.id, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW });
+    if (enroll) await store.pinMachineKey({ envId: created.env.id, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: NOW });
     return created.env.id;
   }
   const rowOf = async (envId: string) => (await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId)))[0];

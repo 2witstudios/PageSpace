@@ -263,6 +263,11 @@
       "import": "./dist/env-bridge/grant-args.js",
       "require": "./dist/env-bridge/grant-args.js"
     },
+    "./env-bridge/owner-approval": {
+      "types": "./dist/env-bridge/owner-approval.d.ts",
+      "import": "./dist/env-bridge/owner-approval.js",
+      "require": "./dist/env-bridge/owner-approval.js"
+    },
     "./env-bridge/machine-signatures": {
       "types": "./dist/env-bridge/machine-signatures.d.ts",
       "import": "./dist/env-bridge/machine-signatures.js",

@@ -61,6 +61,8 @@ export function makeLocalRecord(over: Partial<DriveEnvLocalRecord> = {}): DriveE
     // the column's deny-all default is the backstop for a row some path
     // forgot. Tests that want the backstop set `{ ops: [] }` explicitly.
     serverPolicy: { ops: ['fs_read', 'fs_write', 'exec'], checkpoint: false },
+    /** Pinned by `pinMachineKey` at enrolment (hardening B); NULL before that, exactly as the column is. */
+    ownerCredentials: null,
     bindPolicy: 'owner',
     enrollmentCodeHash: null,
     enrollmentCodeExpiresAt: null,
@@ -165,14 +167,14 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       return [...local.values()].filter((sibling) => sibling.ownerId === ownerId).flatMap((sibling) => { const env = rows.get(sibling.envId); return env ? [{ env, local: sibling }] : []; });
     },
 
-    async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, enrollmentCodeHash, now: at }) {
+    async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, ownerCredentials, enrollmentCodeHash, now: at }) {
       const sibling = local.get(envId);
       // The real store's compare-and-set: only a pending, unrevoked row with an
       // unconsumed code — still the code that was VERIFIED — may be enrolled,
       // and enrolling consumes the code.
       if (!sibling || sibling.enrolledAt !== null || sibling.enrollmentCodeUsedAt !== null || sibling.revokedAt !== null) return false;
       if (sibling.enrollmentCodeHash !== enrollmentCodeHash) return false;
-      local.set(envId, { ...sibling, machinePublicKey, machineKeyFingerprint, serverKeyId, enrolledAt: at, enrollmentCodeUsedAt: at, enrollmentCodeHash: null, updatedAt: at });
+      local.set(envId, { ...sibling, machinePublicKey, machineKeyFingerprint, serverKeyId, ownerCredentials, enrolledAt: at, enrollmentCodeUsedAt: at, enrollmentCodeHash: null, updatedAt: at });
       return true;
     },
 

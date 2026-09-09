@@ -41,6 +41,7 @@ import { decideExecution as libDecideExecution, type DecideExecutionInput, type 
 import type { AdvertisedCapabilities, MachinePolicy, ServerPolicy } from './lib-core.js';
 import type { PathProbe } from './lib-core.js';
 import { verifyPause, verifyRevoke } from './lib-core.js';
+import { pendingRequestForWire, verifyOwnerApproval, type PinnedOwnerApproval, type Sha256Bytes, type VerifyWebauthnSignature } from './lib-core.js';
 import { execOutputCeiling, fsReadContentCeiling, type Frame, type FrameLimits, type PendingApproval } from './lib-core.js';
 import type { SignWithMachineKey } from './keypair.js';
 import { grantPredatesDaemon, PREDATES_DAEMON_REASON, type DaemonNonceStore } from './nonce-store.js';
@@ -62,6 +63,14 @@ export const DAEMON_CAPABILITIES: AdvertisedCapabilities = { shell: true, pty: f
  * is not a policy of the daemon's own and it widens nothing.
  */
 const SERVER_POLICY_CARRIED_BY_SIGNATURE: ServerPolicy = { ops: [...GRANT_OPS], checkpoint: false };
+
+/** What the daemon needs to verify the owner's WebAuthn assertion itself. */
+export interface OwnerApprovalGate {
+  /** Credentials, rpId and origin as pinned at enrolment; never updated afterwards. */
+  readonly pinned: PinnedOwnerApproval;
+  readonly sha256: Sha256Bytes;
+  readonly verifyWebauthn: VerifyWebauthnSignature;
+}
 
 export interface DecisionGates {
   readonly verifyGrant: (input: VerifyGrantInput) => GrantVerdict;
@@ -116,6 +125,17 @@ export interface DispatcherDeps {
   readonly challenges?: ChallengeStore;
   /** Send asks to the chat even when a terminal prompter exists. */
   readonly preferChat?: boolean;
+  /**
+   * THE OWNER'S CLICK, PROVEN (hardening B, leaf B4). What this machine
+   * pinned at enrolment, plus the two primitives the pure verifier injects.
+   *
+   * OMITTED MEANS REFUSE. A daemon without this gate cannot tell a human from
+   * the server that dialled it, so every chat approval is `approval_unproven`
+   * and nothing runs — the same answer as an empty pinned set. That is
+   * deliberate: the absence of a proof mechanism must never be the absence of
+   * a check (leaf B5).
+   */
+  readonly ownerApproval?: OwnerApprovalGate;
   readonly log: (line: string) => void;
   /** The socket frame limit; bounds what an fs_read may return. */
   readonly limits: FrameLimits;
@@ -155,21 +175,18 @@ function freezeRequest(request: NormalizedRequest): NormalizedRequest {
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-/** The frozen request as the frame codec carries it (fresh copies of the frozen arrays; every field, nothing else). */
-function pendingRequestOnTheWire(request: NormalizedRequest): PendingApproval['request'] {
-  return {
-    op: request.op,
-    ...(request.cmd !== undefined && { cmd: request.cmd }),
-    ...(request.args !== undefined && { args: [...request.args] }),
-    cwd: request.cwd,
-    paths: [...request.paths],
-    ...(request.writeModes !== undefined && { writeModes: [...request.writeModes] }),
-    env: { ...request.env },
-    timeoutMs: request.timeoutMs,
-    maxBytes: request.maxBytes,
-    clamped: request.clamped,
-  };
-}
+/**
+ * The fail-closed stand-ins for a daemon with no owner-approval gate wired.
+ * `verifyOwnerApproval` refuses an empty pinned set as `no_pinned_credential`
+ * before it reaches either primitive, so these can never actually run; they
+ * exist so the absence of a gate is a REFUSAL rather than an optional call
+ * site somebody could later make optional in the other direction.
+ */
+const EMPTY_PINNED_OWNER_APPROVAL: PinnedOwnerApproval = { rpId: '', origin: '', credentials: [] };
+const UNAVAILABLE_SHA256: Sha256Bytes = () => {
+  throw new Error('no owner-approval gate: this machine cannot verify that a human clicked');
+};
+const UNAVAILABLE_WEBAUTHN_VERIFY: VerifyWebauthnSignature = () => false;
 
 export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const gates: DecisionGates = deps.gates ?? { verifyGrant: libVerifyGrant, decideExecution: libDecideExecution };
@@ -279,6 +296,32 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       if (frozen.grant.principal.userId !== grant.principal.userId || frozen.grant.op !== grant.op) {
         return refuse(grant.grantId, 'approval_mismatch', { grant, op: grant.op, verdict: `deny:approval_mismatch:principal:${intent.challengeId}` });
       }
+
+      // THE PROOF A HUMAN CLICKED (hardening B, leaf B4) — the check that
+      // makes this whole path worth anything. Everything above is satisfiable
+      // by whoever holds the signing key and stands where the server stands:
+      // the challenge id and the frozen request come back to them in the
+      // `ask_pending` reply, so the byte-compare below passes BY
+      // CONSTRUCTION. Only the owner's authenticator can produce a signature
+      // over a challenge derived from the request THIS machine froze, under a
+      // credential THIS machine pinned. Verified before the byte-compare so
+      // an unproven click is answered as unproven rather than as a mismatch.
+      const proof = verifyOwnerApproval({
+        assertion: intent.assertion,
+        pinned: deps.ownerApproval?.pinned ?? EMPTY_PINNED_OWNER_APPROVAL,
+        envId: deps.envId,
+        challengeId: intent.challengeId,
+        // The request THIS machine froze — never one the server supplied.
+        request: pendingRequestForWire(frozen.request),
+        // The scope the server is ASKING for, not one the machine assumes: a
+        // proof made for `once` and relayed as `until_revoked` derives a
+        // different challenge and is refused (Codex P1 on #2599).
+        scope: intent.scope,
+        sha256: deps.ownerApproval?.sha256 ?? UNAVAILABLE_SHA256,
+        verifyWebauthn: deps.ownerApproval?.verifyWebauthn ?? UNAVAILABLE_WEBAUTHN_VERIFY,
+      });
+      if (!proof.ok) return denied(grant.grantId, 'approval_unproven', { grant, op: grant.op, verdict: `deny:approval_unproven:${proof.reason}:${intent.challengeId}` });
+
       const compared = gates.decideExecution({ ...decideInput, localApproval: { grantId: grant.grantId, approvedAt: now, request: frozen.request } });
       if (compared.kind !== 'allow') {
         const reason = compared.kind === 'deny' ? compared.reason : 'approval_mismatch';
@@ -317,15 +360,30 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
             return { path, mode: file.mode ?? null, bytes: Buffer.from(file.contentB64, 'base64').length, reason: sensitive.find((found) => found.path === path)?.reason ?? null };
           })
         : undefined;
-      if (deps.ask === null || deps.preferChat === true) {
+      /**
+       * FAIL CLOSED (hardening B, leaf B5). A chat approval is only worth
+       * ASKING for if this machine can verify the answer. With nothing pinned
+       * it cannot, so the chat path is refused outright rather than answered
+       * on the server's word — and the terminal prompt is used instead
+       * wherever there is one, even when the chat is preferred. The terminal
+       * was never exposed to this forgery: a TTY daemon mints no challenge, so
+       * a fabricated challenge id dies as `unknown_challenge`.
+       */
+      const canProveOwnerClick = (deps.ownerApproval?.pinned.credentials.length ?? 0) > 0;
+      if ((deps.ask === null || deps.preferChat === true) && canProveOwnerClick) {
         // Tier B: no terminal (or the chat is preferred) — freeze the request
         // under a challenge and let the owner's click in the chat answer it.
         if (deps.challenges === undefined) return refuse(grant.grantId, 'ask_unavailable', { grant, op: grant.op });
         const pending = deps.challenges.issue({ grant, request: shown, subjects }, deps.now());
         if (pending === null) return refuse(grant.grantId, 'ask_unavailable', { grant, op: grant.op, verdict: 'deny:ask_unavailable:challenges_full' });
         await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: `ask:pending:${pending.id}`, argsHash: grant.argsHash, exitCode: null, paths: auditPaths });
-        return reply({ type: 'grant_denied', grantId: grant.grantId, reason: `ask_pending:${pending.id}`, pending: { challengeId: pending.id, expiresAt: pending.exp, request: pendingRequestOnTheWire(pending.request), ...(files !== undefined && { files }) } });
+        return reply({ type: 'grant_denied', grantId: grant.grantId, reason: `ask_pending:${pending.id}`, pending: { challengeId: pending.id, expiresAt: pending.exp, request: pendingRequestForWire(pending.request), ...(files !== undefined && { files }) } });
       }
+      if (deps.ask === null) {
+        // Nowhere to ask that this machine can trust the answer from.
+        return refuse(grant.grantId, 'ask_unavailable', { grant, op: grant.op, ...(canProveOwnerClick ? {} : { verdict: 'deny:ask_unavailable:no_owner_credential' }) });
+      }
+      // Hardening A's `sensitive` list rides the terminal prompt too.
       const answer = await deps.ask.ask({ grantId: grant.grantId, principal: grant.principal, op: grant.op, request: shown, subjects, sensitive });
       // Re-checked after the await: the owner may have pressed Stop while the prompt sat open.
       if (predatesPause(grant)) return refuse(grant.grantId, 'paused', { grant, op: grant.op });

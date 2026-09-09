@@ -138,6 +138,27 @@ describe('daemon structural invariants', () => {
       expect(dispatcher).not.toMatch(/frame\.type === '(approve|approval|allow)/);
     });
 
+    /**
+     * HARDENING B, LEAF B5 — the same asymmetry, for the thing that PROVES the
+     * owner. The pinned credential set is the root of the whole check: if
+     * anything on the wire could extend it, a server could pin its own key and
+     * answer its own cards. So nothing may write it except `env enroll`.
+     */
+    it('(c) NO frame type can add an owner credential, and no daemon file writes the pinned set — it is written once, by enroll', () => {
+      const codec = readFileSync(join(HERE, '..', '..', '..', 'lib', 'src', 'env-bridge', 'frame-codec.ts'), 'utf8');
+      // The wire has no vocabulary for it at all: not the field, not the concept.
+      expect(codec).not.toMatch(/ownerApproval|ownerCredential|publicKeyCose|credentialId/);
+      // Nor does any daemon file assign one, or grow the pinned list.
+      for (const file of daemonFiles) {
+        expect(read(file), name(file)).not.toMatch(/ownerApproval\s*=[^=]|credentials\.push/);
+      }
+      // The daemon only ever READS it: no file that mentions it also writes to the credential store.
+      const writers = daemonFiles.filter((file) => /ownerApproval/.test(read(file)) && /\.set\(/.test(read(file))).map(name);
+      expect(writers).toEqual([]);
+      // The ONE writer is `env enroll`, outside the daemon, at the trust-on-first-use moment.
+      const enroll = read(join(HERE, '..', 'commands', 'env.ts'));
+      expect(enroll).toMatch(/pinnedOwnerApprovalFromEnrollment\(result\.ownerCredentials\)/);
+    });
     it('GA wave 3: the `pause` path can add nothing and delete no key — handlePause never touches approvals, remember, or deleteKey, and the codec\'s pause schema carries no approvalId', () => {
       const pauseStart = dispatcher.indexOf('const handlePause');
       const pauseEnd = dispatcher.indexOf('\n  return {', pauseStart);

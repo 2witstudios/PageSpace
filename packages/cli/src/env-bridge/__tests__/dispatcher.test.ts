@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHash, generateKeyPairSync, sign as nodeSign } from 'node:crypto';
+import { createHash, createPrivateKey, generateKeyPairSync, sign as nodeSign } from 'node:crypto';
 import { canonicalizeArgs, decodeBase64, encodeGrant, verifyGrant, type ApprovalIntent, type Grant } from '@pagespace/lib/env-bridge/grant';
 import { grantRequestForFrame, type GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 import { decideExecution, type NormalizedRequest } from '@pagespace/lib/env-bridge/decide-execution';
@@ -12,7 +12,8 @@ import { createDaemonNonceStore } from '../nonce-store.js';
 import { createApprovalsStore, type ApprovalsStore } from '../approvals-store.js';
 import { createChallengeStore, type ChallengeStore } from '../challenge-store.js';
 import { generateMachineKeypair, signWithMachineKey } from '../keypair.js';
-import { ed25519Verify, envBridgeHash } from '../crypto.js';
+import { ed25519Verify, envBridgeHash, envBridgeSha256, webauthnVerify } from '../crypto.js';
+import { deriveOwnerApprovalChallenge, pendingRequestForWire, type ApprovalIntentScope, type OwnerApprovalRequest, type PinnedOwnerApproval } from '../lib-core.js';
 import type { AuditEntry } from '../audit-log.js';
 import type { ExecRunner } from '../exec-runner.js';
 import type { FsRunner } from '../fs-runner.js';
@@ -32,6 +33,66 @@ const STARTED_AT = Date.parse('2026-09-06T10:00:00.000Z');
 const NOW = STARTED_AT + 5_000;
 const PRINCIPAL = { userId: 'u1', sessionId: 's1', conversationId: 'c1' };
 const ROOT = '/real/proj';
+
+// ---------------------------------------------------------------------------
+// The OWNER's authenticator (hardening B). A real P-256 credential, so the
+// assertion rows are signed and verified for real rather than simulated —
+// only the pinning and the two primitives are handed to the dispatcher.
+// ---------------------------------------------------------------------------
+const RP_ID = 'pagespace.test';
+const ORIGIN = 'https://pagespace.test';
+const b64url = (bytes: Uint8Array | Buffer): string => Buffer.from(bytes).toString('base64url');
+
+function makeOwnerCredential(credentialId: string) {
+  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const jwk = publicKey.export({ format: 'jwk' }) as { x: string; y: string };
+  const cose = Buffer.concat([
+    Buffer.from([0xa5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20]),
+    Buffer.from(jwk.x, 'base64url'),
+    Buffer.from([0x22, 0x58, 0x20]),
+    Buffer.from(jwk.y, 'base64url'),
+  ]);
+  const pem = privateKey.export({ format: 'pem', type: 'pkcs8' }) as string;
+  return {
+    credentialId: b64url(Buffer.from(credentialId)),
+    publicKeyCose: b64url(cose),
+    sign: (message: Uint8Array) => new Uint8Array(nodeSign('sha256', message, createPrivateKey(pem))),
+  };
+}
+
+const OWNER_CREDENTIAL = makeOwnerCredential('owner-key');
+const IMPOSTOR_CREDENTIAL = makeOwnerCredential('impostor-key');
+const PINNED_OWNER: PinnedOwnerApproval = { rpId: RP_ID, origin: ORIGIN, credentials: [{ credentialId: OWNER_CREDENTIAL.credentialId, publicKeyCose: OWNER_CREDENTIAL.publicKeyCose }] };
+const OWNER_APPROVAL_GATE = { pinned: PINNED_OWNER, sha256: envBridgeSha256, verifyWebauthn: webauthnVerify };
+
+interface AssertionOverrides {
+  readonly type?: string;
+  readonly challenge?: string;
+  readonly origin?: string;
+  readonly rpId?: string;
+  readonly flags?: number;
+  readonly credential?: typeof OWNER_CREDENTIAL;
+  /** The scope the owner's proof is made FOR; the daemon recomputes from the scope in the received intent. */
+  readonly scope?: ApprovalIntentScope;
+}
+
+/**
+ * A WebAuthn assertion over the challenge DERIVED from the request the machine
+ * froze — the only thing that can make a chat approval run.
+ */
+function ownerAssertion(envId: string, challengeId: string, request: OwnerApprovalRequest, over: AssertionOverrides = {}) {
+  const credential = over.credential ?? OWNER_CREDENTIAL;
+  const challenge = over.challenge ?? deriveOwnerApprovalChallenge({ envId, challengeId, request, scope: over.scope ?? '30d' }, envBridgeSha256);
+  const clientDataJSON = Buffer.from(JSON.stringify({ type: over.type ?? 'webauthn.get', challenge, origin: over.origin ?? ORIGIN, crossOrigin: false }));
+  const authenticatorData = Buffer.concat([createHash('sha256').update(over.rpId ?? RP_ID).digest(), Buffer.from([over.flags ?? 0x05]), Buffer.alloc(4)]);
+  const signed = Buffer.concat([authenticatorData, createHash('sha256').update(clientDataJSON).digest()]);
+  return {
+    credentialId: credential.credentialId,
+    authenticatorData: b64url(authenticatorData),
+    clientDataJSON: b64url(clientDataJSON),
+    signature: b64url(credential.sign(signed)),
+  };
+}
 
 const POLICY: MachinePolicy = { mode: 'allowlist', principals: ['u1'], ops: ['exec', 'fs_read', 'fs_write'], roots: [ROOT], envAllowlist: ['CI'], maxBytes: 4096, maxTimeoutMs: 10_000 };
 const ASK_POLICY: MachinePolicy = { ...POLICY, mode: 'ask', ops: [] };
@@ -90,6 +151,10 @@ function harness(overrides: Partial<DispatcherDeps> = {}) {
     fsRunner,
     audit: { record: async (entry) => void audits.push(entry) },
     ask: null,
+    // The owner's pinned credentials (hardening B). A daemon WITHOUT this
+    // refuses every chat approval; the tests that assert that pass
+    // `ownerApproval: undefined` explicitly.
+    ownerApproval: OWNER_APPROVAL_GATE,
     log: () => undefined,
     limits: { maxFrameBytes: 1024 * 1024 },
     ...overrides,
@@ -565,16 +630,36 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
       const fs = { content: null as string | null };
       const writes: string[] = [];
       const approvals = createApprovalsStore({ path: '/p', uid: 501, open: () => (fs.content === null ? null : { uid: 501, mode: 0o100600, content: fs.content }), write: async (_p, c) => { writes.push(c); fs.content = c; }, now: () => NOW });
-      return { ...harness({ policy: () => ASK_POLICY, ask: null, challenges, approvals, resolveArgv0: (name) => BIN[name] ?? null, ...overrides }), challenges, writes };
+      /**
+       * The owner's assertion for a question this machine is actually
+       * holding — bound to the request IT froze, which is what the daemon
+       * re-derives. `undefined` when nothing is pending under that id.
+       */
+      const proof = (challengeId = 'ch_1', over: AssertionOverrides = {}) => {
+        const frozen = challenges.peek(challengeId, NOW);
+        // Defaults to the scope `INTENT` carries, so a click built with the default intent verifies.
+        return frozen === undefined ? undefined : ownerAssertion(ENV_ID, challengeId, pendingRequestForWire(frozen.request), { scope: INTENT.scope, ...over });
+      };
+      return { ...harness({ policy: () => ASK_POLICY, ask: null, challenges, approvals, resolveArgv0: (name) => BIN[name] ?? null, ...overrides }), challenges, writes, proof };
     }
-    /** The click: the SAME unsigned frame, a fresh grant, plus the server-signed intent. */
-    const click = (extra: Partial<Extract<GrantFrame, { type: 'grant_exec' }>> = {}, intent: Partial<ApprovalIntent> = {}, principal = PRINCIPAL, grantOverrides: Partial<Grant> = {}) =>
-      signedGrant({ type: 'grant_exec', cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' }, ...extra }, { approvalIntent: { ...INTENT, ...intent }, principal: { ...principal, sessionId: 'later', conversationId: 'later' }, ...grantOverrides });
+    /**
+     * The click: the SAME unsigned frame, a fresh grant, the server-signed
+     * intent — and the owner's assertion, without which the daemon runs
+     * nothing (hardening B). Callers pass `h.proof()`.
+     */
+    const click = (
+      extra: Partial<Extract<GrantFrame, { type: 'grant_exec' }>> = {},
+      intent: Partial<ApprovalIntent> = {},
+      principal = PRINCIPAL,
+      grantOverrides: Partial<Grant> = {},
+      assertion?: ApprovalIntent['assertion'],
+    ) =>
+      signedGrant({ type: 'grant_exec', cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' }, ...extra }, { approvalIntent: { ...INTENT, ...(assertion !== undefined && { assertion }), ...intent }, principal: { ...principal, sessionId: 'later', conversationId: 'later' }, ...grantOverrides });
 
     it('given a click whose re-issued request is BYTE-IDENTICAL to the frozen one, should run it, audit allow:click:<id>:<scope>, remember the approval under the challenge id, and spend the challenge', async () => {
       const h = clickHarness();
       expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_1' } });
-      const result = await h.dispatcher.handle(click());
+      const result = await h.dispatcher.handle(click({}, {}, PRINCIPAL, {}, h.proof()));
       expect(result).toMatchObject({ kind: 'reply', frame: { type: 'exec_result', exitCode: 0 } });
       expect(h.spawnRun).toHaveBeenCalledTimes(1);
       expect(h.spawnRun.mock.calls[0]![0]).toMatchObject({ cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' } });
@@ -588,7 +673,9 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
     it('EXIT CRITERION: a chat click cannot introduce a request the machine did not frame — a click over DIFFERENT bytes is approval_mismatch, executes nothing, remembers nothing, is audited', async () => {
       const h = clickHarness();
       await h.dispatcher.handle(execFrame());
-      for (const different of [click({ cmd: 'rm', args: ['-rf', 'x'] }), click({ args: ['b'] }), click({ env: { CI: '2' } }), click({ cwd: `${ROOT}/file` })]) {
+      // Each carries the owner's GENUINE assertion for the pending question — the realistic attack, and the one only the byte-compare catches.
+      const proof = h.proof();
+      for (const different of [click({ cmd: 'rm', args: ['-rf', 'x'] }, {}, PRINCIPAL, {}, proof), click({ args: ['b'] }, {}, PRINCIPAL, {}, proof), click({ env: { CI: '2' } }, {}, PRINCIPAL, {}, proof), click({ cwd: `${ROOT}/file` }, {}, PRINCIPAL, {}, proof)]) {
         expect(await h.dispatcher.handle(different)).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'approval_mismatch' } });
       }
       expect(h.spawnRun).not.toHaveBeenCalled();
@@ -596,7 +683,7 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
       expect(h.audits.slice(1).every((a) => a.verdict.startsWith('deny:approval_mismatch'))).toBe(true);
       // The genuine question is still pending: a matching click can still answer it.
       expect(h.challenges.size()).toBe(1);
-      expect(await h.dispatcher.handle(click())).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
+      expect(await h.dispatcher.handle(click({}, {}, PRINCIPAL, {}, h.proof()))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
     });
 
     it('COMPROMISED SERVER: a server-signed grant carrying an approvalIntent whose challengeId this daemon has NEVER frozen (the server manufacturing a "covered" request out of thin air) ⇒ approval_mismatch, nothing executes, NOTHING is remembered', async () => {
@@ -636,21 +723,168 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
     it('given scope once, should run and remember nothing; given until_revoked, should remember with no expiry', async () => {
       const once = clickHarness();
       await once.dispatcher.handle(execFrame());
-      expect(await once.dispatcher.handle(click({}, { scope: 'once' }))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
+      expect(await once.dispatcher.handle(click({}, { scope: 'once' }, PRINCIPAL, {}, once.proof('ch_1', { scope: 'once' })))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
       expect(once.writes).toHaveLength(0);
       const forever = clickHarness();
       await forever.dispatcher.handle(execFrame());
-      await forever.dispatcher.handle(click({}, { scope: 'until_revoked' }));
+      await forever.dispatcher.handle(click({}, { scope: 'until_revoked' }, PRINCIPAL, {}, forever.proof('ch_1', { scope: 'until_revoked' })));
       expect(JSON.parse(forever.writes[0]!)).toMatchObject({ approvals: [expect.objectContaining({ approvalId: 'ch_1', scope: 'until_revoked', expiresAt: null })] });
+    });
+
+    /**
+     * HARDENING B, LEAF B4 — the machine verifies the OWNER'S CLICK itself.
+     *
+     * Everything the older rows above check is satisfiable by whoever holds
+     * the signing key AND stands where the server stands: the daemon hands
+     * the challenge id and the frozen request back in its own `ask_pending`
+     * reply, so a second grant carrying `approvalIntent { challengeId }`
+     * byte-matches BY CONSTRUCTION. These rows are what closes that.
+     */
+    describe('hardening B — the daemon verifies the assertion, not the server\'s word', () => {
+      const pend = async (h: ReturnType<typeof clickHarness>) => {
+        expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_1' } });
+      };
+      const refusal = async (h: ReturnType<typeof clickHarness>, assertion: ApprovalIntent['assertion'], reason: string) => {
+        const result = await h.dispatcher.handle(click({}, {}, PRINCIPAL, {}, assertion));
+        expect(result).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'approval_unproven' } });
+        // Audited with the precise cause, and NOTHING ran or was remembered.
+        expect(h.audits.at(-1)?.verdict).toBe(`deny:approval_unproven:${reason}:ch_1`);
+        expect(h.spawnRun).not.toHaveBeenCalled();
+        expect(h.writes).toHaveLength(0);
+        // The genuine question survives unspent: the owner can still answer it properly.
+        expect(h.challenges.peek('ch_1', NOW)).toBeDefined();
+      };
+
+      it('THE FORGERY: a well-formed click with NO assertion at all is approval_unproven — a server holding the signing key can no longer make this machine run anything', async () => {
+        const h = clickHarness();
+        await pend(h);
+        await refusal(h, undefined, 'malformed');
+      });
+
+      it('EXIT CRITERION: an assertion the owner genuinely made for a DIFFERENT frozen request is refused — the challenge is derived from the request THIS machine froze', async () => {
+        const h = clickHarness();
+        await pend(h);
+        // A second, different question, answered honestly by the owner…
+        expect(await h.dispatcher.handle(execFrame({ cmd: 'rm', args: ['-rf', 'x'] }))).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_2' } });
+        const otherProof = h.proof('ch_2');
+        // …replayed onto the FIRST question, whose re-issued bytes match it exactly, so the byte-compare cannot catch this.
+        await refusal(h, otherProof, 'challenge_mismatch');
+      });
+
+      it('THE RELAY ATTACK (Codex P1): a proof the owner made for `once` and the server re-issues as `until_revoked` is refused, so no durable approval is written', async () => {
+        const h = clickHarness();
+        await pend(h);
+        const forOnce = h.proof('ch_1', { scope: 'once' });
+        // Presented as the wider scope the owner never chose.
+        const relayed = await h.dispatcher.handle(click({}, { scope: 'until_revoked' }, PRINCIPAL, {}, forOnce));
+        expect(relayed).toMatchObject({ kind: 'reply', frame: { reason: 'approval_unproven' } });
+        expect(h.audits.at(-1)?.verdict).toBe('deny:approval_unproven:challenge_mismatch:ch_1');
+        expect(h.spawnRun).not.toHaveBeenCalled();
+        expect(h.writes, 'nothing durable may be remembered from a relayed proof').toHaveLength(0);
+        // The owner's actual choice still runs, and `once` remembers nothing.
+        expect(await h.dispatcher.handle(click({}, { scope: 'once' }, PRINCIPAL, {}, forOnce))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
+        expect(h.writes).toHaveLength(0);
+      });
+
+      it('an assertion bound to another ENVIRONMENT is refused — it never travels between machines', async () => {
+        const h = clickHarness();
+        await pend(h);
+        const frozen = h.challenges.peek('ch_1', NOW)!;
+        await refusal(h, ownerAssertion('env_somewhere_else', 'ch_1', pendingRequestForWire(frozen.request), { scope: INTENT.scope }), 'challenge_mismatch');
+      });
+
+      it.each<[string, AssertionOverrides, string]>([
+        ['a registration ceremony replayed as an approval', { type: 'webauthn.create' }, 'wrong_type'],
+        ['an origin that is not the one pinned at enrolment', { origin: 'https://evil.example' }, 'origin_mismatch'],
+        ['an rpId that is not the one pinned at enrolment', { rpId: 'evil.example' }, 'rp_mismatch'],
+        ['the user-present flag unset (a silent authenticator is not a click)', { flags: 0x04 }, 'user_not_present'],
+        ['a credential outside the pinned set', { credential: IMPOSTOR_CREDENTIAL }, 'unknown_credential'],
+      ])('refuses %s', async (_label, over, reason) => {
+        const h = clickHarness();
+        await pend(h);
+        await refusal(h, h.proof('ch_1', over), reason);
+      });
+
+      it('refuses a signature made by a key that is not the pinned one, even under the pinned credential id', async () => {
+        const h = clickHarness();
+        await pend(h);
+        const frozen = h.challenges.peek('ch_1', NOW)!;
+        const impostor = ownerAssertion(ENV_ID, 'ch_1', pendingRequestForWire(frozen.request), { credential: IMPOSTOR_CREDENTIAL, scope: INTENT.scope });
+        await refusal(h, { ...impostor, credentialId: OWNER_CREDENTIAL.credentialId }, 'bad_signature');
+      });
+
+      it.each<[string, unknown]>([
+        ['truncated authenticator data', { credentialId: OWNER_CREDENTIAL.credentialId, authenticatorData: 'AAAA', clientDataJSON: 'e30', signature: 'AAAA' }],
+        ['client data that is not JSON', { credentialId: OWNER_CREDENTIAL.credentialId, authenticatorData: 'A'.repeat(52), clientDataJSON: 'bm90IGpzb24', signature: 'AAAA' }],
+        ['hostile non-base64url bytes', { credentialId: OWNER_CREDENTIAL.credentialId, authenticatorData: '!!!!', clientDataJSON: '!!!!', signature: '!!!!' }],
+      ])('refuses a MALFORMED assertion (%s) rather than throwing', async (_label, assertion) => {
+        const h = clickHarness();
+        await pend(h);
+        await refusal(h, assertion as ApprovalIntent['assertion'], 'malformed');
+      });
+
+      it('B5: with a pinned set, the machine USES it and never falls back to an unproven intent — a click on a challenge frozen earlier is still refused if the credentials are gone', async () => {
+        // Frozen while the gate was in place…
+        const h = clickHarness();
+        await pend(h);
+        const proof = h.proof();
+        // …and answered by a daemon that can no longer verify anybody: refused, not waved through.
+        const blind = { ...h, dispatcher: createDispatcher({ ...h.deps, ownerApproval: undefined }) };
+        expect(await blind.dispatcher.handle(click({}, {}, PRINCIPAL, {}, proof))).toMatchObject({ kind: 'reply', frame: { reason: 'approval_unproven' } });
+        expect(blind.audits.at(-1)?.verdict).toBe('deny:approval_unproven:no_pinned_credential:ch_1');
+        expect(h.spawnRun).not.toHaveBeenCalled();
+        // An EMPTY pinned set is the same answer: an owner with no passkey has not been vouched for.
+        const empty = { ...h, dispatcher: createDispatcher({ ...h.deps, ownerApproval: { ...OWNER_APPROVAL_GATE, pinned: { ...PINNED_OWNER, credentials: [] } } }) };
+        expect(await empty.dispatcher.handle(click({}, {}, PRINCIPAL, {}, proof, ))).toMatchObject({ kind: 'reply', frame: { reason: 'approval_unproven' } });
+      });
+
+      it('B5: with NO pinned credential and no terminal, the chat path is refused BEFORE anything is frozen — the machine does not even ask a question it could not verify the answer to', async () => {
+        const h = clickHarness({ ownerApproval: undefined });
+        expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'ask_unavailable' } });
+        expect(h.audits.at(-1)?.verdict).toBe('deny:ask_unavailable:no_owner_credential');
+        expect(h.challenges.size()).toBe(0);
+        expect(h.spawnRun).not.toHaveBeenCalled();
+        // Same for a pinned-but-empty set.
+        const empty = clickHarness({ ownerApproval: { ...OWNER_APPROVAL_GATE, pinned: { ...PINNED_OWNER, credentials: [] } } });
+        expect(await empty.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { reason: 'ask_unavailable' } });
+        expect(empty.challenges.size()).toBe(0);
+      });
+
+      it('B5: with NO pinned credential but a TERMINAL attached, the ask goes to the TERMINAL even when the chat is preferred — the prompt was never exposed to this forgery', async () => {
+        const asked: AskInput[] = [];
+        const ask: AskPrompter = { ask: async (input) => { asked.push(input); return { approved: true, scope: 'once' as const }; } };
+        const h = clickHarness({ ownerApproval: undefined, ask, preferChat: true });
+        expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { type: 'exec_result', exitCode: 0 } });
+        expect(asked).toHaveLength(1);
+        expect(h.challenges.size()).toBe(0);
+        // With credentials pinned, the same daemon prefers the chat again.
+        const proven = clickHarness({ ask, preferChat: true });
+        expect(await proven.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_1' } });
+      });
+
+      it('the proof is checked BEFORE the byte-compare, so an unproven click reads as unproven rather than as a mismatch', async () => {
+        const h = clickHarness();
+        await pend(h);
+        // Different bytes AND no assertion: the assertion is what is reported.
+        const result = await h.dispatcher.handle(click({ cmd: 'rm', args: ['-rf', 'x'] }));
+        expect(result).toMatchObject({ kind: 'reply', frame: { reason: 'approval_unproven' } });
+      });
+
+      it('a click carrying a VALID assertion still runs, and remembers, exactly as before — the check adds a condition, it does not change the happy path', async () => {
+        const h = clickHarness();
+        await pend(h);
+        expect(await h.dispatcher.handle(click({}, {}, PRINCIPAL, {}, h.proof()))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result', exitCode: 0 } });
+        expect(h.audits.at(-1)).toMatchObject({ verdict: 'allow:click:ch_1:30d' });
+      });
     });
 
     it('a click is only ever a fresh grant: the intent rides the signature (a forged one is bad_signature) and its nonce is spent like any other', async () => {
       const h = clickHarness();
       await h.dispatcher.handle(execFrame());
-      const forged = click();
+      const forged = click({}, {}, PRINCIPAL, {}, h.proof());
       const tampered = { ...forged, grant: { ...forged.grant, approvalIntent: { ...INTENT, scope: 'until_revoked' } } } as GrantFrame;
       expect(await h.dispatcher.handle(tampered)).toMatchObject({ kind: 'reply', frame: { reason: 'bad_signature' } });
-      const genuine = click();
+      const genuine = click({}, {}, PRINCIPAL, {}, h.proof());
       await h.dispatcher.handle(genuine);
       expect(await h.dispatcher.handle(genuine)).toMatchObject({ kind: 'reply', frame: { reason: 'replayed' } });
       expect(h.spawnRun).toHaveBeenCalledTimes(1);
@@ -731,7 +965,11 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
         const approvals = createApprovalsStore({ path: '/p', uid: 501, open: () => null, write: () => write.promise, now: () => NOW });
         const h = latchHarness({ approvals, challenges });
         expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_1' } });
-        const click = signedGrant({ type: 'grant_exec', cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' } }, { approvalIntent: { challengeId: 'ch_1', scope: '30d', expiresAt: NOW + 30_000 }, principal: { ...PRINCIPAL, sessionId: 'later', conversationId: 'later' } });
+        const frozen = challenges.peek('ch_1', NOW)!;
+        const click = signedGrant(
+          { type: 'grant_exec', cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' } },
+          { approvalIntent: { challengeId: 'ch_1', scope: '30d', expiresAt: NOW + 30_000, assertion: ownerAssertion(ENV_ID, 'ch_1', pendingRequestForWire(frozen.request), { scope: '30d' }) }, principal: { ...PRINCIPAL, sessionId: 'later', conversationId: 'later' } },
+        );
         const pending = h.dispatcher.handle(click);
         await Promise.resolve();
         await Promise.resolve();
@@ -900,13 +1138,33 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
 
     it('given the owner CLICKS the sensitive write, should run it — escalation is a question, and the answer is honoured', async () => {
       const approvals = createApprovalsStore({ path: '/p', uid: 501, open: () => null, write: async () => undefined, now: () => NOW });
-      const h = chat({ approvals });
+      const challenges = createChallengeStore({ newId: () => 'ch_1' });
+      const h = chat({ approvals, challenges });
       const file = { path: `${ROOT}/.git/hooks/pre-commit`, contentB64: 'aGk=', mode: 0o755 };
       await h.dispatcher.handle(signedGrant({ type: 'grant_fs_write', files: [file] }));
       expect(h.fsRunner.write).not.toHaveBeenCalled();
-      const clicked = await h.dispatcher.handle(signedGrant({ type: 'grant_fs_write', files: [file] }, { approvalIntent: { challengeId: 'ch_1', scope: 'once', expiresAt: NOW + 30_000 }, principal: { ...PRINCIPAL, sessionId: 'later' } }));
+      // The click must now be PROVEN (hardening B): an assertion over the
+      // request THIS machine froze — `writeModes` included — at THIS scope.
+      const frozen = challenges.peek('ch_1', NOW)!;
+      expect(pendingRequestForWire(frozen.request).writeModes).toEqual([0o755]);
+      const assertion = ownerAssertion(ENV_ID, 'ch_1', pendingRequestForWire(frozen.request), { scope: 'once' });
+      const clicked = await h.dispatcher.handle(
+        signedGrant({ type: 'grant_fs_write', files: [file] }, { approvalIntent: { challengeId: 'ch_1', scope: 'once', expiresAt: NOW + 30_000, assertion }, principal: { ...PRINCIPAL, sessionId: 'later' } }),
+      );
       expect(clicked).toMatchObject({ kind: 'reply', frame: { type: 'fs_write_result', ok: true } });
       expect(h.fsRunner.write).toHaveBeenCalledTimes(1);
+    });
+
+    it('and an UNPROVEN click on the same sensitive write writes nothing (hardening A escalates, hardening B proves)', async () => {
+      const challenges = createChallengeStore({ newId: () => 'ch_1' });
+      const h = chat({ challenges });
+      const file = { path: `${ROOT}/.git/hooks/pre-commit`, contentB64: 'aGk=', mode: 0o755 };
+      await h.dispatcher.handle(signedGrant({ type: 'grant_fs_write', files: [file] }));
+      const clicked = await h.dispatcher.handle(
+        signedGrant({ type: 'grant_fs_write', files: [file] }, { approvalIntent: { challengeId: 'ch_1', scope: 'once', expiresAt: NOW + 30_000 }, principal: { ...PRINCIPAL, sessionId: 'later' } }),
+      );
+      expect(clicked).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'approval_unproven' } });
+      expect(h.fsRunner.write).not.toHaveBeenCalled();
     });
   });
 

@@ -9,6 +9,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 const fetchWithAuthMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/auth/auth-fetch', () => ({ fetchWithAuth: (...args: unknown[]) => fetchWithAuthMock(...args) }));
+/** The owner's authenticator (hardening B): Allow must obtain a real assertion before it posts. */
+const startAuthenticationMock = vi.hoisted(() => vi.fn());
+vi.mock('@simplewebauthn/browser', () => ({ startAuthentication: (...args: unknown[]) => startAuthenticationMock(...args) }));
 
 import { AskUserAnswerProvider } from '../ask-user/AskUserAnswerContext';
 import { EnvApprovalCard, frozenRequestRows } from '../env-approval/EnvApprovalCard';
@@ -19,7 +22,18 @@ const PENDING = {
   principal: { userId: 'user_owner', sessionId: 'sess_1', conversationId: 'conv_1' },
   expiresAt: 1_800_000_030_000,
   request: { op: 'exec', cmd: 'sh', args: ['-c', 'git status'], cwd: '/home/o/proj', paths: [], env: { CI: '1' }, timeoutMs: 120_000, maxBytes: 1_048_576, clamped: true },
+  // One challenge per SCOPE: the challenge binds the scope the owner picks (Codex P1 on #2599).
+  webauthn: {
+    available: true,
+    rpId: 'pagespace.test',
+    challenges: { once: 'Y2hhbC1vbmNl', session: 'Y2hhbC1zZXNz', '30d': 'Y2hhbC0zMGQ', until_revoked: 'Y2hhbC1mb3JldmVy' },
+    allowCredentials: [{ id: 'cred-a', type: 'public-key' as const }],
+  },
 };
+
+/** What `startAuthentication` hands back for the pinned credential. */
+const AUTHENTICATOR_RESPONSE = { id: 'cred-a', response: { authenticatorData: 'YXV0aA', clientDataJSON: 'Y2xpZW50', signature: 'c2ln' } };
+const EXPECTED_ASSERTION = { credentialId: 'cred-a', authenticatorData: 'YXV0aA', clientDataJSON: 'Y2xpZW50', signature: 'c2ln' };
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -36,6 +50,8 @@ describe('EnvApprovalCard', () => {
     fetchMock.mockReset();
     rawFetch = vi.fn(async () => { throw new Error('raw fetch must not be used — it carries no CSRF token'); });
     vi.stubGlobal('fetch', rawFetch);
+    startAuthenticationMock.mockReset();
+    startAuthenticationMock.mockResolvedValue(AUTHENTICATOR_RESPONSE);
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -101,7 +117,8 @@ describe('EnvApprovalCard', () => {
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (!init || init.method !== 'POST') return jsonResponse(PENDING);
       expect(url).toBe('/api/env-bridge/approvals/ch_1');
-      expect(JSON.parse(String(init.body))).toEqual({ decision: 'allow', scope: 'until_revoked' });
+      // The Allow body now carries the owner's assertion (hardening B, leaf B3).
+      expect(JSON.parse(String(init.body))).toEqual({ decision: 'allow', scope: 'until_revoked', assertion: EXPECTED_ASSERTION });
       return jsonResponse({ challengeId: 'ch_1', outcome: 'allowed', scope: 'until_revoked', exitCode: 0, stdout: 'On branch main', stderr: '', truncated: false });
     });
     const submitAnswers = vi.fn();
@@ -165,5 +182,128 @@ describe('EnvApprovalCard', () => {
     render(<EnvApprovalCard part={part({ state: 'output-available', output: { challengeId: 'ch_1', outcome: 'allowed', scope: '30d', exitCode: 0 } })} />);
     expect(screen.getByTestId('env-approval-answered').textContent).toContain('Approved and run on your machine');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * B3 (card) — Allow is PROVEN, not merely reported. The browser asks the
+ * owner's authenticator to sign the derived challenge, and the assertion
+ * rides to the machine, which is the party that verifies it.
+ */
+describe('EnvApprovalCard — the owner\'s passkey', () => {
+  beforeEach(() => {
+    fetchWithAuthMock.mockReset();
+    startAuthenticationMock.mockReset();
+    startAuthenticationMock.mockResolvedValue(AUTHENTICATOR_RESPONSE);
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('raw fetch must not be used'); }));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const renderCard = (submitAnswers = vi.fn()) => {
+    render(
+      <AskUserAnswerProvider value={{ answerableToolCallIds: new Set(['call_1']), submitAnswers }}>
+        <EnvApprovalCard part={part()} />
+      </AskUserAnswerProvider>,
+    );
+    return submitAnswers;
+  };
+
+  it('runs the ceremony with the challenge and allowCredentials the route derived, then posts the assertion', async () => {
+    let posted: unknown;
+    fetchWithAuthMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (!init || init.method !== 'POST') return jsonResponse(PENDING);
+      posted = JSON.parse(String(init.body));
+      return jsonResponse({ challengeId: 'ch_1', outcome: 'allowed', scope: '30d' });
+    });
+    const submitAnswers = renderCard();
+    await waitFor(() => expect(screen.getByTestId('env-approval-allow')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('env-approval-allow'));
+    await waitFor(() => expect(submitAnswers).toHaveBeenCalledTimes(1));
+    // The default scope is 30d, so THAT scope's challenge is what the authenticator signs.
+    expect(startAuthenticationMock).toHaveBeenCalledWith({
+      optionsJSON: { challenge: 'Y2hhbC0zMGQ', rpId: 'pagespace.test', allowCredentials: [{ id: 'cred-a', type: 'public-key' }], userVerification: 'preferred' },
+    });
+    expect(posted).toEqual({ decision: 'allow', scope: '30d', assertion: EXPECTED_ASSERTION });
+  });
+
+  it('signs the challenge for the SCOPE the owner selected, not a fixed one (Codex P1 on #2599)', async () => {
+    let posted: { scope?: string } | undefined;
+    fetchWithAuthMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (!init || init.method !== 'POST') return jsonResponse(PENDING);
+      posted = JSON.parse(String(init.body)) as { scope?: string };
+      return jsonResponse({ challengeId: 'ch_1', outcome: 'allowed', scope: posted.scope });
+    });
+    const submitAnswers = renderCard();
+    await waitFor(() => expect(screen.getByTestId('env-approval-allow')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('Remember for'), { target: { value: 'once' } });
+    fireEvent.click(screen.getByTestId('env-approval-allow'));
+    await waitFor(() => expect(submitAnswers).toHaveBeenCalledTimes(1));
+    expect(startAuthenticationMock.mock.calls[0]![0]).toMatchObject({ optionsJSON: { challenge: 'Y2hhbC1vbmNl' } });
+    expect(posted?.scope).toBe('once');
+  });
+
+  it('refuses to sign when the route offered no challenge for the selected scope, rather than signing the wrong one', async () => {
+    fetchWithAuthMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (!init || init.method !== 'POST') return jsonResponse({ ...PENDING, webauthn: { ...PENDING.webauthn, challenges: { '30d': 'Y2hhbC0zMGQ' } } });
+      throw new Error('the POST must not happen');
+    });
+    renderCard();
+    await waitFor(() => expect(screen.getByTestId('env-approval-allow')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('Remember for'), { target: { value: 'until_revoked' } });
+    fireEvent.click(screen.getByTestId('env-approval-allow'));
+    await waitFor(() => expect(screen.getByText(/did not offer a challenge/)).toBeTruthy());
+    expect(fetchWithAuthMock.mock.calls.filter((call) => (call[1] as RequestInit | undefined)?.method === 'POST')).toHaveLength(0);
+  });
+
+  it('the ceremony runs BEFORE the POST — a cancelled prompt sends nothing at all', async () => {
+    fetchWithAuthMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (!init || init.method !== 'POST') return jsonResponse(PENDING);
+      throw new Error('the POST must not happen');
+    });
+    startAuthenticationMock.mockRejectedValue(new Error('The operation either timed out or was not allowed.'));
+    renderCard();
+    await waitFor(() => expect(screen.getByTestId('env-approval-allow')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('env-approval-allow'));
+    await waitFor(() => expect(screen.getByText(/timed out or was not allowed/)).toBeTruthy());
+    expect(fetchWithAuthMock.mock.calls.filter((call) => (call[1] as RequestInit | undefined)?.method === 'POST')).toHaveLength(0);
+  });
+
+  it('given the machine pinned no passkey, says so on the card and refuses to send an unprovable Allow', async () => {
+    fetchWithAuthMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (!init || init.method !== 'POST') return jsonResponse({ ...PENDING, webauthn: { available: false, rpId: null, challenges: {}, allowCredentials: [] } });
+      throw new Error('the POST must not happen');
+    });
+    renderCard();
+    await waitFor(() => expect(screen.getByTestId('env-approval-no-passkey')).toBeTruthy());
+    expect(screen.getByTestId('env-approval-no-passkey').textContent).toContain('pagespace env connect');
+    fireEvent.click(screen.getByTestId('env-approval-allow'));
+    // Twice: the standing banner on the card, and the failure the click reports.
+    await waitFor(() => expect(screen.getAllByText(/cannot verify that a human clicked/)).toHaveLength(2));
+    expect(startAuthenticationMock).not.toHaveBeenCalled();
+    expect(fetchWithAuthMock.mock.calls.filter((call) => (call[1] as RequestInit | undefined)?.method === 'POST')).toHaveLength(0);
+  });
+
+  it('DENY never runs the ceremony — refusing to run is not the dangerous direction', async () => {
+    fetchWithAuthMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (!init || init.method !== 'POST') return jsonResponse(PENDING);
+      expect(JSON.parse(String(init.body))).toEqual({ decision: 'deny' });
+      return jsonResponse({ challengeId: 'ch_1', outcome: 'denied' });
+    });
+    const submitAnswers = renderCard();
+    await waitFor(() => expect(screen.getByTestId('env-approval-deny')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('env-approval-deny'));
+    await waitFor(() => expect(submitAnswers).toHaveBeenCalledTimes(1));
+    expect(startAuthenticationMock).not.toHaveBeenCalled();
+  });
+
+  it('still uses fetchWithAuth for the POST — a raw fetch answers 403 CSRF_TOKEN_MISSING (a shipped defect, never reintroduced)', async () => {
+    fetchWithAuthMock.mockImplementation(async (_url: string, init?: RequestInit) =>
+      !init || init.method !== 'POST' ? jsonResponse(PENDING) : jsonResponse({ challengeId: 'ch_1', outcome: 'allowed' }),
+    );
+    renderCard();
+    await waitFor(() => expect(screen.getByTestId('env-approval-allow')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('env-approval-allow'));
+    await waitFor(() => expect(fetchWithAuthMock).toHaveBeenCalledTimes(2));
+    expect(fetchWithAuthMock.mock.calls[1]![1]).toMatchObject({ method: 'POST' });
   });
 });

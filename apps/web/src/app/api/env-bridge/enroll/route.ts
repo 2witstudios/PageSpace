@@ -16,7 +16,7 @@
  * for every refusal.
  *
  *   body   { enrollmentId, code, machinePublicKey (base64 SPKI DER) }
- *   200    { enrollmentId, envId, serverKeyId, serverPublicKey (base64 SPKI DER), ownerId, serverPolicy }
+ *   200    { enrollmentId, envId, serverKeyId, serverPublicKey (base64 SPKI DER), ownerId, serverPolicy, ownerCredentials }
  */
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -45,6 +45,10 @@ const STATUS_FOR_REASON = {
   used: 409,
   already_enrolled: 409,
   race: 409,
+  // The owner's passkeys could not be read, so nothing was pinned and the code
+  // was NOT spent (hardening B, leaf B1): pinning an empty set on a database
+  // hiccup would silently cost the owner chat approvals forever. Retryable.
+  owner_credentials_unavailable: 503,
   mismatch: 401,
   malformed: 400,
   bad_public_key: 400,
@@ -95,5 +99,18 @@ export async function POST(request: Request) {
   // `serverPolicy` is the env's allow-set — no secret either (the owner chose
   // it in the dialog), and what the machine needs to scaffold the file ops it
   // may run headless (GA wave 2, Tier A). The enroller never scaffolds `exec`.
-  return NextResponse.json({ enrollmentId: result.enrollmentId, envId: result.envId, serverKeyId: result.serverKeyId, serverPublicKey: result.serverPublicKey, ownerId: result.ownerId, serverPolicy: result.serverPolicy });
+  // `ownerCredentials` is the owner's PASSKEY PUBLIC KEYS plus the rpId and
+  // origin an assertion must be made under (hardening B, leaf B1). No secret
+  // — a public key verifies signatures and cannot make them — and it is the
+  // one thing that lets the machine stop taking this server's word that a
+  // human clicked. Pinned once, here; nothing may add to it afterwards.
+  return NextResponse.json({
+    enrollmentId: result.enrollmentId,
+    envId: result.envId,
+    serverKeyId: result.serverKeyId,
+    serverPublicKey: result.serverPublicKey,
+    ownerId: result.ownerId,
+    serverPolicy: result.serverPolicy,
+    ownerCredentials: result.ownerCredentials,
+  });
 }

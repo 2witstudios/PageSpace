@@ -23,6 +23,9 @@ import { makeDriveEnvStore, makeEnvRecord, makeLocalRecord, DRIVE_ID, PAYER_ID, 
 const machine = generateKeyPairSync('ed25519');
 const machinePublicKey = machine.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
 
+/** The owner's passkeys as enrolment reads them (hardening B, leaf B1); these suites enrol an owner with none, so an empty set is pinned. */
+const ownerCredentials = { rpId: 'pagespace.test', origin: 'https://pagespace.test', list: async () => [] };
+
 const identity: LocalEnvIdentityDeps = {
   random: (length) => new Uint8Array(randomBytes(length)),
   hash: (bytes) => createHash('sha3-256').update(bytes).digest('hex'),
@@ -42,7 +45,7 @@ const identity: LocalEnvIdentityDeps = {
 
 function harness(now: Date = NOW) {
   const fake = makeDriveEnvStore([], () => now);
-  const deps = { store: fake.store, resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'pro' as const }), now: () => now, identity };
+  const deps = { store: fake.store, resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'pro' as const }), now: () => now, identity, ownerCredentials };
   return { fake, deps };
 }
 

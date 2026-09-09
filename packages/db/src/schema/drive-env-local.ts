@@ -71,6 +71,26 @@ export interface DriveEnvLocalServerPolicy {
   checkpoint: boolean;
 }
 
+/**
+ * The owner's passkeys as PINNED at enrolment (hardening B). Mirrors
+ * `PinnedOwnerApproval` in `env-bridge/owner-approval.ts`; `publicKeyCose` is
+ * the same base64url COSE key `passkeys.publicKey` stores.
+ *
+ * WHY THE SERVER KEEPS A COPY of something the machine is the real holder of:
+ * the card must offer the owner exactly the credentials their MACHINE will
+ * accept. Offering a passkey registered after enrolment would have the owner
+ * touch a key the daemon then refuses (`unknown_credential`) with nothing to
+ * explain it. Public keys only — a leaked row is worth nothing here, as
+ * everywhere else on this table.
+ */
+export interface DriveEnvLocalOwnerCredentials {
+  /** The WebAuthn relying-party id assertions must be made under. */
+  rpId: string;
+  /** The origin assertions must be made from. */
+  origin: string;
+  credentials: { credentialId: string; publicKeyCose: string }[];
+}
+
 export const driveEnvLocal = pgTable('drive_env_local', {
   /** PK; also the first column of the composite FK to the env this row describes. */
   envId: text('envId').primaryKey(),
@@ -156,6 +176,19 @@ export const driveEnvLocal = pgTable('drive_env_local', {
    * the first hello.
    */
   daemonEpoch: text('daemonEpoch'),
+
+  /**
+   * The owner's passkeys, PINNED at enrolment — trust on first use, at the one
+   * moment the owner is provably at the keyboard, exactly as the server
+   * signing key is pinned in the other direction (hardening B, leaf B1).
+   *
+   * Written ONCE, in the same update that pins the machine key, and never
+   * again: nothing on the wire and no later request may add a credential, or
+   * the property this exists for collapses (leaf B5). An owner with no passkey
+   * pins an empty set and the machine refuses chat approvals until they
+   * re-enrol with one. NULL means enrolled before this column existed.
+   */
+  ownerCredentials: jsonb('ownerCredentials').$type<DriveEnvLocalOwnerCredentials>(),
 
   /** The drive's allow-set for this env. Deny-by-default. */
   serverPolicy: jsonb('serverPolicy')
