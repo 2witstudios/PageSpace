@@ -3,21 +3,19 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   format,
-  addDays,
-  subDays,
+  addMonths,
+  subMonths,
+  addWeeks,
+  subWeeks,
   startOfWeek,
+  endOfWeek,
   startOfMonth,
   endOfMonth,
   eachDayOfInterval,
-  isSameDay,
-  isTomorrow,
-  isYesterday,
 } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { ChevronDown, ListTodo, CalendarDays, Calendar, SlidersHorizontal } from 'lucide-react';
-import Link from 'next/link';
+import { ChevronDown, ListTodo, Plus, SlidersHorizontal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Toggle } from '@/components/ui/toggle';
 import {
   Sheet,
   SheetContent,
@@ -32,7 +30,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { MobileWeekStrip } from './MobileWeekStrip';
-import { MobileDayAgenda } from './MobileDayAgenda';
+import { MobileAgenda, type MobileAgendaHandle } from './MobileAgenda';
 import { MobileMonthPicker } from './MobileMonthPicker';
 import { CalendarSidebar } from './CalendarSidebar';
 import { useCalendarFilterStore } from '@/stores/useCalendarFilterStore';
@@ -41,12 +39,9 @@ import {
   CalendarHandlers,
   TaskWithDueDate,
   EventColorConfig,
-  getEventsForDay,
-  getTasksForDay,
-  resolveEventColor,
-  resolveSwipeDirection,
-  TASK_OVERLAY_STYLE,
+  isSameDay,
   isToday,
+  resolveSwipeDirection,
 } from './calendar-types';
 
 interface CalendarEntryForMobile {
@@ -73,8 +68,6 @@ interface MobileCalendarViewProps {
   onHideAllCalendars?: () => void;
 }
 
-type MobileViewMode = 'day' | 'month';
-
 export function MobileCalendarView({
   events,
   tasks,
@@ -93,66 +86,105 @@ export function MobileCalendarView({
 }: MobileCalendarViewProps) {
   const { isEventTypeVisible, toggleEventType } = useCalendarFilterStore();
   const [selectedDate, setSelectedDate] = useState(() => parentDate ?? new Date());
-  const [currentWeekStart, setCurrentWeekStart] = useState(() =>
-    startOfWeek(parentDate ?? new Date())
-  );
+  const [isMonthPickerOpen, setIsMonthPickerOpen] = useState(false);
+  const [isStripExpanded, setIsStripExpanded] = useState(false);
+  // Set when the user picks a date; cleared once the agenda has scrolled to it.
+  const [pendingScroll, setPendingScroll] = useState<Date | null>(null);
+  const [pinnedDate, setPinnedDate] = useState<Date | null>(null);
+
+  const agendaRef = useRef<MobileAgendaHandle>(null);
 
   // Sync with parent date when it changes externally
   useEffect(() => {
     if (!parentDate) return;
-
-    setSelectedDate((previousDate) => {
-      if (isSameDay(parentDate, previousDate)) {
-        return previousDate;
-      }
-      return parentDate;
-    });
-
-    const parentWeekStart = startOfWeek(parentDate);
-    setCurrentWeekStart((previousWeekStart) => {
-      if (isSameDay(parentWeekStart, previousWeekStart)) {
-        return previousWeekStart;
-      }
-      return parentWeekStart;
-    });
+    setSelectedDate((previousDate) =>
+      isSameDay(parentDate, previousDate) ? previousDate : parentDate
+    );
   }, [parentDate]);
-  const [mobileView, setMobileView] = useState<MobileViewMode>('day');
-  const [isMonthPickerOpen, setIsMonthPickerOpen] = useState(false);
 
-  // Touch handling for swipe navigation. One ref, not two, so a reset can never
-  // be partial -- a stale end-X used to replay the previous gesture on a tap.
+  useEffect(() => {
+    if (!pendingScroll) return;
+    agendaRef.current?.scrollToDate(pendingScroll);
+    setPendingScroll(null);
+  }, [pendingScroll]);
+
+  // The window useCalendarData has actually fetched. Keyed on the month, not the
+  // date, so scroll-sync within a month does not hand the agenda a new array.
+  const monthKey = format(selectedDate, 'yyyy-MM');
+  const agendaDays = useMemo(
+    () =>
+      eachDayOfInterval({
+        start: startOfWeek(startOfMonth(selectedDate)),
+        end: endOfWeek(endOfMonth(selectedDate)),
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- monthKey is the identity of selectedDate that matters here
+    [monthKey]
+  );
+
+  const goToDate = useCallback(
+    (date: Date, { scroll }: { scroll: boolean }) => {
+      setSelectedDate(date);
+      handlers.onDateChange(date);
+      if (scroll) {
+        setPinnedDate(date);
+        setPendingScroll(date);
+      }
+    },
+    [handlers]
+  );
+
+  const handleDateSelect = useCallback(
+    (date: Date) => {
+      goToDate(date, { scroll: true });
+      setIsStripExpanded(false);
+    },
+    [goToDate]
+  );
+
+  // Scrolling the agenda past a day boundary moves the strip, but must not
+  // scroll the agenda back -- that would fight the user's own gesture.
+  const handleVisibleDateChange = useCallback(
+    (date: Date) => goToDate(date, { scroll: false }),
+    [goToDate]
+  );
+
+  const handleMonthSelect = useCallback(
+    (date: Date) => {
+      goToDate(date, { scroll: true });
+      setIsMonthPickerOpen(false);
+    },
+    [goToDate]
+  );
+
+  const handleTodayClick = useCallback(() => {
+    goToDate(new Date(), { scroll: true });
+  }, [goToDate]);
+
+  const handleCreateEvent = useCallback(() => {
+    const start = new Date(selectedDate);
+    const now = new Date();
+
+    if (isToday(selectedDate)) {
+      start.setMinutes(0, 0, 0);
+      start.setHours(now.getHours() + 1);
+    } else {
+      start.setHours(9, 0, 0, 0);
+    }
+
+    const end = new Date(start);
+    end.setHours(end.getHours() + 1);
+    handlers.onEventCreate(start, end);
+  }, [selectedDate, handlers]);
+
+  // Horizontal belongs to the strip, not the list: swiping it pages the week
+  // (or the month, while it is expanded). The agenda owns the vertical axis.
   const touchRef = useRef<{
     startX: number;
     startY: number;
     lastX: number;
     lastY: number;
   } | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
 
-  // Handle date selection from week strip
-  const handleDateSelect = useCallback((date: Date) => {
-    setSelectedDate(date);
-    handlers.onDateChange(date);
-  }, [handlers]);
-
-  // Handle week change from week strip navigation
-  const handleWeekChange = useCallback((date: Date) => {
-    const weekStart = startOfWeek(date);
-    setCurrentWeekStart(weekStart);
-    const newDate = addDays(weekStart, selectedDate.getDay());
-    setSelectedDate(newDate);
-    handlers.onDateChange(newDate);
-  }, [selectedDate, handlers]);
-
-  // Handle month selection from month picker
-  const handleMonthSelect = useCallback((date: Date) => {
-    setSelectedDate(date);
-    setCurrentWeekStart(startOfWeek(date));
-    handlers.onDateChange(date);
-    setIsMonthPickerOpen(false);
-  }, [handlers]);
-
-  // Swipe to change day
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     const touch = e.touches[0];
     touchRef.current = {
@@ -181,30 +213,12 @@ export function MobileCalendarView({
     });
     if (!direction) return;
 
-    const nextDate =
-      direction === 'next' ? addDays(selectedDate, 1) : subDays(selectedDate, 1);
-    setSelectedDate(nextDate);
-    if (!isSameDay(startOfWeek(nextDate), currentWeekStart)) {
-      setCurrentWeekStart(startOfWeek(nextDate));
-    }
-    handlers.onDateChange(nextDate);
-  }, [selectedDate, currentWeekStart, handlers]);
-
-  // Jump to today
-  const handleTodayClick = useCallback(() => {
-    const today = new Date();
-    setSelectedDate(today);
-    setCurrentWeekStart(startOfWeek(today));
-    handlers.onDateChange(today);
-  }, [handlers]);
-
-  // Update week strip when selected date changes externally
-  useEffect(() => {
-    const weekStart = startOfWeek(selectedDate);
-    if (!isSameDay(weekStart, currentWeekStart)) {
-      setCurrentWeekStart(weekStart);
-    }
-  }, [selectedDate, currentWeekStart]);
+    const step = direction === 'next' ? 1 : -1;
+    const nextDate = isStripExpanded
+      ? (step > 0 ? addMonths : subMonths)(selectedDate, 1)
+      : (step > 0 ? addWeeks : subWeeks)(selectedDate, 1);
+    goToDate(nextDate, { scroll: true });
+  }, [isStripExpanded, selectedDate, goToDate]);
 
   if (isLoading) {
     return (
@@ -216,33 +230,56 @@ export function MobileCalendarView({
 
   return (
     <div className="flex flex-col h-full bg-background">
-      {/* Mobile header */}
-      <div className="flex items-center justify-between px-4 py-2 border-b bg-background">
-        {/* Month/Year dropdown trigger */}
+      {/* One date header. The strip and the agenda both restate it below only
+          while scrolling, never as fixed chrome. */}
+      <div className="flex flex-none items-center justify-between gap-1 border-b bg-background px-2 py-1.5">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="gap-1 px-2 font-semibold">
-              {format(selectedDate, 'MMM yyyy')}
-              <ChevronDown className="h-4 w-4" />
+            <Button variant="ghost" className="gap-1 px-2 text-base font-semibold">
+              {format(selectedDate, 'MMMM yyyy')}
+              <ChevronDown className="h-4 w-4 opacity-60" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
-            <DropdownMenuItem onClick={handleTodayClick}>
-              Go to Today
-            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleTodayClick}>Go to Today</DropdownMenuItem>
             <DropdownMenuItem onClick={() => setIsMonthPickerOpen(true)}>
               Choose Month...
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Right controls */}
-        <div className="flex items-center gap-1">
-          {/* Calendar filter (root calendar only) */}
+        <div className="flex items-center gap-0.5">
+          {!isToday(selectedDate) && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 rounded-full px-3 text-xs"
+              onClick={handleTodayClick}
+            >
+              Today
+            </Button>
+          )}
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn('h-8 w-8', showTasks && 'text-primary')}
+            aria-pressed={showTasks}
+            aria-label={showTasks ? 'Hide tasks' : 'Show tasks'}
+            onClick={() => onShowTasksChange(!showTasks)}
+          >
+            <ListTodo className="h-4 w-4" />
+          </Button>
+
           {calendarEntries && onToggleCalendar && onShowAllCalendars && onHideAllCalendars && (
             <Sheet>
               <SheetTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Filter calendars">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  aria-label="Filter calendars"
+                >
                   <SlidersHorizontal className="h-4 w-4" />
                 </Button>
               </SheetTrigger>
@@ -265,268 +302,58 @@ export function MobileCalendarView({
               </SheetContent>
             </Sheet>
           )}
-          {/* View mode toggle */}
-          <div className="flex items-center bg-muted rounded-md p-0.5">
-            <button
-              onClick={() => setMobileView('day')}
-              className={cn(
-                'p-1.5 rounded transition-colors',
-                mobileView === 'day'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground'
-              )}
-              title="Day view"
-              aria-label="Day view"
-            >
-              <CalendarDays className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => setMobileView('month')}
-              className={cn(
-                'p-1.5 rounded transition-colors',
-                mobileView === 'month'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground'
-              )}
-              title="Month view"
-              aria-label="Month view"
-            >
-              <ListTodo className="h-4 w-4" />
-            </button>
-          </div>
 
-          {/* Tasks toggle */}
-          <Toggle
-            pressed={showTasks}
-            onPressedChange={onShowTasksChange}
-            size="sm"
-            aria-label="Show tasks"
-            className="data-[state=on]:bg-primary/10"
+          <Button
+            size="icon"
+            className="h-8 w-8"
+            aria-label="New event"
+            onClick={handleCreateEvent}
           >
-            Tasks
-          </Toggle>
+            <Plus className="h-4 w-4" />
+          </Button>
         </div>
       </div>
 
-      {/* Week strip */}
-      <MobileWeekStrip
-        currentDate={currentWeekStart}
+      <div
+        className="flex-none touch-pan-y"
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+      >
+        <MobileWeekStrip
+          selectedDate={selectedDate}
+          events={events}
+          tasks={showTasks ? tasks : []}
+          onDateSelect={handleDateSelect}
+          expanded={isStripExpanded}
+          onToggleExpanded={() => setIsStripExpanded((open) => !open)}
+          driveColorMap={driveColorMap}
+          context={context}
+        />
+      </div>
+
+      <MobileAgenda
+        ref={agendaRef}
+        days={agendaDays}
         selectedDate={selectedDate}
+        pinnedDate={pinnedDate}
         events={events}
-        tasks={showTasks ? tasks : []}
-        onDateSelect={handleDateSelect}
-        onWeekChange={handleWeekChange}
+        tasks={tasks}
+        handlers={handlers}
+        showTasks={showTasks}
+        onCreateEvent={handleCreateEvent}
+        onVisibleDateChange={handleVisibleDateChange}
+        showGoogleCalendarHint={showGoogleCalendarHint}
         driveColorMap={driveColorMap}
         context={context}
       />
 
-      {/* Main content area with swipe support */}
-      <div
-        ref={containerRef}
-        className="flex flex-1 flex-col min-h-0 overflow-hidden touch-pan-y"
-        {...(mobileView === 'day'
-          ? {
-              onTouchStart: handleTouchStart,
-              onTouchMove: handleTouchMove,
-              onTouchEnd: handleTouchEnd,
-            }
-          : {})}
-      >
-        {mobileView === 'day' ? (
-          <MobileDayAgenda
-            selectedDate={selectedDate}
-            events={events}
-            tasks={tasks}
-            handlers={handlers}
-            showTasks={showTasks}
-            driveColorMap={driveColorMap}
-            context={context}
-          />
-        ) : (
-          // Month agenda view - shows all events for the month
-          <MobileMonthAgenda
-            selectedDate={selectedDate}
-            events={events}
-            tasks={tasks}
-            handlers={handlers}
-            showTasks={showTasks}
-            showGoogleCalendarHint={showGoogleCalendarHint}
-            onDateSelect={handleDateSelect}
-            driveColorMap={driveColorMap}
-            context={context}
-          />
-        )}
-      </div>
-
-      {/* Month picker modal */}
       <MobileMonthPicker
         isOpen={isMonthPickerOpen}
         onClose={() => setIsMonthPickerOpen(false)}
         selectedDate={selectedDate}
         onSelect={handleMonthSelect}
       />
-    </div>
-  );
-}
-
-// Month agenda view - shows all events grouped by day
-function MobileMonthAgenda({
-  selectedDate,
-  events,
-  tasks,
-  handlers,
-  showTasks,
-  showGoogleCalendarHint,
-  onDateSelect,
-  driveColorMap,
-  context = 'drive',
-}: {
-  selectedDate: Date;
-  events: CalendarEvent[];
-  tasks: TaskWithDueDate[];
-  handlers: CalendarHandlers;
-  showTasks: boolean;
-  showGoogleCalendarHint: boolean;
-  onDateSelect: (date: Date) => void;
-  driveColorMap?: Map<string | null, EventColorConfig> | null;
-  context?: 'user' | 'drive';
-}) {
-  // Get all days in the current month with events/tasks
-  const dayGroups = useMemo(() => {
-    const monthStart = startOfMonth(selectedDate);
-    const monthEnd = endOfMonth(selectedDate);
-    const monthDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
-
-    return monthDays
-      .map((day: Date) => ({
-        date: day,
-        events: getEventsForDay(events, day).sort((a, b) => {
-          if (a.allDay && !b.allDay) return -1;
-          if (!a.allDay && b.allDay) return 1;
-          return new Date(a.startAt).getTime() - new Date(b.startAt).getTime();
-        }),
-        tasks: showTasks ? getTasksForDay(tasks, day) : [],
-      }))
-      .filter((group: { events: CalendarEvent[]; tasks: TaskWithDueDate[] }) =>
-        group.events.length > 0 || group.tasks.length > 0
-      );
-  }, [selectedDate, events, tasks, showTasks]);
-
-  const formatRelativeDate = (date: Date) => {
-    if (isToday(date)) return 'Today';
-    if (isTomorrow(date)) return 'Tomorrow';
-    if (isYesterday(date)) return 'Yesterday';
-    return format(date, 'EEEE, MMM d');
-  };
-
-  if (dayGroups.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full p-8 text-center">
-        <p className="text-lg font-medium text-muted-foreground">No events this month</p>
-        <p className="text-sm text-muted-foreground mt-1">
-          Tap a day to add an event
-        </p>
-        {showGoogleCalendarHint && (
-          <Link
-            href="/settings/integrations/google-calendar"
-            className="flex items-center gap-1.5 text-sm mt-4 text-muted-foreground/70 hover:text-primary transition-colors"
-          >
-            <Calendar className="h-4 w-4" />
-            Import from Google Calendar
-          </Link>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
-      <div className="p-4 space-y-4">
-        {dayGroups.map((group: { date: Date; events: CalendarEvent[]; tasks: TaskWithDueDate[] }) => {
-          const isTodayDate = isToday(group.date);
-          const isSelected = isSameDay(group.date, selectedDate);
-
-          return (
-            <div key={group.date.toISOString()}>
-              {/* Day header - tappable to select */}
-              <button
-                className={cn(
-                  'flex items-center gap-3 w-full py-2 mb-2',
-                  isSelected && 'text-primary'
-                )}
-                onClick={() => onDateSelect(group.date)}
-              >
-                <div
-                  className={cn(
-                    'w-10 h-10 flex items-center justify-center rounded-full font-bold text-sm',
-                    isTodayDate
-                      ? 'bg-primary text-primary-foreground'
-                      : isSelected
-                        ? 'bg-primary/20 text-primary'
-                        : 'bg-muted'
-                  )}
-                >
-                  {format(group.date, 'd')}
-                </div>
-                <span className="font-medium">{formatRelativeDate(group.date)}</span>
-              </button>
-
-              {/* Events for this day */}
-              <div className="space-y-2 pl-13">
-                {group.events.map((event: CalendarEvent) => {
-                  const colors = resolveEventColor(event, context, driveColorMap ?? null);
-                  return (
-                    <button
-                      key={`${event.id}-${event.startAt}`}
-                      className={cn(
-                        'w-full text-left p-3 rounded-lg border-l-4',
-                        colors.bg,
-                        colors.border,
-                        'active:scale-[0.98] transition-transform'
-                      )}
-                      onClick={() => handlers.onEventClick(event)}
-                    >
-                      <div className="font-medium truncate">{event.title}</div>
-                      {!event.allDay && (
-                        <div className="text-xs text-muted-foreground mt-0.5">
-                          {format(new Date(event.startAt), 'h:mm a')}
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-
-                {group.tasks.map((task: TaskWithDueDate) => (
-                  <button
-                    key={task.id}
-                    className={cn(
-                      'w-full text-left p-3 rounded-lg border-l-4',
-                      TASK_OVERLAY_STYLE.bg,
-                      TASK_OVERLAY_STYLE.border,
-                      'active:scale-[0.98] transition-transform'
-                    )}
-                    onClick={() => handlers.onTaskClick?.(task)}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className={task.status === 'completed' ? 'text-green-600' : ''}>
-                        {task.status === 'completed' ? '✓' : '☐'}
-                      </span>
-                      <span
-                        className={cn(
-                          'truncate',
-                          task.status === 'completed' && 'line-through text-muted-foreground'
-                        )}
-                      >
-                        {task.title}
-                      </span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }

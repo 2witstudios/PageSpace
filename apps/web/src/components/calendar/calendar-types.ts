@@ -187,6 +187,7 @@ export const TASK_OVERLAY_STYLE = {
   bg: 'bg-muted/30',
   border: 'border-l-muted-foreground/50 border-dashed',
   text: 'text-muted-foreground italic',
+  dot: 'bg-muted-foreground/50',
   opacity: 'opacity-70',
 };
 
