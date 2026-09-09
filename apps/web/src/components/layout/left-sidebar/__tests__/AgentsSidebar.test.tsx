@@ -2616,7 +2616,57 @@ describe('AgentsSidebar', () => {
       await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
       await user.click(screen.getByRole('button', { name: 'Create environment' }));
       await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', { name: 'mac', substrate: 'local', label: 'jono-macstudio' }),
+        expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', {
+          name: 'mac',
+          substrate: 'local',
+          label: 'jono-macstudio',
+          // The dialog's default: files in, commands OUT. The server writes exactly this.
+          serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false },
+        }),
+      );
+    });
+
+    test('"This computer" preselects reading and writing files, keeps "Run commands" OFF behind its own toggle with the boundary copy, and never offers a terminal or a checkpoint', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      renderSidebar();
+      await openCreateStep(user);
+      // Nothing policy-shaped is on screen for a cloud sandbox.
+      expect(screen.queryByLabelText('Run commands')).toBeNull();
+      await user.click(screen.getByLabelText('This computer'));
+      expect((await screen.findByLabelText('Read files')) as HTMLInputElement).toBeChecked();
+      expect(screen.getByLabelText('Write files') as HTMLInputElement).toBeChecked();
+      const exec = screen.getByLabelText('Run commands') as HTMLInputElement;
+      expect(exec).not.toBeChecked();
+      // The README's words for what exec means, beside the toggle that turns it on.
+      expect(screen.getByText(/runs as you/i)).toBeDefined();
+      expect(screen.getByText(/no sandbox/i)).toBeDefined();
+      // Not offered at all: a terminal, a checkpoint.
+      expect(screen.queryByLabelText(/terminal/i)).toBeNull();
+      expect(screen.queryByLabelText(/checkpoint/i)).toBeNull();
+    });
+
+    test('turning "Run commands" on posts exec in the serverPolicy; turning "Write files" off leaves it out', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByLabelText('Run commands'));
+      await user.click(screen.getByLabelText('Write files'));
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', {
+          name: 'mac',
+          substrate: 'local',
+          label: 'jono-macstudio',
+          serverPolicy: { ops: ['fs_read', 'exec'], checkpoint: false },
+        }),
       );
     });
 

@@ -621,7 +621,7 @@ describe('spawnAgentSession into a LOCAL env — the bind gate, for real (C1)', 
       payerId,
       maxEnvs: 1_000,
       now: new Date(),
-      local: { ownerId: payerId, label: 'jono-macstudio', enrollmentId: `enr_${createId()}`, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(Date.now() + 600_000) },
+      local: { ownerId: payerId, label: 'jono-macstudio', enrollmentId: `enr_${createId()}`, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(Date.now() + 600_000), serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } },
     });
     if (!created.ok) throw new Error(`seedLocalEnv refused: ${created.reason}`);
     const envId = created.env.id;
@@ -657,7 +657,7 @@ describe('spawnAgentSession into a LOCAL env — the bind gate, for real (C1)', 
   it('given a local env in ANOTHER drive, should still be env_not_found — the drive check runs before the gate', async () => {
     const created = await envStore.createIfUnderLimit({
       driveId: otherDriveId, name: `local-${createId().slice(0, 8)}`, createdBy: payerId, payerId, maxEnvs: 1_000, now: new Date(),
-      local: { ownerId: payerId, label: 'x', enrollmentId: `enr_${createId()}`, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(Date.now() + 600_000) },
+      local: { ownerId: payerId, label: 'x', enrollmentId: `enr_${createId()}`, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(Date.now() + 600_000) , serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } },
     });
     if (!created.ok) throw new Error(created.reason);
     expect(await trySpawn({ envId: created.env.id })).toEqual({ ok: false, reason: 'env_not_found' });

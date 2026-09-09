@@ -34,7 +34,7 @@ import {
   type SpriteHolderLifecycleRow,
 } from '../../agent-workspaces/plan-workspace-lifecycle';
 import { planEnvDelete } from '../../drive-envs/plan-env-delete';
-import type { DriveEnvDTO, DriveEnvSpriteStatus, DriveEnvLocalStatus } from '../../drive-envs/env-contract';
+import type { DriveEnvDTO, DriveEnvSpriteStatus, DriveEnvLocalStatus, DriveEnvServerPolicy } from '../../drive-envs/env-contract';
 import {
   checkDriveEnvAllowance,
   getDriveEnvLimit,
@@ -206,12 +206,15 @@ export async function createDriveEnv({
   /** AUDIT ONLY: who asked. Never consulted for permission, payment or lifecycle. */
   createdBy: string | null;
   /**
-   * Present for a LOCAL env: the machine's human label and its OWNER (the
-   * enrolling user — the one `bindPolicy = 'owner'` keys on). The env row and
-   * its `drive_env_local` sibling are minted in ONE store step, with a one-time
-   * enrollment code whose hash is stored and whose value is returned once.
+   * Present for a LOCAL env: the machine's human label, its OWNER (the
+   * enrolling user — the one `bindPolicy = 'owner'` keys on) and the explicit
+   * SERVER POLICY the owner chose in the dialog (GA wave 1: what PageSpace may
+   * ask this machine to do; the column default is a backstop, never a path).
+   * The env row and its `drive_env_local` sibling are minted in ONE store
+   * step, with a one-time enrollment code whose hash is stored and whose value
+   * is returned once — the policy lands in that same transaction.
    */
-  local?: { label: string; ownerId: string };
+  local?: { label: string; ownerId: string; serverPolicy: DriveEnvServerPolicy };
   deps: CreateDriveEnvDeps;
 }): Promise<CreateDriveEnvResult> {
   if (local && !deps.identity) throw new Error('createDriveEnv: a local env needs identity deps (random, hash, newEnrollmentId)');
@@ -242,7 +245,7 @@ export async function createDriveEnv({
     maxEnvs: getDriveEnvLimit(payer.tier),
     local:
       local && issued
-        ? { ownerId: local.ownerId, label: local.label, enrollmentId: issued.enrollmentId, enrollmentCodeHash: issued.codeHash, enrollmentCodeExpiresAt: new Date(issued.exp) }
+        ? { ownerId: local.ownerId, label: local.label, enrollmentId: issued.enrollmentId, enrollmentCodeHash: issued.codeHash, enrollmentCodeExpiresAt: new Date(issued.exp), serverPolicy: local.serverPolicy }
         : undefined,
   });
   if (!created.ok) {

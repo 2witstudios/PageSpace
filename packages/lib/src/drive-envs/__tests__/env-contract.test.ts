@@ -33,8 +33,47 @@ describe('drive-env contract — the substrate axis (Local Environments epic)', 
       expect(createDriveEnvRequestSchema.safeParse({ name: 'mac', substrate: 'local' }).success).toBe(false);
     });
 
-    it('given substrate local WITH a label, should accept and keep the trimmed label', () => {
-      expect(createDriveEnvRequestSchema.parse({ name: 'mac', substrate: 'local', label: '  jono-macstudio ' })).toEqual({ name: 'mac', substrate: 'local', label: 'jono-macstudio' });
+    it('given substrate local WITH a label and an explicit serverPolicy, should accept and keep the trimmed label', () => {
+      expect(createDriveEnvRequestSchema.parse({ name: 'mac', substrate: 'local', label: '  jono-macstudio ', serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } })).toEqual({
+        name: 'mac',
+        substrate: 'local',
+        label: 'jono-macstudio',
+        serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false },
+      });
+    });
+
+    describe('serverPolicy — REQUIRED for a local env (GA wave 1: the column default is a backstop, never a path)', () => {
+      const local = { name: 'mac', substrate: 'local', label: 'mac' };
+
+      it('given substrate local WITHOUT a serverPolicy, should reject — the dialog must say what the machine may do', () => {
+        const result = createDriveEnvRequestSchema.safeParse(local);
+        expect(result.success).toBe(false);
+        if (!result.success) expect(result.error.issues.map((issue) => String(issue.path[0]))).toContain('serverPolicy');
+      });
+
+      it('given an op outside GRANT_OPS, should reject', () => {
+        expect(createDriveEnvRequestSchema.safeParse({ ...local, serverPolicy: { ops: ['exec', 'rm_rf'], checkpoint: false } }).success).toBe(false);
+      });
+
+      it('given checkpoint true, should reject — a local machine never advertises checkpoints (invariant 12)', () => {
+        expect(createDriveEnvRequestSchema.safeParse({ ...local, serverPolicy: { ops: ['fs_read'], checkpoint: true } }).success).toBe(false);
+      });
+
+      it('given a stray field in serverPolicy, should reject (closed shape)', () => {
+        expect(createDriveEnvRequestSchema.safeParse({ ...local, serverPolicy: { ops: ['fs_read'], checkpoint: false, roots: ['/'] } }).success).toBe(false);
+      });
+
+      it('given an EMPTY ops list, should accept — an owner may mint a machine that does nothing yet and enable ops later', () => {
+        expect(createDriveEnvRequestSchema.parse({ ...local, serverPolicy: { ops: [], checkpoint: false } })).toMatchObject({ serverPolicy: { ops: [], checkpoint: false } });
+      });
+
+      it('given duplicated ops, should keep each once', () => {
+        expect(createDriveEnvRequestSchema.parse({ ...local, serverPolicy: { ops: ['exec', 'exec', 'fs_read'], checkpoint: false } })).toMatchObject({ serverPolicy: { ops: ['exec', 'fs_read'] } });
+      });
+
+      it('given substrate sprite WITH a serverPolicy, should drop it (a Sprite has no server policy)', () => {
+        expect(createDriveEnvRequestSchema.parse({ name: 'dev', substrate: 'sprite', serverPolicy: { ops: ['exec'], checkpoint: false } })).toEqual({ name: 'dev', substrate: 'sprite' });
+      });
     });
 
     it('given substrate sprite WITH a label, should accept and drop the label (it means nothing for a Sprite)', () => {

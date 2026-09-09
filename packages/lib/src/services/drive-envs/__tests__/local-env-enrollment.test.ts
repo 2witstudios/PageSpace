@@ -71,7 +71,7 @@ function harness(now: Date = NOW) {
 }
 
 async function createLocal(h: ReturnType<typeof harness>) {
-  const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'jono-macstudio', ownerId: 'user-1' }, deps: h.deps });
+  const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'jono-macstudio', ownerId: 'user-1', serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } }, deps: h.deps });
   if (!result.ok || !result.enrollment) throw new Error(`create failed: ${JSON.stringify(result)}`);
   return { env: result.env, enrollment: result.enrollment };
 }
@@ -111,7 +111,7 @@ describe('createDriveEnv with local facts — env + sibling + one-time code in O
   it('should meter a local env against the same per-payer ceiling as a Sprite env (an env is an env)', async () => {
     const h = harness();
     h.fake.ownedEnvs.set(PAYER_ID, 1_000);
-    const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'm', ownerId: 'user-1' }, deps: h.deps });
+    const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'm', ownerId: 'user-1', serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } }, deps: h.deps });
     expect(result.ok).toBe(false);
     expect(!result.ok && result.reason).toBe('quota_exceeded');
     expect(h.fake.local.size).toBe(0);

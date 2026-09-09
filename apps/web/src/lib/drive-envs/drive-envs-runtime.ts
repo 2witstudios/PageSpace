@@ -46,7 +46,7 @@ import {
   type DeleteDriveEnvResult,
   type RebuildDriveEnvResult,
 } from '@pagespace/lib/services/drive-envs/drive-envs';
-import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
+import type { DriveEnvDTO, DriveEnvServerPolicy } from '@pagespace/lib/drive-envs/env-contract';
 import type { RevokeLocalDriveEnvResult } from '@pagespace/lib/services/drive-envs/local-env-revoke';
 import { getSandboxHost } from '@/lib/agent-workspaces/sandbox-host-runtime';
 import { createHash, createPublicKey, randomBytes, verify as nodeVerify } from 'crypto';
@@ -205,8 +205,8 @@ export async function createEnvInDrive(input: {
   driveId: string;
   name: string;
   createdBy: string;
-  /** Present for a LOCAL env: the machine label and its owner (the creating user). */
-  local?: { label: string; ownerId: string };
+  /** Present for a LOCAL env: the machine label, its owner (the creating user) and the explicit server policy. */
+  local?: { label: string; ownerId: string; serverPolicy: DriveEnvServerPolicy };
 }): Promise<CreateDriveEnvResult> {
   const store = await getDriveEnvStore();
   return createDriveEnv({

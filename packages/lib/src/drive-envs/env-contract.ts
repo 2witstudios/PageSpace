@@ -25,6 +25,7 @@
  */
 
 import { z } from 'zod';
+import { GRANT_OPS } from '../env-bridge/grant';
 
 /** Longest environment name accepted. Long enough for `staging-eu-west` and its kin, short enough to render in a sidebar row. */
 export const MAX_DRIVE_ENV_NAME_LENGTH = 64;
@@ -170,9 +171,30 @@ export const driveEnvDtoSchema = z.discriminatedUnion('substrate', [
 export type DriveEnvDTO = z.infer<typeof driveEnvDtoSchema>;
 
 /**
+ * A local env's SERVER policy as a client may set it — PageSpace's say in the
+ * three-way intersection (invariant 4; GA wave 1). A closed op set drawn from
+ * `GRANT_OPS`, each op at most once, and `checkpoint` pinned to `false`: a
+ * local machine never advertises filesystem checkpoints (invariant 12), so a
+ * client asking for one is asking for a silent no-op, and is refused instead.
+ * An EMPTY op set is valid — a machine that may do nothing yet — but it is
+ * never the default: the create body REQUIRES this field, because the column
+ * default (`{ops:[],checkpoint:false}`) is a fail-closed backstop, not a path
+ * a request may quietly fall to.
+ */
+export const driveEnvServerPolicySchema = z
+  .object({
+    ops: z.array(z.enum(GRANT_OPS)).transform((ops) => [...new Set(ops)]),
+    checkpoint: z.literal(false),
+  })
+  .strict();
+
+export type DriveEnvServerPolicy = z.infer<typeof driveEnvServerPolicySchema>;
+
+/**
  * POST body for creating an environment. A name, and optionally a substrate
  * (defaults to `'sprite'`, so every existing client is unchanged). A local env
- * REQUIRES a machine label; a label sent for a Sprite env means nothing and is
+ * REQUIRES a machine label AND an explicit `serverPolicy` (what PageSpace may
+ * ask the machine to do); either sent for a Sprite env means nothing and is
  * dropped rather than stored.
  */
 export const createDriveEnvRequestSchema = z
@@ -180,8 +202,8 @@ export const createDriveEnvRequestSchema = z
     // The discriminator's default: a body with no substrate is a Sprite request.
     (body) => (typeof body === 'object' && body !== null && !('substrate' in body) ? { ...body, substrate: 'sprite' } : body),
     z.discriminatedUnion('substrate', [
-      z.object({ name: driveEnvNameSchema, substrate: z.literal('sprite'), label: driveEnvLabelSchema.optional() }),
-      z.object({ name: driveEnvNameSchema, substrate: z.literal('local'), label: driveEnvLabelSchema }),
+      z.object({ name: driveEnvNameSchema, substrate: z.literal('sprite'), label: driveEnvLabelSchema.optional(), serverPolicy: z.unknown().optional() }),
+      z.object({ name: driveEnvNameSchema, substrate: z.literal('local'), label: driveEnvLabelSchema, serverPolicy: driveEnvServerPolicySchema }),
     ]),
   )
   .transform((value) => (value.substrate === 'local' ? value : { name: value.name, substrate: value.substrate }));

@@ -97,9 +97,11 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
         ? "substrate must be 'sprite' or 'local'"
         : failed.has('label')
           ? 'A machine label (1–64 characters) is required for a local environment'
-          : failed.has('name')
-            ? 'A non-empty environment name is required'
-            : 'Invalid environment request';
+          : failed.has('serverPolicy')
+            ? 'A server policy ({ ops: [exec | fs_read | fs_write], checkpoint: false }) is required for a local environment'
+            : failed.has('name')
+              ? 'A non-empty environment name is required'
+              : 'Invalid environment request';
       return NextResponse.json({ error }, { status: 400 });
     }
 
@@ -110,7 +112,10 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       return NextResponse.json({ error: 'Local environments are not enabled on this deployment' }, { status: 501 });
     }
 
-    const local = parsed.data.substrate === 'local' ? { label: parsed.data.label, ownerId: auth.userId } : undefined;
+    // The policy is the dialog's explicit choice, written in the same
+    // transaction as the code hash (GA wave 1). The parser above already
+    // refused a body without one: the column default is never reached here.
+    const local = parsed.data.substrate === 'local' ? { label: parsed.data.label, ownerId: auth.userId, serverPolicy: parsed.data.serverPolicy } : undefined;
     const result = await createEnvInDrive({ driveId, name: parsed.data.name, createdBy: auth.userId, local });
     if (!result.ok) {
       if (result.reason === 'drive_not_found') {

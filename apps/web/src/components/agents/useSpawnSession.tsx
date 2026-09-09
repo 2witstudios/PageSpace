@@ -22,7 +22,7 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { canManageDrive } from '@/hooks/usePermissions';
 import { useEditingSession } from '@/stores/useEditingSession';
 import type { DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
-import { MAX_DRIVE_ENV_LABEL_LENGTH, MAX_DRIVE_ENV_NAME_LENGTH, type DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
+import { type DriveEnvServerPolicy, MAX_DRIVE_ENV_LABEL_LENGTH, MAX_DRIVE_ENV_NAME_LENGTH, type DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
 import { LocalEnvEnrollmentPanel, type LocalEnvEnrollmentIssue } from './LocalEnvEnrollment';
 
 export type SpawnKind = 'agent' | 'shell' | 'assistant';
@@ -33,7 +33,7 @@ export type SpawnKind = 'agent' | 'shell' | 'assistant';
  * substrate existed. A LOCAL environment ([D-3]: the user's own machine as a
  * substrate of an ordinary environment) also names the machine.
  */
-type NewEnvironmentInput = { name: string; substrate: 'sprite' } | { name: string; substrate: 'local'; label: string };
+type NewEnvironmentInput = { name: string; substrate: 'sprite' } | { name: string; substrate: 'local'; label: string; serverPolicy: DriveEnvServerPolicy };
 
 /**
  * A local create's handoff, held until the person has read it: the env it
@@ -328,7 +328,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
       try {
         // The cloud body is `{ name }` and nothing else — a user who never
         // wants a local env must not be able to tell this shipped.
-        const body = input.substrate === 'local' ? { name: input.name, substrate: 'local', label: input.label } : { name: input.name };
+        const body = input.substrate === 'local' ? { name: input.name, substrate: 'local', label: input.label, serverPolicy: input.serverPolicy } : { name: input.name };
         created = await post<{ env: DriveEnvDTO; enrollment?: LocalEnvEnrollmentIssue }>(`/api/drives/${encodeURIComponent(driveId)}/envs`, body);
       } catch (error) {
         // `'retry'` is the one refusal retyping fixes; everything else has been
@@ -569,6 +569,14 @@ function SpawnSessionPalette({
   // name. Cloud is the default every time; nothing remembers "local".
   const [envSubstrate, setEnvSubstrate] = useState<'sprite' | 'local'>('sprite');
   const [envLabel, setEnvLabel] = useState('');
+  // The SERVER policy for a local env (GA wave 1: PageSpace's say in what may
+  // run on the machine, written at mint). Files in by default; commands OFF
+  // behind their own toggle, because `exec` runs as the owner with no sandbox
+  // and the CLI README's boundary statement is the copy beside it. No terminal
+  // and no checkpoint are offered at all.
+  const [allowFsRead, setAllowFsRead] = useState(true);
+  const [allowFsWrite, setAllowFsWrite] = useState(true);
+  const [allowExec, setAllowExec] = useState(false);
   const [creatingEnv, setCreatingEnv] = useState(false);
   const createEnvInputId = useId();
   const substrateGroupId = useId();
@@ -756,7 +764,15 @@ function SpawnSessionPalette({
             if (local && !trimmedLabel) return;
             const attempt = createAttempt.current;
             setCreatingEnv(true);
-            void onCreateEnv(local ? { name: trimmed, substrate: 'local', label: trimmedLabel } : { name: trimmed, substrate: 'sprite' }).finally(() => {
+            // Order is the op order the contract shows; only what is ticked is sent.
+            const ops: DriveEnvServerPolicy['ops'] = [
+              ...(allowFsRead ? (['fs_read'] as const) : []),
+              ...(allowFsWrite ? (['fs_write'] as const) : []),
+              ...(allowExec ? (['exec'] as const) : []),
+            ];
+            void onCreateEnv(
+              local ? { name: trimmed, substrate: 'local', label: trimmedLabel, serverPolicy: { ops, checkpoint: false } } : { name: trimmed, substrate: 'sprite' },
+            ).finally(() => {
               // Only the attempt still on screen may re-enable the form. An
               // older one landing must leave the current request's POST looking
               // exactly as in-flight as it is.
@@ -813,14 +829,42 @@ function SpawnSessionPalette({
                 </span>
               </label>
               {envSubstrate === 'local' && (
-                <input
-                  aria-label="Machine label"
-                  value={envLabel}
-                  onChange={(event) => setEnvLabel(event.target.value)}
-                  maxLength={MAX_DRIVE_ENV_LABEL_LENGTH}
-                  placeholder="Machine label, e.g. my-laptop"
-                  className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                />
+                <>
+                  <input
+                    aria-label="Machine label"
+                    value={envLabel}
+                    onChange={(event) => setEnvLabel(event.target.value)}
+                    maxLength={MAX_DRIVE_ENV_LABEL_LENGTH}
+                    placeholder="Machine label, e.g. my-laptop"
+                    className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                  />
+                  {/* What PageSpace may ask this machine to do — the server
+                      policy, chosen here and enforced when a grant is signed.
+                      Files are the safe default (blast radius = the roots in
+                      the machine's own policy file); commands are a separate
+                      decision with the README's words beside it. */}
+                  <div className="space-y-1.5 pt-1">
+                    <div className="text-xs font-medium text-muted-foreground">PageSpace may ask this computer to</div>
+                    <label className="flex items-start gap-2 text-sm">
+                      <input type="checkbox" aria-label="Read files" className="mt-1" checked={allowFsRead} onChange={(event) => setAllowFsRead(event.target.checked)} />
+                      <span>Read files <span className="block text-xs text-muted-foreground">Inside the folders your policy file allows.</span></span>
+                    </label>
+                    <label className="flex items-start gap-2 text-sm">
+                      <input type="checkbox" aria-label="Write files" className="mt-1" checked={allowFsWrite} onChange={(event) => setAllowFsWrite(event.target.checked)} />
+                      <span>Write files <span className="block text-xs text-muted-foreground">Inside the same folders.</span></span>
+                    </label>
+                    <label className="flex items-start gap-2 text-sm">
+                      <input type="checkbox" aria-label="Run commands" className="mt-1" checked={allowExec} onChange={(event) => setAllowExec(event.target.checked)} />
+                      <span>
+                        Run commands
+                        <span className="block text-xs text-muted-foreground">
+                          A command runs as you, on this computer, with no sandbox around it: it can read any file you can read, change any file you
+                          can change, reach anything on your network, and use any credential in your home directory. Off unless you turn it on.
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+                </>
               )}
             </fieldset>
           )}

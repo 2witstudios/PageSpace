@@ -118,6 +118,13 @@ export interface NewDriveEnvLocalFacts {
   enrollmentId: string;
   enrollmentCodeHash: string;
   enrollmentCodeExpiresAt: Date;
+  /**
+   * The owner's explicit allow-set, written in the SAME transaction as the
+   * code hash (GA wave 1). Required: the column's deny-all default is the
+   * fail-closed backstop for a row minted by some path that forgot, not a
+   * value this store ever chooses on a caller's behalf.
+   */
+  serverPolicy: { ops: string[]; checkpoint: boolean };
 }
 
 export interface NewDriveEnvInput {
@@ -756,7 +763,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
           // without its lifecycle row, and the composite FK holds both ways.
           const [sibling] = await tx
             .insert(driveEnvLocal)
-            .values({ envId: row!.id, ownerId: local.ownerId, label: local.label, enrollmentId: local.enrollmentId, enrollmentCodeHash: local.enrollmentCodeHash, enrollmentCodeExpiresAt: local.enrollmentCodeExpiresAt, createdAt: at, updatedAt: at })
+            .values({ envId: row!.id, ownerId: local.ownerId, label: local.label, enrollmentId: local.enrollmentId, enrollmentCodeHash: local.enrollmentCodeHash, enrollmentCodeExpiresAt: local.enrollmentCodeExpiresAt, serverPolicy: local.serverPolicy, createdAt: at, updatedAt: at })
             .returning();
           return { ok: true as const, env: row as DriveEnvRecord, local: { ...(sibling as Omit<DriveEnvLocalRecord, 'driveId'>), driveId } as DriveEnvLocalRecord };
         });

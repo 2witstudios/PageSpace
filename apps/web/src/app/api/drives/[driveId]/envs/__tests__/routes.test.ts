@@ -125,7 +125,7 @@ describe('POST /envs — who may CREATE one', () => {
 
   it('given substrate local while LOCAL_ENVS_ENABLED is off, should answer 501 and create NOTHING — never a Sprite env in its place', async () => {
     vi.mocked(isLocalEnvsEnabled).mockReturnValue(false);
-    const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local', label: 'jono-macstudio' }), params);
+    const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local', label: 'jono-macstudio', serverPolicy: { ops: ['fs_read'], checkpoint: false } }), params);
     expect(response.status).toBe(501);
     expect(createEnvInDrive).not.toHaveBeenCalled();
   });
@@ -138,15 +138,38 @@ describe('POST /envs — who may CREATE one', () => {
       env: { ...envRow, name: 'mac', substrate: 'local' },
       enrollment: { enrollmentId: 'enr_1', code: 'ABCDEFGHJKMNPQRSTVWX', expiresAt },
     } as never);
-    const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local', label: 'jono-macstudio' }), params);
+    const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local', label: 'jono-macstudio', serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } }), params);
     expect(response.status).toBe(201);
-    expect(createEnvInDrive).toHaveBeenCalledWith({ driveId: DRIVE_ID, name: 'mac', createdBy: USER_ID, local: { label: 'jono-macstudio', ownerId: USER_ID } });
+    expect(createEnvInDrive).toHaveBeenCalledWith({
+      driveId: DRIVE_ID,
+      name: 'mac',
+      createdBy: USER_ID,
+      local: { label: 'jono-macstudio', ownerId: USER_ID, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } },
+    });
     const body = (await response.json()) as { env: unknown; enrollment: { enrollmentId: string; code: string; expiresAt: string } };
     expect(body.enrollment).toEqual({ enrollmentId: 'enr_1', code: 'ABCDEFGHJKMNPQRSTVWX', expiresAt: expiresAt.toISOString() });
   });
 
+  it('given substrate local WITHOUT a serverPolicy, should answer 400 naming the policy and mint NOTHING — never fall to the column default', async () => {
+    vi.mocked(isLocalEnvsEnabled).mockReturnValue(true);
+    const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local', label: 'jono-macstudio' }), params);
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toMatch(/policy/i);
+    expect(createEnvInDrive).not.toHaveBeenCalled();
+  });
+
+  it('given a serverPolicy with checkpoint true or an op outside the closed set, should answer 400 naming the policy', async () => {
+    vi.mocked(isLocalEnvsEnabled).mockReturnValue(true);
+    for (const serverPolicy of [{ ops: ['fs_read'], checkpoint: true }, { ops: ['pty_open', 'shell'], checkpoint: false }]) {
+      const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local', label: 'jono-macstudio', serverPolicy }), params);
+      expect(response.status).toBe(400);
+      expect(((await response.json()) as { error: string }).error).toMatch(/policy/i);
+    }
+    expect(createEnvInDrive).not.toHaveBeenCalled();
+  });
+
   it('given substrate local without a label, should answer 400 naming the label, not the name', async () => {
-    const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local' }), params);
+    const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local', serverPolicy: { ops: [], checkpoint: false } }), params);
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: string }).error).toMatch(/label/i);
     expect(createEnvInDrive).not.toHaveBeenCalled();
@@ -160,7 +183,7 @@ describe('POST /envs — who may CREATE one', () => {
   });
 
   it('given a blank label for a local env, should answer 400 naming the label as invalid (not merely missing)', async () => {
-    const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local', label: '   ' }), params);
+    const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local', label: '   ', serverPolicy: { ops: [], checkpoint: false } }), params);
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: string }).error).toMatch(/label/i);
     expect(createEnvInDrive).not.toHaveBeenCalled();
