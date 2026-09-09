@@ -369,6 +369,17 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
               className="flex items-center gap-2"
               onSubmit={(e) => {
                 e.preventDefault();
+                // ...and stop it here. This dialog renders through a Radix
+                // portal, but React propagates synthetic events along the REACT
+                // tree, not the DOM one — so a submit from inside the portal
+                // still reaches an ancestor `<form onSubmit>` even though the
+                // node is detached in the DOM. `PageAgentSettingsTab` is such
+                // an ancestor now that the agent's Settings tab hosts the
+                // webhooks entry point, and without this, creating a webhook
+                // would also PATCH the agent config with whatever unsaved edits
+                // the form happened to be holding. `preventDefault` alone only
+                // stops the browser's navigation, not the propagation.
+                e.stopPropagation();
                 void createWebhook();
               }}
             >
