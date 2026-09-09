@@ -18,9 +18,11 @@
  * `sessionId` is WHICH grid the pane lands in. An ENVIRONMENT's preview is
  * previewed from one of that environment's sessions (an env-bound session
  * reads the env's own holder — the status route resolves that), so the caller
- * passes the session it would open; `null` means there is no grid to open
- * into yet (an environment with no sessions running), and the line then
- * states what it knows without offering an action it cannot perform.
+ * passes the session it would open — which the click SELECTS before opening
+ * the pane, since the console renders the selected session's grid and
+ * nothing else. `null` means there is no grid to open into yet (an
+ * environment with no sessions running), and the line then states what it
+ * knows without offering an action it cannot perform.
  *
  * Rendered from the polled status read (`useDevPreviewStatus`), which the
  * server folds without ever probing the sprite — when the realtime tier has
@@ -49,6 +51,7 @@ import { cn } from '@/lib/utils';
 import { useDevPreviewCapability } from '@/hooks/dev-preview/useDevPreviewCapability';
 import { useDevPreviewStatus } from '@/hooks/dev-preview/useDevPreviewStatus';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { devPreviewAffordanceText, devPreviewAffordanceVerb, shouldShowDevPreviewAffordance } from './dev-preview-copy';
 
 /** The affordance polls slowly: a dev server coming up is a seconds-scale event, and every tick is a control-plane read. */
@@ -76,6 +79,7 @@ export function DevPreviewAffordance({
 }) {
   const enabled = useDevPreviewCapability();
   const openPorts = useAgentWorkspaceStore((state) => state.openPorts);
+  const selectSession = useAgentSurfaceStore((state) => state.selectSession);
   const { preview } = useDevPreviewStatus(statusPath, { enabled: enabled === true, polling: active, pauseWhenIdle, intervalMs: AFFORDANCE_POLL_MS });
 
   if (enabled !== true || !shouldShowDevPreviewAffordance(preview)) return null;
@@ -97,7 +101,13 @@ export function DevPreviewAffordance({
         onClick={(event) => {
           // A row's own click targets (its context menu, its disclosure) must not also fire.
           event.stopPropagation();
-          if (sessionId !== null) openPorts(sessionId);
+          if (sessionId === null) return;
+          // SELECT then open: the console renders the grid of the SELECTED
+          // session, so opening a pane in another one (an env row while the
+          // user is elsewhere) would change an off-screen grid and look like
+          // the click did nothing. A no-op when it is already selected.
+          selectSession(sessionId);
+          openPorts(sessionId);
         }}
         data-testid="dev-preview-open"
       >

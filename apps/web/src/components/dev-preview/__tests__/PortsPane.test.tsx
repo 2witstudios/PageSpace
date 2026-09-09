@@ -230,6 +230,13 @@ describe('PortsPane — the chrome that governs the preview', () => {
     expect(useEditingStore.getState().activeSessions.has('dev-preview-pane-ws1')).toBe(false);
   });
 
+  test('a pane with NO frame holds no editing session — `isAnyEditing` would otherwise pause page-tree invalidation and disable hotkeys for as long as the pane sat on a placeholder', async () => {
+    preview = status();
+    renderPane();
+    await screen.findByTestId('ports-placeholder');
+    expect(useEditingStore.getState().activeSessions.has('dev-preview-pane-ws1')).toBe(false);
+  });
+
   test('STOP posts the action and re-reads; RESUME appears once the server says so; the manage verdict is read LIVE, never snapshotted', async () => {
     preview = live();
     renderPane();

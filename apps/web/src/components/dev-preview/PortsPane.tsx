@@ -92,8 +92,13 @@ export function PortsPane({ workspaceId }: { workspaceId: string }) {
   // from previous renders").
   const [frameArmed, setFrameArmed] = useState(false);
   if (preview?.canOpen && !frameArmed) setFrameArmed(true);
+  const framePath = frameArmed && typeof preview?.openPath === 'string' ? preview.openPath : null;
 
-  useEditingSession(`dev-preview-pane-${workspaceId}`, true, 'form', { componentName: 'PortsPane' });
+  // Only while a FRAME is up. `isAnyEditing()` counts every form session, so
+  // registering for the pane's mere existence would pause `usePageAgents` and
+  // page-tree invalidation and disable editing-gated hotkeys for as long as a
+  // pane sat on a placeholder — with no frame and no input to protect.
+  useEditingSession(`dev-preview-pane-${workspaceId}`, framePath !== null, 'form', { componentName: 'PortsPane' });
 
   const holderKind = preview?.holder.kind;
   const holderId = preview?.holder.id;
@@ -222,7 +227,7 @@ export function PortsPane({ workspaceId }: { workspaceId: string }) {
   // `openPath` is null until the holder has something to open; narrow at the
   // use site so the frame cannot be built from a null.
   const openPath = typeof preview?.openPath === 'string' ? preview.openPath : null;
-  const frameSrc = frameArmed && openPath !== null ? buildFrameSrc(openPath, nonce) : null;
+  const frameSrc = framePath === null ? null : buildFrameSrc(framePath, nonce);
   const audience = preview ? devPreviewApprovalAudience(preview.holder) : null;
   const badge = preview ? devPreviewBadge(preview.state) : null;
   const approvable = preview?.canManage === true && preview.canApprove && preview.state.status === 'needs-approval'

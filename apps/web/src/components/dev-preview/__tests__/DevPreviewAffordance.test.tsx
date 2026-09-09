@@ -17,6 +17,7 @@ vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
 
 import { DevPreviewAffordance } from '../DevPreviewAffordance';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import type { DevPreviewStatusDTO } from '@/hooks/dev-preview/useDevPreviewStatus';
 
 const STATUS_PATH = '/api/agent-workspaces/ws1/preview';
@@ -60,6 +61,7 @@ beforeEach(() => {
   mockFetchJSON.mockImplementation(async () => ({ preview }));
   openPorts.mockClear();
   useAgentWorkspaceStore.setState({ openPorts });
+  useAgentSurfaceStore.getState().selectSession(null);
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -92,6 +94,10 @@ describe('DevPreviewAffordance', () => {
     // The session's own pane — `openPorts` focuses the one it already has
     // rather than making a second view of the same preview.
     expect(openPorts).toHaveBeenCalledWith('ws1');
+    // And the console is brought TO that session: opening a pane in a session
+    // the user is not looking at (an env row while elsewhere) would change an
+    // off-screen grid and look like nothing happened.
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ws1');
   });
 
   test('with no session to open into (an environment with none running), the line still states what it knows and the action says why it cannot', async () => {
