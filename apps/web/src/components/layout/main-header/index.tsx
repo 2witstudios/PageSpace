@@ -35,11 +35,17 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel, onReveal
       <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 sm:px-4">
         {/*
           flex-wrap, not just min-w-0: this group is flex-1 and shrinkable, so
-          it never forces the OUTER wrap — it silently narrows below its
+          it never forces the OUTER wrap — it silently narrows below its own
           content instead, and any child that refuses to shrink then overflows
-          into the right-hand controls. That was invisible while the only thing
-          in here was a 30px icon link; a labelled control makes it reachable
-          at phone widths. Wrapping degrades to a second row instead.
+          into the right-hand controls rather than tightening. That was
+          invisible while the only occupant was a ~30px icon link; a control
+          carrying a word makes it reachable. Wrapping degrades to a second row.
+
+          This is the safety net for the breakpoint choices in DashboardCrumb,
+          which rest on reading the classes of every control in this header
+          rather than on measuring a running one. Get one of those wrong and
+          the header gets taller, which is recoverable; without this it would
+          overlap, which is not.
         */}
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
           <div className="flex items-center">

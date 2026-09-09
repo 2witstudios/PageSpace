@@ -136,11 +136,12 @@ describe('DashboardCrumb', () => {
       expect(label.className).not.toMatch(/\bhidden\b/);
     });
 
-    // The way OUT always shows; the you-are-here marker does not. The left
-    // group tightens as the viewport GROWS — NavButtons arrives at sm and
-    // InlineSearch at md with a 200px minimum — so a control that refuses to
-    // shrink overflows its neighbours rather than tightening. The marker can
-    // afford to go because it has nowhere to navigate to; the link cannot.
+    // The way OUT always shows; the you-are-here marker does not. The header
+    // row tightens as the viewport GROWS — NavButtons arrives at sm,
+    // InlineSearch at md with a 200px minimum, and CreditBalance unfolds at sm
+    // into three controls — so something that refuses to shrink overflows its
+    // neighbours rather than tightening. The marker can afford to go because it
+    // has nowhere to navigate to; the link cannot.
     it('given the dashboard route, should gate the you-are-here marker while the link variant never hides', () => {
       atRoute('/dashboard');
       const { unmount } = render(<DashboardCrumb />);

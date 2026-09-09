@@ -72,12 +72,13 @@ export default function DashboardCrumb() {
       {/*
         Context, not a destination, so it yields before the label does.
 
-        Gated at lg, and NOT at sm, which is the counter-intuitive part: this
-        group gets tighter as the viewport grows, because growing is what adds
-        its expensive occupants. NavButtons appears at sm (~72px) and
-        InlineSearch at md carrying a 200px minimum, so md is a worse place to
-        put a crumb than a phone is. lg is the first width where the group has
-        clear room for all of it.
+        Gated at lg, not sm, which is the counter-intuitive part: this row gets
+        TIGHTER as the viewport grows, because growing is what adds its
+        expensive occupants. Going up, NavButtons appears at sm, InlineSearch
+        at md with a 200px minimum, and CreditBalance unfolds at sm from a bare
+        readout into a readout plus an upgrade and a buy-credits button. md is
+        therefore a worse place for a crumb than a phone is. lg is the first
+        width where the row is not still gaining occupants.
 
         The cost is worth naming — DriveSwitcher, the only other chrome saying
         which drive you are in, lives in the sidebar, which is a sheet below lg.
