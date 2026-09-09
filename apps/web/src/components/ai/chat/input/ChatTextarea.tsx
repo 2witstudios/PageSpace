@@ -35,6 +35,15 @@ export interface ChatTextareaProps {
   placeholder?: string;
   /** Drive ID for mention suggestions */
   driveId?: string;
+  /**
+   * Drive scope for the `/` command picker, when it differs from the mention
+   * picker's `driveId` (defaults to it). MUST be the drive the server resolves
+   * this surface's command chips against — `page.driveId` for an agent turn
+   * (`page-chat-turn.ts`), the location context's drive for a global-assistant
+   * one (`global-chat-turn.ts`). Offering a scope the server won't use hands
+   * the user commands that fail as `not_found` the moment they're sent.
+   */
+  commandDriveId?: string;
   /** Enable cross-drive mention search */
   crossDrive?: boolean;
   /** Whether the input is disabled */
@@ -69,6 +78,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       canSendEmpty = false,
       placeholder = 'Type your message...',
       driveId,
+      commandDriveId,
       crossDrive = false,
       disabled = false,
       variant = 'main',
@@ -113,7 +123,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
     const command = useCommandSuggestion({
       inputRef: textareaRef,
       enabled: !disabled,
-      driveId,
+      driveId: commandDriveId ?? driveId,
       popupPlacement,
       getTokens,
       enterSelects: enterToSend,

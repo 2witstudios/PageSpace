@@ -31,31 +31,63 @@
  * already covers the conversation-scoped case, and doing it twice is harmless
  * (both are idempotent DELETEs) while doing neither retains content forever.
  *
+ * `ai_stream_frames` joined the same shape when it landed: it is the durable
+ * form of the very content `parts` holds, it carries `conversation_id` only to
+ * inherit that same cascade, and it has NO `user_id` at all — so the identical
+ * cross-user residue applies to it, and it cannot be reached without going
+ * through the session rows.
+ *
  * Ordering: runs BEFORE `delete-user`, so the evidence lands on the DSR row
- * while the subject still exists. Neither table references `users`, so the
- * order is a reporting choice, not a referential requirement.
+ * while the subject still exists. No table here references `users`, so the
+ * order relative to that step is a reporting choice, not a referential
+ * requirement — but the order WITHIN this step is not (see below).
  */
 
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
-import { aiStreamSessions, aiPendingAbortIntents } from '@pagespace/db/schema/ai-streams';
+import { eq, inArray } from '@pagespace/db/operators';
+import { aiStreamSessions, aiPendingAbortIntents, aiStreamFrames } from '@pagespace/db/schema/ai-streams';
 
 export interface StreamStateErasureResult {
   /** `ai_stream_sessions` rows deleted (each may hold checkpointed content). */
   streamSessions: number;
+  /** `ai_stream_frames` rows deleted (each holds the raw generated frames). */
+  streamFrames: number;
   /** `ai_pending_abort_intents` rows deleted. */
   abortIntents: number;
 }
 
 /**
- * Delete every AI stream row the subject owns, in both stream tables.
+ * Delete every AI stream row the subject owns, across all three stream tables.
  *
  * Sequential rather than concurrent: `ai_stream_sessions` is a cascade target
  * of `conversations`, and running user-scoped deletes alongside other erasure
  * statements over overlapping rows is the deadlock shape retention had to
  * avoid too. Erasure is not latency-sensitive.
+ *
+ * FRAMES BEFORE SESSIONS, and that order is load-bearing. The session row is
+ * the ONLY thing that ties a frame to a user — frames are keyed by
+ * `message_id`. Delete the sessions first and a crash before the second
+ * statement leaves the subject's generated content in the database with
+ * nothing left that can find it again: a re-run of erasure would report
+ * success over rows it can no longer see. Deleting frames first inverts that:
+ * the residue of a crash is a session row whose content a re-run still
+ * reaches. This is the same write-then-settle ordering
+ * `materializeInterruptedStream` documents, applied to teardown.
  */
 export async function deleteStreamStateForUser(userId: string): Promise<StreamStateErasureResult> {
+  const frames = await db
+    .delete(aiStreamFrames)
+    .where(
+      inArray(
+        aiStreamFrames.messageId,
+        db
+          .select({ messageId: aiStreamSessions.messageId })
+          .from(aiStreamSessions)
+          .where(eq(aiStreamSessions.userId, userId)),
+      ),
+    )
+    .returning({ messageId: aiStreamFrames.messageId });
+
   const streams = await db
     .delete(aiStreamSessions)
     .where(eq(aiStreamSessions.userId, userId))
@@ -66,5 +98,5 @@ export async function deleteStreamStateForUser(userId: string): Promise<StreamSt
     .where(eq(aiPendingAbortIntents.userId, userId))
     .returning({ conversationId: aiPendingAbortIntents.conversationId });
 
-  return { streamSessions: streams.length, abortIntents: intents.length };
+  return { streamSessions: streams.length, streamFrames: frames.length, abortIntents: intents.length };
 }

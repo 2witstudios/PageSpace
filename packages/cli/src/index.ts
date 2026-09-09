@@ -3,7 +3,7 @@ export { parseArgv, PROFILE_FLAG_RENAMED_MESSAGE } from './argv/parse.js';
 export type { CommandIntent, ParsedFlags, ParseResult, UsageError } from './argv/parse.js';
 
 // Config precedence resolver (flags > env > loaded credential > defaults).
-export { DEFAULT_HOST, resolveConfig } from './config/resolve.js';
+export { DEFAULT_HOST, isUsableTimeoutMs, MAX_TIMEOUT_MS, resolveConfig, resolveTimeoutSetting } from './config/resolve.js';
 export type { ConfigCredential, ConfigEnv, ConfigFlags, ConfigSources, ResolvedConfig } from './config/resolve.js';
 
 // Router — resolves a parsed command path to a handler.
@@ -44,7 +44,16 @@ export {
   tokenPrefix,
   upsertHost,
 } from './credentials/serialize.js';
-export type { CredentialSummary, CredentialsFile, HostCredential, HostProfiles, OAuthHostCredential, StaticHostCredential } from './credentials/serialize.js';
+export type {
+  CredentialSummary,
+  CredentialsFile,
+  HostCredential,
+  HostProfiles,
+  LoginHostCredential,
+  MachineHostCredential,
+  OAuthHostCredential,
+  StaticHostCredential,
+} from './credentials/serialize.js';
 
 // The per-machine active-key map (`pagespace keys use`) — a non-secret
 // host -> key-name JSON file next to the credential file-store fallback.
@@ -126,11 +135,24 @@ export {
   agentsAskHandler,
   agentsConfigHandler,
   agentsListHandler,
+  createAgentsAskHandler,
   modelsListHandler,
   renderAgentsList,
   renderAgentsMultiDriveList,
+  renderAskTimeoutMessage,
   renderModelsList,
 } from './commands/agents.js';
+export type { AgentsAskDeps } from './commands/agents.js';
+// Conversation reading — the retrieval half of `agents ask`. A consult that
+// outruns its caller's deadline keeps running server-side and persists its
+// answer; these are how that answer is found and read back.
+export {
+  conversationsListHandler,
+  conversationsReadHandler,
+  renderConversation,
+  renderConversationsList,
+  renderMessageParts,
+} from './commands/conversations.js';
 export { activityHandler, renderActivity } from './commands/activity.js';
 export { channelsSendHandler } from './commands/channels.js';
 
@@ -170,8 +192,23 @@ export {
   pagesReplaceLinesHandler,
 } from './commands/content.js';
 export type { ContentSourceDeps } from './commands/content.js';
-export { createSheetsEditCellsHandler, sheetsEditCellsHandler } from './commands/sheets.js';
-export type { SheetsEditCellsDeps } from './commands/sheets.js';
+export {
+  createSheetsAppendHandler,
+  createSheetsEditCellsHandler,
+  createSheetsUpdateCellsHandler,
+  renderDescribe,
+  renderGetRows,
+  renderQueryRows,
+  renderRows,
+  sheetsAppendHandler,
+  sheetsDeleteRowsHandler,
+  sheetsDescribeHandler,
+  sheetsEditCellsHandler,
+  sheetsQueryHandler,
+  sheetsRowsHandler,
+  sheetsUpdateCellsHandler,
+} from './commands/sheets.js';
+export type { SheetsStdinDeps } from './commands/sheets.js';
 export { createPagesExportHandler, pagesExportHandler } from './commands/export.js';
 export type { PagesExportDeps } from './commands/export.js';
 export {
@@ -280,6 +317,11 @@ export type { ResolveCredentialSourceInput, ResolvedCredentialSource } from './a
 export { PROBE_DRIVES_TIMEOUT_MS, probeDriveCount } from './auth/probe-drives.js';
 export type { ProbeDriveCount } from './auth/probe-drives.js';
 
+// Mint-time readback: what the key just minted can actually do, asked with
+// that key. Same auth-edge shape as the drives probe above.
+export { DESCRIBE_KEY_TIMEOUT_MS, describeKeyPermissions } from './auth/probe-permissions.js';
+export type { DescribeKeyPermissions, KeyDescription } from './auth/probe-permissions.js';
+
 // The transport switch every consent-driven command goes through — loopback
 // browser flow or RFC 8628 device flow — with each transport carrying its own
 // delay adapter (they need opposite ref/unref semantics; see wait.ts).
@@ -287,6 +329,12 @@ export { describeConsentFailure, renderDeviceCodePrompt, runConsent } from './au
 export type { ConsentResult, DeviceConsentDeps, LoopbackConsentDeps, RunConsentParams } from './auth/run-consent.js';
 export { createSigintFlag } from './auth/sigint.js';
 export { parseTokenResponse } from './auth/token-response.js';
+
+// Secret-free classification of the resolved credential, so a command can
+// refuse accurately instead of letting the server answer a question it can
+// only refuse (issue #2464).
+export { credentialKindOf, keysCommandNeedsLoginMessage } from './auth/credential-kind.js';
+export type { CredentialKind } from './auth/credential-kind.js';
 
 export { buildAuthProvider, enforceAuth, FailingAuthProvider } from './auth/auth-context.js';
 export type { BuildAuthProviderDeps, DiscoverTokenEndpoint, EnforceAuthDeps } from './auth/auth-context.js';
@@ -314,7 +362,32 @@ export {
 } from './commands/keys/create.js';
 export type { BuildKeyActivateScopeResult, BuildKeyUpdateScopeResult, BuildTokenScopeResult, ResolveNewKeyNameResult, TokensCreateHandlerDeps } from './commands/keys/create.js';
 export { tokensList, tokensListHandler } from './commands/keys/list.js';
+export { keysDescribeHandler, parseKeysDescribeArgs, renderKeyDescription } from './commands/keys/describe.js';
 export { tokensRevoke, tokensRevokeHandler } from './commands/keys/revoke.js';
+
+// `pagespace env enroll|token` — this machine's local-environment identity.
+export { createEnvEnrollHandler, createEnvTokenHandler, envEnrollHandler, envTokenHandler } from './commands/env.js';
+export type { EnvEnrollHandlerDeps, EnvTokenHandlerDeps } from './commands/env.js';
+export { encodeChallenge, generateMachineKeypair, signWithMachineKey } from './env-bridge/keypair.js';
+export type { GenerateMachineKeypair, MachineKeypair, SignWithMachineKey } from './env-bridge/keypair.js';
+// `pagespace env connect|disconnect|policy` — the bridge daemon (M1 · t08).
+// Its pure decision core comes from `@pagespace/lib/env-bridge/*` through the
+// single seam `env-bridge/lib-core.ts`, which the build BUNDLES into dist
+// (`scripts/bundle-lib-core.mjs`), so the published package never resolves
+// `@pagespace/lib` at runtime (`__tests__/published-entry-no-lib.test.ts`).
+export { createEnvConnectHandler, envConnectHandler, pidFilePath } from './commands/env/connect.js';
+export { assertSecureHost, bridgeSocketUrl, isLoopbackHost } from './env-bridge/secure-host.js';
+export type { EnvConnectHandlerDeps, PidFileStore } from './commands/env/connect.js';
+export { createEnvDisconnectHandler, envDisconnectHandler } from './commands/env/disconnect.js';
+export type { EnvDisconnectHandlerDeps } from './commands/env/disconnect.js';
+export { createEnvPolicyHandler, envPolicyHandler } from './commands/env/policy.js';
+export type { EnvPolicyHandlerDeps } from './commands/env/policy.js';
+export { loadMachinePolicy, defaultPolicyPath, describePolicyRefusal } from './env-bridge/policy.js';
+export type { LoadedPolicy, PolicyLoadReason, PolicyLoaderDeps } from './env-bridge/policy.js';
+export { createAuditLog, defaultAuditPath, formatAuditLine } from './env-bridge/audit-log.js';
+export type { AuditEntry, AuditLog, AuditLogDeps } from './env-bridge/audit-log.js';
+export { mintBridgeToken, BridgeTokenError } from './env-bridge/token.js';
+export type { MintBridgeTokenInput, MintedBridgeToken } from './env-bridge/token.js';
 
 // `pagespace keys use` — the per-machine active key (browser-approved
 // activation ceremony shared with the wizard's "Set active key").

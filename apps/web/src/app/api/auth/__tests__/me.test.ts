@@ -46,7 +46,7 @@ const mockUser: User = {
   tokenVersion: 0,
   adminRoleVersion: 0,
   currentAiProvider: 'openai',
-  currentAiModel: 'openai/gpt-5.3-chat',
+  currentAiModel: 'openai/gpt-5.4-nano',
   imageGenerationModel: null,
   storageUsedBytes: 0,
   activeUploads: 0,
@@ -60,6 +60,7 @@ const mockUser: User = {
   suspendedReason: null,
   timezone: null,
   starterSkillsInstalledAt: null,
+  onboardingCompletedAt: null,
   createdAt: new Date('2024-01-01T00:00:00Z'),
   updatedAt: new Date('2024-01-01T00:00:00Z'),
 };

@@ -9,6 +9,7 @@ import { CanvasFrame } from '@/components/canvas/CanvasFrame';
 import { ErrorBoundary } from '@/components/ai/shared';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { useDocument } from '@/hooks/useDocument';
+import DocumentConflictGate from '@/components/layout/middle-content/page-views/document/DocumentConflictGate';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useSocket } from '@/hooks/useSocket';
@@ -53,6 +54,11 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
 
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const closePreview = useCallback(() => setIsPreviewOpen(false), []);
+  // Bumped after a force-save so CanvasFrame re-navigates to the freshly saved
+  // document. The frame renders from the server (see the preview route) rather
+  // than from in-memory editor state, which is what gives it the same CSP the
+  // published artifact gets — so it has to be told when the server's copy moved.
+  const [previewKey, setPreviewKey] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const hasInitializedRef = useRef(false);
   const isDirtyRef = useRef(false);
@@ -62,15 +68,12 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
   // identical fix for why the key must not be pageId alone.
   const instanceId = useId();
 
-  // Mirrors published_pages.themeBridgeEnabled so the View tab's live preview
-  // matches what publishing produces. Shared with the header's
-  // PublishControls and the Settings tab's Appearance category via
-  // usePublishStatusStore — a save from either surface updates this
-  // immediately, no callback prop needed.
+  // Populates usePublishStatusStore for the header's PublishControls and the
+  // Settings tab's Appearance category. The PREVIEW no longer reads
+  // themeBridgeEnabled from here — the preview route reads published_pages
+  // itself when it renders, so the frame and the published artifact resolve the
+  // setting from one place and cannot drift.
   const fetchPublishStatus = usePublishStatusStore((s) => s.fetchStatus);
-  const themeBridgeEnabled = usePublishStatusStore(
-    (s) => s.statuses.get(pageId)?.settings.themeBridgeEnabled ?? true
-  );
   useEffect(() => {
     fetchPublishStatus(pageId);
   }, [pageId, fetchPublishStatus]);
@@ -83,6 +86,9 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
     updateContentFromServer,
     saveWithDebounce,
     forceSave,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
   } = useDocument(pageId);
 
   const content = documentState?.content ?? '';
@@ -115,6 +121,24 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
   useEffect(() => {
     forceSaveRef.current = forceSave;
   }, [forceSave]);
+
+  // Entering the View tab flushes any pending edit, then bumps previewKey so the
+  // frame loads what was just written. The Code and View tabs are mutually
+  // exclusive, so there is no moment where the author is typing and watching at
+  // once — which is what makes server-rendering the preview free of any
+  // live-update cost.
+  useEffect(() => {
+    if (activeTab !== 'view') return;
+    let cancelled = false;
+    forceSaveRef.current()
+      .catch(console.error)
+      .finally(() => {
+        if (!cancelled) setPreviewKey((key) => key + 1);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
 
   // Initialize document when component mounts (fetches from API if not cached)
   useEffect(() => {
@@ -217,6 +241,12 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
 
   return (
     <div ref={containerRef} className="h-full flex flex-col relative">
+      <DocumentConflictGate
+        conflict={conflict}
+        onResolve={resolveConflict}
+        isResolving={isResolvingConflict}
+        previewMode="plain"
+      />
       <div className="relative flex flex-wrap items-center border-b">
         <button
           className={`px-4 py-2 ${activeTab === 'view' ? 'border-b-2 border-blue-500' : ''}`}
@@ -259,7 +289,7 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
           </button>
           {!isPreviewOpen && (
             <ErrorBoundary>
-              <CanvasFrame html={content} themeBridgeEnabled={themeBridgeEnabled} />
+              <CanvasFrame pageId={pageId} previewKey={previewKey} />
             </ErrorBoundary>
           )}
         </div>
@@ -281,7 +311,7 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
         >
           <DialogTitle className="sr-only">Canvas preview</DialogTitle>
           <ErrorBoundary>
-            <CanvasFrame html={content} title="Canvas preview" themeBridgeEnabled={themeBridgeEnabled} onEscape={closePreview} />
+            <CanvasFrame pageId={pageId} previewKey={previewKey} title="Canvas preview" onEscape={closePreview} />
           </ErrorBoundary>
         </DialogContent>
       </Dialog>

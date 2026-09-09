@@ -14,6 +14,13 @@ export interface ElectronAPI {
   removeAllListeners: (channel: string) => void;
   platform: NodeJS.Platform;
   version: string;
+  /**
+   * Which desktop app this is — `pagespace` or `coder`. One shell builds both,
+   * and each registers its own protocol scheme, so anything constructing a deep
+   * link back into the app must resolve the scheme from this rather than
+   * assuming `pagespace://`. Absent in older shells; treat that as `pagespace`.
+   */
+  appVariant?: string;
   auth: {
     /**
      * Gets the opaque session token from Electron's secure storage.

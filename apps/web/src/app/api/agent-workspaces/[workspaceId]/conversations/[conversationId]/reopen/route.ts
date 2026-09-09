@@ -1,17 +1,18 @@
 /**
- * Reopen ONE conversation back INTO its session's listing — the undo of the
- * sibling `[conversationId]` route's DELETE.
+ * Put ONE conversation back into its workspace — the undo of the sibling
+ * `[conversationId]` route's DELETE.
  *
- * POST → 200 { ok: true } — the console's "History" affordance: a closed
- * listing is invisible to `GET /api/agent-workspaces` (see
- * `listSessionConversationsBulk`'s doc) but its transcript is untouched, so
- * this is how a user gets back to a conversation they closed a pane on. It
- * never touches history — same as the close route, this stamps/clears
- * `conversations.closedInWorkspaceAt` only.
+ * POST → 200 { ok: true } — an ADMISSION, and a re-mint. There is no `readmit`
+ * in the model: that was a `move` back onto the grid, and it existed only
+ * because a closed thread kept a node with no parent. Closing DESTROYS the
+ * node, so a thread that was closed is a member of nothing, and putting it back
+ * is an ordinary admission that mints a fresh node for it.
  *
- * Subject to the same `MAX_SESSION_CONVERSATIONS` ceiling the create route
- * enforces (`session_full` → the shared 429), because reopening occupies an
- * open-listing slot exactly like minting a new conversation does.
+ * **Which is why `session_full` is live on this path.** It is bounded by
+ * `MAX_SESSION_CONVERSATIONS` because the cap counts MEMBERSHIP and a close now
+ * genuinely frees a slot — so a return has to re-consult the ceiling like any
+ * other admission, and can lose. It is answered 409 below rather than folded
+ * into the "nothing here" 404: it is the one refusal here a user can resolve.
  *
  * Gated by the same ordinary session access check the close route uses —
  * this is a routine write, not a capability-gated act.
@@ -23,7 +24,6 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkSessionAccess, reopenConversationInSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
-import { sessionConversationLimitExceeded } from '@/lib/agent-workspaces/quota-response';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -61,7 +61,14 @@ export async function POST(request: Request, context: RouteContext) {
   }
 
   if (outcome === 'session_full') {
-    return sessionConversationLimitExceeded(request, auth.userId, workspaceId, ROUTE);
+    // 409, not 404: the thread exists and is the caller's, and the workspace is
+    // simply full. This is the one refusal on this path a user can resolve —
+    // close something and retry — so it says so, rather than joining the
+    // "nothing here" shape above and inviting no action at all.
+    return NextResponse.json(
+      { error: 'This session is full. Close a conversation and try again.' },
+      { status: 409 },
+    );
   }
 
   if (outcome === 'reopened') {
@@ -74,6 +81,13 @@ export async function POST(request: Request, context: RouteContext) {
     });
   }
 
+  // EXHAUSTIVENESS BACKSTOP — see the twin in `claim/route.ts`. Everything
+  // below is a SUCCESS response, so a refusal reaching it is answered
+  // `200 {ok: true}`. An `if`-chain cannot be checked for completeness, so the
+  // narrowing is written down: adding a refusal to `ReopenConversationOutcome`
+  // without an arm above is a COMPILE error here rather than a silent success.
+  const settled: 'reopened' | 'already_open' = outcome;
+
   // `alreadyOpen` (outcome === 'already_open'): this call did NOT transition
   // the listing — it was already open (e.g. a different pane, tab, or an
   // agent switch that left it open but unshown). The caller needs this to
@@ -82,5 +96,5 @@ export async function POST(request: Request, context: RouteContext) {
   // listing the request never actually opened, possibly still in use
   // elsewhere (review finding — chatgpt-codex-connector on PR #2299,
   // round 15).
-  return NextResponse.json({ ok: true, alreadyOpen: outcome === 'already_open' });
+  return NextResponse.json({ ok: true, alreadyOpen: settled === 'already_open' });
 }

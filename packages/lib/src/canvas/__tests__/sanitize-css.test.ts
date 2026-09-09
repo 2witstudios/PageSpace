@@ -60,6 +60,51 @@ describe('sanitizeCSS — allowedHttpsHosts option', () => {
   })
 })
 
+describe('sanitizeCSS — allowAnyHttpsUrl option (site mode)', () => {
+  it('given allowAnyHttpsUrl, should preserve an https url() from any host', () => {
+    const css = 'background: url("https://cdn.example.com/hero.png");'
+    const result = sanitizeCSS(css, { allowAnyHttpsUrl: true })
+    expect(result).toContain('https://cdn.example.com/hero.png')
+    expect(result).not.toContain('url("")')
+  })
+
+  it('given allowAnyHttpsUrl, should preserve an https @import so webfont stylesheets load', () => {
+    const css = "@import url('https://fonts.googleapis.com/css2?family=Inter');"
+    const result = sanitizeCSS(css, { allowAnyHttpsUrl: true })
+    expect(result).toContain('fonts.googleapis.com')
+    expect(result).not.toContain('@import blocked')
+  })
+
+  it('given allowAnyHttpsUrl, should still block script execution vectors', () => {
+    const css = 'a { width: expression(alert(1)); background: url("javascript:alert(1)"); }'
+    const result = sanitizeCSS(css, { allowAnyHttpsUrl: true })
+    expect(result).toContain('expression blocked')
+    expect(result).toContain('javascript blocked')
+  })
+
+  it('given allowAnyHttpsUrl, should still neuter the data:text/html scheme', () => {
+    const css = 'background: url("data:text/html,<script>alert(1)</script>");'
+    const result = sanitizeCSS(css, { allowAnyHttpsUrl: true })
+    // What makes this dangerous is the scheme sitting in a fetchable position.
+    // Once it is replaced by a comment marker the browser has no document to
+    // parse, and the leftover markup text is inert.
+    expect(result).not.toMatch(/url\(\s*['"]?data:text\/html/i)
+    expect(result).toContain('data:text/html blocked')
+  })
+
+  it('given allowAnyHttpsUrl, should still block plaintext http:// so a site cannot downgrade', () => {
+    const css = 'background: url("http://cdn.example.com/hero.png");'
+    const result = sanitizeCSS(css, { allowAnyHttpsUrl: true })
+    expect(result).toContain('url("")')
+  })
+
+  it('given allowAnyHttpsUrl is absent, should block external https exactly as before', () => {
+    const css = 'background: url("https://cdn.example.com/hero.png");'
+    expect(sanitizeCSS(css)).toContain('url("")')
+    expect(sanitizeCSS(css, { allowAnyHttpsUrl: false })).toContain('url("")')
+  })
+})
+
 describe('sanitizeCSS', () => {
   it('given empty input, should return an empty string', () => {
     expect(sanitizeCSS('')).toBe('')

@@ -27,6 +27,17 @@ export interface RenderPublishedPageInput {
    * external HTTPS `url()` values.
    */
   assetBaseUrl?: string;
+  /**
+   * Mirrors `pages.siteMode`. Threads the persisted flag through to
+   * `renderCanvasDocument`, which swaps the baseline CSP for `buildSiteCsp()`
+   * and stops the CSS sanitizer rewriting external https `url()`/`@import`.
+   *
+   * Must stay wired: the in-app preview route reads the same column, and if
+   * only one of the two honours it a site-mode page loads CDN scripts and
+   * fetches in preview but not once published — defeating the parity this
+   * whole path exists to guarantee.
+   */
+  siteMode?: boolean;
   /** Base URL for favicon assets — see RenderCanvasDocumentInput.faviconBaseUrl. */
   faviconBaseUrl?: string;
   /** Explicit favicon href from the canvas — see RenderCanvasDocumentInput.faviconHref. */

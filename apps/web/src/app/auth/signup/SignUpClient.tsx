@@ -18,7 +18,8 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useAuthCSRF } from '@/hooks/useAuthCSRF';
 import { useOAuthSignIn } from '@/hooks/useOAuthSignIn';
 import type { InviteContextData } from '@/lib/auth/invite-resolver';
-import { detectInAppBrowser, getPreferredBrowserName } from '@/lib/auth/browser-detection';
+import { getPreferredBrowserName } from '@/lib/auth/browser-detection';
+import { useInAppBrowserNotice } from '@/hooks/useInAppBrowserNotice';
 
 interface SignUpClientProps {
   inviteToken?: string;
@@ -29,7 +30,7 @@ interface SignUpClientProps {
 export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpClientProps) {
   const [error, setError] = useState<string | null>(null);
   const [showMagicLink, setShowMagicLink] = useState(false);
-  const [inAppInfo, setInAppInfo] = useState<{ isInApp: boolean; appName: string | undefined }>({ isInApp: false, appName: undefined });
+  const inAppInfo = useInAppBrowserNotice();
   const router = useRouter();
   const { csrfToken, refreshToken } = useAuthCSRF();
   const [passkeyLoading, setPasskeyLoading] = useState(false);
@@ -50,13 +51,12 @@ export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpCl
 
   const isAnyLoading = isGoogleLoading || isAppleLoading || passkeyLoading;
 
+  // A genuine in-app browser cannot complete Google's web OAuth, so open the
+  // magic-link form for it. The Capacitor shell never reports in-app (native
+  // Google works there), so this leaves the app's sign-in screen alone.
   useEffect(() => {
-    const result = detectInAppBrowser();
-    if (result.isInApp) {
-      setInAppInfo({ isInApp: true, appName: result.appName });
-      setShowMagicLink(true);
-    }
-  }, []);
+    if (inAppInfo.isInApp) setShowMagicLink(true);
+  }, [inAppInfo.isInApp]);
 
   const browserName = getPreferredBrowserName() ?? 'your browser';
   const appLabel = inAppInfo.appName ?? 'this app';

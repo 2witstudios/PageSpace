@@ -31,7 +31,10 @@ vi.mock('node:os', () => ({
 }));
 
 vi.mock('../store', () => ({ store: { set: vi.fn() } }));
-vi.mock('../app-url', () => ({ getAppUrl: vi.fn(() => 'https://pagespace.ai/dashboard') }));
+vi.mock('../app-url', () => ({
+  getAppOrigin: vi.fn(() => 'https://pagespace.ai'),
+  getStartUrl: vi.fn(() => 'https://pagespace.ai/dashboard'),
+}));
 vi.mock('../state', () => ({
   mainWindow: null,
   setCachedSession: vi.fn(),
@@ -54,7 +57,7 @@ vi.mock('../mcp-status', () => ({ triggerMCPStatusBroadcast: vi.fn() }));
 
 import { ipcMain, session, shell } from 'electron';
 import { saveAuthSession } from '../auth-storage';
-import { getAppUrl } from '../app-url';
+import { getAppOrigin } from '../app-url';
 import { store } from '../store';
 import { getOrLoadSession } from '../auth-session';
 import { registerIPCHandlers } from '../ipc-handlers';
@@ -91,7 +94,7 @@ describe('IPC Handlers', () => {
     it('should save session AND set cookie on defaultSession', async () => {
       vi.mocked(saveAuthSession).mockResolvedValue(undefined);
       vi.mocked(session.defaultSession.cookies.set).mockResolvedValue(undefined);
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
 
       const handler = getRegisteredHandler('auth:store-session');
       const sessionData = {
@@ -119,7 +122,7 @@ describe('IPC Handlers', () => {
     it('should set secure: true for HTTPS origins', async () => {
       vi.mocked(saveAuthSession).mockResolvedValue(undefined);
       vi.mocked(session.defaultSession.cookies.set).mockResolvedValue(undefined);
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
 
       const handler = getRegisteredHandler('auth:store-session');
       await handler(senderFor('https://pagespace.ai/dashboard'), { sessionToken: 'x', csrfToken: 'y', deviceToken: 'z' });
@@ -132,7 +135,7 @@ describe('IPC Handlers', () => {
     it('should set secure: false for HTTP LAN origins', async () => {
       vi.mocked(saveAuthSession).mockResolvedValue(undefined);
       vi.mocked(session.defaultSession.cookies.set).mockResolvedValue(undefined);
-      vi.mocked(getAppUrl).mockReturnValue('http://pagespace.local:3000/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('http://pagespace.local:3000');
 
       const handler = getRegisteredHandler('auth:store-session');
       await handler(senderFor('http://pagespace.local:3000/dashboard'), { sessionToken: 'x', csrfToken: 'y', deviceToken: 'z' });
@@ -145,7 +148,7 @@ describe('IPC Handlers', () => {
     it('should set secure: false for localhost', async () => {
       vi.mocked(saveAuthSession).mockResolvedValue(undefined);
       vi.mocked(session.defaultSession.cookies.set).mockResolvedValue(undefined);
-      vi.mocked(getAppUrl).mockReturnValue('http://localhost:3000/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('http://localhost:3000');
 
       const handler = getRegisteredHandler('auth:store-session');
       await handler(senderFor('http://localhost:3000/dashboard'), { sessionToken: 'x', csrfToken: 'y', deviceToken: 'z' });
@@ -158,7 +161,7 @@ describe('IPC Handlers', () => {
     it('should still succeed if cookie setting fails (non-blocking)', async () => {
       vi.mocked(saveAuthSession).mockResolvedValue(undefined);
       vi.mocked(session.defaultSession.cookies.set).mockRejectedValue(new Error('Cookie error'));
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
 
       const handler = getRegisteredHandler('auth:store-session');
       const result = await handler(senderFor('https://pagespace.ai/dashboard'), {
@@ -171,7 +174,7 @@ describe('IPC Handlers', () => {
     });
 
     it('refuses to store a session from an untrusted sender (no injection)', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
 
       const handler = getRegisteredHandler('auth:store-session');
       const result = await handler(untrustedEvent, {
@@ -188,7 +191,7 @@ describe('IPC Handlers', () => {
 
   describe('set-app-url (H5 allowlist + origin gate)', () => {
     it('stores an allowlisted app URL from a trusted sender', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
       const handler = getRegisteredHandler('set-app-url');
 
       const result = await handler(trustedEvent, 'https://pagespace.ai/dashboard');
@@ -198,7 +201,7 @@ describe('IPC Handlers', () => {
     });
 
     it('rejects a non-allowlisted URL without storing it', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
       const handler = getRegisteredHandler('set-app-url');
 
       const result = await handler(trustedEvent, 'https://evil.com/phish');
@@ -208,7 +211,7 @@ describe('IPC Handlers', () => {
     });
 
     it('rejects any set-app-url from an untrusted sender', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
       const handler = getRegisteredHandler('set-app-url');
 
       const result = await handler(untrustedEvent, 'https://pagespace.ai/dashboard');
@@ -218,7 +221,7 @@ describe('IPC Handlers', () => {
     });
 
     it('allows the currently-configured (env) origin even if not static', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://app.example.com/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://app.example.com');
       const handler = getRegisteredHandler('set-app-url');
 
       const result = await handler(
@@ -233,7 +236,7 @@ describe('IPC Handlers', () => {
 
   describe('auth:get-session-token (H5 origin gate)', () => {
     it('returns the token to a trusted sender', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
       vi.mocked(getOrLoadSession).mockResolvedValue({ sessionToken: 'ps_sess_secret' } as never);
       const handler = getRegisteredHandler('auth:get-session-token');
 
@@ -243,7 +246,7 @@ describe('IPC Handlers', () => {
     });
 
     it('returns null to an untrusted sender (token never leaves)', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
       vi.mocked(getOrLoadSession).mockResolvedValue({ sessionToken: 'ps_sess_secret' } as never);
       const handler = getRegisteredHandler('auth:get-session-token');
 
@@ -254,7 +257,7 @@ describe('IPC Handlers', () => {
     });
 
     it('fails closed when the sender frame is unknown', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
       const handler = getRegisteredHandler('auth:get-session-token');
 
       const result = await handler(noFrameEvent);
@@ -265,7 +268,7 @@ describe('IPC Handlers', () => {
 
   describe('auth:begin-exchange (L9)', () => {
     it('returns a fresh opaque state to a trusted sender', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
       const handler = getRegisteredHandler('auth:begin-exchange');
 
       const result = await handler(trustedEvent);
@@ -274,7 +277,7 @@ describe('IPC Handlers', () => {
     });
 
     it('refuses an untrusted sender', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
       const handler = getRegisteredHandler('auth:begin-exchange');
 
       const result = await handler(untrustedEvent);
@@ -285,7 +288,7 @@ describe('IPC Handlers', () => {
 
   describe('mcp:execute-tool (H5 origin gate)', () => {
     it('refuses execution from an untrusted sender', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
       const handler = getRegisteredHandler('mcp:execute-tool');
 
       const result = await handler(untrustedEvent, 'srv', 'tool', {});
@@ -296,7 +299,7 @@ describe('IPC Handlers', () => {
 
   describe('mcp:get-config (H5 origin gate — env secrets)', () => {
     it('returns an empty config to an untrusted sender (no env leak)', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
       const handler = getRegisteredHandler('mcp:get-config');
 
       const result = await handler(untrustedEvent);
@@ -307,7 +310,7 @@ describe('IPC Handlers', () => {
 
   describe('mcp:stop-server (H5 origin gate)', () => {
     it('refuses to stop a server from an untrusted sender', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
       const handler = getRegisteredHandler('mcp:stop-server');
 
       const result = await handler(untrustedEvent, 'srv');
@@ -385,7 +388,7 @@ describe('IPC Handlers', () => {
 
     it('allows /auth/passkey-external on the configured app origin', async () => {
       vi.mocked(shell.openExternal).mockResolvedValue(undefined);
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
 
       const handler = getRegisteredHandler('auth:open-external');
       const result = await handler(
@@ -401,7 +404,7 @@ describe('IPC Handlers', () => {
 
     it('allows a localhost http app origin in development', async () => {
       vi.mocked(shell.openExternal).mockResolvedValue(undefined);
-      vi.mocked(getAppUrl).mockReturnValue('http://localhost:3000/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('http://localhost:3000');
 
       const handler = getRegisteredHandler('auth:open-external');
       const result = await handler(
@@ -416,7 +419,7 @@ describe('IPC Handlers', () => {
     });
 
     it('rejects app-origin URLs whose path is not /auth/passkey-external', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
 
       const handler = getRegisteredHandler('auth:open-external');
       const result = await handler(
@@ -432,7 +435,7 @@ describe('IPC Handlers', () => {
     });
 
     it('rejects app-origin lookalike hosts', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
 
       const handler = getRegisteredHandler('auth:open-external');
       const result = await handler(
@@ -448,7 +451,7 @@ describe('IPC Handlers', () => {
     });
 
     it('rejects http on non-localhost even for /auth/passkey-external', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
 
       const handler = getRegisteredHandler('auth:open-external');
       const result = await handler(
@@ -465,7 +468,7 @@ describe('IPC Handlers', () => {
 
     it('allows /auth/passkey-register-external on the configured app origin', async () => {
       vi.mocked(shell.openExternal).mockResolvedValue(undefined);
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
 
       const handler = getRegisteredHandler('auth:open-external');
       const result = await handler(
@@ -481,7 +484,7 @@ describe('IPC Handlers', () => {
 
     it('allows /auth/passkey-register-external on a localhost http app origin', async () => {
       vi.mocked(shell.openExternal).mockResolvedValue(undefined);
-      vi.mocked(getAppUrl).mockReturnValue('http://localhost:3000/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('http://localhost:3000');
 
       const handler = getRegisteredHandler('auth:open-external');
       const result = await handler(
@@ -496,7 +499,7 @@ describe('IPC Handlers', () => {
     });
 
     it('rejects /auth/passkey-register-external on a third-party origin', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
 
       const handler = getRegisteredHandler('auth:open-external');
       const result = await handler(
@@ -512,7 +515,7 @@ describe('IPC Handlers', () => {
     });
 
     it('rejects app-origin lookalike hosts for /auth/passkey-register-external', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
 
       const handler = getRegisteredHandler('auth:open-external');
       const result = await handler(
@@ -528,7 +531,7 @@ describe('IPC Handlers', () => {
     });
 
     it('rejects http on non-localhost even for /auth/passkey-register-external', async () => {
-      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      vi.mocked(getAppOrigin).mockReturnValue('https://pagespace.ai');
 
       const handler = getRegisteredHandler('auth:open-external');
       const result = await handler(

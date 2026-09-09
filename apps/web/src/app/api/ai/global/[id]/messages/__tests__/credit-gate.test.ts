@@ -12,13 +12,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const {
   mockCreateStreamLifecycle,
-  mockLifecyclePushPart,
   mockLifecycleFinish,
   mockBroadcastChatUserMessage,
   mockSaveGlobalAssistantMessageToDatabase,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
-  mockLifecyclePushPart: vi.fn(),
   mockLifecycleFinish: vi.fn(),
   mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
   mockSaveGlobalAssistantMessageToDatabase: vi.fn().mockResolvedValue(undefined),
@@ -218,7 +216,7 @@ vi.mock('@pagespace/lib/billing/credit-gate', () => ({
 }));
 
 vi.mock('@/lib/ai/core/provider-factory', () => ({
-  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.4-nano' }),
   updateUserProviderSettings: vi.fn(),
   createProviderErrorResponse: vi.fn(),
   isProviderError: vi.fn().mockReturnValue(false),
@@ -341,7 +339,7 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   ADMIN_ONLY_PROVIDERS: new Set<string>([]),
   resolveProviderModel: vi.fn((sp: string, sm: string) => ({
     provider: sp && sm ? sp : 'openai',
-    model: sm || 'openai/gpt-5.3-chat',
+    model: sm || 'openai/gpt-5.4-nano',
   })),
 }));
 vi.mock('@/lib/ai/core/tool-utils', () => ({
@@ -373,6 +371,32 @@ const mockAuth = (): SessionAuthResult => ({
   adminRoleVersion: 0,
 });
 
+/**
+ * A stand-in for the lifecycle's frame channel.
+ *
+ * The turn strategies hand the SDK stream to the pump and serve the response by SUBSCRIBING
+ * to this — so a mocked lifecycle has to carry one or the route cannot build a response at
+ * all. Only the surface `pumpAndRespond` touches is modelled; the channel's real behaviour is
+ * covered in stream-channel.test.ts, and the reduction in foldChunksToParts.test.ts.
+ */
+const makeFakeChannel = () => {
+  const frames: unknown[] = [];
+  return {
+    messageId: 'msg-1',
+    get nextSeq() { return frames.length; },
+    firstAvailableSeq: 0,
+    finished: false,
+    aborted: false,
+    subscriberCount: 0,
+    append: (chunk: unknown) => { frames.push(chunk); },
+    finish: () => {},
+    getFrames: () => frames.slice(),
+    subscribe: () => () => {},
+    subscribeReadable: () => new ReadableStream({ start(c) { c.close(); } }),
+  } as never;
+};
+
+
 const makeRequest = () =>
   new Request('https://example.com/api/ai/global/conv-1/messages', {
     method: 'POST',
@@ -380,7 +404,7 @@ const makeRequest = () =>
     body: JSON.stringify({
       messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
       selectedProvider: 'openai',
-      selectedModel: 'openai/gpt-5.3-chat',
+      selectedModel: 'openai/gpt-5.4-nano',
     }),
   });
 
@@ -400,7 +424,7 @@ describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
     captured.totalUsage = { inputTokens: 10, outputTokens: 5, totalTokens: 15 };
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
-    mockCreateStreamLifecycle.mockResolvedValue({ pushPart: mockLifecyclePushPart, finish: mockLifecycleFinish, getBufferedParts: vi.fn().mockReturnValue([]) });
+    mockCreateStreamLifecycle.mockResolvedValue({ channel: makeFakeChannel(), finish: mockLifecycleFinish, getParts: vi.fn().mockResolvedValue([]) });
   });
 
   it('returns 402 out_of_credits and never starts the stream when the gate denies', async () => {
@@ -469,7 +493,7 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
     captured.streamTextOptions = {};
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
-    mockCreateStreamLifecycle.mockResolvedValue({ pushPart: mockLifecyclePushPart, finish: mockLifecycleFinish, getBufferedParts: vi.fn().mockReturnValue([]) });
+    mockCreateStreamLifecycle.mockResolvedValue({ channel: makeFakeChannel(), finish: mockLifecycleFinish, getParts: vi.fn().mockResolvedValue([]) });
   });
 
   it('calls AIMonitoring.trackUsage even when the provider returns no usage metadata', async () => {
@@ -482,7 +506,7 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
 
     expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
     const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
-    expect(call.model).toBe('openai/gpt-5.3-chat');
+    expect(call.model).toBe('openai/gpt-5.4-nano');
     expect(call.totalTokens).toBeUndefined();
   });
 
@@ -495,7 +519,7 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
 
     expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
     const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
-    expect({ model: call.model, totalTokens: call.totalTokens }).toEqual({ model: 'openai/gpt-5.3-chat', totalTokens: 20 });
+    expect({ model: call.model, totalTokens: call.totalTokens }).toEqual({ model: 'openai/gpt-5.4-nano', totalTokens: 20 });
   });
 
   it('AWAITS trackUsage in onFinish (durable persistence, not fire-and-forget)', async () => {
@@ -507,7 +531,11 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
     // within a bounded number of flushes. This is what makes the guarantee testable
     // — a synchronous mock + "was it called" assertion would pass either way.
     let resolveTrack!: () => void;
-    vi.mocked(AIMonitoring.trackUsage).mockReturnValueOnce(new Promise<void>((res) => { resolveTrack = res; }));
+    vi.mocked(AIMonitoring.trackUsage).mockReturnValueOnce(
+      new Promise((res) => {
+        resolveTrack = () => res({ persisted: true, creditsSettled: true });
+      }),
+    );
 
     await POST(makeRequest(), makeContext());
     await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
@@ -543,7 +571,7 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
     expect(mockSaveGlobalAssistantMessageToDatabase.mock.calls.length).toBe(savesBeforeFinish);
     expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
     const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
-    expect(call.model).toBe('openai/gpt-5.3-chat');
+    expect(call.model).toBe('openai/gpt-5.4-nano');
   });
 
   it('settles the hold (trackUsage) even when persisting the assistant message throws', async () => {

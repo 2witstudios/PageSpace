@@ -50,7 +50,7 @@ export async function POST(request: Request, context: RouteContext) {
   if (isAuthError(auth)) return auth.error;
   const { workspaceId } = await context.params;
 
-  let body: { agentPageId?: unknown; conversationId?: unknown } = {};
+  let body: { agentPageId?: unknown; conversationId?: unknown; activeNodeId?: unknown } = {};
   try {
     body = await request.json();
   } catch {
@@ -98,12 +98,20 @@ export async function POST(request: Request, context: RouteContext) {
       ? body.conversationId
       : createId();
 
+  // WHERE the caller wants it, when a human picked a pane. A preference only —
+  // the placement policy still refuses a pane it may not give up, and an id
+  // naming nothing in this tree simply loses to the default. Not validated
+  // beyond its type for that reason: it cannot address anything outside the
+  // workspace the write already locked.
+  const activeNodeId = typeof body.activeNodeId === 'string' && body.activeNodeId.length > 0 ? body.activeNodeId : null;
+
   try {
     await createConversationInSession({
       conversationId,
       userId: auth.userId,
       agentPageId,
       workspaceId,
+      ...(activeNodeId === null ? {} : { activeNodeId }),
     });
   } catch (error) {
     if (error instanceof SessionFullError) {

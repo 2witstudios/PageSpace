@@ -1,6 +1,6 @@
 /**
  * The Agents console's default middle-panel view — every past conversation
- * the requester owns. The behavior worth pinning: clicking a session-less
+ * the requester owns. The behavior worth pinning: clicking an unbound
  * row now tries to CLAIM it into a freshly spawned session (landing it in
  * the pane grid with a real sandbox) before falling back to the pre-claim
  * page/global navigation, and a capability-kind failure degrades silently
@@ -50,20 +50,20 @@ import AgentsPastConversationsList from '../AgentsPastConversationsList';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { ApiRequestError } from '@/lib/auth/auth-fetch';
 import { isAgentWorkspacesKey } from '../panes/workspace-conversations';
+import type { PastConversationDTO } from '@/lib/agent-workspaces/past-conversation-dto';
 
-interface Row {
-  conversationId: string;
-  title: string | null;
-  type: 'page' | 'global';
-  agentPageId: string | null;
-  pageTitle: string | null;
-  lastMessageAt: string | null;
-  createdAt: string;
-  sessionId: string | null;
-  sessionName: string | null;
-  sessionEndedAt: string | null;
-  driveId: string | null;
-}
+/**
+ * The wire shape, imported — NOT re-declared here. A private `interface Row`
+ * used to live in this file saying `sessionId`, and that is precisely how the
+ * bug stayed invisible: these tests fed the component rows shaped like the
+ * client's wrong belief, so they agreed with it. Fixtures now come from the
+ * one declaration the server is derived from as well
+ * (`past-conversation-dto.ts`), so a rename breaks this file too.
+ */
+type Row = PastConversationDTO;
+
+/** A real cuid2 — `claimConflictWorkspaceId` refuses anything that is not one. */
+const OWNER_WORKSPACE_ID = 'nshgif165q8ehrnjgx9jvqxc';
 
 const PAGE_ROW: Row = {
   conversationId: 'conv-page',
@@ -73,7 +73,7 @@ const PAGE_ROW: Row = {
   pageTitle: 'Researcher',
   lastMessageAt: '2026-07-28T00:00:00.000Z',
   createdAt: '2026-07-28T00:00:00.000Z',
-  sessionId: null,
+  workspaceId: null,
   sessionName: null,
   sessionEndedAt: null,
   driveId: 'drive-1',
@@ -87,7 +87,7 @@ const GLOBAL_ROW: Row = {
   pageTitle: null,
   lastMessageAt: '2026-07-28T00:00:00.000Z',
   createdAt: '2026-07-28T00:00:00.000Z',
-  sessionId: null,
+  workspaceId: null,
   sessionName: null,
   sessionEndedAt: null,
   driveId: null,
@@ -101,7 +101,7 @@ const BOUND_ROW: Row = {
   pageTitle: 'Researcher',
   lastMessageAt: '2026-07-28T00:00:00.000Z',
   createdAt: '2026-07-28T00:00:00.000Z',
-  sessionId: 'ses-1',
+  workspaceId: 'ses-1',
   sessionName: 'Worker',
   sessionEndedAt: null,
   driveId: 'drive-1',
@@ -134,7 +134,7 @@ beforeEach(() => {
 });
 
 describe('AgentsPastConversationsList', () => {
-  test('a session-bound row selects it directly — no claim, no navigation', async () => {
+  test('a workspace-bound row selects it directly — no claim, no navigation', async () => {
     mockFetchWithAuth.mockResolvedValue(conversationsResponse([BOUND_ROW]));
     renderList();
     const user = userEvent.setup();
@@ -142,11 +142,88 @@ describe('AgentsPastConversationsList', () => {
     await user.click(await screen.findByText('Live chat'));
 
     expect(mockPost).not.toHaveBeenCalled();
+    expect(mockPush).not.toHaveBeenCalled();
     expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
     expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-bound');
+    expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
   });
 
-  test('a session-less page row claims into a freshly spawned session and selects it', async () => {
+  test('a 409 naming the owning workspace opens THAT workspace — it never leaves the surface', async () => {
+    // The race this exists for: another tab (or a claim that landed between
+    // this listing's fetch and the click) already claimed the conversation,
+    // so the row is stale and the claim is refused. The refusal names the
+    // winner, and "already belongs to a session" is the answer, not a dead
+    // end — before this, it fell through to `navigateFallback` and pushed the
+    // user to /dashboard.
+    mockFetchWithAuth.mockResolvedValue(conversationsResponse([PAGE_ROW]));
+    mockPost.mockRejectedValue(
+      new ApiRequestError('That conversation already belongs to a session', 409, {
+        error: 'That conversation already belongs to a session',
+        // A real cuid2 — the client validates the shape, so `ses-owner` would
+        // be refused as an id no `agentWorkspaces.id` could hold.
+        workspaceId: OWNER_WORKSPACE_ID,
+      }),
+    );
+    renderList();
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByText('Page chat'));
+
+    await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe(OWNER_WORKSPACE_ID));
+    expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-page');
+    expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(mockToastError).not.toHaveBeenCalled();
+    // The winning workspace was minted by another tab, so this tab's shared
+    // listing has never seen it — the panes render off that listing, so it
+    // must be revalidated or the selection points at nothing until the 20s
+    // poll happens to fire.
+    expect(mockMutate).toHaveBeenCalledWith(isAgentWorkspacesKey);
+  });
+
+  test('a 409 naming an UNOPENABLE workspace falls back — the server withheld the id', async () => {
+    // The server omits `workspaceId` when the caller cannot open that
+    // workspace (it can hold a conversation you own inside a drive session you
+    // have since lost membership of). Nothing to select into, so the
+    // pre-existing degrade is right — and the client must not invent one.
+    mockFetchWithAuth.mockResolvedValue(conversationsResponse([PAGE_ROW]));
+    mockPost.mockRejectedValue(
+      new ApiRequestError('That conversation already belongs to a session', 409, {
+        error: 'That conversation already belongs to a session',
+      }),
+    );
+    renderList();
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByText('Page chat'));
+
+    await waitFor(() =>
+      expect(mockPush).toHaveBeenCalledWith('/dashboard/drive-1/agent-1?conversationId=conv-page'),
+    );
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  test('a 409 that names no workspace still falls back — nothing to open', async () => {
+    // The route's other 409: a `type: 'client'` conversation, refused because
+    // no in-app viewer can host it. There is no workspace to select into, so
+    // the pre-existing degrade is still the right answer.
+    mockFetchWithAuth.mockResolvedValue(conversationsResponse([PAGE_ROW]));
+    mockPost.mockRejectedValue(
+      new ApiRequestError('That conversation is not available', 409, { error: 'That conversation is not available' }),
+    );
+    renderList();
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByText('Page chat'));
+
+    await waitFor(() =>
+      expect(mockPush).toHaveBeenCalledWith('/dashboard/drive-1/agent-1?conversationId=conv-page'),
+    );
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
+  });
+
+  test('an unbound page row claims into a freshly spawned session and selects it', async () => {
     mockFetchWithAuth.mockResolvedValue(conversationsResponse([PAGE_ROW]));
     mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-page' });
     renderList();
@@ -190,7 +267,7 @@ describe('AgentsPastConversationsList', () => {
     expect(mockMutate).not.toHaveBeenCalled();
   });
 
-  test('a session-less global row claims with the surface\'s own (absent) drive scope', async () => {
+  test('an unbound global row claims with the surface\'s own (absent) drive scope', async () => {
     mockFetchWithAuth.mockResolvedValue(conversationsResponse([GLOBAL_ROW]));
     mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-global' });
     renderList();

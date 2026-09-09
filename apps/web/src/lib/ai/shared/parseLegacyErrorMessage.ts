@@ -25,15 +25,22 @@ const classifyByPattern = (message: string): AIErrorCause['code'] => {
 };
 
 /**
- * TRANSITIONAL (deletion covenant, page kw69qhfck96jpssdk6w2xtbp) — the ONE
- * surviving string parser. `toErrorCause` (real path) fires whenever a
- * request goes through `createStreamTrackingFetch`, which reads the response
- * status and body directly; this adapter exists only for whatever still
- * reaches the client as a bare message string (a genuine network failure
- * before any response arrives, or an error surfaced by a path this epic
- * doesn't touch). `httpStatus` is always null here — there is no real
- * response to read one from. DELETE ME at the SDK 7 transport swap,
- * alongside the own-stream mirror and hydrateTransportBeforeReinvoke.
+ * The fallback for errors that arrive as a bare message string, with no response behind them.
+ *
+ * THIS IS PERMANENT NOW. It carried a deletion marker scheduling it to go "at the SDK 7
+ * transport swap, alongside the own-stream mirror and hydrateTransportBeforeReinvoke" — that
+ * swap has happened (`useChatSession` replaced `useChat`), both of those modules are deleted,
+ * and this one is still needed. The marker is removed rather than re-dated: a deletion gate
+ * that keeps slipping is one nobody believes.
+ *
+ * It is needed because the swap did not remove the case it covers. `toErrorCause` is the real
+ * path and fires whenever a request reaches a RESPONSE: `useChatSession` reads the status and
+ * body directly and throws a typed cause. But a genuine network failure — DNS, a dropped
+ * connection, an offline tab — rejects the `fetch` before any response exists, and what
+ * surfaces is a message string and nothing else. `httpStatus` is always null here for exactly
+ * that reason: there is no response to read one from.
+ *
+ * So this is a permanent fallback for a permanent case, not scaffolding awaiting a swap.
  */
 export const parseLegacyErrorMessage = (message: string | undefined): AIErrorCause => {
   if (!message) return buildErrorCause('unknown', null, undefined);

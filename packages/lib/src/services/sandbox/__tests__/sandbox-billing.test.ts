@@ -152,6 +152,18 @@ describe('defaultSandboxBillingDeps.gate', () => {
 });
 
 describe('defaultSandboxBillingDeps.trackUsage', () => {
+  it('RETURNS the credit seam’s persistence outcome verbatim — the shell heartbeat gates its billing window on it', async () => {
+    mockTrackUsage.mockResolvedValueOnce({ persisted: false, creditsSettled: false });
+    expect(
+      await defaultSandboxBillingDeps.trackUsage({ payerId: 'owner-1', holdId: 'hold-1', activeSeconds: 3600 }),
+    ).toEqual({ persisted: false, creditsSettled: false });
+
+    mockTrackUsage.mockResolvedValueOnce({ persisted: true, creditsSettled: true });
+    expect(
+      await defaultSandboxBillingDeps.trackUsage({ payerId: 'owner-1', holdId: 'hold-1', activeSeconds: 3600 }),
+    ).toEqual({ persisted: true, creditsSettled: true });
+  });
+
   it("bills source:'terminal' with the real active-window cost and threads the holdId through", async () => {
     mockTrackUsage.mockResolvedValue(undefined);
 

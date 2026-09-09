@@ -6,7 +6,6 @@ import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { createTaskTriggerWorkflow, type TaskTriggerWorkflowResult } from '@/lib/workflows/task-trigger-helpers';
-import { DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -14,11 +13,12 @@ import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 import { computeHasContent } from './task-utils';
-import { backfillMissingTaskItems } from '@/services/api/task-sync-service';
+import { backfillMissingTaskItems, seedInheritedTaskStatusConfigs, resolveSeedStatus, resolveSeedCompletedAt } from '@/services/api/task-sync-service';
 import { compareByPagePosition, computeTaskMovePosition } from '@/services/api/task-ordering';
 import { reorderTaskListChildPages } from '@/services/api/task-reorder-service';
 import { computeReorderPlan } from '@pagespace/lib/services/reorder';
-import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
+import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
+import { isNaiveISODatetime, parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
 import { decryptTaskUserRelations, decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
 import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
 import { parseTaskQuerySpec } from './query-spec';
@@ -45,13 +45,11 @@ async function getOrCreateTaskListForPage(pageId: string, userId: string) {
         status: 'pending',
       }).returning();
 
-      // Create default status configs
-      await tx.insert(taskStatusConfigs).values(
-        DEFAULT_TASK_STATUSES.map(s => ({
-          taskListId: created.id,
-          ...s,
-        }))
-      );
+      // Inherit the nearest ancestor task list's vocabulary rather than always
+      // seeding the four defaults. A sub-list born with a different status set
+      // from its parent is what makes a nested status dropdown produce slugs the
+      // PATCH route rejects — see seedInheritedTaskStatusConfigs.
+      await seedInheritedTaskStatusConfigs(tx, created.id, pageId);
 
       return created;
     });
@@ -63,20 +61,16 @@ async function getOrCreateTaskListForPage(pageId: string, userId: string) {
     });
 
     if (existingConfigs.length === 0) {
-      try {
-        await db.insert(taskStatusConfigs).values(
-          DEFAULT_TASK_STATUSES.map(s => ({
-            taskListId: taskList!.id,
-            ...s,
-          }))
-        );
-      } catch (error) {
-        // Swallow duplicate key errors from concurrent requests
-        const message = error instanceof Error ? error.message : '';
-        if (!message.includes('unique') && !message.includes('duplicate')) {
-          throw error;
-        }
-      }
+      // Same inheritance as the create path: a legacy list left half-initialized
+      // should come back with its ancestor's vocabulary, not the defaults.
+      //
+      // In one transaction, as on the agent read paths: the seed writes twice —
+      // the configs, then the rows conformed to them — and this repair only ever
+      // runs while the vocabulary is empty. Commit the configs without the rows
+      // and those rows hold a slug their own list does not define, permanently,
+      // because no later read comes back for them.
+      const listId = taskList.id;
+      await db.transaction((tx) => seedInheritedTaskStatusConfigs(tx, listId, pageId));
     }
   }
 
@@ -492,14 +486,44 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const primaryAssigneeId = assigneeId || assigneeIds?.find((a: { type: string }) => a.type === 'user')?.id || null;
   const primaryAgentId = assigneeAgentId || assigneeIds?.find((a: { type: string }) => a.type === 'agent')?.id || null;
 
-  // Resolve the trigger timezone once, up front: explicit body value wins, else
-  // the caller's profile timezone, else UTC — matching the internal create_task tool.
-  const resolvedTimezone = agentTrigger
-    ? (typeof timezone === 'string' && timezone.trim() ? timezone.trim() : (await getUserTimezone(userId)) || 'UTC')
+  // Resolve the timezone once, up front: explicit body value wins, else the
+  // caller's profile timezone, else UTC — matching the internal create_task tool.
+  //
+  // Needed for the trigger workflow AND for reading the due date: a naive
+  // "2026-02-19T19:00:00" is a wall-clock time that means nothing without a
+  // zone. Resolving only for the trigger would leave the due date itself read
+  // in the server's zone (#2404). An absolute due date needs no zone, so the
+  // profile lookup stays skipped in the common case.
+  const dueDateNeedsTimezone = typeof dueDate === 'string' && isNaiveISODatetime(dueDate);
+  const resolvedTimezone = (agentTrigger || dueDateNeedsTimezone)
+    ? await resolveTimezone(typeof timezone === 'string' ? timezone : null, userId)
     : 'UTC';
+  // Only a string can be naive. Anything else — an epoch number, say — keeps the
+  // prior `new Date()` behaviour instead of being stringified into an Invalid
+  // Date; this route parses an unvalidated body, so that input is reachable.
+  const parsedDueDate = dueDate
+    ? (typeof dueDate === 'string' ? parseDatetimeInTimezone(dueDate, resolvedTimezone) : new Date(dueDate))
+    : null;
 
   // Create task and its document page in a transaction
   const result = await db.transaction(async (tx) => {
+    // Resolve the default from the LIST's own vocabulary rather than hardcoding
+    // 'pending'. Sub-lists now inherit their ancestor's statuses, so a list
+    // customised to e.g. icebox/building/shipped does not define 'pending' at
+    // all — writing it would produce exactly the orphaned-status row that
+    // normalizeStatusForList exists to prevent: unclassifiable by
+    // isCompletedStatus, and rendered by the dropdown's raw-slug fallback with
+    // no matching option. addTaskItemUnderParent already resolves it this way.
+    const seedStatus = status || await resolveSeedStatus(tx, taskList.id);
+    // A resolved default can itself be a done-group slug: resolveSeedStatus
+    // falls back to the first config by position, and a vocabulary with no
+    // open status leaves that in the done group. Without stamping completedAt
+    // the row reads as complete to isCompletedStatus while the parent's
+    // subTaskCompletedCount — which counts `completedAt IS NOT NULL` — does not
+    // see it, and the two drift apart.
+    const seedCompletedAt = status
+      ? initialCompletedAt
+      : await resolveSeedCompletedAt(tx, taskList.id, seedStatus);
     // Create task list page (description + sub-tasks live here)
     const [taskPage] = await tx.insert(pages).values({
       id: newTaskPageId,
@@ -516,12 +540,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     const [newTask] = await tx.insert(taskItems).values({
       userId,
       pageId: taskPage.id,
-      status: status || 'pending',
+      status: seedStatus,
       priority: priority || 'medium',
       assigneeId: primaryAssigneeId,
       assigneeAgentId: primaryAgentId,
-      dueDate: dueDate ? new Date(dueDate) : null,
-      completedAt: initialCompletedAt,
+      dueDate: parsedDueDate,
+      completedAt: seedCompletedAt,
       metadata: {
         createdAt: new Date().toISOString(),
         note,
@@ -564,7 +588,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         taskId: newTask.id,
         taskMetadata: newTask.metadata as Record<string, unknown> | null,
         agentTrigger,
-        dueDate: dueDate ? new Date(dueDate) : null,
+        dueDate: parsedDueDate,
         timezone: resolvedTimezone,
       });
     }

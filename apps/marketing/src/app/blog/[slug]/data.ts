@@ -76,6 +76,7 @@ Agent sessions, panes, and code-executing Workflows are open to everyone today. 
     readTime: "7 min read",
     category: "Product",
     featured: true,
+    image: "/blog/agents-get-a-computer.png",
   },
   "build-a-chat-app-on-pagespace": {
     slug: "build-a-chat-app-on-pagespace",
@@ -290,7 +291,7 @@ Look at everything you did not have to build: no AI model to choose and pay a se
     title:
       "Credits Replace Daily Limits: Pay for What You Use, Run the Models You Want",
     description:
-      "PageSpace AI is now usage-based. Every plan gets a monthly pool of credits you spend however you like, paid plans unlock frontier models, and you can top up any amount from $5 to $500. Here's how it works, plus the infrastructure move that makes it scale.",
+      "PageSpace AI is now usage-based. Every plan gets a pool of credits you spend however you like (a starter grant on Free, a monthly allowance on paid plans), paid plans unlock frontier models, and you can top up any amount from $5 to $500. Here's how it works, plus the infrastructure move that makes it scale.",
     image: "/blog/usage-based-pricing-and-built-for-scale.png",
     content: `
 ## Daily limits were a stopgap. We outgrew them.
@@ -299,18 +300,18 @@ When PageSpace was small, the simplest way to meter AI was a daily call count. F
 
 A quick yes/no question and a ten-step research agent counted the same: one call. The number on the wall had nothing to do with the cost behind it. And we kept leaning into longer, more agentic work: agents that plan, call tools, and run for many steps on your behalf, where a single task can do the work of a hundred old "calls." Stack that on top of better, more expensive models and the call-count math fell apart. We could cap you harder or quietly eat costs we couldn't sustain, and neither is how you build something meant to last.
 
-So we put our big-boy pants on. AI in PageSpace is now usage-based: a monthly pool of credits you spend on exactly what you use, priced on what each model actually costs. It's the model we should have started with. It's what lets us scale, and it's what lets us hand you genuinely better models instead of holding them back.
+So we put our big-boy pants on. AI in PageSpace is now usage-based: a pool of credits you spend on exactly what you use, priced on what each model actually costs. It's the model we should have started with. It's what lets us scale, and it's what lets us hand you genuinely better models instead of holding them back.
 
 ## Credits, not call counts
 
-Every plan comes with a monthly pool of credits:
+Every plan comes with a pool of credits — a one-time starter grant on Free, a monthly allowance on paid plans:
 
-- **Free:** 5/month in credits
+- **Free:** 5 credits to start
 - **Pro:** 15/month in credits
 - **Founder:** 50/month in credits
 - **Business:** 100/month in credits
 
-Each period adds to your balance — unused credits carry over, so nothing is lost. You spend it however you like: long agent runs, quick questions, voice, whatever the work needs. There's no per-day ceiling and no separate bucket for "standard" versus "heavy" usage. It's one balance, and you decide where it goes.
+On paid plans each renewal adds to your balance — unused credits carry over, so nothing is lost. You spend it however you like: long agent runs, quick questions, voice, whatever the work needs. There's no per-day ceiling and no separate bucket for "standard" versus "heavy" usage. It's one balance, and you decide where it goes.
 
 Each call draws from your balance based on what that model actually costs. No per-model multipliers, no rounding a fraction-of-a-cent call up to something absurd. A cheap model costs you a little and an expensive one costs you more — keeping the math simple is what lets us open up the best models from every major provider instead of charging extra for the good ones.
 
@@ -326,7 +327,7 @@ Here's the part daily limits could never give you: when billing is usage-based, 
 
 ## When you run low
 
-If your balance runs out before your next renewal, you're not locked out until tomorrow. Top up.
+If your balance runs out, you're not locked out until tomorrow. Top up.
 
 You can add **any amount from $5 to $500** in one click, or grab a quick-pick pack of $10, $25, or $50. Top-up credits never expire, so anything you add during a busy week carries over.
 

@@ -2,12 +2,20 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { canActorEditPage, canActorDeletePage, canActorManageDrive, canActorAdministerDrive, driveDeniedByAppToken, driveOutsideMcpScope } from './actor-permissions';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
+import {
+  isProtectedMemoryPage,
+  MEMORY_PAGE_DELETE_ERROR,
+  MEMORY_PAGE_MOVE_ERROR,
+  findProtectedMemoryPages,
+} from '@pagespace/lib/memory/memory-pages';
 import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { isAIChatPage, isDocumentPage, isCodePage, getDefaultContent, getCreatablePageTypes, getPageTypeConfig } from '@pagespace/lib/content/page-types.config';
-import { parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress, isSheetType } from '@pagespace/lib/sheets/sheet';
+import { isAIChatPage, isDocumentPage, getDefaultContent, getCreatablePageTypes, getPageTypeConfig } from '@pagespace/lib/content/page-types.config';
+import { isValidCellAddress, isSheetType } from '@pagespace/lib/sheets/sheet';
+import { setCells } from '@pagespace/lib/sheets/store';
+import { logSheetCellActivity } from '@/services/api/sheet-activity';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { logPageActivity, logDriveActivity, getActorInfo, type ActivityOperation } from '@pagespace/lib/monitoring/activity-logger';
 import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format';
@@ -24,12 +32,44 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import type { ToolExecutionContext } from '../core/types';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { ensureTaskListForPage, syncTaskItemOnMove } from '@/services/api/task-sync-service';
-import { replaceLines } from '@/lib/editor/line-edit';
+import { LineRangeError, projectLines, replaceLines, type LineEditResult } from '@/lib/editor/line-edit';
+import { describeContentModeMismatch, isRawTextPage } from '../core/page-serializer';
 import { insertAtAnchor } from '@/lib/editor/text-edit';
 import { resolveOrThrowPageId } from './page-context-defaults';
 import { resolveOrThrowDriveId } from './drive-context-defaults';
+import { toModelOutputForPageWrite } from './page-write-model-output';
 
 const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });
+
+/**
+ * The most cells `edit_sheet_cells` accepts in one call.
+ *
+ * There was no cap here at all, and nothing downstream enforced one either:
+ * not the MCP documents route, not the SDK, not the CLI. What agents actually
+ * hit was their OWN output budget — the whole `cells` array has to be generated
+ * as tool-call arguments in a single assistant message, and a model whose
+ * output is cut off mid-JSON produces a malformed call that never reaches this
+ * code. The failure therefore arrived with no server-side error to read, and
+ * the batch size that worked got established by trial and error (issue #2467
+ * reports settling on 240 from a "SDK default of 250" that does not exist).
+ *
+ * Measured: serialized as tool arguments, one cell costs roughly 34 bytes with
+ * a short numeric value, 64 with a typical short text value, and 139 with a
+ * long URL. At 500 cells that is ~17KB / ~32KB / ~69KB of arguments — call it
+ * 4k, 8k and 17k output tokens at the conventional four-characters-per-token
+ * estimate this codebase already uses for budgeting (`SEED_CHARS_PER_TOKEN`).
+ * 500 is therefore the largest round number that still fits a common 8k output
+ * budget for realistic data, and it is double the number the field settled on.
+ *
+ * The cap's real job is to be VISIBLE. It lives in the schema, so it reaches
+ * the model as part of the JSON Schema and it chunks before it tries; and an
+ * over-cap call is rejected with a message that names the limit, instead of
+ * failing somewhere the agent cannot see. It cannot rescue a call whose
+ * arguments were truncated during generation — nothing server-side can, since
+ * that call never arrives — which is why the tool description also tells the
+ * model to halve the batch when a large call fails to generate at all.
+ */
+const MAX_SHEET_CELLS_PER_EDIT = 500;
 
 // Helper: Non-blocking activity logging with AI context (fire-and-forget)
 function logPageActivityAsync(
@@ -110,7 +150,14 @@ function logPageActivityAsync(
     });
 }
 
-async function buildAiMutationContext(
+/**
+ * Exported for `copy-content-tools-runtime.ts`: a copy into a page is a page
+ * mutation like any other and must carry the same AI-authorship metadata
+ * (actor, provider/model, agent chain). Rebuilding that shape there would let
+ * the two drift, and the drift would be invisible — activity rows would simply
+ * start disagreeing about who made the change.
+ */
+export async function buildAiMutationContext(
   context: ToolExecutionContext,
   options?: {
     metadata?: Record<string, unknown>;
@@ -226,6 +273,15 @@ async function trashPage(
     }
   }
 
+  // Same protection the HTTP path enforces. An agent asked to "clean up my
+  // drive" must not be able to delete the pages that hold the user's profile.
+  //
+  // AFTER the permission check, matching pageService.trashPage. Refusing first
+  // would tell a caller who cannot delete the page that it is a memory page.
+  if (await isProtectedMemoryPage(page.id)) {
+    throw new Error(MEMORY_PAGE_DELETE_ERROR);
+  }
+
   let childrenCount = 0;
 
   const changeGroupId = createChangeGroupId();
@@ -237,10 +293,18 @@ async function trashPage(
   if (withChildren) {
     // Use repository seam for recursive child lookup
     const childPageIds = await pageRepository.getChildIds(page.driveId, page.id);
-    childrenCount = childPageIds.length;
+    const protectedChildIds = await findProtectedMemoryPages(childPageIds);
+    childrenCount = childPageIds.length - protectedChildIds.size;
     const allPageIds = [page.id, ...childPageIds];
 
     for (const targetId of allPageIds) {
+      // This branch recurses independently of pageService.recursivelyTrash, so
+      // it needs its own guard: the check at the top of this function only saw
+      // the page the agent named, not what is underneath it.
+      if (protectedChildIds.has(targetId)) {
+        continue;
+      }
+
       const targetPage = targetId === page.id ? page : await pageRepository.findById(targetId);
       if (!targetPage) {
         continue;
@@ -408,6 +472,19 @@ async function restoreDrive(
 type MovablePage = NonNullable<Awaited<ReturnType<typeof pageRepository.findById>>>;
 
 /**
+ * Refuse to relocate a memory page.
+ *
+ * Same-drive moves only: the cross-drive path enforces this inside
+ * `movePagesToDrive`, which is shared with /api/pages/bulk-move and is the only
+ * place that covers BOTH callers.
+ */
+async function refuseIfMemoryPage(pageId: string): Promise<void> {
+  if (await isProtectedMemoryPage(pageId)) {
+    throw new Error(MEMORY_PAGE_MOVE_ERROR);
+  }
+}
+
+/**
  * Same-drive move / reorder. Requires drive owner or admin — mirrors the
  * /api/pages/reorder REST route's authorization bar for the same operation.
  */
@@ -424,6 +501,13 @@ async function moveWithinDrive(params: {
   if (!canManage) {
     throw new Error('Only drive owners and admins can move pages');
   }
+
+  // Memory pages stay put — a page moved out of the Memory folder is what ends
+  // up inside another page's delete cascade. Checked here rather than once at
+  // the dispatch so it lands AFTER this function's own authorization bar,
+  // matching pageService.updatePage; the cross-drive path repeats it after its
+  // (different) bar for the same reason.
+  await refuseIfMemoryPage(page.id);
 
   if (newParentId) {
     // Verify the destination exists and is in the same drive
@@ -623,8 +707,10 @@ export const pageWriteTools = {
       startLine: z.number().describe('Starting line number (1-based)'),
       endLine: z.number().optional().describe('Ending line number (1-based, optional, defaults to startLine)'),
       content: z.string().describe('New content to replace the lines with'),
+      expectedTotalLines: z.number().int().min(0).optional().describe('Optional safety check: the total line count you saw when you read the page. If the document is no longer that length the edit is refused instead of being applied to lines you have not seen.'),
     }),
-    execute: async ({ title, pageId: pageIdArg, startLine, endLine = startLine, content }, { experimental_context: context }) => {
+    toModelOutput: ({ output }) => toModelOutputForPageWrite(output),
+    execute: async ({ title, pageId: pageIdArg, startLine, endLine = startLine, content, expectedTotalLines }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -681,20 +767,45 @@ export const pageWriteTools = {
         // structure (and CODE may contain raw HTML/XML that addLineBreaksForAI
         // would mangle); HTML documents are normalized for line-based editing.
         // oldContent is normalized identically to newContent so a small edit
-        // diffs as a small change rather than a full-document replacement.
-        const isRawText = page.contentMode === 'markdown' || isCodePage(page.type as PageType);
-        const { oldContent, newContent, newLineCount, changeType } = replaceLines({
-          content: page.content,
-          startLine,
-          endLine,
-          replacement: content,
-          isRawText,
-        });
+        // diffs as a small change rather than a full-document replacement, and
+        // newContent is the canonical projection — the same text a read of this
+        // page returns, so newLineCount below is what the agent will see next.
+        const isRawText = isRawTextPage(page);
+        const contentModeWarning = describeContentModeMismatch(page);
+        let edit: LineEditResult;
+        try {
+          edit = replaceLines({
+            content: page.content,
+            startLine,
+            endLine,
+            replacement: content,
+            isRawText,
+            expectedTotalLines,
+          });
+        } catch (error) {
+          // A bad range is the agent's mistake, not a fault: answer it with the
+          // real line count so the next attempt is addressed correctly, rather
+          // than a bare message it has to parse. `totalLines` is a field, not
+          // prose inside `message`, and it is the same field the MCP route
+          // returns for the same two refusals.
+          if (error instanceof LineRangeError) {
+            return {
+              success: false,
+              error: error.kind === 'stale' ? 'Document changed since it was read' : 'Line number out of range',
+              message: error.message,
+              totalLines: projectLines(page.content, isRawText).length,
+              suggestion: 'Read the page again and re-address the edit against the line numbers it returns.',
+              pageInfo: { pageId: page.id, title: page.title, type: page.type },
+            };
+          }
+          throw error;
+        }
+        const { oldContent, newContent, newLineCount, previousLineCount, linesReplaced, changeType } = edit;
         const isDeletion = changeType === 'deletion';
 
         const mutationContext = await buildAiMutationContext(context as ToolExecutionContext, {
           metadata: {
-            linesChanged: endLine - startLine + 1,
+            linesChanged: linesReplaced,
             changeType,
           },
         });
@@ -723,16 +834,18 @@ export const pageWriteTools = {
           contentMode: page.contentMode || 'html',
           oldContent,
           newContent,
-          linesReplaced: endLine - startLine + 1,
+          linesReplaced,
           newLineCount,
+          previousLineCount,
+          ...(contentModeWarning && { contentModeWarning }),
           message: isDeletion
             ? `Successfully removed lines ${startLine}-${endLine}`
             : `Successfully replaced lines ${startLine}-${endLine}`,
           summary: isDeletion
-            ? `Removed ${endLine - startLine + 1} line${endLine - startLine + 1 === 1 ? '' : 's'} from "${page.title}"`
-            : `Updated "${page.title}" by replacing ${endLine - startLine + 1} line${endLine - startLine + 1 === 1 ? '' : 's'}`,
+            ? `Removed ${linesReplaced} line${linesReplaced === 1 ? '' : 's'} from "${page.title}"`
+            : `Updated "${page.title}" by replacing ${linesReplaced} line${linesReplaced === 1 ? '' : 's'}`,
           stats: {
-            linesChanged: endLine - startLine + 1,
+            linesChanged: linesReplaced,
             totalLines: newLineCount,
             changeType
           },
@@ -767,7 +880,7 @@ export const pageWriteTools = {
       parentId: z.string().optional().describe('The unique ID of the parent page from list_pages - REQUIRED when creating inside any page (folder, document, channel, etc). Only omit for root-level pages in the drive.'),
       title: z.string().describe('The title of the new page'),
       type: z.enum(getCreatablePageTypes() as [string, ...string[]]).describe('The type of page to create'),
-      contentMode: z.enum(['html', 'markdown']).optional().describe('Content mode for DOCUMENT pages. Defaults to html. Use markdown for markdown-native documents.'),
+      contentMode: z.enum(['html', 'markdown']).optional().describe('Content mode for DOCUMENT pages. Defaults to markdown, whose line numbers are the document\'s own newlines. Pass html only for a document that will be edited in the rich-text editor.'),
     }),
     execute: async ({ driveId: driveIdArg, parentId, title, type, contentMode }, { experimental_context: context }) => {
       const rawContext = context as ToolExecutionContext | undefined;
@@ -822,6 +935,17 @@ export const pageWriteTools = {
         // Get next position via repository seam
         const nextPosition = await pageRepository.getNextPosition(drive.id, parentId || null);
 
+        // Machine-written documents default to markdown (#2463). In html mode the
+        // stored content is TipTap markup and line numbers exist only as a
+        // normalized projection of it, so an agent that writes raw JSON or
+        // markdown into one is addressing lines it did not write. Markdown's
+        // lines are its own newlines. Non-document types keep 'html': the column
+        // is meaningless for them and changing it would reinterpret their
+        // stored JSON. An explicit contentMode always wins.
+        const resolvedContentMode = isDocumentPage(type as PageType)
+          ? (contentMode ?? 'markdown')
+          : 'html';
+
         const initialContent = getDefaultContent(type as PageType);
         const contentFormat = detectPageContentFormat(initialContent);
         const contentRef = hashWithPrefix(contentFormat, initialContent);
@@ -841,7 +965,7 @@ export const pageWriteTools = {
           title,
           type: type as PageType,
           content: initialContent,
-          contentMode: type === 'DOCUMENT' && contentMode ? contentMode : 'html',
+          contentMode: resolvedContentMode,
           position: nextPosition,
           driveId: drive.id,
           parentId: parentId || null,
@@ -868,11 +992,17 @@ export const pageWriteTools = {
         // create() bypasses pageService.createPage()'s seeding, so without this the
         // Kanban UI crashes on first load with no status-group config to render.
         if (type === 'TASK_LIST') {
-          await ensureTaskListForPage(db, {
+          // In a transaction, like every other lazy-init: the seed inserts the
+          // vocabulary and then conforms any rows already under the page, and
+          // committing one without the other is permanent (the repair paths only
+          // re-run while the vocabulary is empty). The conform matches nothing
+          // here — the page was created moments ago — but the exception is not
+          // worth carrying when the rule is this cheap to keep.
+          await db.transaction((tx) => ensureTaskListForPage(tx, {
             pageId: newPage.id,
             title: newPage.title,
             userId,
-          });
+          }));
         }
 
         await createPageVersion({
@@ -945,7 +1075,7 @@ export const pageWriteTools = {
           title: newPage.title,
           type: newPage.type,
           driveId: drive.id,
-          contentMode: isDocumentPage(type as PageType) && contentMode ? contentMode : 'html',
+          contentMode: resolvedContentMode,
           parentId: parentId || 'root',
           message: `Successfully created ${type.toLowerCase()} page "${title}"`,
           summary: `Created new ${type.toLowerCase()} "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'}`,
@@ -1315,6 +1445,7 @@ export const pageWriteTools = {
       content: z.string().describe('Content to insert as a new line'),
       position: z.enum(['before', 'after']).describe('Insert the new line before or after the anchor line'),
     }),
+    toModelOutput: ({ output }) => toModelOutputForPageWrite(output),
     execute: async ({ title, pageId: pageIdArg, anchor, content, position }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
@@ -1352,8 +1483,9 @@ export const pageWriteTools = {
           throw new Error('Insufficient permissions to edit this document');
         }
 
-        const isRawText = page.contentMode === 'markdown' || isCodePage(page.type as PageType);
-        const { oldContent, newContent, inserted, anchorLine } = insertAtAnchor({
+        const isRawText = isRawTextPage(page);
+        const contentModeWarning = describeContentModeMismatch(page);
+        const { oldContent, newContent, newLineCount, inserted, anchorLine } = insertAtAnchor({
           content: page.content,
           anchor,
           insertion: content,
@@ -1397,6 +1529,8 @@ export const pageWriteTools = {
           anchorLine,
           oldContent,
           newContent,
+          newLineCount,
+          ...(contentModeWarning && { contentModeWarning }),
           message: `Inserted content ${position} line ${anchorLine} in "${page.title}"`,
         };
       } catch (error) {
@@ -1414,13 +1548,13 @@ export const pageWriteTools = {
    * Edit cells in a sheet page
    */
   edit_sheet_cells: tool({
-    description: 'Edit one or more cells in a SHEET page. Use A1-style cell addresses. Supports batch updates for efficiency. Values starting with "=" are treated as formulas. Omit pageId to edit the sheet currently in view.',
+    description: 'Edit one or more cells in a SHEET page. Use A1-style cell addresses. Supports batch updates for efficiency. Values starting with "=" are treated as formulas. Hard limit of ' + MAX_SHEET_CELLS_PER_EDIT + ' cells per call — split larger writes across calls. Note that the whole cells array is generated as one tool call, so a batch of long values can exhaust your own output budget well before that limit; if a large call fails to be produced at all, halve the batch. Omit pageId to edit the sheet currently in view.',
     inputSchema: z.object({
       pageId: z.string().optional().describe('The unique ID of the sheet page to edit. Defaults to the page currently in view if omitted.'),
       cells: z.array(z.object({
         address: z.string().describe('Cell address in A1-style format (e.g., "A1", "B2", "AA100")'),
         value: z.string().describe('Value to set in the cell. Values starting with "=" are formulas. Empty string clears the cell.'),
-      })).min(1).describe('Array of cell updates to apply'),
+      })).min(1).max(MAX_SHEET_CELLS_PER_EDIT).describe(`Array of cell updates to apply. At most ${MAX_SHEET_CELLS_PER_EDIT} per call; send more in separate calls.`),
     }),
     execute: async ({ pageId: pageIdArg, cells }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
@@ -1466,28 +1600,37 @@ export const pageWriteTools = {
           throw new Error(`Invalid cell addresses: ${examples}. Use A1-style format (e.g., A1, B2, AA100).`);
         }
 
-        // Parse the existing sheet content
-        const sheetData = parseSheetContent(page.content);
-
-        // Apply the cell updates
-        const updatedSheet = updateSheetCells(sheetData, cells);
-
-        // Serialize back to TOML format
-        const newContent = serializeSheetContent(updatedSheet, { pageId: page.id });
-
+        // Addressed cell writes. The parse-splice-reserialise this replaces was
+        // O(document) per call and needed a guard against an unreadable parse
+        // replacing the sheet with just these cells; `setCells` writes the named
+        // cells and recomputes only their dependents.
         const mutationContext = await buildAiMutationContext(context as ToolExecutionContext, {
           metadata: {
             cellsUpdated: cells.length,
           },
         });
 
-        await applyPageMutation({
+        const setResult = await setCells(
+          { pageId: page.id },
+          cells,
+          {
+            userId: mutationContext.userId,
+            actorEmail: mutationContext.actorEmail,
+            changeGroupId: mutationContext.changeGroupId,
+          }
+        );
+
+        // Activity entry + workflow trigger, which `applyPageMutation` used to
+        // provide on this path.
+        await logSheetCellActivity({
           pageId: page.id,
-          operation: 'update',
-          updates: { content: newContent },
-          updatedFields: ['content'],
-          expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
-          context: mutationContext,
+          driveId: page.driveId,
+          pageTitle: page.title,
+          userId: mutationContext.userId,
+          actorEmail: mutationContext.actorEmail,
+          changeGroupId: mutationContext.changeGroupId,
+          isAiGenerated: true,
+          metadata: { source: 'ai-tool', tool: 'edit_sheet_cells', cellsUpdated: cells.length },
         });
 
         // Broadcast content update event
@@ -1515,8 +1658,8 @@ export const pageWriteTools = {
             formulasSet: formulaCount,
             cellsCleared: clearCount,
             sheetDimensions: {
-              rows: updatedSheet.rowCount,
-              columns: updatedSheet.columnCount
+              rows: setResult.rowCount,
+              columns: setResult.columnCount
             }
           },
           updatedCells: cells.map(c => ({

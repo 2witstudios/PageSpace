@@ -1,10 +1,17 @@
 /**
  * Pure function, no I/O — a click on a past-conversation row must land in
- * exactly the right place for that row's kind. A session-bound conversation
+ * exactly the right place for that row's kind. A WORKSPACE-BOUND conversation
  * always wins the pane grid, whatever its `type`; everything else branches on
  * `type` with an exhaustive switch (compile-time guarded — see the `never`
  * check in the source) so a future `ConversationKind` value can't silently
  * misroute here.
+ *
+ * These cases all existed before and all passed, including the pane ones —
+ * against a row shape that said `sessionId`, a field the server has never
+ * sent. Every `workspaceId` below is now `Pick`ed from the shared wire
+ * contract, so the fixtures can no longer describe a row that cannot arrive.
+ * The end-to-end proof that the wire agrees lives in
+ * `api/agent-workspaces/conversations/__tests__/wire-contract.test.ts`.
  */
 import { describe, it, expect } from 'vitest';
 import { resolveNavigationTarget, type PastConversationRow } from '../resolveNavigationTarget';
@@ -14,35 +21,35 @@ function row(overrides: Partial<PastConversationRow> = {}): PastConversationRow 
     conversationId: 'conv-1',
     type: 'global',
     agentPageId: null,
-    sessionId: null,
+    workspaceId: null,
     driveId: null,
     ...overrides,
   };
 }
 
 describe('resolveNavigationTarget', () => {
-  it('a session-bound conversation opens the pane grid, whatever its type', () => {
+  it('a workspace-bound conversation opens the pane grid, whatever its type', () => {
     const target = resolveNavigationTarget(
-      row({ type: 'page', sessionId: 'ses-1', agentPageId: 'agent-1', driveId: 'drive-1' }),
+      row({ type: 'page', workspaceId: 'ses-1', agentPageId: 'agent-1', driveId: 'drive-1' }),
       undefined,
     );
     expect(target).toEqual({ kind: 'pane', sessionId: 'ses-1', conversationId: 'conv-1', agentId: 'agent-1' });
   });
 
-  it('a session-bound page conversation whose page is currently inaccessible is unavailable, not a pane', () => {
+  it('a workspace-bound page conversation whose page is currently inaccessible is unavailable, not a pane', () => {
     // The API masks `driveId` to null (never a real value for a live page)
     // specifically when it already checked and the requester can no longer
     // view that page. Opening the pane anyway would hit a 403 on the message
     // fetch and silently show nothing (review finding) — this must be caught
-    // before the unconditional sessionId branch below, not after it.
+    // before the unconditional workspaceId branch below, not after it.
     const target = resolveNavigationTarget(
-      row({ type: 'page', sessionId: 'ses-1', agentPageId: 'agent-1', driveId: null }),
+      row({ type: 'page', workspaceId: 'ses-1', agentPageId: 'agent-1', driveId: null }),
       undefined,
     );
     expect(target).toEqual({ kind: 'unavailable' });
   });
 
-  it('a session-less page conversation is claimable — spawning a session is tried before falling back to its agent page', () => {
+  it('an unbound page conversation is claimable — spawning a session is tried before falling back to its agent page', () => {
     const target = resolveNavigationTarget(
       row({ type: 'page', agentPageId: 'agent-1', driveId: 'drive-1' }),
       undefined,
@@ -57,7 +64,6 @@ describe('resolveNavigationTarget', () => {
         driveId: 'drive-1',
         pageId: 'agent-1',
         conversationId: 'conv-1',
-        sessionId: null,
       },
     });
   });
@@ -76,7 +82,7 @@ describe('resolveNavigationTarget', () => {
     expect(target).toEqual({ kind: 'unavailable' });
   });
 
-  it('a session-less global conversation is claimable — its fallback is wherever the global assistant currently lives', () => {
+  it('an unbound global conversation is claimable — its fallback is wherever the global assistant currently lives', () => {
     const target = resolveNavigationTarget(row({ type: 'global' }), 'drive-current');
     expect(target).toEqual({
       kind: 'claimable',
@@ -87,7 +93,7 @@ describe('resolveNavigationTarget', () => {
     });
   });
 
-  it('a session-less global conversation with no current drive scope falls back to the dashboard home', () => {
+  it('an unbound global conversation with no current drive scope falls back to the dashboard home', () => {
     const target = resolveNavigationTarget(row({ type: 'global' }), undefined);
     expect(target).toEqual({
       kind: 'claimable',
@@ -98,9 +104,9 @@ describe('resolveNavigationTarget', () => {
     });
   });
 
-  it('a session-bound row still wins the pane grid even for a claimable-shaped type (branch-ordering regression guard)', () => {
+  it('a workspace-bound row still wins the pane grid even for a claimable-shaped type (branch-ordering regression guard)', () => {
     const target = resolveNavigationTarget(
-      row({ type: 'global', sessionId: 'ses-1' }),
+      row({ type: 'global', workspaceId: 'ses-1' }),
       'drive-current',
     );
     expect(target).toEqual({ kind: 'pane', sessionId: 'ses-1', conversationId: 'conv-1', agentId: null });

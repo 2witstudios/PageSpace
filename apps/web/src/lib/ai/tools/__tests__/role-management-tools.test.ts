@@ -15,14 +15,22 @@ vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId' },
 }));
 
-vi.mock('@pagespace/lib/services/drive-role-service', () => ({
-  checkDriveAccessForRoles: vi.fn(),
-  listDriveRoles: vi.fn(),
-  getRoleById: vi.fn(),
-  createDriveRole: vi.fn(),
-  updateDriveRole: vi.fn(),
-  deleteDriveRole: vi.fn(),
-}));
+vi.mock('@pagespace/lib/services/drive-role-service', async () => {
+  // `roleNotFoundMessage` stays REAL: it is a pure string function with no DB
+  // reach, and the point of the assertions below is exactly what it says.
+  const actual = await vi.importActual<typeof import('@pagespace/lib/services/drive-role-service')>(
+    '@pagespace/lib/services/drive-role-service',
+  );
+  return {
+    roleNotFoundMessage: actual.roleNotFoundMessage,
+    checkDriveAccessForRoles: vi.fn(),
+    listDriveRoles: vi.fn(),
+    getRoleById: vi.fn(),
+    createDriveRole: vi.fn(),
+    updateDriveRole: vi.fn(),
+    deleteDriveRole: vi.fn(),
+  };
+});
 
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   getDriveRecipientUserIds: vi.fn().mockResolvedValue(['owner1', 'user1']),
@@ -200,6 +208,24 @@ describe('role-management-tools', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('not found');
+    });
+
+    // Issue #2470: the honest dead end. A system role name can never resolve
+    // here, so the refusal has to say where those live instead of stopping at
+    // "not found in this drive".
+    it('tells a caller asking for a SYSTEM role where system roles actually live', async () => {
+      mockCheckAccess.mockResolvedValueOnce(memberAccess);
+      mockGetRole.mockResolvedValueOnce(null);
+
+      const result = await roleManagementTools.get_drive_role.execute!(
+        { driveId: 'drive1', roleId: 'member' },
+        makeContext('user1')
+      ) as { success: boolean; error: string };
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/system role/i);
+      expect(result.error).toMatch(/drive membership/i);
+      expect(result.error).toContain('pagespace keys describe');
     });
   });
 

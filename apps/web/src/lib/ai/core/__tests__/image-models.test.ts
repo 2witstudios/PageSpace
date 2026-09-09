@@ -20,7 +20,7 @@ describe('isImageOutputModel (pure)', () => {
       given: 'a model whose output_modalities is ["text"] only',
       should: 'return false',
       actual: isImageOutputModel({
-        id: 'openai/gpt-5.3-chat',
+        id: 'openai/gpt-5.4-nano',
         architecture: { output_modalities: ['text'] },
       }),
       expected: false,
@@ -48,7 +48,7 @@ describe('isImageOutputModel (pure)', () => {
 
 const PAYLOAD = {
   data: [
-    { id: 'openai/gpt-5.3-chat', architecture: { output_modalities: ['text'] } },
+    { id: 'openai/gpt-5.4-nano', architecture: { output_modalities: ['text'] } },
     {
       id: 'google/gemini-3.1-flash-image-preview',
       name: 'Gemini 3.1 Flash Image',

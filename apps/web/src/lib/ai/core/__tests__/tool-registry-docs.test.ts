@@ -17,7 +17,7 @@
  * Adding a new doc line that cites the count = add one entry to DOC_COUNT_ASSERTIONS.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildPageSpaceTools } from '../ai-tools';
@@ -66,6 +66,12 @@ describe('tool registry — internal consistency', () => {
         'list_panes',
         'resize_pane',
         'move_pane',
+        // `close_pane` joins the family as a REPLACEMENT, not an addition:
+        // `move_pane(toParentId: null)` used to carry taking a pane off the
+        // grid, and that destination is gone with the parked state it named.
+        // Chat-only for the same reason as the rest, so the public
+        // workspace-tool count (and every doc that cites it) is unchanged.
+        'close_pane',
         'arrange_panes',
       ]),
     );
@@ -83,6 +89,42 @@ describe('tool registry — internal consistency', () => {
       }
     }
   });
+});
+
+/**
+ * Tools declared in a `*-tools.ts` module that are deliberately NOT part of
+ * `pageSpaceTools`. `ask_user` is the only one: it is attached by the chat
+ * route to the one turn that can answer it, never to the registry.
+ */
+const DECLARED_BUT_NOT_REGISTERED = new Set(['ask_user']);
+
+describe('every declared tool is registered', () => {
+  it('a `name: tool(` in any *-tools.ts module is a key of the full registry, or ledgered here', () => {
+    // The class of bug the sheet-formatting epic shipped with: a tool module
+    // written, tested and merged, then nothing assembled it into
+    // TOOL_MODULES, so the tools were dead code for four tasks. Every other
+    // registration test starts FROM the registry and so cannot see a module
+    // the registry does not know about. This one starts from the source.
+    // (registry-coverage.test.ts scans the same way but only against the
+    // renderer map, and deliberately never imports the tool graph.)
+    const dir = resolve(dirname(fileURLToPath(import.meta.url)), '../../tools');
+    const declared = new Set<string>();
+    for (const file of readdirSync(dir).filter((f) => f.endsWith('-tools.ts'))) {
+      for (const match of readFileSync(resolve(dir, file), 'utf8').matchAll(/^ {2,}([a-zA-Z_][a-zA-Z0-9_]*): tool\(/gm)) {
+        declared.add(match[1]);
+      }
+    }
+    expect(declared.size).toBeGreaterThan(80);
+    expect(declared.has('format_sheet')).toBe(true);
+
+    const registered = new Set(Object.keys(buildPageSpaceTools({ codeExecutionEnabled: true })));
+    const missing = [...declared].filter((name) => !registered.has(name) && !DECLARED_BUT_NOT_REGISTERED.has(name)).sort();
+    expect(missing, `declared in a tool module but never registered: ${missing.join(', ')}`).toEqual([]);
+
+    const stale = [...DECLARED_BUT_NOT_REGISTERED].filter((name) => registered.has(name) || !declared.has(name));
+    expect(stale, `ledger entries that are registered or no longer declared: ${stale.join(', ')}`).toEqual([]);
+  });
+
 });
 
 describe('docs cite the derived workspace-tool count', () => {

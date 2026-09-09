@@ -381,6 +381,61 @@ describe('PATCH /api/workflows/[workflowId]', () => {
       instructionPageId: 'page_instr',
     }));
   });
+
+  /**
+   * The column is what the cron poller schedules against: it reads the stored
+   * value straight into getNextRunDate on every tick
+   * (api/cron/workflows/route.ts). A value that resolution accepted but the
+   * column did not — a padded zone, or whitespace that resolves back to the
+   * existing one — would throw there, leave nextRunAt stale, and re-fire the
+   * workflow on every poll. So what gets validated and what gets stored have to
+   * be the same string (PR #2405 review, codex P1).
+   */
+  describe('timezone persistence', () => {
+    const patchTimezone = async (timezone: string) => {
+      const request = new Request('https://example.com/api/workflows/wf_1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ timezone }),
+      });
+      const response = await PATCH(request, createContext('wf_1'));
+      expect(response!.status).toBe(200);
+      return mockUpdateSet.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    };
+
+    it('stores a space-padded timezone trimmed', async () => {
+      const written = await patchTimezone('  America/Chicago  ');
+
+      expect(written.timezone).toBe('America/Chicago');
+    });
+
+    it('stores the existing zone rather than whitespace when the field is blank', async () => {
+      const written = await patchTimezone('   ');
+
+      // Resolution treats blank as absent and falls back to the workflow's own
+      // zone; the column must not end up holding the blank string.
+      expect(written.timezone).toBe('UTC');
+    });
+
+    it('schedules against the same zone it stores', async () => {
+      const written = await patchTimezone('  America/Chicago  ');
+
+      expect(getNextRunDate).toHaveBeenCalledWith('0 9 * * 1-5', written.timezone);
+    });
+
+    it('leaves the stored zone untouched when the request omits it', async () => {
+      const request = new Request('https://example.com/api/workflows/wf_1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'New Name' }),
+      });
+      const response = await PATCH(request, createContext('wf_1'));
+
+      expect(response!.status).toBe(200);
+      const written = mockUpdateSet.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+      expect(written.timezone).toBeUndefined();
+    });
+  });
 });
 
 // ============================================================================

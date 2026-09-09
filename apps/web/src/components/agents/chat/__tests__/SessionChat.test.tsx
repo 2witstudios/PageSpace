@@ -38,12 +38,14 @@ vi.mock('@/components/ai/chat/input', () => ({
     onSend,
     disabled,
     placeholder,
+    commandDriveId,
   }: {
     value: string;
     onChange: (v: string) => void;
     onSend: () => void;
     disabled?: boolean;
     placeholder?: string;
+    commandDriveId?: string;
   }) => (
     <div>
       <input
@@ -51,6 +53,7 @@ vi.mock('@/components/ai/chat/input', () => ({
         value={value}
         placeholder={placeholder}
         disabled={disabled}
+        data-command-drive-id={commandDriveId ?? 'none'}
         onChange={(e) => onChange(e.target.value)}
       />
       <button data-testid="chat-send" onClick={onSend}>
@@ -64,12 +67,32 @@ vi.mock('@/components/ai/shared/chat', () => ({
   UndoAiChangesDialog: () => null,
 }));
 
+const assistantChatState = vi.hoisted(() => ({
+  current: {} as Record<string, unknown>,
+}));
+
+vi.mock('../useAssistantSessionChat', () => ({
+  useAssistantSessionChat: vi.fn(() => assistantChatState.current),
+  // The session's own drive when it has one, else whatever the pathname
+  // resolves to — the same fallback the real hook feeds into `contextRef`.
+  useAssistantContextRef: vi.fn((driveId: string | null) => ({
+    routeType: 'drive',
+    driveId: driveId ?? 'drive-from-pathname',
+  })),
+}));
+
+vi.mock('@/stores/useAssistantSettingsStore', () => ({
+  useAssistantSettingsStore: (selector: (s: unknown) => unknown) =>
+    selector({ currentModel: 'claude-sonnet-5' }),
+}));
+
 vi.mock('@/components/ai/shared/chat/ChatErrorBanner', () => ({
   ChatErrorBanner: ({ cause }: { cause: unknown }) =>
     cause ? <div data-testid="chat-error-banner" /> : null,
 }));
 
 import SessionChat from '../SessionChat';
+import AssistantSessionChat from '../AssistantSessionChat';
 
 function agentFixture(): AgentInfo {
   return {
@@ -109,9 +132,26 @@ function baseChatState(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   chatState.current = baseChatState();
+  assistantChatState.current = baseChatState();
 });
 
 describe('SessionChat', () => {
+  // Regression: the composer rendered with no command drive at all, so `/`
+  // listed only built-ins + personal commands — `loadAvailableCommands` skips
+  // the drive query entirely when driveId is null, and a command the picker
+  // never offers can never be inserted as a chip, which is the only way one
+  // executes. The scope MUST be the agent page's own drive, because that is
+  // what the server resolves chips against (page-chat-turn's `page.driveId`);
+  // a session's drive can legitimately differ and would offer commands that
+  // then fail as not_found.
+  it("scopes the command picker to the agent's drive", () => {
+    render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" />);
+    expect(screen.getByTestId('chat-input')).toHaveAttribute(
+      'data-command-drive-id',
+      'drive-1'
+    );
+  });
+
   it("renders the full messages area (ChatMessagesArea) in 'page' context", () => {
     render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" />);
     expect(screen.getByTestId('chat-messages-area')).toBeInTheDocument();
@@ -193,5 +233,41 @@ describe('SessionChat', () => {
     chatState.current = baseChatState({ errorCause: { message: 'boom' } });
     render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" />);
     expect(screen.getByTestId('chat-error-banner')).toBeInTheDocument();
+  });
+});
+
+describe('AssistantSessionChat — command picker scope', () => {
+  // The global assistant's execution scope is not its `driveId` prop but the
+  // contextRef it ships, which `global-chat-turn` resolves into the drive it
+  // scopes commands to. Routing the picker through the SAME ref is what keeps
+  // the two from disagreeing.
+  it("uses the session's own drive when it has one", () => {
+    render(
+      <AssistantSessionChat
+        sessionId="sess-1"
+        conversationId="conv-1"
+        driveId="drive-2"
+        context="page"
+      />
+    );
+    expect(screen.getByTestId('chat-input')).toHaveAttribute(
+      'data-command-drive-id',
+      'drive-2'
+    );
+  });
+
+  it('falls back to the pathname-derived drive for a driveless session, rather than dropping drive commands the server would have run', () => {
+    render(
+      <AssistantSessionChat
+        sessionId="sess-1"
+        conversationId="conv-1"
+        driveId={null}
+        context="page"
+      />
+    );
+    expect(screen.getByTestId('chat-input')).toHaveAttribute(
+      'data-command-drive-id',
+      'drive-from-pathname'
+    );
   });
 });

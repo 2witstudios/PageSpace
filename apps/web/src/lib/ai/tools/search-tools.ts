@@ -3,6 +3,9 @@ import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq, and, ne, sql, inArray, asc } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
+import { sheetCellsMatchRegex, sheetCellsMatchIlike } from '@pagespace/lib/sheets/search-sql';
+import { sheetMatchingRowsByPage, type MatchingRowText } from '@pagespace/lib/sheets/store';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { getActorAccessiblePagesInDrive, canActorAccessDrive } from './actor-permissions';
 import type { ToolExecutionContext } from '../core/types';
@@ -65,7 +68,10 @@ export const searchTools = {
             eq(pages.driveId, driveId),
             eq(pages.isTrashed, false),
             eq(pages.excludeFromSearch, false),
-            sql`${pages.content} ~ ${pgPattern}`
+            // A sheet's text is in its rows; `pages.content` is empty for a
+            // materialised one, so matching the column alone made every
+            // spreadsheet invisible to an agent's search.
+            sql`(${pages.content} ~ ${pgPattern} OR ${sheetCellsMatchRegex(pgPattern)})`
           );
         } else if (searchIn === 'title') {
           whereConditions = and(
@@ -79,7 +85,7 @@ export const searchTools = {
             eq(pages.driveId, driveId),
             eq(pages.isTrashed, false),
             eq(pages.excludeFromSearch, false),
-            sql`${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern}`
+            sql`(${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern} OR ${sheetCellsMatchRegex(pgPattern)})`
           );
         }
 
@@ -113,6 +119,24 @@ export const searchTools = {
           suggestedLineRange?: { start: number; end: number };
         }> = [];
 
+        // One query for every visible sheet's matching rows, not one per sheet.
+        //
+        // Skipped entirely when no excerpt will be read from it — a title-only
+        // search, or a call that asked for conversations and not documents.
+        const sheetExcerpts = searchIn === 'title' || !contentTypes.includes('documents')
+          ? new Map<string, MatchingRowText[]>()
+          : await sheetMatchingRowsByPage(
+              matchingPages
+                .filter(page => isSheetType(page.type as PageType) && accessiblePageIds.has(page.id))
+                .map(page => page.id),
+              { regex: pgPattern },
+              // Bounded at 50 rather than the 5 the list shows, so
+              // `totalMatches` is not silently pinned to the display cap — the
+              // document branch below counts every matching line and slices
+              // afterwards.
+              { limit: 50 },
+            );
+
         // Search documents if requested
         if (contentTypes.includes('documents')) {
           for (const page of matchingPages) {
@@ -139,16 +163,32 @@ export const searchTools = {
               // Extract matching lines if searching content
               const matchingLines: Array<{ lineNumber: number; content: string }> = [];
               if (searchIn !== 'title') {
-                const lines = page.content.split('\n');
-                // Use pre-validated jsRegex without /g flag to avoid lastIndex persistence bug
-                lines.forEach((line, index) => {
-                  if (jsRegex.test(line)) {
-                    matchingLines.push({
-                      lineNumber: index + 1,
-                      content: line.substring(0, 200), // Truncate long lines
-                    });
+                if (isSheetType(page.type as PageType)) {
+                  // Quote the rows that MATCHED, found by the same predicate
+                  // that made the page a hit.
+                  //
+                  // A sheet's text is in its rows, so `page.content` is empty
+                  // and a spreadsheet came back as a hit with a blank excerpt.
+                  // A bounded preview does not fix that either: a match at row
+                  // 5,000, on a later tab, or past the character cap falls
+                  // outside the preview, and the result still reports zero
+                  // matching lines for a page the database says matched.
+                  for (const row of sheetExcerpts.get(page.id) ?? []) {
+                    // The spreadsheet row number, not an offset into a preview.
+                    matchingLines.push({ lineNumber: row.rowIndex + 1, content: row.text });
                   }
-                });
+                } else {
+                  const lines = page.content.split('\n');
+                  // Use pre-validated jsRegex without /g flag to avoid lastIndex persistence bug
+                  lines.forEach((line, index) => {
+                    if (jsRegex.test(line)) {
+                      matchingLines.push({
+                        lineNumber: index + 1,
+                        content: line.substring(0, 200), // Truncate long lines
+                      });
+                    }
+                  });
+                }
               }
 
               results.push({
@@ -564,7 +604,7 @@ export const searchTools = {
               eq(pages.driveId, drive.id),
               eq(pages.isTrashed, false),
               eq(pages.excludeFromSearch, false),
-              sql`${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern}`
+              sql`(${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern} OR ${sheetCellsMatchRegex(pgPattern)})`
             );
           } else {
             const searchPattern = `%${searchQuery}%`;
@@ -572,7 +612,7 @@ export const searchTools = {
               eq(pages.driveId, drive.id),
               eq(pages.isTrashed, false),
               eq(pages.excludeFromSearch, false),
-              sql`${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern}`
+              sql`(${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern} OR ${sheetCellsMatchIlike(searchPattern)})`
             );
           }
 

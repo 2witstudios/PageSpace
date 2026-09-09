@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { isCapacitorApp, getPlatform } from './useCapacitor';
+import { isCapacitorApp, getPlatform } from '@/lib/capacitor-bridge';
 
 export interface UseMobileKeyboardReturn {
   /** Whether the keyboard is currently open */

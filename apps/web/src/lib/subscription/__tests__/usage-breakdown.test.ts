@@ -5,6 +5,7 @@ import {
   USAGE_FALLBACK_LOOKBACK_MS,
   type UsageLedgerRow,
 } from '../usage-breakdown';
+import { SANDBOX_STORAGE_MODELS } from '@pagespace/lib/monitoring/usage-source';
 
 const PERIOD = { periodStart: '2026-06-01T00:00:00.000Z', periodEnd: '2026-07-01T00:00:00.000Z' };
 
@@ -17,6 +18,8 @@ const row = (over: Partial<UsageLedgerRow>): UsageLedgerRow => ({
   pageId: null,
   pageTitle: null,
   durationMs: null,
+  sessionId: null,
+  envName: null,
   ...over,
 });
 
@@ -269,6 +272,122 @@ describe('aggregateUsageBreakdown', () => {
         PERIOD,
       );
       expect(r.byAgentSession.map((m) => m.pageId)).toEqual(['big', 'small']);
+    });
+  });
+
+  describe('byEnvironment (drive environments)', () => {
+    // What the storage meter actually writes for an environment's disk:
+    // source 'terminal' like a session's, no pageId at all, the env id on the
+    // shared analytics `sessionId` column, and the model label as the ONLY
+    // thing distinguishing it from a session's storage row.
+    const envStorageRow = (over: Partial<UsageLedgerRow>): UsageLedgerRow =>
+      row({
+        source: 'terminal',
+        model: SANDBOX_STORAGE_MODELS.env,
+        provider: 'sprites',
+        totalTokens: 0,
+        durationMs: 0,
+        pageId: null,
+        pageTitle: null,
+        ...over,
+      });
+
+    /** A session's RUNTIME row, for the cases that need agent spend beside the env's. */
+    const agentSessionRow = (over: Partial<UsageLedgerRow>): UsageLedgerRow =>
+      row({ source: 'terminal', model: 'terminal-machine', provider: 'sprites', totalTokens: 0, ...over });
+
+    it('given an env storage row, should never render it as an "Unattributed agent" — the bug this section exists for', () => {
+      const r = aggregateUsageBreakdown(
+        [envStorageRow({ sessionId: 'env-1', envName: 'staging', chargeMillicents: 8_000 })],
+        PERIOD,
+      );
+      expect(r.byAgentSession).toEqual([]);
+      expect(r.byEnvironment).toHaveLength(1);
+      expect(r.byEnvironment[0]).toMatchObject({ envId: 'env-1', label: 'staging', spendCents: 8, calls: 1 });
+    });
+
+    it('given env storage beside real agent spend, should keep it out of the agent section\'s sharePct denominator', () => {
+      const r = aggregateUsageBreakdown(
+        [
+          agentSessionRow({ pageId: 'page-a', pageTitle: 'A', chargeMillicents: 7_500 }),
+          agentSessionRow({ pageId: 'page-b', pageTitle: 'B', chargeMillicents: 2_500 }),
+          // Ten times the agents' combined spend. If it were still counted in
+          // the terminal denominator, both shares below would collapse to a few
+          // percent.
+          envStorageRow({ sessionId: 'env-1', envName: 'staging', chargeMillicents: 100_000 }),
+        ],
+        PERIOD,
+      );
+      expect(r.byAgentSession.find((m) => m.pageId === 'page-a')!.sharePct).toBe(75);
+      expect(r.byAgentSession.find((m) => m.pageId === 'page-b')!.sharePct).toBe(25);
+    });
+
+    it('given a session storage row, should leave it in the agent section — only the ENV label moves', () => {
+      const r = aggregateUsageBreakdown(
+        [
+          row({
+            source: 'terminal',
+            model: SANDBOX_STORAGE_MODELS.session,
+            provider: 'sprites',
+            pageId: 'agent-page-1',
+            pageTitle: 'My Agent',
+            chargeMillicents: 4_000,
+            durationMs: 0,
+            totalTokens: 0,
+          }),
+        ],
+        PERIOD,
+      );
+      expect(r.byAgentSession.map((m) => m.pageId)).toEqual(['agent-page-1']);
+      expect(r.byEnvironment).toEqual([]);
+    });
+
+    it('given several charges for one environment, should sum them into a single row', () => {
+      const r = aggregateUsageBreakdown(
+        [
+          envStorageRow({ sessionId: 'env-1', envName: 'staging', chargeMillicents: 4_000 }),
+          envStorageRow({ sessionId: 'env-1', envName: 'staging', chargeMillicents: 6_000 }),
+        ],
+        PERIOD,
+      );
+      expect(r.byEnvironment).toHaveLength(1);
+      expect(r.byEnvironment[0]).toMatchObject({ envId: 'env-1', spendCents: 10, calls: 2 });
+    });
+
+    it('given an env whose row is gone, should label it "Deleted environment" rather than dropping its spend', () => {
+      const r = aggregateUsageBreakdown(
+        [envStorageRow({ sessionId: 'env-gone', envName: null, chargeMillicents: 3_000 })],
+        PERIOD,
+      );
+      expect(r.byEnvironment[0]).toMatchObject({ envId: 'env-gone', label: 'Deleted environment', spendCents: 3 });
+    });
+
+    it('given a charge that recorded no env id at all, should say "Unknown environment" — not claim a deletion it cannot know', () => {
+      const r = aggregateUsageBreakdown(
+        [envStorageRow({ sessionId: null, envName: null, chargeMillicents: 5_000 })],
+        PERIOD,
+      );
+      expect(r.byEnvironment[0]).toMatchObject({
+        envId: null,
+        label: 'Unknown environment',
+        spendCents: 5,
+      });
+      // Still out of the agent section, which is the point of the split.
+      expect(r.byAgentSession).toEqual([]);
+    });
+
+    it('computes sharePct against ENVIRONMENT spend, and sorts by spend descending', () => {
+      const r = aggregateUsageBreakdown(
+        [
+          row({ source: 'chat', chargeMillicents: 900_000 }),
+          agentSessionRow({ pageId: 'page-a', pageTitle: 'A', chargeMillicents: 500_000 }),
+          envStorageRow({ sessionId: 'env-small', envName: 'dev', chargeMillicents: 2_500 }),
+          envStorageRow({ sessionId: 'env-big', envName: 'staging', chargeMillicents: 7_500 }),
+        ],
+        PERIOD,
+      );
+      expect(r.byEnvironment.map((e) => e.envId)).toEqual(['env-big', 'env-small']);
+      expect(r.byEnvironment.map((e) => e.sharePct)).toEqual([75, 25]);
     });
   });
 });

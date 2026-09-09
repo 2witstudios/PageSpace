@@ -15,6 +15,16 @@
  * D2 fix: `delete_task_trigger`'s route was session-only prior to
  * #1764/66/67/70; it now accepts `['session','mcp']`, so this op declares
  * `requiredScope: 'drive'` like every other op here, not `sessionOnly`.
+ *
+ * Timezone contract for `dueDate` (same rule `calendar` documents): a *naive*
+ * datetime (no `Z`/offset, e.g. `"2026-02-19T19:00:00"`) is a wall-clock time
+ * and is read server-side in this request's `timezone` field, else the caller's
+ * profile timezone, else UTC. A value carrying `Z` or an explicit offset is an
+ * absolute instant and `timezone` has no effect on it, and a date-only value
+ * (`"2026-02-19"`) keeps its ISO 8601 meaning of UTC midnight. Omitting
+ * `timezone` is therefore NOT the same as sending `"UTC"`. The due date and any
+ * `due_date` agentTrigger scheduled against it always resolve to the same
+ * instant.
  */
 import { z } from 'zod';
 import { defineOperation } from '../registry/define.js';

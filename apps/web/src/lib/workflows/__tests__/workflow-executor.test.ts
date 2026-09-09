@@ -137,7 +137,7 @@ vi.mock('@/lib/ai/core/timestamp-utils', () => ({
 }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   DEFAULT_PROVIDER: 'openai',
-  DEFAULT_MODEL: 'openai/gpt-5.3-chat',
+  DEFAULT_MODEL: 'openai/gpt-5.4-nano',
 }));
 
 vi.mock('@/lib/repositories/message-repository', () => ({
@@ -192,7 +192,7 @@ const mockAgent = {
   systemPrompt: 'You are a report generator.',
   includeDrivePrompt: false,
   aiProvider: 'openai',
-  aiModel: 'openai/gpt-5.3-chat',
+  aiModel: 'openai/gpt-5.4-nano',
   enabledTools: ['list_pages', 'create_page'],
   driveId: 'drive_abc',
 };
@@ -208,7 +208,7 @@ const mockDrive = {
 const mockProviderResult = {
   model: { id: 'mock-model' },
   provider: 'openai',
-  modelName: 'openai/gpt-5.3-chat',
+  modelName: 'openai/gpt-5.4-nano',
 };
 
 function setupSelectChain(...results: unknown[][]) {

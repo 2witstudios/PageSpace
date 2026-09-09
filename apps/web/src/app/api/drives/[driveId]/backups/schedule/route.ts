@@ -120,6 +120,17 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ dr
       .limit(1);
 
     const frequency = parsed.frequency ?? existing?.frequency ?? 'daily';
+    /**
+     * Deliberately NOT resolved against the caller's profile, unlike calendar
+     * events, task due dates and workflow schedules (#2404).
+     *
+     * A backup window belongs to the DRIVE, not to whoever last touched the
+     * setting. Any owner or admin can save this form, so a profile fallback
+     * would let a colleague in another timezone silently move the whole drive's
+     * backup window by toggling an unrelated field. The zone is an explicit
+     * choice with its own control in the UI; absent means "keep what the drive
+     * already had", and UTC only for a schedule that never had one.
+     */
     const timezone = parsed.timezone ?? existing?.timezone ?? 'UTC';
     const now = new Date();
 

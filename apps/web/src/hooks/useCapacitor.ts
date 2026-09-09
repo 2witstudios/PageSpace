@@ -1,8 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-
-type Platform = 'ios' | 'android' | 'web';
+import {
+  getNativeCapabilities,
+  getPlatform,
+  isAndroid,
+  isIOS,
+  isIPad,
+  isNativeApp,
+  NO_NATIVE_CAPABILITIES,
+  type NativeCapability,
+  type Platform,
+} from '@/lib/capacitor-bridge';
 
 interface CapacitorState {
   /** Whether running in a native Capacitor app */
@@ -15,90 +24,55 @@ interface CapacitorState {
   isAndroid: boolean;
   /** Whether running on iPad (iOS Capacitor with tablet-sized screen) */
   isIPad: boolean;
+  /**
+   * What this platform can actually do.
+   *
+   * Prefer this over `isIOS`/`isAndroid` when gating a native feature — see
+   * `hasNativeCapability` in `@/lib/capacitor-bridge`.
+   */
+  capabilities: Readonly<Record<NativeCapability, boolean>>;
   /** Whether state has been determined (for SSR hydration) */
   isReady: boolean;
 }
 
 /**
  * Hook to detect Capacitor native environment.
- * Provides platform information for conditional rendering and behavior.
+ * Provides platform and capability information for conditional rendering.
  *
  * @example
  * ```tsx
- * const { isNative, isIOS, platform } = useCapacitor();
+ * const { isNative, capabilities } = useCapacitor();
  *
- * if (isIOS) {
- *   // iOS-specific behavior
+ * if (capabilities.badge) {
+ *   // this platform can set an app badge
  * }
  * ```
  */
 export function useCapacitor(): CapacitorState {
+  // The initial state must match what the server rendered: no native platform
+  // and no capabilities. Reading the real platform here instead would make the
+  // first client render disagree with the server's HTML on any native build.
   const [state, setState] = useState<CapacitorState>({
     isNative: false,
     platform: 'web',
     isIOS: false,
     isAndroid: false,
     isIPad: false,
+    capabilities: NO_NATIVE_CAPABILITIES,
     isReady: false,
   });
 
   useEffect(() => {
-    // Check for Capacitor global object
-    const capacitor = (window as Window & { Capacitor?: CapacitorGlobal }).Capacitor;
-    const isCapacitor = typeof capacitor !== 'undefined' && capacitor.isNativePlatform?.();
-
-    if (isCapacitor && capacitor) {
-      const platform = capacitor.getPlatform?.() as Platform || 'web';
-      const isIOSPlatform = platform === 'ios';
-      // Detect iPad: iOS Capacitor + tablet-sized screen (min dimension >= 768px).
-      // All iPads have min(width, height) >= 768px; all iPhones are well under.
-      const isIPadDevice = isIOSPlatform &&
-        Math.min(window.screen.width, window.screen.height) >= 768;
-      setState({
-        isNative: true,
-        platform,
-        isIOS: isIOSPlatform,
-        isAndroid: platform === 'android',
-        isIPad: isIPadDevice,
-        isReady: true,
-      });
-    } else {
-      setState({
-        isNative: false,
-        platform: 'web',
-        isIOS: false,
-        isAndroid: false,
-        isIPad: false,
-        isReady: true,
-      });
-    }
+    setState({
+      isNative: isNativeApp(),
+      platform: getPlatform(),
+      isIOS: isIOS(),
+      isAndroid: isAndroid(),
+      isIPad: isIPad(),
+      capabilities: getNativeCapabilities(),
+      isReady: true,
+    });
   }, []);
 
   return state;
-}
-
-interface CapacitorGlobal {
-  isNativePlatform?: () => boolean;
-  getPlatform?: () => string;
-}
-
-/**
- * Non-hook function to check if running in Capacitor.
- * Use when you need platform detection outside of React components.
- */
-export function isCapacitorApp(): boolean {
-  if (typeof window === 'undefined') return false;
-  const capacitor = (window as Window & { Capacitor?: CapacitorGlobal }).Capacitor;
-  return typeof capacitor !== 'undefined' && !!capacitor.isNativePlatform?.();
-}
-
-/**
- * Get the current platform synchronously.
- * Returns 'web' if not in Capacitor or if called during SSR.
- */
-export function getPlatform(): Platform {
-  if (typeof window === 'undefined') return 'web';
-  const capacitor = (window as Window & { Capacitor?: CapacitorGlobal }).Capacitor;
-  if (!capacitor?.isNativePlatform?.()) return 'web';
-  return (capacitor.getPlatform?.() as Platform) || 'web';
 }

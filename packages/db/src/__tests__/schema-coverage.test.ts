@@ -33,10 +33,26 @@ describe('schema.ts exports', () => {
     expect(schemaModule.schema.drives).toBeDefined();
     expect(schemaModule.schema.pages).toBeDefined();
     expect(schemaModule.schema.tags).toBeDefined();
-    expect(schemaModule.schema.pageTags).toBeDefined();
     expect(schemaModule.schema.favorites).toBeDefined();
     expect(schemaModule.schema.mentions).toBeDefined();
     expect(schemaModule.schema.userMentions).toBeDefined();
+  });
+
+  it('schema object contains the content tag assignment table', () => {
+    // `pageTags` used to be asserted alongside `tags` above. It was dropped
+    // (dead since migration 0000, zero write paths) and REPLACED by this
+    // table, so the assertion moved rather than disappearing.
+    expect(schemaModule.schema.contentTags).toBeDefined();
+  });
+
+  it('schema object contains published-app hosting tables', () => {
+    expect(schemaModule.schema.publishedApps).toBeDefined();
+    expect(schemaModule.schema.appDeployTokenMints).toBeDefined();
+    // The FK-free teardown outbox. Registered here so a future refactor that
+    // drops it from the barrel fails loudly rather than silently disabling the
+    // only thing that stops a deleted environment (or drive, or user) stranding
+    // a billing Fly app.
+    expect(schemaModule.schema.appHostingReclaims).toBeDefined();
   });
 
   it('no longer exposes the dropped legacy chat_messages table', () => {
@@ -166,6 +182,15 @@ describe('schema.ts exports', () => {
 
   it('schema object contains workflows tables', () => {
     expect(schemaModule.schema.workflows).toBeDefined();
+  });
+
+  it('schema object contains drive-envs tables', () => {
+    // Registered the moment the table landed, not when its first writer does.
+    // An unregistered table is absent from `schema` for every consumer that
+    // reaches for it by name (the drift guards over the GDPR and tenant
+    // exports both enumerate this object at runtime), and "nothing writes it
+    // yet" is a state that expires quietly.
+    expect(schemaModule.schema.driveEnvs).toBeDefined();
   });
 
   it('re-exports auth enums', () => {

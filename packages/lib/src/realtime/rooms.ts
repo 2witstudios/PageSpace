@@ -88,8 +88,8 @@ export const dmRoom = (conversationId: string): string => `dm:${conversationId}`
 
 /**
  * Agent-session workspace room (`session:<agent_workspaces.id>`) — the layout
- * plane for one workspace: `workspace:updated` (rev-carrying pane-grid
- * events) fan out here (epic Phase 3). Clients join from
+ * plane for one workspace: `workspace:nodes-updated` (rev-carrying node-tree
+ * events) fans out here. Clients join from
  * `useWorkspaceLayoutSync`, which holds this room for the ONE workspace whose
  * grid is on screen — distinct from `user:<id>:sessions`, the directory plane
  * carrying every workspace a user owns. Two rooms because the audiences
@@ -247,8 +247,8 @@ export const roomsForConversationKick = (conversationId: string): string[] => [
 
 /**
  * The layout room of ONE agent workspace a revocation reached. Enumerated for
- * the same reason: `session:<workspaceId>` carries `workspace:updated` grids
- * for a workspace in the drive whose membership was just revoked, and the
- * drive id alone cannot name it.
+ * the same reason: `session:<workspaceId>` carries `workspace:nodes-updated`
+ * trees for a workspace in the drive whose membership was just revoked, and
+ * the drive id alone cannot name it.
  */
 export const roomsForWorkspaceKick = (workspaceId: string): string[] => [sessionRoom(workspaceId)];

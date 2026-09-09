@@ -15,6 +15,8 @@ import * as auth from '../auth';
 import * as sessions from '../sessions';
 // Core schema
 import * as core from '../core';
+// Content tags schema
+import * as contentTagsSchema from '../content-tags';
 // Members schema
 import * as members from '../members';
 // Chat schema
@@ -63,6 +65,7 @@ import * as calendar from '../calendar';
 // Workflows schema
 import * as workflows from '../workflows';
 import * as workflowRuns from '../workflow-runs';
+import * as driveEnvs from '../drive-envs';
 
 const schemaDir = resolve(process.cwd(), 'src/schema');
 
@@ -115,7 +118,6 @@ describe('Schema definitions', () => {
       expect(core.drives).toBeDefined();
       expect(core.pages).toBeDefined();
       expect(core.tags).toBeDefined();
-      expect(core.pageTags).toBeDefined();
       expect(core.storageEvents).toBeDefined();
       expect(core.favorites).toBeDefined();
       expect(core.mentions).toBeDefined();
@@ -126,10 +128,22 @@ describe('Schema definitions', () => {
       expect(core.drivesRelations).toBeDefined();
       expect(core.pagesRelations).toBeDefined();
       expect(core.tagsRelations).toBeDefined();
-      expect(core.pageTagsRelations).toBeDefined();
       expect(core.favoritesRelations).toBeDefined();
       expect(core.mentionsRelations).toBeDefined();
       expect(core.userMentionsRelations).toBeDefined();
+    });
+  });
+
+  describe('content-tags schema', () => {
+    it('exports enums', () => {
+      expect(contentTagsSchema.contentTagTargetKind).toBeDefined();
+      expect(contentTagsSchema.contentTagAnchorStatus).toBeDefined();
+      expect(contentTagsSchema.contentTagSource).toBeDefined();
+    });
+
+    it('exports tables and relations', () => {
+      expect(contentTagsSchema.contentTags).toBeDefined();
+      expect(contentTagsSchema.contentTagsRelations).toBeDefined();
     });
   });
 
@@ -192,9 +206,10 @@ describe('Schema definitions', () => {
       expect(conversations.messagesRelations).toBeDefined();
     });
 
-    it('pins closedInWorkspaceAt — listing membership, kept separate from isActive (history soft-delete)', () => {
-      expect(conversations.conversations.closedInWorkspaceAt).toBeDefined();
-    });
+    // `closedInWorkspaceAt` was pinned here as "listing membership, kept
+    // separate from isActive". Both it and `workspaceId` are gone: membership
+    // is a node row, and closing a thread out of a workspace destroys that
+    // node rather than stamping a column.
   });
 
   describe('notifications schema', () => {
@@ -531,6 +546,16 @@ describe('Schema definitions', () => {
 
     it('exports relations', () => {
       expect(workflowRuns.workflowRunsRelations).toBeDefined();
+    });
+  });
+
+  describe('drive_envs schema', () => {
+    it('exports tables', () => {
+      expect(driveEnvs.driveEnvs).toBeDefined();
+    });
+
+    it('exports relations', () => {
+      expect(driveEnvs.driveEnvsRelations).toBeDefined();
     });
   });
 });

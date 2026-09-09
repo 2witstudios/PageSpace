@@ -66,7 +66,7 @@ import type { MobileOAuthResponse } from '@pagespace/lib/auth/oauth-types';
 import { getClientIP } from '@/lib/auth';
 import { createSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
-import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 
 const oauthExchangeSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),

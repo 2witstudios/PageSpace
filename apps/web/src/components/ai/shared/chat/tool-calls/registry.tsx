@@ -13,6 +13,8 @@ import { ActivityRenderer, type ActivityItem } from './ActivityRenderer';
 import { WebSearchRenderer, type WebSearchResult } from './WebSearchRenderer';
 import { MemberListRenderer, type MemberInfo } from './MemberListRenderer';
 import { SheetEditRenderer } from './SheetEditRenderer';
+import { SheetFormatRenderer } from './SheetFormatRenderer';
+import type { FormatOpInput, RegionInput, RuleInput } from '@/lib/ai/tools/sheet-format-tools';
 import { AgentConfigRenderer, type AgentConfigData } from './AgentConfigRenderer';
 import { ModelListRenderer, type ModelListProvider } from './ModelListRenderer';
 import { WebFetchRenderer } from './WebFetchRenderer';
@@ -209,6 +211,13 @@ const parsePathsToTree = (paths: string[]): TreeItem[] => {
   return buildTreeFromParsed(parsedPages, 1, []);
 };
 
+/** The card chrome both sheet-formatting tools share. */
+const sheetFormatCard = (output: Record<string, unknown>) => ({
+  title: (output.title as string | undefined) || 'Sheet',
+  pageId: output.pageId as string | undefined,
+  message: output.message as string | undefined,
+});
+
 /**
  * Tools handled outside this registry as full-width cards in the wrapper
  * (they replace the collapsible shell rather than render inside it). Listed so
@@ -331,6 +340,32 @@ export const toolRenderers: Record<string, ToolRenderer> = {
         content={content}
         pageId={parsedOutput.pageId as string | undefined}
         pageType={parsedOutput.type as string | undefined}
+        // read_page on a SHEET returns the same row table, whose leading
+        // numbers are A1 rows rather than display chrome.
+        preserveLineNumbers={parsedOutput.type === 'SHEET'}
+      />
+    );
+  },
+
+  // A sheet read renders as the table it already carries — the same
+  // RichContentRenderer read_page uses, so a sheet looks the same whichever
+  // tool fetched it.
+  read_sheet: ({ parsedOutput }) => {
+    const table = parsedOutput.table;
+    // Returning null here for a failure envelope left an EMPTY card for
+    // precisely the results the tool works hardest to explain — the
+    // wrong-page-type, bad-tabIndex, mixed-paging and "do not overwrite it"
+    // refusals all carry a message and no table. Fall through to the generic
+    // success/failure renderer below, which shows them.
+    if (parsedOutput.success === false) return null;
+    if (typeof table !== 'string' || table.length === 0) return null;
+    return (
+      <RichContentRenderer
+        title={(parsedOutput.title as string | undefined) || 'Sheet'}
+        content={table}
+        pageId={parsedOutput.pageId as string | undefined}
+        pageType="SHEET"
+        preserveLineNumbers
       />
     );
   },
@@ -365,6 +400,37 @@ export const toolRenderers: Record<string, ToolRenderer> = {
   },
 
   // === PAGE WRITE TOOLS ===
+  // A copy into a page is exactly the "diff a human should review" case, so it
+  // renders like the other line edits. A copy into a FILE has no prior content
+  // to diff against, so it falls through to the action summary.
+  copy_content: ({ parsedOutput }) => {
+    // `inserted: false` rides on a success:true envelope (a missing insertAfter
+    // anchor is a no-op the agent can act on, not a fault). Nothing was written
+    // in that case, so it must not render as a completed update.
+    const copied = parsedOutput.success !== false && parsedOutput.inserted !== false;
+    if (copied && typeof parsedOutput.oldContent === 'string' && typeof parsedOutput.newContent === 'string') {
+      return (
+        <RichDiffRenderer
+          title={(parsedOutput.title as string | undefined) || 'Document'}
+          oldContent={parsedOutput.oldContent}
+          newContent={parsedOutput.newContent}
+          pageId={parsedOutput.pageId as string | undefined}
+          changeSummary={parsedOutput.message as string | undefined}
+        />
+      );
+    }
+    return (
+      <ActionResultRenderer
+        actionType="update"
+        success={copied}
+        title={(parsedOutput.title as string | undefined) ?? (parsedOutput.path as string | undefined)}
+        pageId={parsedOutput.pageId as string | undefined}
+        message={parsedOutput.message as string | undefined}
+        errorMessage={parsedOutput.error as string | undefined}
+      />
+    );
+  },
+
   insert_content: ({ parsedOutput }) => {
     if (parsedOutput.success && typeof parsedOutput.oldContent === 'string' && typeof parsedOutput.newContent === 'string') {
       return (
@@ -544,6 +610,45 @@ export const toolRenderers: Record<string, ToolRenderer> = {
         pageId={parsedOutput.pageId as string | undefined}
         driveId={parsedOutput.driveId as string | undefined}
         cellsUpdated={parsedOutput.cellsUpdated as number | undefined}
+      />
+    );
+  },
+  // Formatting card, not the value table — see SheetFormatRenderer. Two shapes
+  // mean "nothing landed": the tool's own refusal (`success: false`) and the
+  // execute_tool wrapper's `{ error }` envelope, which carries no `success`
+  // key and arrives with the model's UNVALIDATED parameters as the input.
+  // Both fall through to the generic envelope, which prints the error.
+  format_sheet: ({ parsedInput, parsedOutput }) => {
+    if (parsedOutput.success === false || parsedOutput.error) return null;
+    return (
+      <SheetFormatRenderer
+        {...sheetFormatCard(parsedOutput)}
+        regions={parsedInput?.regions as RegionInput[] | undefined}
+        removedRegionIds={parsedOutput.removedRegionIds as string[] | undefined}
+        ops={parsedInput?.ops as FormatOpInput[] | undefined}
+        regionsApplied={parsedOutput.regionsApplied as number | undefined}
+        opsApplied={parsedOutput.opsApplied as number | undefined}
+        cellsFormatted={parsedOutput.cellsFormatted as number | undefined}
+        changed={parsedOutput.changed as boolean | undefined}
+      />
+    );
+  },
+  set_conditional_format: ({ parsedInput, parsedOutput }) => {
+    if (parsedOutput.success === false || parsedOutput.error) return null;
+    return (
+      <SheetFormatRenderer
+        {...sheetFormatCard(parsedOutput)}
+        rules={parsedInput?.rules as RuleInput[] | undefined}
+        // Removals as the store confirmed them under its lock — an id the
+        // tab did not hold was never a removal and is not listed.
+        removedRuleIds={parsedOutput.removedRuleIds as string[] | undefined}
+        ruleIds={parsedOutput.ruleIds as string[] | undefined}
+        ruleIdsAdded={parsedOutput.ruleIdsAdded as string[] | undefined}
+        ruleMode={parsedOutput.mode as 'append' | 'replaceAll' | undefined}
+        rulesAdded={parsedOutput.added as number | undefined}
+        rulesRemoved={parsedOutput.removed as number | undefined}
+        changed={parsedOutput.changed as boolean | undefined}
+        skippedDuplicates={parsedOutput.skippedDuplicates as Array<{ index: number }> | undefined}
       />
     );
   },

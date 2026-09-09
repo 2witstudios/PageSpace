@@ -1,5 +1,4 @@
 import { ReactRenderer } from '@tiptap/react';
-import { Mention } from '@tiptap/extension-mention';
 import { useDriveStore } from '@/hooks/useDrive';
 import { MentionSuggestion, PageMentionData } from '@/types/mentions';
 import tippy, { Instance } from 'tippy.js';
@@ -8,6 +7,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { cn } from '@/lib/utils';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TAB_TYPES, type TabType } from '@/components/mentions/MentionPicker';
+import { PageMentionNode, getMentionAttrs } from '@pagespace/editor/page-mention-node';
 
 interface SuggestionListRef {
   onKeyDown: (props: { event: KeyboardEvent }) => boolean;
@@ -120,22 +120,28 @@ const TiptapSuggestionList = forwardRef<SuggestionListRef, TiptapSuggestionListP
   );
 });
 
-interface MentionAttrs {
-  id: string;
-  label: string;
-  driveId: string | null;
-  driveSlug: string | null;
-  mentionType: string;
-}
-
-function getMentionAttrs(attrs: Record<string, unknown>): MentionAttrs {
-  return {
-    id: typeof attrs.id === 'string' ? attrs.id : '',
-    label: typeof attrs.label === 'string' ? attrs.label : '',
-    driveId: typeof attrs.driveId === 'string' ? attrs.driveId : null,
-    driveSlug: typeof attrs.driveSlug === 'string' ? attrs.driveSlug : null,
-    mentionType: typeof attrs.mentionType === 'string' ? attrs.mentionType : 'page',
-  };
+/**
+ * Where a click on a page mention goes, in the editor's node view.
+ *
+ * With a driveId, the direct dashboard URL. Without one — the AI-authored shape
+ * carries `data-page-id` and nothing else — the `/p/{pageId}` resolver, which
+ * exists precisely so "mentions [can] link directly to a page ID without
+ * knowing the driveId" (`app/p/[pageId]/page.tsx`). Null when there is no id,
+ * so the chip simply does not navigate, rather than following the bare
+ * `/dashboard/` this used to fall back to, which landed on the dashboard root
+ * instead of the mentioned page.
+ *
+ * Deliberately NOT used by `renderHTML`. That output is stored and published,
+ * and `neutralizeDashboardLinks` (`packages/lib/src/publish/`) makes a mention
+ * inert on a published page by rewriting hrefs that start with `/dashboard/`.
+ * A `/p/{pageId}` href would slip past it and publish as a live link into an
+ * auth-gated route, so stored HTML gets the dashboard href or no href at all.
+ */
+function pageMentionNavigationHref(id: string, driveId: string | null): string | null {
+  if (!id) {
+    return null;
+  }
+  return driveId ? `/dashboard/${driveId}/${id}` : `/p/${id}`;
 }
 
 function dispatchInternalNavigation(href: string): void {
@@ -147,24 +153,15 @@ function dispatchInternalNavigation(href: string): void {
   document.dispatchEvent(event);
 }
 
-const PageMentionNode = Mention.extend({
-  name: 'pageMention',
-
-  inline: true,
-  atom: true,
-  selectable: false,
-
-  addAttributes() {
-    return {
-      id: { default: null },
-      label: { default: null },
-      driveId: { default: null },
-      driveSlug: { default: null },
-      // 'page' | 'user' | 'everyone' | 'role'
-      mentionType: { default: 'page' },
-    };
-  },
-
+/**
+ * The client's `pageMention`: `PageMentionNode`'s frozen schema plus the node
+ * view (DOM click/navigation chip) and the suggestion picker (tippy/React
+ * fetch against `/api/mentions/search`). Neither addition is schema-affecting
+ * — `addNodeView` and the `suggestion` option don't touch `NodeSpec` — but
+ * both need `document`/React/fetch, which is why they stay out of the
+ * Node-safe `page-mention-node.ts`.
+ */
+const PageMentionWithView = PageMentionNode.extend({
   addNodeView() {
     return ({ node }: { node: { attrs: { [key: string]: unknown } } }) => {
       const { mentionType, id, label, driveId } = getMentionAttrs(node.attrs);
@@ -182,11 +179,26 @@ const PageMentionNode = Mention.extend({
         return { dom, contentDOM: null };
       }
 
+      // A user mention has no page to navigate to. It used to build
+      // `/dashboard/{driveId}/{userId}`, which resolves to nothing — match
+      // renderHTML and emit an inert chip carrying `data-user-id`.
+      if (mentionType === 'user') {
+        const dom = document.createElement('a');
+        dom.className = 'mention';
+        dom.contentEditable = 'false';
+        dom.setAttribute('data-mention-type', 'user');
+        dom.setAttribute('data-user-id', id);
+        if (driveId) dom.setAttribute('data-drive-id', driveId);
+        dom.textContent = `@${label}`;
+        dom.addEventListener('mousedown', (event) => { event.preventDefault(); });
+        return { dom, contentDOM: null };
+      }
+
       const dom = document.createElement('a');
-      const href = driveId && id ? `/dashboard/${driveId}/${id}` : `/dashboard/`;
+      const href = pageMentionNavigationHref(id, driveId);
 
       // NO target="_blank" - stays in WebView on Capacitor
-      dom.href = href;
+      if (href) dom.href = href;
       dom.rel = 'noopener noreferrer nofollow';
       dom.className = 'mention';
       dom.contentEditable = 'false';
@@ -194,11 +206,13 @@ const PageMentionNode = Mention.extend({
       dom.setAttribute('data-page-id', id);
       dom.textContent = `@${label}`;
 
-      dom.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        dispatchInternalNavigation(href);
-      });
+      if (href) {
+        dom.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          dispatchInternalNavigation(href);
+        });
+      }
       dom.addEventListener('mousedown', (event) => { event.preventDefault(); });
 
       return { dom, contentDOM: null };
@@ -206,56 +220,7 @@ const PageMentionNode = Mention.extend({
   },
 });
 
-export const PageMention = PageMentionNode.configure({
-  HTMLAttributes: {
-    class: 'mention',
-    contenteditable: 'false',
-  },
-  renderHTML({ options, node }) {
-    const { mentionType, id, label, driveId } = getMentionAttrs(node.attrs);
-
-    if (mentionType === 'everyone') {
-      return [
-        'span',
-        {
-          ...options.HTMLAttributes,
-          'data-mention-type': 'everyone',
-          'data-drive-id': driveId ?? '',
-          contenteditable: 'false',
-        },
-        `@${label}`,
-      ];
-    }
-
-    if (mentionType === 'role') {
-      return [
-        'span',
-        {
-          ...options.HTMLAttributes,
-          'data-mention-type': 'role',
-          'data-role-id': id,
-          'data-drive-id': driveId ?? '',
-          contenteditable: 'false',
-        },
-        `@${label}`,
-      ];
-    }
-
-    const href = driveId && id ? `/dashboard/${driveId}/${id}` : `/dashboard/`;
-    return [
-      'a',
-      {
-        ...options.HTMLAttributes,
-        href,
-        // NO target="_blank" - stays in WebView on Capacitor iOS
-        rel: 'noopener noreferrer nofollow',
-        'data-mention-type': 'page',
-        'data-page-id': id,
-        contenteditable: 'false',
-      },
-      `@${label}`,
-    ];
-  },
+export const PageMention = PageMentionWithView.configure({
   suggestion: {
     allowSpaces: true,
     items: async ({ query }) => {

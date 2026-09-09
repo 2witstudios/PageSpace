@@ -15,6 +15,8 @@ import { getCreditPack } from '@pagespace/lib/billing/credit-pricing';
 import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
 import { sendSubscriptionReceiptEmail, sendTopupReceiptEmail } from '@/lib/billing/send-payment-receipt-email';
 import { classifyDedupeOutcome, DEFAULT_LEASE_MS, type DedupeOutcome } from './dedupe';
+import { invoiceSubscriptionId, routeInvoice, routeSubscription } from './dedicated-routing';
+import { handleDedicatedSubscriptionEvent } from './dedicated-handlers';
 
 export async function POST(request: NextRequest) {
   try {
@@ -143,13 +145,52 @@ export async function POST(request: NextRequest) {
     try {
       switch (event.type) {
         case 'customer.subscription.created':
-        case 'customer.subscription.updated':
-          await handleSubscriptionChange(event.data.object as Stripe.Subscription);
+        case 'customer.subscription.updated': {
+          // FORKED ON `metadata.kind`. A dedicated-hosting subscription must never
+          // reach `handleSubscriptionChange`, which would derive an account tier of
+          // `free` from its unmapped price and write it over a paying customer's
+          // tier — permanently, because the reconcile cron then reads that entitled
+          // unmapped row as `indeterminate` and refuses to repair it. See
+          // `dedicated-routing.ts` for why an absent or unrecognised kind still
+          // takes the path below.
+          const subscription = event.data.object as Stripe.Subscription;
+          if (routeSubscription(subscription, event.id) === 'published_app_dedicated') {
+            // RETRYABLE, through the same marker-deleting wrapper the funding
+            // paths use. Without it a throwing hosting event is still marked
+            // processed, so Stripe's redelivery classifies as a duplicate and is
+            // acked — and an app that had just been set `dedicated` would stay
+            // that way forever with no paying subscription behind it and nothing
+            // left to repair it. The handler is idempotent (an upsert plus a tier
+            // write guarded on the tier it planned against), so reprocessing is
+            // safe.
+            await withFundingRetry(event.id, () =>
+              handleDedicatedSubscriptionEvent(subscription, event.id, event.created),
+            );
+            break;
+          }
+          await handleSubscriptionChange(subscription);
           break;
+        }
 
-        case 'customer.subscription.deleted':
-          await handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
+        case 'customer.subscription.deleted': {
+          // Same fork. A cancelled hosting subscription downgrades ONE APP back to
+          // metered; it says nothing about the account's plan, and running it
+          // through `handleSubscriptionDeleted` would set the customer's tier to
+          // `free` because a hosting subscription ended.
+          const subscription = event.data.object as Stripe.Subscription;
+          if (routeSubscription(subscription, event.id) === 'published_app_dedicated') {
+            // Retryable for the same reason as the created/updated fork above, and
+            // more urgently: this is the event that takes an app OFF the dedicated
+            // tier, so losing it to a duplicate-ack leaves an always-on machine
+            // running for a customer who has stopped paying.
+            await withFundingRetry(event.id, () =>
+              handleDedicatedSubscriptionEvent(subscription, event.id, event.created),
+            );
+            break;
+          }
+          await handleSubscriptionDeleted(subscription);
           break;
+        }
 
         case 'checkout.session.completed': {
           // Whole path is retryable: a transient failure in EITHER the handler or
@@ -202,12 +243,44 @@ export async function POST(request: NextRequest) {
           break;
         }
 
-        case 'invoice.payment_failed':
-          await handlePaymentFailed(event.data.object as Stripe.Invoice);
+        case 'invoice.payment_failed': {
+          const invoice = event.data.object as Stripe.Invoice;
+          if (routeInvoice(invoice, event.id) === 'published_app_dedicated') {
+            // Logged and left to Stripe's dunning. The app is NOT downgraded on a
+            // failed payment: Stripe retries for days, and taking an always-on app
+            // to scale-to-zero over a card that will probably work on the next
+            // attempt is an outage caused by a temporary decline. Entitlement ends
+            // when the subscription's STATUS ends (`canceled` / `unpaid`), which
+            // arrives as a subscription event and is handled there.
+            loggers.api.info('Dedicated hosting invoice payment failed; awaiting Stripe dunning', {
+              eventId: event.id,
+              invoiceId: invoice.id,
+              stripeSubscriptionId: invoiceSubscriptionId(invoice),
+            });
+            break;
+          }
+          await handlePaymentFailed(invoice);
           break;
+        }
 
         case 'invoice.paid': {
           const invoice = event.data.object as Stripe.Invoice;
+          // FORKED BEFORE FUNDING, and this fork is as load-bearing as the
+          // subscription one. `applyStripeFunding` refills the customer's monthly
+          // AI-credit bucket on every paid subscription invoice, falling back to
+          // their STORED tier when the invoice's price maps to no tier — which is
+          // exactly what a hosting price does. Left unforked, a customer with a
+          // dedicated app would have their monthly allowance reset a second time
+          // every month, on the hosting subscription's own billing anchor.
+          if (routeInvoice(invoice, event.id) === 'published_app_dedicated') {
+            loggers.api.info('Dedicated hosting invoice paid', {
+              eventId: event.id,
+              invoiceId: invoice.id,
+              stripeSubscriptionId: invoiceSubscriptionId(invoice),
+              amountPaid: invoice.amount_paid,
+            });
+            break;
+          }
           await withFundingRetry(event.id, async () => {
             await handleInvoicePaid(invoice);
             // Reset the monthly credit bucket to the tier allowance on each renewal.

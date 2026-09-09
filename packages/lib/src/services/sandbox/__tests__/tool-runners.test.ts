@@ -3,15 +3,21 @@ import {
   runBashInSandbox,
   writeSandboxFile,
   readSandboxFile,
+  readSandboxFileForCopy,
   editSandboxFile,
   MAX_WRITE_BYTES,
   CHECKPOINT_TIMEOUT_MS,
+  DENIAL_MESSAGES,
+  localRefusalToToolDenial,
   type SandboxActorContext,
   type SandboxRunDeps,
 } from '../tool-runners';
 import type { ExecutableSandbox, SandboxRunResult } from '../sandbox-client/types';
 import type { CodeExecutionAuditInput } from '../audit';
 import { SANDBOX_ROOT } from '../sandbox-paths';
+import { DEFAULT_READ_LINES, SANDBOX_MAX_OUTPUT_BYTES, MAX_LINE_BYTES } from '../execution-policy';
+import { LINE_ELISION_MARKER } from '../output-limit';
+import { LocalEnvUnsupportedError } from '../sandbox-host';
 
 const NOW = new Date('2026-06-01T12:00:00.000Z');
 
@@ -693,6 +699,118 @@ describe('runBashInSandbox — pre-batch checkpoint (Sprites Platform Alignment 
     expect(order).toEqual(['checkpoint', 'run']);
   });
 
+  /**
+   * C13 / invariant 12. A substrate that CANNOT snapshot its filesystem must
+   * not run a destructive agent batch unprotected — and the refusal has to be
+   * observable at the CALLER, not merely thrown by the host, because the
+   * caller is the thing that decides whether the command runs.
+   */
+  describe('a substrate that cannot checkpoint fails CLOSED (C13, invariant 12)', () => {
+    const localCaps = { exec: true, fs: true, stream: false, checkpoint: false, preview: false, services: false } as const;
+
+    it('given a sandbox advertising checkpoint:false, should REFUSE the batch with a typed reason and run nothing', async () => {
+      const { checkpoint, created } = makeCheckpointDeps();
+      let ran = 0;
+      const { deps } = makeDeps({
+        checkpoint,
+        reconnect: async () =>
+          makeSandbox({
+            capabilities: localCaps,
+            runCommand: async () => {
+              ran += 1;
+              return { exitCode: 0, stdout: 'ok', stderr: '' };
+            },
+          }),
+      });
+
+      const result = await runBashInSandbox({ command: 'rm -rf /workspace', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+
+      expect(result).toMatchObject({ success: false, reason: 'checkpoint_unsupported' });
+      expect(ran).toBe(0);
+      expect(created).toEqual([]);
+    });
+
+    it('given the host itself throws the typed unsupported error, should ALSO refuse — never swallow it as a fail-open checkpoint failure', async () => {
+      const { checkpoint } = makeCheckpointDeps({
+        createCheckpoint: async () => {
+          throw new LocalEnvUnsupportedError('createCheckpoint', 'env-1');
+        },
+      });
+      let ran = 0;
+      const { deps } = makeDeps({
+        checkpoint,
+        // No advertised capabilities at all: the error is the ONLY signal, so
+        // this row proves the second net works on its own.
+        reconnect: async () =>
+          makeSandbox({
+            runCommand: async () => {
+              ran += 1;
+              return { exitCode: 0, stdout: 'ok', stderr: '' };
+            },
+          }),
+      });
+
+      const result = await runBashInSandbox({ command: 'rm -rf /workspace', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+
+      expect(result).toMatchObject({ success: false, reason: 'checkpoint_unsupported' });
+      expect(ran).toBe(0);
+    });
+
+    it('given checkpoint:false but the POLICY wants no checkpoint (flag off), should still run — there is nothing to be unprotected about', async () => {
+      const { checkpoint, created } = makeCheckpointDeps({ isEnabled: () => false });
+      const { deps } = makeDeps({ checkpoint, reconnect: async () => makeSandbox({ capabilities: localCaps }) });
+
+      const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+
+      expect(result).toMatchObject({ success: true });
+      expect(created).toEqual([]);
+    });
+
+    /**
+     * The refusal happens AFTER the code-execution slot is acquired, so it must
+     * go through the same `finally` every other exit does. A leaked slot is
+     * invisible — nothing downstream fails — until the semaphore fills and
+     * stops code execution for that user on EVERY substrate, not just the local
+     * one that was refused.
+     */
+    it('should RELEASE the code-execution slot it acquired — a refusal must not leak the semaphore', async () => {
+      const { checkpoint } = makeCheckpointDeps();
+      const { deps, slots } = makeDeps({ checkpoint, reconnect: async () => makeSandbox({ capabilities: localCaps }) });
+
+      const result = await runBashInSandbox({ command: 'rm -rf /workspace', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+
+      expect(result).toMatchObject({ success: false, reason: 'checkpoint_unsupported' });
+      expect(slots.acquired).toBe(1);
+      expect(slots.released).toBe(slots.acquired);
+    });
+
+    it('should release it on the typed-error path too', async () => {
+      const { checkpoint } = makeCheckpointDeps({
+        createCheckpoint: async () => {
+          throw new LocalEnvUnsupportedError('createCheckpoint', 'env-1');
+        },
+      });
+      const { deps, slots } = makeDeps({ checkpoint, reconnect: async () => makeSandbox() });
+
+      await runBashInSandbox({ command: 'rm -rf /workspace', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+
+      expect(slots.released).toBe(slots.acquired);
+    });
+
+    it('CONTROL: the same batch on a sandbox advertising checkpoint:true runs — proving the refusals above are load-bearing', async () => {
+      const { checkpoint, created } = makeCheckpointDeps();
+      const { deps } = makeDeps({
+        checkpoint,
+        reconnect: async () => makeSandbox({ capabilities: { ...localCaps, checkpoint: true } }),
+      });
+
+      const result = await runBashInSandbox({ command: 'rm -rf /workspace', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+
+      expect(result).toMatchObject({ success: true });
+      expect(created).toEqual([{ sandboxId: 'sbx-1', comment: 'pagespace-pre-agent-turn-1' }]);
+    });
+  });
+
   it('given the flag off, should never call createCheckpoint', async () => {
     const { checkpoint, created } = makeCheckpointDeps({ isEnabled: () => false });
     const { deps } = makeDeps({ checkpoint });
@@ -1061,6 +1179,204 @@ describe('readSandboxFile', () => {
     expect(result).toMatchObject({ success: false, reason: 'path_escape' });
     expect(acquired).toBe(false);
   });
+
+  // --- line paging (offset/limit) -------------------------------------------
+  // Before this, readFile cut at 256 KiB with no offset parameter, so a caller
+  // could not reach past the cut AT ALL, and learned only `truncated: true`.
+
+  /** A sandbox whose file is `lines` numbered lines, newline-terminated. */
+  const linesSandbox = (count: number) =>
+    makeSandbox({
+      readFileToBuffer: async () =>
+        Buffer.from(Array.from({ length: count }, (_, i) => `line ${i + 1}`).join('\n') + '\n'),
+    });
+
+  it('given a file longer than the default window, should return the first page and say how to get the rest', async () => {
+    const { deps } = makeDeps({ reconnect: async () => linesSandbox(5000) });
+    const result = await readSandboxFile({ path: 'big.ts', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.firstLine).toBe(1);
+    expect(result.lastLine).toBe(DEFAULT_READ_LINES);
+    expect(result.totalLines).toBe(5000);
+    expect(result.truncated).toBe(true);
+    expect(result.content.split('\n')[0]).toBe('line 1');
+    // The caller must be told the exact next call, not just that there is more.
+    expect(result.notice).toContain(`offset: ${DEFAULT_READ_LINES + 1}`);
+    expect(result.notice).toContain('5,000');
+  });
+
+  it('given an explicit offset and limit, should return exactly that window', async () => {
+    const { deps } = makeDeps({ reconnect: async () => linesSandbox(5000) });
+    const result = await readSandboxFile({ path: 'big.ts', offset: 2001, limit: 3, ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.content).toBe('line 2001\nline 2002\nline 2003');
+    expect(result.firstLine).toBe(2001);
+    expect(result.lastLine).toBe(2003);
+  });
+
+  it('given a window that reaches the last line, should report it is the end rather than offering a next page', async () => {
+    const { deps } = makeDeps({ reconnect: async () => linesSandbox(10) });
+    const result = await readSandboxFile({ path: 'small.ts', offset: 9, ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.content).toBe('line 9\nline 10\n');
+    expect(result.truncated).toBe(true); // windowed: line 1-8 not shown
+    expect(result.notice).not.toContain('Continue with');
+    expect(result.notice).toContain('end of the file');
+  });
+
+  it('given an offset past the end, should return an empty window naming the real length, not an error', async () => {
+    const { deps } = makeDeps({ reconnect: async () => linesSandbox(10) });
+    const result = await readSandboxFile({ path: 'small.ts', offset: 999, ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.content).toBe('');
+    expect(result.totalLines).toBe(10);
+    expect(result.notice).toContain('past the end');
+  });
+
+  it('given a file shorter than the window, should not be truncated and should carry no notice', async () => {
+    const { deps } = makeDeps({ reconnect: async () => linesSandbox(10) });
+    const result = await readSandboxFile({ path: 'small.ts', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.truncated).toBe(false);
+    expect(result.totalLines).toBe(10);
+    expect(result.notice).toBeUndefined();
+  });
+
+  it('given one enormous line, should clip it and still return the lines after it', async () => {
+    // Previously the byte cap ate the whole window on line 1, and because paging
+    // is by line there was no offset that could reach line 2.
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({ readFileToBuffer: async () => Buffer.from('A'.repeat(300 * 1024) + '\nline2\nline3\n') }),
+    });
+    const result = await readSandboxFile({ path: 'bundle.min.js', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThanOrEqual(SANDBOX_MAX_OUTPUT_BYTES);
+    expect(result.content).toContain('line2');
+    expect(result.content).toContain('line3');
+    expect(result.lastLine).toBe(3);
+    expect(result.truncated).toBe(true);
+    expect(result.notice).toContain('too long to show in full');
+  });
+
+  it('given a full-file read whose content exactly fills the byte cap, should still report truncated and explain why', async () => {
+    // Every line is short enough, and there are few enough of them, that
+    // per-line clipping and the line-count window are both out of the
+    // picture — reachesEnd is true and windowed is false. The ONLY thing
+    // trimmed is the restored trailing newline, which selectLineWindow drops
+    // rather than exceed maxBytes by one byte. Before this fix, `truncated`
+    // was computed as `windowed || lineElided` alone, so this case silently
+    // reported `truncated: false` with no notice.
+    const width = 200; // bytes per line, well under MAX_LINE_BYTES
+    const lines: string[] = [];
+    let used = 0;
+    while (true) {
+      const cost = width + (lines.length > 0 ? 1 : 0);
+      if (used + cost > SANDBOX_MAX_OUTPUT_BYTES - width) break; // leave room to compute an exact final line
+      lines.push('x'.repeat(width));
+      used += cost;
+    }
+    // One final short line sized to make the total land EXACTLY at the cap.
+    const finalLen = SANDBOX_MAX_OUTPUT_BYTES - used - 1;
+    lines.push('x'.repeat(finalLen));
+    used += finalLen + 1;
+    expect(used).toBe(SANDBOX_MAX_OUTPUT_BYTES);
+
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => Buffer.from(lines.join('\n') + '\n') }),
+    });
+    const result = await readSandboxFile({ path: 'exact-cap.txt', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.lastLine).toBe(lines.length);
+    expect(result.totalLines).toBe(lines.length);
+    expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThanOrEqual(SANDBOX_MAX_OUTPUT_BYTES);
+    expect(result.truncated).toBe(true);
+    expect(result.notice).toContain('output size limit trimmed the very end');
+  });
+
+  it('given a window cut short by the byte budget, should point the next read at the line content actually ended on', async () => {
+    // The bug this pins: the budget used to be applied to the joined window
+    // AFTER selection, so content stopped near line 1,300 while lastLine still
+    // said 2,000 and the notice sent the caller to offset 2,001 — silently
+    // losing ~700 lines.
+    const wide = Array.from({ length: 5000 }, (_, i) => `line ${i + 1} ` + 'x'.repeat(190)).join('\n') + '\n';
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => Buffer.from(wide) }),
+    });
+    const result = await readSandboxFile({ path: 'wide.ts', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const returnedLines = result.content.replace(/\n$/, '').split('\n').length;
+    expect(result.lastLine).toBe(returnedLines);
+    expect(result.lastLine).toBeLessThan(DEFAULT_READ_LINES);
+    expect(result.notice).toContain(`offset: ${result.lastLine + 1}`);
+    expect(result.notice).toContain('output size limit');
+  });
+
+  it('given repeated reads following the notice, should recover every line of a large file', async () => {
+    const total = 5000;
+    const wide = Array.from({ length: total }, (_, i) => `line ${i + 1} ` + 'x'.repeat(190)).join('\n') + '\n';
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => Buffer.from(wide) }),
+    });
+
+    const seen: string[] = [];
+    let offset = 1;
+    for (let guard = 0; guard < 50; guard += 1) {
+      const page = await readSandboxFile({ path: 'wide.ts', offset, ctx: makeCtx(), deps });
+      if (!page.success || page.lastLine < page.firstLine) break;
+      seen.push(...page.content.replace(/\n$/, '').split('\n'));
+      if (page.lastLine >= page.totalLines) break;
+      offset = page.lastLine + 1;
+    }
+
+    expect(seen.length).toBe(total);
+    expect(seen[total - 1]).toBe(`line ${total} ` + 'x'.repeat(190));
+  });
+
+  it('given a truncated read, should report the WHOLE file size — originalBytes used to be computed and thrown away', async () => {
+    const { deps } = makeDeps({ reconnect: async () => linesSandbox(5000) });
+    const result = await readSandboxFile({ path: 'big.ts', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.originalBytes).toBeGreaterThan(Buffer.byteLength(result.content, 'utf8'));
+  });
+
+  it('given a truncated read, should warn that editFile matches outside the window', async () => {
+    // The harm chain this closes: editFile counts occurrences across the ENTIRE
+    // file, so an anchor unique in the visible window can still report
+    // edit_not_unique, and replaceAll would then edit an unseen region.
+    const { deps } = makeDeps({ reconnect: async () => linesSandbox(5000) });
+    const result = await readSandboxFile({ path: 'big.ts', ctx: makeCtx(), deps });
+    if (!result.success) return;
+    expect(result.notice).toContain('editFile');
+    expect(result.notice).toContain('replaceAll');
+  });
+
+  it('given a multi-byte character at the window edge, should not corrupt it', async () => {
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => Buffer.from('a\n😀\nc\n') }),
+    });
+    const result = await readSandboxFile({ path: 'emoji.txt', offset: 2, limit: 1, ctx: makeCtx(), deps });
+    if (!result.success) return;
+    expect(result.content).toBe('😀');
+  });
 });
 
 describe('injection seam wiring (screenOutput, fail-open)', () => {
@@ -1131,6 +1447,7 @@ function makeBilling(over: Partial<SandboxRunDeps['billing']> = {}): {
     },
     trackUsage: async (input) => {
       trackUsageCalls.push(input);
+      return { persisted: true, creditsSettled: true };
     },
     releaseHold: async (holdId) => {
       releaseHoldCalls.push(holdId);
@@ -1235,6 +1552,68 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     expect(trackUsageCalls).toEqual([
       { payerId: 'owner-42', holdId: 'hold-1', activeSeconds: 5, pageId: undefined, driveId: 'd1', workspaceId: 'ws-1' },
     ]);
+    expect(releaseHoldCalls).toEqual([]);
+  });
+
+  it('given a settle that resolves WITHOUT persisting, RETURNS the hold instead of handing it off', async () => {
+    // A one-shot run has no window to reopen, so the honest response to a lost
+    // charge is to stop pretending the credit pipeline owns the reservation:
+    // `trackUsage` wrote nothing, so nothing downstream will ever settle or delete
+    // the hold, and leaving it would suppress the payer's spendable until its TTL.
+    const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
+    const sandbox = makeSandbox({
+      runCommand: async () => {
+        clock.advance(5000);
+        return { exitCode: 0, stdout: 'ok', stderr: '' };
+      },
+    });
+    let settleAttempts = 0;
+    const { billing, releaseHoldCalls } = makeBilling({
+      trackUsage: async () => {
+        settleAttempts += 1;
+        return { persisted: false, creditsSettled: false };
+      },
+    });
+    const { deps } = makeDeps({
+      billing,
+      resolveBillingSession: makeBillingSession({ ownerId: 'owner-42', driveId: 'd1', workspaceId: 'ws-1' }),
+      reconnect: async () => sandbox,
+      now: clock.now,
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    // The user's command still succeeds — billing never fails a run.
+    expect(result).toMatchObject({ success: true });
+    expect(settleAttempts).toBe(1);
+    expect(releaseHoldCalls).toEqual(['hold-1']);
+  });
+
+  it('given a PERSISTED settle whose ledger settle was deferred, still hands the hold off to the credit pipeline', async () => {
+    const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
+    const sandbox = makeSandbox({
+      runCommand: async () => {
+        clock.advance(5000);
+        return { exitCode: 0, stdout: 'ok', stderr: '' };
+      },
+    });
+    const { billing, releaseHoldCalls } = makeBilling({
+      trackUsage: async () => ({ persisted: true, creditsSettled: false }),
+    });
+    const { deps } = makeDeps({
+      billing,
+      resolveBillingSession: makeBillingSession({ ownerId: 'owner-42', driveId: 'd1', workspaceId: 'ws-1' }),
+      reconnect: async () => sandbox,
+      now: clock.now,
+    });
+
+    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    // The usage row exists, so the backfill cron owns the CHARGE and will settle it
+    // from that row; releasing the hold here would under-reserve that pending debit.
+    // The hold itself is disposed of by whichever lands first — the cron's settle
+    // transaction, or its own TTL expiry (the cron sweeps expired holds; it does not
+    // dispose of live ones).
     expect(releaseHoldCalls).toEqual([]);
   });
 
@@ -1433,3 +1812,183 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     ]);
   });
 });
+
+describe('readSandboxFileForCopy', () => {
+  // This runner exists because everything readSandboxFile does to make a file
+  // safe for a MODEL corrupts bytes destined for STORAGE. Each case below pins
+  // one of those three transforms as absent.
+
+  const fileOf = (content: string) =>
+    makeSandbox({ readFileToBuffer: async () => Buffer.from(content) });
+
+  it('given a file longer than the read window, should return every line, not the first page', async () => {
+    const long = Array.from({ length: DEFAULT_READ_LINES * 2 }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
+    const { deps } = makeDeps({ reconnect: async () => fileOf(long) });
+    const result = await readSandboxFileForCopy({ path: 'long.ts', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.content).toBe(long);
+  });
+
+  it('given a line longer than MAX_LINE_BYTES, should not clip it or staple on an elision marker', async () => {
+    const longLine = 'x'.repeat(MAX_LINE_BYTES * 3);
+    const { deps } = makeDeps({ reconnect: async () => fileOf(longLine) });
+    const result = await readSandboxFileForCopy({ path: 'min.js', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.content).toBe(longLine);
+    expect(result.content).not.toContain(LINE_ELISION_MARKER);
+  });
+
+  it('given a screenOutput hook, should NOT annotate — a copy is not model-visible output', async () => {
+    // readSandboxFile screens here on purpose. This path must not: the banner
+    // would land inside the user's document.
+    const { deps } = makeDeps({ screenOutput: async (t) => `[SCREENED]${t}` });
+    const result = await readSandboxFileForCopy({ path: 'a.txt', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.content).toBe('file-contents');
+    expect(result.content).not.toContain('[SCREENED]');
+  });
+
+  it('given a file over the write cap, should refuse rather than return a short copy', async () => {
+    const { deps } = makeDeps({ reconnect: async () => fileOf('y'.repeat(MAX_WRITE_BYTES + 1)) });
+    const result = await readSandboxFileForCopy({ path: 'huge.bin', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'content_too_large' });
+  });
+
+  it('given a file exactly at the cap, should allow it', async () => {
+    const { deps } = makeDeps({ reconnect: async () => fileOf('y'.repeat(MAX_WRITE_BYTES)) });
+    const result = await readSandboxFileForCopy({ path: 'edge.bin', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+  });
+
+  it('given a missing file, should deny not_found', async () => {
+    const { deps } = makeDeps({ reconnect: async () => makeSandbox({ readFileToBuffer: async () => null }) });
+    const result = await readSandboxFileForCopy({ path: 'nope.txt', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'not_found' });
+  });
+
+  it('given a traversal path, should deny path_escape before provisioning', async () => {
+    let acquired = false;
+    const { deps } = makeDeps({
+      acquireSandbox: async () => {
+        acquired = true;
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' };
+      },
+    });
+    const result = await readSandboxFileForCopy({ path: '/etc/passwd', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'path_escape' });
+    expect(acquired).toBe(false);
+  });
+
+  it('given the kill switch off, should deny before touching a sandbox', async () => {
+    const { deps } = makeDeps({ isEnabled: () => false });
+    const result = await readSandboxFileForCopy({ path: 'a.txt', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'kill_switch_off' });
+  });
+
+  it('given a successful copy read, should release its slot and audit', async () => {
+    const { deps, audits, slots } = makeDeps();
+    await readSandboxFileForCopy({ path: 'a.txt', ctx: makeCtx(), deps });
+    expect(audits[0]?.exitCode).toBe(0);
+    expect(audits[0]?.code).toContain('copyRead');
+    expect(slots.released).toBe(1);
+  });
+
+  it('given a binary file, should refuse rather than hand back a lossily-decoded copy', async () => {
+    // 0xFF/0xFE are not valid UTF-8. toString('utf8') turns them into U+FFFD
+    // without complaint, so a PNG would "copy" successfully and arrive corrupt.
+    const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x00, 0x01]);
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => binary }),
+    });
+    const result = await readSandboxFileForCopy({ path: 'logo.png', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'binary_content' });
+  });
+
+  it('given valid multi-byte UTF-8, should NOT mistake it for binary', async () => {
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => Buffer.from('héllo 😀 ünïcødé') }),
+    });
+    const result = await readSandboxFileForCopy({ path: 'u.txt', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.content).toBe('héllo 😀 ünïcødé');
+  });
+
+  it('should measure the cap in BYTES, not characters', async () => {
+    // A multi-byte file whose character count sits exactly at the cap is twice
+    // that many bytes on disk, and must be refused.
+    //
+    // (Measuring the buffer rather than the decoded string is also more honest,
+    // but it is not independently observable: anything that reaches the success
+    // path round-trips, so the two lengths agree there by construction.)
+    const overCap = Buffer.from('é'.repeat(MAX_WRITE_BYTES)); // 2 bytes each
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => overCap }),
+    });
+    const result = await readSandboxFileForCopy({ path: 'big.txt', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'content_too_large' });
+  });
+
+  it('should report bytes as the file size on disk', async () => {
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => Buffer.from('é') }),
+    });
+    const result = await readSandboxFileForCopy({ path: 'e.txt', ctx: makeCtx(), deps });
+    if (!result.success) return;
+    expect(result.bytes).toBe(2);
+  });
+
+  it('preserves bytes exactly — CRLF, tabs, trailing newline, unicode', async () => {
+    const tricky = 'a\r\n\tb\n😀\n\n';
+    const { deps } = makeDeps({ reconnect: async () => fileOf(tricky) });
+    const result = await readSandboxFileForCopy({ path: 't.txt', ctx: makeCtx(), deps });
+    if (!result.success) return;
+    expect(result.content).toBe(tricky);
+  });
+});
+
+/**
+ * Requirement 6: a caller who cannot tell "your machine is not connected" from
+ * "your machine's owner denied you" debugs the wrong layer. Both the reason
+ * word and the copy the agent actually reads are pinned here.
+ */
+describe('a LOCAL environment\'s two refusals stay distinguishable all the way to the agent', () => {
+  it('should map not_connected and bind_policy to reasons of their own', () => {
+    expect(localRefusalToToolDenial('not_connected')).toBe('local_not_connected');
+    expect(localRefusalToToolDenial('bind_policy')).toBe('local_bind_denied');
+    expect(localRefusalToToolDenial('not_connected')).not.toBe(localRefusalToToolDenial('bind_policy'));
+  });
+
+  it.each(['flag_disabled', 'code_exec_denied', 'not_local', 'revoked', 'substrate_unsupported', undefined])(
+    'should leave %s to the caller\'s generic provisioning fault — the requester can do nothing about it',
+    (refusal) => {
+      expect(localRefusalToToolDenial(refusal)).toBeNull();
+    },
+  );
+
+  it('should give each one COPY that names who can fix it, and never the same sentence twice', () => {
+    const notConnected = DENIAL_MESSAGES.local_not_connected;
+    const denied = DENIAL_MESSAGES.local_bind_denied;
+
+    expect(notConnected).toContain('pagespace env connect');
+    expect(denied).toContain('owner');
+    expect(denied).toContain('Retrying will not help');
+    expect(notConnected).not.toBe(denied);
+    expect(notConnected).not.toBe(DENIAL_MESSAGES.provision_failed);
+    expect(denied).not.toBe(DENIAL_MESSAGES.provision_failed);
+  });
+
+  it.each(['local_not_connected', 'local_bind_denied', 'checkpoint_unsupported'] as const)(
+    'given acquire answers %s, the agent should receive that reason with its own message',
+    async (reason) => {
+      const { deps } = makeDeps({ acquireSandbox: async () => ({ ok: false, reason }) });
+      const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+      expect(result).toEqual({ success: false, reason, error: DENIAL_MESSAGES[reason] });
+    },
+  );
+});
+

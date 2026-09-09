@@ -1,5 +1,5 @@
 import type { Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Newsreader } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { GoogleOneTap } from "@/components/GoogleOneTap";
@@ -17,15 +17,24 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// Display face for marketing headlines only. Geist stays the body and UI face
+// (it is the product's font); the serif is reserved for the site's own voice.
+const newsreader = Newsreader({
+  variable: "--font-newsreader",
+  subsets: ["latin"],
+  weight: "variable",
+  axes: ["opsz"],
+  display: "swap",
+});
+
 export const metadata = siteMetadata;
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#0f0f0f" },
-  ],
+  // Dark is the default theme regardless of OS preference, so one value
+  // matching the dark canvas (oklch 0.11 0 0).
+  themeColor: "#040404",
 };
 
 export default function RootLayout({
@@ -39,11 +48,11 @@ export default function RootLayout({
         <JsonLd data={[organizationSchema, websiteSchema]} />
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} ${newsreader.variable} antialiased`}
       >
         <ThemeProvider
           attribute="class"
-          defaultTheme="light"
+          defaultTheme="dark"
           enableSystem
           disableTransitionOnChange
         >

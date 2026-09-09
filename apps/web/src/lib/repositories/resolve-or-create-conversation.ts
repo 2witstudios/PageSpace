@@ -93,9 +93,9 @@ export async function resolveOrCreateConversation(
   }
 
   // Idempotent insert: ON CONFLICT DO NOTHING handles concurrent first-writes.
-  // Always session-agnostic — this never writes `workspaceId` (there is no
-  // param for it). A conversation that needs a session gets one afterward,
-  // via `claimConversationInSession` (see `claim-conversation-in-workspace.ts`).
+  // Always session-agnostic — a conversation that needs a workspace is ADMITTED
+  // into one by the membership write, which is a node row rather than a column
+  // here (see `claim-conversation-in-workspace.ts`).
   const [created] = await db
     .insert(conversations)
     .values({
@@ -103,7 +103,6 @@ export async function resolveOrCreateConversation(
       userId,
       type: 'global',
       isActive: true,
-      workspaceId: null,
       title: opts?.title ?? null,
       // Explicit, matching the page path (conversationRepository
       // .createConversation): the column has no DB default, and leaving it to

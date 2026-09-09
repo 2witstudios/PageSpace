@@ -15,7 +15,7 @@ import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
-import { provisionHomeDriveIfNeeded, type ProvisionHomeDriveResult } from '@/lib/onboarding/home-drive';
+import { provisionHomeDriveIfNeeded, type ProvisionHomeDriveResult } from '@pagespace/lib/onboarding/home-drive';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';

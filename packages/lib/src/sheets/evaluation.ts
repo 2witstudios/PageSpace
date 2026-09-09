@@ -11,14 +11,34 @@ import type {
   SheetEvaluation,
   SheetEvaluationCell,
   SheetEvaluationOptions,
+  SheetCellAddress,
+  SheetPrimitive,
+  SheetSparseEvaluation,
   SheetExternalReferenceToken,
   SheetExternalReferenceResolution,
   SheetDocDependencyRecord,
 } from './types';
 import { LOCAL_PAGE_KEY } from './constants';
-import { encodeCellAddress, expandRange, numberRegex } from './address';
+import { encodeCellAddress, decodeCellAddress, expandRange, numberRegex, columnLabelOf } from './address';
 import { tokenize, FormulaParser } from './parser';
 import { evaluateFunction, flattenValue, coerceNumber, formatDisplayValue } from './functions';
+import { applyNumberFormat, resolveCellFormat } from './format';
+import { createRegionResolver, type RegionResolver } from './region-format';
+import {
+  MAX_CONDITIONAL_TOTAL_CELLS,
+  expandRangesWithinBudget,
+  evaluateConditionalFormats,
+  type DataBarFill,
+} from './conditional';
+
+/**
+ * Column letters of an A1 address, for column-default format lookup.
+ *
+ * The shared scanner, not a local `replace(/\d+$/, '')`. That pattern is
+ * unanchored and retries from every position, which CodeQL flags as
+ * polynomial-time on uncontrolled input.
+ */
+const columnLettersOf = columnLabelOf;
 
 interface EvaluationEnvironment {
   options: SheetEvaluationOptions;
@@ -26,6 +46,13 @@ interface EvaluationEnvironment {
   sheets: Map<string, SheetData>;
   pageTitles: Map<string, string>;
   resolutionCache: Map<string, SheetExternalReferenceResolution>;
+  /**
+   * Built once per page and reused for every cell of it. Preparing a region —
+   * resolving its bounds, its per-column role formats and its theme — is work
+   * that depends only on the region set, so doing it per cell would make a full
+   * evaluation quadratic in the number of regions for no gain.
+   */
+  regionResolvers: Map<string, RegionResolver>;
 }
 
 function getPageCache(
@@ -38,6 +65,16 @@ function getPageCache(
     env.caches.set(pageKey, cache);
   }
   return cache;
+}
+
+function getRegionResolver(env: EvaluationEnvironment, pageKey: string): RegionResolver {
+  let resolver = env.regionResolvers.get(pageKey);
+  if (!resolver) {
+    const sheet = getSheetForPage(env, pageKey);
+    resolver = createRegionResolver(sheet.regions, sheet.rowCount);
+    env.regionResolvers.set(pageKey, resolver);
+  }
+  return resolver;
 }
 
 function getSheetForPage(env: EvaluationEnvironment, pageKey: string): SheetData {
@@ -436,6 +473,31 @@ function evaluateCellInternal(
     };
   }
 
+  // Apply presentation last, in one place, so the grid, both exports and the
+  // published page all read the same `display`.
+  //
+  // This deliberately rewrites only `display` and never `value`: the
+  // concatenation and comparison operators format *values* via
+  // `formatDisplayValue`, so touching `value` here would make `="Total: "&A1`
+  // embed a currency symbol and `A1=B1` compare formatted text.
+  const { row, column } = decodeCellAddress(normalized);
+  const format = resolveCellFormat(
+    sheet.formats?.[normalized],
+    sheet.columnFormats?.[columnLettersOf(normalized)],
+    getRegionResolver(env, pageKey)(row, column)
+  );
+
+  if (format) {
+    result.format = format;
+
+    if (!result.error) {
+      const formatted = applyNumberFormat(result.value, format.number);
+      if (formatted !== null) {
+        result.display = formatted;
+      }
+    }
+  }
+
   cache.set(normalized, result);
   return result;
 }
@@ -443,6 +505,163 @@ function evaluateCellInternal(
 /**
  * Evaluate a sheet and return all cell values, displays, and errors
  */
+/**
+ * Evaluate a bare expression in the sheet's context.
+ *
+ * Conditional formula rules need this: they are formulas that belong to no
+ * cell, so there is no address to evaluate through.
+ */
+function evaluateExpression(
+  formula: string,
+  pageKey: string,
+  env: EvaluationEnvironment
+): SheetPrimitive {
+  const trimmed = formula.trim();
+  const body = trimmed.startsWith('=') ? trimmed.slice(1) : trimmed;
+  const tokens = tokenize(body);
+  if (tokens.length === 0) throw new Error('Empty formula');
+
+  const evaluated = evaluateNode(
+    new FormulaParser(tokens).parse(),
+    {
+      getCell: (reference, ancestors) => evaluateCellInternal(reference, pageKey, env, ancestors),
+      getExternalCell: (pageRef, reference, ancestors) =>
+        evaluateExternalReferenceCell(pageRef, reference, env, ancestors),
+    },
+    new Set()
+  );
+  return flattenValue(evaluated)[0];
+}
+
+/**
+ * Every address any rule covers, so a rule over blank cells still paints.
+ *
+ * Bounded by the same aggregate cap `evaluateConditionalFormats` enforces
+ * (`MAX_CONDITIONAL_TOTAL_CELLS`), expanded one range at a time via
+ * `expandRangesWithinBudget` rather than flat-mapped up front: a rule can
+ * hold an unbounded number of ranges, each individually valid and under
+ * `MAX_CONDITIONAL_RANGE_CELLS` on its own, and this result feeds the
+ * blank-cell backfill below — materializing it unbounded would defeat the
+ * budget before evaluation ever got a chance to apply it.
+ */
+export function conditionalAddresses(sheet: SheetData): string[] {
+  const rules = sheet.conditionalFormats;
+  if (!rules || rules.length === 0) return [];
+
+  // `.concat()`, not `.push(...ruleAddresses)`: spreading a large array as
+  // call arguments blows the engine's argument-count limit well before it
+  // reaches `MAX_CONDITIONAL_TOTAL_CELLS`.
+  let addresses: string[] = [];
+  let remainingBudget = MAX_CONDITIONAL_TOTAL_CELLS;
+
+  for (const rule of rules) {
+    if (remainingBudget <= 0) break;
+    const { addresses: ruleAddresses, consumed } = expandRangesWithinBudget(rule.ranges, remainingBudget);
+    addresses = addresses.concat(ruleAddresses);
+    remainingBudget -= consumed;
+  }
+
+  return addresses;
+}
+
+/**
+ * Fold conditional formatting into an already-evaluated set of cells.
+ *
+ * A second pass, not part of `evaluateCellInternal`, because a colour scale
+ * needs every value in its range before it can place any one of them — which
+ * a per-cell, cached evaluation cannot know.
+ *
+ * Precedence is column default < conditional < explicit cell format, so the
+ * merge re-resolves from the parts rather than layering onto the already
+ * resolved format.
+ *
+ * Returns the data bars, which are a render-layer concern with no `CellFormat`
+ * field to live in.
+ */
+function applyConditionalFormats(
+  sheet: SheetData,
+  byAddress: Record<string, SheetEvaluationCell>,
+  pageKey: string,
+  env: EvaluationEnvironment
+): Record<string, DataBarFill> {
+  const rules = sheet.conditionalFormats;
+  if (!rules || rules.length === 0) return {};
+
+  const regionAt = getRegionResolver(env, pageKey);
+  const { formats, bars } = evaluateConditionalFormats(rules, {
+    valueAt: (address) => byAddress[address]?.value ?? '',
+    isError: (address) => Boolean(byAddress[address]?.error),
+    evaluateFormula: (formula) => evaluateExpression(formula, pageKey, env),
+  });
+
+  for (const [address, conditional] of Object.entries(formats)) {
+    const cell = byAddress[address];
+    if (!cell) continue;
+
+    const { row, column } = decodeCellAddress(address);
+    cell.format = {
+      ...sheet.columnFormats?.[columnLettersOf(address)],
+      ...regionAt(row, column),
+      ...sheet.formats?.[address],
+      ...conditional,
+    };
+
+    // A rule may carry a number format, and `display` was produced before the
+    // rule was known.
+    if (!cell.error) {
+      const formatted = applyNumberFormat(cell.value, cell.format.number);
+      if (formatted !== null) cell.display = formatted;
+    }
+  }
+
+  return bars;
+}
+
+/**
+ * Evaluate only the named addresses.
+ *
+ * `evaluateSheet` walks every cell of the grid and allocates three dense
+ * structures the size of the whole sheet, which is precisely the cost the row
+ * store exists to avoid: after a single cell write, the only values that can
+ * have changed are that cell and its dependency closure. This evaluates that
+ * closure and nothing else.
+ *
+ * The environment, cache and ancestor-set cycle detection are exactly the ones
+ * `evaluateSheet` uses, so `value`, `display`, `type` and `error` agree with a
+ * full pass — including on a cycle. Cells outside `addresses` are still
+ * readable as inputs; they are simply not returned.
+ *
+ * The dependency fields do NOT agree, and cannot: `evaluateSheet` fills in
+ * `dependents` and de-duplicates `dependsOn` in a post-pass over the whole
+ * grid, which is exactly the work this function exists to skip. Nothing here
+ * can know which cells outside the closure point at one inside it. Treat
+ * `dependsOn`/`dependents` from this function as unset, and derive persisted
+ * edges from `extractFormulaDependencies` (as `store.ts` does) instead.
+ */
+export function evaluateAddresses(
+  sheet: SheetData,
+  addresses: Iterable<string>,
+  options: SheetEvaluationOptions = {}
+): Record<SheetCellAddress, SheetEvaluationCell> {
+  const pageKey = options.pageId ?? LOCAL_PAGE_KEY;
+  const env: EvaluationEnvironment = {
+    options,
+    caches: new Map([[pageKey, new Map()]]),
+    sheets: new Map([[pageKey, sheet]]),
+    pageTitles: new Map([[pageKey, options.pageTitle ?? 'Sheet']]),
+    resolutionCache: new Map(),
+    regionResolvers: new Map(),
+  };
+
+  const result: Record<SheetCellAddress, SheetEvaluationCell> = {};
+  for (const address of addresses) {
+    const normalized = address.toUpperCase();
+    result[normalized] = evaluateCellInternal(normalized, pageKey, env, new Set());
+  }
+
+  return result;
+}
+
 export function evaluateSheet(
   sheet: SheetData,
   options: SheetEvaluationOptions = {}
@@ -456,6 +675,7 @@ export function evaluateSheet(
     sheets: new Map([[pageKey, sheet]]),
     pageTitles: new Map([[pageKey, options.pageTitle ?? 'Sheet']]),
     resolutionCache: new Map(),
+    regionResolvers: new Map(),
   };
   const byAddress: Record<string, SheetEvaluationCell> = {};
   const display: string[][] = Array.from({ length: rowCount }, () => Array(columnCount).fill(''));
@@ -494,12 +714,178 @@ export function evaluateSheet(
     };
   }
 
+  // After the grid is evaluated: a colour scale needs every value in its range
+  // before it can place any one of them, which a per-cell cached pass cannot
+  // know. This rewrites `format` and `display` in place, so the display grid
+  // has to be rebuilt from it.
+  const bars = applyConditionalFormats(sheet, byAddress, pageKey, env);
+  if (sheet.conditionalFormats?.length) {
+    for (let row = 0; row < rowCount; row++) {
+      for (let column = 0; column < columnCount; column++) {
+        const cell = byAddress[encodeCellAddress(row, column)];
+        display[row][column] = cell.error ? '#ERROR' : cell.display;
+      }
+    }
+  }
+
   return {
     byAddress,
     display,
     errors,
     dependencies,
+    ...(Object.keys(bars).length > 0 ? { bars } : {}),
   };
+}
+
+/**
+ * Evaluate only the cells that exist.
+ *
+ * Not to be confused with `evaluateAddresses` above, which the row store uses.
+ * The two answer different questions and are not interchangeable:
+ *
+ * - `evaluateAddresses` takes a caller-chosen set — the closure affected by one
+ *   write — and deliberately leaves `dependsOn`/`dependents` unset, because
+ *   computing them means a pass over the whole grid.
+ * - this takes the whole sheet and returns a correct dependency graph, which is
+ *   what `sheetDataToSheetDoc` persists and what the editor renders from.
+ *
+ * Reach for `evaluateAddresses` after a targeted write; reach for this when you
+ * need the sheet as a whole without paying for the empty cells.
+ *
+ * `evaluateSheet` walks the whole `rowCount × columnCount` rectangle and
+ * allocates an entry per grid position, empty ones included. For the 10,000-row
+ * sheet a virtualized grid is meant to make usable that is 600,000 objects, and
+ * it runs on every keystroke — so the grid would stay unusable no matter how
+ * few cells it rendered.
+ *
+ * This walks `Object.keys(sheet.cells)` instead. An address with no entry in
+ * the returned map is an empty cell, which every consumer already handles the
+ * same way as the empty entry the dense form produces.
+ *
+ * `evaluateSheet` is deliberately left alone rather than reimplemented on top
+ * of this: the exports, the published page, and the serializer all depend on
+ * its dense grids, and the empty entries it emits reach the persisted
+ * dependency table. `sheet-sparse-equivalence.test.ts` pins the two together.
+ */
+/**
+ * Whether a key names a local A1 cell.
+ *
+ * `sheet.cells` is a plain map and `dependsOn` mixes local addresses with
+ * external references like `@[Budget]:B2`, so both the seed and the back-fill
+ * have to filter. Rows are 1-based, so `A0` is not an address either.
+ */
+const isLocalAddress = (key: string): boolean => /^[A-Z]+[1-9]\d*$/.test(key);
+
+export function evaluateSheetSparse(
+  sheet: SheetData,
+  options: SheetEvaluationOptions = {}
+): SheetSparseEvaluation {
+  const pageKey = options.pageId ?? LOCAL_PAGE_KEY;
+  const env: EvaluationEnvironment = {
+    options,
+    caches: new Map([[pageKey, new Map()]]),
+    sheets: new Map([[pageKey, sheet]]),
+    pageTitles: new Map([[pageKey, options.pageTitle ?? 'Sheet']]),
+    resolutionCache: new Map(),
+    regionResolvers: new Map(),
+  };
+
+  const byAddress: Record<string, SheetEvaluationCell> = {};
+
+  for (const rawAddress of Object.keys(sheet.cells)) {
+    const address = rawAddress.toUpperCase();
+    // `cells` is a plain map and may hold a key that is not an A1 address at
+    // all (hand-written content, a newer writer). The dense walk never sees
+    // such a key because it enumerates positions rather than keys; skipping it
+    // here keeps the two in step instead of evaluating a nonsense address.
+    if (!isLocalAddress(address)) continue;
+    byAddress[address] = evaluateCellInternal(address, pageKey, env, new Set());
+  }
+
+  // Every cell that *depends* on something holds a formula, and a formula cell
+  // is by definition non-empty, so the seed above already contains all of them.
+  // The targets are another matter: `=B1` where B1 is empty has no seeded entry,
+  // and simply skipping it would drop the reverse edge that the dense walk
+  // records — changing what `sheetDataToSheetDoc` emits. Materializing the
+  // target keeps the persisted dependency graph symmetric and the output
+  // identical; it costs one entry per referenced empty address, which is
+  // bounded by the formulas actually written rather than by the grid's area.
+  //
+  // Snapshot first: the loop inserts into `byAddress`, and the cells it inserts
+  // are empty ones with no dependencies of their own to process.
+  for (const cell of Object.values(byAddress).slice()) {
+    for (const dependency of cell.dependsOn) {
+      // Only local addresses. `dependsOn` also carries external references such
+      // as `@[Budget]:B2`, which were resolved through `getExternalCell` against
+      // another page — evaluating one here would fabricate a local cell for it,
+      // and `evaluateCellInternal` upper-cases the key, so the record would not
+      // even match the `dependsOn` entry it is supposed to pair with.
+      if (!isLocalAddress(dependency)) continue;
+
+      let target = byAddress[dependency];
+      if (!target) {
+        target = evaluateCellInternal(dependency, pageKey, env, new Set());
+        byAddress[dependency] = target;
+      }
+      if (!target.dependents.includes(cell.address)) {
+        target.dependents = [...target.dependents, cell.address];
+      }
+    }
+  }
+
+  const dependencies: Record<string, SheetDocDependencyRecord> = {};
+
+  for (const cell of Object.values(byAddress)) {
+    cell.dependsOn = uniqueSorted(cell.dependsOn);
+    cell.dependents = uniqueSorted(cell.dependents);
+    dependencies[cell.address] = {
+      dependsOn: cell.dependsOn,
+      dependents: cell.dependents,
+    };
+  }
+
+  if (options.skipConditionalFormats) {
+    return { byAddress, dependencies };
+  }
+
+  // A rule can cover cells that hold nothing — "highlight the blanks", or a
+  // coloured band across an empty row. Those have no entry here, and without
+  // one the rule would be stored correctly and paint nothing, which is exactly
+  // how a blank cell's own formatting was once invisible.
+  //
+  // Bounded to the sheet's own rectangle to agree with `evaluateSheet`: the
+  // dense walk only ever seeds addresses inside `rowCount x columnCount`, so
+  // a rule range reaching past it paints nothing there — unlike a real
+  // formula cell stored past the rectangle (which both paths intentionally
+  // keep; see `serializeSheetContent`'s comment), a blank backfilled purely
+  // to satisfy a rule has no content to preserve, so there is no reason for
+  // the two evaluators to disagree here.
+  const sparseRowCount = Math.max(1, sheet.rowCount);
+  const sparseColumnCount = Math.max(1, sheet.columnCount);
+  for (const address of conditionalAddresses(sheet)) {
+    if (byAddress[address] || !isLocalAddress(address)) continue;
+    const { row, column } = decodeCellAddress(address);
+    if (row < 0 || row >= sparseRowCount || column < 0 || column >= sparseColumnCount) continue;
+    byAddress[address] = evaluateCellInternal(address, pageKey, env, new Set());
+  }
+
+  const bars = applyConditionalFormats(sheet, byAddress, pageKey, env);
+
+  return { byAddress, dependencies, ...(Object.keys(bars).length > 0 ? { bars } : {}) };
+}
+
+/**
+ * The display text for one position of a sparse evaluation, matching what the
+ * dense `display` grid would hold — including the `#ERROR` substitution.
+ */
+export function sparseDisplayAt(
+  evaluation: SheetSparseEvaluation,
+  row: number,
+  column: number
+): string {
+  const cell = evaluation.byAddress[encodeCellAddress(row, column)];
+  if (!cell) return '';
+  return cell.error ? '#ERROR' : cell.display;
 }
 
 // Internal helper functions

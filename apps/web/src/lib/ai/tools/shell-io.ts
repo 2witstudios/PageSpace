@@ -22,13 +22,13 @@
  */
 
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
-import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/contract';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/shells-contract';
 import type {
   ShellReadPayload,
   ShellReadResult,
   ShellSendPayload,
   ShellSendResult,
-} from '@pagespace/lib/agent-workspaces/contract';
+} from '@pagespace/lib/agent-workspaces/shells-contract';
 import { annotateToolOutput } from '@pagespace/lib/services/sandbox/injection-seam';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { scrollbackLines, tailOfLines } from '@pagespace/lib/services/agent-workspaces/shell-scrollback';

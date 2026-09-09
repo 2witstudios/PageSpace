@@ -35,9 +35,48 @@ describe('createExecuteTool', () => {
     const t = createExecuteTool(registry);
     const result = await t.execute!({ tool_name: 'does_not_exist', parameters: {} }, {} as never) as { error: string };
     assert({
-      given: 'an unknown tool_name',
+      given: 'an unknown tool_name with nothing close to it in the registry',
       should: 'return an error message mentioning tool_search',
       actual: result.error.includes('tool_search'),
+      expected: true,
+    });
+  });
+
+  it('a near-miss tool_name is suggested instead of a bare tool_search hint', async () => {
+    const t = createExecuteTool({ ...registry, readFile: calendarTool });
+    const result = await t.execute!({ tool_name: 'read_file', parameters: {} }, {} as never) as { error: string };
+    assert({
+      given: 'a snake_case guess at a camelCase tool that exists',
+      should: 'name the real tool in the error',
+      actual: result.error.includes('Did you mean: readFile'),
+      expected: true,
+    });
+  });
+
+  it('suggestions never name a tool the caller is not allowed to run', async () => {
+    const t = createExecuteTool({ ...registry, readFile: calendarTool });
+    const opts = { experimental_context: { enabledTools: ['list_calendar_events'] } };
+    const result = await t.execute!(
+      { tool_name: 'read_file', parameters: {} },
+      opts as never
+    ) as { error: string };
+    assert({
+      given: 'a near-miss name whose match is outside the caller enabledTools allowlist',
+      should: 'not suggest the unreachable tool',
+      actual: result.error.includes('readFile'),
+      expected: false,
+    });
+  });
+
+  it('a prototype key is an unknown tool, not a tool without an implementation', async () => {
+    // `registry['constructor']` resolves up the prototype chain and is truthy,
+    // so a plain `if (!t)` skipped the unknown-tool branch entirely.
+    const t = createExecuteTool(registry);
+    const result = await t.execute!({ tool_name: 'constructor', parameters: {} }, {} as never) as { error: string };
+    assert({
+      given: 'a tool_name that is an Object.prototype member',
+      should: 'be reported as an unknown tool rather than one missing an implementation',
+      actual: result.error.includes('Unknown tool') && !result.error.includes('no execute implementation'),
       expected: true,
     });
   });
@@ -53,14 +92,35 @@ describe('createExecuteTool', () => {
     });
   });
 
-  it('invalid parameters return an error with tool_search hint', async () => {
+  it('invalid parameters return an error carrying the tool schema inline', async () => {
     const t = createExecuteTool(registry);
     const result = await t.execute!({ tool_name: 'list_calendar_events', parameters: {} }, {} as never) as { error: string };
     assert({
       given: 'missing required parameters',
-      should: 'return an error mentioning tool_search and the tool name',
-      actual: result.error.includes('list_calendar_events') && result.error.includes('tool_search'),
-      expected: true,
+      should: 'name the tool and inline the parameter names, so the next call needs no tool_search',
+      actual: (() => {
+        const marker = 'Input schema for "list_calendar_events": ';
+        if (!result.error.includes(marker) || result.error.includes('tool_search')) return null;
+        const schema = JSON.parse(result.error.slice(result.error.indexOf(marker) + marker.length)) as {
+          required: string[];
+        };
+        return schema.required.slice().sort();
+      })(),
+      expected: ['endDate', 'startDate'],
+    });
+  });
+
+  it('a mis-named parameter is correctable from the error alone', async () => {
+    const t = createExecuteTool({ trash_page: { description: 'Trash a page', inputSchema: z.object({ id: z.string() }), execute: async () => 'ok' } });
+    const result = await t.execute!({ tool_name: 'trash_page', parameters: { pageId: 'p1' } }, {} as never) as { error: string };
+    const marker = 'Input schema for "trash_page": ';
+    const schemaJson = result.error.slice(result.error.indexOf(marker) + marker.length);
+    const schema = JSON.parse(schemaJson) as { required: string[] };
+    assert({
+      given: 'the real pageId-for-id mistake from the reported session',
+      should: 'return the schema as parseable JSON naming the key that was actually wanted',
+      actual: schema.required,
+      expected: ['id'],
     });
   });
 

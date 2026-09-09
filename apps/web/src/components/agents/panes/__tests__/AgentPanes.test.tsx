@@ -17,8 +17,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { SWRConfig } from 'swr';
-import { toast } from 'sonner';
+import useSWR, { SWRConfig } from 'swr';
 
 const mockPost = vi.fn();
 const mockDel = vi.fn();
@@ -39,6 +38,12 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   del: (...args: unknown[]) => mockDel(...args),
   ApiRequestError,
 }));
+
+// Unmocked until now, which is why the reported symptom was invisible here: a
+// spurious "Could not close this conversation" toast is not observable unless
+// something records the call.
+const mockToast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() }));
+vi.mock('sonner', () => ({ toast: mockToast }));
 
 let cuidCounter = 0;
 vi.mock('@paralleldrive/cuid2', () => ({
@@ -133,18 +138,39 @@ import {
   __resetWorkspaceQueuesForTests,
 } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
+import type { PaneTarget, WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
+import type { WorkspaceNodeTarget } from '@pagespace/lib/agent-workspaces/workspace-node-wire';
 
 const jsonOk = (body: unknown) => ({ ok: true, json: async () => body });
 
 /**
- * The default routing every test starts from: empty shells, an empty
- * session-conversations list (both `selectPaneAgent`'s switch-decision data
- * AND `decideClosePane`'s close-decision data), and `useResolvedAgent`'s two
- * lookups per fixture agent (id/title come from `mockUsePageAgents` above). A
- * test that cares about a specific route layers its own `mockImplementation`
- * on top, falling back to this for every other URL.
+ * This session's own RECORD — `useSessionRecord`'s read, and the source of
+ * `canEndSession`, which `decideClosePane` needs to know whether the last-pane
+ * close may offer to end the workspace.
+ *
+ * Matched EXACTLY, and ahead of every `includes('/api/agent-workspaces')`
+ * branch below: the listing key is a prefix of this one, so a substring test
+ * would answer a record read with a `{sessions: []}` body and the flag would
+ * read as absent — which is a silent false, not an error.
+ */
+const SESSION_RECORD_URL = '/api/agent-workspaces/ses-1';
+let mockCanEndSession = true;
+const sessionRecord = () => ({
+  session: { driveId: 'drive-1', name: 'Session' },
+  sandboxEligible: true,
+  canEndSession: mockCanEndSession,
+});
+
+/**
+ * The default routing every test starts from: this session's record, empty
+ * shells, an empty session-conversations list (both `selectPaneAgent`'s
+ * switch-decision data AND `decideClosePane`'s close-decision data), and
+ * `useResolvedAgent`'s two lookups per fixture agent (id/title come from
+ * `mockUsePageAgents` above). A test that cares about a specific route layers
+ * its own `mockImplementation` on top, falling back to this for every other URL.
  */
 function defaultFetchRoute(url: string): unknown {
+  if (url === SESSION_RECORD_URL) return sessionRecord();
   if (url.includes('/shells')) return { shells: [] };
   if (url.includes('/api/agent-workspaces')) return { sessions: [] };
   if (url === '/api/pages/agent-1') return { id: 'agent-1', title: 'Researcher', driveId: 'drive-1' };
@@ -163,13 +189,46 @@ function mockSessionConversations(
   conversations: Array<{ conversationId: string; agentPageId: string | null; lastMessageAt?: string | null }>,
 ) {
   mockFetchWithAuth.mockImplementation(async (url: string) => {
-    if (url.includes('/api/agent-workspaces')) {
+    if (url !== SESSION_RECORD_URL && url.includes('/api/agent-workspaces')) {
       return jsonOk({
         sessions: [{ workspaceId: 'ses-1', sessionId: 'ses-1', conversations: conversations.map((c) => ({ lastMessageAt: null, ...c })) }],
       });
     }
     return jsonOk(defaultFetchRoute(url));
   });
+}
+
+/**
+ * Every node write this test issued, as `{put, drop}` — the ONE channel a pane
+ * close is allowed to use.
+ *
+ * The double-send this suite failed to catch survived precisely because
+ * `fetchWithAuth` (the `/nodes` POST) and `del` (the conversations DELETE) are
+ * separate spies, so no assertion ever looked at both. Anything asserting that a
+ * close is one write has to look across the two, which is what this and
+ * {@link conversationDeletes} are for.
+ */
+function nodeWrites(): Array<{ put: unknown[]; drop: string[] }> {
+  return mockFetchWithAuth.mock.calls
+    .filter(([url, init]) => typeof url === 'string' && url.endsWith('/nodes') && init?.method === 'POST')
+    .map(([, init]) => JSON.parse(init.body as string) as { put: unknown[]; drop: string[] });
+}
+
+/** Every conversation-scoped DELETE this test issued. */
+function conversationDeletes(): string[] {
+  return mockDel.mock.calls
+    .map(([url]) => url as string)
+    .filter((url) => typeof url === 'string' && url.includes('/conversations/'));
+}
+
+/**
+ * THE CROSS-CHANNEL ASSERTION: closing a chat pane is exactly one node drop and
+ * no conversation DELETE.
+ */
+async function expectSingleDropClose(nodeId: string) {
+  await waitFor(() => expect(nodeWrites().some((write) => write.drop.includes(nodeId))).toBe(true));
+  expect(nodeWrites().filter((write) => write.drop.includes(nodeId))).toHaveLength(1);
+  expect(conversationDeletes()).toEqual([]);
 }
 
 function renderPanes(props: Partial<React.ComponentProps<typeof AgentPanes>> = {}) {
@@ -188,11 +247,12 @@ function renderPanes(props: Partial<React.ComponentProps<typeof AgentPanes>> = {
 beforeEach(() => {
   vi.clearAllMocks();
   cuidCounter = 0;
-  useAgentWorkspaceStore.setState({ workspaces: {}, sync: {}, focus: {} });
+  mockCanEndSession = true;
+  useAgentWorkspaceStore.setState({ workspaces: {}, sync: {}, focus: {}, queueErrors: {} });
   usePendingStreamsStore.setState({ streams: new Map() });
-  // The verb queue's generation counters and retry timers are module-level
+  // The write queue's generation counters and retry timers are module-level
   // (they deliberately survive real remounts); reset them so one test's
-  // in-flight verb cannot leak into the next.
+  // in-flight write cannot leak into the next.
   __resetWorkspaceQueuesForTests();
   mockUsePageAgents.mockReturnValue({
     allAgents: [
@@ -202,2756 +262,1414 @@ beforeEach(() => {
     isLoading: false,
   });
   mockFetchWithAuth.mockImplementation(async (url: string) => jsonOk(defaultFetchRoute(url)));
+  // A RESOLVED PROMISE BY DEFAULT, so no test depends on another having set one.
+  // `vi.clearAllMocks()` clears calls but NOT implementations, so `del` used to
+  // arrive here carrying whatever `mockResolvedValue` the previous test left on
+  // it — and the terminal-close test relied on that leak without saying so.
+  // When the chat close stopped issuing a DELETE, the leak stopped too:
+  // `closeShell`'s `void del(...).catch(...)` got `undefined` back and threw
+  // inside a React event handler. Every test still passed and the RUN exited 1
+  // on the unhandled error.
+  mockDel.mockResolvedValue(undefined);
 });
 
-describe('AgentPanes', () => {
-  it('seeds the grid on its first conversation and renders the chat pane', async () => {
+
+/** Seat a workspace's tree the way the listing does — there is no client seed. */
+const WS = 'ses-1';
+const rootNode: WorkspaceNode = { nodeType: 'root', id: WS, parentId: null, position: 0, axis: 'row' };
+const paneNode = (id: string, parentId: string, position: number, target: PaneTarget | null): WorkspaceNode => ({
+  nodeType: 'pane',
+  id,
+  parentId,
+  position,
+  target,
+});
+const chatNode = (id: string, parentId: string, position: number, conversationId: string) =>
+  paneNode(id, parentId, position, { kind: 'chat', id: conversationId });
+
+const CONV_1_TARGET: WorkspaceNodeTarget = {
+  id: 'conv-1',
+  kind: 'chat',
+  title: 'First chat',
+  lastMessageAt: null,
+  agentPageId: 'agent-1',
+};
+
+function seat(nodes: WorkspaceNode[], targets: WorkspaceNodeTarget[] = [CONV_1_TARGET]) {
+  act(() => {
+    useAgentWorkspaceStore.getState().hydrateFromServer(WS, { rev: 1, nodes, targets });
+  });
+}
+
+const nodesNow = () => useAgentWorkspaceStore.getState().workspaces[WS]?.nodes ?? [];
+const panesNow = () => nodesNow().filter((node) => node.nodeType === 'pane');
+const nodeById = (id: string) => nodesNow().find((node) => node.id === id);
+const nodeShowingChat = (conversationId: string) =>
+  panesNow().find((node) => node.target?.kind === 'chat' && node.target.id === conversationId);
+
+describe('AgentPanes — the grid it renders', () => {
+  it('renders the chat pane for the tree it was given, with no seeding of its own', async () => {
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
     renderPanes();
-    await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
+    expect(await screen.findByTestId('pane-chat')).toHaveTextContent('conv-1');
+    // The mount-time `ensure` verb is gone with the two-level model — a
+    // workspace's root is minted server-side by whatever write first needs one.
+    expect(mockFetchWithAuth).not.toHaveBeenCalledWith(
+      expect.stringContaining('/nodes'),
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 
-  describe('closing a NON-last pane', () => {
-    it('closes locally with no confirm dialog and no session DELETE', async () => {
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const paneId = Object.values(useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes)[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
-
-      const user = userEvent.setup();
-      const closeButtons = screen.getAllByLabelText('Close pane');
-      await user.click(closeButtons[0]);
-
-      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-      expect(mockDel).not.toHaveBeenCalled();
-    });
-
-    it('closing a terminal pane kills its shell', async () => {
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const workspace = useAgentWorkspaceStore.getState().workspaces['ses-1'];
-      const chatPaneId = workspace.columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', chatPaneId));
-      const termPaneId = Object.values(useAgentWorkspaceStore.getState().workspaces['ses-1'].columns)
-        .flatMap((c) => c.panes)
-        .find((p) => p.id !== chatPaneId)!.id;
-      act(() =>
-        useAgentWorkspaceStore
-          .getState()
-          .assignPane('ses-1', termPaneId, { kind: 'terminal', name: 'shell-1', targetId: 'shell-9', agentPageId: null }),
-      );
-
-      mockDel.mockResolvedValue(undefined);
-      const user = userEvent.setup();
-      await waitFor(() => expect(screen.getByTestId('pane-shell')).toBeInTheDocument());
-      const closeButtons = screen.getAllByLabelText('Close pane');
-      // The terminal pane's own close button — bar order follows column order.
-      await user.click(closeButtons[closeButtons.length - 1]);
-
-      await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells/shell-9'),
-      );
-    });
+  /**
+   * THE EMPTY GRID. Closing the last pane destroys it and leaves the workspace
+   * alive — a state the two-level model could not represent, which is why
+   * browser code used to end the session instead.
+   */
+  it('renders the empty frame for a workspace whose grid holds nothing', async () => {
+    seat([rootNode], []);
+    renderPanes({ initialConversation: null });
+    expect(await screen.findByTestId('empty-grid')).toBeDefined();
   });
 
-  describe('closing the LAST pane (findings 1 + 2)', () => {
-    // Since round 10 (caught in review): the decision layer never
-    // short-circuits straight to `end-session` from the client's own
-    // snapshot — it always attempts the scoped conversation DELETE first,
-    // and only the SERVER's authoritative 409 `last_conversation` response
-    // triggers the confirm dialog (via the exact same `beginEndSessionConfirm`
-    // the non-chat-pane path already used). Every test here mocks that 409
-    // to reach the dialog, exactly mirroring the real server contract.
-    it('asks for confirmation rather than closing immediately (after the server confirms this is the last listing)', async () => {
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      mockDel.mockRejectedValue(new ApiRequestError('conflict', 409));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-      const user = userEvent.setup();
-      await user.click(screen.getByLabelText('Close pane'));
-
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
-      expect(await screen.findByRole('alertdialog')).toBeInTheDocument();
-      // Nothing was mutated — the grid is still exactly what it was.
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
-    });
-
-    it('cancelling leaves the session and the grid untouched', async () => {
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      mockDel.mockRejectedValue(new ApiRequestError('conflict', 409));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const user = userEvent.setup();
-      await user.click(screen.getByLabelText('Close pane'));
-      const dialog = await screen.findByRole('alertdialog');
-
-      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
-
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1');
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
-      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-    });
-
-    it('confirming drops the grid instantly, DELETEs the session, and reports it ended', async () => {
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      mockDel.mockImplementation(async (url: string) => {
-        if (url === '/api/agent-workspaces/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
-        return undefined;
-      });
-      const onSessionEnded = vi.fn();
-      renderPanes({ onSessionEnded });
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const user = userEvent.setup();
-      await user.click(screen.getByLabelText('Close pane'));
-      const dialog = await screen.findByRole('alertdialog');
-
-      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
-
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
-      await waitFor(() => expect(onSessionEnded).toHaveBeenCalledTimes(1));
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
-    });
-
-    it('drops the grid instantly — before the sandbox-kill DELETE resolves, not after', async () => {
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      let resolveSessionDel!: (value: unknown) => void;
-      mockDel.mockImplementation((url: string) => {
-        if (url === '/api/agent-workspaces/ses-1/conversations/conv-1') {
-          return Promise.reject(new ApiRequestError('conflict', 409));
-        }
-        return new Promise((resolve) => {
-          resolveSessionDel = resolve;
-        });
-      });
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const user = userEvent.setup();
-      await user.click(screen.getByLabelText('Close pane'));
-      const dialog = await screen.findByRole('alertdialog');
-
-      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
-
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
-      // Still pending — the sandbox-kill DELETE has not resolved yet, but the
-      // grid is already gone.
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
-      expect(screen.queryByTestId('pane-chat')).not.toBeInTheDocument();
-
-      resolveSessionDel({ hadOtherOpenConversations: false });
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-
-    it("does not kill the peeked pane's own shell until the session-end DELETE actually resolves", async () => {
-      // A lone TERMINAL pane (no conversation of its own) — closing it is a
-      // direct `end-session` decision, no conversation-listing DELETE first.
-      // The session's own (empty) listing must be CONFIRMED-known, not merely
-      // absent, or the close decision can't verify there's nothing to rebind.
-      mockSessionConversations([]);
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() =>
-        useAgentWorkspaceStore
-          .getState()
-          .assignPane('ses-1', paneId, { kind: 'terminal', name: 'shell-1', targetId: 'shell-9', agentPageId: null }),
-      );
-      await waitFor(() => expect(screen.getByTestId('pane-shell')).toBeInTheDocument());
-
-      let resolveSessionDel!: (value: unknown) => void;
-      mockDel.mockImplementation((url: string) =>
-        url === '/api/agent-workspaces/ses-1'
-          ? new Promise((resolve) => {
-              resolveSessionDel = resolve;
-            })
-          : Promise.resolve(undefined),
-      );
-      const user = userEvent.setup();
-      await user.click(screen.getByLabelText('Close pane'));
-      const dialog = await screen.findByRole('alertdialog');
-      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
-
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
-      // Still pending — the shell must not be touched before the session-end
-      // DELETE is known to have actually succeeded (review finding —
-      // chatgpt-codex-connector on PR #2318).
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells/shell-9');
-
-      resolveSessionDel({ hadOtherOpenConversations: false });
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      // Only now, confirmed, is the shell actually torn down.
-      expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells/shell-9');
-    });
-
-    it('never kills the shell at all if the session-end DELETE fails', async () => {
-      mockSessionConversations([]);
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() =>
-        useAgentWorkspaceStore
-          .getState()
-          .assignPane('ses-1', paneId, { kind: 'terminal', name: 'shell-1', targetId: 'shell-9', agentPageId: null }),
-      );
-      await waitFor(() => expect(screen.getByTestId('pane-shell')).toBeInTheDocument());
-
-      mockDel.mockImplementation((url: string) =>
-        url === '/api/agent-workspaces/ses-1'
-          ? Promise.reject(new Error('sandbox teardown failed'))
-          : Promise.resolve(undefined),
-      );
-      const errorSpy = vi.spyOn(toast, 'error').mockImplementation(() => '');
-      const user = userEvent.setup();
-      await user.click(screen.getByLabelText('Close pane'));
-      const dialog = await screen.findByRole('alertdialog');
-      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
-
-      await waitFor(() => expect(errorSpy).toHaveBeenCalled());
-      // Never touched — a failed session-end must never have killed the
-      // shell a restored terminal pane still claims to hold.
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells/shell-9');
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
-      expect(screen.getByTestId('pane-shell')).toBeInTheDocument();
-      errorSpy.mockRestore();
-    });
-
-    it('warns (but still ends the session) when the server reports other open conversations existed', async () => {
-      // Ending is unconditional by design and can't be prevented client
-      // side — but THIS dialog's confirm was shown because the pane's own
-      // close 409'd on a "this looks like the last listing" belief that can
-      // go stale (a conversation minted elsewhere committed in the window
-      // between that 409 and this confirm). Silently destroying more than
-      // expected deserves a signal, even though nothing here can undo it
-      // (caught in review).
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      mockDel.mockImplementation(async (url: string) => {
-        if (url === '/api/agent-workspaces/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
-        return { ok: true, spriteTornDown: true, hadOtherOpenConversations: true };
-      });
-      const warnSpy = vi.spyOn(toast, 'warning').mockImplementation(() => '');
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const user = userEvent.setup();
-      await user.click(screen.getByLabelText('Close pane'));
-      const dialog = await screen.findByRole('alertdialog');
-
-      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
-
-      await waitFor(() => expect(warnSpy).toHaveBeenCalled());
-      warnSpy.mockRestore();
-    });
-
-    it('a failed DELETE rolls the grid back to exactly what it was', async () => {
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      mockDel.mockImplementation(async (url: string) => {
-        if (url === '/api/agent-workspaces/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
-        throw new Error('sandbox teardown failed');
-      });
-      const onSessionEnded = vi.fn();
-      renderPanes({ onSessionEnded });
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const user = userEvent.setup();
-      await user.click(screen.getByLabelText('Close pane'));
-      const dialog = await screen.findByRole('alertdialog');
-
-      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
-
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
-      expect(onSessionEnded).not.toHaveBeenCalled();
-      // The grid dropped optimistically the instant "End session" was
-      // confirmed, then the DELETE failed — `hydrateWorkspace` restores it
-      // from the pre-close snapshot rather than leaving it gone. No second
-      // session gets minted because nothing here ever creates one.
-      await waitFor(() => expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined());
-      expect(screen.getByTestId('pane-chat')).toBeInTheDocument();
-    });
-
-    it("is a no-op on a brand-new session whose OWN entry hasn't appeared in an already-warm cache — never guesses confirmed-empty", async () => {
-      // The `/api/agent-workspaces` cache can be warm from ANOTHER session in
-      // the same drive (so `sessionsData` is truthy) while THIS brand-new
-      // session's own row hasn't appeared in it yet — a real fact distinct
-      // from "loaded and confirmed to have no other conversations." Treating
-      // the former as the latter would offer to end a session whose actual
-      // membership is still unknown (caught in review).
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url.includes('/api/agent-workspaces')) {
-          return jsonOk({ sessions: [{ workspaceId: 'ses-other', sessionId: 'ses-other', conversations: [] }] });
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-      const user = userEvent.setup();
-      await user.click(screen.getByLabelText('Close pane'));
-
-      // No dialog, no DELETE, no local mutation — the fact is unverified so
-      // the close is a pure no-op rather than a guess in either direction.
-      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-      expect(mockDel).not.toHaveBeenCalled();
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
-      expect(screen.getByTestId('pane-chat')).toBeInTheDocument();
-    });
+  it('renders the empty frame for a workspace that has never been written', async () => {
+    seat([], []);
+    renderPanes({ initialConversation: null });
+    expect(await screen.findByTestId('empty-grid')).toBeDefined();
   });
 
-  describe("closing a conversation's listing (session → conversation → panes)", () => {
-    it("closes the last pane bound to an agent's conversation via the session-scoped DELETE, silently — no dialog", async () => {
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }, { conversationId: 'conv-2', agentPageId: 'agent-2' }]);
-      mockDel.mockResolvedValue(undefined);
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
-      const secondPaneId = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id !== firstPaneId)!.id;
-      act(() =>
-        useAgentWorkspaceStore
-          .getState()
-          .assignPane('ses-1', secondPaneId, { kind: 'chat', name: 'Conversation', targetId: 'conv-2', agentPageId: 'agent-2' }),
-      );
-      await waitFor(() => expect(screen.getAllByTestId('pane-chat')).toHaveLength(2));
+  it('titles a pane from targets[], not from anything the node carries', async () => {
+    seat([rootNode, paneNode('n1', WS, 0, { kind: 'page', id: 'page-1' })], [
+      { id: 'page-1', kind: 'page', title: 'Spec doc', lastMessageAt: null, agentPageId: null },
+    ]);
+    renderPanes({ initialConversation: null });
+    expect(await screen.findByText('Spec doc')).toBeDefined();
+  });
 
-      const user = userEvent.setup();
-      const closeButtons = screen.getAllByLabelText('Close pane');
-      await user.click(closeButtons[0]);
+  it('still renders a pane whose target the viewer cannot resolve, under a generic name', async () => {
+    // No `targets[]` entry — gone, or not this viewer's to read. The rectangle
+    // is still there and must still be closable.
+    seat([rootNode, paneNode('n1', WS, 0, { kind: 'page', id: 'page-1' })], []);
+    renderPanes({ initialConversation: null });
+    expect(await screen.findByText('Page')).toBeDefined();
+  });
+});
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
-      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-      await waitFor(() =>
-        expect(
-          useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
-        ).toHaveLength(1),
-      );
+describe('AgentPanes — selection is an instruction', () => {
+  it('focuses the node already showing the selected conversation', async () => {
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-9'), chatNode('n2', WS, 1, 'conv-1')]);
+    renderPanes();
+    await waitFor(() => expect(useAgentWorkspaceStore.getState().workspaces[WS]?.activeNodeId).toBe('n2'));
+  });
+
+  /**
+   * A thread held DEEP in the tree. This was about a PARKED node: `open` refused
+   * it deliberately, so the store had to move it back or selecting a closed
+   * thread from the sidebar silently did nothing. Every holder is on screen now,
+   * and the property that survives is the one that mattered — no SECOND node is
+   * minted for a conversation the workspace already shows.
+   */
+  it('focuses a node nested below a split rather than minting a second one', async () => {
+    seat([
+      rootNode,
+      chatNode('n1', WS, 0, 'conv-9'),
+      { nodeType: 'split', id: 's1', parentId: WS, position: 1, axis: 'column' },
+      chatNode('deep', 's1', 0, 'conv-1'),
+      chatNode('beside', 's1', 1, 'conv-8'),
+    ]);
+    renderPanes();
+    await waitFor(() => expect(useAgentWorkspaceStore.getState().workspaces[WS]?.activeNodeId).toBe('deep'));
+    expect(panesNow().filter((node) => node.target?.kind === 'chat' && node.target.id === 'conv-1')).toHaveLength(1);
+  });
+});
+
+describe('AgentPanes — closing a pane', () => {
+  it('closes a chat pane with ONE node drop and no conversation DELETE', async () => {
+    // THE DOUBLE-SEND REGRESSION. Both requests destroyed the same node: the
+    // store's drop, POSTed to /nodes, and a DELETE whose `expel` is the same
+    // destroy. The drop normally won, so the DELETE's expel found nothing,
+    // answered 404, and raised a toast for a close that had already succeeded.
+    // Asserted across BOTH channels, because the two are separate spies and
+    // that is exactly why nothing caught it.
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')]);
+    const user = userEvent.setup();
+    renderPanes();
+
+    await screen.findAllByTestId('pane-chat');
+    await user.click(within(screen.getAllByTestId('pane-bar')[0]).getByLabelText('Close pane'));
+
+    await expectSingleDropClose('n1');
+    // DESTROYED, not parked. It used to survive with a null parent, still a
+    // member holding its binding — the state that made a closed pane and a
+    // broken one the same row.
+    expect(nodeById('n1')).toBeUndefined();
+  });
+
+  it('shows no error toast on a successful close', async () => {
+    // The reported symptom, stated directly. Unobservable before this suite
+    // mocked `sonner` at all.
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')]);
+    const user = userEvent.setup();
+    renderPanes();
+
+    await screen.findAllByTestId('pane-chat');
+    await user.click(within(screen.getAllByTestId('pane-bar')[0]).getByLabelText('Close pane'));
+
+    await waitFor(() => expect(nodeById('n1')).toBeUndefined());
+    expect(mockToast.error).not.toHaveBeenCalled();
+  });
+
+  it('closing a terminal pane kills its shell — a closed tab is a DELETE, not an orphan', async () => {
+    seat(
+      [
+        rootNode,
+        paneNode('n1', WS, 0, { kind: 'terminal', id: 'shell-1' }),
+        chatNode('n2', WS, 1, 'conv-2'),
+      ],
+      [],
+    );
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    await screen.findByTestId('pane-shell');
+    await user.click(within(screen.getAllByTestId('pane-bar')[0]).getByLabelText('Close pane'));
+
+    await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells/shell-1'));
+    expect(nodeById('n1')).toBeUndefined();
+  });
+
+  it('raises NO toast when the shell was already gone — a 404 is what success looks like here', async () => {
+    // Issue #2473, and the route already said so: "A shell that does not exist
+    // (or lives under a different session than the URL claims) is a 404, which
+    // the client treats as success." It did not — every non-2xx toasted, so a
+    // user closing the tab of a shell whose row had gone with an ended session
+    // read "Could not close the shell / Shell not found" for a close that had
+    // in fact happened.
+    mockDel.mockRejectedValueOnce(new ApiRequestError('Shell not found', 404));
+    seat(
+      [
+        rootNode,
+        paneNode('n1', WS, 0, { kind: 'terminal', id: 'shell-1' }),
+        chatNode('n2', WS, 1, 'conv-2'),
+      ],
+      [],
+    );
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    await screen.findByTestId('pane-shell');
+    await user.click(within(screen.getAllByTestId('pane-bar')[0]).getByLabelText('Close pane'));
+
+    await waitFor(() => expect(nodeById('n1')).toBeUndefined());
+    expect(mockToast.error).not.toHaveBeenCalled();
+  });
+
+  it('still raises a toast when the kill genuinely failed, because the process may still be running', async () => {
+    // The other half of the same rule: 404 is "already gone", 502 is "it may
+    // still be running", and silencing the second to fix the first would be the
+    // crippled-agent trade this change exists to refuse.
+    mockDel.mockRejectedValueOnce(new ApiRequestError('Could not close this shell', 502));
+    seat(
+      [
+        rootNode,
+        paneNode('n1', WS, 0, { kind: 'terminal', id: 'shell-1' }),
+        chatNode('n2', WS, 1, 'conv-2'),
+      ],
+      [],
+    );
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    await screen.findByTestId('pane-shell');
+    await user.click(within(screen.getAllByTestId('pane-bar')[0]).getByLabelText('Close pane'));
+
+    // The message names the way back, and that is the load-bearing half: the
+    // pane is already gone from this window (the close is optimistic and
+    // nothing rolls it back) while the server has kept the shell ROW, so the
+    // sidebar really can reopen it.
+    await waitFor(() =>
+      expect(mockToast.error).toHaveBeenCalledWith(
+        'Could not close the shell',
+        expect.objectContaining({ description: expect.stringContaining('sidebar') }),
+      ),
+    );
+  });
+
+  it('does nothing while the directory has not resolved — a close never acts on an unverified fact', async () => {
+    // A tree this browser SEEDED and no server answer has confirmed:
+    // `runCommand` mints a root locally so the first click composes into one
+    // write, so nodes can exist with nothing server-read behind them. "Not
+    // confirmed" is not "confirmed and empty". Split first, so two panes exist
+    // and the last-pane branch (decided ABOVE this guard) is not what answers.
+    //
+    // The node write must NOT settle: the pump folds a successful ack into the
+    // base, which is itself a server confirmation of this tree and would
+    // legitimately resolve the directory.
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/nodes')) return new Promise<never>(() => {});
+      return jsonOk(defaultFetchRoute(url));
     });
-
-    it('rebinds the grid-last pane onto another OPEN listing that has no pane here, instead of falling back to the picker or ending the session', async () => {
-      // conv-2 is a real open listing elsewhere in the SESSION with no pane
-      // of its own in THIS grid (e.g. a background worker minted it, or
-      // another tab is showing it) — the grid-never-empties rule means
-      // closing this pane's own conversation repoints it at that other
-      // listing rather than vanishing to a blank picker.
-      mockSessionConversations([
-        { conversationId: 'conv-1', agentPageId: 'agent-1' },
-        { conversationId: 'conv-2', agentPageId: 'agent-2', lastMessageAt: '2026-01-15T00:00:00.000Z' },
-      ]);
-      mockDel.mockResolvedValue(undefined);
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-
-      const user = userEvent.setup();
-      await user.click(screen.getByLabelText('Close pane'));
-
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
-      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-      // The grid never emptied — still exactly one pane, now repointed at
-      // the other session's other open listing instead of the picker.
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-2'));
-      expect(
-        useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
-      ).toHaveLength(1);
+    act(() => {
+      useAgentWorkspaceStore.getState().openConversation(WS, 'conv-1');
     });
+    const seeded = nodesNow().find((node) => node.nodeType === 'pane');
+    act(() => {
+      useAgentWorkspaceStore.getState().splitPane(WS, seeded!.id, 'row');
+    });
+    expect(useAgentWorkspaceStore.getState().workspaces[WS].hasServerSnapshot).toBe(false);
 
-    it("resets the grid-last pane to its picker — not a stale no-op — when the DELETE succeeds despite the client's OWN snapshot showing nothing to rebind to", async () => {
-      // The client's own listing snapshot shows conv-1 as the ONLY open
-      // conversation (nothing to rebind to) — `decideClosePane` still
-      // attempts the real DELETE rather than pre-guessing end-session (the
-      // server is the authority), and here it SUCCEEDS: the server must
-      // have known about another open listing this stale client snapshot
-      // didn't. `closePane` refuses to remove a grid's only pane (the
-      // never-empty invariant), so blindly calling it here would silently
-      // no-op and leave this pane's scope pointed at the conversation that
-      // just closed, forever — it must reset to the picker instead (review
-      // finding — coderabbitai on PR #2308).
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      mockDel.mockResolvedValue(undefined);
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+    const user = userEvent.setup();
+    renderPanes();
 
-      const user = userEvent.setup();
-      await user.click(screen.getByLabelText('Close pane'));
+    await screen.findByTestId('pane-chat');
+    const chatPaneId = nodeShowingChat('conv-1')!.id;
+    const bars = screen.getAllByTestId('pane-bar');
+    await user.click(within(bars[0]).getByLabelText('Close pane'));
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
-      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-      await waitFor(() => {
-        const pane = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-          .find((p) => p.id === paneId);
-        expect(pane?.scope).toBeNull();
+    expect(mockDel).not.toHaveBeenCalled();
+    expect(nodeById(chatPaneId)).toBeDefined();
+  });
+
+  it('is a pure layout close when the listing resolved WITHOUT this thread', async () => {
+    mockSessionConversations([{ conversationId: 'conv-other', agentPageId: 'agent-1' }]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')]);
+    const user = userEvent.setup();
+    renderPanes();
+
+    await screen.findAllByTestId('pane-chat');
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());
+    await user.click(within(screen.getAllByTestId('pane-bar')[0]).getByLabelText('Close pane'));
+
+    await waitFor(() => expect(nodeById('n1')).toBeUndefined());
+    expect(mockDel).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * CLOSING THE LAST PANE ENDS THE SESSION — restored, and decided on the client.
+ *
+ * It used to be the server's `last_conversation` 409 caught by the close
+ * DELETE's error branch; the node-tree cutover removed that refusal, which left
+ * the branch unreachable and the user stranded in an empty grid. The whole
+ * decision is `decideClosePane`'s now, so the confirm is raised without any
+ * request having to fail first — `mockDel` never rejects in any of these.
+ */
+describe('AgentPanes — closing the LAST pane', () => {
+  it('raises the end-session confirm instead of emptying the grid', async () => {
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes();
+
+    await screen.findByTestId('pane-chat');
+    await user.click(screen.getByLabelText('Close pane'));
+
+    expect(await screen.findByRole('alertdialog')).toBeDefined();
+    // NOTHING has been written yet — the confirm is the whole act so far.
+    expect(nodeById('n1')).toBeDefined();
+    expect(nodeWrites()).toEqual([]);
+    expect(mockDel).not.toHaveBeenCalled();
+  });
+
+  it('raises it for a lone TERMINAL pane too — the count is of panes, not of chats', async () => {
+    seat([rootNode, paneNode('n1', WS, 0, { kind: 'terminal', id: 'shell-1' })], []);
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    await screen.findByTestId('pane-shell');
+    await user.click(screen.getByLabelText('Close pane'));
+
+    expect(await screen.findByRole('alertdialog')).toBeDefined();
+    expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells/shell-1');
+  });
+
+  it('raises it while the listing has NOT resolved', async () => {
+    // The default route never lists this workspace, so `activeConversations` is
+    // null. Behind that guard the click would silently no-op; the decision is
+    // taken above it.
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes();
+
+    await screen.findByTestId('pane-chat');
+    await user.click(screen.getByLabelText('Close pane'));
+
+    expect(await screen.findByRole('alertdialog')).toBeDefined();
+  });
+
+  it('Cancel leaves the pane exactly where it was, having written nothing', async () => {
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes();
+
+    await screen.findByTestId('pane-chat');
+    await user.click(screen.getByLabelText('Close pane'));
+    await user.click(await screen.findByRole('button', { name: /cancel/i }));
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(nodeById('n1')).toBeDefined();
+    expect(nodeWrites()).toEqual([]);
+    expect(mockDel).not.toHaveBeenCalled();
+    expect(useAgentWorkspaceStore.getState().workspaces[WS]).toBeDefined();
+  });
+
+  it('Confirm ends the session', async () => {
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    mockDel.mockResolvedValue({});
+    const onSessionEnded = vi.fn();
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes({ onSessionEnded });
+
+    await screen.findByTestId('pane-chat');
+    await user.click(screen.getByLabelText('Close pane'));
+    await user.click(await screen.findByRole('button', { name: /end session/i }));
+
+    await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
+    await waitFor(() => expect(useAgentWorkspaceStore.getState().workspaces[WS]).toBeUndefined());
+    expect(onSessionEnded).toHaveBeenCalled();
+  });
+
+  it('restores the sidebar row when the end DELETE fails, whatever scope the listing was fetched under', async () => {
+    // THE REACH HAS TO MATCH. `forgetWorkspaceInCache` strips this row from
+    // EVERY listing entry (an `isWorkspaceListingKey` predicate), so a rollback
+    // snapshot read from the one `agentWorkspacesKey(driveId)` key comes back
+    // empty whenever the listing was fetched under a different scope — and the
+    // row is then dropped everywhere and restored nowhere, leaving a workspace
+    // that is still very much alive missing from the sidebar.
+    //
+    // Here the grid is handed `drive-1` while the listing is subscribed under
+    // the UNSCOPED key, which is exactly that mismatch. The subscriber stands in
+    // for the sidebar, and has to be a real one: SWR's predicate `mutate` only
+    // reaches keys SWR itself is tracking, so a hand-seeded cache entry would
+    // make this test vacuous — neither removed nor restored.
+    const row = { workspaceId: 'ses-1', sessionId: 'ses-1', conversations: [] };
+    // The listing is fetched ONCE and is then offline — the same dead network
+    // that failed the DELETE. That is the whole reason `restoreWorkspaceInCache`
+    // exists rather than a bare revalidate: with the network down, re-reading
+    // brings nothing back.
+    let listingOnline = true;
+    const ListingProbe = () => {
+      useSWR('/api/agent-workspaces', async () => {
+        if (!listingOnline) throw new Error('offline');
+        listingOnline = false;
+        return { sessions: [row] };
       });
-      // Still exactly one pane (the grid never empties) — just unbound now.
-      expect(
-        useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
-      ).toHaveLength(1);
-    });
+      return null;
+    };
+    let listingNow: Array<{ workspaceId: string }> = [];
+    const Watch = () => {
+      const { data } = useSWR<{ sessions: Array<{ workspaceId: string }> }>('/api/agent-workspaces');
+      listingNow = data?.sessions ?? [];
+      return null;
+    };
 
-    it("falls back to the EndSessionDialog when the server says this was the session's last open listing (409)", async () => {
-      mockSessionConversations([
-        { conversationId: 'conv-1', agentPageId: 'agent-1' },
-        { conversationId: 'conv-2', agentPageId: 'agent-2' },
-      ]);
-      mockDel.mockRejectedValue(new ApiRequestError('conflict', 409));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    mockDel.mockRejectedValue(new Error('offline'));
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    render(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <ListingProbe />
+        <Watch />
+        <AgentPanes
+          sessionId="ses-1"
+          driveId="drive-1"
+          initialConversation={{ conversationId: 'conv-1', agentPageId: 'agent-1', name: 'Conversation' }}
+        />
+      </SWRConfig>,
+    );
 
-      const user = userEvent.setup();
-      await user.click(screen.getByLabelText('Close pane'));
+    await screen.findByTestId('pane-chat');
+    await waitFor(() => expect(listingNow).toHaveLength(1));
 
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
-      expect(await screen.findByRole('alertdialog')).toBeInTheDocument();
-      // The grid is untouched — this is the SAME peek-then-confirm flow as
-      // any other end-session, nothing was mutated by the failed close.
-      expect(
-        useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
-      ).toHaveLength(1);
-    });
+    await user.click(screen.getByLabelText('Close pane'));
+    await user.click(await screen.findByRole('button', { name: /end session/i }));
 
-    it('closing one of TWO panes showing the SAME conversation is a pure layout close, not a listing close', async () => {
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
-      const secondPaneId = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id !== firstPaneId)!.id;
-      act(() =>
-        useAgentWorkspaceStore
-          .getState()
-          .assignPane('ses-1', secondPaneId, { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' }),
-      );
-      await waitFor(() => expect(screen.getAllByTestId('pane-chat')).toHaveLength(2));
+    await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith('Could not end the session', expect.anything()));
+    // The optimistic removal is rolled back rather than left to a revalidate the
+    // same dead network would fail.
+    await waitFor(() => expect(listingNow).toHaveLength(1));
+    expect(listingNow[0]).toMatchObject({ workspaceId: 'ses-1' });
+  });
 
-      const user = userEvent.setup();
-      const closeButtons = screen.getAllByLabelText('Close pane');
-      await user.click(closeButtons[0]);
+  it('a member who may NOT end the workspace keeps the ordinary close', async () => {
+    // `DELETE /api/agent-workspaces/{id}` is gated by `checkSessionEndAccess`,
+    // which is stricter than the access that let them reach the pane. Offering
+    // a confirm they would obey and then be refused for is worse than the empty
+    // grid they had before.
+    mockCanEndSession = false;
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes();
 
-      expect(mockDel).not.toHaveBeenCalled();
-      await waitFor(() =>
-        expect(
-          useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
-        ).toHaveLength(1),
-      );
-    });
+    await screen.findByTestId('pane-chat');
+    // Wait for the session record to land, or the flag reads as its (false)
+    // default for a reason that has nothing to do with permission.
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledWith(SESSION_RECORD_URL));
+    await user.click(screen.getByLabelText('Close pane'));
 
-    it('does not destroy a pane reassigned to a NEW conversation while its close DELETE was still in flight', async () => {
-      mockSessionConversations([
-        { conversationId: 'conv-1', agentPageId: 'agent-1' },
-        { conversationId: 'conv-2', agentPageId: 'agent-2' },
-      ]);
-      let resolveDel!: () => void;
-      mockDel.mockReturnValue(new Promise<void>((resolve) => (resolveDel = resolve)));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      // A second pane so closing the first is NOT grid-last (close-conversation, no rebind).
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
+    await waitFor(() => expect(nodeById('n1')).toBeUndefined());
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1');
+    expect(await screen.findByTestId('empty-grid')).toBeDefined();
+  });
+});
 
-      const user = userEvent.setup();
-      const closeButtons = screen.getAllByLabelText('Close pane');
-      await user.click(closeButtons[0]);
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
+describe('AgentPanes — the mint lifecycle', () => {
+  /** An unbound pane, so the picker is what renders. */
+  const withPicker = () => seat([rootNode, paneNode('n1', WS, 0, null)], []);
 
-      // WHILE that DELETE is still pending, this exact pane gets reassigned —
-      // e.g. the pane bar's agent selector switched it, or a fresh mint
-      // landed here. The stale close must not clobber it once it resolves.
-      act(() =>
-        useAgentWorkspaceStore.getState().assignPane('ses-1', paneId, {
-          kind: 'chat',
-          name: 'Conversation',
-          targetId: 'conv-reassigned',
-          agentPageId: 'agent-3',
-        }),
-      );
+  it('mints a conversation and places it, without ever half-binding the pane', async () => {
+    mockPost.mockResolvedValue({});
+    withPicker();
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
 
-      resolveDel();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+    await user.click(await screen.findByText('Researcher'));
 
-      const paneAfter = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id === paneId);
-      expect(paneAfter?.scope).toMatchObject({ targetId: 'conv-reassigned', agentPageId: 'agent-3' });
-    });
+    await waitFor(() =>
+      expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
+        conversationId: 'new-id-1',
+        sessionId: 'ses-1',
+        // The pane the user picked into — without it the server places blind.
+        activeNodeId: 'n1',
+      }),
+    );
+    await waitFor(() => expect(nodeShowingChat('new-id-1')).toBeDefined());
+  });
 
-    it('does not tell the host to recover a pane that was reassigned while its close DELETE was still in flight', async () => {
-      // Same race as above, but checking the HOST callback rather than the
-      // local pane mutation: even though `paneStillShows` already protects
-      // the pane's own scope, an unconditional `onConversationClosed` would
-      // still tell a host (AgentPageView/AgentsSurface) to recover from the
-      // now-irrelevant closed conversation — which tracks its own "current"
-      // independently of any specific pane — potentially overwriting
-      // whatever the user just picked for this exact pane (caught in review).
-      mockSessionConversations([
-        { conversationId: 'conv-1', agentPageId: 'agent-1' },
-        { conversationId: 'conv-2', agentPageId: 'agent-2' },
-      ]);
-      let resolveDel!: () => void;
-      mockDel.mockReturnValue(new Promise<void>((resolve) => (resolveDel = resolve)));
-      const onConversationClosed = vi.fn();
-      renderPanes({ onConversationClosed });
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
+  /**
+   * The pane bar's own "+", which every mint test above reaches through the
+   * PICKER instead — so nothing in this suite actually exercised the control a
+   * BOUND chat pane offers. It now lives in `PaneNewConversationAction`, shared
+   * with the agent page's session-less chat; this pins the wiring on this side
+   * of that share.
+   */
+  it('the pane bar\'s "+" mints a fresh conversation for the SAME agent, into the same pane', async () => {
+    mockPost.mockResolvedValue({});
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes();
 
-      const user = userEvent.setup();
-      const closeButtons = screen.getAllByLabelText('Close pane');
-      await user.click(closeButtons[0]);
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
+    const plus = await screen.findByRole('button', { name: 'Start a new conversation' });
+    await waitFor(() => expect(plus).not.toBeDisabled());
+    await user.click(plus);
 
-      act(() =>
-        useAgentWorkspaceStore.getState().assignPane('ses-1', paneId, {
-          kind: 'chat',
-          name: 'Conversation',
-          targetId: 'conv-reassigned',
-          agentPageId: 'agent-3',
-        }),
-      );
+    await waitFor(() =>
+      expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
+        conversationId: 'new-id-1',
+        sessionId: 'ses-1',
+        activeNodeId: 'n1',
+      }),
+    );
+    await waitFor(() => expect(nodeShowingChat('new-id-1')).toBeDefined());
+  });
 
-      resolveDel();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+  /**
+   * THE REBIND THE MODEL DELETED. A mint used to set the pane to `{kind,
+   * targetId: null}` and then to the real target; a `PaneTarget` cannot be
+   * half-bound, so a failed mint leaves the pane exactly as the user left it and
+   * there is nothing to restore.
+   */
+  it('a failed mint leaves the pane untouched — no sentinel to unwind', async () => {
+    mockPost.mockRejectedValue(new Error('boom'));
+    withPicker();
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
 
-      expect(onConversationClosed).not.toHaveBeenCalled();
-    });
+    await user.click(await screen.findByText('Researcher'));
 
-    it("ends the session (via forgetWorkspace) when closing the session's LAST open listing, even with a terminal pane remaining", async () => {
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      mockDel.mockImplementation(async (url: string) => {
-        if (url === '/api/agent-workspaces/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
-        return undefined;
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+    // Untouched: still the same node, still unbound, still on the grid — and
+    // back on the picker rather than stuck on a spinner.
+    await waitFor(() => expect(screen.getByText('Researcher')).toBeDefined());
+    expect(nodeById('n1')).toMatchObject({ target: null, parentId: WS });
+    expect(panesNow()).toHaveLength(1);
+  });
+
+  /**
+   * THE REGRESSION #2386-adjacent, and the one that made a second agent pane
+   * unusable: a mint's OWN server write admits what it created, and admitting
+   * PLACES — into this very pane, because that is what `admit` does with an
+   * unbound one. The `session:<id>` broadcast binds it here before the POST
+   * resolves, so the pane the user asked for arrives, and then the completion
+   * handler used to read "bound" as "somebody else took this node", declare
+   * itself superseded, and DELETE the conversation it had just created. The
+   * pane appeared and vanished, silently, because that cleanup says nothing.
+   */
+  it("keeps the conversation when the mint's own admission bound this pane first", async () => {
+    let resolveMint!: (value: unknown) => void;
+    mockPost.mockReturnValue(new Promise((resolve) => (resolveMint = resolve)));
+    mockDel.mockResolvedValue({});
+    withPicker();
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    await user.click(await screen.findByText('Researcher'));
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+
+    // The broadcast for the mint's own admission — the server placed the new
+    // conversation into this pane while its POST was still in flight.
+    act(() => {
+      useAgentWorkspaceStore.getState().applyRemoteUpdate({
+        workspaceId: WS,
+        rev: 2,
+        nodes: [rootNode, chatNode('n1', WS, 0, 'new-id-1')],
       });
-      const onSessionEnded = vi.fn();
-      renderPanes({ onSessionEnded });
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const chatPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', chatPaneId));
-      const termPaneId = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id !== chatPaneId)!.id;
-      act(() =>
-        useAgentWorkspaceStore
-          .getState()
-          .assignPane('ses-1', termPaneId, { kind: 'terminal', name: 'shell-1', targetId: 'shell-9', agentPageId: null }),
-      );
-      await waitFor(() => expect(screen.getByTestId('pane-shell')).toBeInTheDocument());
-
-      const user = userEvent.setup();
-      const closeButtons = screen.getAllByLabelText('Close pane');
-      // The chat pane's own close button (bar order follows column order).
-      await user.click(closeButtons[0]);
-      const dialog = await screen.findByRole('alertdialog');
-      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
-
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1'));
-      await waitFor(() => expect(onSessionEnded).toHaveBeenCalledTimes(1));
-      // The WHOLE workspace is gone, including the terminal pane that was
-      // never itself targeted by the close.
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
     });
 
-    it('rebinds a lone TERMINAL pane onto another real open listing that has no pane here, instead of asking to end the session', async () => {
-      // conv-2 is a real open listing with NO pane anywhere in this grid
-      // (e.g. a background worker minted it). A terminal addresses no
-      // conversation of its own, so there is nothing here to DELETE — but
-      // the grid-never-empties rule still applies: with another open
-      // listing available, this pane repoints at it (killing the shell it
-      // was showing) rather than asking to end the session.
-      mockSessionConversations([
-        { conversationId: 'conv-1', agentPageId: 'agent-1' },
-        { conversationId: 'conv-2', agentPageId: 'agent-2', lastMessageAt: '2026-01-15T00:00:00.000Z' },
-      ]);
-      mockDel.mockResolvedValue(undefined);
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-      const chatPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() =>
-        useAgentWorkspaceStore
-          .getState()
-          .assignPane('ses-1', chatPaneId, { kind: 'terminal', name: 'shell-1', targetId: 'shell-9', agentPageId: null }),
-      );
-      await waitFor(() => expect(screen.getByTestId('pane-shell')).toBeInTheDocument());
+    resolveMint({});
 
-      const user = userEvent.setup();
-      await user.click(screen.getByLabelText('Close pane'));
+    await waitFor(() => expect(nodeShowingChat('new-id-1')).toBeDefined());
+    // The whole point: nothing tears down what the mint just made.
+    expect(mockDel).not.toHaveBeenCalled();
+  });
 
-      // No confirm dialog — the grid still has an open listing to fall back
-      // to. The terminal's own shell is killed as part of the rebind (the
-      // conversation DELETE route is never called — there was no
-      // conversation of its own to close).
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-2'));
-      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-      expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells/shell-9');
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1');
-      expect(
-        useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
-      ).toHaveLength(1);
+  it('lands the conversation in the pane the user picked into, not whichever was empty first', async () => {
+    // TWO unbound panes. Without a placement preference the server's `open()`
+    // policy falls to `panes.find(canReplace)` — the FIRST unbound pane in grid
+    // order, n1 — while the user clicked n2. So the mint has to name the pane.
+    seat([rootNode, paneNode('n1', WS, 0, null), paneNode('n2', WS, 1, null)], []);
+    mockPost.mockResolvedValue({});
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    // The SECOND picker — the pane the user is actually looking at.
+    const pickers = await screen.findAllByText('Researcher');
+    await user.click(pickers[1]);
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+    // The mint has to say WHERE, or the server places blind.
+    expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
+      conversationId: 'new-id-1',
+      sessionId: 'ses-1',
+      activeNodeId: 'n2',
     });
   });
 
-  describe('picking an agent (mint lifecycle)', () => {
-    it('mints a conversation into the session and binds the pane', async () => {
-      mockPost.mockResolvedValue({});
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
+  it('still cleans up when the pane was taken by something ELSE mid-mint', async () => {
+    // The case the supersede check exists for, and which must survive the fix:
+    // bound, but to a thread this mint did not create.
+    let resolveMint!: (value: unknown) => void;
+    mockPost.mockReturnValue(new Promise((resolve) => (resolveMint = resolve)));
+    mockDel.mockResolvedValue({});
+    withPicker();
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
 
-      const user = userEvent.setup();
-      await user.click(await screen.findByTestId('pick-agent-agent-2'));
+    await user.click(await screen.findByText('Researcher'));
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
 
-      await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-2/conversations', {
-          conversationId: 'new-id-1',
-          sessionId: 'ses-1',
-        }),
-      );
-      await waitFor(() => expect(screen.getAllByTestId('pane-chat')).toHaveLength(2));
+    act(() => {
+      useAgentWorkspaceStore.getState().applyRemoteUpdate({
+        workspaceId: WS,
+        rev: 2,
+        nodes: [rootNode, chatNode('n1', WS, 0, 'someone-elses-thread')],
+      });
     });
 
-    it('a failed mint resets the pane back to the picker, not a dead sentinel scope', async () => {
-      mockPost.mockRejectedValue(new Error('quota exceeded'));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
+    resolveMint({});
 
-      const user = userEvent.setup();
-      await user.click(await screen.findByTestId('pick-agent-agent-2'));
+    await waitFor(() =>
+      expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/new-id-1'),
+    );
+  });
 
-      await waitFor(() => {
-        const newPane = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-          .find((p) => p.id !== paneId)!;
-        expect(newPane.scope).toBeNull();
-      });
-      expect(await screen.findAllByTestId('pane-picker')).toHaveLength(1);
+  it('holds the pane on a spinner while its mint is in flight, never a speculative terminal', async () => {
+    let resolveMint!: (value: unknown) => void;
+    mockPost.mockReturnValue(new Promise((resolve) => (resolveMint = resolve)));
+    withPicker();
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    await user.click(await screen.findByText('Researcher'));
+
+    // Neither the picker nor a surface — the pane is holding.
+    await waitFor(() => expect(screen.queryByText('Researcher')).toBeNull());
+    expect(screen.queryByTestId('pane-shell')).toBeNull();
+    expect(screen.queryByTestId('pane-chat')).toBeNull();
+
+    resolveMint({});
+    await waitFor(() => expect(nodeShowingChat('new-id-1')).toBeDefined());
+  });
+
+  it('cleans up the orphaned row when the pane is closed mid-mint', async () => {
+    let resolveMint!: (value: unknown) => void;
+    mockPost.mockReturnValue(new Promise((resolve) => (resolveMint = resolve)));
+    mockDel.mockResolvedValue({});
+    seat([rootNode, paneNode('n1', WS, 0, null), chatNode('n2', WS, 1, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    await user.click(await screen.findByText('Researcher'));
+    // The pane leaves the grid while its POST is still on the wire.
+    act(() => {
+      useAgentWorkspaceStore.getState().closePane(WS, 'n1');
+    });
+    resolveMint({});
+
+    await waitFor(() =>
+      expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/new-id-1'),
+    );
+  });
+});
+
+describe('AgentPanes — the picker', () => {
+  const withPicker = () => seat([rootNode, paneNode('n1', WS, 0, null)], []);
+
+  it('opens a shell and binds the pane to it', async () => {
+    mockPost.mockResolvedValue({ shell: { shellId: 'shell-9', name: 'shell-1' } });
+    withPicker();
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    await user.click(await screen.findByText('Shell'));
+
+    await waitFor(() =>
+      expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells', { activeNodeId: 'n1' }),
+    );
+    await waitFor(() => expect(nodeById('n1')).toMatchObject({ target: { kind: 'terminal', id: 'shell-9' } }));
+  });
+
+  it('opens the shell in the pane the user picked into, not whichever was empty first', async () => {
+    // The terminal's own version of the mint's blind placement: `spawnShell`
+    // ADMITS the same way a conversation does, so with two unbound panes the
+    // policy falls to `panes.find(canReplace)` — n1 — while the user clicked n2.
+    mockPost.mockResolvedValue({ shell: { shellId: 'shell-9', name: 'shell-1' } });
+    seat([rootNode, paneNode('n1', WS, 0, null), paneNode('n2', WS, 1, null)], []);
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    // The SECOND picker — the pane the user is actually looking at.
+    const pickers = await screen.findAllByText('Shell');
+    await user.click(pickers[1]);
+
+    await waitFor(() =>
+      expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells', { activeNodeId: 'n2' }),
+    );
+  });
+
+  it('closes a shell whose pane went away while it was being opened', async () => {
+    let resolveShell!: (value: unknown) => void;
+    mockPost.mockReturnValue(new Promise((resolve) => (resolveShell = resolve)));
+    seat([rootNode, paneNode('n1', WS, 0, null), chatNode('n2', WS, 1, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    await user.click(await screen.findByText('Shell'));
+    act(() => {
+      useAgentWorkspaceStore.getState().closePane(WS, 'n1');
+    });
+    resolveShell({ shell: { shellId: 'shell-9', name: 'shell-1' } });
+
+    await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells/shell-9'));
+  });
+
+  /**
+   * A shell already bound to a node ANYWHERE in the tree is not offered for
+   * reattach — the list reads every pane, not only the root's own children.
+   * This used to be stated with a PARKED holder, which was the only way to make
+   * "somewhere the picker is not looking" interesting.
+   */
+  it('does not offer a shell already bound to a node nested below a split', async () => {
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.includes('/shells')) return jsonOk({ shells: [{ shellId: 'shell-deep', name: 'deep shell' }] });
+      return jsonOk(defaultFetchRoute(url));
+    });
+    seat(
+      [
+        rootNode,
+        paneNode('n1', WS, 0, null),
+        { nodeType: 'split', id: 's1', parentId: WS, position: 1, axis: 'column' },
+        paneNode('held', 's1', 0, { kind: 'terminal', id: 'shell-deep' }),
+        paneNode('beside', 's1', 1, { kind: 'page', id: 'page-1' }),
+      ],
+      [],
+    );
+    renderPanes({ initialConversation: null });
+
+    await screen.findByText('Researcher');
+    expect(screen.queryByText('deep shell')).toBeNull();
+  });
+
+  it('binds a page directly, with no mint', async () => {
+    withPicker();
+    renderPanes({ initialConversation: null });
+    await screen.findByText('Researcher');
+    act(() => {
+      useAgentWorkspaceStore.getState().bindPane(WS, 'n1', { kind: 'page', id: 'page-1' });
+    });
+    expect(nodeById('n1')).toMatchObject({ target: { kind: 'page', id: 'page-1' } });
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+});
+
+describe('AgentPanes — the pane bar', () => {
+  /** Every interactive switch needs THIS workspace's entry in the switch-decision data first. */
+  async function findEnabledSelector(name: RegExp) {
+    const button = await screen.findByRole('button', { name });
+    await waitFor(() => expect(button).not.toBeDisabled());
+    return button;
+  }
+
+  it("shows the pane's own agent as its identity", async () => {
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    renderPanes();
+    expect(await screen.findByText('Researcher')).toBeDefined();
+  });
+
+  it('switching to an agent the workspace already has a thread with shows THAT thread, without minting', async () => {
+    // `conv-2` is a MEMBER, which under the node model means it has a node —
+    // membership is the node, so a thread in the workspace with no node is a
+    // state the model cannot hold (and the listing this used to read derived
+    // its rows from those same nodes, so it could not hold it either).
+    mockDel.mockResolvedValue({});
+    seat(
+      [rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')],
+      [CONV_1_TARGET, { id: 'conv-2', kind: 'chat', title: 'Second', lastMessageAt: null, agentPageId: 'agent-2' }],
+    );
+    const user = userEvent.setup();
+    // conv-2's pane renders as the HOST's own identity — a plain label, no
+    // second agent selector — so the only "Writer" control on screen is the
+    // menu item this test means to click.
+    renderPanes({ hostConversationId: 'conv-2' });
+
+    await screen.findAllByTestId('pane-chat');
+    // Opened by KEYBOARD, not pointer: in a split grid the resize handle's
+    // document-level pointer handling swallows Radix's open sequence under
+    // jsdom, and this suite's other selector tests only ever run single-pane.
+    // Enter on the focused trigger is the same open, through a path the
+    // harness does not interfere with.
+    (await findEnabledSelector(/Researcher/)).focus();
+    await user.keyboard('{Enter}');
+    await user.click(await screen.findByRole('menuitem', { name: /Writer/ }));
+
+    await waitFor(() => expect(nodeShowingChat('conv-2')).toBeDefined());
+    expect(mockPost).not.toHaveBeenCalled();
+    // And the outgoing thread's listing is closed — the fix for panes silently
+    // accumulating stray sidebar rows.
+    await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
+  });
+
+  /**
+   * THE AWAIT WINDOW. The MRU re-read made this handler suspend, and nothing
+   * invalidated an earlier invocation across it — so a pick the user had already
+   * replaced could resume and act on a decision computed two selections ago,
+   * taking the outgoing thread's DELETE with it.
+   */
+  it('a superseding pick on the same pane cancels the one waiting on the MRU re-read', async () => {
+    // agent-1 ("Researcher") has TWO threads here, so switching to it takes the
+    // re-read branch and suspends. agent-2 ("Writer") has none, so the second
+    // pick decides straight away and mints.
+    const nodeReads: Array<(value: unknown) => void> = [];
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/nodes')) return new Promise((resolve) => nodeReads.push(resolve));
+      return jsonOk(defaultFetchRoute(url));
+    });
+    mockPost.mockResolvedValue({});
+    mockDel.mockResolvedValue({});
+    seat(
+      [rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2'), chatNode('n3', WS, 2, 'conv-3')],
+      [
+        { id: 'conv-1', kind: 'chat', title: 'Assistant thread', lastMessageAt: null, agentPageId: null },
+        { id: 'conv-2', kind: 'chat', title: 'A', lastMessageAt: '2026-08-01T00:00:00.000Z', agentPageId: 'agent-1' },
+        { id: 'conv-3', kind: 'chat', title: 'B', lastMessageAt: '2026-08-02T00:00:00.000Z', agentPageId: 'agent-1' },
+      ],
+    );
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+    await screen.findAllByTestId('pane-chat');
+
+    const pick = async (agent: RegExp) => {
+      const trigger = await screen.findByRole('button', { name: /Assistant/ });
+      await waitFor(() => expect(trigger).not.toBeDisabled());
+      trigger.focus();
+      await user.keyboard('{Enter}');
+      await user.click(await screen.findByRole('menuitem', { name: agent }));
+    };
+
+    await pick(/Researcher/); // suspends on the re-read
+    await pick(/Writer/); // supersedes it, and mints
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+
+    // NOW let the first pick's re-read come back, so its handler resumes.
+    await act(async () => {
+      for (const resolve of nodeReads) resolve(jsonOk({ rev: 1, nodes: nodesNow(), targets: [] }));
+      await Promise.resolve();
     });
 
-    // review finding — chatgpt-codex-connector on PR #2299 (round 23): the
-    // round-10 fix bumped the closing pane's assignment token BEFORE
-    // deciding what the close actually does — including when the decision
-    // turns out to be a no-op (the grid-last pane's session-conversation
-    // listing hasn't resolved yet, so decideClosePane can't safely act).
-    // Invalidating a pending mint's token for a close that never actually
-    // happened left the mint's own completion treating itself as
-    // superseded, discarding its result without ever moving the pane out
-    // of its loading state — stuck spinning forever for nothing.
-    it('does not invalidate a pending mint when closing turns out to be a no-op (listing not yet resolved)', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url.includes('/api/agent-workspaces')) {
-          // Never resolves — closeDecisionListing stays null the whole test.
-          return new Promise(() => {});
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      let resolveMint!: (value: unknown) => void;
-      mockPost.mockReturnValue(new Promise((resolve) => (resolveMint = resolve)));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+    // Resuming, the stale pick would call `openConversation` for agent-1's
+    // most-recent thread — which is already on the grid, so it takes the FOCUS
+    // to that pane, off the conversation the second pick just made for the user.
+    const minted = nodeShowingChat('new-id-1');
+    expect(minted).toBeDefined();
+    expect(useAgentWorkspaceStore.getState().workspaces[WS].activeNodeId).toBe(minted!.id);
+  });
 
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      await user.click(await screen.findByRole('button', { name: 'create-new-from-history' })); // mint pending
+  /**
+   * THE SUPERSEDER THAT DOES NOT MINT. The guard above only sees a newer pick if
+   * that pick TOOK the pane's token, and until this was fixed only the mint
+   * branch did — so a newer switch that landed an EXISTING thread was invisible
+   * to it. The earlier, still-suspended switch would then resume against an
+   * unchanged token and act on top of it: a second DELETE for the outgoing
+   * thread, and the console selection dragged back to the agent the user had
+   * already replaced.
+   */
+  it('a superseding pick that lands an EXISTING thread also cancels the suspended one', async () => {
+    const seatedNodes = [
+      rootNode,
+      chatNode('n1', WS, 0, 'conv-1'),
+      chatNode('n2', WS, 1, 'conv-2'),
+      chatNode('n3', WS, 2, 'conv-3'),
+      chatNode('n4', WS, 3, 'conv-4'),
+    ];
+    const seatedTargets: WorkspaceNodeTarget[] = [
+      { id: 'conv-1', kind: 'chat', title: 'Assistant thread', lastMessageAt: null, agentPageId: null },
+      // Researcher has TWO, so switching to it suspends on the MRU re-read.
+      { id: 'conv-2', kind: 'chat', title: 'A', lastMessageAt: '2026-08-01T00:00:00.000Z', agentPageId: 'agent-1' },
+      { id: 'conv-3', kind: 'chat', title: 'B', lastMessageAt: '2026-08-02T00:00:00.000Z', agentPageId: 'agent-1' },
+      // Writer has ONE, so switching to it decides straight away — and lands an
+      // existing thread rather than minting.
+      { id: 'conv-4', kind: 'chat', title: 'C', lastMessageAt: '2026-08-03T00:00:00.000Z', agentPageId: 'agent-2' },
+    ];
+    let suspend = false;
+    const nodeReads: Array<(value: unknown) => void> = [];
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/nodes')) {
+        if (suspend) return new Promise((resolve) => nodeReads.push(resolve));
+        return jsonOk({ rev: 1, nodes: seatedNodes, targets: seatedTargets });
+      }
+      return jsonOk(defaultFetchRoute(url));
+    });
+    mockDel.mockResolvedValue({});
+    seat(seatedNodes, seatedTargets);
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+    await screen.findAllByTestId('pane-chat');
 
-      // Close the pane WHILE the mint is pending and the listing hasn't
-      // resolved — the grid's only pane, so this is a no-op (nothing to
-      // fall back to is confirmed yet).
-      await user.click(screen.getByLabelText('Close pane'));
-      // Still there — a no-op close doesn't remove anything.
-      expect(
-        useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
-      ).toHaveLength(1);
+    const pick = async (agent: RegExp) => {
+      const trigger = await findEnabledSelector(/Assistant/);
+      trigger.focus();
+      await user.keyboard('{Enter}');
+      await user.click(await screen.findByRole('menuitem', { name: agent }));
+    };
 
-      // The mint then succeeds — must land normally, not be discarded as
-      // "superseded" by the no-op close attempt.
+    suspend = true;
+    await pick(/Researcher/); // suspends on the re-read
+    await pick(/Writer/); // decides at once, and lands conv-4 here
+    await waitFor(() => expect(conversationDeletes()).toContain('/api/agent-workspaces/ses-1/conversations/conv-1'));
+
+    // NOW let the suspended pick's re-read come back.
+    await act(async () => {
+      for (const resolve of nodeReads) resolve(jsonOk({ rev: 1, nodes: seatedNodes, targets: seatedTargets }));
+      await Promise.resolve();
+    });
+
+    // It must not decide again on top of the pick that replaced it. The outgoing
+    // thread is closed ONCE, by the switch that actually owns the pane.
+    expect(
+      conversationDeletes().filter((url) => url === '/api/agent-workspaces/ses-1/conversations/conv-1'),
+    ).toHaveLength(1);
+  });
+
+  /**
+   * A FAILED RE-READ IS NOT A REASON TO REFUSE THE SWITCH — the stale ordering
+   * is still a real answer, and it is the one already on screen.
+   *
+   * The claim worth pinning is that the failure never reaches the caller:
+   * `refreshWorkspaceSnapshot` wraps its whole body and reports failure as
+   * `false`, so this handler resumes normally, keeps the candidates it had, and
+   * runs the token check — rather than rejecting out of a `void`-ed call and
+   * leaving the user's pick to do nothing at all.
+   */
+  it('switches on the stale ordering when the MRU re-read fails', async () => {
+    const seatedNodes = [
+      rootNode,
+      chatNode('n1', WS, 0, 'conv-1'),
+      chatNode('n2', WS, 1, 'conv-2'),
+      chatNode('n3', WS, 2, 'conv-3'),
+    ];
+    const seatedTargets: WorkspaceNodeTarget[] = [
+      { id: 'conv-1', kind: 'chat', title: 'Assistant thread', lastMessageAt: null, agentPageId: null },
+      { id: 'conv-2', kind: 'chat', title: 'A', lastMessageAt: '2026-08-01T00:00:00.000Z', agentPageId: 'agent-1' },
+      { id: 'conv-3', kind: 'chat', title: 'B', lastMessageAt: '2026-08-02T00:00:00.000Z', agentPageId: 'agent-1' },
+    ];
+    // Healthy until the pick, so the grid mounts on a real snapshot; the re-read
+    // the switch itself makes is the one that fails.
+    let failNodeReads = false;
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/nodes')) {
+        if (failNodeReads) throw new Error('offline');
+        return jsonOk({ rev: 1, nodes: seatedNodes, targets: seatedTargets });
+      }
+      return jsonOk(defaultFetchRoute(url));
+    });
+    mockDel.mockResolvedValue({});
+    seat(seatedNodes, seatedTargets);
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+    await screen.findAllByTestId('pane-chat');
+
+    failNodeReads = true;
+    // Researcher has TWO threads here, so this takes the re-read branch.
+    const trigger = await findEnabledSelector(/Assistant/);
+    trigger.focus();
+    await user.keyboard('{Enter}');
+    await user.click(await screen.findByRole('menuitem', { name: /Researcher/ }));
+
+    // It still decides, on the ordering it already had: conv-3 is the most
+    // recently active of Researcher's two, so the focus lands on its pane.
+    // IT STILL DECIDED, on the ordering it already had. Both halves matter:
+    // reaching the outgoing thread's DELETE means the handler resumed past the
+    // failed re-read and ran its token check rather than rejecting out of a
+    // `void`-ed call; and never POSTing means it found Researcher's thread in
+    // the stale candidate list instead of concluding there was none and minting
+    // a duplicate.
+    await waitFor(() =>
+      expect(conversationDeletes()).toContain('/api/agent-workspaces/ses-1/conversations/conv-1'),
+    );
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  /**
+   * THE SAME WINDOW, FROM THE OTHER SIDE. Guarding the await above needs a token
+   * saying who owns this pane — but TAKING one to find out is itself a write,
+   * and this handler can still decide it has nothing to do: re-picking the agent
+   * a pane already shows is `noop`. A token claimed on that path invalidates a
+   * mint in flight for the same pane, and that mint answers supersession by
+   * DELETING the conversation it just created — the pane appearing and then
+   * silently vanishing, which is the defect this branch exists to fix, arriving
+   * through a narrower door. So the guard PEEKS across the await, leaving the
+   * claim to the mint that actually rebinds the pane.
+   */
+  it('re-picking the agent a pane already shows does not cancel a mint in flight for it', async () => {
+    let resolveMint!: (value: unknown) => void;
+    mockPost.mockReturnValue(new Promise((resolve) => (resolveMint = resolve)));
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes();
+
+    await screen.findByTestId('pane-chat');
+
+    // Switch to Writer, who has no thread here: a mint, held in flight. The pane
+    // is BOUND, so it goes on showing conv-1 — and its selector goes on saying
+    // "Researcher" — for the whole round trip.
+    await user.click(await findEnabledSelector(/Researcher/));
+    await user.click(await screen.findByRole('menuitem', { name: /Writer/ }));
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+
+    // Now re-pick the agent already on screen. `selectPaneAgent` answers `noop`:
+    // nothing about this pane changes, so nothing may be invalidated either.
+    await user.click(await findEnabledSelector(/Researcher/));
+    await user.click(await screen.findByRole('menuitem', { name: /Researcher/ }));
+
+    await act(async () => {
       resolveMint({});
-      await waitFor(() => {
-        const pane = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-          .find((p) => p.id === paneId);
-        expect(pane?.scope?.targetId).toBe('new-id-1');
-      });
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/new-id-1');
+      await Promise.resolve();
     });
 
-    // review finding — chatgpt-codex-connector on PR #2299 (round 13): unlike
-    // the picker-flow test above (nothing to lose), "New Conversation" picked
-    // from a pane's OWN History tab starts from a pane already showing a
-    // real, working conversation. The unconditional reset-to-picker on
-    // failure lost that conversation to a blank picker for no reason — a
-    // transient failure (session full, network drop) should not cost the
-    // user a working conversation they never asked to leave.
-    it('given "New Conversation" from History fails, restores the prior working conversation instead of resetting to the picker', async () => {
-      mockPost.mockRejectedValue(new Error('session full'));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+    // The mint lands, and nothing tore it down on the way.
+    await waitFor(() => expect(nodeShowingChat('new-id-1')).toBeDefined());
+    expect(conversationDeletes()).not.toContain('/api/agent-workspaces/ses-1/conversations/new-id-1');
+  });
 
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
-      await user.click(await screen.findByRole('button', { name: 'create-new-from-history' }));
+  it('switching to an agent with no thread here mints one', async () => {
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    mockPost.mockResolvedValue({});
+    mockDel.mockResolvedValue({});
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes();
 
-      await waitFor(() => {
-        const pane = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-          .find((p) => p.id === paneId);
-        // Restored to the ORIGINAL working conversation, not reset to a
-        // blank picker and not left on the failed mint's loading sentinel.
-        expect(pane?.scope?.targetId).toBe('conv-1');
-      });
-      // Stayed on History — the failed create never landed, so the tab
-      // switch to Chat that would follow a successful one never fires.
-      expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
+    await screen.findByTestId('pane-chat');
+    await user.click(await findEnabledSelector(/Researcher/));
+    await user.click(await screen.findByText('Writer'));
+
+    await waitFor(() =>
+      expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-2/conversations', {
+        conversationId: 'new-id-1',
+        sessionId: 'ses-1',
+        activeNodeId: 'n1',
+      }),
+    );
+  });
+
+  /**
+   * A REPLACEMENT PARKS THE OUTGOING NODE. It used to be re-pointed in place,
+   * which made "this rectangle" and "this conversation" the same object; here
+   * the old node keeps its binding and stays a member until its listing closes.
+   */
+  it('DESTROYS the outgoing node rather than re-pointing it', async () => {
+    // Exercised through the MINT branch, which is where the replacement is
+    // PLACED into this node's slot. (The focus-existing branch reaches the same
+    // end by a different road — the outgoing thread's DELETE expels its node
+    // server-side — which the test above pins.)
+    mockPost.mockResolvedValue({});
+    mockDel.mockResolvedValue({});
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes();
+
+    await screen.findByTestId('pane-chat');
+    await user.click(await findEnabledSelector(/Researcher/));
+    await user.click(await screen.findByText('Writer'));
+
+    // A binding is for life, so the switch does not re-point this node — it
+    // takes the node away and puts a new one in its slot. The node used to
+    // survive parked, keeping its binding; there is nowhere for it to survive.
+    await waitFor(() => expect(nodeById('n1')).toBeUndefined());
+    expect(panesNow().some((node) => node.target?.kind === 'chat' && node.target.id === 'new-id-1')).toBe(true);
+  });
+
+  it("is disabled while a thread's facts are still being fetched — the switch can't decide against a partial list", async () => {
+    // Exactly what a structural `session:<id>` broadcast produces: another
+    // member placed `conv-2`, so it is a MEMBER immediately, but the broadcast
+    // carries no per-viewer facts and its agent is unknown here. Deciding
+    // against the resolved subset alone would read "no thread for this agent"
+    // and mint a duplicate. The re-read is held open, so this is the window
+    // where the answer is genuinely still coming.
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/nodes')) return new Promise<never>(() => {});
+      return jsonOk(defaultFetchRoute(url));
     });
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')], [CONV_1_TARGET]);
+    renderPanes();
+    expect(await screen.findByRole('button', { name: /Researcher/ })).toBeDisabled();
+  });
 
-    // review finding — chatgpt-codex-connector on PR #2299 (round 14): two
-    // mints for the SAME pane install the identical, indistinguishable
-    // loading scope — without a per-call token, the OLDER one's failure
-    // could restore over the NEWER one's still-pending (and about to
-    // succeed) mint, which then finds itself "superseded" and discards its
-    // own just-created row.
-    it('given New Conversation is clicked twice before either settles, an older rejection does not clobber the still-pending newer mint', async () => {
-      let rejectOlder!: (reason: unknown) => void;
-      let resolveNewer!: (value: unknown) => void;
-      mockPost
-        .mockReturnValueOnce(new Promise((_resolve, reject) => (rejectOlder = reject)))
-        .mockReturnValueOnce(new Promise((resolve) => (resolveNewer = resolve)));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+  /**
+   * AND IT COMES BACK. A missing target entry means "gone, or not readable by
+   * this viewer" exactly as often as "not fetched yet" — the two are
+   * deliberately indistinguishable — so a thread that was simply DELETED would
+   * otherwise leave the switcher and New Conversation dead for the rest of the
+   * session, however many times we asked. Once the re-read has been answered,
+   * whatever is still missing is missing for good.
+   */
+  it('arms once the re-read has been answered, even if the facts never arrived', async () => {
+    // The default route answers the nodes GET with a non-snapshot body, so the
+    // probe settles WITHOUT resolving conv-2 — a permanently absent target.
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')], [CONV_1_TARGET]);
+    renderPanes();
+    await waitFor(async () =>
+      expect(await screen.findByRole('button', { name: /Researcher/ })).not.toBeDisabled(),
+    );
+  });
 
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      await user.click(await screen.findByRole('button', { name: 'create-new-from-history' })); // older, pending
-      await user.click(await screen.findByRole('button', { name: 'create-new-from-history' })); // newer, pending
-
-      // The OLDER mint rejects first — must be a no-op (superseded), not a
-      // restore, since the newer mint is still pending and about to land.
-      rejectOlder(new Error('transient'));
-      await act(async () => {
-        await Promise.resolve();
-      });
-
-      // The NEWER mint then succeeds — must land normally.
-      resolveNewer({});
-      await waitFor(() => {
-        const pane = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-          .find((p) => p.id === paneId);
-        expect(pane?.scope?.targetId).toBe('new-id-2');
-      });
-      // Not cleaned up as if it had been superseded.
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/new-id-2');
+  /**
+   * A DROPPED READ ANSWERS NOTHING. `refreshWorkspaceSnapshot` reports failure
+   * as `false` rather than throwing, and arming on it conflates "we asked and
+   * these facts are not ours to have" with "we never got to ask" — so one
+   * dropped request at the moment another member's thread lands would arm
+   * readiness against a list missing that thread, and the switch would then read
+   * "no thread for this agent" and mint a DUPLICATE of a conversation that is
+   * sitting right there.
+   */
+  it('does not arm on a read that failed — it asks once more before believing the list', async () => {
+    // conv-2 is a member with no facts. The first probe read FAILS; the second
+    // carries the facts, and identifies conv-2 as Researcher's existing thread.
+    const resolved: WorkspaceNodeTarget[] = [
+      CONV_1_TARGET,
+      { id: 'conv-2', kind: 'chat', title: 'Theirs', lastMessageAt: null, agentPageId: 'agent-2' },
+    ];
+    const nodes = [rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')];
+    // Read 1 is the mount's own, and answers WITHOUT conv-2's facts — which is
+    // what leaves the directory unresolved and starts the probe. Read 2 is that
+    // probe, and it is the one that gets dropped.
+    let nodeReads = 0;
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/nodes')) {
+        nodeReads += 1;
+        if (nodeReads === 1) return jsonOk({ rev: 1, nodes, targets: [CONV_1_TARGET] });
+        if (nodeReads === 2) throw new Error('dropped');
+        return jsonOk({ rev: 2, nodes, targets: resolved });
+      }
+      return jsonOk(defaultFetchRoute(url));
     });
+    mockPost.mockResolvedValue({});
+    mockDel.mockResolvedValue({});
+    seat(nodes, [CONV_1_TARGET]);
+    const user = userEvent.setup();
+    // conv-2's pane renders as the HOST's own identity, so the only "Researcher"
+    // control on screen is n1's selector.
+    renderPanes({ hostConversationId: 'conv-2' });
 
-    // review finding — chatgpt-codex-connector on PR #2299 (round 15): the
-    // round-13 restore-on-failure fix re-read "the pane's live scope" fresh
-    // at the start of EVERY mint call — for a SECOND overlapping mint,
-    // that live scope is already the FIRST mint's own loading sentinel, not
-    // the true original conversation. A failed second mint then "restored"
-    // that sentinel, leaving the pane stuck spinning forever.
-    it('given New Conversation is clicked twice before either settles and BOTH fail, restores the TRUE original conversation, not an intermediate loading sentinel', async () => {
-      let rejectOlder!: (reason: unknown) => void;
-      let rejectNewer!: (reason: unknown) => void;
-      mockPost
-        .mockReturnValueOnce(new Promise((_resolve, reject) => (rejectOlder = reject)))
-        .mockReturnValueOnce(new Promise((_resolve, reject) => (rejectNewer = reject)));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+    await screen.findAllByTestId('pane-chat');
+    const trigger = await screen.findByRole('button', { name: /Researcher/ });
+    await waitFor(() => expect(trigger).not.toBeDisabled());
+    trigger.focus();
+    await user.keyboard('{Enter}');
+    await user.click(await screen.findByRole('menuitem', { name: /Writer/ }));
 
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      await user.click(await screen.findByRole('button', { name: 'create-new-from-history' })); // older, pending
-      await user.click(await screen.findByRole('button', { name: 'create-new-from-history' })); // newer, pending
+    // The switch found Writer's thread and showed it, closing the outgoing one.
+    // A POST would mean the retry never happened, the partial list was believed,
+    // and a DUPLICATE of conv-2 was minted alongside it.
+    await waitFor(() => expect(conversationDeletes()).toContain('/api/agent-workspaces/ses-1/conversations/conv-1'));
+    expect(mockPost).not.toHaveBeenCalled();
+  });
 
-      // The OLDER mint rejects first — superseded, no-op.
-      rejectOlder(new Error('transient'));
-      await act(async () => {
-        await Promise.resolve();
-      });
+  it('is enabled once every thread in the workspace has its facts', async () => {
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    renderPanes();
+    expect(await screen.findByRole('button', { name: /Researcher/ })).not.toBeDisabled();
+  });
 
-      // The NEWER (current) mint then ALSO rejects — must restore the
-      // ORIGINAL conv-1, not the older mint's own loading sentinel.
-      rejectNewer(new Error('session full'));
-      await waitFor(() => {
-        const pane = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-          .find((p) => p.id === paneId);
-        expect(pane?.scope?.targetId).toBe('conv-1');
-      });
+  /**
+   * THE SHARED-WORKSPACE CASE, which is why the grid stopped reading
+   * `GET /api/agent-workspaces` at all: every filter on that listing carries
+   * `ownerId`, so a workspace owned by another drive member is never in it. The
+   * grid reached this workspace through drive MEMBERSHIP, and the tree answers
+   * through that same gate — so the controls come alive on a workspace the
+   * listing will never mention.
+   */
+  it("enables the switch for a workspace the ownership listing never returns — a colleague's workspace", async () => {
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      // The listing answers as it does for a workspace you do not own: no row,
+      // ever, however long you wait.
+      if (url !== SESSION_RECORD_URL && url.includes('/api/agent-workspaces') && !url.endsWith('/nodes')) {
+        return jsonOk({ sessions: [] });
+      }
+      return jsonOk(defaultFetchRoute(url));
     });
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    renderPanes();
 
-    // review finding — chatgpt-codex-connector on PR #2299 (round 14): the
-    // pane's captured priorScope can itself go stale — if the conversation
-    // it points at is deleted from History (elsewhere) while this mint is
-    // still pending, restoring it on failure would bind the pane to a
-    // transcript that already 404s on send.
-    it('given the prior conversation is deleted from History while New Conversation is pending and the mint then fails, resets to the picker instead of restoring the deleted conversation', async () => {
-      // Inline fixture — `conversationsFixture` below is scoped to a
-      // different (later) describe block.
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return jsonOk({
-            conversations: [
-              {
-                id: 'conv-1',
-                title: 'Conversation',
-                preview: '',
-                createdAt: new Date('2026-01-01').toISOString(),
-                updatedAt: new Date('2026-01-01').toISOString(),
-                messageCount: 1,
-                sessionId: null,
-                lastMessage: { role: 'user', timestamp: new Date('2026-01-01').toISOString() },
-              },
-            ],
-          });
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      let rejectMint!: (reason: unknown) => void;
-      mockPost.mockReturnValue(new Promise((_resolve, reject) => (rejectMint = reject)));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+    expect(await screen.findByRole('button', { name: /Researcher/ })).not.toBeDisabled();
+  });
 
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      // Confirm the History list (including conv-1) has actually loaded
-      // before starting the mint below.
-      await screen.findByRole('button', { name: 'delete-conv-1' });
-      await user.click(await screen.findByRole('button', { name: 'create-new-from-history' })); // mint pending
+  it('has History and Settings tabs that switch the pane body', async () => {
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes();
 
-      // The prior conversation (conv-1) is deleted from History while the
-      // mint above is still pending — the pane's own scope is the generic
-      // loading sentinel at this point, so the delete's own affected-panes
-      // scan can't identify and reset this pane directly.
-      await user.click(await screen.findByRole('button', { name: 'delete-conv-1' }));
-      await waitFor(() =>
-        expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations/conv-1', { method: 'DELETE' }),
-      );
+    await screen.findByTestId('pane-chat');
+    await user.click(await screen.findByRole('tab', { name: /history/i }));
+    expect(await screen.findByTestId('pane-history-tab')).toBeDefined();
 
-      // NOW the mint fails — must NOT restore the pane to the just-deleted
-      // conv-1; falls back to the picker instead.
-      rejectMint(new Error('quota exceeded'));
-      await waitFor(() => {
-        const pane = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-          .find((p) => p.id === paneId);
-        expect(pane?.scope?.targetId).not.toBe('conv-1');
-      });
-    });
+    await user.click(await screen.findByRole('tab', { name: /settings/i }));
+    expect(await screen.findByTestId('pane-settings-tab')).toBeDefined();
+  });
 
-    it('a pane closed mid-mint does not resurrect once the POST resolves, and the orphaned row is cleaned up', async () => {
-      let resolvePost!: (value: unknown) => void;
-      mockPost.mockReturnValue(new Promise((resolve) => (resolvePost = resolve)));
-      mockDel.mockResolvedValue(undefined);
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
+  it('hides the Settings tab for the Assistant, which has no agent page', async () => {
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: null }]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')], [{ ...CONV_1_TARGET, agentPageId: null }]);
+    renderPanes();
 
-      const user = userEvent.setup();
-      await user.click(await screen.findByTestId('pick-agent-agent-2'));
-      const mintingPaneId = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id !== firstPaneId)!.id;
+    await screen.findByTestId('pane-chat');
+    expect(await screen.findByRole('tab', { name: /history/i })).toBeDefined();
+    expect(screen.queryByRole('tab', { name: /settings/i })).toBeNull();
+  });
+});
 
-      // The user closes the still-minting pane before the network resolves.
-      act(() => {
-        useAgentWorkspaceStore.getState().closePane('ses-1', mintingPaneId);
-      });
-      expect(
-        useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
-      ).toHaveLength(1);
-
-      resolvePost({});
-
-      await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/new-id-1'),
-      );
-      // Still just the one pane — the resolved mint did not resurrect it.
-      expect(
-        useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
-      ).toHaveLength(1);
-    });
-
-    it('a pane REBOUND to another listing mid-mint does not get clobbered once the abandoned mint resolves', async () => {
-      // A grid-last close can rebind this exact pane to a different open
-      // conversation while a mint it started is still in flight — the
-      // mint's own completion must see that and clean up rather than
-      // overwrite the rebind with its own now-abandoned result.
-      let resolvePost!: (value: unknown) => void;
-      mockPost.mockReturnValue(new Promise((resolve) => (resolvePost = resolve)));
-      mockDel.mockResolvedValue(undefined);
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByTestId('pick-agent-agent-2'));
-      const mintingPaneId = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id !== firstPaneId)!.id;
-
-      // Simulate a grid-last close rebinding THIS pane to another already-open
-      // conversation, exactly as `handleClosePane`'s `rebind-pane` branch does
-      // — while the mint above is still awaiting its POST.
-      act(() => {
-        useAgentWorkspaceStore.getState().assignPane('ses-1', mintingPaneId, {
-          kind: 'chat',
-          name: 'Conversation',
-          targetId: 'rebound-conv',
-          agentPageId: 'agent-3',
+describe('AgentPanes — a History delete', () => {
+  /**
+   * A binding is for life, so a pane showing a deleted transcript cannot be
+   * emptied in place: the node is destroyed and a fresh unbound one takes its
+   * slot. The user keeps a pane where they had one, showing the picker.
+   */
+  /** The agent's own History list — a separate read from the workspace listing. */
+  function mockAgentHistory() {
+    const base = mockFetchWithAuth.getMockImplementation()!;
+    mockFetchWithAuth.mockImplementation(async (url: string, init?: { method?: string }) => {
+      if (url === '/api/ai/page-agents/agent-1/conversations' && init?.method !== 'DELETE') {
+        return jsonOk({
+          conversations: [
+            {
+              id: 'conv-1',
+              title: 'First chat',
+              preview: '',
+              createdAt: new Date('2026-01-01').toISOString(),
+              updatedAt: new Date('2026-01-01').toISOString(),
+              messageCount: 1,
+              sessionId: 'ses-1',
+              isOwner: true,
+              lastMessage: { role: 'user', timestamp: new Date('2026-01-01').toISOString() },
+            },
+          ],
         });
-      });
-
-      resolvePost({});
-
-      await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/new-id-1'),
-      );
-      // The rebind survives — still pointed at the OTHER conversation, not
-      // silently overwritten by the abandoned mint's own conversationId.
-      const pane = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id === mintingPaneId)!;
-      expect(pane.scope).toMatchObject({ targetId: 'rebound-conv', agentPageId: 'agent-3' });
+      }
+      return base(url, init);
     });
+  }
 
-    it('a pane REBOUND to another listing mid-mint survives a REJECTED mint too, not just a resolved one', async () => {
-      // Same rebind-survives rule as the success-path test above, but for the
-      // catch branch: a mint that fails outright must not reset a pane a
-      // grid-last close already rebound to something else while the request
-      // was in flight (round-4b review — the earlier fix only guarded the
-      // success path's assignPane call, not the catch block's resetPane).
-      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      let rejectPost!: (error: unknown) => void;
-      mockPost.mockReturnValue(new Promise((_resolve, reject) => (rejectPost = reject)));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
+  it('replaces every node showing the deleted thread with a fresh unbound pane', async () => {
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    mockAgentHistory();
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-9')]);
+    const user = userEvent.setup();
+    renderPanes();
 
-      const user = userEvent.setup();
-      await user.click(await screen.findByTestId('pick-agent-agent-2'));
-      const mintingPaneId = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id !== firstPaneId)!.id;
+    await screen.findAllByTestId('pane-chat');
+    await user.click(screen.getAllByRole('tab', { name: /history/i })[0]);
+    await user.click(await screen.findByText('delete-conv-1'));
 
-      act(() => {
-        useAgentWorkspaceStore.getState().assignPane('ses-1', mintingPaneId, {
-          kind: 'chat',
-          name: 'Conversation',
-          targetId: 'rebound-conv',
-          agentPageId: 'agent-3',
+    await waitFor(() => expect(nodeShowingChat('conv-1')).toBeUndefined());
+    // Same pane count — the rectangle survived, its binding did not.
+    expect(panesNow().filter((node) => node.parentId !== null)).toHaveLength(2);
+    expect(panesNow().some((node) => node.target === null)).toBe(true);
+  });
+
+  /**
+   * The host pane's bar carries a History tab now (it didn't used to — see
+   * the identity-slot fix above), so deleting the page's OWN hosted
+   * conversation from inside the grid is reachable for the first time.
+   * Unbinding the node alone would leave `AgentPageView`'s `current` state
+   * pointed at a conversation that no longer exists, with nothing to notice
+   * (review finding — chatgpt-codex-connector). This reuses the SAME
+   * `onConversationClosed` event a manual pane close already reports, which
+   * `AgentPageView`'s handler already turns into a `mintReplacementForCurrent`
+   * when `next` is null — no new recovery path, just routing this delete
+   * through the existing one.
+   */
+  it("notifies the host recovery path when the DELETED conversation is the page's own hosted one", async () => {
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    mockAgentHistory();
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const onConversationClosed = vi.fn();
+    const user = userEvent.setup();
+    renderPanes({ hostConversationId: 'conv-1', onConversationClosed });
+
+    await screen.findByTestId('pane-chat');
+    await user.click(await screen.findByRole('tab', { name: /history/i }));
+    await user.click(await screen.findByText('delete-conv-1'));
+
+    await waitFor(() =>
+      expect(onConversationClosed).toHaveBeenCalledWith({
+        conversationId: 'conv-1',
+        next: null,
+        nextAgentPageId: null,
+      }),
+    );
+  });
+
+  it("does NOT notify the host recovery path for a delete that ISN'T the hosted conversation", async () => {
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    mockAgentHistory();
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const onConversationClosed = vi.fn();
+    const user = userEvent.setup();
+    // Hosted conversation is a DIFFERENT one — this pane's own delete is a
+    // split pane's own history, not the page's tracked conversation.
+    renderPanes({ hostConversationId: 'conv-2', onConversationClosed });
+
+    await screen.findByTestId('pane-chat');
+    await user.click(await screen.findByRole('tab', { name: /history/i }));
+    await user.click(await screen.findByText('delete-conv-1'));
+
+    await waitFor(() => expect(nodeShowingChat('conv-1')).toBeUndefined());
+    expect(onConversationClosed).not.toHaveBeenCalled();
+  });
+
+  it('still notifies the host recovery path even if the workspace was forgotten while the DELETE was in flight (session-end race)', async () => {
+    // The notification does not depend on the workspace still being in the
+    // store — a concurrent session-end (the sidebar's own independent
+    // end-session path) can forget it before this DELETE's own round trip
+    // resolves. Simulated by holding the DELETE pending, forgetting the
+    // workspace while it's in flight, then letting it resolve.
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    let resolveDelete!: (value: { ok: boolean; json: () => Promise<unknown> }) => void;
+    const base = mockFetchWithAuth.getMockImplementation()!;
+    mockFetchWithAuth.mockImplementation(async (url: string, init?: { method?: string }) => {
+      if (url === '/api/ai/page-agents/agent-1/conversations' && init?.method !== 'DELETE') {
+        return jsonOk({
+          conversations: [
+            {
+              id: 'conv-1',
+              title: 'First chat',
+              preview: '',
+              createdAt: new Date('2026-01-01').toISOString(),
+              updatedAt: new Date('2026-01-01').toISOString(),
+              messageCount: 1,
+              sessionId: 'ses-1',
+              isOwner: true,
+              lastMessage: { role: 'user', timestamp: new Date('2026-01-01').toISOString() },
+            },
+          ],
         });
-      });
-
-      act(() => {
-        rejectPost(new Error('quota exceeded'));
-      });
-
-      await waitFor(() => expect(consoleErrorSpy).toHaveBeenCalled());
-      // The rebind survives the rejection too — not reset to a dead sentinel.
-      const pane = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id === mintingPaneId)!;
-      expect(pane.scope).toMatchObject({ targetId: 'rebound-conv', agentPageId: 'agent-3' });
-      consoleErrorSpy.mockRestore();
+      }
+      if (init?.method === 'DELETE') return new Promise((resolve) => (resolveDelete = resolve));
+      return base(url, init);
     });
-  });
-
-  describe('a global-assistant session (driveId null)', () => {
-    beforeEach(() => {
-      // Genuinely cross-drive (unlike the shared drive-1-only default
-      // fixture): proves the picker aggregates across every accessible
-      // drive, not just whichever single drive the fixture happens to use
-      // (a narrower, buggy filter could pass against a single-drive fixture
-      // by coincidence).
-      mockUsePageAgents.mockReturnValue({
-        allAgents: [
-          { id: 'agent-1', title: 'Researcher', driveId: 'drive-1', driveName: 'Alpha' },
-          { id: 'agent-2', title: 'Writer', driveId: 'drive-2', driveName: 'Beta' },
-        ],
-        isLoading: false,
-      });
-    });
-
-    it('offers every accessible agent across drives, not an empty list', async () => {
-      renderPanes({
-        driveId: null,
-        initialConversation: { conversationId: 'conv-1', agentPageId: null, name: 'Conversation' },
-      });
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
-
-      // Both cross-drive fixture agents show up — the picker used to be
-      // unconditionally empty for a null driveId (`enabled: driveId !== null`
-      // plus a `agent.driveId === driveId` filter that could never match).
-      expect(await screen.findByTestId('pick-agent-agent-1')).toBeInTheDocument();
-      expect(screen.getByTestId('pick-agent-agent-2')).toBeInTheDocument();
-      expect(screen.getByTestId('pick-global-assistant')).toBeInTheDocument();
-      // Cross-drive entries are labeled with their own drive — page titles
-      // aren't unique, so two drives can hold identically-titled agents that
-      // would otherwise be indistinguishable in the list.
-      expect(within(screen.getByTestId('pick-agent-agent-1')).getByText('Alpha')).toBeInTheDocument();
-      expect(within(screen.getByTestId('pick-agent-agent-2')).getByText('Beta')).toBeInTheDocument();
-    });
-
-    it('mints a picked cross-drive agent into the session, same as a drive session would', async () => {
-      mockPost.mockResolvedValue({});
-      renderPanes({
-        driveId: null,
-        initialConversation: { conversationId: 'conv-1', agentPageId: null, name: 'Conversation' },
-      });
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByTestId('pick-agent-agent-2'));
-
-      await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-2/conversations', {
-          conversationId: 'new-id-1',
-          sessionId: 'ses-1',
-        }),
-      );
-      await waitFor(() => expect(screen.getAllByTestId('pane-chat')).toHaveLength(2));
-    });
-  });
-
-  describe('picking a shell', () => {
-    it('opens a shell in the session and binds the pane to it', async () => {
-      mockPost.mockResolvedValue({ shell: { shellId: 'shell-9', name: 'shell-1' } });
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByTestId('pick-shell'));
-
-      await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells', {}),
-      );
-      await waitFor(() => expect(screen.getByTestId('pane-shell')).toHaveTextContent('shell-9'));
-    });
-
-    it('disables the Shell pick when the session record reports the payer as sandbox-ineligible', async () => {
-      // The server-resolved answer (useSessionRecord's `sandboxEligible`),
-      // not the viewing user's own tier — a free-tier member of a Pro-owned
-      // drive would otherwise see this wrongly disabled.
-      mockFetchWithAuth.mockImplementation(async (url: string) =>
-        url === '/api/agent-workspaces/ses-1'
-          ? jsonOk({ session: { driveId: 'drive-1', name: 'worker' }, sandboxEligible: false })
-          : jsonOk(defaultFetchRoute(url)),
-      );
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
-
-      const shellButton = await screen.findByTestId('pick-shell');
-      await waitFor(() => expect(shellButton).toBeDisabled());
-
-      const user = userEvent.setup({ pointerEventsCheck: 0 });
-      await user.click(shellButton);
-      expect(mockPost).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/shells', {});
-    });
-  });
-
-  describe('reattaching an existing shell (finding 3)', () => {
-    it('offers a shell not currently shown in any pane, and binds it with no POST', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) =>
-        url.includes('/shells')
-          ? jsonOk({ shells: [{ shellId: 'shell-old', name: 'build' }] })
-          : jsonOk(defaultFetchRoute(url)),
-      );
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByTestId('reattach-shell-shell-old'));
-
-      expect(mockPost).not.toHaveBeenCalled();
-      await waitFor(() => expect(screen.getByTestId('pane-shell')).toHaveTextContent('shell-old'));
-    });
-
-    it('does not offer a shell already bound to a pane in this grid', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) =>
-        url.includes('/shells')
-          ? jsonOk({ shells: [{ shellId: 'shell-bound', name: 'build' }] })
-          : jsonOk(defaultFetchRoute(url)),
-      );
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const chatPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', chatPaneId));
-      const termPaneId = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id !== chatPaneId)!.id;
-      act(() =>
-        useAgentWorkspaceStore
-          .getState()
-          .assignPane('ses-1', termPaneId, { kind: 'terminal', name: 'build', targetId: 'shell-bound', agentPageId: null }),
-      );
-
-      act(() => useAgentWorkspaceStore.getState().splitDown('ses-1', termPaneId));
-
-      await waitFor(() =>
-        expect(screen.queryByTestId('reattach-shell-shell-bound')).not.toBeInTheDocument(),
-      );
-    });
-  });
-
-  describe('keyboard activation (finding 7)', () => {
-    it('focusing a control inside a pane activates it, not only a click', async () => {
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
-      // The split focused the new pane; move active back to the first so the
-      // test can prove a FOCUS (not a click) moves it again.
-      act(() => useAgentWorkspaceStore.getState().selectPane('ses-1', firstPaneId));
-
-      const closeButtons = screen.getAllByLabelText('Close pane');
-      act(() => closeButtons[closeButtons.length - 1].focus());
-
-      await waitFor(() =>
-        expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].activePaneId).not.toBe(firstPaneId),
-      );
-    });
-  });
-
-  describe('the pane bar agent selector (restored /development AISelector)', () => {
-    /** Every interactive test needs THIS session's entry present in the switch-decision data first — see the readiness tests below for why. */
-    async function findEnabledSelector(name: RegExp) {
-      const button = await screen.findByRole('button', { name });
-      await waitFor(() => expect(button).not.toBeDisabled());
-      return button;
-    }
-
-    it("shows the pane's current agent as the bar identity", async () => {
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      expect(await screen.findByRole('button', { name: /Researcher/ })).toBeInTheDocument();
-    });
-
-    describe('hostConversationId — the hosting AI_CHAT page drops duplicate chrome for its own pane only', () => {
-      it('drops to a plain label (no selector, no tab strip) when this pane IS the host conversation, keeping split/close', async () => {
-        renderPanes({ hostConversationId: 'conv-1' });
-        await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-        expect(screen.queryByRole('button', { name: /Researcher/ })).not.toBeInTheDocument();
-        expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-        expect(screen.getByLabelText('Split right')).toBeInTheDocument();
-        expect(screen.getByLabelText('Close pane')).toBeInTheDocument();
-      });
-
-      // Review finding: matching by AGENT instead of CONVERSATION would also
-      // collapse a split pane the user deliberately pointed at a SECOND,
-      // distinct conversation of the same agent — silently stripping its
-      // only in-grid way to be retargeted (AISelector) or to reach its own
-      // History/Settings (PaneChatTabStrip), even though the page's own
-      // header isn't showing that conversation. Matching by conversation id
-      // instead keeps that pane fully functional.
-      it('keeps its own selector + tab strip for a split pane on a DIFFERENT conversation of the SAME agent as the host', async () => {
-        renderPanes({ hostConversationId: 'conv-1' });
-        await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-        const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-        act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
-        const secondPaneId = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-          .find((p) => p.id !== firstPaneId)!.id;
-        act(() =>
-          useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
-            kind: 'chat',
-            name: 'Other conversation',
-            targetId: 'conv-other',
-            agentPageId: 'agent-1',
-          }),
-        );
-
-        await waitFor(() => expect(screen.getAllByTestId('pane-chat')).toHaveLength(2));
-        // Exactly one match each — the FIRST (host) pane stays a plain label;
-        // only the SECOND (different conversation) pane still has these.
-        expect(screen.getByRole('button', { name: /Researcher/ })).toBeInTheDocument();
-        expect(screen.getByRole('tablist')).toBeInTheDocument();
-      });
-    });
-
-    it("has a Settings tab for the pane's agent, which switches the pane body to the settings form", async () => {
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-      const settingsTab = await screen.findByRole('tab', { name: /researcher settings/i });
-      await userEvent.click(settingsTab);
-
-      expect(await screen.findByTestId('pane-settings-tab')).toHaveAttribute('data-page-id', 'agent-1');
-      expect(screen.queryByTestId('pane-chat')).not.toBeInTheDocument();
-    });
-
-    it('hides the Settings tab for the Assistant (no agent page, so no settings)', async () => {
-      renderPanes({
-        initialConversation: { conversationId: 'conv-1', agentPageId: null, name: 'Assistant' },
-      });
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-      expect(screen.queryByRole('tab', { name: /settings/i })).not.toBeInTheDocument();
-    });
-
-    it('has a History tab that switches the pane body to the conversation list, and back to Chat on selection', async () => {
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-      const historyTab = await screen.findByRole('tab', { name: /history/i });
-      await userEvent.click(historyTab);
-
-      expect(await screen.findByTestId('pane-history-tab')).toBeInTheDocument();
-      expect(screen.queryByTestId('pane-chat')).not.toBeInTheDocument();
-
-      const chatTab = screen.getByRole('tab', { name: /^chat$/i });
-      await userEvent.click(chatTab);
-
-      expect(await screen.findByTestId('pane-chat')).toBeInTheDocument();
-      expect(screen.queryByTestId('pane-history-tab')).not.toBeInTheDocument();
-    });
-
-    const conversationsFixture = (
-      entries: Array<{ id: string; title: string; sessionId: string | null; isOwner?: boolean }>,
-    ) =>
-      jsonOk({
-        conversations: entries.map((e) => ({
-          id: e.id,
-          title: e.title,
-          preview: '',
-          createdAt: new Date('2026-01-01').toISOString(),
-          updatedAt: new Date('2026-01-01').toISOString(),
-          messageCount: 1,
-          sessionId: e.sessionId,
-          // Every existing fixture entry represents the test's own caller's
-          // conversation unless a test opts a shared/foreign one in —
-          // defaulting true keeps every pre-existing claim-branch test
-          // exercising the SAME path it always has.
-          isOwner: e.isOwner ?? true,
-          lastMessage: { role: 'user', timestamp: new Date('2026-01-01').toISOString() },
-        })),
-      });
-
-    // review finding — chatgpt-codex-connector on PR #2299: picking a History
-    // entry already open in another pane bypassed the store's deduplicating
-    // openConversation path, mounting a second independently interactive
-    // surface for the same transcript.
-    it('focuses an existing pane instead of duplicating it when the picked History conversation is already open elsewhere', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([{ id: 'conv-other', title: 'Other chat', sessionId: null }]);
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
-      const secondPaneId = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id !== firstPaneId)!.id;
-      act(() =>
-        useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
-          kind: 'chat',
-          name: 'Other chat',
-          targetId: 'conv-other',
-          agentPageId: 'agent-1',
-        }),
-      );
-
-      const user = userEvent.setup();
-      // Pane bar and its pane's body are siblings under the same `group/pane`
-      // container — locate the pane bar whose OWN pane currently renders
-      // conv-1 (the first pane), rather than assuming DOM/array order lines
-      // up with pane creation order.
-      const bars = screen.getAllByTestId('pane-bar');
-      const firstPaneBar = bars.find((bar) =>
-        within(bar.parentElement as HTMLElement).queryByTestId('pane-chat')?.textContent === 'conv-1',
-      )!;
-      await user.click(within(firstPaneBar).getByRole('tab', { name: /history/i }));
-      await user.click(await screen.findByRole('button', { name: 'select-conv-other' }));
-
-      await waitFor(() =>
-        expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].activePaneId).toBe(secondPaneId),
-      );
-      // The first pane's own binding is untouched — no duplicate was created there.
-      const firstPaneAfter = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id === firstPaneId);
-      expect(firstPaneAfter?.scope?.targetId).toBe('conv-1');
-    });
-
-    // issue #2295: a pane the user closed out of this session
-    // (`closedInWorkspaceAt`) must never be silently overwritten by an
-    // unrelated LATER conversation selection — e.g. clicking a different
-    // row in the past-conversations list, or the sidebar's session
-    // re-entry, both of which funnel into the seeding effect that fires
-    // `openConversation` on an `initialConversation` prop change. `conv-1`
-    // is deliberately absent from the live listing below to simulate it.
-    it('does not evict a pane showing a conversation absent from the live listing when a different conversation is selected', async () => {
-      mockSessionConversations([{ conversationId: 'conv-2', agentPageId: 'agent-1' }]);
-      const { rerender } = renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-      // Wait for the session's own entry to have actually appeared in the
-      // switch-decision cache — the same readiness signal `findEnabledSelector`
-      // above waits on — so the seeding effect's `liveConversationIds` is
-      // populated from real data rather than racing an unresolved fetch.
-      await waitFor(() => expect(screen.getByRole('button', { name: /Researcher/ })).not.toBeDisabled());
-
-      rerender(
-        <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-          <AgentPanes
-            sessionId="ses-1"
-            driveId="drive-1"
-            initialConversation={{ conversationId: 'conv-2', agentPageId: 'agent-1', name: 'Conversation 2' }}
-          />
-        </SWRConfig>,
-      );
-
-      await waitFor(() => expect(screen.getAllByTestId('pane-chat')).toHaveLength(2));
-      const shown = screen.getAllByTestId('pane-chat').map((el) => el.textContent);
-      expect(shown).toContain('conv-1');
-      expect(shown).toContain('conv-2');
-    });
-
-    // review finding — chatgpt-codex-connector on PR #2307: before THIS
-    // session's own entry has appeared in the switch-decision cache (a cold
-    // reload, a slow fetch, or one that never resolves), `sessionKnownToConversationsCache`
-    // reads false. The seeding effect must not fall back to the OLD
-    // unprotected eviction behavior in that window — that would reopen the
-    // exact race issue #2295 fixes on every cold load — and once the fetch
-    // DOES resolve, the deferred decision must still run (protected) rather
-    // than leaving the pane stuck on stale data forever.
-    it('defers the eviction decision (rather than evicting unprotected) while the live listing has not resolved, then finishes it once it does', async () => {
-      let resolveSessions!: () => void;
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        // The sessions-LISTING endpoint specifically (`?driveId=`) — not the
-        // per-session `/workspace` sub-route `useWorkspaceServerSync` also
-        // fetches (same prefix, see the readiness test above this block).
-        if (url.includes('/api/agent-workspaces?')) {
-          return new Promise((resolve) => {
-            resolveSessions = () =>
-              resolve(
-                jsonOk({
-                  sessions: [
-                    { workspaceId: 'ses-1', sessionId: 'ses-1', conversations: [{ conversationId: 'conv-2', agentPageId: 'agent-1', lastMessageAt: null }] },
-                  ],
-                }),
-              );
-          });
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      // A pre-existing grid — e.g. restored from persisted storage — already
-      // showing conv-1, before this mount's seeding effect (targeting
-      // conv-2) ever runs.
-      useAgentWorkspaceStore
-        .getState()
-        .ensureWorkspace('ses-1', { kind: 'chat', name: 'Existing', targetId: 'conv-1', agentPageId: 'agent-1' });
-
-      renderPanes({ initialConversation: { conversationId: 'conv-2', agentPageId: 'agent-1', name: 'Conversation 2' } });
-
-      // The listing fetch hasn't resolved yet — the effect must have
-      // deferred rather than evicting conv-1's pane unprotected.
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(screen.getAllByTestId('pane-chat')).toHaveLength(1);
-      expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1');
-
-      resolveSessions();
-
-      // conv-1 is absent from the resolved live listing (closed-in-session):
-      // the deferred decision runs protected — conv-1's pane survives, conv-2
-      // opens in a split rather than evicting it.
-      await waitFor(() => expect(screen.getAllByTestId('pane-chat')).toHaveLength(2));
-      const shownAfter = screen.getAllByTestId('pane-chat').map((el) => el.textContent);
-      expect(shownAfter).toContain('conv-1');
-      expect(shownAfter).toContain('conv-2');
-    });
-
-    // review finding — chatgpt-codex-connector on PR #2299: switching to Chat
-    // immediately (fire-and-forget) after starting an async reopen showed the
-    // OLD pane content as if a failed pick had succeeded.
-    it('stays on the History tab when reopening a same-session conversation fails, rather than following the failed pick to Chat', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([{ id: 'conv-closed', title: 'Closed chat', sessionId: 'ses-1' }]);
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      mockPost.mockRejectedValue(new Error('session full'));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      await user.click(await screen.findByRole('button', { name: 'select-conv-closed' }));
-
-      await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-closed/reopen', {}),
-      );
-      expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
-      expect(screen.queryByTestId('pane-chat')).not.toBeInTheDocument();
-    });
-
-    // review finding — chatgpt-codex-connector on PR #2299: a slow reopen's
-    // completion, arriving after the user has already picked something else
-    // on the SAME pane, must not overwrite that newer choice.
-    it('ignores a stale reopen completion superseded by a second pick on the same pane', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([
-            { id: 'conv-slow', title: 'Slow chat', sessionId: 'ses-1' },
-            { id: 'conv-fast', title: 'Fast chat', sessionId: null },
-          ]);
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      let resolveSlowReopen!: (value: unknown) => void;
-      // Unbound (`conv-fast`) now needs a real claim call too, distinct from
-      // the deliberately-slow reopen this test is exercising — only the
-      // reopen URL stays pending; the claim resolves normally.
-      mockPost.mockImplementation((url: string) => {
-        if (url === '/api/agent-workspaces/ses-1/conversations/conv-slow/reopen') {
-          return new Promise((resolve) => (resolveSlowReopen = resolve));
-        }
-        return Promise.resolve({ ok: true, alreadyInSession: false });
-      });
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      // Starts the slow reopen — still pending, so the pane stays on History
-      // (per the previous fix) rather than following it to Chat.
-      await user.click(await screen.findByRole('button', { name: 'select-conv-slow' }));
-      expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
-
-      // A second pick on the SAME pane, before the first resolves — unbound,
-      // so it claims (resolving promptly per the mock above) rather than
-      // reopening, and lands quickly.
-      await user.click(await screen.findByRole('button', { name: 'select-conv-fast' }));
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-fast'));
-
-      // NOW the stale reopen resolves — must be ignored, AND rolled back:
-      // it succeeded server-side (closedInWorkspaceAt cleared, a cap slot
-      // consumed) for a pick nothing shows anymore, which could otherwise
-      // make a later reopen fail as "session full" for no visible reason.
-      resolveSlowReopen({});
-      await waitFor(() => {
-        const pane = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-          .find((p) => p.id === paneId);
-        expect(pane?.scope?.targetId).toBe('conv-fast');
-      });
-      await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-slow'),
-      );
-    });
-
-    // review finding — final adversarial pass on PR #2302: a pane's History
-    // list routinely also contains OTHER users' shared, still-unbound
-    // conversations (the list route's own `isShared` clause). Claiming one
-    // of those 404s (the claim primitive's ownership gate refuses a foreign
-    // row), which used to strand the pick on the History tab entirely
-    // instead of opening the shared transcript the old, pre-claim, cosmetic
-    // way.
-    it('opens a session-less SHARED conversation the caller does not own via plain assignment, never a claim', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([
-            { id: 'conv-not-owned', title: 'Shared chat', sessionId: null, isOwner: false },
-          ]);
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      await user.click(await screen.findByRole('button', { name: 'select-conv-not-owned' }));
-
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-not-owned'));
-      expect(mockPost).not.toHaveBeenCalledWith(
-        expect.stringContaining('/conversations/conv-not-owned/claim'),
-        expect.anything(),
-      );
-    });
-
-    // review finding — chatgpt-codex-connector on PR #2299 (round 7): the
-    // rollback above must not fire when the SAME conversation was picked
-    // twice and the NEWER pick's reopen wins the race, legitimately landing
-    // in a pane before the older (now-stale) reopen resolves — closing it
-    // back out would rip a currently-visible conversation out of its pane.
-    it('does not roll back a stale reopen when a newer pick already landed the same conversation', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([{ id: 'conv-slow', title: 'Slow chat', sessionId: 'ses-1' }]);
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      let resolveSlowReopen!: (value: unknown) => void;
-      mockPost
-        .mockReturnValueOnce(new Promise((resolve) => (resolveSlowReopen = resolve)))
-        .mockResolvedValueOnce({});
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      // First pick of conv-slow — still pending, stays on History.
-      await user.click(await screen.findByRole('button', { name: 'select-conv-slow' }));
-      expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
-
-      // Second pick of the SAME conversation, on the SAME pane, before the
-      // first resolves — its own reopen resolves immediately and legitimately
-      // lands it in the pane.
-      await user.click(await screen.findByRole('button', { name: 'select-conv-slow' }));
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-slow'));
-
-      // NOW the first (stale) reopen resolves — must NOT close conv-slow,
-      // since a pane is currently showing it.
-      resolveSlowReopen({});
-      // Flush the stale completion's own continuation — without this, the
-      // waitFor below can pass on its first attempt (the pane already shows
-      // conv-slow from the SECOND pick) before the rollback guard even runs,
-      // making the assertion below pass trivially (review finding —
-      // coderabbitai on PR #2299, round 12).
-      await act(async () => {
-        await Promise.resolve();
-      });
-      await waitFor(() => {
-        const pane = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-          .find((p) => p.id === paneId);
-        expect(pane?.scope?.targetId).toBe('conv-slow');
-      });
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-slow');
-    });
-
-    // review finding — chatgpt-codex-connector on PR #2299 (round 15): the
-    // reopen endpoint returns the same { ok: true } shape for a genuine
-    // transition AND a no-op ("already_open" — the conversation was already
-    // open elsewhere, e.g. another pane/tab, or an agent switch that left
-    // it open unshown). Rolling back a superseded pick unconditionally
-    // could close a listing this request never actually opened.
-    it('does not roll back a superseded reopen whose response reports alreadyOpen (a no-op, not a transition)', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([
-            { id: 'conv-already-open', title: 'Already open', sessionId: 'ses-1' },
-            { id: 'conv-other', title: 'Other', sessionId: null },
-          ]);
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      let resolveReopen!: (value: unknown) => void;
-      // `conv-other` is unbound, so picking it now claims (a real POST) —
-      // resolve that one normally; only the reopen this test exercises stays
-      // pending.
-      mockPost.mockImplementation((url: string) => {
-        if (url === '/api/agent-workspaces/ses-1/conversations/conv-already-open/reopen') {
-          return new Promise((resolve) => (resolveReopen = resolve));
-        }
-        return Promise.resolve({ ok: true, alreadyInSession: false });
-      });
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      await user.click(await screen.findByRole('button', { name: 'select-conv-already-open' })); // pending
-
-      // Superseded by picking a DIFFERENT conversation on the same pane.
-      await user.click(await screen.findByRole('button', { name: 'select-conv-other' }));
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-other'));
-
-      // The stale reopen resolves reporting alreadyOpen — this request
-      // never transitioned the listing, so no cleanup DELETE should fire.
-      resolveReopen({ ok: true, alreadyOpen: true });
-      await act(async () => {
-        await Promise.resolve();
-      });
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-already-open');
-    });
-
-    // review finding — chatgpt-codex-connector on PR #2299 (round 16): the
-    // round-15 alreadyOpen early-return skipped the "am I the last settler,
-    // do I need to finish a SIBLING's deferred cleanup" check entirely —
-    // an alreadyOpen no-op response for the LAST pending reopen left an
-    // earlier request's genuine (but deferred) transition orphaned forever.
-    it("given the last-to-settle reopen reports alreadyOpen, still drains an earlier sibling's deferred cleanup", async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([
-            { id: 'conv-shared-16', title: 'Shared', sessionId: 'ses-1' },
-            { id: 'conv-other-16', title: 'Other', sessionId: null },
-          ]);
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      let resolveOlder!: (value: unknown) => void;
-      let resolveNewer!: (value: unknown) => void;
-      mockPost
-        .mockReturnValueOnce(new Promise((resolve) => (resolveOlder = resolve)))
-        .mockReturnValueOnce(new Promise((resolve) => (resolveNewer = resolve)))
-        // The third pick below is unbound, so it claims (a real POST, unlike
-        // the old cosmetic-only assign) — resolve it normally.
-        .mockResolvedValue({ ok: true, alreadyInSession: false });
-      mockDel.mockResolvedValue(undefined);
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      await user.click(await screen.findByRole('button', { name: 'select-conv-shared-16' })); // older, pending
-      await user.click(await screen.findByRole('button', { name: 'select-conv-shared-16' })); // newer, pending, supersedes older
-      // A third pick (unbound — claims via a fresh, promptly-resolved POST)
-      // supersedes the newer reopen too.
-      await user.click(await screen.findByRole('button', { name: 'select-conv-other-16' }));
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-other-16'));
-
-      // Older resolves first, genuinely transitioning the listing —
-      // deferred, since the newer reopen is still pending.
-      resolveOlder({ ok: true, alreadyOpen: false });
-      await act(async () => {
-        await Promise.resolve();
-      });
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-shared-16');
-
-      // The newer (LAST to settle) reports alreadyOpen — its OWN outcome is
-      // a no-op, but it must still drain the older's deferred cleanup.
-      resolveNewer({ ok: true, alreadyOpen: true });
-      await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-shared-16'),
-      );
-    });
-
-    // review finding — chatgpt-codex-connector on PR #2299 (round 8): the
-    // "is anyone showing this?" rollback check above still misses the case
-    // where the newer reopen for the SAME conversation hasn't LANDED yet
-    // when the older one resolves — nothing shows it yet, but something is
-    // about to. The rollback must also check for a still-in-flight reopen.
-    it('does not close a conversation when an older reopen resolves first while a newer reopen for the same conversation is still pending', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([{ id: 'conv-race', title: 'Race chat', sessionId: 'ses-1' }]);
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      let resolveOlder!: (value: unknown) => void;
-      let resolveNewer!: (value: unknown) => void;
-      mockPost
-        .mockReturnValueOnce(new Promise((resolve) => (resolveOlder = resolve)))
-        .mockReturnValueOnce(new Promise((resolve) => (resolveNewer = resolve)));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      // Both picks fire before either reopen resolves — neither has landed.
-      await user.click(await screen.findByRole('button', { name: 'select-conv-race' }));
-      await user.click(await screen.findByRole('button', { name: 'select-conv-race' }));
-      expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
-
-      // The OLDER reopen resolves first. No pane shows conv-race yet, but
-      // the newer request is still in flight — must not close it.
-      resolveOlder({});
-      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(2));
-      await act(async () => {
-        await Promise.resolve();
-      });
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-race');
-
-      // The newer reopen resolves too — legitimately lands it.
-      resolveNewer({});
-      await waitFor(() => {
-        const pane = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-          .find((p) => p.id === paneId);
-        expect(pane?.scope?.targetId).toBe('conv-race');
-      });
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-race');
-    });
-
-    // review finding — chatgpt-codex-connector on PR #2299 (round 17): the
-    // cleanup DELETE itself can be delayed long enough for a LATER,
-    // independent pick of the exact same conversation to land in a pane
-    // before it reaches the server — closing a listing that is now visibly
-    // displayed. cleanupOrphanedConversation must recheck after its own
-    // DELETE resolves and compensate (reopen it back) if so.
-    it('compensates by reopening a conversation that landed in a pane while its own delayed cleanup DELETE was still in flight', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([
-            { id: 'conv-compensate', title: 'Compensate', sessionId: 'ses-1' },
-            { id: 'conv-unbound', title: 'Unbound', sessionId: null },
-          ]);
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      let resolveFirstReopen!: (value: unknown) => void;
-      let resolveDelete!: (value: unknown) => void;
-      mockPost
-        .mockReturnValueOnce(new Promise((resolve) => (resolveFirstReopen = resolve))) // first pick: reopen conv-compensate
-        .mockResolvedValueOnce({ ok: true, alreadyInSession: false }) // unbound pick below: claim conv-unbound (a real call now)
-        .mockResolvedValueOnce({ ok: true, alreadyOpen: false }); // second (fresh) pick: reopen conv-compensate again
-      mockDel.mockReturnValueOnce(new Promise((resolve) => (resolveDelete = resolve)));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      await user.click(await screen.findByRole('button', { name: 'select-conv-compensate' })); // reopen #1, pending
-
-      // Superseded by an unbound pick — claims (a real POST, resolved
-      // promptly per the mock above) rather than reopening.
-      await user.click(await screen.findByRole('button', { name: 'select-conv-unbound' }));
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-unbound'));
-
-      // Reopen #1 resolves — genuinely orphaned (nothing shows it, nothing
-      // else pending for this id) — triggers a DIRECT cleanup, DELETE
-      // pending.
-      resolveFirstReopen({ ok: true, alreadyOpen: false });
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-compensate'));
-
-      // WHILE that DELETE is still in flight, a fresh pick of the SAME
-      // conversation lands it back in the pane (back to History first —
-      // landing conv-unbound switched the tab to Chat).
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      await user.click(await screen.findByRole('button', { name: 'select-conv-compensate' }));
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-compensate'));
-
-      // NOW the delayed cleanup DELETE resolves — must compensate by
-      // reopening the conversation it just closed back out, since a pane
-      // is now showing it.
-      resolveDelete(undefined);
-      // 2 reopen calls happened already (the first pick, the fresh second
-      // pick) — the compensating call is a THIRD.
-      await waitFor(() =>
-        expect(
-          mockPost.mock.calls.filter(
-            (c) => c[0] === '/api/agent-workspaces/ses-1/conversations/conv-compensate/reopen',
-          ),
-        ).toHaveLength(3),
-      );
-    });
-
-    // review finding — chatgpt-codex-connector on PR #2299 (round 18): the
-    // SAME race that motivates the compensating reopen above applies to
-    // that compensating reopen itself — if IT is slow, the pane that made
-    // it necessary can move on again before it lands, leaving the
-    // conversation orphaned a second time with nothing left to notice.
-    it('recursively re-checks and cleans up again if the pane moves on before the compensating reopen itself lands', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([
-            { id: 'conv-recurse', title: 'Recurse', sessionId: 'ses-1' },
-            { id: 'conv-unbound', title: 'Unbound', sessionId: null },
-          ]);
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      let resolveFirstReopen!: (value: unknown) => void;
-      let resolveFirstDelete!: (value: unknown) => void;
-      let resolveCompensatingReopen!: (value: unknown) => void;
-      mockPost
-        .mockReturnValueOnce(new Promise((resolve) => (resolveFirstReopen = resolve))) // first pick: reopen #1, pending
-        .mockResolvedValueOnce({ ok: true, alreadyInSession: false }) // unbound pick below: claim (first click)
-        .mockResolvedValueOnce({ ok: true, alreadyOpen: false }) // fresh second pick: reopen conv-recurse again
-        .mockReturnValueOnce(new Promise((resolve) => (resolveCompensatingReopen = resolve))) // compensating reopen
-        .mockResolvedValueOnce({ ok: true, alreadyInSession: false }); // unbound pick below: claim (second click)
-      mockDel
-        .mockReturnValueOnce(new Promise((resolve) => (resolveFirstDelete = resolve))) // first cleanup DELETE
-        .mockResolvedValueOnce(undefined); // second (recursive) cleanup DELETE
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      await user.click(await screen.findByRole('button', { name: 'select-conv-recurse' })); // reopen #1, pending
-
-      // Unbound — claims (a real POST, resolved promptly per the mock above)
-      // rather than reopening.
-      await user.click(await screen.findByRole('button', { name: 'select-conv-unbound' }));
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-unbound'));
-
-      // Reopen #1 resolves, genuinely orphaned — DIRECT cleanup, DELETE
-      // pending.
-      resolveFirstReopen({ ok: true, alreadyOpen: false });
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-recurse'));
-
-      // A fresh pick lands it back while that first DELETE is pending.
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      await user.click(await screen.findByRole('button', { name: 'select-conv-recurse' }));
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-recurse'));
-
-      // First DELETE resolves — triggers a compensating reopen, pending.
-      resolveFirstDelete(undefined);
-      await waitFor(() =>
-        expect(
-          mockPost.mock.calls.filter((c) => c[0] === '/api/agent-workspaces/ses-1/conversations/conv-recurse/reopen'),
-        ).toHaveLength(3),
-      );
-
-      // WHILE that compensating reopen is still pending, the pane moves on
-      // to something else again.
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      await user.click(await screen.findByRole('button', { name: 'select-conv-unbound' }));
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-unbound'));
-
-      // The compensating reopen resolves — must recheck and, since nothing
-      // shows conv-recurse anymore, clean it up AGAIN.
-      resolveCompensatingReopen({ ok: true, alreadyOpen: false });
-      await waitFor(() =>
-        expect(
-          mockDel.mock.calls.filter((c) => c[0] === '/api/agent-workspaces/ses-1/conversations/conv-recurse'),
-        ).toHaveLength(2),
-      );
-    });
-
-    // review finding — chatgpt-codex-connector (PR review on this branch):
-    // the SAME unbound History row clicked twice rapidly in one pane can
-    // have the FIRST request land the actual claim, go stale, and see
-    // "nothing shows it yet" while the SECOND (now-current) request for the
-    // identical conversationId is still in flight and about to assign it.
-    // Without deferring the first request's cleanup decision the same way
-    // reopen does above, its cleanup DELETE could close the listing right
-    // after the second request already decided nothing needed cleaning up —
-    // leaving the pane displaying a conversation the session lists as
-    // closed. Pins that this can no longer happen: no cleanup DELETE ever
-    // fires, and the pane correctly lands on the claimed conversation.
-    it('coordinates two rapid claims of the SAME unbound conversation on one pane — the stale one defers, the current one lands cleanly with no cleanup DELETE', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([{ id: 'conv-double-claim', title: 'Double claim', sessionId: null }]);
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      let resolveFirstClaim!: (value: unknown) => void;
-      let resolveSecondClaim!: (value: unknown) => void;
-      mockPost
-        .mockReturnValueOnce(new Promise((resolve) => (resolveFirstClaim = resolve)))
-        .mockReturnValueOnce(new Promise((resolve) => (resolveSecondClaim = resolve)));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      await user.click(await screen.findByRole('button', { name: 'select-conv-double-claim' })); // claim #1, pending
-      await user.click(await screen.findByRole('button', { name: 'select-conv-double-claim' })); // claim #2, pending, supersedes #1
-
-      // Claim #1 (stale, actually transitioned the listing server-side)
-      // resolves FIRST, while #2 is still pending — must defer its cleanup
-      // decision rather than closing the listing #2 is about to use.
-      resolveFirstClaim({ ok: true, alreadyInSession: false });
-      await act(async () => {
-        await Promise.resolve();
-      });
-      expect(mockDel).not.toHaveBeenCalled();
-
-      // Claim #2 (current, a no-op idempotent hit of #1's own transition)
-      // resolves — lands the pane, and #1's deferred cleanup marker is now
-      // moot since something (this pane) shows it.
-      resolveSecondClaim({ ok: true, alreadyInSession: true });
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-double-claim'));
-      expect(mockDel).not.toHaveBeenCalled();
-    });
-
-    // review finding — chatgpt-codex-connector on PR #2299 (round 8): a
-    // reopen can commit server-side and then have its OWN response delayed
-    // long enough for the SAME conversation to be deleted from History
-    // before the completion assigns it — landing a pane on a transcript
-    // that already 404s on send.
-    it('does not assign a pane to a conversation deleted from History while its reopen was still in flight', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([{ id: 'conv-doomed-live', title: 'Doomed live chat', sessionId: 'ses-1' }]);
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      let resolveReopen!: (value: unknown) => void;
-      mockPost.mockReturnValue(new Promise((resolve) => (resolveReopen = resolve)));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      // Reopen starts and commits server-side but its response is delayed.
-      await user.click(await screen.findByRole('button', { name: 'select-conv-doomed-live' }));
-      expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
-
-      // The SAME conversation is deleted from History before the reopen
-      // above completes.
-      await user.click(await screen.findByRole('button', { name: 'delete-conv-doomed-live' }));
-      await waitFor(() =>
-        expect(mockFetchWithAuth).toHaveBeenCalledWith(
-          '/api/ai/page-agents/agent-1/conversations/conv-doomed-live',
-          { method: 'DELETE' },
-        ),
-      );
-
-      // NOW the delayed reopen resolves — must NOT assign the pane to the
-      // just-deleted conversation.
-      resolveReopen({});
-      await act(async () => {
-        await Promise.resolve();
-      });
-      const pane = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id === paneId);
-      expect(pane?.scope?.targetId).not.toBe('conv-doomed-live');
-    });
-
-    // review finding — chatgpt-codex-connector on PR #2299 (round 9): the
-    // Set-based mark above is a SINGLE consumable flag — fine for one
-    // pending reopen, but TWO panes concurrently reopening the same closed
-    // conversation both need to observe the same delete, and whichever
-    // completion checks first would consume it, leaving the second one
-    // blind and assigning a deleted conversation anyway.
-    it('rejects EVERY pending reopen for a conversation deleted from History, not just the first to check', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([{ id: 'conv-shared', title: 'Shared chat', sessionId: 'ses-1' }]);
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      let resolveA!: (value: unknown) => void;
-      let resolveB!: (value: unknown) => void;
-      mockPost
-        .mockReturnValueOnce(new Promise((resolve) => (resolveA = resolve)))
-        .mockReturnValueOnce(new Promise((resolve) => (resolveB = resolve)));
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
-      const secondPaneId = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id !== firstPaneId)!.id;
-
-      const user = userEvent.setup();
-      const historyTabs = await screen.findAllByRole('tab', { name: /history/i });
-      await user.click(historyTabs[0]);
-      await user.click(historyTabs[1]);
-
-      // Both panes reopen the SAME conversation — both pending.
-      const selectButtonsFirst = await screen.findAllByRole('button', { name: 'select-conv-shared' });
-      await user.click(selectButtonsFirst[0]);
-      const selectButtonsSecond = await screen.findAllByRole('button', { name: 'select-conv-shared' });
-      await user.click(selectButtonsSecond[1]);
-
-      // Deleted from History while BOTH reopens are still in flight.
-      const deleteButtons = await screen.findAllByRole('button', { name: 'delete-conv-shared' });
-      await user.click(deleteButtons[0]);
-      await waitFor(() =>
-        expect(mockFetchWithAuth).toHaveBeenCalledWith(
-          '/api/ai/page-agents/agent-1/conversations/conv-shared',
-          { method: 'DELETE' },
-        ),
-      );
-
-      // Both delayed reopens resolve — NEITHER pane may end up bound to the
-      // deleted conversation.
-      resolveA({});
-      resolveB({});
-      await act(async () => {
-        await Promise.resolve();
-      });
-      const finalPanes = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes);
-      expect(finalPanes.find((p) => p.id === firstPaneId)?.scope?.targetId).not.toBe('conv-shared');
-      expect(finalPanes.find((p) => p.id === secondPaneId)?.scope?.targetId).not.toBe('conv-shared');
-    });
-
-    // review finding — chatgpt-codex-connector on PR #2299 (round 9): the
-    // round-8 fix deferred cleanup when another reopen for the same
-    // conversation was still pending, on the assumption that request would
-    // either land it (fine) or fail leaving cleanup moot (WRONG — a failed
-    // final request leaves the earlier successful-but-deferred reopen
-    // dangling forever, since nothing else will ever revisit it).
-    it('cleans up an earlier successful-but-deferred reopen when the final pending reopen for it fails', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([{ id: 'conv-orphan', title: 'Orphan chat', sessionId: 'ses-1' }]);
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      let resolveOlder!: (value: unknown) => void;
-      let rejectNewer!: (reason: unknown) => void;
-      mockPost
-        .mockReturnValueOnce(new Promise((resolve) => (resolveOlder = resolve)))
-        .mockReturnValueOnce(new Promise((_resolve, reject) => (rejectNewer = reject)));
-      mockDel.mockResolvedValue(undefined);
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /history/i }));
-      // Two picks of the same conversation on the same pane — the second
-      // supersedes the first's token.
-      await user.click(await screen.findByRole('button', { name: 'select-conv-orphan' }));
-      await user.click(await screen.findByRole('button', { name: 'select-conv-orphan' }));
-
-      // The OLDER (now-superseded) reopen resolves successfully first —
-      // deferred, since the newer one is still pending and nothing shows it
-      // yet.
-      resolveOlder({});
-      await act(async () => {
-        await Promise.resolve();
-      });
-      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-orphan');
-
-      // The NEWER (current) reopen then fails outright — nothing else will
-      // ever revisit the older one's dangling server-side success; the
-      // failing settle must finish that deferred cleanup itself.
-      rejectNewer(new Error('network down'));
-      await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-orphan'),
-      );
-    });
-
-    // review finding — chatgpt-codex-connector on PR #2299 (round 10): none
-    // of the close branches touched the closing pane's assignment token, so
-    // a History reopen still in flight for that exact pane stayed "current"
-    // even after the pane was gone — either no-oping assignPane onto a
-    // removed pane (leaving an invisible open listing that consumes a
-    // session cap slot forever) or, if it resolved before the close's own
-    // effect, silently repurposing the pane the user just asked to close.
-    it('cancels a pending History reopen when its own pane is closed before the reopen resolves', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([{ id: 'conv-closed-mid-close', title: 'Closed chat', sessionId: 'ses-1' }]);
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      let resolveReopen!: (value: unknown) => void;
-      mockPost.mockReturnValue(new Promise((resolve) => (resolveReopen = resolve)));
-      mockDel.mockResolvedValue(undefined);
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
-      const secondPaneId = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id !== firstPaneId)!.id;
-      // History needs an agent context to know whose conversations to list —
-      // give the second pane one without landing a conversation of its own
-      // yet (the same "agent picked, mint still pending" shape handlePickAgent
-      // itself produces).
-      act(() =>
-        useAgentWorkspaceStore
-          .getState()
-          .assignPane('ses-1', secondPaneId, { kind: 'chat', name: 'Conversation', targetId: null, agentPageId: 'agent-1' }),
-      );
-
-      const user = userEvent.setup();
-      // Correlate the SECOND pane's own DOM subtree by content rather than
-      // array/DOM order (unreliable — a `pane-bar` and its pane body are
-      // siblings under one `group/pane` container; the first pane is the
-      // only one ever showing "conv-1").
-      await waitFor(() => expect(screen.getAllByTestId('pane-bar')).toHaveLength(2));
-      const secondPaneContainer = screen
-        .getAllByTestId('pane-bar')
-        .map((bar) => bar.parentElement!)
-        .find((container) => !container.textContent?.includes('conv-1'))!;
-
-      await user.click(within(secondPaneContainer).getByRole('tab', { name: /history/i }));
-      await user.click(
-        await within(secondPaneContainer).findByRole('button', { name: 'select-conv-closed-mid-close' }),
-      );
-
-      // Close that SAME (second) pane while the reopen is still in flight —
-      // a pure layout close (unbound pane, another pane still in the grid),
-      // no DELETE of its own.
-      await user.click(within(secondPaneContainer).getByLabelText('Close pane'));
-      await waitFor(() =>
-        expect(
-          useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
-        ).toHaveLength(1),
-      );
-
-      // NOW the reopen resolves — must not repurpose (there is no pane left
-      // to assign to) and must clean up the now-invisible open listing it
-      // left behind server-side.
-      resolveReopen({});
-      await waitFor(() =>
-        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-closed-mid-close'),
-      );
-      // The surviving (first) pane was never touched by any of this.
-      const survivingPane = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id === firstPaneId);
-      expect(survivingPane?.scope?.targetId).not.toBe('conv-closed-mid-close');
-    });
-
-    // review finding — chatgpt-codex-connector on PR #2299: History-delete
-    // deactivates the CANONICAL row, not just the deleting pane's own
-    // listing — every pane showing that id (in this grid), whichever pane's
-    // History tab the delete came from, must be reset rather than left
-    // pointing at a transcript that now 404s on send.
-    it("resets every pane showing a conversation deleted from another pane's History tab back to the picker", async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([{ id: 'conv-doomed', title: 'Doomed chat', sessionId: null }]);
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
-      const secondPaneId = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id !== firstPaneId)!.id;
-      act(() =>
-        useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
-          kind: 'chat',
-          name: 'Doomed chat',
-          targetId: 'conv-doomed',
-          agentPageId: 'agent-1',
-        }),
-      );
-
-      const user = userEvent.setup();
-      const historyTabs = await screen.findAllByRole('tab', { name: /history/i });
-      await user.click(historyTabs[0]);
-      await user.click(await screen.findByRole('button', { name: 'delete-conv-doomed' }));
-
-      await waitFor(() => {
-        const secondPaneAfter = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-          .find((p) => p.id === secondPaneId);
-        expect(secondPaneAfter?.scope).toBeNull();
-      });
-    });
-
-    // review finding — chatgpt-codex-connector and coderabbitai on PR #2299:
-    // deleteConversation used to resolve regardless of outcome, so a REFUSED
-    // delete (the never-empty guard's 409) still reset every pane showing
-    // it, discarding a working binding for a conversation the server never
-    // actually deleted.
-    it('does NOT reset panes when the History delete is refused (a 409)', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([{ id: 'conv-doomed', title: 'Doomed chat', sessionId: null }]);
-        }
-        if (url === '/api/ai/page-agents/agent-1/conversations/conv-doomed') {
-          return { ok: false, json: async () => ({ error: 'last conversation', reason: 'last_conversation' }) };
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
-      const secondPaneId = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id !== firstPaneId)!.id;
-      act(() =>
-        useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
-          kind: 'chat',
-          name: 'Doomed chat',
-          targetId: 'conv-doomed',
-          agentPageId: 'agent-1',
-        }),
-      );
-
-      const user = userEvent.setup();
-      const historyTabs = await screen.findAllByRole('tab', { name: /history/i });
-      await user.click(historyTabs[0]);
-      await user.click(await screen.findByRole('button', { name: 'delete-conv-doomed' }));
-
-      await waitFor(() =>
-        expect(mockFetchWithAuth).toHaveBeenCalledWith(
-          '/api/ai/page-agents/agent-1/conversations/conv-doomed',
-          expect.objectContaining({ method: 'DELETE' }),
-        ),
-      );
-      const secondPaneAfter = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id === secondPaneId);
-      expect(secondPaneAfter?.scope?.targetId).toBe('conv-doomed');
-    });
-
-    // review finding — chatgpt-codex-connector on PR #2299: reading the
-    // workspace SNAPSHOT captured when the callback was created (rather than
-    // fresh at completion time) meant a pane reassigned WHILE the DELETE was
-    // in flight still got reset based on its old, no-longer-current binding.
-    it('does not reset a pane that was reassigned to something else while the History delete was in flight', async () => {
-      let resolveDelete!: () => void;
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/ai/page-agents/agent-1/conversations') {
-          return conversationsFixture([{ id: 'conv-doomed', title: 'Doomed chat', sessionId: null }]);
-        }
-        if (url === '/api/ai/page-agents/agent-1/conversations/conv-doomed') {
-          return new Promise((resolve) => (resolveDelete = () => resolve({ ok: true })));
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
-      const secondPaneId = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id !== firstPaneId)!.id;
-      act(() =>
-        useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
-          kind: 'chat',
-          name: 'Doomed chat',
-          targetId: 'conv-doomed',
-          agentPageId: 'agent-1',
-        }),
-      );
-
-      const user = userEvent.setup();
-      const historyTabs = await screen.findAllByRole('tab', { name: /history/i });
-      await user.click(historyTabs[0]);
-      await user.click(await screen.findByRole('button', { name: 'delete-conv-doomed' }));
-      await waitFor(() =>
-        expect(mockFetchWithAuth).toHaveBeenCalledWith(
-          '/api/ai/page-agents/agent-1/conversations/conv-doomed',
-          expect.objectContaining({ method: 'DELETE' }),
-        ),
-      );
-
-      // The user reassigns the SECOND pane to something else while the
-      // DELETE is still pending.
-      act(() =>
-        useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
-          kind: 'chat',
-          name: 'Something else',
-          targetId: 'conv-something-else',
-          agentPageId: 'agent-1',
-        }),
-      );
-
-      // NOW the delete resolves — must not clobber the newer assignment.
-      // No `affectedPanes` remain (the pane no longer shows conv-doomed),
-      // so nothing else to await on directly — poll the pane's own scope
-      // instead, giving the delete's `.then()` chain time to run and
-      // confirming it stays put once it has.
-      resolveDelete();
-      await waitFor(() => {
-        const secondPaneAfter = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-          .find((p) => p.id === secondPaneId);
-        expect(secondPaneAfter?.scope?.targetId).toBe('conv-something-else');
-      });
-    });
-
-    // review finding — coderabbitai on PR #2299: `showSettings` hides the tab
-    // once agentPageId becomes null, but a stuck `activeTab: 'settings'` fell
-    // through to a spinner branch that could never resolve for the Assistant.
-    it('resets away from the Settings tab when the pane switches to a different agent', async () => {
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      mockPost.mockResolvedValue({});
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-      const user = userEvent.setup();
-      await user.click(await screen.findByRole('tab', { name: /researcher settings/i }));
-      await screen.findByTestId('pane-settings-tab');
-
-      await user.click(await findEnabledSelector(/Researcher/));
-      await user.click(await screen.findByRole('menuitem', { name: /Writer/ }));
-
-      await waitFor(() => expect(screen.getAllByTestId('pane-chat').length).toBeGreaterThan(0));
-      expect(screen.queryByTestId('pane-settings-tab')).not.toBeInTheDocument();
-    });
-
-    // review finding — chatgpt-codex-connector on PR #2299: PageAgentSettingsTab
-    // registers submitForm before its own config-loaded check returns, and its
-    // form defaults contain an empty prompt/tool list — clicking Save before
-    // agentConfig arrives would PATCH those defaults over the agent's real
-    // config. The Save button now stays disabled until there's actually
-    // something to save, which subsumes that original guard: it can't turn
-    // dirty before config has loaded, since the form has nothing of the
-    // user's to differ from yet.
-    it('disables the Save button until the agent config has loaded and the user has made an edit', async () => {
-      let resolveConfig!: () => void;
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url === '/api/pages/agent-1/agent-config') {
-          return new Promise((resolve) => {
-            resolveConfig = () => resolve(jsonOk({ systemPrompt: '', enabledTools: [], availableTools: [] }));
-          });
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-      const settingsTab = await screen.findByRole('tab', { name: /researcher settings/i });
-      await userEvent.click(settingsTab);
-      await screen.findByTestId('pane-settings-tab');
-
-      const saveButton = screen.getByRole('button', { name: /save/i });
-      expect(saveButton).toBeDisabled();
-
-      resolveConfig();
-      // Config has loaded, but nothing has been edited yet — the Save
-      // button only lights up once there's something to save.
-      await waitFor(() => expect(screen.getByTestId('pane-settings-tab')).toHaveAttribute('data-has-config', 'true'));
-      expect(saveButton).toBeDisabled();
-
-      await userEvent.click(screen.getByRole('button', { name: 'mark-dirty' }));
-
-      await waitFor(() => expect(saveButton).not.toBeDisabled());
-    });
-
-    // A success toast used to cover the very tab strip/buttons a user needs
-    // to leave Settings with — the confirmation now shows on the Save
-    // button itself instead (no toast is asserted here; there's simply
-    // nothing left that would fire one).
-    it('shows an inline "Saved" confirmation on the Save button, then reverts to disabled', async () => {
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-      await userEvent.click(await screen.findByRole('tab', { name: /researcher settings/i }));
-      await screen.findByTestId('pane-settings-tab');
-
-      const saveButton = screen.getByRole('button', { name: /save/i });
-      await userEvent.click(screen.getByRole('button', { name: 'mark-dirty' }));
-      expect(saveButton).not.toBeDisabled();
-
-      await userEvent.click(screen.getByRole('button', { name: 'finish-config-update' }));
-
-      expect(await screen.findByRole('button', { name: /saved/i })).toBeDisabled();
-      await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled(), { timeout: 3000 });
-    });
-
-    it("is disabled until THIS session's entry appears in the switch decision's own data", async () => {
-      let resolveSessions!: () => void;
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        // The sessions-LISTING endpoint specifically (`?driveId=`) — not the
-        // per-session `/workspace` sub-route `useWorkspaceServerSync` also
-        // fetches, which would otherwise reassign this shared resolver to
-        // the WRONG pending promise (both URLs start with the same prefix).
-        if (url.includes('/api/agent-workspaces?')) {
-          return new Promise((resolve) => {
-            resolveSessions = () => resolve(jsonOk({ sessions: [{ workspaceId: 'ses-1', sessionId: 'ses-1', conversations: [] }] }));
-          });
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-      const button = await screen.findByRole('button', { name: /Researcher/ });
-      expect(button).toBeDisabled();
-
-      resolveSessions();
-      await waitFor(() => expect(button).not.toBeDisabled());
-    });
-
-    it('stays disabled when the initial sessions fetch fails outright (SWR isLoading goes false with no data)', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url.includes('/api/agent-workspaces')) return { ok: false, status: 500, json: async () => ({}) };
-        return jsonOk(defaultFetchRoute(url));
-      });
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-
-      const button = await screen.findByRole('button', { name: /Researcher/ });
-      // Give SWR's failed fetch time to settle (isLoading -> false) — the
-      // gate must not key off that; it must still see no data for THIS
-      // session and stay disabled.
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(button).toBeDisabled();
-    });
-
-    it('stays disabled when the shared drive-level cache is already warm but does not yet list THIS session (a session spawned after the last successful fetch)', async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url.includes('/api/agent-workspaces')) {
-          // Warm cache, real data, but for a DIFFERENT session — exactly
-          // what a shared per-drive SWR key can already hold when a brand
-          // new session opens.
-          return jsonOk({ sessions: [{ workspaceId: 'some-other-session', sessionId: 'some-other-session', conversations: [] }] });
-        }
-        return jsonOk(defaultFetchRoute(url));
-      });
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      await waitFor(() =>
-        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-workspaces?driveId=drive-1')),
-      );
-
-      expect(await screen.findByRole('button', { name: /Researcher/ })).toBeDisabled();
-    });
-
-    it('selecting the pane\'s current agent again is a no-op', async () => {
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      renderPanes();
-      const user = userEvent.setup();
-      await user.click(await findEnabledSelector(/Researcher/));
-      await user.click(await screen.findByRole('menuitem', { name: /Researcher/ }));
-
-      expect(mockPost).not.toHaveBeenCalled();
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].scope).toMatchObject({
-        targetId: 'conv-1',
-        agentPageId: 'agent-1',
-      });
-    });
-
-    it('switching to an agent the session already has a conversation with focuses it, without minting', async () => {
-      mockSessionConversations([
-        { conversationId: 'conv-1', agentPageId: 'agent-1' },
-        { conversationId: 'conv-existing-2', agentPageId: 'agent-2' },
-      ]);
-      renderPanes();
-      const user = userEvent.setup();
-      await user.click(await findEnabledSelector(/Researcher/));
-      await user.click(await screen.findByText('Writer'));
-
-      expect(mockPost).not.toHaveBeenCalled();
-      await waitFor(() =>
-        expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].scope).toMatchObject({
-          targetId: 'conv-existing-2',
-          agentPageId: 'agent-2',
-        }),
-      );
-      expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-existing-2');
-    });
-
-    it('switching to an agent with no conversation in this session mints one, same as the split picker', async () => {
-      mockPost.mockResolvedValue({});
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      renderPanes();
-      const user = userEvent.setup();
-      await user.click(await findEnabledSelector(/Researcher/));
-      await user.click(await screen.findByText('Writer'));
-
-      await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-2/conversations', {
-          conversationId: 'new-id-1',
-          sessionId: 'ses-1',
-        }),
-      );
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('new-id-1'));
-    });
-
-    it('closes the outgoing conversation on switch, so switching back mints FRESH rather than reusing the one just left', async () => {
-      // The actual bug fix, from the switch side: today's model has no
-      // "leave it open in the background" — a plain AISelector switch
-      // always replaces the active tab, closing what it replaces (unless
-      // shown elsewhere). Switching back to an agent you just left is
-      // therefore a fresh mint every time, not a free rewind — that's what
-      // keeps the session's open-listing set (and the sidebar) matching
-      // what's actually visible, instead of accumulating every agent ever
-      // visited. Pane tabs (keeping several agents' conversations alive at
-      // once behind one pane) were tried and removed — see pane-reducer.ts's
-      // own header comment; a pane holds exactly one conversation now.
-      mockPost.mockResolvedValue({});
-      mockDel.mockResolvedValue(undefined);
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      renderPanes();
-      const user = userEvent.setup();
-      await user.click(await findEnabledSelector(/Researcher/));
-      await user.click(await screen.findByText('Writer'));
-      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('new-id-1'));
-      // The outgoing conversation (agent-1's original) closed.
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
-
-      // Switch back to the ORIGINAL agent — conv-1 is gone now, so this
-      // mints a SECOND, brand-new conversation rather than reusing it.
-      await user.click(await findEnabledSelector(/Writer/));
-      await user.click(await screen.findByRole('menuitem', { name: /Researcher/ }));
-
-      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(2));
-      await waitFor(() =>
-        expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].scope).toMatchObject({
-          targetId: 'new-id-2',
-          agentPageId: 'agent-1',
-        }),
-      );
-      // And the just-left Writer conversation (new-id-1) closed in turn.
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/new-id-1'));
-    });
-
-    it('clicking "+" starts a new conversation with the pane\'s CURRENT agent, replacing what it shows — no agent picker', async () => {
-      // Pane tabs are gone: the "+" chip no longer opens a dropdown to add a
-      // tab. It is now the literal same operation as History's own "New
-      // Conversation" button (`onCreateNewFromHistory`/`handlePickAgent`) —
-      // mint fresh with THIS pane's own agent and replace what's showing.
-      mockPost.mockResolvedValue({});
-      mockDel.mockResolvedValue(undefined);
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-
-      const user = userEvent.setup();
-      await user.click(screen.getByRole('button', { name: 'Start a new conversation' }));
-
-      // No agent picker/dropdown ever opens — nothing to choose, so no
-      // "Writer" option is ever offered here.
-      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
-      expect(screen.queryByRole('menuitem', { name: /Writer/ })).not.toBeInTheDocument();
-
-      await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
-          conversationId: 'new-id-1',
-          sessionId: 'ses-1',
-        }),
-      );
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('new-id-1'));
-      // The replaced conversation (conv-1) closed — the same
-      // closeReplacedConversation cleanup an AISelector switch triggers.
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
-    });
-
-    it('clicking "+" does not close the replaced conversation when another pane still shows it', async () => {
-      // closeReplacedConversation's "don't leak a stray open listing" rule
-      // has an exception baked in: if the outgoing conversation is still
-      // visibly shown in ANOTHER pane, closing it here would rip it out from
-      // under that pane.
-      mockPost.mockResolvedValue({});
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
-      const secondPaneId = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id !== firstPaneId)!.id;
-      act(() =>
-        useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
-          kind: 'chat',
-          name: 'Conversation',
-          targetId: 'conv-1',
-          agentPageId: 'agent-1',
-        }),
-      );
-      await waitFor(() => expect(screen.getAllByTestId('pane-chat')).toHaveLength(2));
-
-      const user = userEvent.setup();
-      const newConversationButtons = screen.getAllByRole('button', { name: 'Start a new conversation' });
-      await user.click(newConversationButtons[0]);
-
-      await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
-          conversationId: 'new-id-1',
-          sessionId: 'ses-1',
-        }),
-      );
-      // Wait for the mint to fully land (closeReplacedConversation, if it
-      // were going to run, runs as part of settling this) before asserting
-      // the negative — otherwise the assertion can pass on timing alone,
-      // before the async cleanup path would have had a chance to call `del`
-      // (review finding — coderabbitai on PR #2308).
-      await waitFor(() => expect(screen.getAllByTestId('pane-chat')[0]).toHaveTextContent('new-id-1'));
-      // The SECOND pane still shows conv-1 — never closed.
-      expect(mockDel).not.toHaveBeenCalled();
-      const secondPaneAfter = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id === secondPaneId);
-      expect(secondPaneAfter?.scope?.targetId).toBe('conv-1');
-    });
-
-    it("records a closed conversation's removal locally, so another pane's selector mints fresh instead of silently reopening it", async () => {
-      // The mirror of the mint test above: without a local record of the
-      // close, `selectPaneAgent`'s switch decision (read from ANOTHER pane's
-      // own selector) still sees the just-closed row as open inside the SWR
-      // poll's 20s window — `focus` reopens a conversation the server
-      // already considers closed, outside the History reopen flow entirely
-      // (caught in review).
-      mockSessionConversations([
-        { conversationId: 'conv-1', agentPageId: 'agent-1' },
-        { conversationId: 'conv-2', agentPageId: 'agent-2' },
-      ]);
-      mockDel.mockResolvedValue(undefined);
-      mockPost.mockResolvedValue({});
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
-      act(() =>
-        useAgentWorkspaceStore.getState().assignPane('ses-1', firstPaneId, {
-          kind: 'chat',
-          name: 'Conversation',
-          targetId: 'conv-2',
-          agentPageId: 'agent-2',
-        }),
-      );
-      const secondPaneId = useAgentWorkspaceStore
-        .getState()
-        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-        .find((p) => p.id !== firstPaneId)!.id;
-      act(() =>
-        useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
-          kind: 'chat',
-          name: 'Conversation',
-          targetId: 'conv-1',
-          agentPageId: 'agent-1',
-        }),
-      );
-      await waitFor(() => expect(screen.getAllByTestId('pane-chat')).toHaveLength(2));
-
-      // Close the pane showing conv-1 (agent-1) — the OTHER pane (conv-2)
-      // keeps the grid non-empty, so this is an ordinary scoped close.
-      const closeButtons = screen.getAllByLabelText('Close pane');
-      const user = userEvent.setup();
-      await user.click(closeButtons[1]);
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
-
-      // From the REMAINING pane, switch to agent-1 — the one whose
-      // conversation JUST closed. This must MINT a fresh one, not silently
-      // reopen conv-1 via a stale `focus` decision.
-      await user.click(await findEnabledSelector(/Writer/));
-      await user.click(await screen.findByRole('menuitem', { name: /Researcher/ }));
-
-      await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
-          conversationId: 'new-id-1',
-          sessionId: 'ses-1',
-        }),
-      );
-    });
-
-    it('mints a GLOBAL ASSISTANT conversation (agentPageId: null) through the same path, closing the outgoing agent conversation', async () => {
-      mockPost.mockResolvedValue({});
-      mockDel.mockResolvedValue(undefined);
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      renderPanes();
-      const user = userEvent.setup();
-      await user.click(await findEnabledSelector(/Researcher/));
-      await user.click(await screen.findByRole('menuitem', { name: 'Global Assistant' }));
-      await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations', {
-          conversationId: 'new-id-1',
-        }),
-      );
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('new-id-1'));
-      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'));
-
-      // Switching back to Researcher mints fresh too (conv-1 is gone), same
-      // "closes on switch" discipline as the null-agentPageId case's outgoing side.
-      await user.click(await findEnabledSelector(/Global Assistant/));
-      await user.click(await screen.findByRole('menuitem', { name: /Researcher/ }));
-      await waitFor(() =>
-        expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].scope).toMatchObject({
-          targetId: 'new-id-2',
-          agentPageId: 'agent-1',
-        }),
-      );
-      expect(mockPost).toHaveBeenCalledTimes(2);
-    });
-
-    it("disables the selector while the pane's chat is streaming", async () => {
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      usePendingStreamsStore.getState().addStream({
-        messageId: 'msg-1',
-        pageId: 'agent-1',
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const onConversationClosed = vi.fn();
+    const user = userEvent.setup();
+    renderPanes({ hostConversationId: 'conv-1', onConversationClosed });
+
+    await screen.findByTestId('pane-chat');
+    await user.click(await screen.findByRole('tab', { name: /history/i }));
+    await user.click(await screen.findByText('delete-conv-1'));
+
+    // The DELETE is pending — a concurrent session-end (unrelated to this
+    // delete) forgets the workspace before the delete's own round trip
+    // resolves.
+    useAgentWorkspaceStore.getState().forgetWorkspace(WS);
+    expect(useAgentWorkspaceStore.getState().workspaces[WS]).toBeUndefined();
+
+    resolveDelete({ ok: true, json: async () => ({}) });
+
+    await waitFor(() =>
+      expect(onConversationClosed).toHaveBeenCalledWith({
         conversationId: 'conv-1',
-        isOwn: true,
-        triggeredBy: { userId: 'user-1', displayName: 'You' },
-      });
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      // Let the (now-loaded) conversation list rule itself out as the cause,
-      // isolating the assertion to the streaming guard.
-      await waitFor(() =>
-        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-workspaces?driveId=drive-1')),
-      );
+        next: null,
+        nextAgentPageId: null,
+      }),
+    );
+  });
 
-      expect(await screen.findByRole('button', { name: /Researcher/ })).toBeDisabled();
+  it('does NOT touch any pane when the delete is refused', async () => {
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    mockFetchWithAuth.mockImplementation(async (url: string, init?: { method?: string }) => {
+      if (init?.method === 'DELETE') return { ok: false, status: 409, json: async () => ({}) };
+      if (url.includes('/api/agent-workspaces')) {
+        return jsonOk({
+          sessions: [
+            {
+              workspaceId: 'ses-1',
+              sessionId: 'ses-1',
+              conversations: [{ conversationId: 'conv-1', agentPageId: 'agent-1', lastMessageAt: null }],
+            },
+          ],
+        });
+      }
+      return jsonOk(defaultFetchRoute(url));
     });
+    mockAgentHistory();
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes();
 
-    it('also disables the "+" chip while the pane\'s chat is streaming — replacing it would yank a still-arriving response out from under itself', async () => {
-      // Same guard the selector above gets, applied to the "+" chip: clicking
-      // it replaces the pane's content and closes the outgoing conversation,
-      // which for a live stream means abandoning a response (and any
-      // in-flight tool work) that's still arriving, with no way back to it
-      // (review finding — chatgpt-codex-connector on PR #2308).
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      usePendingStreamsStore.getState().addStream({
-        messageId: 'msg-1',
-        pageId: 'agent-1',
-        conversationId: 'conv-1',
-        isOwn: true,
-        triggeredBy: { userId: 'user-1', displayName: 'You' },
-      });
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
-      await waitFor(() =>
-        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-workspaces?driveId=drive-1')),
-      );
+    await screen.findByTestId('pane-chat');
+    await user.click(await screen.findByRole('tab', { name: /history/i }));
+    await user.click(await screen.findByText('delete-conv-1'));
 
-      expect(await screen.findByRole('button', { name: 'Start a new conversation' })).toBeDisabled();
+    await waitFor(() => expect(nodeById('n1')).toMatchObject({ target: { kind: 'chat', id: 'conv-1' } }));
+  });
+});
+
+describe('AgentPanes — keyboard activation', () => {
+  it('focusing a control inside a pane activates it, not only a click', async () => {
+    seat([rootNode, paneNode('n1', WS, 0, null), chatNode('n2', WS, 1, 'conv-1')]);
+    renderPanes();
+
+    await screen.findByTestId('pane-chat');
+    act(() => {
+      useAgentWorkspaceStore.getState().selectNode(WS, 'n2');
     });
+    expect(useAgentWorkspaceStore.getState().workspaces[WS]?.activeNodeId).toBe('n2');
 
-    it('does NOT disable the "+" chip merely because a mint is already in flight for this pane — a second click is a supported, harmless race', async () => {
-      // Unlike the stream guard above, a mid-mint pane must stay clickable:
-      // `handlePickAgent`'s own token/counter bookkeeping is what makes two
-      // overlapping mints for the same pane land safely, and this button
-      // must not pre-empt that by disabling itself on `surface === 'loading'`
-      // (review finding follow-up — over-guarding this identically to the
-      // agent selector's `disabledAgentSwitch` broke the existing
-      // "click New Conversation twice" race-condition coverage).
-      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      mockPost.mockReturnValue(new Promise(() => {})); // never resolves — pane stays 'loading'
-      renderPanes();
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
-      await waitFor(() => expect(screen.getByRole('button', { name: 'Start a new conversation' })).not.toBeDisabled());
-      const user = userEvent.setup();
-      await user.click(screen.getByRole('button', { name: 'Start a new conversation' }));
-
-      await waitFor(() =>
-        expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].scope?.targetId).toBeNull(),
-      );
-      expect(screen.getByRole('button', { name: 'Start a new conversation' })).not.toBeDisabled();
+    // Two 'Researcher' texts exist (the picker's button and the other pane's
+    // bar identity) — scope to the picker's own.
+    const pickerBody = screen.getAllByText('Researcher')[0];
+    act(() => {
+      pickerBody.focus();
+      pickerBody.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
     });
+    await waitFor(() => expect(useAgentWorkspaceStore.getState().workspaces[WS]?.activeNodeId).toBe('n1'));
   });
 });

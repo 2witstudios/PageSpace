@@ -34,7 +34,7 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@pagespace/lib/sheets/sheet', () => ({
   isSheetType: vi.fn(() => false),
-  parseSheetContent: vi.fn(),
+  parseSheetContentSafe: vi.fn(),
   serializeSheetContent: vi.fn(),
   updateSheetCells: vi.fn(),
   isValidCellAddress: vi.fn(() => true),
@@ -74,7 +74,6 @@ vi.mock('@/services/api/page-mutation-service', () => ({
 vi.mock('@/services/api/task-sync-service', () => ({
   backfillMissingTaskItems: vi.fn(),
   ensureTaskListForPage: vi.fn(),
-  seedDefaultTaskStatusConfigs: vi.fn(),
 }));
 
 vi.mock('@/lib/ai/tools/task-helpers', () => ({

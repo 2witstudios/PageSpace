@@ -5,6 +5,7 @@ import {
   isAllowedAppUrl,
   isTrustedSenderUrl,
   classifyNavigation,
+  guardsRedirect,
 } from '../navigation-guard';
 
 describe('isAllowedNavigation', () => {
@@ -92,36 +93,54 @@ describe('isAllowedAppUrl', () => {
 
 describe('classifyNavigation', () => {
   const appOrigin = 'https://pagespace.ai';
+  const scheme = 'pagespace:';
 
   it('allows same-origin navigation', () => {
-    expect(classifyNavigation('https://pagespace.ai/dashboard', appOrigin)).toBe('allow');
+    expect(classifyNavigation('https://pagespace.ai/dashboard', appOrigin, scheme)).toBe('allow');
   });
 
   it('passes the app deep-link scheme through to the OS handler', () => {
-    expect(classifyNavigation('pagespace://auth-exchange?code=x&state=y', appOrigin)).toBe('deep-link');
-    expect(classifyNavigation('pagespace://passkey-registered', appOrigin)).toBe('deep-link');
+    expect(classifyNavigation('pagespace://auth-exchange?code=x&state=y', appOrigin, scheme)).toBe('deep-link');
+    expect(classifyNavigation('pagespace://passkey-registered', appOrigin, scheme)).toBe('deep-link');
   });
 
   it('routes off-origin web links to the system browser', () => {
-    expect(classifyNavigation('https://evil.com/phish', appOrigin)).toBe('open-external');
-    expect(classifyNavigation('http://example.com/', appOrigin)).toBe('open-external');
+    expect(classifyNavigation('https://evil.com/phish', appOrigin, scheme)).toBe('open-external');
+    expect(classifyNavigation('http://example.com/', appOrigin, scheme)).toBe('open-external');
   });
 
   it('blocks file:// and other custom schemes', () => {
-    expect(classifyNavigation('file:///etc/passwd', appOrigin)).toBe('block');
-    expect(classifyNavigation('javascript:alert(1)', appOrigin)).toBe('block');
-    expect(classifyNavigation('mailto:a@b.c', appOrigin)).toBe('block');
+    expect(classifyNavigation('file:///etc/passwd', appOrigin, scheme)).toBe('block');
+    expect(classifyNavigation('javascript:alert(1)', appOrigin, scheme)).toBe('block');
+    expect(classifyNavigation('mailto:a@b.c', appOrigin, scheme)).toBe('block');
   });
 
   it('blocks unparseable input', () => {
-    expect(classifyNavigation('not a url', appOrigin)).toBe('block');
-    expect(classifyNavigation('', appOrigin)).toBe('block');
+    expect(classifyNavigation('not a url', appOrigin, scheme)).toBe('block');
+    expect(classifyNavigation('', appOrigin, scheme)).toBe('block');
   });
 
   it('does not allow a foreign origin even when the app origin is unparseable', () => {
     // Caller fails closed on a bad origin; this fn must never return "allow".
-    expect(classifyNavigation('https://evil.com', 'garbage')).toBe('open-external');
-    expect(classifyNavigation('https://pagespace.ai', 'garbage')).not.toBe('allow');
+    expect(classifyNavigation('https://evil.com', 'garbage', scheme)).toBe('open-external');
+    expect(classifyNavigation('https://pagespace.ai', 'garbage', scheme)).not.toBe('allow');
+  });
+
+  // The two apps built from this shell must not honour each other's deep
+  // links: those URLs carry single-use auth exchange codes, so a coder window
+  // classifying `pagespace://auth-exchange` as a deep link would hand PageSpace's
+  // sign-in to the wrong app.
+  describe.each([
+    { app: 'PageSpace', own: 'pagespace:', foreign: 'pagespace-coder://auth-exchange?code=x' },
+    { app: 'PageSpace Coder', own: 'pagespace-coder:', foreign: 'pagespace://auth-exchange?code=x' },
+  ])('under the $app scheme', ({ own, foreign }) => {
+    it('passes its own scheme to the OS handler', () => {
+      expect(classifyNavigation(`${own}//auth-exchange?code=x`, appOrigin, own)).toBe('deep-link');
+    });
+
+    it("blocks the other app's scheme", () => {
+      expect(classifyNavigation(foreign, appOrigin, own)).toBe('block');
+    });
   });
 });
 
@@ -142,5 +161,16 @@ describe('isTrustedSenderUrl', () => {
     expect(isTrustedSenderUrl('https://evil.com', appOrigin)).toBe(false);
     expect(isTrustedSenderUrl('http://pagespace.ai', appOrigin)).toBe(false);
     expect(isTrustedSenderUrl('file:///offline.html', appOrigin)).toBe(false);
+  });
+});
+
+describe('guardsRedirect', () => {
+  it('judges the main frame, and an event that does not say (fail closed)', () => {
+    expect(guardsRedirect(true)).toBe(true);
+    expect(guardsRedirect(undefined)).toBe(true);
+  });
+
+  it('exempts a subframe — it holds no preload bridge, and the preview frame must follow its own redirect', () => {
+    expect(guardsRedirect(false)).toBe(false);
   });
 });

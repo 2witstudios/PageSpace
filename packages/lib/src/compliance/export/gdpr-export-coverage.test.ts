@@ -63,6 +63,7 @@ const EMPTY: AllUserData = {
   profile: { id: 'u', name: 'n', email: 'e', image: null, timezone: null, createdAt: new Date(0), updatedAt: new Date(0) },
   drives: [],
   pages: [],
+  sheets: [],
   messages: [],
   files: [],
   activity: [],
@@ -76,8 +77,11 @@ const EMPTY: AllUserData = {
   displayPreferences: [],
   settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [] },
   personalization: null,
+  personalizationCandidates: [],
   agentWorkspaces: [],
   streamState: [],
+  contentTags: [],
+  localEnvironments: [],
 };
 
 describe('GDPR export table coverage', () => {
@@ -144,6 +148,7 @@ describe('GDPR export table coverage', () => {
       profile: 'profile.json',
       drives: 'drives.json',
       pages: 'pages.json',
+      sheets: 'sheets.json',
       messages: 'messages.json',
       files: 'files-metadata.json',
       activity: 'activity.json',
@@ -158,8 +163,11 @@ describe('GDPR export table coverage', () => {
       settings: 'settings.json',
       // Omitted entirely when the user has none, so an empty bundle lacks it.
       personalization: null,
+      personalizationCandidates: 'personalization-candidates.json',
       agentWorkspaces: 'agent-workspaces.json',
       streamState: 'stream-state.json',
+      localEnvironments: 'local-environments.json',
+      contentTags: 'content-tags.json',
     };
 
     const unshipped = [...new Set(Object.values(EXPORTED_TABLES))].filter((category) => {
@@ -187,5 +195,10 @@ describe('GDPR export table coverage', () => {
     // deletes `ai_stream_sessions` on an erasure request. Anything we will
     // delete on demand, we must be able to disclose on demand.
     expect(EXPORTED_TABLES['ai_stream_sessions']).toBe('streamState');
+    // `ai_stream_frames` is the same content in the form that replaces `parts`,
+    // and `purge-stream-state` deletes it too. Pinned separately so a future
+    // edit that moves it to the exclusion list has to argue with this test
+    // rather than with a set difference.
+    expect(EXPORTED_TABLES['ai_stream_frames']).toBe('streamState');
   });
 });

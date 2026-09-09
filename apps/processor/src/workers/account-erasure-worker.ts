@@ -173,7 +173,8 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
     'purge-stream-state': async () => {
       const result = await deleteStreamStateForUser(userId);
       return ok(
-        `streamSessions=${result.streamSessions} abortIntents=${result.abortIntents}`
+        `streamSessions=${result.streamSessions} streamFrames=${result.streamFrames} ` +
+          `abortIntents=${result.abortIntents}`
       );
     },
 

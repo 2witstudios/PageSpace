@@ -41,8 +41,6 @@
 
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import type { UIMessage } from 'ai';
-import { useChat } from '@ai-sdk/react';
-import { toast } from 'sonner';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Activity, Plus, History } from 'lucide-react';
@@ -51,10 +49,11 @@ import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
-import { useGlobalChatConfig, useGlobalChatConversation } from '@/contexts/GlobalChatContext';
+import { useOnboardingHandoffStore } from '@/stores/useOnboardingHandoffStore';
+import { useGlobalChatConversation } from '@/contexts/GlobalChatContext';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
-import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
-import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
+import { VoiceCallBarForConversation } from '@/components/ai/voice/realtime';
+import { useVoiceRebindStore } from '@/stores/useVoiceRebindStore';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 
 // Shared hooks and components
@@ -62,15 +61,11 @@ import {
   useMCPTools,
   useCacheMessageActions,
   useProviderSettings,
-  useChatTransport,
+  useChatSession,
   useSendHandoff,
-  useConversationSendHandoff,
-  HANDOFF_REFUSED_MESSAGE,
   useResumeBootstrap,
   useAnswerAskUser,
   useChatErrorCause,
-  buildChatConfig,
-  AGENT_CHAT_ID,
   LocationContext,
   buildGlobalChatRequestBody,
 } from '@/lib/ai/shared';
@@ -94,9 +89,9 @@ import { DEFAULT_PROVIDER } from '@/lib/ai/core/ai-providers-config';
 import { useAuth } from '@/hooks/useAuth';
 import { useConversationActiveStream, useActiveStream } from '@/hooks/useActiveStream';
 import { useStopStream } from '@/hooks/useStopStream';
-import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
 import { useRenderedMessages, useConversationLoadState, useConversationOlderPageState } from '@/hooks/useRenderedMessages';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { getOutboundMessages } from '@/hooks/outboundMessages';
 import {
   loadGlobalConversationMessages,
   loadAgentConversationMessages,
@@ -105,12 +100,8 @@ import {
 } from '@/hooks/conversationMessagesLoaders';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
-import { selectVoiceStreamText } from '@/lib/ai/streams/selectVoiceStreamText';
-import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActivationBaseline';
-import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
 import { createId } from '@paralleldrive/cuid2';
 
-const VOICE_OWNER: VoiceModeOwner = 'global-assistant';
 
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
@@ -121,7 +112,6 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   // GLOBAL CHAT CONTEXT - for Global Assistant mode
   // ============================================
-  const { chatConfig: globalChatConfig } = useGlobalChatConfig();
   const { currentConversationId: globalConversationId, isInitialized: globalIsInitialized, createNewConversation, rejoinGlobalStream } = useGlobalChatConversation();
 
   // ============================================
@@ -167,19 +157,9 @@ const GlobalAssistantView: React.FC = () => {
   const [input, setInput] = useState<string>('');
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
-  const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
-  // undefined = uninitialized, null = initialized with no baseline message, string = baseline message ID
-  const voiceBaselineRef = useRef<string | null | undefined>(undefined);
   // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>(DEFAULT_PROVIDER);
   const [agentSelectedModel, setAgentSelectedModel] = useState<string>('');
-
-  // Voice mode state
-  const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
-  const voiceOwner = useVoiceModeStore((s) => s.owner);
-  const enableVoiceMode = useVoiceModeStore((s) => s.enable);
-  const disableVoiceMode = useVoiceModeStore((s) => s.disable);
-  const isVoiceModeActive = isVoiceModeEnabled && voiceOwner === VOICE_OWNER;
 
   // Display preferences
   const { preferences: displayPreferences } = useDisplayPreferences();
@@ -198,6 +178,18 @@ const GlobalAssistantView: React.FC = () => {
   // SHARED HOOKS
   // ============================================
   const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
+
+  // The switcher is the voice switcher — see the twin of this comment in
+  // SidebarChatTab. Records an intent on the explicit act; navigation records
+  // nothing and therefore can never rebind.
+  const requestVoiceRebind = useVoiceRebindStore((state) => state.requestRebind);
+  const handleSelectAgentForVoice = useCallback(
+    (agent: Parameters<typeof selectAgent>[0]) => {
+      selectAgent(agent);
+      requestVoiceRebind(agent?.id ?? null);
+    },
+    [selectAgent, requestVoiceRebind],
+  );
 
   const { isLoading: isLoadingProviders, isAnyProviderConfigured, needsSetup } =
     useProviderSettings();
@@ -297,46 +289,61 @@ const GlobalAssistantView: React.FC = () => {
   // CHAT CONFIGURATION
   // ============================================
 
-  const agentTransport = useChatTransport(agentConversationId, '/api/ai/chat', selectedAgent?.id ?? null);
+  // `userId` is what `isOwnStream` compares, so a store entry opened by either send is
+  // recognised as this user's own in every tab and on every device.
+  const sendIdentity = useMemo(
+    () => ({ userId: user?.id ?? '', displayName: user?.name || user?.email || 'You' }),
+    [user?.id, user?.name, user?.email],
+  );
 
-  // Agent mode chat config
-  const agentChatConfig = useMemo(() => {
-    if (!selectedAgent || !agentConversationId || !agentTransport) return null;
+  // TWO SEND SHELLS, one per mode — and unlike the two `useChat` instances they replace, both
+  // can have sends in flight simultaneously without interfering. A shell is a `fetch` wrapper
+  // with per-conversation state, so "agent mode is busy" places no constraint at all on a
+  // global-mode send, and neither places one on a send into a DIFFERENT conversation of the
+  // same mode. That is the whole reason the pre-send handoff below is gone rather than moved.
+  //
+  // Their bases are the settled store views, read at call time — see `useChatSession`.
 
-    return buildChatConfig({
-      id: AGENT_CHAT_ID,
-      transport: agentTransport,
-      onError: (error: Error) => {
-        console.error('Agent Chat error:', error);
-      },
-    });
-  }, [selectedAgent, agentConversationId, agentTransport]);
-
-  // Global mode chat
   const {
-    messages: globalLocalMessages,
-    sendMessage: globalSendMessage,
-    status: globalStatus,
-    error: globalError,
-    clearError: globalClearError,
-    regenerate: globalRegenerate,
-    setMessages: setGlobalLocalMessages,
-    stop: globalStop,
-    addToolResult: globalAddToolResult,
-  } = useChat(globalChatConfig || {});
-
-  // Agent mode chat
-  const {
-    messages: agentMessages,
     sendMessage: agentSendMessage,
     status: agentStatus,
     error: agentError,
     clearError: agentClearError,
     regenerate: agentRegenerate,
-    setMessages: setAgentMessages,
-    stop: agentStop,
     addToolResult: agentAddToolResult,
-  } = useChat(agentChatConfig || {});
+  } = useChatSession({
+    api: '/api/ai/chat',
+    channelId: selectedAgent?.id ?? null,
+    conversationId: agentConversationId,
+    triggeredBy: sendIdentity,
+    getBaseMessages: getOutboundMessages,
+    onError: (error: Error) => {
+      console.error('Agent Chat error:', error);
+    },
+  });
+
+  const {
+    sendMessage: globalSendMessage,
+    status: globalStatus,
+    error: globalError,
+    clearError: globalClearError,
+    regenerate: globalRegenerate,
+    addToolResult: globalAddToolResult,
+  } = useChatSession({
+    api: globalConversationId
+      ? `/api/ai/global/${encodeURIComponent(globalConversationId)}/messages`
+      : '',
+    channelId: channelIdForGlobal,
+    conversationId: globalConversationId,
+    triggeredBy: sendIdentity,
+    getBaseMessages: getOutboundMessages,
+    onError: (error: Error) => {
+      console.error('Global Chat Error:', error);
+      if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {
+        console.error('Authentication failed - user may need to log in again');
+      }
+    },
+  });
 
   // ============================================
   // UNIFIED INTERFACE - select based on mode
@@ -349,9 +356,7 @@ const GlobalAssistantView: React.FC = () => {
   const error = selectedAgent ? agentError : globalError;
   const clearError = selectedAgent ? agentClearError : globalClearError;
   const regenerate = selectedAgent ? agentRegenerate : globalRegenerate;
-  const rawStop = selectedAgent ? agentStop : globalStop;
   const addToolResult = selectedAgent ? agentAddToolResult : globalAddToolResult;
-  const isStreaming = status === 'submitted' || status === 'streaming';
 
   // ============================================
   // STREAM/STOP — one selector read per mode (PR 5A)
@@ -359,13 +364,6 @@ const GlobalAssistantView: React.FC = () => {
   // The channel each mode's streams live on. Agent streams are keyed by the agent's page id;
   // global streams by this user's global channel id. Both are what useChannelStreamSocket and
   // useOwnStreamMirror write their store entries under.
-  // Stable identity for both mirror mounts — useOwnStreamMirror depends on the FIELDS, not the
-  // object, but memoizing keeps the two call sites honest about sharing one value.
-  const mirrorTriggeredBy = useMemo(
-    () => ({ userId: user?.id ?? '', displayName: user?.name || user?.email || 'You' }),
-    [user?.id, user?.name, user?.email],
-  );
-
   const agentActiveStream = useConversationActiveStream(selectedAgent?.id ?? null, agentConversationId);
   const globalActiveStream = useConversationActiveStream(channelIdForGlobal, globalConversationId);
   const activeStream = selectedAgent ? agentActiveStream : globalActiveStream;
@@ -385,7 +383,7 @@ const GlobalAssistantView: React.FC = () => {
   // Hand off to OUR OWN stream, never merely "a stream exists": on a shared conversation a
   // remote user's live stream would otherwise end our pendingSend the instant we clicked send,
   // leaving the submitted window — the one it exists to cover — unprotected.
-  const { wrapSend, pendingSendConversationId } = useSendHandoff(
+  const { wrapSend, pendingSendConversationId, releasePendingSend } = useSendHandoff(
     currentConversationId,
     status,
     activeStream?.isOwn === true,
@@ -397,14 +395,12 @@ const GlobalAssistantView: React.FC = () => {
   // unnecessary); what remains is the resume handler's "had a turn in flight" record —
   // conversation-scoped, so a stream still running against a conversation the user left
   // cannot trigger a regenerate for the one they are now looking at.
-  const isOwnAgentStreamForCurrentConversation = agentActiveStream?.isOwn === true;
-  const isOwnGlobalStreamForCurrentConversation = globalActiveStream?.isOwn === true;
-  // For guarding TRANSPORT-ARRAY writes, the store entry is not enough: it is absent for the whole
-  // submitted window (by design) and during any temporary store wipe (clearPageStreams on a socket
-  // swap). Each chat's own status covers those; the store entry still covers a bootstrapped stream,
-  // where our status is idle. Per chat — the two are independent and both can be in flight.
-  const agentSendUnsafeToClobber = agentStatus === 'submitted' || agentStatus === 'streaming' || isOwnAgentStreamForCurrentConversation;
-  const globalSendUnsafeToClobber = globalStatus === 'submitted' || globalStatus === 'streaming' || isOwnGlobalStreamForCurrentConversation;
+  // NO PER-MODE LIVENESS FLAGS. A pair of them fed `isOwnSendLive`, which fed
+  // `useCacheMessageActions` -> `useMessageActions.isOwnStreamLive`, whose only reader was the
+  // post-edit reconcile refetch — and that refetch is deleted (there is no transport array left
+  // for it to replace). The whole chain was dead weight, so it goes rather than being kept
+  // "in case" (review: coderabbitai on PR #2410). What the surface still needs is
+  // `effectiveIsStreaming` below, scoped to the conversation actually on screen.
 
   // Streaming for THE CONVERSATION ON SCREEN. `isStreaming` (useChat's status) alone is wrong in
   // both directions: it is true for the OLD conversation's still-in-flight request after a switch
@@ -439,74 +435,27 @@ const GlobalAssistantView: React.FC = () => {
   // Loading/error UI reads the cache entry's state (replaces the context's
   // isMessagesLoading and the dashboard store's isConversationMessagesLoading).
   const messagesLoadState = useConversationLoadState(currentConversationId);
-
-  // Voice's live-stream text (epic leaf 6.4) — one selector, three consumers.
-  const streamingAssistantText = useMemo(
-    () => selectVoiceStreamText(renderedMessages),
-    [renderedMessages],
-  );
-  // TRANSITIONAL (see useOwnStreamMirror) — copies each chat's own live assistant reply from
-  // useChat's local state into usePendingStreamsStore, so this surface's own streams are present
-  // in the store the same way a bootstrapped or remote one is. Everything above derives from
-  // store presence, so without these two mounts an own local stream would be invisible to its own
-  // Stop button.
+  // NO OWN-STREAM MIRRORS, and nothing replaced them.
   //
-  // MOUNTED PER CHAT, never for the mode-selected one: both chats can be in flight at once, and
-  // mirroring only the visible mode would drop the other's stream out of the store mid-generation
-  // — the same class of bug as the shared hold-refs this replaces. Each mount reads its OWN
-  // chat's messages/status and writes under its OWN channel + conversation.
+  // Two `useOwnStreamMirror` mounts stood here, copying each chat's own live assistant reply
+  // OUT of useChat's internal array and INTO `usePendingStreamsStore`, so this surface's own
+  // streams were present in the store the same way a bootstrapped or remote one was. That
+  // copy is what made the mirror necessary at all — it was one stateful container being
+  // reconciled against another, and it carried a latch, a re-latch rule for server-issued id
+  // adoption, a wipe-repair subscription, and a documented one-commit-wide window in which it
+  // could name the wrong conversation.
   //
-  // `ownAssistantMessage` deliberately reads the raw useChat arrays: this is the ONE place that
-  // must read the SDK's live-growing content in order to copy it OUT into the store. It is
-  // undefined unless the last message is an assistant's — during the submitted window the last
-  // message is the user's own, which is exactly why no store entry exists in that window (and why
-  // Stop falls back to the send-time conversationId there).
-  const { getLatchedConversationId: getAgentLatchedConversationId } = useOwnStreamMirror({
-    status: agentStatus,
-    ownMessages: agentMessages,
-    pageId: selectedAgent?.id ?? '',
-    conversationId: agentConversationId ?? '',
-    triggeredBy: mirrorTriggeredBy,
-  });
+  // There is one container now. `useChatSession` opens the store entry itself, from the
+  // admission envelope, keyed by the messageId the server stated — so an own stream is in the
+  // store from the instant it is admitted, by the same call that started it. Nothing is
+  // mirrored because nothing is duplicated.
+  //
+  // NO PRE-SEND HANDOFFS either. Both shells can have sends in flight at once, so a send into
+  // conversation B while A generates needs no `stop()`, no settle wait, and cannot be refused.
 
-  const { getLatchedConversationId: getGlobalLatchedConversationId } = useOwnStreamMirror({
-    status: globalStatus,
-    ownMessages: globalLocalMessages,
-    pageId: channelIdForGlobal ?? '',
-    conversationId: globalConversationId ?? '',
-    triggeredBy: mirrorTriggeredBy,
-  });
-
-  // Pre-send handoff, PER CHAT like the mirrors: a send into a different conversation than the
-  // one a chat is consuming for must first stop the local read and hand the in-flight stream to
-  // the socket path — the SDK's Chat cannot consume two response bodies at once, and a second
-  // concurrent send is how chat 1's stream ended up rendering inside chat 2. See
-  // useConversationSendHandoff.
-  // Through the ref: useAgentChannelMultiplayer mounts further down, and the ref is its standing
-  // late-binding (same pattern as the recovery path's rejoinAgentStreamRef.current() call).
-  const rejoinAgentStreamLate = useCallback(() => { rejoinAgentStreamRef.current(); }, []);
-  const { prepareSend: prepareAgentSend } = useConversationSendHandoff({
-    status: agentStatus,
-    stop: agentStop,
-    getLatchedConversationId: getAgentLatchedConversationId,
-    rejoin: rejoinAgentStreamLate,
-  });
-  const { prepareSend: prepareGlobalSend } = useConversationSendHandoff({
-    status: globalStatus,
-    stop: globalStop,
-    getLatchedConversationId: getGlobalLatchedConversationId,
-    rejoin: rejoinGlobalStream,
-  });
-  const prepareSendForMode = selectedAgent ? prepareAgentSend : prepareGlobalSend;
-
-  // Declared after the mirrors: the rawStop gate reads the mode-selected latch, so a Stop on a
-  // socket-attached conversation cannot abort another conversation's live local fetch.
-  const stop = useStopStream({
+  const { handleStop: stop, isStopping } = useStopStream({
     activeStream,
     pendingSendConversationId,
-    rawStop,
-    getLocalSendConversationId: selectedAgent ? getAgentLatchedConversationId : getGlobalLatchedConversationId,
-    targetConversationId: currentConversationId,
   });
 
 
@@ -555,11 +504,7 @@ const GlobalAssistantView: React.FC = () => {
   // SETTLED rows only; the live bubble's verb is Stop, and a synthesized
   // streaming row must never reach retry/delete's server-side DELETEs).
   // ============================================
-  const setMessages = selectedAgent ? setAgentMessages : setGlobalLocalMessages;
-  const isOwnSendLive = selectedAgent ? agentSendUnsafeToClobber : globalSendUnsafeToClobber;
   // Read after an await (resume runs async), so a ref rather than the captured value.
-  const isOwnSendLiveRef = useRef(isOwnSendLive);
-  isOwnSendLiveRef.current = isOwnSendLive;
   // Conversation-scoped counterpart, for consumers that must not see the OLD conversation's
   // still-in-flight raw useChat status as "busy" (PR 6 review, CodeRabbit, same class as the
   // AskUser fix above) — resume's isOwnStreamLive gate, unlike useCacheMessageActions' clobber
@@ -567,19 +512,24 @@ const GlobalAssistantView: React.FC = () => {
   const effectiveIsStreamingRef = useRef(effectiveIsStreaming);
   effectiveIsStreamingRef.current = effectiveIsStreaming;
 
-  const getIsOwnSendLive = useCallback(() => isOwnSendLiveRef.current, []);
 
   const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
     agentId: selectedAgent?.id || null,
     conversationId: currentConversationId,
     renderedMessages,
-    isOwnSendLive,
-    setMessages,
-    regenerate,
-    // Retry is a send: the handoff runs INSIDE handleRetry, before its destructive steps, and
-    // the hydrate decision re-reads liveness after the handoff settles (dual-stream fix).
-    prepareSend: prepareSendForMode,
-    getIsOwnSendLive,
+    // Adapts the shell's explicit-conversation `regenerate` to the action hook's
+    // conversation-less one. Binding the id HERE is what makes a Retry unambiguous — it used
+    // to be inferred inside a shared `Chat` from whatever the surface had last touched, which
+    // is how a Retry could re-send another conversation's trail under this one's body.
+    regenerate: (opts?: { body?: Record<string, unknown> }) => {
+      if (!currentConversationId) return;
+      void regenerate(currentConversationId, opts);
+    },
+    // Retry inherits send's optimistic path — see useCacheMessageActions.
+    wrapSend,
+    // …and its release: a retry stopped mid-DELETE dispatches nothing, and nothing else
+    // would clear the pendingSend it registered.
+    releasePendingSend,
   });
 
   // Display ids come from the RENDERED list (affordance placement + streaming
@@ -634,8 +584,6 @@ const GlobalAssistantView: React.FC = () => {
   useResumeBootstrap({
     rejoin: rejoinActiveMode,
     reload: handlePullUpRefresh,
-    stop: rawStop,
-    isOwnStreamLive: useCallback(() => effectiveIsStreamingRef.current, []),
     enabled: resumeEnabled,
   });
 
@@ -648,13 +596,20 @@ const GlobalAssistantView: React.FC = () => {
   // and the mirror latches only during its own send, so an un-cleared array cannot
   // mislead it (PR 5A's latch fix). The clear existed for the old render path.
 
-  // Stop global stream when switching to agent mode. Local-only stop — the accepted
-  // residual on the PR 5 node (the server generation continues) stands; recorded there.
-  useEffect(() => {
-    if (selectedAgent && (globalStatus === 'submitted' || globalStatus === 'streaming')) {
-      globalStop();
-    }
-  }, [selectedAgent, globalStatus, globalStop]);
+  // NO MODE-SWITCH STOP. Deleted, not made server-aborting.
+  //
+  // An effect here used to call `globalStop()` whenever the user selected an agent while a
+  // global reply was streaming. It was documented as an "accepted residual" on the grounds
+  // that "the server generation continues" — which is true, and is the half that does not
+  // matter. The user's rule has two clauses: (a) do not abort the compute, (b) do not end the
+  // run's VISIBLE life. Only (a) was ever reasoned about. Switching which mode you are LOOKING
+  // AT is not a stop by any reading, and the run's tokens kept arriving on a channel this tab
+  // had just stopped reading, so the reply the user came back to was frozen at the moment they
+  // glanced away.
+  //
+  // Nothing takes its place, because nothing needs to: both modes' streams live in the same
+  // store, written by the same app-wide registry, and a mode switch changes only which of them
+  // is selected for display. `only-a-deliberate-stop.test.ts` fails if this comes back.
 
   // NO refreshSignal effect (PR 5B, leaf 5.4): remote events write the conversation
   // cache directly in GlobalChatContext — merge-at-render means a DB snapshot landing
@@ -675,8 +630,11 @@ const GlobalAssistantView: React.FC = () => {
   // slot was still ours), and their cleanups, which fired on every 'ready' render and so ran for
   // the entire life of a bootstrapped stream.
   //
-  // This is Elliott rail 11: no effect may copy state between stateful containers. The mirror
-  // above is the one sanctioned exception, and it is TRANSITIONAL.
+  // This is Elliott rail 11: no effect may copy state between stateful containers. The
+  // own-stream mirror above was the one sanctioned exception to it — and it is now deleted
+  // too, so the rail holds here without exception. `useChatSession` opens the store entry
+  // itself from the admission envelope, which means the fact was never copied at all: there is
+  // one container, and everything reads it.
 
   // NO load-on-select effects (PR 5B, leaf 5.2): loads commit straight to the
   // conversation cache (dashboard store loaders / GlobalChatContext), and rendering
@@ -741,7 +699,7 @@ const GlobalAssistantView: React.FC = () => {
     setActiveTab('history');
   };
 
-  // Shared by every send-shaped request (typed send, voice send, AskUser resume) — one
+  // Shared by every send-shaped request (typed send, AskUser resume) — one
   // definition means the body a resume POST carries can't drift from what a real send
   // would have sent (epic leaf 6.3: deletes the separate buildAskUserAnswerBody).
   const buildRequestBody = useCallback(() => {
@@ -782,15 +740,22 @@ const GlobalAssistantView: React.FC = () => {
     mcpToolSchemas,
   ]);
 
-  const handleSendMessage = async () => {
+  /**
+   * Send `text` as the user's message.
+   *
+   * Split out from `handleSendMessage` so a caller that did not come from the
+   * composer — onboarding handing over the user's first request — can send
+   * without having to stuff text into composer state and synthesise a submit.
+   * Kept as its own function rather than an optional first argument to
+   * `handleSendMessage`, because that is wired directly to `onSend` and would
+   * receive a click event in that position.
+   */
+  const sendMessageWithText = async (text: string, options?: { clearComposer?: boolean }) => {
     const files = getFilesForSend();
-    if ((!input.trim() && files.length === 0) || !currentConversationId) return;
+    if ((!text.trim() && files.length === 0) || !currentConversationId) return;
 
     const requestBody = buildRequestBody();
 
-    // Capture the draft BEFORE the handoff await below: the wait can run up to ~1.5s, and
-    // anything the user types or attaches during it must survive (Codex review, PR #2121).
-    const text = input;
     const sendFiles = files.length > 0 ? files : undefined;
     // The ids behind `files` — same processed filter getFilesForSend applies. Attachments are
     // cleared per-id AFTER the handoff confirms, so a refusal loses nothing and anything
@@ -799,17 +764,15 @@ const GlobalAssistantView: React.FC = () => {
 
     // Text clears immediately (typing during the wait must not merge into the old draft) and is
     // restored on refusal ONLY if the composer is still empty — newer keystrokes win.
-    setInput('');
+    // Only for composer sends: a programmatic send must never wipe a draft the
+    // user is part-way through typing.
+    if (options?.clearComposer) setInput('');
 
-    // Hand off any in-flight stream this chat is consuming for ANOTHER conversation before
-    // sending — the Chat cannot consume two bodies at once. No-op for same-conversation sends.
-    // `false` means the handoff could not confirm (unmount, or the settle wait timed out with
-    // the latch still held): sending would re-key the new stream under the old conversation.
-    if (!(await prepareSendForMode(currentConversationId))) {
-      toast.error(HANDOFF_REFUSED_MESSAGE);
-      setInput((current) => (current === '' ? text : current));
-      return;
-    }
+    // NO PRE-SEND HANDOFF, and no path that can refuse the send. A send is its own `fetch`;
+    // a generation already running in another conversation — or in the other mode — is
+    // simply not this send's concern. What stood here stopped the other read, waited up to
+    // 1.5s for a status to settle, and on timeout put the user's text back in the composer
+    // behind a toast.
     for (const id of sentAttachmentIds) removeFile(id);
 
     // Client-minted id, parts-form send (PR 4 pattern): the `{text, files}` shorthand
@@ -825,37 +788,72 @@ const GlobalAssistantView: React.FC = () => {
     }) as UIMessage;
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
-    // wrapSend handles pendingSend registration and cleanup when streaming starts
-    rollbackOptimisticSendOnFailure(
-      () => wrapSend(() => sendMessage(userMessage, { body: requestBody })),
+    // wrapSend handles pendingSend registration and cleanup when streaming starts.
+    // Returned (not fire-and-forget) so a caller that must know whether the send
+    // was admitted — the onboarding handoff, which restores the request on a
+    // pre-admission failure like a 402 — can await it.
+    return rollbackOptimisticSendOnFailure(
+      () => wrapSend(() => sendMessage(userMessage, currentConversationId, { body: requestBody })),
       currentConversationId,
       userMessage.id,
     );
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   };
 
-  // Voice mode: Send message from voice transcript
-  const handleVoiceSend = useCallback(async (text: string) => {
-    if (!text.trim() || !currentConversationId) return;
+  const handleSendMessage = async () => {
+    // Capture the draft BEFORE any await: the wait can run up to ~1.5s, and
+    // anything the user types or attaches during it must survive (Codex review, PR #2121).
+    await sendMessageWithText(input, { clearComposer: true });
+  };
 
-    // Same cross-conversation handoff as handleSendMessage; abort on an unconfirmed handoff —
-    // with feedback, or the transcript would vanish silently.
-    if (!(await prepareSendForMode(currentConversationId))) {
-      toast.error(HANDOFF_REFUSED_MESSAGE);
-      return;
-    }
+  // First-run handoff: onboarding queues the user's first request, and we send
+  // it as soon as the GLOBAL assistant has a conversation to send it into.
+  //
+  // Subscribed to the store rather than reading it once: in the normal case the
+  // global conversation already exists by the time the user finishes the five
+  // modal steps, so an effect keyed only on the conversation id would have
+  // already run, found nothing, and never run again — leaving the request
+  // queued forever and the whole feature silently dead.
+  //
+  // Gated on `!selectedAgent` because `sendMessage` and `currentConversationId`
+  // both switch on it: with an agent restored from the URL or a cookie, the
+  // user's first request would be delivered to that agent instead of the global
+  // assistant. Waiting is safe — the subscription re-fires when they return to
+  // global mode.
+  //
+  // `claim()` clears the request as it returns it, so a remount can never
+  // re-send; the ref closes the same window within one mount. On a failed send
+  // the request is put back rather than lost, since the user has already been
+  // told it was sent.
+  const pendingHandoffRequest = useOnboardingHandoffStore((s) => s.pendingRequest);
+  const handoffSentRef = useRef(false);
 
-    // Same client-minted-id, optimistic-cache-write shape as handleSendMessage.
-    const userMessage = buildUserMessage({ id: createId(), text }) as UIMessage;
-    conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
+  useEffect(() => {
+    useOnboardingHandoffStore.getState().hydrate();
+  }, []);
 
-    // wrapSend handles pendingSend registration and cleanup when streaming starts
-    rollbackOptimisticSendOnFailure(
-      () => wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() })),
-      currentConversationId,
-      userMessage.id,
-    );
-  }, [currentConversationId, sendMessage, buildRequestBody, wrapSend, prepareSendForMode]);
+  useEffect(() => {
+    if (handoffSentRef.current) return;
+    if (!pendingHandoffRequest) return;
+    if (selectedAgent) return; // wait for global mode — never deliver to an agent
+    if (!globalConversationId) return; // not ready yet — keep it queued, don't drop it
+
+    const pending = useOnboardingHandoffStore.getState().claim();
+    if (!pending) return;
+    handoffSentRef.current = true;
+
+    void (async () => {
+      try {
+        await sendMessageWithText(pending);
+      } catch {
+        handoffSentRef.current = false;
+        useOnboardingHandoffStore.getState().restore(pending);
+      }
+    })();
+    // sendMessageWithText is recreated every render; depending on it would
+    // re-run this effect constantly. The ref + take-once claim are the guards.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingHandoffRequest, selectedAgent, globalConversationId]);
 
   // renderedMessages (selector output), not useChat's raw `messages`: "answerable" is
   // decided by whether the ask_user part sits on the conversation's LAST message, and
@@ -868,45 +866,11 @@ const GlobalAssistantView: React.FC = () => {
     conversationId: currentConversationId,
     renderedMessages,
     isConversationBusy: effectiveIsStreaming,
-    setMessages,
     addToolResult,
     wrapSend,
+    releasePendingSend,
     buildBody: buildRequestBody,
-    // Answering re-invokes the chat — same cross-conversation handoff as every send path.
-    prepareSend: prepareSendForMode,
   });
-
-  // Track last AI response for voice mode TTS (epic leaf 6.4 — baseline decision is
-  // now a shared pure helper; only the "activate once" ref bookkeeping stays here).
-  useEffect(() => {
-    if (!isVoiceModeActive) {
-      voiceBaselineRef.current = undefined;
-      setLastAIResponse(null);
-      return;
-    }
-
-    // Initialize baseline BEFORE the streaming guard. If we waited until after,
-    // activating voice mid-stream would leave the baseline unset and then silence
-    // the in-flight response when it finishes.
-    if (voiceBaselineRef.current === undefined) {
-      voiceBaselineRef.current = selectVoiceActivationBaseline(renderedMessages);
-      return;
-    }
-
-    const next = selectPostBaselineAssistantMessage(renderedMessages, voiceBaselineRef.current);
-    if (!next) return;
-
-    setLastAIResponse((current) => (current?.id === next.id ? current : next));
-  }, [renderedMessages, isVoiceModeActive]);
-
-  // Voice mode toggle handler
-  const handleVoiceModeToggle = useCallback(() => {
-    if (isVoiceModeActive) {
-      disableVoiceMode();
-    } else {
-      enableVoiceMode(VOICE_OWNER);
-    }
-  }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);
 
   // ============================================
   // RENDER
@@ -942,8 +906,11 @@ const GlobalAssistantView: React.FC = () => {
         <div className="flex items-center space-x-2">
           <AISelector
             selectedAgent={selectedAgent}
-            onSelectAgent={selectAgent}
-            disabled={isStreaming}
+            onSelectAgent={handleSelectAgentForVoice}
+            // The CONVERSATION's own liveness, not a raw chat status. Switching agent while
+            // something generates is a view change, not a send — and the underlying status no
+            // longer reports "streaming" at all, because this client does not read a body.
+            disabled={effectiveIsStreaming}
           />
         </div>
         <div className="flex items-center space-x-2">
@@ -978,6 +945,16 @@ const GlobalAssistantView: React.FC = () => {
           </Button>
         </div>
       </div>
+
+      {/*
+        Voice as a MODE on this surface — same conversation, same message list,
+        with the live call's chrome above it. Spoken turns arrive in that list as
+        ordinary messages, so there is no second transcript here.
+      */}
+      <VoiceCallBarForConversation
+        conversationId={currentConversationId}
+        assistantName={selectedAgent ? selectedAgent.title : 'Global Assistant'}
+      />
 
       {/* Usage Monitor */}
       {displayPreferences.showTokenCounts && (
@@ -1018,6 +995,7 @@ const GlobalAssistantView: React.FC = () => {
         onSend={handleSendMessage}
         onStop={stop}
         isStreaming={effectiveIsStreaming}
+        isStopping={isStopping}
         isLoading={isLoading}
         disabled={!isAnyProviderConfigured || !isInitialized}
         placeholder={selectedAgent ? `Ask ${selectedAgent.title}...` : 'Ask about your workspace...'}
@@ -1063,17 +1041,6 @@ const GlobalAssistantView: React.FC = () => {
         remoteStreams={remoteStreams}
         renderInput={(props) => (
           <>
-            {isVoiceModeActive && (
-              <VoiceCallPanel
-                owner={VOICE_OWNER}
-                onSend={handleVoiceSend}
-                latestAssistantMessage={lastAIResponse}
-                isAIStreaming={effectiveIsStreaming}
-                streamingText={streamingAssistantText}
-                onStopStream={stop}
-                onClose={disableVoiceMode}
-              />
-            )}
             <ChatInput
               ref={inputRef}
               value={props.value}
@@ -1081,6 +1048,7 @@ const GlobalAssistantView: React.FC = () => {
               onSend={props.onSend}
               onStop={props.onStop}
               isStreaming={props.isStreaming}
+              isStopping={props.isStopping}
               disabled={props.disabled}
               placeholder={props.placeholder}
               driveId={props.driveId}
@@ -1094,8 +1062,6 @@ const GlobalAssistantView: React.FC = () => {
               onMcpServerToggle={props.onMcpServerToggle}
               showMcp={props.showMcp}
               popupPlacement={props.inputPosition === 'centered' ? 'bottom' : 'top'}
-              onVoiceModeClick={handleVoiceModeToggle}
-              isVoiceModeActive={isVoiceModeActive}
               attachments={attachments}
               onAddFiles={addFiles}
               onRemoveFile={removeFile}

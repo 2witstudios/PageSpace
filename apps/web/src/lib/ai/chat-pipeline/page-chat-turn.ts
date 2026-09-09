@@ -22,7 +22,6 @@ import {
   stepCountIs,
   hasToolCall,
   createUIMessageStream,
-  createUIMessageStreamResponse,
   type TextUIPart,
   type ToolSet,
 } from 'ai';
@@ -33,7 +32,6 @@ import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
-import { canUseAskUser } from '@/lib/ai/core/ask-user-gating';
 import {
   extractClientAskUserResults,
   applyAskUserResultsToPageMessage,
@@ -49,12 +47,12 @@ import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
+import { pumpAndRespond } from '@/lib/ai/chat-pipeline/pump-and-respond';
 import { startChatGeneration } from './start-chat-generation';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
-import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
-import { isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage, canPrincipalEditPage, type AuthResult } from '@/lib/auth';
+import { isMCPAuthResult, isServiceAuthResult, checkMCPPageScope, getAllowedDriveIds, isDriveScopedPrincipal, canPrincipalViewPage, canPrincipalEditPage, type AuthResult } from '@/lib/auth';
 
 /**
  * Thrown when the conversation was still active at the ownership check far
@@ -89,10 +87,7 @@ import {
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
 import { respondWithHelpAnswer } from '@/lib/ai/core/help-responder';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
-import { buildSystemPrompt, buildPersonalizationPrompt } from '@/lib/ai/core/system-prompt';
-import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
-import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
 import { resolveHomeDriveHint } from '@/lib/ai/core/home-drive-hint';
@@ -100,7 +95,6 @@ import {
   filterToolsForReadOnly,
   filterToolsForMcpScope,
   filterToolsForAgentAllowlist,
-  filterToolsForDispatchCredentials,
   filterToolsForSandboxEnablement,
   filterToolsForSandboxTier,
 } from '@/lib/ai/core/tool-filtering';
@@ -116,11 +110,12 @@ import { applyToolExposureMode, ALWAYS_UPFRONT_TOOLS } from '@/lib/ai/tools/tool
 import { buildBuiltinSkillCatalog, listEligibleSkills } from '@/lib/ai/core/skill-catalog';
 import { loadUserCommandCatalog } from '@/lib/commands/command-catalog-loader';
 import {
+  buildAgentSystemPrompt,
   buildVolatileTurnContext,
   appendTurnContextToLastUserMessage,
   withCacheBreakpoints,
 } from '@/lib/ai/core/prompt-assembly';
-import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
+import { prepareHistoryForModel, finishModelRequest, agentLoopPrepareStep } from '@/lib/ai/core/context-assembly';
 import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/agent-memory';
 
 import { db } from '@pagespace/db/db'
@@ -144,7 +139,6 @@ import {
   attachStreamFinisher,
   createStreamAbortController,
   removeStream,
-  STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
@@ -323,13 +317,25 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       },
     });
     if (persisted && mentionNotify) mentionNotified = true;
+    // A terminal `messages` row for this generation now exists, so its raw frames have stopped
+    // being the only copy of the reply. This ARMS the frame log's release rather than
+    // performing it: a turn writes terminally more than once (execute-end persists the
+    // buffered snapshot, `onFinish` then refines it), and deleting on the first would discard
+    // a tail the pump may still have been forwarding. The lifecycle releases once this and
+    // `finish()` have both happened. Gated on `persisted` because a save the
+    // conversation-deleted guard declined is not a durable row.
+    if (persisted && args.role === 'assistant') lifecycle?.confirmTerminalWrite(args.messageId);
   };
-  // Captured by the inner catch (createUIMessageStream construction failure) BEFORE it calls
-  // lifecycle.finish() — finish() deletes the multicast registry entry getBufferedParts() reads
-  // from, so by the time the outer catch below runs, a fresh getBufferedParts() call would
-  // always see an empty buffer. Falls back to a fresh (empty) capture in the outer catch when
-  // this was never set (i.e. the throw happened somewhere else, before finish() ever ran).
-  let bufferedPartsAtStreamError: ReturnType<StreamLifecycleHandle['getBufferedParts']> | undefined;
+  // Captured by the inner catch (createUIMessageStream construction failure) before it calls
+  // lifecycle.finish().
+  //
+  // The reason this existed is GONE: finish() used to delete the multicast registry entry that
+  // getBufferedParts() read from, so a fresh call afterwards always saw an empty buffer. The
+  // lifecycle now closes over its own channel, and finishing a channel does not clear its ring,
+  // so `getParts()` still returns the real content after finish(). Kept as belt-and-braces —
+  // capturing at the earliest point is still the most faithful snapshot, and the cost is one
+  // fold — but nothing depends on it any more.
+  let bufferedPartsAtStreamError: Awaited<ReturnType<StreamLifecycleHandle['getParts']>> | undefined;
   // The credit-gate reservation for this request, released when usage is billed.
   let holdId: string | undefined;
   // True once the stream/error handler owns the hold's release. Any earlier
@@ -918,7 +924,6 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 type: 'page',
                 contextId: chatId!,
                 isShared: false,
-                workspaceId: null,
                 title: null,
                 updatedAt: new Date(),
               })
@@ -1224,7 +1229,10 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // so no per-request registration happens here anymore: a conversation IS a
     // session, there is no binding to compose by.
     const baseTools = filterToolsForReadOnly(
-      filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(authResult)),
+      // Drive-scoped in the general sense, not "is an MCP result": a dispatched
+      // worker runs under service auth carrying an inherited ceiling and must
+      // get the same narrowed tool set the token that spawned it would.
+      filterToolsForMcpScope(pageSpaceTools, isDriveScopedPrincipal(authResult)),
       readOnlyMode
     );
 
@@ -1269,11 +1277,15 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // The tier gate strips only the COMPUTE tools — a free payer keeps the
     // chat-only session family (sessions/chat are free on every plan).
     filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
-    // spawn_session/send_session dispatch by forwarding the caller's browser
-    // session cookie — an MCP-authenticated request (allowed on this route)
-    // has none, so its dispatch could only ever refuse (codex round 9; same
-    // posture as /api/v1 and non-interactive workflow runs).
-    filteredTools = filterToolsForDispatchCredentials(filteredTools, !isMCPAuthResult(authResult)) as ToolSet;
+    // spawn_session/send_session used to be stripped for MCP-authenticated
+    // requests, because dispatch worked by forwarding the caller's browser
+    // session cookie and an MCP request has none — so advertising them could
+    // only ever produce a refusal (codex round 9). Dispatch signs its own hop
+    // now (`session-tools-runtime.ts`), so a credential the caller does not have
+    // is no longer a precondition, and an SDK/CLI/MCP turn can drive a worker
+    // like any other. The ceiling that DID matter rides the dispatch instead:
+    // `mcpAllowedDriveIds` below flows into the signed payload and back out as
+    // service auth's `allowedDriveIds`.
 
     // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
     // If the user toggled web search on in the composer, they get web_search regardless of enabledTools.
@@ -1476,10 +1488,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // directly callable and never routed through tool_search/execute_tool.
     // allowedToolNames was captured pre-exposure; push so the inline-instructions
     // ASK_USER section is emitted.
-    if (canUseAskUser(user)) {
-      filteredTools = { ...filteredTools, ...askUserTools } as ToolSet;
-      allowedToolNames.push(ASK_USER_TOOL_NAME);
-    }
+    filteredTools = { ...filteredTools, ...askUserTools } as ToolSet;
+    allowedToolNames.push(ASK_USER_TOOL_NAME);
 
     // Guard against a stale read_page tool-result (image bytes delivered on an
     // earlier turn when the model had vision) being re-embedded as an image when
@@ -1506,36 +1516,11 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       });
     }
 
-    // Build system prompt for Page AI - use custom system prompt if available, otherwise use default
-    // Note: "current page/drive" is turn-volatile — it's built separately as
-    // `locationPrompt` below and injected via buildVolatileTurnContext, NOT
-    // baked in here, so this string stays byte-identical across turns.
-    let systemPrompt: string;
-    if (customSystemPrompt) {
-      // Use custom system prompt with page context injected
-      // Prepend drive prompt if enabled and available
-      systemPrompt = drivePromptPrefix + customSystemPrompt;
-      // Add user personalization if enabled
-      const personalizationPrompt = buildPersonalizationPrompt(personalization ?? undefined);
-      if (personalizationPrompt) {
-        systemPrompt += `\n\n${personalizationPrompt}`;
-      }
-      // Add read-only constraint if applicable
-      if (readOnlyMode) {
-        systemPrompt += `\n\nREAD-ONLY MODE:\n• You cannot modify, create, or delete any content\n• Focus on exploring, analyzing, and planning\n• Create actionable plans for the user to execute later`;
-      }
-    } else {
-      // Fallback to default PageSpace system prompt with read-only mode and personalization
-      systemPrompt = buildSystemPrompt(
-        readOnlyMode,
-        personalization ?? undefined,
-        isCodeExecutionEnabled()
-      );
-
-      // Append workspace knowledge (tool-aware). Custom systemPrompt = opt-out (blank slate).
-      systemPrompt += buildInlineInstructions(allowedToolNames);
-    }
-
+    // The system prompt itself is assembled once, below, by
+    // `buildAgentSystemPrompt` — every input it needs is gathered first. Note
+    // that "current page/drive" is turn-volatile: it is built separately as
+    // `locationPrompt` and injected via buildVolatileTurnContext, NOT baked
+    // into the system prompt, so that string stays byte-identical across turns.
     const hasTurnLocation = Boolean(turnLocation?.currentPage || turnLocation?.currentDrive);
     const locationHomeDriveId = await resolveHomeDriveHint(userId, hasTurnLocation, getAllowedDriveIds(authResult));
 
@@ -1546,30 +1531,26 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       homeDriveId: locationHomeDriveId,
     } : { homeDriveId: locationHomeDriveId });
 
-    // Cross-drive membership context applies uniformly regardless of whether
-    // a custom system prompt is set (unlike drivePromptPrefix above, which is
-    // only prepended in the customSystemPrompt branch).
-    systemPrompt = memberDriveContextPrefix + systemPrompt;
-
-    // Skill catalog applies uniformly too — including custom-systemPrompt
+    // Skill catalog applies uniformly — including to custom-systemPrompt
     // agents, which opt out of buildInlineInstructions and would otherwise
     // carry load_skill with no idea what is loadable. It is capability
     // metadata (like toolDiscoveryPrompt), not behavioral instruction, and
     // varies only with the agent's tool configuration — stable per
-    // conversation, so it belongs in this cache-stable prompt, never the
+    // conversation, so it belongs in the cache-stable prompt, never the
     // volatile block.
-    systemPrompt += buildBuiltinSkillCatalog(allowedToolNames);
+    const skillCatalogPrompt = buildBuiltinSkillCatalog(allowedToolNames);
 
     // Active plan pointer. Same volatility class as the skill catalog above and
     // as Agent Memory: it changes only when the agent calls set_plan/clear_plan,
     // never on navigation, so it is cache-stable per conversation. It has to be
-    // here rather than in the volatile block — the compaction summary is lossy,
-    // and this pointer is precisely what the agent needs after a summary.
+    // in the stable prompt rather than the volatile block — the compaction
+    // summary is lossy, and this pointer is precisely what the agent needs
+    // after a summary.
     // Scoped MCP/OAuth tokens reach this turn too, and a plan can be bound to a
     // page in ANOTHER drive — so the principal-aware check is required here. A
     // user-level check would leak an out-of-scope plan's title and id to a token
     // that may not reach that drive.
-    systemPrompt += buildActivePlanPrompt(
+    const activePlanPrompt = buildActivePlanPrompt(
       await getActivePlan(conversationId, userId, (pageId) =>
         canPrincipalViewPage(authResult, pageId),
       ),
@@ -1606,6 +1587,25 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       const memoryContent = await getAgentMemoryContext(chatId, userId);
       agentMemoryPrompt = buildAgentMemorySection(memoryContent);
     }
+
+    // One assembly, shared with the Global Assistant and with voice — see
+    // `buildAgentSystemPrompt`. A custom systemPrompt is a blank slate: it
+    // skips the default persona and the workspace-knowledge block, but not the
+    // capability metadata.
+    const systemPrompt = buildAgentSystemPrompt({
+      surface: 'page',
+      readOnly: readOnlyMode,
+      personalization,
+      allowedToolNames,
+      skillCatalog: skillCatalogPrompt,
+      activePlan: activePlanPrompt,
+      pageTree: pageTreePrompt,
+      customSystemPrompt,
+      drivePromptPrefix,
+      memberDriveContextPrefix,
+      agentMemory: agentMemoryPrompt,
+      toolDiscovery: toolDiscoveryPrompt,
+    });
 
     loggers.ai.debug('AI Chat API: Loading conversation history', {
       pageId: chatId
@@ -1663,7 +1663,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       pageId,
       model: resolvedModelName ?? currentModel,
       provider: resolvedProvider ?? currentProvider,
-      systemPrompt: systemPrompt + pageTreePrompt + agentMemoryPrompt + toolDiscoveryPrompt,
+      systemPrompt: systemPrompt,
       tools: filteredTools as Record<string, unknown>,
       user: user ? { id: user.id, role: user.role } : null,
     });
@@ -1752,7 +1752,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     }
 
     try {
-      const stream = createUIMessageStream({
+      const sdkStream = createUIMessageStream({
         originalMessages: sanitizedMessages,
         generateId: () => serverAssistantMessageId!,
         execute: async ({ writer }) => {
@@ -1823,7 +1823,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
               model,
               // Stable system prompt — no volatile sections; stays byte-identical
               // across turns so provider prefix caches survive per request.
-              system: systemPrompt + pageTreePrompt + agentMemoryPrompt + toolDiscoveryPrompt,
+              system: systemPrompt,
               messages: cachedMessages,
               tools: filteredTools,
               // hasToolCall(ASK_USER_TOOL_NAME) is documentation: ask_user has no
@@ -1875,7 +1875,16 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 // so a scoped token cannot reach drives outside its scope — or
                 // exceed its own membership role — via the agent's broader ACL.
                 mcpAllowedDriveIds: getAllowedDriveIds(authResult),
-                mcpTokenId: isMCPAuthResult(authResult) ? authResult.tokenId : undefined,
+                // Also carried across an agent-dispatch hop: a worker turn
+                // arrives under service auth, whose `originatingMcpTokenId` is
+                // the token that started the chain. Dropping it there would drop
+                // the app-member RBAC ceiling `actor-permissions` applies on top
+                // of the drive scope — the scope alone does not imply the role.
+                mcpTokenId: isMCPAuthResult(authResult)
+                  ? authResult.tokenId
+                  : isServiceAuthResult(authResult)
+                    ? authResult.originatingMcpTokenId
+                    : undefined,
                 // How deep in an agent-dispatch chain this turn already runs —
                 // 0 for a direct user request, N for a worker turn dispatched
                 // by spawn_session/send_session (the X-Agent-Dispatch-Depth
@@ -1883,10 +1892,6 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 agentCallDepth: agentDispatchDepth,
               }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
               maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
-              onChunk: ({ chunk }) => {
-                const part = chunkToPart(chunk as never);
-                if (part) lifecycle!.pushPart(part);
-              },
               onAbort: () => {
                 loggers.ai.info('AI Chat API: Stream aborted by user', {
                   userId: maskIdentifier(userId!),
@@ -1897,13 +1902,12 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 });
                 lifecycle!.finish(true);
               },
-              // Re-mark breakpoints per step so mid-loop tool results are cached.
-              // stableBoundaryIndex stays fixed (the summary is always at position
-              // 0; its first tail neighbour at position 1 remains stable as new
-              // messages are appended to the END of the accumulating array).
-              prepareStep: ({ messages: stepMessages }) => ({
-                messages: withCacheBreakpoints(stepMessages, stableBoundaryIndex),
-              }),
+              // Cap this turn's own oversized tool payloads, then re-mark breakpoints
+              // so mid-loop tool results are cached. stableBoundaryIndex stays fixed
+              // (the summary is always at position 0; its first tail neighbour at
+              // position 1 remains stable as new messages are appended to the END of
+              // the accumulating array). See agentLoopPrepareStep.
+              prepareStep: agentLoopPrepareStep(stableBoundaryIndex),
             })
           },
           });
@@ -1931,7 +1935,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           // edit/delete's 409 guard, an invisible, permanently-locked ghost row. See
           // Server Stream Durability epic PR 2 — Codex + CodeRabbit review.
           if (chatId && serverAssistantMessageId) {
-            const bufferedParts = lifecycle!.getBufferedParts();
+            const bufferedParts = await lifecycle!.getParts();
             const aborted = isRunAborted({ agentRun, abortSignal });
             const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
             // This write may be the sole record of the message (see the docblock above) — it
@@ -2160,18 +2164,18 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         },
       });
 
+
+
       result = {
-        toUIMessageStreamResponse: () => createUIMessageStreamResponse({
-          stream,
-          headers: { [STREAM_ID_HEADER]: streamId },
-        }),
+        toUIMessageStreamResponse: () =>
+          pumpAndRespond({ sdkStream, lifecycle: lifecycle!, streamId, request, channelId: chatId!, conversationId: conversationId! }),
       };
     } catch (streamError) {
       removeStream({ streamId });
       // Captured BEFORE finish() for the same reason as the outer catch below — this inner
       // catch's own finish() call would otherwise clear the buffer before the outer catch's
       // cleanup ever gets a chance to read it.
-      bufferedPartsAtStreamError = lifecycle.getBufferedParts();
+      bufferedPartsAtStreamError = await lifecycle.getParts();
       lifecycle.finish(true);
       loggers.ai.error('AI Chat API: Failed to create stream', streamError as Error, {
         message: streamError instanceof Error ? streamError.message : 'Unknown error',
@@ -2191,14 +2195,12 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     if (activeStreamId !== undefined) {
       removeStream({ streamId: activeStreamId });
     }
-    // Captured BEFORE finish() — finish() deletes the multicast registry entry backing
-    // getBufferedParts(), so calling it after finish() would always see an empty buffer and
-    // silently discard any real partial content the cleanup write below is meant to preserve.
-    // Prefers bufferedPartsAtStreamError (captured by the INNER catch above, before ITS OWN
-    // finish() call already cleared the registry) when set — a fresh getBufferedParts() call
-    // here would otherwise always see [] for exactly the createUIMessageStream-threw case this
-    // cleanup exists for.
-    const bufferedPartsAtError = bufferedPartsAtStreamError ?? lifecycle?.getBufferedParts() ?? [];
+    // Prefers the inner catch's earlier capture when set. That preference used to be load-
+    // bearing (finish() cleared the registry backing the old getBufferedParts, so a fresh call
+    // here saw [] for exactly the createUIMessageStream-threw case this cleanup exists for);
+    // it is now merely the more faithful of two working snapshots, since a finished channel
+    // keeps its ring.
+    const bufferedPartsAtError = bufferedPartsAtStreamError ?? (lifecycle ? await lifecycle.getParts() : []);
     lifecycle?.finish(true);
 
     // Last-resort cleanup: something threw before execute-end or onFinish ever got a chance to

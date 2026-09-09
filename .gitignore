@@ -194,6 +194,12 @@ skills-lock.json
 # Broadcast idempotency ledger (credits announcement email)
 .credits-change-sent.jsonl
 .sdk-launch-sent.jsonl
+.agent-sandbox-launch-sent.jsonl
+.free-credits-change-sent.jsonl
 
 # Vercel CLI local project-link metadata
 .vercel/
+
+# Review/audit reports written by agents about a branch. They are pinned to
+# SHAs a squash-merge erases, so they are working notes, never repo content.
+.pu-reports/

@@ -5,6 +5,7 @@ import {
   MAX_TRANSCRIPT_MESSAGE_CHARS,
   UNTRUSTED_TRANSCRIPT_NOTE,
   type SessionToolsDeps,
+  type AgentToolSurfaceReport,
 } from '../session-tools';
 import { MAX_AGENT_DEPTH } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import type { ToolExecutionContext } from '../../core/types';
@@ -28,11 +29,15 @@ const SHELL = {
   createdAt: '2026-07-28T00:00:00.000Z',
 };
 
+/** The layout a spawn reports back: the pane it landed in, and how many the workspace holds. */
+const PANES = { paneCount: 2, nodeId: 'pane-shell' };
+
 function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
   return {
-    findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID })),
+    findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: null })),
     // The layout family's session-access gate (security review HIGH 2).
     checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })),
+    checkWorkspaceEndAccess: vi.fn(async () => ({ allowed: true })),
     listWorkspaceWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
     listOwnWorkspaces: vi.fn(async () => []),
     listSharedWorkspaces: vi.fn(async () => []),
@@ -43,17 +48,22 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
       name: 'worker',
       workspaceId: WORKSPACE_ID,
       isClosed: false,
+      isShared: false,
+      workspaceOwnerId: null,
+      workspaceDriveId: null,
     })),
     countOpenConversations: vi.fn(async () => 0),
     canUseAgent: vi.fn(async () => true),
+    describeAgentToolSurface: vi.fn(async () => ({ configured: null, granted: [], blocked: [], conditional: [], deferred: [], notes: [] })),
+    describeWorkerComputeShortfall: vi.fn(async () => null),
     createWorkerSession: vi.fn(async () => ({ ok: true as const, workspaceId: WORKSPACE_ID })),
     dispatch: vi.fn(async () => ({ ok: true as const, waited: false as const })),
     readTranscript: vi.fn(async () => []),
     killWorker: vi.fn(async () => ({ ok: true as const, spriteTornDown: true })),
     ensureOwnSessionSandbox: vi.fn(async () => ({ ok: true as const })),
-    spawnShell: vi.fn(async () => ({ ok: true as const, shell: SHELL })),
+    spawnShell: vi.fn(async () => ({ ok: true as const, shell: SHELL, panes: PANES })),
     findShell: vi.fn(async () => ({ shellId: SHELL.shellId, workspaceId: WORKSPACE_ID, name: SHELL.name })),
-    killShell: vi.fn(async () => ({ ok: true as const, killed: true })),
+    killShell: vi.fn(async () => ({ ok: true as const, killed: true, panes: { paneCount: 2, nodeId: 'pane-shell' } })),
     shellIo: {
       read: vi.fn(async () => ({ ok: true as const, live: true, hasOutput: true, output: 'hello' })),
       send: vi.fn(async () => ({ ok: true as const, delivered: true as const })),
@@ -85,13 +95,20 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('the thirteen-tool surface', () => {
-  it('should export EXACTLY the thirteen tools of the three verb families', () => {
+describe('the fourteen-tool surface', () => {
+  it('should export EXACTLY the fourteen tools of the three verb families', () => {
     const tools = createSessionTools(makeDeps());
     // Workers + shells (frozen since Phase 1) plus the LAYOUT family that
     // issue #2208 added once the pane grid became relational entities.
+    //
+    // `close_pane` is a REPLACEMENT rather than a fourteenth capability: an
+    // agent used to take a pane off the grid with `move_pane(toParentId: null)`,
+    // because null was a legal destination meaning PARKED. There is one place a
+    // node can be now, so that destination is gone and taking a pane away needs
+    // its own verb.
     expect(Object.keys(tools).sort()).toEqual([
       'arrange_panes',
+      'close_pane',
       'kill_session',
       'kill_shell',
       'list_panes',
@@ -203,6 +220,9 @@ describe('spawn_session', () => {
       agentPageId: CALLER_AGENT,
       name: 'worker',
       workspace: undefined,
+      // The calling credential's ceiling rides placement — empty here because
+      // this caller is unscoped. Pinned in the scoped block below.
+      allowedDriveIds: [],
     });
     expect(deps.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'new-session-id', depth: 1, wait: false, input: 'do the thing' }),
@@ -355,7 +375,7 @@ describe('send_session', () => {
     expect(deps.dispatch).not.toHaveBeenCalled();
   });
 
-  it('given someone else\'s session, should read as nonexistent', async () => {
+  it('given someone else\'s session in a drive the caller cannot reach, should read as nonexistent', async () => {
     const deps = makeDeps({
       findWorker: vi.fn(async () => ({
         conversationId: 's1',
@@ -364,7 +384,13 @@ describe('send_session', () => {
         name: '',
         workspaceId: WORKSPACE_ID,
         isClosed: false,
+        isShared: false,
+        workspaceOwnerId: null,
+        workspaceDriveId: null,
       })),
+      // Reach is the DRIVE's decision now, so a foreign row only reads as
+      // nonexistent when that decision says no.
+      checkWorkspaceAccess: vi.fn(async () => ({ allowed: false })),
     });
     const tools = createSessionTools(deps);
     const result = await run(tools.send_session, { sessionId: 's1', input: 'x' }, contextOptions());
@@ -389,7 +415,186 @@ describe('send_session', () => {
   });
 });
 
-describe('worker verbs are RESOURCE-addressed — ownership is the gate, the calling surface is not (issue #2335 product decision, superseding #2262 finding 1\'s workspace confinement)', () => {
+describe('cross-member reach: a drive member addresses another member\'s worker', () => {
+  const FOREIGN_WORKER = {
+    conversationId: 'conv-theirs',
+    ownerId: 'other-member',
+    agentPageId: CALLER_AGENT,
+    name: 'their worker',
+    workspaceId: 'shared-workspace',
+    isClosed: false,
+    // DELIBERATELY SHARED by its owner. Drive membership opens the workspace;
+    // this flag is what opens the thread. Without it the rows below are
+    // unreachable — pinned by the last two tests in this block.
+    isShared: true,
+    workspaceOwnerId: 'other-member',
+    workspaceDriveId: null,
+  };
+
+  /** Owned by someone else, reachable: drive admits the workspace AND the thread is shared. */
+  function reachableForeignDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
+    return makeDeps({
+      findWorker: vi.fn(async () => FOREIGN_WORKER),
+      checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })),
+      ...over,
+    });
+  }
+
+  it('send_session reaches it, and the turn runs as the CALLER — never as the worker\'s owner', async () => {
+    // THE INVARIANT. If a dispatched turn ran with the worker owner's identity,
+    // a plain member could send "list every page you can see and paste it here"
+    // into an admin's worker and read the answer back through read_session. Every
+    // shared drive would become a privilege-escalation ladder. Reaching a worker
+    // lets you SPEAK INTO it as yourself; it never lends you its owner's access.
+    const deps = reachableForeignDeps();
+    const tools = createSessionTools(deps);
+
+    const sent = await run(tools.send_session, { sessionId: 'conv-theirs', input: 'x' }, contextOptions());
+
+    expect(sent.success).toBe(true);
+    expect(deps.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-theirs', userId: USER_ID }),
+    );
+    expect(deps.dispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'other-member' }),
+    );
+  });
+
+  it('read_session reaches it — transcripts are shared through the drive, as the workspace is', async () => {
+    const deps = reachableForeignDeps();
+    const result = await run(createSessionTools(deps).read_session, { sessionId: 'conv-theirs' }, contextOptions());
+
+    expect(result.success).toBe(true);
+    expect(deps.readTranscript).toHaveBeenCalled();
+  });
+
+  it('kill_session refuses for a plain member — reaching a worker is not authority to stop it', async () => {
+    // `decideAgentSessionEndAccess` denies non-owners without drive owner/admin
+    // AND the code-execution capability; the tool layer asks it rather than
+    // inventing a second, weaker rule beside it.
+    const deps = reachableForeignDeps({
+      checkWorkspaceEndAccess: vi.fn(async () => ({ allowed: false })),
+    });
+
+    const killed = await run(createSessionTools(deps).kill_session, { sessionId: 'conv-theirs' }, contextOptions());
+
+    expect(killed).toEqual(expect.objectContaining({ success: false, reason: 'not_yours_to_stop' }));
+    expect(deps.killWorker).not.toHaveBeenCalled();
+  });
+
+  it('kill_session succeeds for a drive admin, and aborts the WORKER OWNER\'s streams', async () => {
+    const deps = reachableForeignDeps({
+      checkWorkspaceEndAccess: vi.fn(async () => ({ allowed: true })),
+    });
+
+    const killed = await run(createSessionTools(deps).kill_session, { sessionId: 'conv-theirs' }, contextOptions());
+
+    expect(killed.success).toBe(true);
+    // Not `actingUserId` — aborting as the admin would match no stream rows and
+    // report success while the worker kept running.
+    expect(deps.killWorker).toHaveBeenCalledWith({
+      conversationId: 'conv-theirs',
+      streamOwnerId: 'other-member',
+      actingUserId: USER_ID,
+    });
+  });
+
+  it('a NON-member gets one indistinguishable refusal from all three verbs', async () => {
+    const deps = reachableForeignDeps({
+      checkWorkspaceAccess: vi.fn(async () => ({ allowed: false })),
+    });
+    const missingDeps = makeDeps({ findWorker: vi.fn(async () => null) });
+    const tools = createSessionTools(deps);
+
+    for (const verb of ['send_session', 'read_session', 'kill_session'] as const) {
+      const input = verb === 'send_session' ? { sessionId: 'conv-theirs', input: 'x' } : { sessionId: 'conv-theirs' };
+      const refused = await run(tools[verb], input, contextOptions());
+      const missing = await run(createSessionTools(missingDeps)[verb], input, contextOptions());
+      expect(refused).toEqual(missing);
+    }
+    expect(deps.dispatch).not.toHaveBeenCalled();
+    expect(deps.readTranscript).not.toHaveBeenCalled();
+    expect(deps.killWorker).not.toHaveBeenCalled();
+  });
+
+  it('the owner may always stop their own worker without the END check running at all', async () => {
+    const deps = makeDeps({
+      checkWorkspaceEndAccess: vi.fn(async () => ({ allowed: false })),
+    });
+
+    const killed = await run(createSessionTools(deps).kill_session, { sessionId: 's1' }, contextOptions());
+
+    expect(killed.success).toBe(true);
+    expect(deps.checkWorkspaceEndAccess).not.toHaveBeenCalled();
+  });
+
+  it('a foreign worker with NO workspace is unreachable — there is nothing to derive drive reach from', async () => {
+    const deps = makeDeps({
+      findWorker: vi.fn(async () => ({ ...FOREIGN_WORKER, workspaceId: null })),
+      checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })),
+    });
+
+    const sent = await run(createSessionTools(deps).send_session, { sessionId: 'conv-theirs', input: 'x' }, contextOptions());
+
+    expect(sent.success).toBe(false);
+    // It must not leak the typed "not a worker yet" remedy to a stranger, and it
+    // must not have consulted the drive at all.
+    expect(sent).not.toHaveProperty('reason');
+    expect(deps.checkWorkspaceAccess).not.toHaveBeenCalled();
+  });
+  it('an UNSHARED foreign worker reads as nonexistent even with full drive access', async () => {
+    // THE OPT-IN. Drive membership opens the working context, not every private
+    // conversation inside it. This is the same predicate that prints
+    // "(private thread)" for this row in list_sessions — one rule, so an agent
+    // can address exactly the rows it can name.
+    const deps = reachableForeignDeps({
+      findWorker: vi.fn(async () => ({ ...FOREIGN_WORKER, isShared: false })),
+    });
+    const missingDeps = makeDeps({ findWorker: vi.fn(async () => null) });
+    const tools = createSessionTools(deps);
+
+    for (const verb of ['send_session', 'read_session', 'kill_session'] as const) {
+      const input = verb === 'send_session' ? { sessionId: 'conv-theirs', input: 'x' } : { sessionId: 'conv-theirs' };
+      const refused = await run(tools[verb], input, contextOptions());
+      const missing = await run(createSessionTools(missingDeps)[verb], input, contextOptions());
+      // Indistinguishable from a row that does not exist — a member learns
+      // nothing about a colleague's private thread from the refusal.
+      expect(refused).toEqual(missing);
+    }
+    expect(deps.dispatch).not.toHaveBeenCalled();
+    expect(deps.readTranscript).not.toHaveBeenCalled();
+    expect(deps.killWorker).not.toHaveBeenCalled();
+  });
+
+  it('the WORKSPACE owner reaches an unshared thread inside their own workspace', async () => {
+    // They are the tenant of that working context, and the listing already shows
+    // them every title in it — the same third arm of the predicate.
+    const deps = reachableForeignDeps({
+      findWorker: vi.fn(async () => ({
+        ...FOREIGN_WORKER,
+        isShared: false,
+        workspaceOwnerId: USER_ID,
+        workspaceDriveId: null,
+      })),
+    });
+
+    const sent = await run(createSessionTools(deps).send_session, { sessionId: 'conv-theirs', input: 'x' }, contextOptions());
+
+    expect(sent.success).toBe(true);
+  });
+
+  it('an unresolvable workspace owner fails CLOSED rather than opening every thread', async () => {
+    const deps = reachableForeignDeps({
+      findWorker: vi.fn(async () => ({ ...FOREIGN_WORKER, isShared: false, workspaceOwnerId: null })),
+    });
+
+    const sent = await run(createSessionTools(deps).send_session, { sessionId: 'conv-theirs', input: 'x' }, contextOptions());
+
+    expect(sent.success).toBe(false);
+  });
+});
+
+describe('worker verbs are RESOURCE-addressed — REACH is the gate, the calling surface is not (issue #2335 product decision, superseding #2262 finding 1\'s workspace confinement)', () => {
   // The verbs work like read_page: the id is the address, permission decides.
   // Deliberate tradeoff, decided by the product owner: the assistant
   // orchestrates the user's workers from ANY surface, so "is this worker in
@@ -405,6 +610,9 @@ describe('worker verbs are RESOURCE-addressed — ownership is the gate, the cal
     name: 'worker elsewhere',
     workspaceId: 'another-of-my-workspaces',
     isClosed: false,
+    isShared: false,
+    workspaceOwnerId: null,
+    workspaceDriveId: null,
   };
 
   it('the caller\'s own worker in ANOTHER workspace is addressable — send/read/kill all reach it', async () => {
@@ -424,9 +632,10 @@ describe('worker verbs are RESOURCE-addressed — ownership is the gate, the cal
     expect(deps.killWorker).toHaveBeenCalled();
   });
 
-  it('a FOREIGN-owned worker reads as nonexistent — ownership is the gate that remains', async () => {
+  it('a FOREIGN-owned worker the caller cannot reach through the drive reads as nonexistent', async () => {
     const deps = makeDeps({
       findWorker: vi.fn(async () => ({ ...OTHER_WORKSPACE_ROW, ownerId: 'someone-else' })),
+      checkWorkspaceAccess: vi.fn(async () => ({ allowed: false })),
     });
     const tools = createSessionTools(deps);
 
@@ -497,6 +706,7 @@ describe('worker verbs are RESOURCE-addressed — ownership is the gate, the cal
   it('the refusal reads exactly like a nonexistent session — nothing to learn from the difference', async () => {
     const deps = makeDeps({
       findWorker: vi.fn(async () => ({ ...OTHER_WORKSPACE_ROW, ownerId: 'someone-else' })),
+      checkWorkspaceAccess: vi.fn(async () => ({ allowed: false })),
     });
     const noRowDeps = makeDeps({ findWorker: vi.fn(async () => null) });
     const foreign = await run(
@@ -551,7 +761,11 @@ describe('kill_session', () => {
     const tools = createSessionTools(deps);
     const result = await run(tools.kill_session, { sessionId: 's1' }, contextOptions());
     expect(result).toEqual({ success: true, sessionId: 's1', spriteTornDown: true });
-    expect(deps.killWorker).toHaveBeenCalledWith({ conversationId: 's1', userId: USER_ID });
+    expect(deps.killWorker).toHaveBeenCalledWith({
+      conversationId: 's1',
+      streamOwnerId: USER_ID,
+      actingUserId: USER_ID,
+    });
   });
 
   it('given a teardown failure, should say the sandbox may still be running', async () => {
@@ -574,12 +788,18 @@ describe('spawn_shell', () => {
       }),
       spawnShell: vi.fn(async () => {
         order.push('spawn');
-        return { ok: true as const, shell: SHELL };
+        return { ok: true as const, shell: SHELL, panes: PANES };
       }),
     });
     const tools = createSessionTools(deps);
     const result = await run(tools.spawn_shell, {}, contextOptions());
-    expect(result).toEqual({ success: true, shellId: SHELL.shellId, name: SHELL.name });
+    expect(result).toEqual({
+      success: true,
+      shellId: SHELL.shellId,
+      name: SHELL.name,
+      paneNodeId: PANES.nodeId,
+      paneCount: PANES.paneCount,
+    });
     expect(order).toEqual(['ensure', 'spawn']);
     expect(deps.ensureOwnSessionSandbox).toHaveBeenCalledWith({
       conversationId: CALLER_CONVERSATION,
@@ -659,7 +879,10 @@ describe('kill_shell', () => {
     const deps = makeDeps();
     const tools = createSessionTools(deps);
     const result = await run(tools.kill_shell, { shellId: SHELL.shellId }, contextOptions());
-    expect(result).toEqual({ success: true, shellId: SHELL.shellId, killed: true });
+    expect(result).toEqual({ success: true, shellId: SHELL.shellId, killed: true, paneNodeId: 'pane-shell', paneCount: 2 });
+    // The pane went with the process, in the kill's own write — so this is the
+    // acting HUMAN's id, never the model's word for one (issue #2462).
+    expect(deps.killShell).toHaveBeenCalledWith({ shellId: SHELL.shellId, actingUserId: USER_ID });
   });
 
   it('given an already-gone shell, should SUCCEED — teardown callers retry', async () => {
@@ -675,6 +898,27 @@ describe('kill_shell', () => {
     const tools = createSessionTools(deps);
     const result = await run(tools.kill_shell, { shellId: SHELL.shellId }, contextOptions());
     expect(result).toEqual(expect.objectContaining({ success: false, reason: 'error' }));
+    expect((result as { error: string }).error).toContain('Retry');
+  });
+
+  /**
+   * The MODEL reads the sentence, not the reason code. A substrate with no
+   * interactive-stream surface (a local environment) refuses permanently, so
+   * telling the model to retry instructs a loop it can never break out of —
+   * the same defect as collapsing two distinct refusals into one word, except
+   * this one actively causes the wasted work.
+   */
+  it('given a substrate with NO terminal support, should tell the model not to retry — not "its process may still be running"', async () => {
+    const deps = makeDeps({ killShell: vi.fn(async () => ({ ok: false as const, reason: 'unsupported' })) });
+    const tools = createSessionTools(deps);
+
+    const result = await run(tools.kill_shell, { shellId: SHELL.shellId }, contextOptions());
+
+    expect(result).toEqual(expect.objectContaining({ success: false, reason: 'unsupported' }));
+    const error = (result as { error: string }).error;
+    expect(error).toContain('no terminal support');
+    expect(error).toContain('Do not retry');
+    expect(error).not.toContain('may still be running');
   });
 });
 
@@ -709,5 +953,383 @@ describe('shell addressing across the two id namespaces (review H2)', () => {
     const result = await run(tools.kill_shell, { shellId: SHELL.shellId }, contextOptions());
     expect(result).toMatchObject({ success: true, killed: false });
     expect(deps.killShell).not.toHaveBeenCalled();
+  });
+});
+
+describe('a drive-scoped credential is held to its ceiling, whoever owns the worker', () => {
+  // A scoped MCP/API token is NOT its user: it is confined to a subset of that
+  // user's drives. Every other gate in this family asks about the user, so
+  // without this the token reached any worker its owner could — including in
+  // drives outside its scope (PR review, P1).
+  const scoped = { mcpAllowedDriveIds: ['drive-in-scope'], mcpTokenId: 'mcp-token-1' };
+
+  function rowInDrive(driveId: string | null, over: Record<string, unknown> = {}) {
+    return {
+      conversationId: 's1',
+      ownerId: USER_ID,
+      agentPageId: CALLER_AGENT,
+      name: 'worker',
+      workspaceId: WORKSPACE_ID,
+      isClosed: false,
+      isShared: false,
+      workspaceOwnerId: USER_ID,
+      workspaceDriveId: driveId,
+      ...over,
+    };
+  }
+
+  it('reaches its OWN worker inside the ceiling', async () => {
+    const deps = makeDeps({ findWorker: vi.fn(async () => rowInDrive('drive-in-scope')) });
+
+    const sent = await run(
+      createSessionTools(deps).send_session,
+      { sessionId: 's1', input: 'x' },
+      contextOptions(scoped),
+    );
+
+    expect(sent.success).toBe(true);
+  });
+
+  it('refuses its OWN worker outside the ceiling — ownership is not an escape from scope', async () => {
+    const deps = makeDeps({ findWorker: vi.fn(async () => rowInDrive('drive-out-of-scope')) });
+    const missingDeps = makeDeps({ findWorker: vi.fn(async () => null) });
+    const tools = createSessionTools(deps);
+
+    for (const verb of ['send_session', 'read_session', 'kill_session'] as const) {
+      const input = verb === 'send_session' ? { sessionId: 's1', input: 'x' } : { sessionId: 's1' };
+      const refused = await run(tools[verb], input, contextOptions(scoped));
+      const missing = await run(createSessionTools(missingDeps)[verb], input, contextOptions(scoped));
+      expect(refused).toEqual(missing);
+    }
+    expect(deps.dispatch).not.toHaveBeenCalled();
+    expect(deps.readTranscript).not.toHaveBeenCalled();
+    expect(deps.killWorker).not.toHaveBeenCalled();
+  });
+
+  it('refuses a worker whose workspace drive cannot be resolved — fails CLOSED', async () => {
+    const deps = makeDeps({ findWorker: vi.fn(async () => rowInDrive(null)) });
+
+    const sent = await run(
+      createSessionTools(deps).send_session,
+      { sessionId: 's1', input: 'x' },
+      contextOptions(scoped),
+    );
+
+    expect(sent.success).toBe(false);
+  });
+
+  it('an UNSCOPED caller is unaffected — an empty ceiling admits everything', async () => {
+    const deps = makeDeps({ findWorker: vi.fn(async () => rowInDrive('any-drive')) });
+
+    const sent = await run(
+      createSessionTools(deps).send_session,
+      { sessionId: 's1', input: 'x' },
+      contextOptions(),
+    );
+
+    expect(sent.success).toBe(true);
+  });
+
+  it('an UNSCOPED caller reaches a GLOBAL-assistant worker, which has no drive at all', async () => {
+    // The asymmetry that is easy to get backwards: `null` means "no drive", so
+    // an unscoped credential admits it (this is the case the whole epic set out
+    // to enable — the SDK/CLI driving the global assistant), while a scoped one
+    // never can, because there is no drive for a drive-scope to have granted.
+    const deps = makeDeps({ findWorker: vi.fn(async () => rowInDrive(null)) });
+
+    const sent = await run(
+      createSessionTools(deps).send_session,
+      { sessionId: 's1', input: 'x' },
+      contextOptions(),
+    );
+
+    expect(sent.success).toBe(true);
+  });
+
+  it('the BOUND workspace is held to the ceiling too — a binding can point outside it', async () => {
+    // `spawn_session` takes an explicit `workspace` id, so a conversation driven
+    // by an agent page in drive A can be bound to a workspace in drive B. The
+    // page-scope check upstream covers the PAGE, not the binding — so without
+    // this gate a scoped token got the richest view in the file (every worker's
+    // sessionId and agent binding, every shell, live sandbox status) for a drive
+    // it may not touch.
+    const deps = makeDeps({
+      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope' })),
+      listOwnWorkspaces: vi.fn(async () => []),
+      listSharedWorkspaces: vi.fn(async () => []),
+    });
+
+    const result = await run(createSessionTools(deps).list_sessions, {}, contextOptions(scoped));
+
+    // Degrades to the no-workspace answer rather than erroring, exactly as a
+    // revoked drive membership does.
+    expect(result.workspaceId).toBeNull();
+    expect(result.workers).toEqual([]);
+    expect(deps.listWorkspaceWorkers).not.toHaveBeenCalled();
+  });
+
+  it('spawn_session cannot PLACE a worker into an out-of-scope workspace', async () => {
+    // Placement is a WRITE, and the worst of the class: it puts an agent, and
+    // its sandbox reach, into a workspace the token was never granted. The
+    // ceiling rides `createWorkerSession` so the runtime's placement resolver
+    // enforces it alongside the user-level session-access decision.
+    const deps = makeDeps();
+
+    await run(
+      createSessionTools(deps).spawn_session,
+      { name: 'w', prompt: 'go', workspace: 'ws-elsewhere' },
+      contextOptions(scoped),
+    );
+
+    expect(deps.createWorkerSession).toHaveBeenCalledWith(
+      expect.objectContaining({ allowedDriveIds: ['drive-in-scope'] }),
+    );
+  });
+
+  it('spawn_shell refuses when the conversation is bound OUT of scope', async () => {
+    // A shell is live PTY access. Only an EXISTING binding can point out of
+    // scope — with none, `ensure` mints in the agent's own drive, which the
+    // page-scope check upstream already admitted.
+    const deps = makeDeps({
+      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope' })),
+    });
+
+    const result = await run(createSessionTools(deps).spawn_shell, {}, contextOptions(scoped));
+
+    expect(result.success).toBe(false);
+    expect(deps.ensureOwnSessionSandbox).not.toHaveBeenCalled();
+    expect(deps.spawnShell).not.toHaveBeenCalled();
+  });
+
+  it('the pane grid is unreachable when the bound workspace is out of scope', async () => {
+    const deps = makeDeps({
+      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope' })),
+    });
+
+    const result = await run(createSessionTools(deps).list_panes, {}, contextOptions(scoped));
+
+    expect(result.success).toBe(false);
+    expect(deps.checkWorkspaceAccess).not.toHaveBeenCalled();
+  });
+
+  it('list_sessions discovers only workspaces inside the ceiling', async () => {
+    // Discovery resolves from the USER's drive relationships, so without the
+    // same filter it advertised workspace ids and every worker's sessionId in
+    // drives the token may not touch — the addressability gate would then refuse
+    // exactly what the listing had just offered.
+    const deps = makeDeps({
+      findOwnWorkspace: vi.fn(async () => null),
+      listOwnWorkspaces: vi.fn(async () => [
+        { workspaceId: 'ws-in', name: 'mine', driveId: 'drive-in-scope', sandbox: 'running' as const, workers: [] },
+        { workspaceId: 'ws-out', name: 'other', driveId: 'drive-out-of-scope', sandbox: 'running' as const, workers: [] },
+      ]),
+      listSharedWorkspaces: vi.fn(async () => [
+        { workspaceId: 'ws-shared-in', name: 'team', driveId: 'drive-in-scope', sandbox: 'running' as const, workers: [] },
+        { workspaceId: 'ws-shared-out', name: 'elsewhere', driveId: 'drive-out-of-scope', sandbox: 'running' as const, workers: [] },
+      ]),
+    });
+
+    const result = await run(createSessionTools(deps).list_sessions, {}, contextOptions(scoped));
+
+    expect((result.otherWorkspaces as Array<{ workspaceId: string }>).map((w) => w.workspaceId)).toEqual(['ws-in']);
+    expect((result.sharedWorkspaces as Array<{ workspaceId: string }>).map((w) => w.workspaceId)).toEqual(['ws-shared-in']);
+    expect(JSON.stringify(result)).not.toContain('drive-out-of-scope');
+  });
+});
+
+/**
+ * Issue #2460: three spawns of an agent whose enabledTools named 24 sandbox
+ * tools produced three different page-only surfaces and no error anywhere. The
+ * allowlist was never ignored — the sandbox switch stripped the family
+ * downstream of it — so the spawn is where the divergence has to become
+ * audible.
+ */
+describe('spawn_session: honouring the agent\'s configured tool surface', () => {
+  const surface = (over: Partial<AgentToolSurfaceReport> = {}): AgentToolSurfaceReport => ({
+    configured: null,
+    granted: [],
+    blocked: [],
+    conditional: [],
+    deferred: [],
+    notes: [],
+    ...over,
+  });
+
+  it('given an agent whose enabledTools name sandbox tools its own switch strips, should REFUSE and name the tools and the gate', async () => {
+    const deps = makeDeps({
+      describeAgentToolSurface: vi.fn(async () =>
+        surface({
+          configured: ['read_page', 'bash', 'spawn_shell'],
+          granted: ['read_page'],
+          blocked: [
+            { tool: 'bash', gate: 'sandbox_disabled' as const },
+            { tool: 'spawn_shell', gate: 'sandbox_disabled' as const },
+          ],
+          notes: ['also: read_file is not a tool here'],
+        }),
+      ),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p', agent: 'scraper-runner' },
+      contextOptions(),
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({ success: false, reason: 'agent_tools_ungrantable' }),
+    );
+    expect(String(result.error)).toContain('bash, spawn_shell');
+    expect(String(result.error)).toContain('sandboxEnabled');
+    // Everything wrong with the config, not only the half that refused — a
+    // caller fixing one problem should not have to spawn again to discover the
+    // next one.
+    expect(result.toolSurfaceWarnings).toEqual(['also: read_file is not a tool here']);
+    // A crippled worker is worse than no worker: nothing was created, nothing
+    // was dispatched, and the caller has an actionable fix instead of a
+    // silently useless session id.
+    expect(deps.createWorkerSession).not.toHaveBeenCalled();
+    expect(deps.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('given drops the caller cannot fix (unregistered names, search-mode deferral), should spawn anyway and WARN on the success payload', async () => {
+    const deps = makeDeps({
+      describeAgentToolSurface: vi.fn(async () =>
+        surface({
+          configured: ['read_page', 'read_file'],
+          granted: ['read_page'],
+          blocked: [{ tool: 'read_file', gate: 'not_registered' as const }],
+          deferred: ['trash_page'],
+          notes: ['no tool named read_file', 'trash_page is reached through tool_search'],
+        }),
+      ),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p', agent: 'scraper-runner' },
+      contextOptions(),
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        success: true,
+        toolSurfaceWarnings: ['no tool named read_file', 'trash_page is reached through tool_search'],
+      }),
+    );
+    expect(deps.dispatch).toHaveBeenCalled();
+  });
+
+  it('given the check itself failing, should still spawn — and say the surface was NOT checked', async () => {
+    const deps = makeDeps({
+      describeAgentToolSurface: vi.fn(async () => {
+        throw new Error('database unavailable');
+      }),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p', agent: 'scraper-runner' },
+      contextOptions(),
+    );
+
+    // A diagnostic added to a path that worked without it must not become a new
+    // way for that path to fail…
+    expect(result).toEqual(expect.objectContaining({ success: true, sessionId: 'new-session-id' }));
+    expect(deps.dispatch).toHaveBeenCalled();
+    // …and an unchecked surface is reported as unchecked, never as fine.
+    expect(String((result.toolSurfaceWarnings as string[])[0])).toContain('not checked');
+  });
+
+  it('given a workspace whose plan excludes compute, should WARN about the tools that landed short', async () => {
+    // The divergence the stored config cannot predict, and the one that made
+    // three spawns of one agent look random: compute eligibility keys on the
+    // WORKSPACE the worker landed in, not on the agent.
+    const deps = makeDeps({
+      describeWorkerComputeShortfall: vi.fn(async () => 'no compute in that workspace'),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.spawn_session, { name: 'w', prompt: 'p' }, contextOptions());
+
+    expect(result).toEqual(
+      expect.objectContaining({ success: true, toolSurfaceWarnings: ['no compute in that workspace'] }),
+    );
+    // Asked of the workspace the worker ACTUALLY landed in, not the caller's.
+    expect(deps.describeWorkerComputeShortfall).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: WORKSPACE_ID, userId: USER_ID }),
+    );
+  });
+
+  it('should ACCUMULATE the config warnings and the workspace one, not replace either', async () => {
+    const deps = makeDeps({
+      describeAgentToolSurface: vi.fn(async () =>
+        surface({
+          configured: ['read_page', 'read_file'],
+          granted: ['read_page'],
+          blocked: [{ tool: 'read_file', gate: 'not_registered' as const }],
+          notes: ['no tool named read_file'],
+        }),
+      ),
+      describeWorkerComputeShortfall: vi.fn(async () => 'no compute in that workspace'),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p', agent: 'scraper-runner' },
+      contextOptions(),
+    );
+
+    // Two independent divergences, two sentences: a caller told only the second
+    // would fix the workspace and still find the tool missing.
+    expect(result.toolSurfaceWarnings).toEqual([
+      'no tool named read_file',
+      'no compute in that workspace',
+    ]);
+  });
+
+  it('given the compute check itself failing, should still spawn and stay quiet about it', async () => {
+    const deps = makeDeps({
+      describeWorkerComputeShortfall: vi.fn(async () => {
+        throw new Error('tier lookup unavailable');
+      }),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.spawn_session, { name: 'w', prompt: 'p' }, contextOptions());
+
+    expect(result).toEqual(expect.objectContaining({ success: true }));
+    expect(result).not.toHaveProperty('toolSurfaceWarnings');
+  });
+
+  it('given an unrestricted agent, should ask the compute question with null rather than an empty list', async () => {
+    // `null` is the WIDEST case (the whole registry), not "nothing" — passing
+    // [] would tell the runtime no compute tool is in play.
+    const deps = makeDeps();
+    const tools = createSessionTools(deps);
+    await run(tools.spawn_session, { name: 'w', prompt: 'p' }, contextOptions());
+
+    expect(deps.describeWorkerComputeShortfall).toHaveBeenCalledWith(
+      expect.objectContaining({ granted: null }),
+    );
+  });
+
+  it('given a config the gates honour verbatim, should say nothing about tools at all', async () => {
+    const deps = makeDeps();
+    const tools = createSessionTools(deps);
+    const result = await run(tools.spawn_session, { name: 'w', prompt: 'p' }, contextOptions());
+
+    expect(result).toEqual(expect.objectContaining({ success: true }));
+    expect(result).not.toHaveProperty('toolSurfaceWarnings');
+  });
+
+  it('given a global-assistant caller with no agent, should not ask about a tool surface there is no agent to describe', async () => {
+    const deps = makeDeps();
+    const tools = createSessionTools(deps);
+    await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p' },
+      contextOptions({ chatSource: { type: 'global' } as ToolExecutionContext['chatSource'] }),
+    );
+
+    expect(deps.describeAgentToolSurface).not.toHaveBeenCalled();
   });
 });

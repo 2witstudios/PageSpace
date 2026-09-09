@@ -115,6 +115,47 @@ export class SessionService {
   }
 
   /**
+   * Is the session that minted a DERIVED credential still usable, for this
+   * user? Read-only, and keyed on the session id rather than its token.
+   *
+   * The dev-preview cookie is the caller: it is signed by us, names its
+   * minting session, and is presented to a preview origin that never sees the
+   * session token — so `validateSession` (token-hash keyed) cannot answer.
+   * Without this, revoking a session left its preview answering until the
+   * cookie expired.
+   *
+   * `tokenVersion` and `suspendedAt` are BOTH checked, not just `revokedAt`.
+   * `validateSessionWithReason` revokes on those mismatches LAZILY — the row
+   * may still show `revokedAt: null` after a password change, an erasure or a
+   * suspension — so testing revocation alone would leave open exactly the
+   * window this exists to close.
+   *
+   * Deliberately performs no writes: no lazy revoke, no `lastUsedAt` touch.
+   * This runs per proxied subresource from an untrusted origin, and the next
+   * real session use will do the lazy revoke anyway.
+   */
+  async isSessionUsableById(sessionId: string, userId: string): Promise<boolean> {
+    const session = await sessionRepository.findActiveSessionById(sessionId);
+    if (!session?.user) return false;
+    if (session.userId !== userId) return false;
+    if (session.user.suspendedAt) return false;
+    if (session.tokenVersion !== session.user.tokenVersion) return false;
+    // THE IDLE TIMEOUT APPLIES HERE TOO, and it is the revocation most likely
+    // to matter for a preview: a frame left open in a background tab makes no
+    // request that would trigger `validateSession`'s lazy revoke, so without
+    // this an idle-policy deployment would keep proxying into the sandbox
+    // until the session's own expiry — days, not minutes. Read-only like the
+    // rest of this method: the revoke is still written by the next real
+    // session use, and the preview is refused meanwhile either way.
+    if (IDLE_TIMEOUT_MS > 0) {
+      const lastActivity = session.lastUsedAt ?? session.createdAt;
+      const lastUsed = lastActivity instanceof Date ? lastActivity : new Date(lastActivity);
+      if (Date.now() - lastUsed.getTime() > IDLE_TIMEOUT_MS) return false;
+    }
+    return true;
+  }
+
+  /**
    * Validate token and return claims OR the reason it failed (D5).
    *
    * Behaviourally identical to the historical `validateSession` — same reject conditions, same
@@ -284,6 +325,15 @@ export class SessionService {
 
   async revokeAllUserSessions(userId: string, reason: string): Promise<number> {
     return sessionRepository.revokeAllForUser(userId, reason);
+  }
+
+  /**
+   * Revoke every live session bound to one resource (`resourceType` +
+   * `resourceId`) — the env bridge's socket tokens on a revoked local
+   * environment. Returns how many were live.
+   */
+  async revokeResourceSessions(resourceType: string, resourceId: string, reason: string): Promise<number> {
+    return sessionRepository.revokeAllForResource(resourceType, resourceId, reason);
   }
 
   /**

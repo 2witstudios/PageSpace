@@ -102,6 +102,7 @@ import { db } from '@pagespace/db/db';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core/types';
 import { checkSubTasksComplete } from '@/lib/tasks/completion-guard';
+import { syncTaskDueDateTrigger } from '@/lib/workflows/task-trigger-helpers';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 
 const mockDb = vi.mocked(db);
@@ -367,6 +368,86 @@ describe('task-management-tools', () => {
             tasks: expect.any(Array),
           }),
         );
+      });
+
+      /**
+       * A due date the model writes as a wall-clock time ("2026-02-19T19:00:00")
+       * has to be read in the user's zone, which the execution context already
+       * carries. A bare `new Date()` read it in the server's zone instead, so
+       * the AI path stored a different instant than the same words typed into
+       * the calendar (#2404).
+       *
+       * The assertion is the GAP between two callers, not one absolute instant:
+       * a fixed expectation passes under the old parse on any machine whose
+       * zone matches the context's.
+       */
+      const updateDueDateIn = async (timezone: string, dueDate: string) => {
+        mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue({
+          id: 'task-1',
+          pageId: 'doc-page-1',
+          status: 'pending',
+          priority: 'medium',
+          assigneeId: null,
+          assigneeAgentId: null,
+          dueDate: null,
+          completedAt: null,
+          metadata: null,
+          page: { title: 'My Task', parentId: 'task-list-page-1' },
+        });
+        mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue({
+          id: 'list-1',
+          pageId: 'task-list-page-1',
+          userId: 'user-123',
+          title: 'My Tasks',
+          description: null,
+          status: 'pending',
+        });
+        mockDb.query.taskItems.findMany = vi.fn().mockResolvedValue([]);
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({ driveId: 'drive-1' });
+        mockDb.query.taskStatusConfigs.findMany = vi.fn().mockResolvedValue([]);
+        mockCanUserEditPage.mockResolvedValue(true);
+
+        mockDb.transaction = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
+          const tx = {
+            update: vi.fn(() => ({
+              set: vi.fn(() => ({
+                where: vi.fn(() => ({
+                  returning: vi.fn().mockResolvedValue([
+                    { id: 'task-1', pageId: 'doc-page-1', status: 'pending', priority: 'medium', position: 0, dueDate: null, assigneeId: null, assigneeAgentId: null, completedAt: null },
+                  ]),
+                })),
+              })),
+            })),
+            delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
+            insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) })),
+          };
+          return cb(tx);
+        }) as unknown as typeof mockDb.transaction;
+
+        vi.mocked(syncTaskDueDateTrigger).mockClear();
+
+        const context = {
+          toolCallId: '1', messages: [],
+          experimental_context: { userId: 'user-123', timezone } as ToolExecutionContext,
+        };
+
+        await taskManagementTools.update_task.execute!({ taskId: 'task-1', dueDate }, context);
+
+        return vi.mocked(syncTaskDueDateTrigger).mock.calls.at(-1)?.[1] as Date | null;
+      };
+
+      it('reads a naive due date in the caller timezone from the execution context', async () => {
+        const chicago = await updateDueDateIn('America/Chicago', '2026-02-19T19:00:00');
+        const tokyo = await updateDueDateIn('Asia/Tokyo', '2026-02-19T19:00:00');
+
+        // UTC-6 vs UTC+9 in February. Read in the server's zone, both would be equal.
+        expect(Number(chicago) - Number(tokyo)).toBe(15 * 60 * 60 * 1000);
+      });
+
+      it('leaves an absolute due date alone whatever the caller timezone', async () => {
+        const stored = await updateDueDateIn('America/Chicago', '2026-02-19T19:00:00Z');
+
+        expect(stored).toEqual(new Date('2026-02-19T19:00:00Z'));
       });
 
       it('broadcasts page:updated when title changes', async () => {

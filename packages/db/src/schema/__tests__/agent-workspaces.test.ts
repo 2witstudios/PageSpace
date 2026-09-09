@@ -11,10 +11,11 @@
  *    had `conversationId` as the PK (one environment per chat thread), which
  *    made shared working contexts structurally impossible; a session is a
  *    drive-level workspace hosting MANY conversations.
- *  - **Threads bind permanently and survive their session** —
- *    `conversations.workspaceId` is a nullable FK with ON DELETE SET NULL: ending
- *    a session keeps its threads as plain history, and a thread's filesystem is
- *    never retroactively rewritten (moving a thread is a fork, not a rebind).
+ *  - **Threads survive their session** — a thread is bound to a workspace by an
+ *    `agent_workspace_nodes` row, which cascades from `agent_workspaces`: ending
+ *    a session drops the binding and keeps the thread as plain history. The
+ *    `conversations.workspaceId` column that used to state this is gone; two
+ *    witnesses for one fact is the thing the node model deleted.
  *  - **Ids address, names label** — a session's `name` carries NO uniqueness of
  *    any kind (renaming can never break a connection); a shell's `(workspaceId,
  *    name)` uniqueness exists for tab titles, while `id` alone is the address.
@@ -38,7 +39,6 @@ import {
   agentWorkspacesRelations,
   agentWorkspaceShellsRelations,
 } from '../agent-workspaces';
-import { conversations } from '../conversations';
 
 const sessionsConfig = getTableConfig(agentWorkspaces);
 const sessionsColumns = getTableColumns(agentWorkspaces);
@@ -80,7 +80,8 @@ describe('agent_workspaces schema — identity', () => {
   it('should carry NO conversation-derived column — the conflation must not creep back', () => {
     // `conversationId` as the PK is what forced one environment per chat
     // thread and made panes unable to share a sandbox. The association runs
-    // the OTHER way now: conversations.workspaceId FKs here.
+    // the OTHER way now: an `agent_workspace_nodes` row FKs here and names the
+    // conversation as its target.
     expect('conversationId' in sessionsColumns).toBe(false);
     expect('agentPageId' in sessionsColumns).toBe(false);
   });
@@ -116,29 +117,12 @@ describe('agent_workspaces schema — identity', () => {
   });
 });
 
-describe('conversations.workspaceId — the thread→session binding', () => {
-  const conversationsConfig = getTableConfig(conversations);
-  const conversationsColumns = getTableColumns(conversations);
-
-  it('should be a nullable FK onto agent_workspaces.id — plain chats have no session', () => {
-    const fk = fkOnColumn(conversationsConfig, 'workspaceId');
-    expect(getTableConfig(fk.reference().foreignTable).name).toBe('agent_workspaces');
-    expect(fk.reference().foreignColumns.map((column) => column.name)).toEqual(['id']);
-    expect(conversationsColumns.workspaceId.notNull).toBe(false);
-  });
-
-  it('given threads outlive their session as history, should SET NULL rather than cascade', () => {
-    // Cascade here would make ending a session DELETE its chat threads.
-    // A session's death releases compute; it must never erase history.
-    const fk = fkOnColumn(conversationsConfig, 'workspaceId');
-    expect(fk.onDelete).toBe('set null');
-  });
-
-  it('indexes workspaceId for the per-session conversation list', () => {
-    const indexNames = conversationsConfig.indexes.map((index) => index.config.name);
-    expect(indexNames).toContain('conversations_workspace_id_idx');
-  });
-});
+/**
+ * `conversations.workspaceId` USED TO BE PINNED HERE — nullable FK, SET NULL on
+ * session delete, indexed for the per-session listing. The column is gone: a
+ * thread's workspace is the `agent_workspace_nodes` row bound to it, and that
+ * table's own suite pins the binding (`agent-workspace-nodes.test.ts`).
+ */
 
 describe('agent_workspaces schema — Sprite identity and storage', () => {
   it.each([

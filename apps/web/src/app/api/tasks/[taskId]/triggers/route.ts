@@ -11,7 +11,7 @@ import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
+import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 
 const logger = loggers.api.child({ module: 'task-triggers-api' });
 
@@ -159,7 +159,7 @@ export async function PUT(request: Request, context: { params: Promise<{ taskId:
 
   // Explicit body value wins, else the caller's profile timezone, else UTC —
   // matching the internal update_task/create_task tools.
-  const timezone = parsed.data.timezone?.trim() || (await getUserTimezone(userId)) || 'UTC';
+  const timezone = await resolveTimezone(parsed.data.timezone, userId);
 
   try {
     await createTaskTriggerWorkflow({

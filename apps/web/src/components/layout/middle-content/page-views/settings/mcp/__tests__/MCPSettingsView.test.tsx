@@ -486,7 +486,7 @@ describe('MCPSettingsView — Quick MCP Setup', () => {
     expect(within(setupCard).getByText(/reuse that scoped credential/i)).toBeInTheDocument();
   });
 
-  it('switching to the No install (npx) tab hides the install step and emits an npx config', async () => {
+  it('switching to the No install (npx) tab hides the install step and emits an npx config that names the bin with -p, since @pagespace/cli has two bins and neither is named cli', async () => {
     await renderView();
 
     await userEvent.click(screen.getByRole('tab', { name: /no install \(npx\)/i }));
@@ -496,7 +496,10 @@ describe('MCPSettingsView — Quick MCP Setup', () => {
 
     const config = getConfigJson();
     expect(config.mcpServers.pagespace.command).toBe('npx');
-    expect(config.mcpServers.pagespace.args).toEqual(['-y', '@pagespace/cli', 'pagespace-mcp']);
+    // Dropping `-p` here makes the emitted config unrunnable: npx would take
+    // `@pagespace/cli` as the command name and die with "could not determine
+    // executable to run". Do not "simplify" it away.
+    expect(config.mcpServers.pagespace.args).toEqual(['-y', '-p', '@pagespace/cli', 'pagespace-mcp']);
     expect(config.mcpServers.pagespace.env).toEqual({
       PAGESPACE_API_URL: 'https://pagespace.ai',
       PAGESPACE_TOKEN: '<YOUR_PAGESPACE_MCP_TOKEN_HERE>',

@@ -25,9 +25,15 @@
  */
 
 import type { SubscriptionTier } from '../subscription-utils';
-import { SANDBOX_TIMEOUT_MS, SANDBOX_MAX_TIMEOUT_MS, SANDBOX_MAX_OUTPUT_BYTES } from './execution-policy';
+import {
+  SANDBOX_TIMEOUT_MS,
+  SANDBOX_MAX_TIMEOUT_MS,
+  SANDBOX_MAX_OUTPUT_BYTES,
+  DEFAULT_READ_LINES,
+  MAX_LINE_BYTES,
+} from './execution-policy';
 import { evaluateCommandPolicy } from './command-policy';
-import { truncateToBytes } from './output-limit';
+import { truncateToBytes, selectLineWindow, LINE_ELISION_MARKER } from './output-limit';
 import { resolveSandboxPath, SANDBOX_ROOT } from './sandbox-paths';
 import { applyEdit } from './edit-file';
 import { buildSandboxEnv } from './sandbox-env';
@@ -39,7 +45,9 @@ import {
 } from './checkpoint-policy';
 import { getValidatedEnv } from '../../config/env-validation';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
+import { LocalEnvUnsupportedError } from './sandbox-host';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
+import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
 
 /** Largest file body a single `writeFile` may submit, in bytes. */
 export const MAX_WRITE_BYTES = 1024 * 1024;
@@ -96,8 +104,8 @@ export interface SandboxQuotaDeps {
  * Optional — omitting it disables metering (no hold, no charge), mirroring
  * every other optional seam in this file (`screenOutput`, `notifyShellActivity`).
  *
- * The hold->settle protocol mirrors the voice STT recipe
- * (apps/web/src/app/api/voice/transcribe/route.ts): `gate` places a flat-estimate
+ * The hold->settle protocol mirrors the realtime voice recipe
+ * (apps/realtime/src/voice/call-metering.ts): `gate` places a flat-estimate
  * hold BEFORE the machine is acquired (the real active-window duration isn't known
  * until the run ends); `trackUsage` settles the hold to the real cost and hands off
  * its release to the credit pipeline on a SUCCESSFUL run only; `releaseHold` is the
@@ -122,6 +130,12 @@ export interface SandboxBillingDeps {
    * agent page; `driveId` is the realtime shell bridge's session-level
    * attribution (a session is drive-scoped, not page-anchored) — a caller
    * sets whichever one its own model has, never both.
+   *
+   * REPORTS ITS OUTCOME: resolving is not the same as settling.
+   * `UsageTrackingOutcome.persisted` says whether the usage row landed, and the
+   * realtime shell's heartbeat keeps its billing window OPEN when it did not.
+   * A one-shot run (this file) has no window to keep, so it only disposes of the
+   * hold correctly and lets the seam's own ERROR log stand.
    */
   trackUsage: (input: {
     payerId: string;
@@ -133,7 +147,7 @@ export interface SandboxBillingDeps {
     driveId?: string;
     /** The `agent_workspaces.id` this run belongs to — first-class attribution, mirroring `driveId`. */
     workspaceId?: string;
-  }) => Promise<void>;
+  }) => Promise<UsageTrackingOutcome>;
   /** Releases a hold without billing. Called on every exit that never reaches `trackUsage`. */
   releaseHold: (holdId: string) => Promise<void>;
 }
@@ -234,7 +248,17 @@ export interface SandboxRunDeps {
   /** Ensures the caller's agent-session sandbox is provisioned and live (lifecycle deps already injected). */
   acquireSandbox: (input: AcquireSandboxRequest) => Promise<SandboxAcquireResult>;
   /** Reconnect to the executable handle for an acquired sandbox id. */
-  reconnect: (sandboxId: string) => Promise<ExecutableSandbox | null>;
+  /**
+   * Re-open the machine `acquireSandbox` just addressed.
+   *
+   * `principal` is WHO the reconnected handle acts as, and it is a parameter
+   * rather than something the implementation infers because a second
+   * substrate needs it: a LOCAL environment (the user's own computer) signs
+   * the acting identity into every request it sends, and its owner's local
+   * approval prompt names that identity. A Sprite implementation ignores it —
+   * a Sprite is addressed by name and was authorized at the gate.
+   */
+  reconnect: (sandboxId: string, principal: SandboxReconnectPrincipal) => Promise<ExecutableSandbox | null>;
   quota: SandboxQuotaDeps;
   buildEnv: () => Record<string, string>;
   audit: (input: CodeExecutionAuditInput) => Promise<void>;
@@ -349,6 +373,17 @@ const AUTHZ_DENY_REASONS = new Set([
 ]);
 
 
+/**
+ * Who a reconnected sandbox acts as — the acting user, the session that owns
+ * the machine, and the conversation the request came through. Assembled from
+ * facts the runner already holds; see `SandboxRunDeps.reconnect`.
+ */
+export interface SandboxReconnectPrincipal {
+  userId: string;
+  workspaceId: string;
+  conversationId: string;
+}
+
 export type SandboxToolDenialReason =
   | 'kill_switch_off'
   | 'tier_ineligible'
@@ -366,12 +401,31 @@ export type SandboxToolDenialReason =
   | 'github_over_bash'
   | 'path_escape'
   | 'content_too_large'
+  | 'binary_content'
   | 'edit_no_match'
   | 'edit_not_unique'
   | 'no_session'
   | 'provision_failed'
   | 'execution_failed'
   | 'not_found'
+  /**
+   * The substrate cannot take a filesystem checkpoint, and the checkpoint
+   * policy says this batch needs one (invariant 12). A REFUSAL, not a
+   * fallback: proceeding would run a destructive agent batch on the user's own
+   * machine with no restore point, which is exactly the silent safety
+   * degradation the advertised `checkpoint: false` exists to stop.
+   */
+  | 'checkpoint_unsupported'
+  /**
+   * The user's own computer holds no live bridge connection. Kept DISTINCT
+   * from `local_bind_denied` on purpose: this one the requester fixes
+   * themselves in seconds (`pagespace env connect`), that one only the
+   * machine's owner can fix, elsewhere. An agent told merely "could not
+   * provision" debugs the wrong layer.
+   */
+  | 'local_not_connected'
+  /** The machine owner's bind policy denies this actor. See `local_not_connected` for why the two are separate reasons. */
+  | 'local_bind_denied'
   | 'error';
 
 export type BashToolResult =
@@ -383,7 +437,36 @@ export type WriteFileToolResult =
   | { success: false; error: string; reason: SandboxToolDenialReason };
 
 export type ReadFileToolResult =
-  | { success: true; path: string; content: string; truncated: boolean }
+  | {
+      success: true;
+      path: string;
+      content: string;
+      /**
+       * True when `content` is NOT the whole file — either the line window
+       * ended before the last line, or the byte backstop cut it. Always
+       * accompanied by `notice`, because a boolean in a JSON blob is not a
+       * thing a model reliably acts on.
+       */
+      truncated: boolean;
+      /** 1-based line numbers of the window actually returned. */
+      firstLine: number;
+      lastLine: number;
+      /** Total lines in the file, so the caller can see what it is missing. */
+      totalLines: number;
+      /** Size of the WHOLE file on disk, not of `content`. */
+      originalBytes: number;
+      /** Present iff `truncated`: says what is missing and how to get it. */
+      notice?: string;
+    }
+  | { success: false; error: string; reason: SandboxToolDenialReason };
+
+/**
+ * `readSandboxFileForCopy`'s result. Deliberately NOT ReadFileToolResult: there
+ * is no `truncated`, no window and no notice, because this read either returns
+ * the file whole or fails. A partial success is not representable on purpose.
+ */
+export type ReadFileForCopyResult =
+  | { success: true; path: string; content: string; bytes: number }
   | { success: false; error: string; reason: SandboxToolDenialReason };
 
 export type EditFileToolResult =
@@ -414,15 +497,57 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
     'The bash sandbox has no GitHub credentials. Use the dedicated git_*/gh_* tools for GitHub operations (e.g. git_clone, git_push, gh_pr_create) — they carry your connected GitHub auth.',
   path_escape: 'The path is invalid or escapes the sandbox root.',
   content_too_large: 'The file content is too large.',
-  edit_no_match: 'The oldString was not found in the file. Read the file and copy the exact text to replace.',
-  edit_not_unique: 'The oldString is not unique in the file. Include more surrounding context, or set replaceAll to replace every occurrence.',
+  binary_content:
+    'This file is not valid UTF-8 text, so it cannot be copied byte-for-byte through this tool — decoding it would silently replace the undecodable bytes. Use bash (cp/mv) to move binary files inside the sandbox.',
+  edit_no_match:
+    'The oldString was not found in the file. Read the file and copy the exact text to replace. '
+    + 'If you read a windowed page of a long file, the text you are targeting may be in a part you have not read yet.',
+  edit_not_unique:
+    'The oldString is not unique in the file. Add more surrounding context to pin the one you mean. '
+    + 'The duplicate may be OUTSIDE the lines you read — readFile returns a window, but this match runs over the whole file, '
+    + 'so read the rest before assuming replaceAll is safe: it would rewrite every occurrence, including ones you have not seen.',
   no_session:
     'This conversation has no session (workspace), so there is no sandbox to run in — it predates sessions. Start a new conversation to get one.',
   provision_failed: 'Could not provision a sandbox for this run.',
   execution_failed: 'Command execution failed or timed out.',
   not_found: 'File not found.',
+  checkpoint_unsupported:
+    'This environment cannot take a filesystem checkpoint, and a checkpoint is required before running commands here. '
+    + 'Nothing was run — a destructive batch with no restore point is refused rather than attempted.',
+  local_not_connected:
+    'The local environment this session is bound to has no connected machine. '
+    + 'Run `pagespace env connect` on that computer, then retry.',
+  local_bind_denied:
+    "The machine owner's policy does not allow you to run code on this local environment. "
+    + 'Retrying will not help — the environment owner has to change its bind policy.',
   error: 'Code execution could not be completed.',
 };
+
+/**
+ * How a LOCAL env's server-side refusal reaches the AGENT.
+ *
+ * Two of the six verdicts get a word of their own, and the split is the whole
+ * point: `not_connected` is fixed by the requester in seconds
+ * (`pagespace env connect` on their machine), while `bind_policy` can only be
+ * fixed by the environment's OWNER, elsewhere, and retrying never helps. An
+ * agent handed the same sentence for both debugs the wrong layer — and so does
+ * the human reading its transcript.
+ *
+ * Everything else maps to `null`, meaning "keep the caller's generic
+ * provisioning fault with its detail": `flag_disabled` and `substrate_unsupported`
+ * are deployment facts the requester can do nothing about, `revoked` and
+ * `not_local` describe a row rather than an action, and `code_exec_denied`
+ * already carries `can-run-code`'s own cause.
+ *
+ * Lives here, next to `DENIAL_MESSAGES`, so the vocabulary and the copy cannot
+ * drift apart, and so every entry point that surfaces a local refusal asks one
+ * function.
+ */
+export function localRefusalToToolDenial(refusal: string | undefined): SandboxToolDenialReason | null {
+  if (refusal === 'not_connected') return 'local_not_connected';
+  if (refusal === 'bind_policy') return 'local_bind_denied';
+  return null;
+}
 
 function fail(
   reason: SandboxToolDenialReason,
@@ -567,9 +692,8 @@ export async function withMachineBilling<S>(
   try {
     const result = await run();
     if (result.success) {
-      handedOff = true;
       const activeSeconds = Math.max(0, (deps.now().getTime() - startedAt) / 1000);
-      await billing.trackUsage({
+      const settle = await billing.trackUsage({
         payerId,
         holdId,
         activeSeconds,
@@ -579,6 +703,18 @@ export async function withMachineBilling<S>(
         driveId: billingSession.driveId ?? undefined,
         workspaceId: billingSession.workspaceId,
       });
+      // The hand-off is what the settle ACHIEVED, not what it was asked to do. A
+      // settle that persisted owns the reservation from here (the credit pipeline
+      // deletes it inside the decrement, or the backfill cron settles the row and
+      // the hold expires on its TTL). A settle that did not persist wrote nothing
+      // and owns nothing, so the `finally` below returns the reservation instead of
+      // leaving it to suppress the payer's spendable balance for its whole TTL.
+      // Idempotent either way: releasing an already-deleted hold deletes zero rows.
+      //
+      // A one-shot run has no window to reopen — there is no next tick for a
+      // finished command — so the lost charge is reported by the seam's own ERROR
+      // log and not retried here.
+      handedOff = settle.persisted;
     }
     return result;
   } finally {
@@ -620,7 +756,11 @@ export async function openSession(
       }
       return { ok: false, reason: reasonFromAcquire(acquired) };
     }
-    const sandbox = await deps.reconnect(acquired.sandboxId);
+    const sandbox = await deps.reconnect(acquired.sandboxId, {
+      userId: ctx.userId,
+      workspaceId: acquired.workspaceId,
+      conversationId: ctx.conversationId,
+    });
     if (!sandbox) {
       deps.quota.releaseSlot({ userId: ctx.userId });
       safeLogError(deps.logger, 'Sandbox reconnect returned no handle', {
@@ -723,6 +863,12 @@ function withCheckpointTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
  * to create their own — see that function's doc for why this closes the race
  * regardless of exact timing between callers.
  */
+/**
+ * Whether the destructive batch may proceed. `ok: false` means NOTHING ran and
+ * the caller must refuse with the named reason — never swallow it.
+ */
+type CheckpointGateVerdict = { ok: true } | { ok: false; reason: 'checkpoint_unsupported' };
+
 async function maybeCheckpointBeforeBatch({
   ctx,
   deps,
@@ -731,9 +877,9 @@ async function maybeCheckpointBeforeBatch({
   ctx: SandboxActorContext;
   deps: SandboxRunDeps;
   sandbox: ExecutableSandbox;
-}): Promise<void> {
+}): Promise<CheckpointGateVerdict> {
   const checkpoint = deps.checkpoint;
-  if (!checkpoint || !ctx.turnId) return;
+  if (!checkpoint || !ctx.turnId) return { ok: true };
   const turnId = ctx.turnId;
 
   try {
@@ -745,7 +891,22 @@ async function maybeCheckpointBeforeBatch({
         lastCheckpointTurnId: state.lastCheckpointTurnId,
       })
     ) {
-      return;
+      return { ok: true };
+    }
+    // INVARIANT 12, and the one place fail-open flips to fail-closed. Above
+    // this line the policy has just said this batch NEEDS a restore point; a
+    // substrate that advertises it cannot make one is therefore refused, not
+    // silently run unprotected. The check sits AFTER `shouldCheckpoint` on
+    // purpose: when the policy wants no checkpoint at all (flag off, or one
+    // already taken this turn) there is nothing to be unprotected about, and
+    // refusing there would lock a local environment out of every batch for a
+    // reason unrelated to safety.
+    if (sandbox.capabilities?.checkpoint === false) {
+      safeLogWarn(deps.logger, 'Pre-agent checkpoint unsupported on this substrate — refusing the batch', {
+        sandboxId: sandbox.sandboxId,
+        turnId,
+      });
+      return { ok: false, reason: 'checkpoint_unsupported' };
     }
     await coalesceCheckpointAttempt(sandbox.sandboxId, async () => {
       await withCheckpointTimeout(
@@ -755,12 +916,27 @@ async function maybeCheckpointBeforeBatch({
       checkpoint.recordCheckpoint(sandbox.sandboxId, { lastCheckpointAt: deps.now(), lastCheckpointTurnId: turnId });
     });
   } catch (error) {
+    // The SECOND net, independent of the advertised capability: a substrate
+    // whose `createCheckpoint` says "unsupported" is refused even if it never
+    // declared a capability at all. Every OTHER failure keeps the documented
+    // fail-open behavior — a Sprite whose checkpoint call errored or timed out
+    // is still a sandbox with a restore path, and blocking agent work on
+    // checkpoint availability is what the timeout above exists to prevent.
+    if (error instanceof LocalEnvUnsupportedError) {
+      safeLogWarn(deps.logger, 'Pre-agent checkpoint unsupported on this substrate — refusing the batch', {
+        sandboxId: sandbox.sandboxId,
+        turnId,
+        error: error.message,
+      });
+      return { ok: false, reason: 'checkpoint_unsupported' };
+    }
     safeLogWarn(deps.logger, 'Pre-agent checkpoint failed (proceeding without one)', {
       sandboxId: sandbox.sandboxId,
       turnId,
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  return { ok: true };
 }
 
 export async function runBashInSandbox({
@@ -817,9 +993,16 @@ export async function runBashInSandbox({
   const session = await openSession(ctx, deps);
   if (!session.ok) return fail(session.reason);
 
-  await maybeCheckpointBeforeBatch({ ctx, deps, sandbox: session.sandbox });
-
   try {
+    // INSIDE the try, so the `finally` below releases the code-execution slot
+    // on this refusal exactly as it does on every other exit. Returning between
+    // `openSession` and this block would leak the slot for the life of the
+    // process — invisibly, since nothing downstream fails: the semaphore just
+    // fills up and eventually stops code execution for that user on EVERY
+    // substrate, not only the local one that was refused.
+    const checkpointed = await maybeCheckpointBeforeBatch({ ctx, deps, sandbox: session.sandbox });
+    if (!checkpointed.ok) return fail(checkpointed.reason);
+
     const startedAt = deps.now();
     let run: SandboxRunResult;
     try {
@@ -960,12 +1143,119 @@ export async function writeSandboxFile({
   });
 }
 
+/**
+ * Thousands separators without `toLocaleString()`, which depends on the process
+ * locale — the notice text is asserted in tests and read by a model, so it must
+ * not vary with the environment.
+ */
+function withThousands(n: number): string {
+  return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/**
+ * The sentence a partial read MUST carry.
+ *
+ * `truncated: true` alone was the whole signal before, and it is not one a model
+ * acts on: it is a boolean in a JSON blob next to the content it contradicts.
+ * The notice rides INSIDE the payload for the same reason `shell-io.ts` frames
+ * its cold/unreachable answers there — so truncation cannot be mistaken for the
+ * file simply ending, and so the caller is told the exact next call.
+ *
+ * The editFile clause is the load-bearing one. `applyEdit` counts occurrences
+ * across the ENTIRE file while this read shows a window, so an anchor that looks
+ * unique here can collide with a line the caller never saw; without this warning
+ * the natural recovery from `edit_not_unique` is `replaceAll: true`, which edits
+ * the invisible region.
+ */
+export function buildReadTruncationNotice({
+  path,
+  window,
+}: {
+  path: string;
+  window: {
+    firstLine: number;
+    lastLine: number;
+    totalLines: number;
+    bytesCapped: boolean;
+    lineElided: boolean;
+  };
+}): string {
+  const { firstLine, lastLine, totalLines, bytesCapped, lineElided } = window;
+  const total = withThousands(totalLines);
+
+  // Appended to EVERY variant: whichever way a read came back partial, the next
+  // thing the caller usually does is an edit.
+  const editWarning =
+    ' Note that editFile matches oldString against the ENTIRE file, including lines not shown here —' +
+    ' if an edit reports "not unique", the duplicate may be outside this window,' +
+    ' so read more rather than reaching for replaceAll.';
+  const elisionNote = lineElided
+    ? ` Lines longer than ${withThousands(MAX_LINE_BYTES)} bytes are shown clipped, marked "${LINE_ELISION_MARKER.trim()}" —` +
+      ' their full text is not here, so do not build an editFile anchor from a clipped line.'
+    : '';
+
+  // Overshot the file entirely — say where it actually ends, and do NOT also
+  // claim "this is not the whole file"; nothing was returned to be partial.
+  if (lastLine < firstLine) {
+    return (
+      `[No lines returned: offset ${firstLine} is past the end of ${path}, which has ${total} line${totalLines === 1 ? '' : 's'}.` +
+      ` Re-read with a smaller offset.${editWarning}]`
+    );
+  }
+
+  const shown = `Showing lines ${firstLine}-${lastLine} of ${total}`;
+  const remaining = totalLines - lastLine;
+
+  if (remaining > 0) {
+    // `lastLine` is where the returned content genuinely ends — the byte budget
+    // is applied per line during selection, never to the joined text after —
+    // so this offset resumes exactly where this window stopped, with no gap.
+    const why = bytesCapped
+      ? ' This window was cut short by the output size limit rather than by the line count, so it is shorter than requested.'
+      : '';
+    return (
+      `[${shown}. This is NOT the whole file — ${withThousands(remaining)} line${remaining === 1 ? '' : 's'} below this window` +
+      ` ${remaining === 1 ? 'is' : 'are'} not shown. Continue with readFile({ path: "${path}", offset: ${lastLine + 1} }).` +
+      `${why}${elisionNote}${editWarning}]`
+    );
+  }
+
+  // Every line present and the window started at the top. What made this
+  // partial is either per-line clipping, or — new case — the size limit
+  // trimming the very tail of the file (e.g. dropping the restored trailing
+  // newline so the response does not exceed the budget by one byte). Neither
+  // implies the other, so both get their own clause rather than the
+  // lineElided wording covering a cap it did not cause.
+  if (firstLine === 1) {
+    const capNote = bytesCapped
+      ? ' The output size limit trimmed the very end of the file (e.g. its trailing newline) to stay within budget.'
+      : '';
+    return lineElided
+      ? `[${shown} — every line of the file is here, but at least one was too long to show in full.${capNote}${elisionNote}${editWarning}]`
+      : `[${shown} — every line of the file is here.${capNote}${editWarning}]`;
+  }
+
+  // Reached the last line, but started past line 1: the tail is complete, the
+  // head is missing. Saying "NOT the whole file" here would be misleading about
+  // which end is absent.
+  return (
+    `[${shown} — this window reaches the end of the file, but lines 1-${firstLine - 1} are not shown.` +
+    `${elisionNote}${editWarning}]`
+  );
+}
+
 export async function readSandboxFile({
   path,
+  offset,
+  limit,
   ctx,
   deps,
 }: {
   path: string;
+  /** 1-based first line to return. Omit for the start of the file. */
+  offset?: number;
+  /** How many lines to return. Omit for DEFAULT_READ_LINES. */
+  limit?: number;
   ctx: SandboxActorContext;
   deps: SandboxRunDeps;
 }): Promise<ReadFileToolResult> {
@@ -982,7 +1272,7 @@ export async function readSandboxFile({
     return fail('path_escape');
   }
 
-  return withMachineBilling<{ path: string; content: string; truncated: boolean }>(ctx, deps, async () => {
+  return withMachineBilling<Extract<ReadFileToolResult, { success: true }>>(ctx, deps, async () => {
   const session = await openSession(ctx, deps);
   if (!session.ok) return fail(session.reason);
 
@@ -1021,19 +1311,167 @@ export async function readSandboxFile({
     // Injection seam (fail-open): screen untrusted file content before truncation.
     const rawContent = buffer.toString('utf8');
     const screenedContent = deps.screenOutput ? await deps.screenOutput(rawContent) : rawContent;
-    const { text, truncated } = truncateToBytes({
+    const originalBytes = Buffer.byteLength(screenedContent, 'utf8');
+
+    // Both caps are applied INSIDE the windowing, so `window.lastLine` always
+    // describes the line the returned content actually ends on. Capping the
+    // joined text afterwards instead would cut mid-window while lastLine still
+    // named the requested end, and the notice would then send the caller to an
+    // offset well past the content, silently skipping everything in between.
+    const window = selectLineWindow({
       text: screenedContent,
+      offset,
+      limit: limit ?? DEFAULT_READ_LINES,
       maxBytes: SANDBOX_MAX_OUTPUT_BYTES,
+      maxLineBytes: MAX_LINE_BYTES,
     });
+    const text = window.text;
+    // `bytesCapped` alone (windowed/lineElided both false) is a real, if rare,
+    // case: a full-file read whose content exactly fills maxBytes drops the
+    // restored trailing newline to stay inside the cap (`selectLineWindow`),
+    // which returns `reachesEnd: true` — so `windowed` reads false even though
+    // one byte of the file was left out. Missing it here meant the response
+    // reported `truncated: false` and skipped the notice for a read that was,
+    // in fact, incomplete.
+    const truncated = window.windowed || window.lineElided || window.bytesCapped;
     await safeAudit(deps, ctx, {
       code: `readFile ${path}`,
       exitCode: 0,
       durationMs,
     });
-    return { success: true, path, content: text, truncated };
+    return {
+      success: true,
+      path,
+      content: text,
+      truncated,
+      firstLine: window.firstLine,
+      lastLine: window.lastLine,
+      totalLines: window.totalLines,
+      originalBytes,
+      ...(truncated
+        ? { notice: buildReadTruncationNotice({ path, window }) }
+        : {}),
+    };
   } finally {
     session.release();
   }
+  });
+}
+
+/**
+ * Read a sandbox file VERBATIM, for copying its bytes somewhere else.
+ *
+ * A sibling of `readSandboxFile`, not a caller of it, because everything that
+ * function does to make a file safe and affordable to put in front of a MODEL is
+ * corruption when the bytes are destined for storage:
+ *
+ *   - the line window (DEFAULT_READ_LINES) would copy the first page of a file
+ *     and call it the whole thing;
+ *   - the per-line clip (MAX_LINE_BYTES) would silently rewrite long lines and
+ *     staple LINE_ELISION_MARKER into the middle of the content;
+ *   - `deps.screenOutput` would, on a flagged file, wrap the copy in
+ *     `[UNTRUSTED TOOL OUTPUT …]` banners — text that exists to frame content
+ *     for a model, written here into a user's document.
+ *
+ * The injection seam is skipped rather than forgotten. It annotates
+ * model-visible output; these bytes are never returned to the model (the copy
+ * tool's `toModelOutput` reduces its result to counts), so there is no prompt to
+ * inject. Whatever later reads the destination applies its own seam.
+ *
+ * Refuses above MAX_WRITE_BYTES instead of truncating. A half-copied document
+ * looks complete — there is no notice attached to a page to say it was cut — so
+ * silently short content is a worse failure here than in a read.
+ */
+export async function readSandboxFileForCopy({
+  path,
+  ctx,
+  deps,
+}: {
+  path: string;
+  ctx: SandboxActorContext;
+  deps: SandboxRunDeps;
+}): Promise<ReadFileForCopyResult> {
+  if (!deps.isEnabled()) return fail('kill_switch_off');
+
+  const resolved = resolveSandboxPath(path);
+  if (!resolved) {
+    await safeAudit(deps, ctx, {
+      code: `copyRead ${path}`,
+      exitCode: null,
+      durationMs: 0,
+      anomaly: 'blocked_command',
+    });
+    return fail('path_escape');
+  }
+
+  return withMachineBilling<Extract<ReadFileForCopyResult, { success: true }>>(ctx, deps, async () => {
+    const session = await openSession(ctx, deps);
+    if (!session.ok) return fail(session.reason);
+
+    try {
+      const startedAt = deps.now();
+      let buffer: Buffer | null;
+      try {
+        buffer = await session.sandbox.readFileToBuffer({ path: resolved });
+      } catch {
+        const durationMs = deps.now().getTime() - startedAt.getTime();
+        await safeAudit(deps, ctx, {
+          code: `copyRead ${path}`,
+          exitCode: null,
+          durationMs,
+          anomaly: 'nonzero_exit',
+        });
+        return fail('execution_failed');
+      }
+      const durationMs = deps.now().getTime() - startedAt.getTime();
+      if (buffer === null) {
+        await safeAudit(deps, ctx, {
+          code: `copyRead ${path}`,
+          exitCode: 1,
+          durationMs,
+          anomaly: 'nonzero_exit',
+        });
+        return fail('not_found');
+      }
+
+      // The cap is measured on the SOURCE BYTES, not on a decoded string: for
+      // anything that does not round-trip, the decoded form has a different
+      // length than the file on disk, and the wrong number would be the one
+      // enforced.
+      const bytes = buffer.byteLength;
+      if (bytes > MAX_WRITE_BYTES) {
+        await safeAudit(deps, ctx, {
+          code: `copyRead ${path} (${bytes} bytes, over cap)`,
+          exitCode: 1,
+          durationMs,
+        });
+        return fail('content_too_large');
+      }
+
+      // `toString('utf8')` is LOSSY: undecodable bytes become U+FFFD, silently.
+      // A tool promising byte-exact copies must not hand back content that no
+      // longer matches the file — an image or archive would arrive corrupted
+      // and look like it copied fine. Re-encoding and comparing is the only
+      // honest check, so a non-text file is refused instead.
+      const content = buffer.toString('utf8');
+      if (Buffer.compare(Buffer.from(content, 'utf8'), buffer) !== 0) {
+        await safeAudit(deps, ctx, {
+          code: `copyRead ${path} (not utf-8)`,
+          exitCode: 1,
+          durationMs,
+        });
+        return fail('binary_content');
+      }
+
+      await safeAudit(deps, ctx, {
+        code: `copyRead ${path} (${bytes} bytes)`,
+        exitCode: 0,
+        durationMs,
+      });
+      return { success: true, path, content, bytes };
+    } finally {
+      session.release();
+    }
   });
 }
 
@@ -1119,6 +1557,13 @@ export async function editSandboxFile({
  * Default env builder used by the production tool wrappers. This is the effect
  * seam that sources the validated env from the global and hands it to the pure
  * `buildSandboxEnv`, keeping the allowlist construction itself IO-free.
+ *
+ * The validated env is currently READ AND UNUSED — `SANDBOX_ENV_ALLOWLIST` is
+ * empty, so `buildSandboxEnv` looks at none of it. Kept deliberately: this is
+ * where the host env enters the sandbox path, and the day a key is allowlisted
+ * this seam must hand over the VALIDATED value rather than a raw `process.env`
+ * read. The one live effect meanwhile is that a broken env throws here — which,
+ * in the web service, it would already have done long before any tool ran.
  */
 export const defaultBuildEnv = (): Record<string, string> =>
   buildSandboxEnv({ env: getValidatedEnv() });

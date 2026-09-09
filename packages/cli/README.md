@@ -53,6 +53,13 @@ The model behind those four commands:
   `pagespace keys use --off` deactivates it.
 - **`pagespace mcp` is deliberately excluded** from the active key — MCP configs name their
   credential explicitly so they stay portable and self-describing (see below).
+- **A key can describe itself, but cannot manage keys.** `pagespace keys describe` reports the
+  credential in use — drives, role, and the permissions it actually resolves to — and works
+  under a key. Because it reports on a *content* credential rather than managing keys, it is the
+  one `keys` verb that follows the content-command rule above: name the credential
+  (`--key=<name>`, `--token`, the env vars, or an active key). `keys list`/`revoke`/`use` and the
+  wizard manage the whole set of keys you hold, so they need your login instead, and refuse a key
+  outright rather than failing halfway through.
 
 No browser on this machine (CI, container, remote box)? `pagespace login --device` prints a
 short code and URL you approve from any browser. Keys are different — their consent redirect
@@ -78,7 +85,8 @@ trust boundary.
 | `pagespace keys` | Interactive wizard: create, list, **edit** (re-scope in place, same secret), **set active**, and revoke keys. Needs a real terminal; in scripts use the subcommands below. |
 | `pagespace keys create --drive <id> [--role member\|admin\|<customRoleId>] [--drive … --role …] [--name <name>] [--show-token] [--yes]` | Mints a key scoped to the given drive(s) via browser consent, then stores it under `--name` (defaults to the drive id; required for multiple drives; `default` is reserved for your login). `--yes` overwrites an existing key of the same name. |
 | `pagespace keys use <name>` / `pagespace keys use --off` | Makes a stored key this machine's **active key** (browser approval), or deactivates it locally. See above. |
-| `pagespace keys list [--json]` | Lists your keys (prefix only — never the secret). |
+| `pagespace keys list [--json]` | Lists your keys (prefix only — never the secret), with the role granted on each drive. Needs your login — a key cannot list keys; see `keys describe`. |
+| `pagespace keys describe [--page <pageId>] [--json]` | What the credential this machine would use actually is: its drives, the role granted in each, and the **effective** permissions that role resolves to (view/edit/share/delete). Drive-level permissions cover the drive itself (creating a top-level page, sharing or deleting it); a page inside can be narrower, so `--page` resolves that page too. The one `keys` verb a key can run about itself — and, unlike its siblings, it reports on a **content** credential, so it needs one named: `--key=<name>`, `--token`, the env vars, or an active key. A bare `pagespace keys describe` with only a personal login is refused, like any other content command. |
 | `pagespace keys revoke <tokenId> [--yes]` | Revokes a key server-side. Irreversible. |
 
 `--role` binds to the `--drive` immediately before it, not to every `--drive` on the command
@@ -87,9 +95,14 @@ all — it's scoped to *whatever role you personally hold on drive `a` at reques
 changes if your own membership does. Give every drive its own `--role` when you want a fixed
 grant: `--drive a --role admin --drive b --role admin`.
 
-None of these need `--key`/`--token`: a plain `pagespace login` is enough to drive them all
-(`keys create` brings its own browser consent). Everything else — the content commands — needs
-a credential, resolved as described next.
+A plain `pagespace login` is enough to drive these — with one exception. `keys create`, `list`,
+`revoke`, `use` and the wizard all *manage* keys, so they need your login and nothing else
+(`keys create` brings its own browser consent). **`keys describe` is the exception**: it reports on
+a *content* credential rather than managing keys, so it needs one named — `--key=<name>`,
+`--token`, the env vars, or an active key — exactly like the content commands below. A bare
+`pagespace keys describe` with only a login is refused.
+
+Everything else — the content commands — needs a credential, resolved as described next.
 
 ### How commands find a credential
 
@@ -123,7 +136,8 @@ runs on the machine that minted them.
 Every command is `pagespace <resource> <verb> [args] [flags]`. `pagespace help` prints this
 list in the terminal; `pagespace --version` prints the CLI and SDK versions. Global flags,
 accepted everywhere: `--json` (machine-readable output on stdout, nothing else), `--host <url>`,
-`--token <token>`, `--key <name>`, and `--yes` (skip confirmations).
+`--token <token>`, `--key <name>`, `--timeout <seconds>` (how long to wait for the one request the
+command makes), and `--yes` (skip confirmations).
 
 ```text
 drives    list [--all]                # --all includes trashed drives
@@ -157,7 +171,15 @@ pages     list --drive <driveId> [parentId]
           trash <pageId> [--all] [--yes]
           restore <pageId>
 
-sheets    edit-cells <pageId> [--json-input <json>]
+files     upload <path> --drive <driveId> [--parent <pageId>] [--title <title>] [--mime <type>]
+
+sheets    describe <pageId>                  # tabs and sizes, reads no rows
+          query <pageId> [--where <json>] [--select A,B] [--order-by A:desc] [--limit N] [--offset N] [--tab N]
+          rows <pageId> [--from-row N] [--limit N] [--tab N]
+          append <pageId> [--json-input <json>] [--tab N]
+          update-cells <pageId> [--json-input <json>] [--tab N]
+          delete-rows <pageId> --from-row N --count N [--tab N] [--yes]
+          edit-cells <pageId> [--json-input <json>]
 
 trash     list --drive <driveId>
 
@@ -178,19 +200,196 @@ agents    list --drive <driveId>|--all-drives
           ask <agentPageId> <message> [--conversation-id <id>] [--context <text>]
           config <agentPageId> --set <key>=<value> [--set <key>=<value> …]
 
+conversations list <agentPageId>            # an agent's conversations, newest first
+              read <agentPageId> <conversationId>   # the messages in one conversation
+
 models    list
 
 activity  <driveId>
 
 channels  send <channelId> <message>
 
-keys      (no args: guided wizard) · create · use · list · revoke   # see Credentials above
+keys      (no args: guided wizard) · create · use · list · describe · revoke
+
+env       enroll <enrollmentId> <code>   # bind THIS machine to a local environment (one-time code)
+          token <enrollmentId>           # prove this machine holds its key; prints a short-lived bridge token
 
 mcp       serve the MCP stdio server                                # see below
 ```
 
 One exception to the global flags: `keys create` ignores `--json` — its stdout is either
 ordinary status text or, with `--show-token`, exactly the one `PAGESPACE_TOKEN=…` line.
+
+## `pagespace env` — this machine as a local environment
+
+### What you are agreeing to
+
+`pagespace env connect` lets PageSpace run commands and read and write files **on this computer,
+under your own user account**. Nothing runs unless a policy file you own allows it, and in `ask`
+mode you see the exact command before it runs. Two things follow from approving one, and the
+second surprises people:
+
+- It runs with your privileges, exactly as if you had typed it into this terminal yourself. It can
+  read any file you can read, change any file you can change, reach anything on your network that
+  you can reach, and use any credential sitting in your home directory. There is no sandbox
+  around it.
+- You see the **first** command of each kind, and approving it covers **every later command of
+  that kind for the rest of that session, unseen**. The approval is remembered per user, session
+  and operation — not per command — so after you approve one `exec`, the next `exec` from that
+  same user and session runs with no prompt at all, whatever it is.
+
+The `roots` in your policy file confine the paths an agent can **name** — the working directory it
+asks for, and the files it asks to read or write. They do **not** confine what a program does once
+it has started. A command approved with a working directory inside a root can still read
+`/etc/passwd`, your SSH keys, or anything else your account can reach; it just cannot *ask* the
+daemon to open them. Actually confining a running process needs operating-system sandboxing,
+which this daemon does not do.
+
+So the question at the prompt is not "may this touch that folder". It is "may this, and everything
+like it for the rest of this session, run as me". Answer it the way you would answer a stranger
+asking for your shell for the afternoon. Two practical consequences:
+
+- Run the daemon as an ordinary user, never as root, and prefer a machine — or a separate account —
+  that does not hold secrets you would not hand to whoever is driving the agent.
+- `principals` is the list of PageSpace users allowed to drive this machine. Keep it short, and
+  treat adding a name to it as the same decision as giving that person your shell.
+
+What the daemon does guarantee is narrower than "safe", and worth knowing exactly:
+
+- It **never listens on a port** — it dials out to PageSpace and nothing can dial in.
+- It **denies by default**. No policy file, an unreadable one, or one anybody else can write means
+  every request is refused.
+- Every request carries a **server-signed grant** bound to that exact command or path list: it is
+  single-use, expires within a minute, and cannot be replayed or edited in flight.
+- Your policy is checked **after** the grant and independently of it. A request PageSpace considers
+  allowed is still refused here if your policy does not allow it.
+- Every decision — allowed, denied, declined — is appended to `~/.pagespace/env-audit.jsonl`.
+- Revoking the environment in PageSpace **deletes this machine's key** and stops the daemon;
+  Ctrl-C and `pagespace env disconnect` stop it too, and kill anything it started.
+
+One consequence of the two facts above, worth seeing once before you pick a mode: an agent that
+reads a file on this machine can be *steered* by what that file says — a README, a dependency's
+source, a downloaded document can all contain text aimed at the agent rather than at you. If the
+agent then runs a command, and you have already approved an `exec` in that session, **that command
+runs without a prompt**. This is inherent to agents reading content nobody vetted, not a defect in
+this daemon; the defences that apply here are the ordinary ones — keep `principals` short, keep
+`ops` narrow, stop the daemon when you are not using it, and read
+`~/.pagespace/env-audit.jsonl` when you want to know what actually ran.
+
+### The three modes, in practice
+
+- **`deny`** — nothing runs, ever. The daemon still connects, so the Environment shows as connected.
+- **`ask`** — the safe default to start with. An operation listed in `ops` runs without asking;
+  anything else stops and prompts you in this terminal, showing the exact command, working
+  directory, paths, environment and limits. As above, approving covers further requests for that
+  same operation from the same user and session while the daemon runs — those later commands are
+  never shown to you — but not forever, and not for other people. Declining refuses that request
+  and asks again next time. `ask` needs a terminal: a headless machine cannot use it.
+- **`allowlist`** — only the operations in `ops` run; everything else is denied with no prompt.
+
+**`allowlist` allowlists operations, not executables.** `ops` holds `exec`, `fs_read` and
+`fs_write` — so putting `exec` in it under `allowlist` mode means *any* command may run
+unprompted, not some approved list of programs. There is deliberately no executable allowlist:
+one was considered for this release and not adopted, because a list of program names is easy to
+walk around (`sh -c …`, an interpreter, a script inside a root) and would suggest a guarantee the
+daemon cannot keep. If you want per-command review, use `ask` and leave `exec` out of `ops`.
+
+A drive owner or admin creates a local Environment from the ordinary "New environment" step (choose
+**This computer** and name the machine) and is shown a **one-time enrollment code** (valid ten
+minutes, single use) beside these exact commands. Losing the code is not fatal: until a machine has
+enrolled, the Environment's menu in the sidebar offers **Show a new code**, which replaces the old
+one. Once a machine has enrolled, no new code can ever be issued for that Environment. On the machine:
+
+```text
+pagespace env enroll <enrollmentId> <code> [--host <url>]
+pagespace env token <enrollmentId> [--host <url>]
+pagespace env connect <enrollmentId> [--host <url>]
+pagespace env disconnect <enrollmentId>
+pagespace env policy [--json]
+```
+
+`env enroll` generates an Ed25519 keypair **on this machine**, sends the server the public half
+with the code, and stores the private half — plus the server signing key it pinned in return — in
+this machine's credential store under the profile `env:<enrollmentId>`. The private key is never
+printed (not even with `--json`) and never leaves the machine. A refused enrollment discards the
+key. `env token` proves possession of that key (the server issues a nonce, the machine signs it)
+and prints a short-lived bridge token — the round trip `env connect` performs on every
+reconnect. Neither command needs a login: the code, then the key, are the machine's credentials,
+and the machine credential is never used to authenticate ordinary commands (`logout` and
+`keys use` refuse it). The deployment must set `LOCAL_ENVS_ENABLED=true`; otherwise these
+endpoints do not exist.
+
+### `env connect` — the bridge daemon
+
+`env connect` is the daemon that makes the Environment usable. It opens an **outbound** socket to
+PageSpace (it never listens on a port), earns a fresh token from the machine key on every
+(re)connect, sends a machine-signed `hello`, and then serves requests. Every request carries a
+grant signed by the server key pinned at enrollment; the daemon verifies the signature, expiry,
+env, single-use nonce and that the grant is bound to exactly this request **before** consulting
+your policy, and runs nothing unless the policy allows it. Results are signed with the machine key
+so the server can verify them. Everything is appended to `~/.pagespace/env-audit.jsonl`
+(`PAGESPACE_ENV_AUDIT_LOG` to move it) as one JSON line per decision with the `grantId` the server
+also audits. Ctrl-C, `env disconnect` (which signals the running daemon's pid from
+`~/.pagespace/env-connect.<enrollmentId>.pid`), or a server-signed revoke stops it; a revoke also
+deletes the machine key. After a server restart it reconnects with exponential backoff.
+
+In this release the daemon serves `exec`, `fs_read` and `fs_write`; PTY sessions are advertised as
+unsupported.
+
+**Platform:** `env connect` runs on macOS and Linux only. It relies on POSIX process groups to
+kill a timed-out command and on `O_NOFOLLOW` to open files safely, neither of which Windows
+provides, so on Windows it refuses to start with a clear message. `env enroll`, `env token`,
+`env disconnect` and `env policy` work everywhere.
+
+**Transport:** the host must be `https://` (the daemon sends this machine's proof of possession
+and a short-lived bearer token, and the socket is `wss://`). Plain `http://` is accepted only for
+the loopback hosts used in local development (`localhost`, `127.0.0.1`, `::1`), matching the CLI's
+OAuth loopback policy. Token redemption refuses to follow redirects.
+
+**Stopping it:** `env connect` writes its process identity (pid, start time, `argv0`) to
+`~/.pagespace/env-connect.<enrollmentId>.pid` and refreshes it periodically. `env disconnect`
+validates that record — it must be ours, recent, and the process must still be alive — before
+sending `SIGTERM`, and removes a stale file rather than risk signalling a reused pid.
+
+### The policy file
+
+The daemon reads `~/.pagespace/env-policy.json` (or the path in `PAGESPACE_ENV_POLICY`). **You**
+own this file; PageSpace never sees or edits it. It must be owned by the user running `env connect`
+and must not be writable by group or world (`chmod 600`) — otherwise it is ignored. **No policy file,
+or one that is unreadable, invalid, wrongly owned or writable by others, means every request is
+denied** (`no_policy`); the daemon still connects so you can see the Environment and fix the file.
+`pagespace env policy` prints what is in force, or why the file is being ignored.
+
+```json
+{
+  "mode": "ask",
+  "principals": ["usr_01hzx…"],
+  "ops": ["fs_read"],
+  "roots": ["/Users/me/code/my-project"],
+  "envAllowlist": ["CI", "NODE_ENV"],
+  "maxBytes": 1048576,
+  "maxTimeoutMs": 120000
+}
+```
+
+- `mode` — see "The three modes, in practice" above. In short: `ask` prompts for anything not in
+  `ops` and needs a TTY; `allowlist` runs only what is in `ops` and never prompts; `deny` runs
+  nothing.
+- `principals` — PageSpace user ids allowed to drive this machine. A request from anyone else is
+  denied `principal_not_allowed`, whatever the server thinks. Each of these users can run commands
+  as you on this machine, subject to `mode` and `ops`.
+- `ops` — any of `exec`, `fs_read`, `fs_write` (`pty_open` is reserved for a later release). These
+  are operation kinds, not programs: `exec` covers every command, and there is no per-executable
+  allowlist.
+- `roots` — absolute directories every working directory and every file path must resolve inside
+  (symlinks are resolved; `..` is refused). Roots confine the paths an agent can *name*. They do
+  not confine a command once it is running: an approved `exec` with its cwd inside a root still
+  runs as you and can read anything you can read. See "What you are agreeing to" above.
+- `envAllowlist` — environment variable names the server may set for a command. Loader and
+  interpreter hooks (`LD_*`, `DYLD_*`, `PATH`, `NODE_OPTIONS`, …) are refused even if listed.
+- `maxBytes` / `maxTimeoutMs` — caps on captured output and wall-clock per command; a request that
+  asks for more is clamped, and a command that outlives its timeout has its whole process group
+  killed. Both are optional (defaults 1 MiB and 120 s).
 
 ## `pagespace mcp`
 
@@ -244,6 +443,7 @@ Coming from the standalone `pagespace-mcp` npm package? It's deprecated in favor
 | `PAGESPACE_TOKEN` | Bearer credential; same precedence slot as `--token`. |
 | `PAGESPACE_KEY` | Stored key name to use; same precedence slot as `--key`. |
 | `PAGESPACE_API_URL` | API host; same precedence slot as `--host`. Defaults to `https://pagespace.ai`. |
+| `PAGESPACE_TIMEOUT_MS` | Request deadline in **milliseconds**; same precedence slot as `--timeout` (which takes seconds), and the way to raise it for `pagespace mcp`, which builds the same client. Unset leaves each operation on its own default. |
 | `PAGESPACE_PROFILE` | Deprecated alias for `PAGESPACE_KEY` (pre-1.5 name); warns on stderr. |
 | `PAGESPACE_AUTH_TOKEN` | Deprecated alias for `PAGESPACE_TOKEN` (old `pagespace-mcp` compatibility); warns on stderr. |
 

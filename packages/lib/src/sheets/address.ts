@@ -5,6 +5,19 @@
 
 import type { SheetCellAddress } from './types';
 
+/**
+ * Furthest addressable cell.
+ *
+ * `decodeCellAddress` accepts any digit run, so `A2000000000` would place a row
+ * at index two billion, drive `growExtent` to set `rowCount` to the same, and
+ * then make any rebuild attempt an evaluation over that extent. A longer run
+ * overflows `integer` outright. Postgres's own spreadsheet-scale limits are
+ * well below this; the point is that a single malformed address cannot render
+ * a sheet unusable.
+ */
+export const MAX_ADDRESSABLE_ROW = 5_000_000;
+export const MAX_ADDRESSABLE_COLUMN = 18_277; // ZZZ
+
 // Regex patterns for cell address validation
 export const cellRegex = /^[A-Z]+\d+$/;
 export const numberRegex = /^-?(?:\d+\.?\d*|\.\d+)$/;
@@ -51,6 +64,64 @@ export function decodeCellAddress(address: SheetCellAddress): { row: number; col
     row: parseInt(rowPart, 10) - 1,
     column: column - 1,
   };
+}
+
+/**
+ * Column index to its letters ("A", "AB"). The row store keys a row's cells by
+ * column label, so this is the hot path for every row read and write.
+ */
+export function encodeColumnLabel(columnIndex: number): string {
+  if (columnIndex < 0) {
+    throw new Error('Column index must be non-negative');
+  }
+
+  let column = '';
+  let index = columnIndex;
+
+  while (index >= 0) {
+    column = String.fromCharCode((index % 26) + 65) + column;
+    index = Math.floor(index / 26) - 1;
+  }
+
+  return column;
+}
+
+/** Inverse of `encodeColumnLabel`. Throws on anything that is not letters. */
+export function decodeColumnLabel(label: string): number {
+  const normalized = label.trim().toUpperCase();
+  if (!/^[A-Z]+$/.test(normalized)) {
+    throw new Error(`Invalid column label: ${label}`);
+  }
+
+  let column = 0;
+  for (let i = 0; i < normalized.length; i++) {
+    column *= 26;
+    column += normalized.charCodeAt(i) - 64;
+  }
+
+  return column - 1;
+}
+
+/**
+ * The letters of an A1 address, without its row. Returns '' for anything that
+ * does not start with letters, matching the lenient local helpers this
+ * replaces in `evaluation.ts` and `format-ops.ts`.
+ */
+export function columnLabelOf(address: string): string {
+  // Scanned, not `replace(/\d+$/, '')`.
+  //
+  // That pattern is unanchored at its start, so the engine retries `\d+$` from
+  // every position and degrades to O(n²) on a long run of digits that does not
+  // end the string — CodeQL flags it as a polynomial-time regex on uncontrolled
+  // input, and cell addresses reach here from user data. Walking back over the
+  // trailing digits is exactly equivalent for every input and linear.
+  let end = address.length;
+  while (end > 0) {
+    const code = address.charCodeAt(end - 1);
+    if (code < 48 || code > 57) break;
+    end--;
+  }
+  return address.slice(0, end);
 }
 
 /**
@@ -101,6 +172,53 @@ export function adjustFormulaReferences(
 
   while (index < formula.length) {
     const start = index;
+
+    // Page references `@[Label](id:type)?:A1`: the label can hold any
+    // character at all, including a `"` — the tokenizer (`parser.ts`) scans
+    // it verbatim up to the closing `]` with no quote-awareness. Detected
+    // and consumed as one span before the string-literal check below, so a
+    // quote inside a label (e.g. `@[Budget "Q1]:A1`) is never misread as the
+    // start of a string literal — which would otherwise swallow everything
+    // after it, including a real reference that needs to shift.
+    if (formula.charCodeAt(index) === 64 /* @ */ && formula[index + 1] === '[') {
+      let end = index + 2;
+      while (end < formula.length && formula[end] !== ']') {
+        end += 1;
+      }
+      if (end < formula.length) {
+        end += 1; // include closing ]
+        if (formula[end] === '(') {
+          let metaEnd = end + 1;
+          while (metaEnd < formula.length && formula[metaEnd] !== ')') {
+            metaEnd += 1;
+          }
+          if (metaEnd < formula.length) {
+            end = metaEnd + 1; // include closing )
+          }
+        }
+      }
+      result += formula.slice(start, end);
+      index = end;
+      continue;
+    }
+
+    // String literals: the tokenizer (`parser.ts`) has no escape convention —
+    // a `"` always closes the string — so mirror that exactly and copy the
+    // span verbatim. Otherwise a letters+digits run inside a quoted literal
+    // (e.g. `"q1"`) gets mistaken for a cell reference and shifted/uppercased.
+    if (formula.charCodeAt(index) === 34 /* " */) {
+      let end = index + 1;
+      while (end < formula.length && formula.charCodeAt(end) !== 34) {
+        end += 1;
+      }
+      if (end < formula.length) {
+        end += 1; // include closing quote
+      }
+      result += formula.slice(start, end);
+      index = end;
+      continue;
+    }
+
     let colDollar = '';
     let rowDollar = '';
 
@@ -110,7 +228,11 @@ export function adjustFormulaReferences(
     }
 
     const colStart = index;
-    while (index < formula.length && isUpperAsciiLetter(formula.charCodeAt(index))) {
+    // Case-insensitive: the tokenizer accepts `a1` and normalises it, so a
+    // formula can legitimately hold lowercase references. Scanning only for
+    // uppercase left them unshifted — `=a1>b1` stayed itself for every cell it
+    // was applied to. The rebuilt reference is emitted in canonical uppercase.
+    while (index < formula.length && isAsciiLetter(formula.charCodeAt(index))) {
       index += 1;
     }
     const colEnd = index;
@@ -164,6 +286,10 @@ export function adjustFormulaReferences(
 // Internal helper functions
 function isUpperAsciiLetter(charCode: number): boolean {
   return charCode >= 65 && charCode <= 90;
+}
+
+function isAsciiLetter(charCode: number): boolean {
+  return isUpperAsciiLetter(charCode) || (charCode >= 97 && charCode <= 122);
 }
 
 function isAsciiDigit(charCode: number): boolean {

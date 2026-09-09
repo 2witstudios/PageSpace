@@ -1,5 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import { isSafeReturnUrl, isSafeNextPath, getClientIP } from '../auth-helpers';
+import {
+  isSafeReturnUrl,
+  isSafeNextPath,
+  getClientIP,
+  SIGNIN_NEXT_ALLOWED_PREFIXES,
+} from '../auth-helpers';
+
+/**
+ * The exact shape `pagespace login` produces: the consent page sends its own
+ * URL as `next`, and that URL's query embeds the CLI's percent-encoded
+ * loopback redirect_uri. Rejecting this was the bug that dead-ended the
+ * magic-link step-up flow for every passkey-less CLI user.
+ */
+const CLI_CONSENT_URL =
+  '/oauth/consent?client_id=psc_cli&redirect_uri=http%3A%2F%2F127.0.0.1%3A51739%2Fcallback' +
+  '&response_type=code&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM' +
+  '&code_challenge_method=S256&scope=drive.read+drive.write&state=xyzABC123';
 
 /**
  * Security-Critical: isSafeReturnUrl Open Redirect Prevention Tests
@@ -67,6 +83,10 @@ describe('isSafeReturnUrl', () => {
 
     it('isSafeReturnUrl_pathWithHyphensAndUnderscores_returnsTrue', () => {
       expect(isSafeReturnUrl('/my-page_name/sub-path')).toBe(true);
+    });
+
+    it('isSafeReturnUrl_cliConsentUrlWithEncodedLoopbackRedirectUri_returnsTrue', () => {
+      expect(isSafeReturnUrl(CLI_CONSENT_URL)).toBe(true);
     });
   });
 
@@ -175,6 +195,15 @@ describe('isSafeReturnUrl', () => {
       expect(isSafeReturnUrl('/%252fevil.com')).toBe(true);
     });
 
+    it('isSafeReturnUrl_doubleEncodedDoubleSlash_returnsTrue', () => {
+      // /%252F%252Fevil.com decodes ONCE to /%2F%2Fevil.com — still a relative
+      // path, not //evil.com. Accepted by design: this validator decodes
+      // exactly once, matching consumers, which navigate with the raw string
+      // and never double-decode. A sink that double-decoded before navigating
+      // would be its own vulnerability.
+      expect(isSafeReturnUrl('/%252F%252Fevil.com')).toBe(true);
+    });
+
     it('isSafeReturnUrl_encodedBackslash_returnsFalse', () => {
       // %5c = \
       expect(isSafeReturnUrl('/%5cevil.com')).toBe(false);
@@ -185,9 +214,13 @@ describe('isSafeReturnUrl', () => {
       expect(isSafeReturnUrl('%6a%61%76%61%73%63%72%69%70%74:alert(1)')).toBe(false);
     });
 
-    it('isSafeReturnUrl_encodedHttpInPath_returnsFalse', () => {
-      // Encoded http:// in what looks like a path
-      expect(isSafeReturnUrl('/redirect?url=http%3A%2F%2Fevil.com')).toBe(false);
+    it('isSafeReturnUrl_encodedHttpInQueryValue_returnsTrue', () => {
+      // Verdict deliberately flipped: an encoded absolute URL in a QUERY VALUE
+      // is data, not a destination — navigation goes to /redirect on our own
+      // origin (browsers never percent-decode before parsing scheme/host).
+      // Rejecting this shape was the bug that broke the OAuth consent `next`
+      // (its query carries redirect_uri=http%3A%2F%2F127.0.0.1...).
+      expect(isSafeReturnUrl('/redirect?url=http%3A%2F%2Fevil.com')).toBe(true);
     });
 
     it('isSafeReturnUrl_nullByteInPath_returnsTrue', () => {
@@ -248,13 +281,40 @@ describe('isSafeReturnUrl', () => {
     });
   });
 
-  describe('protocol embedded in path (should return false)', () => {
-    it('isSafeReturnUrl_httpInQueryParam_returnsFalse', () => {
-      expect(isSafeReturnUrl('/redirect?to=http://evil.com')).toBe(false);
+  describe('protocol embedded in the PATH portion (should return false)', () => {
+    it('isSafeReturnUrl_javascriptInPathSegment_returnsFalse', () => {
+      // The URL parser tolerates a colon inside a path segment, so the
+      // path-scoped protocol scan must still catch it.
+      expect(isSafeReturnUrl('/javascript:alert(1)')).toBe(false);
     });
 
-    it('isSafeReturnUrl_javascriptInQueryParam_returnsFalse', () => {
-      expect(isSafeReturnUrl('/action?callback=javascript:alert(1)')).toBe(false);
+    it('isSafeReturnUrl_encodedJavascriptInPathSegment_returnsFalse', () => {
+      expect(isSafeReturnUrl('/%6a%61%76%61%73%63%72%69%70%74:alert(1)')).toBe(false);
+    });
+  });
+
+  describe('protocol embedded in query VALUES (data, not a destination — should return true)', () => {
+    // Verdicts deliberately flipped from the pre-fix behavior: these are
+    // same-origin paths whose query merely CARRIES a URL as data. The
+    // navigation target is /redirect (or /action) on our own origin. Scanning
+    // query values for protocols was the bug that dead-ended the CLI login
+    // magic-link flow.
+    it('isSafeReturnUrl_httpInQueryParam_returnsTrue', () => {
+      expect(isSafeReturnUrl('/redirect?to=http://evil.com')).toBe(true);
+    });
+
+    it('isSafeReturnUrl_javascriptInQueryParam_returnsTrue', () => {
+      expect(isSafeReturnUrl('/action?callback=javascript:alert(1)')).toBe(true);
+    });
+  });
+
+  describe('origin-parse guard (should return false)', () => {
+    it('isSafeReturnUrl_httpsAbsoluteWithTrailingSlash_returnsFalse', () => {
+      expect(isSafeReturnUrl('https://evil.com/')).toBe(false);
+    });
+
+    it('isSafeReturnUrl_protocolRelativeWithCredentials_returnsFalse', () => {
+      expect(isSafeReturnUrl('//user@pagespace.invalid')).toBe(false);
     });
   });
 
@@ -266,7 +326,10 @@ describe('isSafeReturnUrl', () => {
       const result = isSafeReturnUrl(malicious);
       const elapsed = performance.now() - start;
       expect(result).toBe(true); // No protocol, so it's safe
-      expect(elapsed).toBeLessThan(50); // Should be < 1ms, 50ms generous bound
+      // Guards against O(N^2) blowup (which would take seconds at 50k chars),
+      // not absolute speed — the bound must survive a fully loaded parallel
+      // test run, where even linear work on 50k chars can take tens of ms.
+      expect(elapsed).toBeLessThan(500);
     });
 
     it('isSafeReturnUrl_longLetterSequenceDecoded_completesInLinearTime', () => {
@@ -275,7 +338,8 @@ describe('isSafeReturnUrl', () => {
       const start = performance.now();
       isSafeReturnUrl(malicious);
       const elapsed = performance.now() - start;
-      expect(elapsed).toBeLessThan(50);
+      // Same rationale as above: catches quadratic blowup, tolerates load.
+      expect(elapsed).toBeLessThan(500);
     });
   });
 });
@@ -386,6 +450,32 @@ describe('isSafeNextPath', () => {
   describe('rejected: empty allowlist', () => {
     it('given a valid path but empty allowlist, should return false', () => {
       expect(isSafeNextPath({ path: '/dashboard', allowedPrefixes: [] })).toBe(false);
+    });
+  });
+
+  describe('CLI login consent URL under the real signin allowlist (THE regression)', () => {
+    it('accepts the consent URL whose query embeds the encoded loopback redirect_uri', () => {
+      expect(
+        isSafeNextPath({ path: CLI_CONSENT_URL, allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES }),
+      ).toBe(true);
+    });
+
+    it('still rejects hostile shapes under the real signin allowlist', () => {
+      for (const hostile of [
+        '//evil.com',
+        '/\\evil.com',
+        'javascript:alert(1)',
+        '/javascript:alert(1)',
+        'data:text/html,<script>alert(1)</script>',
+        'https://evil.com/',
+        '//user@pagespace.invalid',
+        '/dashboard/../etc',
+        '/path%GG',
+      ]) {
+        expect(
+          isSafeNextPath({ path: hostile, allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES }),
+        ).toBe(false);
+      }
     });
   });
 

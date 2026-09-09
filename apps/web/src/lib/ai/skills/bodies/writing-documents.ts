@@ -12,18 +12,18 @@ How to write and edit DOCUMENT and CODE pages well, using \`read_page\`, \`repla
 
 Every text page is one of:
 
-- **DOCUMENT, html mode (the default)** — rich text stored as Tiptap HTML. The stored HTML has no newlines; line structure is synthesized for you (see below).
-- **DOCUMENT, markdown mode** (\`contentMode: 'markdown'\`) — raw markdown text, stored and edited exactly as written, with natural line structure.
+- **DOCUMENT, html mode** — rich text stored as Tiptap HTML. The stored HTML has no newlines; line structure is synthesized for you (see below). This is what the rich editor produces, so most pages a person created are in this mode.
+- **DOCUMENT, markdown mode** (\`contentMode: 'markdown'\`) — raw markdown text, stored and edited exactly as written, with natural line structure. **This is the default for documents YOU create.**
 - **CODE** — raw plain-text source with syntax highlighting. Treated exactly like markdown mode for editing: no HTML processing, natural lines.
 
 \`read_page\` and \`replace_lines\` results report the page's \`type\` and \`contentMode\` (\`insert_content\` results do not — check *before* inserting, not after). Match the page's format: writing markdown syntax into an html-mode DOCUMENT (or HTML tags into a markdown/CODE page) produces literal garbage, not formatting.
 
 ### Choosing contentMode at create_page
 
-\`create_page\` takes an optional \`contentMode: 'html' | 'markdown'\` for DOCUMENT pages; it defaults to \`html\`. This is a creation-time choice — pick deliberately:
+\`create_page\` takes an optional \`contentMode: 'html' | 'markdown'\` for DOCUMENT pages; **for a document you create it defaults to \`markdown\`** (a document created in the browser still defaults to html — that is the editor's own format). So if you write HTML into a page you created without naming a mode, it is stored as markdown and your tags are literal text. Pick deliberately:
 
-- **html** (default): documents humans will edit in the rich editor; anything needing tables, mentions, syntax-highlighted code blocks, or inline font styling.
-- **markdown**: markdown-native content — docs mirrored from repositories, agent-maintained notes, content where you want clean line-based markdown editing. The editor renders it as rich text but stores markdown.
+- **markdown** (default when you create the page): markdown-native content — docs mirrored from repositories, agent-maintained notes, structured data, anything you want clean line-based editing of. Its line numbers are the text's own newlines. The editor renders it as rich text but stores markdown.
+- **html** (must be asked for explicitly): documents humans will edit in the rich editor; anything needing tables, mentions, syntax-highlighted code blocks, or inline font styling. Write HTML into these, never markdown syntax.
 
 Never try to "convert" a page by writing the other syntax into it; create a new page with the right mode instead.
 
@@ -31,7 +31,7 @@ Never try to "convert" a page by writing the other syntax into it; create a new 
 
 \`read_page\` returns content with each line prefixed \`N→\` (1-based), plus \`totalLines\`, and supports \`lineStart\`/\`lineEnd\` ranges. Like the edit tools, it also **requires a \`title\` field** (the page's title, display-only context) alongside the optional \`pageId\`.
 
-For html-mode DOCUMENTs, the stored HTML is first normalized by an **additive** line-breaker: a newline is added after each opening block tag, before each closing block tag, and between adjacent block tags (\`p\`, \`h1\`–\`h6\`, \`ul\`/\`ol\`/\`li\`, \`table\`/\`tr\`/\`td\`/\`th\`/\`thead\`/\`tbody\`, \`blockquote\`, \`pre\`, \`div\`, and similar). Text content is never removed or changed — the one exception is whitespace *between* adjacent block tags, which is collapsed to the newline. So a paragraph reads as three lines:
+For html-mode DOCUMENTs **whose content is actually an HTML document** (it opens with a block element, as anything the editor wrote does), the stored HTML is first normalized by an **additive** line-breaker: a newline is added after each opening block tag, before each closing block tag, between adjacent block tags (\`p\`, \`h1\`–\`h6\`, \`ul\`/\`ol\`/\`li\`, \`table\`/\`tr\`/\`td\`/\`th\`/\`thead\`/\`tbody\`, \`blockquote\`, \`pre\`, \`div\`, and similar), and after each \`<br>\`/\`<hr>\` — a \`<br>\` ends a line, so a document laid out with \`<br>\` separators numbers one line per break. Nothing is ever removed or changed: text, spacing and blank lines all survive. Content that is *not* an HTML document — raw JSON or markdown sitting in an html-mode page — is left completely alone and numbered by its own newlines, tags inside its strings included. So a paragraph reads as three lines:
 
 \`\`\`
 12→<p>
@@ -47,7 +47,7 @@ CHANNEL and TASK_LIST pages return structured data (transcripts, tasks) rather t
 
 1. **Always read before writing.** Never edit from memory of an earlier read.
 2. Make your edit with \`replace_lines\` or \`insert_content\`.
-3. **Line numbers shift after every edit.** An insert or a replacement with a different line count renumbers everything below it. Re-read the page (a \`lineStart\`/\`lineEnd\` range around the edit area is enough) before any further line-based edit. The edit result's \`newContent\` (and, from \`replace_lines\`, \`newLineCount\`) can also tell you the new layout, but when in doubt, re-read.
+3. **Line numbers shift after every edit.** An insert or a replacement with a different line count renumbers everything below it. Re-read the page (a \`lineStart\`/\`lineEnd\` range around the edit area is enough) before any further line-based edit. \`replace_lines\` reports \`newLineCount\` measured on the content it actually stored, so it is exactly what your next read will return — but it tells you the count, not the new layout; when in doubt, re-read.
 4. Verify the result: edit tools return \`oldContent\`/\`newContent\` so you can confirm the change landed where intended.
 
 ### replace_lines — precise range edits
@@ -56,7 +56,9 @@ CHANNEL and TASK_LIST pages return structured data (transcripts, tasks) rather t
 
 - \`content\` may contain newlines — a multi-line string becomes multiple lines.
 - **Empty-string \`content\` deletes the range entirely** (reported as \`changeType: 'deletion'\`); it does not leave a blank line.
-- The range is validated against the normalized line count: out-of-bounds or inverted ranges fail with \`Invalid line range: X-Y. Document has N lines.\` — a common symptom of stale line numbers.
+- The range is validated against the normalized line count: out-of-bounds or inverted ranges come back with \`success: false\` and \`Invalid line range: X-Y. Document has N lines.\` — a common symptom of stale line numbers. Nothing is written when that happens.
+- **\`expectedTotalLines\` guards against exactly that.** Pass the \`totalLines\` your last read reported; if the document is no longer that length the edit is refused instead of being applied to lines you have not seen. Without it, a range that no longer covers what you think it covers replaces part of the document and silently leaves the rest of the old content behind. Use it on any full-document rewrite.
+- A \`contentModeWarning\` in the result means the page is in html mode but holds content that is not HTML (raw JSON, markdown — usually a page created before content modes existed). Its line numbers are the text's own newlines; keep writing the shape already in the page, and do not introduce HTML into it.
 - It refuses FILE pages (uploads are read-only) and SHEET pages (use \`edit_sheet_cells\` with A1-style addresses instead).
 
 Use it for: rewriting a section, fixing specific lines, deleting content, any edit where you know the exact range from a fresh read.
@@ -73,18 +75,32 @@ Use it for: rewriting a section, fixing specific lines, deleting content, any ed
 
 Use it for: appending sections relative to headings or landmarks, adding items near known text — anywhere counting lines is unnecessary risk. Prefer it over \`replace_lines\` when you are adding (not changing) content.
 
+### copy_content — move content you already have, without retyping it
+
+If the content already exists somewhere the system can read — a page you read, a file you wrote in the sandbox — **do not paste it into \`replace_lines\`, \`insert_content\` or \`writeFile\`.** Call \`copy_content\` instead. The bytes move server-side, so you never emit them: copying a 500-line file costs one short tool call rather than 500 lines of output, and it is byte-exact rather than whatever you managed to retype.
+
+- \`from\`: \`{ kind: 'page', pageId, lineStart?, lineEnd? }\` or \`{ kind: 'file', path }\`. The line numbers are the ones \`read_page\` showed you.
+- \`to\`: \`{ kind: 'page', pageId, mode }\` where mode is \`replace\` (whole page), \`replaceLines\` (a range), \`insertAfter\` (an anchor, like \`insert_content\`), or \`append\`; or \`{ kind: 'file', path }\` to write a whole file.
+- It **converts nothing**. Copying raw text (a sandbox file, a markdown or CODE page) into an html-mode DOCUMENT is refused rather than silently producing literal characters. Create the destination with a matching \`contentMode\` — \`create_page\` defaults to markdown — and copy into that.
+- To copy into a NEW page: \`create_page\` first (it takes no content), then \`copy_content\` into it.
+- \`insertAfter\` reports \`inserted: false\` on a missing anchor, exactly like \`insert_content\`.
+- It refuses rather than truncating if the source is over the size limit. Narrow it with \`from.lineStart\`/\`from.lineEnd\`.
+
+Only compose content by hand when you are actually authoring it. Moving existing bytes is what this tool is for.
+
 ## Writing HTML for html-mode DOCUMENTs
 
 The rich editor's Tiptap 3 schema accepts a specific set of elements. Verified supported:
 
-- **Blocks**: \`<p>\`, headings \`<h1>\` \`<h2>\` \`<h3>\` **only**, \`<blockquote>\`, \`<ul>\`/\`<ol>\` with \`<li>\`, \`<hr>\`, \`<br>\`.
-- **Inline marks**: \`<strong>\`, \`<em>\`, \`<s>\`, \`<u>\`, inline \`<code>\`, \`<a href="...">\` links (https is the default protocol).
+- **Blocks**: \`<p>\`, headings \`<h1>\`–\`<h6>\`, \`<blockquote>\`, \`<ul>\`/\`<ol>\` with \`<li>\`, task lists \`<ul data-type="taskList">\` with \`<li data-type="taskItem" data-checked="true|false">\`, \`<hr>\`, \`<br>\`.
+- **Inline marks**: \`<strong>\`, \`<em>\`, \`<s>\`, \`<u>\`, inline \`<code>\`, \`<mark>\` (highlight), \`<a href="...">\` links (https is the default protocol).
 - **Code blocks**: \`<pre><code class="language-xxx">...</code></pre>\` — the language class drives Shiki syntax highlighting. Escape \`<\`, \`>\`, \`&\` inside as HTML entities.
 - **Tables**: \`<table>\`, \`<tr>\`, \`<th>\`, \`<td>\` (table extension).
 - **Font styling**: \`<span style="font-family: ...">\` / \`<span style="font-size: ...">\`.
+- **Text alignment**: \`style="text-align: left|center|right|justify"\` on a paragraph or heading.
 - **Mentions**: see the mentions section below.
 
-Anything outside the schema is silently dropped or unwrapped the next time the document is opened in the editor — even if your write "succeeds". Notably **not** supported: \`<img>\` (no image node), \`<h4>\`–\`<h6>\` (only levels 1–3 are configured), \`<iframe>\`/\`<script>\`/\`<style>\`, \`<div>\`/\`<section>\` wrappers, and checkbox/task-list markup. Do not write them.
+Anything outside the schema is silently dropped or unwrapped the next time the document is opened in the editor — even if your write "succeeds". Notably **not** supported: \`<iframe>\`/\`<script>\`/\`<style>\`, \`<div>\`/\`<section>\` wrappers. \`<img>\` has schema support, but only \`<img data-file-id="...">\` referencing an internal file — never a plain \`src="https://..."\` URL, which is dropped on the next open. You don't have a way to obtain a \`data-file-id\` from this tool, so don't write \`<img>\` either. Do not write any of these.
 
 Rules of thumb:
 
@@ -107,18 +123,19 @@ There are two mention representations, and which one works depends on the surfac
 - Page link: \`<a class="mention" data-mention-type="page" data-page-id="PAGE_ID">@Page Title</a>\`
 - Everyone: \`<span class="mention" data-mention-type="everyone" data-drive-id="DRIVE_ID">@everyone</span>\` — notifies the drive's owner and members; take the driveId from your LOCATION context if present, otherwise resolve via \`list_drives\`.
 - Role: \`<span class="mention" data-mention-type="role" data-role-id="ROLE_ID" data-drive-id="DRIVE_ID">@Role Name</span>\` — notifies drive members holding that role.
+- User: \`<a class="mention" data-mention-type="user" data-user-id="USER_ID">@Name</a>\` — deliberately has no \`href\`; there is no user page to link to.
 
 When editing around existing mention elements, **preserve them verbatim** — rewriting them as plain text destroys the link.
 
 **The \`@[Label](id:type)\` syntax belongs to chat and channel messages** (types: \`(pageId:page)\`, \`(userId:user)\`, \`(roleId:role)\`, \`(driveId:everyone)\`). Message surfaces render it as a chip and notify. When a user @mentions a page at you in a message, read it with \`read_page\` before responding.
 
-In documents that syntax is only a **fallback**: it is parsed solely when the page contains no HTML mention markers at all — one existing mention element switches extraction to HTML-only and every \`@[..](..)\` in the page is ignored. In html-mode documents it also renders to readers as literal text, not a chip. So in documents, write the HTML elements. There is no working HTML form for a **user** mention in documents; if you need to notify a specific user reliably, do it from a chat/channel message rather than document content. Mention extraction skips \`<pre>\`/\`<code>\` regions, so literal syntax examples are never parsed as real mentions.
+In documents that syntax is only a **fallback**: it is parsed solely when the page contains no HTML mention markers at all — one existing mention element switches extraction to HTML-only and every \`@[..](..)\` in the page is ignored. In html-mode documents it also renders to readers as literal text, not a chip. So in documents, write the HTML elements — all four types, user included, have a working HTML form. Mention extraction skips \`<pre>\`/\`<code>\` regions, so literal syntax examples are never parsed as real mentions.
 
 Notification mechanics: the mention author is never notified, and only **newly added** mentions notify (re-saving the same mention does not). On chat/channel surfaces recipients are filtered to users who can view the page; on document saves they are **not** — a role/everyone mention in a page some drive members cannot view still notifies them, so mention deliberately. Mentioning someone never grants access. Use page mentions for cross-references.
 
 ## Structure conventions for long-form writing
 
-- The page title is the document's name — don't duplicate it as a heading. Open with a short lead paragraph, then \`<h2>\` sections with \`<h3>\` subsections (three heading levels is all you get; design the outline to fit).
+- The page title is the document's name — don't duplicate it as a heading. Open with a short lead paragraph, then \`<h2>\` sections with \`<h3>\` subsections. The schema supports \`<h1>\`–\`<h6>\`, but keep to two or three levels for readability — a deeper outline is usually a sign the content should be split into more pages.
 - Give headings distinctive text: they double as stable anchors for later \`insert_content\` calls.
 - Short paragraphs; \`<ul>\`/\`<ol>\` for enumerable points; tables for comparisons; \`<hr>\` sparingly as a section divider.
 - Build long documents incrementally: \`create_page\`, write the skeleton of headings, then fill sections one at a time with \`insert_content\` anchored to each heading. Small edits produce reviewable diffs; a whole-document \`replace_lines\` of lines 1–N should be a last resort.
@@ -128,7 +145,7 @@ Notification mechanics: the mention author is never notified, and only **newly a
 
 - **Stale line numbers** — editing with numbers from before a previous edit. Re-read after every edit.
 - **Format mismatch** — markdown syntax in an html-mode DOCUMENT, or HTML in markdown/CODE pages. Check \`contentMode\` and \`type\` first.
-- **Unsupported HTML** — \`<img>\`, \`<h4>\`+, \`<div>\` wrappers: dropped by the editor schema even though the write succeeds.
+- **Unsupported HTML** — \`<img src="...">\` (no \`data-file-id\`), \`<iframe>\`/\`<script>\`/\`<style>\`, \`<div>\`/\`<section>\` wrappers: dropped by the editor schema even though the write succeeds.
 - **Partial-block replacement** — replacing the text line but not its enclosing tags (or vice versa), leaving unbalanced HTML.
 - **Assuming insert_content succeeded** — it returns \`inserted: false\` (not an error) when the anchor isn't found.
 - **Forgetting empty content deletes** — \`replace_lines\` with \`content: ""\` removes the lines; to blank a line instead, replace it with a single space or an empty block.

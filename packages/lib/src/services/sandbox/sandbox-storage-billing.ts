@@ -1,8 +1,18 @@
 /**
  * Default (real) IO composition for the storage reconcile cron (Sprites
- * Platform Alignment 6-1) — binds `reconcileSandboxStorage`'s deps seam to the
- * `agent_workspaces` table and the credit pipeline. Reads the last PERSISTED
- * measured bytes (never the provisioned cap, never waking a sprite).
+ * Platform Alignment 6-1) — binds `reconcileSandboxStorage`'s deps seam to its
+ * THREE row sources (`agent_workspaces`, `drive_envs` and `published_apps`) and
+ * the credit pipeline. Reads the last PERSISTED measured bytes (never the provisioned cap,
+ * never waking a sprite).
+ *
+ * **Envs are a row source here, not a meter of their own.** A drive environment
+ * is the billed persistence unit, and it is billed through this same
+ * composition: same cron, same advisory lock, same credit pipeline, one extra
+ * SELECT and one extra watermark UPDATE. The only place the two units diverge
+ * is the payer — an env resolves to its DRIVE OWNER with no fallback
+ * (`resolveEnvPayerId`), because `drive_envs` has no owner column to fall back
+ * to. Nothing here names a substrate: an env that later runs on a bigger guest,
+ * a GPU host or a non-Fly platform bills through these exact lines.
  *
  * Narrowed by the Phase 8 teardown: this used to also enumerate FOUR
  * machine-tree row sources (a Machine's own Sprite, every live branch
@@ -24,20 +34,74 @@
  *
  * All three are throttled per session and best-effort: a billing observation
  * must never wake a paused Sprite, delay a tool call, or fail one.
+ *
+ * **A PUBLISHED APP's measurement has no such seam and needs none.** Its billed
+ * footprint is the registry size of the image it serves, recorded at BUILD time
+ * into `imageSizeBytes`/`imageSizeMeasuredAt` — the only moment the number is
+ * cheaply knowable (reading it later costs a registry round-trip per app; reading
+ * it after the image is replaced is impossible). So there is nothing to refresh
+ * opportunistically, and an app billing the never-measured 0 floor means precisely
+ * that no build has landed yet, which is an app that genuinely holds no rootfs.
+ *
+ * An ENV's measurements come from the same seam, bound once at
+ * `buildEnvProvisionDeps` (`services/drive-envs/env-provision-deps.ts`) — the
+ * single path the web tier's rebuild and a session's ensure in both the web and
+ * realtime tiers all reach — so a freshly-provisioned env is measured while its
+ * Sprite is still awake. Without it an env would bill the never-measured 0 floor
+ * forever while this cron kept advancing its watermark.
  */
 
-import { eq, and, isNotNull, isNull } from '@pagespace/db/operators';
+import { eq, and, isNotNull, isNull, ne, sql } from '@pagespace/db/operators';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
+import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { lookupDriveOwnerId } from '../../billing/sandbox-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
+import { SANDBOX_STORAGE_MODELS } from '../../monitoring/usage-source';
 import {
   reconcileSandboxStorage,
   type ReconcileSandboxStorageDeps,
   type ReconcileSandboxStorageResult,
+  type StorageSubjectKind,
 } from './sandbox-storage-reconcile';
+
+/**
+ * The `metadata.type` tag per persistence unit — the freeform companion to the
+ * `model` label above. A `Record` keyed on `StorageSubjectKind` rather than a
+ * ternary, so a new unit cannot be silently filed under an existing one.
+ */
+const STORAGE_METADATA_TYPES: Record<StorageSubjectKind, string> = {
+  session: 'terminal_storage',
+  env: 'env_storage',
+  hosting: 'published_app_storage',
+};
+
+/**
+ * Read a watermark write's outcome off the value the UPDATE returned.
+ *
+ * ONE statement answers all three cases, which is why the monotonicity lives in
+ * `GREATEST` rather than in a `WHERE ... <= ...` predicate. A predicate would
+ * have collapsed "the guard declined" and "the row is gone" into the same empty
+ * result — and since envs meter ~$0 today, a deleted env is by far the likelier
+ * of the two, so an operator would have been told a generation boundary cut a
+ * billing window when nothing of the sort happened.
+ *
+ *  - no row back → `row_gone`: the row was deleted mid-tick (a drive delete
+ *    cascades its envs). Ordinary, and nothing to report.
+ *  - the value we asked for → `advanced`: the window closed as planned.
+ *  - a LATER value → `superseded`: a provision reset this row's watermark past
+ *    this tick's `now` while the tick ran, and `GREATEST` correctly kept it.
+ */
+function classifyWatermarkWrite(
+  written: Date | null | undefined,
+  billedThrough: Date,
+): 'advanced' | 'superseded' | 'row_gone' {
+  if (!written) return 'row_gone';
+  return written.getTime() > billedThrough.getTime() ? 'superseded' : 'advanced';
+}
 
 export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
   async listAgentSessionSprites() {
@@ -59,13 +123,100 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
     return rows.map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
   },
 
+  /**
+   * The ENV row source — the same "still believed live" predicate, against the
+   * partial index `drive_envs_live_sprite_idx` exists for. Never-provisioned
+   * envs (`sandboxId` null) fall outside it and cost nothing to skip: an env row
+   * with no machine holds no filesystem, so there is nothing to meter.
+   */
+  async listDriveEnvSprites() {
+    const rows = await db
+      .select({
+        envId: driveEnvs.id,
+        driveId: driveEnvs.driveId,
+        storageLastBilledAt: driveEnvs.storageLastBilledAt,
+        measuredBytes: driveEnvs.storageMeasuredBytes,
+        measuredAt: driveEnvs.storageMeasuredAt,
+        lastActiveAt: driveEnvs.lastActiveAt,
+      })
+      .from(driveEnvs)
+      .where(and(isNotNull(driveEnvs.sandboxId), isNull(driveEnvs.spriteTornDownAt)));
+    // `lastActiveAt` is nullable on `drive_envs` too ("reported, never acted on"
+    // — an env is persistent, so idleness must not destroy it). Same
+    // honest-conservative epoch fallback: reads as "not awake" for the staleness
+    // flag only, never for billing.
+    return rows.map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
+  },
+
+  /**
+   * The PUBLISHED-APP row source — every METERED app's rootfs, whatever its status.
+   *
+   * No liveness predicate, unlike the two Sprite sources: their filter exists
+   * because a torn-down Sprite holds no filesystem, whereas a published app holds
+   * its image from the moment a build pins one until the row is destroyed.
+   * `destroying` rows are the one exclusion — their Fly app is being killed, and
+   * billing a resource we are actively removing bills for our own teardown latency.
+   *
+   * DEDICATED APPS ARE EXCLUDED, for the same reason the awake meter excludes them:
+   * that tier buys a FLAT MONTHLY PRICE, and draining credits for its rootfs
+   * alongside it would charge the customer twice for one machine. The flat price
+   * absorbs the rootfs cost comfortably — it is derived from CPU and memory at
+   * 1.5x the Sprites rate table, which for an always-on guest is orders of
+   * magnitude above the $0.15/GB-month the image actually costs. Filtering here
+   * rather than skipping inside the loop keeps the meter's counts an honest tally
+   * of what it is responsible for.
+   *
+   * `imageSizeMeasuredAt` is NOT NULL exactly when `imageSizeBytes` is (a CHECK
+   * constraint), so the never-measured branch here means precisely "no build has
+   * landed yet" — an app with no image, which genuinely holds no rootfs and
+   * correctly bills the 0 floor.
+   */
+  async listPublishedAppRootfs() {
+    return db
+      .select({
+        publishedAppId: publishedApps.id,
+        driveId: publishedApps.driveId,
+        storageLastBilledAt: publishedApps.storageLastBilledAt,
+        measuredBytes: publishedApps.imageSizeBytes,
+        measuredAt: publishedApps.imageSizeMeasuredAt,
+      })
+      .from(publishedApps)
+      .where(and(ne(publishedApps.status, 'destroying'), eq(publishedApps.tier, 'metered')));
+  },
+
   lookupDriveOwnerId,
 
-  async chargeStorage({ payerId, driveId, workspaceId, costDollars, gbMonths }) {
-    await AIMonitoring.trackUsage({
+  /**
+   * REPORTS ITS FAILURE. `AIMonitoring.trackUsage` still never throws (a throw
+   * there would break user-facing generation), but it now resolves with a
+   * `UsageTrackingOutcome` saying whether the `ai_usage_logs` row landed — so a
+   * credit-ledger outage no longer looks identical to a successful charge, and the
+   * reconcile can hold the watermark instead of closing the window over lost spend.
+   */
+  chargeStorage({ payerId, driveId, subjectKind, subjectId, costDollars, gbMonths }) {
+    return AIMonitoring.trackUsage({
       userId: payerId,
       provider: 'sprites',
-      model: 'terminal-machine-storage',
+      // The billed unit, named in the meter line itself. Sessions keep the
+      // string they have always written (renaming it would split one meter's
+      // history across two labels in every existing usage breakdown); envs get
+      // their own. Neither string names a substrate — an env that moves to a
+      // bigger guest, a GPU host or another platform keeps billing under this
+      // same label.
+      //
+      // This label is also what the usage breakdown splits on: an env row and a
+      // session row both carry `source: 'terminal'` and no `pageId`, so the
+      // model string is the ONLY thing that says which of the two a charge is.
+      // Hence the shared constant rather than a literal spelled at each end —
+      // the breakdown's environments section keys off the same value
+      // (`apps/web/src/lib/subscription/usage-breakdown.ts`).
+      // Keyed off the subject kind through the shared constant map, never an
+      // inline ternary chain: adding a fourth persistence unit must be a new key,
+      // not another `subjectKind === ... ? ... :` that silently defaults a new
+      // unit's charges into the session label.
+      model: SANDBOX_STORAGE_MODELS[subjectKind],
+      // One feature bucket for both: this is sandbox persistence either way, and
+      // splitting the source would fragment the usage breakdown's totals.
       source: 'terminal',
       // No pageId: a session is a drive-level workspace, not page-anchored, so
       // there is no page to group its storage under. `trackUsage` treats a
@@ -77,8 +228,10 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       // global-assistant session (mirrors `pageId`'s "unattributed" reading).
       driveId,
       // `AIUsageData.sessionId` is the shared analytics column (`monitoring.session_id`),
-      // written by many sources — out of this rename's scope, so map at the boundary.
-      sessionId: workspaceId,
+      // written by many sources — out of this rename's scope, so map at the
+      // boundary. Carries the `drive_envs` id for an env row; `model` above is
+      // what says which table the id addresses.
+      sessionId: subjectId,
       providerCostDollars: costDollars,
       // Not a wall-clock duration (this is a background storage charge, not a
       // single timed run) — 0 mirrors the shape of every other non-timed
@@ -91,18 +244,67 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       // Same 1.5x substrate floor as active-runtime billing (machine-billing.ts),
       // independent of the shared AI MARKUP_BPS default.
       markupBpsOverride: MACHINE_MARKUP_BPS,
-      metadata: { type: 'terminal_storage', gbMonths },
+      metadata: { type: STORAGE_METADATA_TYPES[subjectKind], gbMonths },
     });
   },
 
   // The `agent_workspaces` Sprite's OWN watermark — directly on the row itself:
   // the design's "per-row watermark" made literal, no separate tracking
   // table.
+  //
+  // MONOTONIC, and that guard is load-bearing rather than defensive.
+  // `billedThrough` is the ONE `now` the whole tick captured, and a tick makes
+  // several awaits per row, so it can span minutes. A provision landing inside
+  // that window resets the row's watermark FORWARD to its own provision time
+  // (`revivedAgentSessionColumns`/`revivedDriveEnvColumns` — a new Sprite
+  // generation is a fresh disk, so the old window must not be billed against
+  // it). An unguarded UPDATE would then drag the watermark BACKWARDS over that
+  // reset, and the span between them is billed a second time on the next tick —
+  // exactly the double-bill the module doc otherwise reserves for a crash
+  // between the charge and the advance. `GREATEST` in the SET makes a newer
+  // reset win — deliberately NOT a `WHERE ... <= ...` predicate, which would
+  // collapse "the guard declined" and "the row is gone" into the same empty
+  // result (see `classifyWatermarkWrite`).
+  //
+  // Losing the write is the safe direction: the row already claims to be billed
+  // further ahead than this tick reached, so at worst one tick-duration of the
+  // DEAD generation's window goes unbilled.
   async advanceAgentSessionWatermark({ workspaceId, billedThrough }) {
-    await db
+    const [row] = await db
       .update(agentWorkspaces)
-      .set({ storageLastBilledAt: billedThrough })
-      .where(eq(agentWorkspaces.id, workspaceId));
+      .set({ storageLastBilledAt: sql`GREATEST(${agentWorkspaces.storageLastBilledAt}, ${sql.param(billedThrough, agentWorkspaces.storageLastBilledAt)})` })
+      .where(eq(agentWorkspaces.id, workspaceId))
+      .returning({ storageLastBilledAt: agentWorkspaces.storageLastBilledAt });
+    return classifyWatermarkWrite(row?.storageLastBilledAt, billedThrough);
+  },
+
+  // The env row's OWN watermark, same literal per-row design and the same
+  // monotonic guard — envs need it more, since `rebuildDriveEnv` is a verb a
+  // user can invoke at any moment, including the middle of a reconcile tick.
+  //
+  // Deliberately NOT guarded on the Sprite pointers, though: the charge it
+  // follows has already happened, so refusing the advance because the env was
+  // torn down mid-run would re-bill that window on the next tick.
+  async advanceDriveEnvWatermark({ envId, billedThrough }) {
+    const [row] = await db
+      .update(driveEnvs)
+      .set({ storageLastBilledAt: sql`GREATEST(${driveEnvs.storageLastBilledAt}, ${sql.param(billedThrough, driveEnvs.storageLastBilledAt)})` })
+      .where(eq(driveEnvs.id, envId))
+      .returning({ storageLastBilledAt: driveEnvs.storageLastBilledAt });
+    return classifyWatermarkWrite(row?.storageLastBilledAt, billedThrough);
+  },
+
+  // The published app's OWN watermark, same literal per-row design and the same
+  // monotonic guard. Deliberately NOT predicated on status: the charge it follows
+  // has already happened, so refusing the advance because the app was stopped or
+  // parked mid-tick would re-bill that window on the next run.
+  async advancePublishedAppWatermark({ publishedAppId, billedThrough }) {
+    const [row] = await db
+      .update(publishedApps)
+      .set({ storageLastBilledAt: sql`GREATEST(${publishedApps.storageLastBilledAt}, ${sql.param(billedThrough, publishedApps.storageLastBilledAt)})` })
+      .where(eq(publishedApps.id, publishedAppId))
+      .returning({ storageLastBilledAt: publishedApps.storageLastBilledAt });
+    return classifyWatermarkWrite(row?.storageLastBilledAt, billedThrough);
   },
 
   now: () => new Date(),
@@ -156,7 +358,8 @@ export async function reconcileSandboxStorageSerialized(
     // and the next scheduled tick retries. `withAdvisoryLock` resolving this outcome
     // instead of throwing (leaf 5.6/5.7) only removes the AMBIGUITY for callers that
     // need to distinguish it from `fn` throwing — this caller's `fn`
-    // (`reconcileSandboxStorage`) already documents that it never throws, so there is
+    // (`reconcileSandboxStorage`) already documents that it never throws — including
+    // its row-source LISTs, which `listSource` isolates — so there is
     // no such ambiguity here, and the choice to keep propagating is now explicit at the
     // type level rather than implicit in an uncaught rejection.
     throw locked.error;

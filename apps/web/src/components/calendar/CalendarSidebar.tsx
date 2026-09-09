@@ -67,7 +67,7 @@ export function CalendarSidebar({
             'flex items-center gap-2 px-1.5 py-1 rounded cursor-pointer transition-colors',
             'hover:bg-muted/50',
             !cal.visible && 'opacity-50',
-            cal.key === selectedKey && 'bg-accent/50'
+            cal.key === selectedKey && 'bg-primary-soft'
           )}
         >
           <span

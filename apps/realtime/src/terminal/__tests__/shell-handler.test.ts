@@ -1,4 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+/**
+ * The realtime logger, mocked so the two UNRECOVERABLE-charge paths can be
+ * asserted rather than merely executed: a settle that resolves without persisting
+ * has no window left to reopen (teardown, and the crash-compensating attempt), so
+ * the ERROR it emits IS the whole observable behaviour.
+ */
+const mockRealtimeLogger = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { realtime: mockRealtimeLogger } }));
+
 import { buildShellHandlers, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveShellCommand, planConnect, ensureShellSession, connectFailureMessage, armIdleReap, planColdTailPersist, latestActivityAt } from '../shell-handler';
 import { createTerminalSessionMap, DETACHED_IDLE_MS } from '../terminal-session-map';
 import type { ShellCheckAuthFn, OpenShellFn, SocketLike } from '../shell-handler';
@@ -121,6 +136,14 @@ function makeAuthSuccess(over: Partial<{
   };
 }
 
+/**
+ * A settle that landed durably. `trackUsage` no longer resolves with `void`: it
+ * reports whether the `ai_usage_logs` row was written, and the heartbeat keeps its
+ * billing window OPEN when it was not — so a stub that resolves with nothing is a
+ * stub that claims a LOST charge.
+ */
+const PERSISTED_SETTLE = { persisted: true, creditsSettled: true } as const;
+
 function makeBilling(over: Partial<{
   gate: ReturnType<typeof vi.fn>;
   trackUsage: ReturnType<typeof vi.fn>;
@@ -128,7 +151,7 @@ function makeBilling(over: Partial<{
 }> = {}) {
   return {
     gate: vi.fn().mockResolvedValue({ allowed: true, holdId: 'hold-1' }),
-    trackUsage: vi.fn().mockResolvedValue(undefined),
+    trackUsage: vi.fn().mockResolvedValue(PERSISTED_SETTLE),
     releaseHold: vi.fn().mockResolvedValue(undefined),
     ...over,
   };
@@ -1850,7 +1873,7 @@ describe('buildShellHandlers', () => {
         const billing = makeBilling({
           trackUsage: vi.fn()
             .mockRejectedValueOnce(new Error('db blip'))
-            .mockResolvedValue(undefined),
+            .mockResolvedValue(PERSISTED_SETTLE),
         });
         const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
@@ -1868,12 +1891,60 @@ describe('buildShellHandlers', () => {
         expect(retry.activeSeconds).toBeCloseTo((2 * SETTLE_HEARTBEAT_MS) / 1000, 0);
       });
 
+      // ── The persistence CONTRACT ────────────────────────────────────────────
+      // The settle reaches `AIMonitoring.trackUsage`, which never throws. Before it
+      // reported an outcome, a settle whose `ai_usage_logs` write failed RESOLVED —
+      // so the rollback above, written for exactly this failure, was unreachable on
+      // the real path and the window was silently rebased over lost spend.
+
+      it('given a heartbeat settle that resolves WITHOUT persisting, restores the window and hold so the next heartbeat retries the FULL window', async () => {
+        const billing = makeBilling({
+          trackUsage: vi.fn()
+            .mockResolvedValueOnce({ persisted: false, creditsSettled: false })
+            .mockResolvedValue(PERSISTED_SETTLE),
+        });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // settle resolves, unpersisted
+        expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+        expect(billing.gate).toHaveBeenCalledTimes(1); // connect only — no fresh hold stacked
+        expect(shell.kill).not.toHaveBeenCalled();     // fail-open: session stays alive
+        expect(sessionMap.getByKey('shell:shl-1')).toMatchObject({ holdId: 'hold-1' }); // hold restored
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // retries the whole window
+        expect(billing.trackUsage).toHaveBeenCalledTimes(2);
+        const retry = billing.trackUsage.mock.calls[1][0];
+        expect(retry.holdId).toBe('hold-1');
+        expect(retry.activeSeconds).toBeCloseTo((2 * SETTLE_HEARTBEAT_MS) / 1000, 0);
+      });
+
+      it('given a PERSISTED settle whose ledger settle was deferred, rebases the window normally (the backfill cron owns that charge)', async () => {
+        // Rolling back here would re-bill a window the credit backfill cron is
+        // already collecting from the usage row — a double-charge caused by trying
+        // to prevent a lost one.
+        const billing = makeBilling({
+          trackUsage: vi.fn().mockResolvedValue({ persisted: true, creditsSettled: false }),
+        });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+        expect(billing.gate).toHaveBeenCalledTimes(2); // connect + the post-settle re-hold
+        expect(sessionMap.getByKey('shell:shl-1')).toMatchObject({ holdId: 'hold-1' });
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+        // The window was rebased, so the second settle bills ONE heartbeat, not two.
+        const second = billing.trackUsage.mock.calls[1][0];
+        expect(second.activeSeconds).toBeCloseTo(SETTLE_HEARTBEAT_MS / 1000, 0);
+      });
+
       it('given the session is torn down while a heartbeat settle is FAILING, retries the pre-heartbeat window once instead of dropping it', async () => {
         let rejectSettle: (e: Error) => void = () => {};
         const billing = makeBilling({
           trackUsage: vi.fn()
             .mockImplementationOnce(() => new Promise((_, rej) => { rejectSettle = rej; })) // heartbeat settle hangs, then fails
-            .mockResolvedValue(undefined),
+            .mockResolvedValue(PERSISTED_SETTLE),
         });
         const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
@@ -1891,6 +1962,52 @@ describe('buildShellHandlers', () => {
         expect(compensating[compensating.length - 1].activeSeconds).toBeCloseTo(SETTLE_HEARTBEAT_MS / 1000, 0);
         // Total billed across all successful-looking calls still sums to the window (tail ≈ 0).
         expect(calls.reduce((s, c) => s + c.activeSeconds, 0)).toBeCloseTo((2 * SETTLE_HEARTBEAT_MS) / 1000, 0);
+      });
+
+      it('given the COMPENSATING settle also resolves without persisting, says plainly that the window is unrecoverable', async () => {
+        // The compensating attempt is the LAST thing that will ever touch this
+        // window — the session is already gone, so there is no next heartbeat and
+        // no watermark to hold. Its outcome is therefore read and logged rather
+        // than dropped: this is the exact moment the charge becomes unrecoverable.
+        let rejectSettle: (e: Error) => void = () => {};
+        const billing = makeBilling({
+          trackUsage: vi.fn()
+            .mockImplementationOnce(() => new Promise((_, rej) => { rejectSettle = rej; }))
+            .mockResolvedValue({ persisted: false, creditsSettled: false }),
+        });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+        const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+        onExitArg(0);
+        rejectSettle(new Error('db blip'));
+        await vi.advanceTimersByTimeAsync(0);
+
+        const messages = mockRealtimeLogger.error.mock.calls.map((c) => String(c[0]));
+        expect(messages).toContain(
+          'Shell compensating settle did not persist a usage row — this window is unbilled and unrecoverable',
+        );
+      });
+
+      it('given the TEARDOWN settle resolves without persisting, says plainly that the window is unrecoverable', async () => {
+        // Teardown has no next tick to retry on, so — as above — the log is the
+        // whole observable behaviour, and it must not be the one silent path.
+        const billing = makeBilling({
+          trackUsage: vi.fn().mockResolvedValue({ persisted: false, creditsSettled: false }),
+        });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+        await onConnect(validPayload);
+
+        const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+        onExitArg(0); // teardown settles the tail
+        await vi.advanceTimersByTimeAsync(0);
+
+        const messages = mockRealtimeLogger.error.mock.calls.map((c) => String(c[0]));
+        expect(messages).toContain(
+          'Shell session final settle did not persist a usage row — this window is unbilled and unrecoverable',
+        );
+        expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined(); // teardown still completed
       });
 
       it('given a gate infra error at a heartbeat, keeps the session alive (fail-open) rather than killing a live PTY', async () => {
@@ -2004,9 +2121,9 @@ describe('buildShellHandlers', () => {
         // Mirror of the failing-settle race: the settle lands fine, but by then the
         // terminal is gone. Asking the gate for the next window's hold would
         // reserve credit for a session nobody will ever settle or release.
-        const settle = deferred<void>();
+        const settle = deferred<typeof PERSISTED_SETTLE>();
         const billing = makeBilling({
-          trackUsage: vi.fn().mockImplementationOnce(() => settle.promise).mockResolvedValue(undefined),
+          trackUsage: vi.fn().mockImplementationOnce(() => settle.promise).mockResolvedValue(PERSISTED_SETTLE),
         });
         const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
@@ -2014,7 +2131,7 @@ describe('buildShellHandlers', () => {
         await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // heartbeat: settle in flight
         const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
         onExitArg(0);          // terminal closes while the settle is still running
-        settle.resolve();      // ...and the settle then SUCCEEDS
+        settle.resolve(PERSISTED_SETTLE); // ...and the settle then SUCCEEDS
         await vi.advanceTimersByTimeAsync(0);
 
         // Only the connect-time gate ran: no hold was taken out for a dead session.
@@ -2054,8 +2171,13 @@ describe('buildShellHandlers', () => {
         const billing = makeBilling({
           trackUsage: vi
             .fn()
-            .mockImplementationOnce(() => new Promise<void>((resolve) => { resolveSettle = () => resolve(undefined); }))
-            .mockResolvedValue(undefined),
+            .mockImplementationOnce(
+              () =>
+                new Promise<typeof PERSISTED_SETTLE>((resolve) => {
+                  resolveSettle = () => resolve(PERSISTED_SETTLE);
+                }),
+            )
+            .mockResolvedValue(PERSISTED_SETTLE),
         });
         const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);

@@ -1,12 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { assert } from '@/hooks/__tests__/riteway';
 
 // Schema tables are opaque markers in these tests; the mock tx ignores them.
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'pages.id', driveId: 'pages.driveId', parentId: 'pages.parentId', isTrashed: 'pages.isTrashed', position: 'pages.position', type: 'pages.type' } }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { pageId: 'taskLists.pageId' },
-  taskItems: { pageId: 'taskItems.pageId', id: 'taskItems.id', assigneeAgentId: 'taskItems.assigneeAgentId', completedAt: 'taskItems.completedAt' },
+  taskItems: { pageId: 'taskItems.pageId', id: 'taskItems.id', assigneeAgentId: 'taskItems.assigneeAgentId', completedAt: 'taskItems.completedAt', status: 'taskItems.status' },
   taskAssignees: { taskId: 'taskAssignees.taskId', agentPageId: 'taskAssignees.agentPageId' },
-  taskStatusConfigs: {},
+  // Real identifiers: the vocabulary probes filter on group and order by
+  // position, and a bare {} makes every one of those conditions read as
+  // undefined — so the mock cannot tell them apart.
+  taskStatusConfigs: {
+    taskListId: 'taskStatusConfigs.taskListId',
+    slug: 'taskStatusConfigs.slug',
+    group: 'taskStatusConfigs.group',
+    position: 'taskStatusConfigs.position',
+  },
   DEFAULT_TASK_STATUSES: [
     { slug: 'pending', name: 'To Do', color: 'c', group: 'todo', position: 0 },
   ],
@@ -43,7 +52,9 @@ const schemaTables = {
 import {
   ensureTaskItemForPage,
   ensureTaskListForPage,
-  seedDefaultTaskStatusConfigs,
+  resolveSeedCompletedAt,
+  resolveSeedStatus,
+  type SeedCache,
   syncTaskItemOnMove,
   backfillMissingTaskItems,
   scrubDriveScopedTaskAssociations,
@@ -80,6 +91,8 @@ function makeTx(config: {
   existingItemStatus?: string;
   existingItemCompletedAt?: Date | null;
   destinationStatusConfigs?: Array<{ slug: string; group: string; position: number }>;
+  /** Rows the post-seed vocabulary sweep should find already in the list. */
+  existingTaskRows?: Array<{ id: string; status: string; completedAt: Date | null }>;
 } = {}) {
   const {
     pageTypes = {},
@@ -98,6 +111,7 @@ function makeTx(config: {
     existingItemStatus = 'pending',
     existingItemCompletedAt = null,
     destinationStatusConfigs = [],
+    existingTaskRows = [],
   } = config;
 
   const taskItemUpdates: Array<Record<string, unknown>> = [];
@@ -148,6 +162,12 @@ function makeTx(config: {
           ? [...agentsInTargetDrive, ...pagesInTargetDrive].map((id) => ({ id }))
         : shape === 'taskItems.id' ? removeBranchTaskItemIds.map((id) => ({ id }))
         : null;
+      // The post-seed sweep: select(id,status,completedAt).from(taskItems)
+      //   .innerJoin(pages).where(...).limit(N)
+      if (shape === 'taskItems.completedAt,taskItems.id,taskItems.status') {
+        const sweep = { where: () => ({ limit: () => Promise.resolve(existingTaskRows) }) };
+        return { from: () => ({ ...sweep, innerJoin: () => sweep }) };
+      }
       if (result === null) return selectChain;
       const terminal = {
         where: (cond: unknown[]) => {
@@ -196,9 +216,27 @@ function makeTx(config: {
       }) },
       taskStatusConfigs: {
         // where: ['and', ['eq','taskStatusConfigs.taskListId', id], ['eq','taskStatusConfigs.slug', slug]]
-        findFirst: vi.fn(async (args: { where: unknown[] }) => {
+        findFirst: vi.fn(async (args: { where: unknown[]; orderBy?: unknown[] }) => {
           const listCond = args.where?.[1] as unknown[];
           const slugCond = args.where?.[2] as unknown[];
+          // The seed and the repairs no longer page the vocabulary — nothing caps
+          // how many statuses a list defines — so they ask for the pieces they
+          // need directly: the first config by position, and the first of a given
+          // group. Those queries have no slug term, and the group ones carry an
+          // 'eq'/'ne' on taskStatusConfigs.group.
+          const ordered = [...destinationStatusConfigs].sort((a, b) => a.position - b.position);
+          const descending = JSON.stringify(args.orderBy ?? []).includes('desc');
+          // A bare `eq(taskListId, …)` — no second condition — is the "first (or
+          // last) config by position" probe.
+          if (args.where?.[0] === 'eq') {
+            return descending ? ordered[ordered.length - 1] : ordered[0];
+          }
+          if (Array.isArray(slugCond) && slugCond[1] === 'taskStatusConfigs.group') {
+            const op = slugCond[0] as string;
+            const group = slugCond[2] as string;
+            const candidates = descending ? [...ordered].reverse() : ordered;
+            return candidates.find((c) => (op === 'ne' ? c.group !== group : c.group === group));
+          }
           statusConfigProbes.push({ taskListId: listCond?.[2] as string, slug: slugCond?.[2] as string });
           return destinationStatusConfigs.find((c) => c.slug === slugCond?.[2]);
         }),
@@ -220,33 +258,77 @@ function makeTx(config: {
   return { tx, taskItemInserts, taskListInserts, taskStatusConfigInserts, deletedPageIds, taskItemUpdates, deletedTables, scrubSelects, deleteConditions, workflowDriveUpdates, statusConfigProbes };
 }
 
-describe('seedDefaultTaskStatusConfigs', () => {
-  it('inserts the 4 default status configs linked to the given task_lists id', async () => {
-    const { tx, taskStatusConfigInserts } = makeTx();
-    await seedDefaultTaskStatusConfigs(tx as never, 'list-1');
-    expect(taskStatusConfigInserts).toEqual([
-      { taskListId: 'list-1', slug: 'pending', name: 'To Do', color: 'c', group: 'todo', position: 0 },
-    ]);
+
+describe('resolveSeedCompletedAt', () => {
+  // A done-group status with a null completedAt reads as complete to the UI
+  // while every count that asks the database (`completedAt IS NOT NULL`) says
+  // otherwise — the row looks finished AND blocks its parent.
+  const txWithConfig = (group?: 'todo' | 'in_progress' | 'done') => ({
+    query: {
+      taskStatusConfigs: {
+        findFirst: vi.fn().mockResolvedValue(group ? { group } : undefined),
+      },
+    },
   });
 
-  it('swallows a unique-constraint violation (concurrent caller already seeded this list)', async () => {
-    const { taskStatusConfigInserts } = makeTx();
-    const tx = {
-      insert: vi.fn(() => ({
-        values: () => Promise.reject(new Error('duplicate key value violates unique constraint "task_status_configs_task_list_slug"')),
-      })),
-    };
-    await expect(seedDefaultTaskStatusConfigs(tx as never, 'list-1')).resolves.toBeUndefined();
-    expect(taskStatusConfigInserts).toHaveLength(0);
+  it('stamps a done-group slug', async () => {
+    assert({
+      given: 'a seed status the list defines as done',
+      should: 'be stamped complete',
+      actual: (await resolveSeedCompletedAt(txWithConfig('done') as never, 'l', 'shipped')) instanceof Date,
+      expected: true,
+    });
   });
 
-  it('rethrows an unrelated error', async () => {
-    const tx = {
-      insert: vi.fn(() => ({
-        values: () => Promise.reject(new Error('connection reset')),
-      })),
-    };
-    await expect(seedDefaultTaskStatusConfigs(tx as never, 'list-1')).rejects.toThrow('connection reset');
+  it('leaves an open slug unstamped', async () => {
+    assert({
+      given: 'a seed status in the todo group',
+      should: 'not be stamped',
+      actual: await resolveSeedCompletedAt(txWithConfig('todo') as never, 'l', 'icebox'),
+      expected: null,
+    });
+  });
+
+  it('resolves once per list when a backfill loop shares a cache', async () => {
+    const tx = txWithConfig('done');
+    const cache: SeedCache = new Map();
+    const seed = await resolveSeedStatus(tx as never, 'l', cache);
+    // Counted from HERE: resolveSeedStatus's own probes vary with the shape of
+    // the vocabulary, and this is about the completion rule, not the seed.
+    const afterSeed = tx.query.taskStatusConfigs.findFirst.mock.calls.length;
+    await resolveSeedCompletedAt(tx as never, 'l', seed, cache);
+    await resolveSeedCompletedAt(tx as never, 'l', seed, cache);
+    assert({
+      given: 'the same list and seed status twice, through a shared cache',
+      should: 'query the vocabulary once for the completion rule, not twice',
+      actual: tx.query.taskStatusConfigs.findFirst.mock.calls.length - afterSeed,
+      expected: 1,
+    });
+  });
+
+  it('does not reuse a cached answer for a different status', async () => {
+    // POST passes an explicit status, which the cached slug did not come from.
+    const tx = txWithConfig('done');
+    const cache: SeedCache = new Map([['l', { slug: 'shipped', completedAt: new Date() }]]);
+    assert({
+      given: 'a cache holding the completion answer for a DIFFERENT slug',
+      should: 'ask the database rather than reuse it',
+      actual: (await resolveSeedCompletedAt(tx as never, 'l', 'icebox', cache)) instanceof Date
+        && tx.query.taskStatusConfigs.findFirst.mock.calls.length === 1,
+      expected: true,
+    });
+  });
+
+  it("falls back to the built-in rule when the list has no vocabulary", async () => {
+    assert({
+      given: 'no config for the slug, on a list with no custom statuses',
+      should: "stamp only the built-in 'completed'",
+      actual: [
+        (await resolveSeedCompletedAt(txWithConfig() as never, 'l', 'completed')) instanceof Date,
+        await resolveSeedCompletedAt(txWithConfig() as never, 'l', 'pending'),
+      ],
+      expected: [true, null],
+    });
   });
 });
 
@@ -311,8 +393,24 @@ describe('ensureTaskItemForPage', () => {
     await ensureTaskItemForPage(tx as never, { pageId: 'list', pageType: 'TASK_LIST', parentId: 'parent', userId: 'u' });
     // No position: task order lives on the linked page's pages.position (#2143).
     expect(taskItemInserts).toEqual([
-      { userId: 'u', pageId: 'list', status: 'pending', priority: 'medium' },
+      { userId: 'u', pageId: 'list', status: 'pending', priority: 'medium', completedAt: null },
     ]);
+  });
+
+  it('stamps completedAt when the seed status the list forces is a done one', async () => {
+    // Not hypothetical: the statuses PUT validates each group but never requires
+    // one per group, so a list CAN end up all-done, and resolveSeedStatus then
+    // has nothing but a done slug to fall back to. Every seeding path has to
+    // apply the same rule as POST or the row reads complete to the client while
+    // every `completedAt IS NOT NULL` counter says it is not.
+    const { tx, taskItemInserts } = makeTx({
+      pageTypes: { parent: 'TASK_LIST' },
+      destinationStatusConfigs: [{ slug: 'shipped', group: 'done', position: 0 }],
+    });
+    await ensureTaskItemForPage(tx as never, { pageId: 'list', pageType: 'TASK_LIST', parentId: 'parent', userId: 'u' });
+    expect(taskItemInserts).toHaveLength(1);
+    expect(taskItemInserts[0]).toMatchObject({ status: 'shipped' });
+    expect(taskItemInserts[0].completedAt).toBeInstanceOf(Date);
   });
 
   it('is idempotent — skips insert when the row already exists', async () => {
@@ -771,6 +869,27 @@ describe('backfillMissingTaskItems', () => {
     expect(database.select).toHaveBeenCalledTimes(1);
     expect(database.transaction).not.toHaveBeenCalled();
     expect(parts.taskItemInserts).toHaveLength(0);
+  });
+
+  it('resolves the parent list once, not once per missing child', async () => {
+    // This runs on an ordinary list read, inside a write transaction. The parent
+    // is fixed for the whole loop, so re-deriving its list per row is a query —
+    // and a possible seeding write — repeated for nothing while the transaction
+    // stays open. A hundred missing rows used to mean a few hundred round trips.
+    const parts = makeTx({ pageTypes: { p: 'TASK_LIST' } });
+    const database = makeDb([], parts);
+    await backfillMissingTaskItems(database as never, {
+      parentId: 'p', childPageIds: ['a', 'b', 'c', 'd'], userId: 'u',
+    });
+    assert({
+      given: 'four children all missing their task_items row',
+      should: 'look the parent list up exactly once',
+      actual: {
+        listLookups: parts.tx.query.taskLists.findFirst.mock.calls.length,
+        inserted: parts.taskItemInserts.length,
+      },
+      expected: { listLookups: 1, inserted: 4 },
+    });
   });
 
   it('backfills only the children missing a task item', async () => {

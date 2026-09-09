@@ -75,6 +75,8 @@ import type {
   WriteFileEntry,
 } from './types';
 import { SandboxProvisionError, type SandboxCreateOptions } from '../sandbox-options';
+import { loggers } from '../../../logging/logger-config';
+import { MAX_LABEL_LENGTH } from '../../../validators/custom-domain';
 
 /** Thrown when a command exceeds the policy's per-run wall-clock cap. */
 export class SandboxCommandTimeoutError extends Error {
@@ -241,6 +243,46 @@ export function readSessionInfoId(message: unknown): string | undefined {
 }
 
 /**
+ * A `port_opened` / `port_closed` control frame from an exec session's
+ * WebSocket, parsed from the same `message` event stream `readSessionInfoId`
+ * reads (the RC SDK ships no typed frame union, so the wire shape is validated
+ * defensively rather than trusted).
+ *
+ * Live-verified (docs/spikes/2026-08-dev-preview-sprite-services-spike.md §5):
+ * the runtime emits `port_opened` when a process binds a port inside a TTY
+ * session — `{"type":"port_opened","port":8124,"address":"10.0.0.1","pid":383}`
+ * — and emits NOTHING on a plain non-TTY `spawn` running the same server (the
+ * filter is server-side; the SDK forwards every TEXT frame regardless of TTY).
+ * `port_closed` is typed by the SDK but was never observed on the wire, so
+ * treat it as best-effort if it ever arrives: never build teardown logic on it.
+ */
+export interface SpritePortNotification {
+  type: 'port_opened' | 'port_closed';
+  port: number;
+  address?: string;
+  pid?: number;
+}
+
+/**
+ * Pure: parse a port notification from an exec-WS `message` frame, or
+ * undefined for every other frame (`session_info`, resize acks, raw text) and
+ * for a malformed port payload. Data only — what a caller DOES about a port
+ * opening (classification, exposure) is deliberately not this layer's job.
+ */
+export function readPortNotification(message: unknown): SpritePortNotification | undefined {
+  if (typeof message !== 'object' || message === null) return undefined;
+  const frame = message as { type?: unknown; port?: unknown; address?: unknown; pid?: unknown };
+  if (frame.type !== 'port_opened' && frame.type !== 'port_closed') return undefined;
+  if (typeof frame.port !== 'number' || !Number.isInteger(frame.port)) return undefined;
+  return {
+    type: frame.type,
+    port: frame.port,
+    ...(typeof frame.address === 'string' ? { address: frame.address } : {}),
+    ...(typeof frame.pid === 'number' ? { pid: frame.pid } : {}),
+  };
+}
+
+/**
  * The subset of the SDK's checkpoint/restore progress stream the driver
  * consumes — mirrors the real `CheckpointStream`/`RestoreStream` (both expose
  * `processAll`). Messages are `{type: 'info'|'stdout'|'stderr'|'error', data?,
@@ -258,6 +300,167 @@ export interface SpriteCheckpointStreamLike {
   /** Close the stream — called on a timeout so a stalled read doesn't hold the
    *  underlying connection open past the point we've given up waiting on it. */
   close(): void;
+}
+
+/**
+ * A service's runtime status, as the services API reports it. The full union
+ * comes from the SDK's `ServiceState` type; live-verified transitions
+ * (docs/spikes/2026-08-dev-preview-sprite-services-spike.md §4):
+ * `running` (fresh create auto-starts), and — the trap — `stopService` lands in
+ * **`failed`** (`error: "exited with code 143"`, the runtime recording its own
+ * SIGTERM as a crash), NOT the documented sticky `stopped`, which was never
+ * observed. Code must not treat `status === 'stopped'` as "the user stopped
+ * it"; stopped-intent has to be tracked by the caller.
+ */
+export type SpriteServiceStatus = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed';
+
+/** The state slice of a service record the driver consumes. Only fields
+ *  verified on the wire AND declared by the SDK are typed here — the wire's
+ *  timestamps are snake_case (`started_at`) while the SDK types camelCase, so
+ *  neither spelling is trustworthy and both are deliberately omitted. */
+export interface SpriteServiceStateLike {
+  status: SpriteServiceStatus;
+  pid?: number;
+  /** e.g. `"exited with code 143"` after a stop — see {@link SpriteServiceStatus}. */
+  error?: string;
+}
+
+/**
+ * A service as reported by GET `/v1/sprites/{name}/services`. `needs` is
+ * `[]` from the list endpoint but `null` from the get-one endpoint (verified),
+ * so it is typed to tolerate both.
+ *
+ * `httpPort` is persisted and echoed back but — live-verified, the spike's
+ * headline finding — has NO routing effect: the sprite URL always proxies to
+ * port 8080, regardless of any service's `httpPort`, and start-on-request does
+ * not exist in shipped behavior. Do not build routing decisions on this field.
+ */
+export interface SpriteServiceRecordLike {
+  name: string;
+  cmd: string;
+  args: string[];
+  needs?: string[] | null;
+  httpPort?: number;
+  state?: SpriteServiceStateLike;
+}
+
+/** Request body for PUT `/v1/sprites/{name}/services/{svc}` (create-or-update). */
+export interface SpriteServiceRequestLike {
+  cmd: string;
+  args?: string[];
+  needs?: string[];
+  httpPort?: number;
+}
+
+/**
+ * One NDJSON event from a service create/start/stop log stream. Only `type` is
+ * load-bearing here; the SDK's `ServiceLogEvent` types richer fields but the
+ * wire diverges from them (verified: the completion event carries `log_files`,
+ * snake_case, where the SDK types `logFiles`), so nothing else is trusted.
+ */
+export interface SpriteServiceLogEventLike {
+  type: string;
+  data?: string;
+}
+
+/** The service-operation NDJSON stream subset the driver consumes — same
+ *  shape/contract as {@link SpriteCheckpointStreamLike}. */
+export interface SpriteServiceLogStreamLike {
+  processAll(handler: (event: SpriteServiceLogEventLike) => void | Promise<void>): Promise<void>;
+  close(): void;
+}
+
+/**
+ * Sprite-URL auth modes accepted by `updateURLSettings` (both live-verified):
+ * `'sprite'` (the default — anonymous/invalid/raw-Fly-token requests get a 302
+ * to an interactive SSO flow at sprites.dev, NOT a 401; `Bearer
+ * <org-minted sprites token>` gets through) and `'public'` (no auth at all).
+ * v1 preview policy keeps every sprite on `'sprite'` — 'public' exists on this
+ * seam because the platform verifies it, but exposure decisions belong to the
+ * (future) decision core and its permission gate, never to this driver.
+ */
+export type SpriteUrlAuth = 'public' | 'sprite';
+
+/** URL auth settings as read back from the API. `auth` is typed open (string)
+ *  because the wire returns a superset of the SDK's `URLSettings` — verified:
+ *  `{ auth: 'sprite', private_access: 'admins' }`. */
+export interface SpriteUrlSettingsLike {
+  auth?: string;
+}
+
+/**
+ * Pure: the failure text of an `error`-type service log event, or undefined
+ * for every other event. Mirrors {@link checkpointStreamErrorMessage}. The
+ * `error` event type is declared by the SDK but was not observed live
+ * (verified events: `started`/`complete`/`stopping`/`stopped`), so this is a
+ * defensive net, not a load-bearing path.
+ */
+export function serviceLogErrorMessage(event: SpriteServiceLogEventLike): string | undefined {
+  if (event.type !== 'error') return undefined;
+  return event.data ?? 'service log stream reported an error';
+}
+
+/**
+ * The monitoring window passed to createService/startService. The stream stays
+ * open for this long after the operation lands (verified: `started` →
+ * `complete` arrive ~`duration` apart), so it is kept short — it is latency on
+ * every create/start. '5s' is the value every live spike run used.
+ */
+export const SERVICE_LOG_MONITOR_WINDOW = '5s';
+
+/** Wall-clock cap on draining a service log stream — the SDK exposes no
+ *  timeout of its own, and every other network op in this driver is bounded. */
+const SERVICE_STREAM_TIMEOUT_MS = 30_000;
+
+/**
+ * Drain a service create/start/stop log stream to completion, bounded, and
+ * surface the first `error`-type event as a rejection. The events themselves
+ * are discarded: the wire's completion payload diverges from the SDK types
+ * (see {@link SpriteServiceLogEventLike}) and no caller consumes it yet.
+ */
+export function drainServiceLogStream(
+  stream: SpriteServiceLogStreamLike,
+  timeoutMs: number = SERVICE_STREAM_TIMEOUT_MS,
+): Promise<void> {
+  let settled = false;
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        stream.close();
+      } catch {
+        // Best-effort cleanup only; the timeout error below is what propagates.
+      }
+      reject(new Error(`Sprite service operation timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    let streamError: string | undefined;
+    stream
+      .processAll((event) => {
+        if (streamError === undefined) {
+          streamError = serviceLogErrorMessage(event);
+        }
+      })
+      .then(
+        () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (streamError !== undefined) {
+            reject(new Error(`Sprite service operation failed: ${streamError}`));
+          } else {
+            resolve();
+          }
+        },
+        (error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+  });
 }
 
 /** The Sprite instance subset the driver consumes. */
@@ -279,6 +482,18 @@ export interface SpriteInstanceLike {
    * Sprite, skip it".
    */
   readonly id?: string;
+  /**
+   * The sprite's POWER state as the control plane last reported it —
+   * `'running'`, `'warm'` (paused with memory snapshot) or `'cold'` (paused,
+   * fresh boot on wake) were observed live (spike §1, §6); the wire types it
+   * as an open string. A control-plane read (`getSprite`) does NOT wake the
+   * sprite (spike §6: `listServices` and `getSprite` both answered while
+   * paused), which is what lets the preview proxy ask "would forwarding this
+   * request be a wake?" without causing one. Optional for the same reason
+   * {@link id} is; a missing value normalizes to `'unknown'`, never to a
+   * claim (see `normalizeSpritePowerState`).
+   */
+  readonly status?: string;
   spawn(
     file: string,
     args?: string[],
@@ -332,6 +547,44 @@ export interface SpriteInstanceLike {
    * gone — see {@link killSpriteSession}.
    */
   killSession(sessionId: string): Promise<void>;
+  /**
+   * The sprite's URL (`https://<name>-<org>.sprites.app`), hydrated from the
+   * API response like {@link id} — present from creation, no service required.
+   * Live-verified: the URL is a proxy to **port 8080 in the sprite, always** —
+   * a service's `httpPort` does not rewire it (see
+   * {@link SpriteServiceRecordLike}) — and a request to it WAKES a paused
+   * sprite even when nothing is listening (the request then hangs, no 502).
+   * Optional for the same reason `id` is: the RC SDK types it optional, and a
+   * build that stops reporting it must degrade to "no URL known".
+   */
+  readonly url?: string;
+  /** URL auth settings hydrated alongside {@link url}. Default `auth: 'sprite'`. */
+  readonly urlSettings?: SpriteUrlSettingsLike;
+  /** Update the sprite URL's auth mode (PATCH, effective immediately — verified). */
+  updateURLSettings(settings: { auth: SpriteUrlAuth }): Promise<void>;
+  /** List the sprite's services with their runtime state. */
+  listServices(): Promise<SpriteServiceRecordLike[]>;
+  /**
+   * Create-or-update a service (PUT — idempotent on the name). AUTO-STARTS the
+   * process and returns the startup log stream; the caller must drain it
+   * (see {@link drainServiceLogStream}). `duration` is the monitoring window
+   * the stream stays open for.
+   */
+  createService(
+    name: string,
+    config: SpriteServiceRequestLike,
+    duration?: string,
+  ): Promise<SpriteServiceLogStreamLike>;
+  /** Start a stopped/failed service. Returns the same kind of log stream. */
+  startService(name: string, duration?: string): Promise<SpriteServiceLogStreamLike>;
+  /**
+   * Stop a service (SIGTERM, then `timeout` before escalation). Sticky in
+   * effect — nothing restarts it — but the recorded state is `failed`, not
+   * `stopped`; see {@link SpriteServiceStatus}.
+   */
+  stopService(name: string, timeout?: string): Promise<SpriteServiceLogStreamLike>;
+  /** Remove a service definition (404s→rejects on an unknown name — verified 204 on success). */
+  deleteService(name: string): Promise<void>;
 }
 
 /** The injectable Sprites SDK statics. Defaults to the real `@fly/sprites`. */
@@ -360,6 +613,27 @@ function toBuffer(chunk: Buffer | string): Buffer {
 }
 
 /**
+ * Pure: locate a `<sentinel> <exit-code>` line in collected stdout. Returns the
+ * stdout BEFORE that line and the parsed code, or null when the sentinel has not
+ * arrived yet (or arrived without a numeric code — treated as not-yet, so a
+ * partial chunk boundary cannot fake a result).
+ */
+export function findSentinel(stdout: string, sentinel: string): { stdout: string; exitCode: number } | null {
+  const lines = stdout.split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!line.startsWith(sentinel)) continue;
+    const code = Number(line.slice(sentinel.length).trim());
+    if (!Number.isInteger(code)) return null;
+    // Only a COMPLETE line counts: a sentinel at the very end with no newline
+    // may still be mid-chunk (the code could be `12` of `127`).
+    if (i === lines.length - 1) return null;
+    return { stdout: lines.slice(0, i).join('\n'), exitCode: code };
+  }
+  return null;
+}
+
+/**
  * Run a command through the SDK's `spawn` (structured `file` + `args[]`, never a
  * host-side shell string) and buffer its output. Faithfully replicates the SDK's
  * own `execFile` collection — stdout/stderr `data` listeners with a `maxBuffer`
@@ -380,6 +654,7 @@ export function runSpawned(
   command: SpriteCommandLike,
   maxBytes: number,
   timeoutMs: number | undefined,
+  stdoutSentinel?: string,
 ): Promise<SandboxRunResult> {
   const maxBuffer = maxBytes > 0 ? maxBytes : DEFAULT_MAX_OUTPUT_BYTES;
   return new Promise<SandboxRunResult>((resolve, reject) => {
@@ -437,6 +712,20 @@ export function runSpawned(
       // Output proves the connection opened, even if the 'spawn' event was missed.
       opened = true;
       stdoutLen = collect(stdoutChunks, chunk, stdoutLen);
+      if (stdoutSentinel === undefined || settled) return;
+      // THE SENTINEL SHORT-CIRCUIT (see `RunCommandArgs.stdoutSentinel`): the
+      // runtime holds the socket open 5–10s after exit, and `exit` arrives only
+      // on close. A caller that ends its command with `<sentinel> <code>` has
+      // told us everything the close would; take it now and kill the lingering
+      // socket ourselves. The sentinel line is stripped from the result.
+      const found = findSentinel(Buffer.concat(stdoutChunks).toString('utf8'), stdoutSentinel);
+      if (found === null) return;
+      try {
+        command.kill('SIGKILL');
+      } catch {
+        // Best-effort: the socket closes on its own within the runtime's grace.
+      }
+      succeed({ exitCode: found.exitCode, stdout: found.stdout, stderr: Buffer.concat(stderrChunks).toString('utf8') });
     });
     command.stderr.on('data', (chunk) => {
       opened = true;
@@ -616,8 +905,9 @@ function runSpawnedWithWakeRetry(
   spawnFn: () => SpriteCommandLike,
   maxBytes: number,
   timeoutMs: number | undefined,
+  stdoutSentinel?: string,
 ): Promise<SandboxRunResult> {
-  return withWakeRetry(() => runSpawned(spawnFn(), maxBytes, timeoutMs));
+  return withWakeRetry(() => runSpawned(spawnFn(), maxBytes, timeoutMs, stdoutSentinel));
 }
 
 /** Reject if `p` has not settled within `ms` — the Sprite filesystem API uses a
@@ -916,6 +1206,55 @@ export function withKillSession<T extends { name: string; client: { baseURL: str
   });
 }
 
+/**
+ * The longest Sprite NAME that still yields a URL DNS can resolve.
+ *
+ * The API accepts names up to a full DNS label (63), but the sprite's URL is
+ * `<name>-<org>.sprites.app` — the platform appends the org suffix to the
+ * SAME label and never checks the sum. Our keys are 72-char HMAC hex; sliced
+ * to 63 they produced 69-char labels (`pgs-env-…-bskrl`) that `dig` refuses
+ * outright ("label too long"), so no preview ever reached a sprite. 15 is
+ * reserved for `-<org>`: the observed suffix is `-` + 5 chars, and the rest
+ * is headroom for a longer one, not a guess about its format. 48 chars is
+ * the 8-char prefix plus 40 hex — 160 bits of the digest, still
+ * collision-free for our keys.
+ */
+export const SPRITE_NAME_MAX = MAX_LABEL_LENGTH - 15;
+/** The budget before {@link SPRITE_NAME_MAX} — the API's own limit; kept ONLY to resume sprites created under it. */
+export const LEGACY_SPRITE_NAME_MAX = MAX_LABEL_LENGTH;
+
+/**
+ * Pure: the Sprite name for a session/env key — deterministic, so the same
+ * key always resumes the same sprite. `max` is the legacy budget only where
+ * `getOrCreate` looks for a sprite created before the current one.
+ */
+export function spriteNameFor(key: string, max: number = SPRITE_NAME_MAX): string {
+  return key.slice(0, max);
+}
+
+/** Legacy names already reported this process — one line per sprite, not per attach. */
+const legacyResumesLogged = new Set<string>();
+
+/**
+ * The budget above is an assumption about the org suffix; this is where it
+ * is CHECKED, on the one path that sees the platform's answer — the URL it
+ * hands back for a sprite just created. An overflow is logged as an error
+ * for the operator (raise the reserve), never thrown at the user: the
+ * sandbox itself works, and the proxy refuses its URL by name anyway.
+ */
+export function checkSpriteUrlLabelFits(sprite: Pick<SpriteInstanceLike, 'name' | 'url'>): boolean {
+  if (!sprite.url) return true;
+  let label: string;
+  try {
+    label = new URL(sprite.url).hostname.split('.')[0] ?? '';
+  } catch {
+    return true;
+  }
+  if (label.length <= MAX_LABEL_LENGTH) return true;
+  loggers.ai.error('sprite URL label exceeds a DNS label — SPRITE_NAME_MAX reserves too little for the org suffix', undefined, { spriteName: sprite.name, labelLength: label.length });
+  return false;
+}
+
 function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): ExecutableSandbox {
   return {
     sandboxId: sprite.name,
@@ -928,7 +1267,7 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
     // identity is unknown — both of which the caller must treat as "unproven".
     egressPolicyToken,
 
-    async runCommand({ cmd, args = [], cwd, env, timeoutMs, maxBytes }: RunCommandArgs): Promise<SandboxRunResult> {
+    async runCommand({ cmd, args = [], cwd, env, timeoutMs, maxBytes, stdoutSentinel }: RunCommandArgs): Promise<SandboxRunResult> {
       // spawn (arg array), never a host-side shell string. The untrusted command
       // runs under the Sprite's own `sh -c`, contained by the VM. Re-spawned per
       // attempt so a cold-start wake drop reconnects on a fresh WebSocket.
@@ -939,7 +1278,7 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
       const spawnFn = cwd === undefined
         ? () => sprite.spawn(cmd, args, { env })
         : () => sprite.spawn(...spawnWithSelfHealingCwd({ command: cmd, args, cwd }), { env });
-      return runSpawnedWithWakeRetry(spawnFn, maxBytes ?? 0, timeoutMs);
+      return runSpawnedWithWakeRetry(spawnFn, maxBytes ?? 0, timeoutMs, stdoutSentinel);
     },
 
     async writeFiles(files: WriteFileEntry[]): Promise<void> {
@@ -1031,6 +1370,16 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
       });
     },
   };
+}
+
+/** `getSprite`, with a genuine not-found folded to `null`; every other error (auth, rate limit, outage) surfaces. */
+async function getSpriteIfExists(sdk: SpritesSdk, name: string): Promise<SpriteInstanceLike | null> {
+  try {
+    return await sdk.getSprite(name);
+  } catch (error) {
+    if (isSpriteNotFoundError(error)) return null;
+    throw error;
+  }
 }
 
 /**
@@ -1418,22 +1767,31 @@ export function createSpritesSandboxClient({
       // genuine not-found. Auth/rate-limit/outage errors from getSprite surface
       // rather than spawning a duplicate Sprite under a name that may still be live.
       //
-      // The Sprites API enforces a 63-char name limit (DNS label). Our session
-      // keys are 72-char HMAC hex strings; truncate to 63 before hitting the API.
-      // The full key stays as the DB session key — only the Sprites name is short.
-      const spriteName = name.slice(0, 63);
+      // The Sprite NAME is the key cut to `SPRITE_NAME_MAX` (see the constant);
+      // the full key stays as the DB session key. The name is not persisted
+      // anywhere — every attach re-derives it — so a sprite created under the
+      // old, longer budget must still be found by THAT name, or every existing
+      // env and session would silently land on a fresh, empty VM. Hence two
+      // lookups, and a create only when neither exists — under the short name.
+      const spriteName = spriteNameFor(name);
+      const legacyName = spriteNameFor(name, LEGACY_SPRITE_NAME_MAX);
       try {
-        let sprite: SpriteInstanceLike;
-        let fresh = false;
-        try {
-          sprite = await sdk.getSprite(spriteName);
-        } catch (error) {
-          if (!isSpriteNotFoundError(error)) throw error;
-          // Caps (RAM / vCPUs / storage / region) come from the resolved policy and
-          // are set explicitly per Sprite rather than relying on the quota defaults.
-          sprite = await sdk.createSprite(spriteName, options.caps);
-          fresh = true;
+        const existing =
+          (await getSpriteIfExists(sdk, spriteName))
+          ?? (name.length > SPRITE_NAME_MAX ? await getSpriteIfExists(sdk, legacyName) : null);
+        if (existing !== null && existing.name === legacyName && legacyName !== spriteName && !legacyResumesLogged.has(legacyName)) {
+          // Resumed on a name whose URL cannot resolve: the sandbox works
+          // (shell, files, services) but cannot be previewed until it is
+          // recreated. Logged once per name per process, so the legacy
+          // population can be watched without a line per attach.
+          legacyResumesLogged.add(legacyName);
+          loggers.ai.info('sprite resumed by legacy name — its URL is not resolvable', { spriteName, legacyName });
         }
+        const fresh = existing === null;
+        // Caps (RAM / vCPUs / storage / region) come from the resolved policy and
+        // are set explicitly per Sprite rather than relying on the quota defaults.
+        const sprite: SpriteInstanceLike = existing ?? (await sdk.createSprite(spriteName, options.caps));
+        if (fresh) checkSpriteUrlLabelFits(sprite);
         // Lock down egress only when THIS VM is not already proven to be running
         // THIS policy — see the file header and `../egress-lockdown.ts`. The proof
         // is a token over (Sprite instance id, policy hash): a warm resume of the
@@ -1461,7 +1819,8 @@ export function createSpritesSandboxClient({
             sleep,
           });
         }
-        // wrap sets sandboxId = sprite.name = spriteName (truncated). The token is
+        // wrap sets sandboxId = sprite.name (the short name, or the legacy one it
+        // resumed on — `get` reconnects by whichever was recorded). The token is
         // now CONFIRMED for this VM (freshly applied, or already proven) — the
         // caller records it, and it is what lets the next hand-back skip the push.
         return wrap(sprite, desiredToken);
@@ -1480,12 +1839,8 @@ export function createSpritesSandboxClient({
       // We do NOT reapply egress here: the policy persists across hibernation
       // (the platform's configure-once model), and a dropped first wake is
       // recovered by runCommand's cold-start retry.
-      try {
-        return wrap(await sdk.getSprite(sandboxId));
-      } catch (error) {
-        if (isSpriteNotFoundError(error)) return null;
-        throw error;
-      }
+      const sprite = await getSpriteIfExists(sdk, sandboxId);
+      return sprite === null ? null : wrap(sprite);
     },
 
     async stop({ sandboxId }) {

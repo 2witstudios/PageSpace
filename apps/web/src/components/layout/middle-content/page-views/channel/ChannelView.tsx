@@ -48,6 +48,9 @@ import { useFindStore } from '@/stores/useFindStore';
 import { useDraft } from '@/hooks/useDraft';
 import { buildDraftKey } from '@/lib/draft/draft';
 
+/** Coalesces the re-mark-as-read POST across a burst of incoming messages. */
+const MARK_READ_DEBOUNCE_MS = 1000;
+
 interface ChannelRef {
   id: string;
   driveId: string;
@@ -180,6 +183,49 @@ function ChannelView({ page }: ChannelViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page.id]);
 
+  const markChannelRead = useCallback(() => {
+    post<{ success: boolean; notificationsMarkedRead: number }>(`/api/channels/${page.id}/read`, {})
+      .then((res) => refetchNotificationsIfMarkedRead(res.notificationsMarkedRead))
+      .catch(() => {
+        // Silently ignore errors - marking as read is not critical
+      });
+  }, [page.id]);
+
+  // Advancing the watermark only on open left every message that arrived while
+  // you sat reading the channel counted as unread, inflating the sidebar badge
+  // until you navigated away and back. Re-mark as messages land, debounced so a
+  // busy channel does not POST per message, and only while the tab is actually
+  // visible — a backgrounded tab must not silently clear unread you never saw.
+  const markReadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleMarkChannelRead = useCallback(() => {
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+    if (markReadTimerRef.current) clearTimeout(markReadTimerRef.current);
+    markReadTimerRef.current = setTimeout(() => {
+      markReadTimerRef.current = null;
+      markChannelRead();
+    }, MARK_READ_DEBOUNCE_MS);
+  }, [markChannelRead]);
+
+  // Keyed on page.id, not [], because CenterPanel reuses this component across
+  // channels: a timer left pending from the channel you just left would post a
+  // read for it a second after it stopped being on screen.
+  useEffect(() => () => {
+    if (markReadTimerRef.current) {
+      clearTimeout(markReadTimerRef.current);
+      markReadTimerRef.current = null;
+    }
+  }, [page.id]);
+
+  // Coming back to a tab that was hidden while messages arrived: those are on
+  // screen now, so clear them rather than waiting for the next message.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') markChannelRead();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [markChannelRead]);
+
   useEffect(() => {
     const fetchMessages = async () => {
       const res = await fetchWithAuth(`/api/channels/${page.id}/messages`);
@@ -189,14 +235,10 @@ function ChannelView({ page }: ChannelViewProps) {
       setNextCursor(data.nextCursor ?? null);
 
       // Mark channel as read when viewed
-      post<{ success: boolean; notificationsMarkedRead: number }>(`/api/channels/${page.id}/read`, {})
-        .then((res) => refetchNotificationsIfMarkedRead(res.notificationsMarkedRead))
-        .catch(() => {
-          // Silently ignore errors - marking as read is not critical
-        });
+      markChannelRead();
     };
     fetchMessages();
-  }, [page.id]);
+  }, [page.id, markChannelRead]);
 
   // Connect to socket store when user is available
   useEffect(() => {
@@ -227,6 +269,8 @@ function ChannelView({ page }: ChannelViewProps) {
         }
         return [...prev.filter(m => !m.id.startsWith('temp-')), message];
       });
+      // It is on screen now, so it is not unread.
+      scheduleMarkChannelRead();
     };
 
     const handleThreadCountUpdated = (data: {
@@ -251,7 +295,7 @@ function ChannelView({ page }: ChannelViewProps) {
       socket.off('new_message', handleNewMessage);
       socket.off('thread_reply_count_updated', handleThreadCountUpdated);
     };
-  }, [socket, connectionStatus, page.id]);
+  }, [socket, connectionStatus, page.id, scheduleMarkChannelRead]);
 
   const handleStartQuote = useCallback((m: MessageWithReactions) => {
     if (m.id.startsWith('temp-')) return;

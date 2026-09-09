@@ -87,6 +87,7 @@ export interface ElisionOptions {
  */
 export const DEFAULT_ELIDABLE_TOOLS: ReadonlySet<string> = new Set([
   'read_page',
+  'read_sheet',
   'read_conversation',
   'list_pages',
   'list_drives',

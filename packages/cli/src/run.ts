@@ -7,8 +7,9 @@
 import { PageSpaceClient } from '@pagespace/sdk';
 import { parseArgv } from './argv/parse.js';
 import { buildAuthProvider, enforceAuth } from './auth/auth-context.js';
+import { credentialKindOf } from './auth/credential-kind.js';
 import { createDiscoverMetadata } from './auth/discover.js';
-import { resolveEnvKeyName, resolveEnvToken } from './auth/legacy-token-env.js';
+import { resolveEnvKeyName, resolveEnvToken, LEGACY_TOKEN_ENV_VAR, LEGACY_KEY_ENV_VAR } from './auth/legacy-token-env.js';
 import { createRefreshAccessToken } from './auth/silent-refresh.js';
 import { mcpNoExplicitCredentialMessage, noExplicitCredentialMessage } from './auth/resolve.js';
 import { resolveCredentialSource } from './auth/resolve-credential-source.js';
@@ -20,10 +21,14 @@ import { tokensCreateHandler } from './commands/keys/create.js';
 import { tokensListHandler } from './commands/keys/list.js';
 import { tokensRevokeHandler } from './commands/keys/revoke.js';
 import { keysUseHandler } from './commands/keys/use.js';
+import { envEnrollHandler, envTokenHandler } from './commands/env.js';
+import { envConnectHandler } from './commands/env/connect.js';
+import { envDisconnectHandler } from './commands/env/disconnect.js';
+import { envPolicyHandler } from './commands/env/policy.js';
 import { keysHandler } from './commands/keys/wizard.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
-import { resolveConfig } from './config/resolve.js';
+import { resolveConfig, resolveTimeoutSetting } from './config/resolve.js';
 import { createNullActiveKeyStore, type ActiveKeyStore } from './credentials/active-key.js';
 import type { CredentialStore } from './credentials/store.js';
 import { EXIT_RUNTIME_ERROR, EXIT_USAGE_ERROR, type ExitCode } from './exit-codes.js';
@@ -95,6 +100,16 @@ const AUTH_EXEMPT_HANDLERS = new Set([
   tokensRevokeHandler,
   keysUseHandler,
   keysHandler,
+  // A machine enrolling, or proving its key, has no login: the one-time code
+  // and then the machine key ARE its credentials (`commands/env.ts`).
+  envEnrollHandler,
+  envTokenHandler,
+  // The daemon and its local helpers likewise: `env connect` earns its own
+  // socket token from the machine key on every connect, `env disconnect`
+  // signals a local process, `env policy` reads a local file.
+  envConnectHandler,
+  envDisconnectHandler,
+  envPolicyHandler,
 ]);
 
 /**
@@ -131,6 +146,8 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     env: { PAGESPACE_API_URL: deps.env.PAGESPACE_API_URL },
     credential: null,
   });
+
+  const timeoutMs = resolveTimeoutSetting(parsed.flags.timeoutMs, deps.env);
 
   const envToken = resolveEnvToken(deps.env);
   if (envToken.deprecationNotice) {
@@ -169,6 +186,18 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     allowActiveKey: activeKeyEligible,
   });
 
+  // The literal env var that actually supplied `source`, legacy alias
+  // included — secret-free (just which NAME resolved, never the value). Used
+  // only to make a refusal message name the right variable to unset; `source`
+  // itself carries no memory of which of the two names (modern vs. legacy)
+  // produced its token/key name.
+  const credentialSourceEnvVarName: string | null =
+    source.kind === 'env'
+      ? (envToken.deprecationNotice !== null ? LEGACY_TOKEN_ENV_VAR : null)
+      : source.kind === 'stored' && activeKeyName === null && !parsed.flags.key?.trim() && envKey.name !== undefined
+        ? (envKey.deprecationNotice !== null ? LEGACY_KEY_ENV_VAR : null)
+        : null;
+
   const auth = buildAuthProvider(source, {
     discoverMetadata: createDiscoverMetadata(),
     createRefreshAccessToken,
@@ -177,11 +206,18 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
   });
 
   const ctx: HandlerContext = {
-    sdk: new PageSpaceClient({ baseUrl: host, auth }),
+    // `timeoutMs` is passed only when the caller actually asked for one:
+    // supplying it unconditionally would make it EXPLICIT for every command
+    // and so beat every operation's own declared default (see the SDK's
+    // `resolveTimeoutMs`), silently dropping `agents.ask` from 120s to 30s.
+    sdk: new PageSpaceClient({ baseUrl: host, auth, ...(timeoutMs === undefined ? {} : { timeoutMs }) }),
     stdout: deps.stdout,
     stderr: deps.stderr,
     env: deps.env,
     credentialStore: deps.credentialStore,
+    credentialKind: credentialKindOf(source),
+    credentialSourceKind: source.kind,
+    credentialSourceEnvVarName,
     activeKeyStore,
     isTTY: deps.isTTY ?? false,
     prompt: deps.prompt ?? (async () => ''),

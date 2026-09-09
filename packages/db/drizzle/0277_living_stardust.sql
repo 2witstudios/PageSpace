@@ -1,0 +1,2 @@
+ALTER TABLE "pages" ADD COLUMN "defaultEnvId" text;--> statement-breakpoint
+ALTER TABLE "pages" ADD CONSTRAINT "pages_defaultEnvId_drive_envs_id_fk" FOREIGN KEY ("defaultEnvId") REFERENCES "public"."drive_envs"("id") ON DELETE set null ON UPDATE no action;

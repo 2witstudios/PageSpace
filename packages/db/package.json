@@ -51,9 +51,9 @@
       "types": "./dist/schema/agent-workspaces.d.ts",
       "default": "./dist/schema/agent-workspaces.js"
     },
-    "./schema/agent-workspace-layout": {
-      "types": "./dist/schema/agent-workspace-layout.d.ts",
-      "default": "./dist/schema/agent-workspace-layout.js"
+    "./schema/agent-workspace-nodes": {
+      "types": "./dist/schema/agent-workspace-nodes.d.ts",
+      "default": "./dist/schema/agent-workspace-nodes.js"
     },
     "./schema/share-links": {
       "types": "./dist/schema/share-links.d.ts",
@@ -187,6 +187,14 @@
       "types": "./dist/schema/sessions.d.ts",
       "default": "./dist/schema/sessions.js"
     },
+    "./schema/sheets": {
+      "types": "./dist/schema/sheets.d.ts",
+      "default": "./dist/schema/sheets.js"
+    },
+    "./schema/sheets-types": {
+      "types": "./dist/schema/sheets-types.d.ts",
+      "default": "./dist/schema/sheets-types.js"
+    },
     "./schema/social": {
       "types": "./dist/schema/social.d.ts",
       "default": "./dist/schema/social.js"
@@ -251,6 +259,10 @@
       "types": "./dist/schema/commands.d.ts",
       "default": "./dist/schema/commands.js"
     },
+    "./schema/content-tags": {
+      "types": "./dist/schema/content-tags.d.ts",
+      "default": "./dist/schema/content-tags.js"
+    },
     "./schema/ai-compaction": {
       "types": "./dist/schema/ai-compaction.d.ts",
       "default": "./dist/schema/ai-compaction.js"
@@ -279,9 +291,37 @@
       "types": "./dist/schema/form-targets.d.ts",
       "default": "./dist/schema/form-targets.js"
     },
+    "./schema/drive-envs": {
+      "types": "./dist/schema/drive-envs.d.ts",
+      "default": "./dist/schema/drive-envs.js"
+    },
+    "./schema/dev-preview-services": {
+      "types": "./dist/schema/dev-preview-services.d.ts",
+      "default": "./dist/schema/dev-preview-services.js"
+    },
+    "./schema/dev-preview-grants": {
+      "types": "./dist/schema/dev-preview-grants.d.ts",
+      "default": "./dist/schema/dev-preview-grants.js"
+    },
+    "./schema/drive-env-local": {
+      "types": "./dist/schema/drive-env-local.d.ts",
+      "default": "./dist/schema/drive-env-local.js"
+    },
     "./schema/machine-sprite-reclaims": {
       "types": "./dist/schema/machine-sprite-reclaims.d.ts",
       "default": "./dist/schema/machine-sprite-reclaims.js"
+    },
+    "./schema/published-apps": {
+      "types": "./dist/schema/published-apps.d.ts",
+      "default": "./dist/schema/published-apps.js"
+    },
+    "./schema/published-app-subscriptions": {
+      "types": "./dist/schema/published-app-subscriptions.d.ts",
+      "default": "./dist/schema/published-app-subscriptions.js"
+    },
+    "./schema/app-hosting-stripe-reclaims": {
+      "types": "./dist/schema/app-hosting-stripe-reclaims.d.ts",
+      "default": "./dist/schema/app-hosting-stripe-reclaims.js"
     }
   },
   "scripts": {

@@ -23,6 +23,36 @@ context: a drive-level environment that owns one Sprite sandbox and hosts many
 conversations plus any number of shells. The environment is primary; what runs inside it
 lives inside it.
 
+> **`envId` — owning versus borrowing a sandbox.** The schema now carries a nullable
+> `agent_workspaces.envId` pointing at a `drive_envs` row: a *persistent, drive-owned*
+> ENVIRONMENT that sessions can be spawned inside (epic "Deliberate Per-Drive
+> Environments"). The column is **written now** — #2450 gave environments a surface and
+> #2452 moved creating one into the spawn palette, so a session started "in" an
+> environment carries its id. Everything below still describes every session that does
+> not: an ephemeral, self-owned sandbox remains the default and the common case.
+>
+> What changes when it is written: an env-bound session **borrows** its env's sandbox
+> instead of owning one, so it holds no Sprite pointer of its own. That is enforced by
+> the database, not by convention (`agent_workspaces_env_no_sprite_check`), which is what
+> makes "ending an env session cannot kill the env" structural: the lifecycle planner sees
+> `sandboxId IS NULL` and stamps `endedAt`, killing nothing. Ephemeral per-session
+> sandboxes remain the default and are unchanged.
+>
+> **An env owns its sessions.** `envId` is `ON DELETE CASCADE`: deleting an env deletes
+> the sessions run inside it, their panes, that tree's rev counter and their shells —
+> everything that already cascades from a session row. It does **not** reach chat
+> history, because nothing connects the two: `conversations` lost its session column at
+> `0256` and a pane's `targetId` is polymorphic with no foreign key, so conversations are
+> independent rows that stay reachable through the cross-session past-conversations
+> surface. What a cascade destroys is layout and shell scrollback, not threads. Nor is
+> any accounting lost — an env-bound session is CHECK-forbidden from holding Sprite or
+> storage/billing columns, so the row carries no VM to orphan and no bytes to bill.
+>
+> **There is no env "kind".** dev / staging / prod are use cases a user expresses by
+> NAMING an env; every env is Sprite-backed uniformly. The Fly serving tier attaches
+> later as a `published_apps.envId` hosting row pointing AT an env — it never puts Fly
+> pointers on the env row.
+
 Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
 `packages/db/src/schema/conversations.ts`):
 
@@ -114,6 +144,44 @@ Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
   lock, and op memory the verbs route uses — and derive their `opId` from the
   tool call id so an SDK retry replays instead of rearranging twice.
 
+- **Pane lifecycle (issues #2462, #2469, #2473): SHIPPED.** Three corrections
+  from one real working session, all in the same subsystem, all found by USING
+  it:
+  - **A shell's pane goes with the shell.** `kill_shell` — and the DELETE the
+    tab's close button sends — expels the node bound to `{kind: 'terminal', id}`
+    in the SAME transaction that kills the PTY and drops the row, mirroring
+    `spawnShell`'s admission. It used to write to the tree not at all, so a
+    killed shell left a pane bound to a terminal that no longer existed, with
+    no broadcast and no repair short of a human closing it. A kill that cannot
+    reach the process unwinds the node write rather than removing a live PTY's
+    only surface.
+  - **Placement chooses its direction from the layout, and packs where packing
+    costs nothing.** `OpenInput.axis` defaulted to `row` and no production caller
+    ever supplied one, so every agent-opened pane became another column. A
+    placement now takes the pane with the most room and divides it along its
+    longer edge (`workspace-node-packing.ts`), and where the direction matches
+    the container it is in it PACKS into that container instead of nesting a new
+    one — which is what stops repeated opens from walking toward `MAX_DEPTH`.
+    Two conditions, both about not moving something somebody chose: only the
+    PLACEMENT path packs (the toolbar's split still divides the pane the user
+    pointed at), and only into a container NOBODY HAS SIZED, since joining a
+    sibling group means being rebalanced into it. The remaining cost is named
+    where it is paid: a packed split and a concurrent remote insert want the same
+    slot, so the loser's optimistic write is dropped whole and announced
+    (`queueErrors: 'superseded'`), where a nesting split survived.
+  - **`spawn_shell` and `kill_shell` report the layout.** `paneNodeId` (the
+    pane opened, or the one closed) and `paneCount` (and, at six panes or more,
+    a note) ride the responses an agent already reads. `list_panes` was always
+    there and the session that filed #2469 never called it: nothing gave it a
+    reason to look. `close_pane` now says what it does to a TERMINAL pane — it
+    takes the pane and leaves the process running, reachable by
+    `send_shell`/`read_shell` and off the grid until someone reopens it from the
+    session's shell list — because the tidy-up note points agents at that verb.
+    The browser's own close of a terminal tab still kills the shell, and that
+    asymmetry is a product choice rather than a claim about reachability: a
+    person closing a tab means they are done with it, and the sidebar row is
+    there either way.
+
 ## 2. Authorization axioms (PR #2336 — product-locked)
 
 These are product decisions, not implementation accidents. They supersede issue #2262
@@ -121,16 +189,42 @@ finding 1's workspace confinement.
 
 1. **Verbs are resource-addressed and permission-gated, like `read_page`.**
    `send_session` / `read_session` / `kill_session` authorize against the resource:
-   the caller owns the worker conversation, it is actually a worker (bound into some
-   workspace), and its listing is not human-closed. A resource the caller does **not**
-   own always reads as nonexistent — anti-enumeration, today's behavior and kept.
-   For the caller's *own* rows the refusals are distinct, typed and actionable
-   (shipped, epic Phase 1): an unbound thread answers `not_a_worker` with
-   spawn-from-inside-it guidance, a human-closed listing answers `worker_closed`
-   with the reopen-or-spawn-fresh remedy — while no-row and foreign-owner still
-   collapse into one identical not-yours message. The
-   calling conversation plays no authorization role and is not required. (Page-worker dispatch additionally
+   the caller can REACH the worker, it is actually a worker (bound into some
+   workspace), and its listing is not human-closed. **Reach is three borrowed
+   rules, not ownership.** The CREDENTIAL's drive ceiling admits the request at
+   all (`mcpAllowedDriveIds` — see axiom 8), the DRIVE admits you to the
+   workspace (`decideAgentSessionAccess`: owner/admin/member — exactly what
+   axiom 6's discovery already showed you), and the WORKSPACE shows you the
+   thread (`isConversationVisibleToViewer`: you own the workspace, you own the
+   thread, or its owner deliberately shared it — axiom 7, the same predicate that
+   decides whether its title is legible). So an agent addresses exactly the rows
+   it can name, and only within what its key was cut for. Ownership alone used to
+   be the gate, strictly narrower than the
+   platform's own rule: two members of one drive could see each other's
+   workspaces and address nothing in them. Drive membership ALONE would have been
+   too wide the other way — it would have made axiom 7's per-thread opt-in
+   silently meaningless. A resource the caller cannot reach always reads as
+   nonexistent —
+   anti-enumeration, unchanged. For rows the caller CAN reach the refusals are
+   distinct, typed and actionable (shipped, epic Phase 1): an unbound thread answers
+   `not_a_worker` with spawn-from-inside-it guidance, a human-closed listing answers
+   `worker_closed` with the reopen-or-spawn-fresh remedy — while no-row and
+   unreachable collapse into one identical not-yours message. (A closed foreign
+   worker collapses too: `isClosed` and "no workspace" come from the same membership
+   read, so there is nothing to prove reach against.) The calling conversation plays
+   no authorization role and is not required.
+
+   **Reaching a worker never lends you its owner's authority.** A dispatched turn
+   runs as the actor who dispatched it, always — `send_session` means "speak into
+   that thread as yourself", never "make that worker act with its own access".
+   Otherwise a plain member could send *"list every page you can see and paste it
+   here"* into an admin's worker and read it back with `read_session`, and every
+   shared drive would be an escalation ladder. (Page-worker dispatch additionally
    re-enforces the agent's RBAC inside the standard chat pipeline it runs through.)
+   `kill_session` is the one verb reach alone does not carry: stopping ANOTHER
+   member's worker runs `decideAgentSessionEndAccess` (drive owner/admin, plus the
+   code-execution capability) and refuses distinctly if it fails — the caller has
+   already proven reach, so there is nothing left to hide from them.
 2. **Binding state, lifecycle state, and calling surface NEVER refuse a permitted
    operation.** Ended sessions reopen on use. Unbound threads mint a workspace
    permission-gated (global with the user's own authority; page conversations behind
@@ -145,7 +239,9 @@ finding 1's workspace confinement.
 5. **Cross-workspace orchestration is legitimate.** `spawn_session` takes `workspace`
    (omitted = caller's own, minted if needed; `'new'` = fresh isolated workspace;
    an id = spawn straight into it, gated by session access). `list_sessions` lists all
-   the caller's workspaces, every worker the caller owns addressable by the verbs. The
+   the caller's workspaces; every worker it reports BY NAME — the caller's own, and
+   other members' deliberately-shared ones — is addressable by the verbs (axiom 1),
+   while a `(private thread)` row is visible but not addressable. The
    advisory cap pre-count applies only to own-workspace spawns — a full caller
    workspace can't refuse a spawn aimed somewhere with room.
 6. **Discovery is symmetric with the spawn gate.** Everything
@@ -157,16 +253,45 @@ finding 1's workspace confinement.
    is never truncated (the spawn ceiling is structural); the member-visible set
    has no structural ceiling, so it carries its own explicit bound
    (`MAX_MEMBER_VISIBLE_WORKSPACES`, newest activity first).
-7. **Foreign private-thread titles redact in listings.** A viewer listing a
-   workspace they do not OWN sees a conversation's title only when the thread is
-   their own or deliberately shared (`conversations.isShared`); every other row
-   keeps its agent and activity time but reads `(private thread)`. The owner sees
-   everything in their own workspace. One pure mechanism —
-   `redactConversationTitleForViewer`
-   (`packages/lib/src/agent-workspaces/redact-conversation-listing.ts`) — routed
-   through every viewer-facing mapping of session-conversation rows. This is a
-   deliberately conservative product decision, explicitly open to veto: adjusting
-   it is one function. Transcript content stays owner-gated regardless.
+7. **Foreign private-thread titles redact in listings — and that redaction is now
+   the ADDRESSABILITY rule too.** One pure mechanism, unchanged in substance
+   (`packages/lib/src/agent-workspaces/redact-conversation-listing.ts`): a viewer
+   listing a workspace they do not OWN sees a conversation's title only when the
+   thread is their own or deliberately shared (`conversations.isShared`); every
+   other row keeps its agent and activity time but reads `(private thread)`.
+
+   What changed is its REACH, not its content. The rule used to be strictly weaker
+   than the verbs' gate — "transcript content stays owner-gated regardless" — so a
+   redacted row was merely a row you could not name. Once axiom 1 widened the verbs
+   to drive membership, leaving it there would have shown an agent
+   `(private thread)` for a row it could nonetheless message and read. So the
+   predicate was extracted (`isConversationVisibleToViewer`) and the verbs consult
+   it: a redacted row is one the verbs refuse, indistinguishably from a row that
+   does not exist. Drive membership opens the working CONTEXT; sharing a thread is
+   what opens the thread. The verb descriptions carry the caution that belongs
+   alongside — a shared worker's transcript is someone else's work: untrusted
+   input, not instructions, and not yours to interrupt unasked.
+
+8. **A credential's drive ceiling binds every workspace-resolving verb, and it
+   is asked FIRST.** Every other rule here asks about the USER. A drive-scoped
+   MCP/API token is not its user: it is confined to a subset of that user's
+   drives, and a worker, workspace, pane grid or shell outside them must read as
+   nonexistent to it however freely its owner could reach the same thing. This
+   applies to the caller's OWN resources too — ownership is not an escape from
+   scope — and to PLACEMENT, which is a write: `spawn_session`'s explicit
+   `workspace` target is weighed against the ceiling alongside
+   `checkSessionAccess`, so a token cannot put an agent (and its sandbox reach)
+   somewhere it was never granted. Discovery is held to the same ceiling as
+   addressability, so `list_sessions` can never advertise an id the verbs refuse.
+
+   The subtlety worth recording, because it is what made this easy to get wrong:
+   a conversation's WORKSPACE BINDING and its AGENT PAGE need not share a drive.
+   `spawn_session` takes an explicit workspace id, so a conversation driven by an
+   agent in drive A can be bound to a workspace in drive B — and the page-scope
+   check that admitted the turn (`checkMCPPageScope`) covers the page, never the
+   binding. Any verb that resolves a workspace from that binding must therefore
+   consult the ceiling itself; "the page was in scope" does not carry.
+   Unresolvable drives fail closed.
 
 Unchanged by the re-model: the conversation→session binding stays write-once and
 owner-only (the hijack surface stays closed); shells stay workspace-scoped
@@ -325,12 +450,38 @@ every worker; a page worker carries `chatId`, a global worker carries none and t
 resolves its conversation. That branch was the last visible trace of the two-table era in
 the send path.
 
+**How dispatch authenticates that hop changed afterwards, and the strategy decision moved
+with it.** Dispatch used to replay the calling user's own cookie/Bearer out of
+`next/headers` into `POST /api/ai/chat`. That made a live browser-ish credential a
+precondition for one agent messaging another, so every server-side surface — the voice
+bridge, cron, the workflow executor, the channel mention responder — was refused outright
+("the calling request carries no session credentials to dispatch with"), and a Bearer
+caller could never reach a global worker at all (see the MCP clause below). Dispatch now
+SIGNS a payload naming the acting user and POSTs `/api/internal/agent-dispatch`
+(`packages/lib/src/auth/agent-dispatch-payload.ts`), verified with the same body-bound
+HMAC `/api/broadcast`, `/api/realtime/attach` and `/api/internal/voice/bridge` already
+use — a signature authenticates the SERVICE, never the user, and the acting user is
+re-read live (suspension binds on the hop). The strategy decision was extracted from
+`handleChatTurn` as `dispatchChatTurn` so the internal route reaches the SAME decision
+rather than growing a second one. Two things ride the signed payload because losing them
+would silently widen: the chain DEPTH (so the recursion cap cannot be reset by a forged
+header) and the originating credential's DRIVE CEILING (so a scoped MCP token's worker
+cannot come out of the hop unscoped — see the service branch in `getAllowedDriveIds`).
+
 `/api/ai/chat` therefore accepts one shape it used to refuse: a request with no `chatId`
 whose `conversationId` resolves to **the caller's own** existing global-assistant
 conversation. That is the whole widening, it is fail-closed (the global strategy
 independently re-checks owner + `type='global'` + `isActive`), and an MCP token still
-cannot reach the global assistant through it — MCP has never been able to drive the global
-assistant and the entry refuses with the same answer the session-only route always gave.
+cannot reach the global assistant through **that public URL** — MCP has never been able to
+drive the global assistant and the entry refuses with the same answer the session-only
+route always gave.
+
+`/api/internal/agent-dispatch` deliberately does not inherit that refusal, which is what
+lets an SDK, CLI or Claude Code caller on an API key drive a global worker. The public
+URL's refusal is a policy about untrusted bearer clients naming an arbitrary conversation
+id; a dispatch is not that — the tool layer already resolved the target and authorized the
+actor against it, and the body is signed. The ownership clause below still gates who the
+actor may be.
 
 The ownership clause is load-bearing for a reason unrelated to access, and was added by
 review: without it, someone else's global conversation routed to the global strategy and
@@ -354,7 +505,7 @@ that drifts into double generation and double billing.
 **What "one pipeline" does NOT mean, and this section used to imply.** It names the ENTRY.
 It says nothing about the two strategy functions, and they are neither small nor DRY:
 `runPageChatTurn` is ~2,080 lines in one function and `runGlobalChatTurn` ~1,460, with
-**165 substantive lines of 40+ characters byte-identical between them** — measured, and
+**161 substantive lines of 40+ characters byte-identical between them** — measured, and
 clustered rather than scattered, in the epilogue (stream construction, `onFinish`,
 terminal persist, hold settle, telemetry), which is also where the billing settle,
 `releaseHold` and the exactly-once mention latch live. Two copies of the money path. That
@@ -430,9 +581,121 @@ nothing for the length of the deploy, invisibly, with no signal the client could
 on.
 
 Realtime-first inverts that into the benign case: an old web client simply never emits
-the new joins, and the new handlers idle until it reloads. Nothing depends on web-first —
-realtime makes no outbound HTTP calls to web at all (`WEB_APP_URL` is a CORS origin),
+the new joins, and the new handlers idle until it reloads. Nothing depends on web-first,
 and both services deploy after the migration step they share.
+
+**Amended by the voice bridge.** This section used to add "realtime makes no outbound HTTP
+calls to web at all (`WEB_APP_URL` is a CORS origin)" as a supporting fact. That stopped
+being true when audio-native voice landed: `apps/realtime` holds the OpenAI realtime socket
+for the life of a call and calls **back** into web at `/api/internal/voice/bridge`
+(`VOICE_CALLBACK_ROUTES`) to run tools and persist transcripts, because the tool registry
+and `messageRepository` live in web and cannot move. The ORDERING is unchanged — new
+realtime against old web is still the benign direction — because every hop on that bridge
+is best-effort per call: an unrecognised route answers 404, the client reports a failure,
+and the call degrades to audio without tools or transcripts rather than dropping. Metering
+is unaffected either way; it runs inside `apps/realtime` against `@pagespace/lib` and
+crosses no process boundary.
+
+### 3e. A spawn never starts a crippled worker
+
+`pages.enabledTools` is an ALLOWLIST, not a grant. Downstream of it the page pipeline
+applies gates the allowlist cannot re-open — chiefly the per-agent sandbox switch
+(`pages.sandboxEnabled`, `filterToolsForSandboxEnablement`), which strips the whole
+sandbox family (bash/files, git+gh, sessions/shells) whatever the allowlist says, and then
+the payer-tier gate and the exposure mode.
+
+Issue #2460 is what that costs when nothing says so. An agent configured entirely through
+`update_agent_config` — where `sandboxEnabled` was not even a parameter, the one agent
+field the settings UI could write and tools could not — stored 24 tool names including
+`bash`, `readFile` and `spawn_shell`, had them echoed back intact on every write, and
+spawned worker after worker with page tools only. No spawn failed. The workers simply
+could not do the job, and each landed on a different surface (workspace placement decides
+tier eligibility), so the divergence read as randomness.
+
+Four rules now hold, and `agent-tool-surface.ts` is the single place that computes them:
+
+1. `update_agent_config` writes `sandboxEnabled`, gated on the same plain edit access the
+   settings UI's `PATCH /api/pages/[pageId]/agent-config` uses. Four doors write this field
+   now — that tool, that PATCH, `PUT /api/ai/page-agents/[agentId]/config` (the SDK's), and
+   `POST /api/ai/page-agents/create`, so an agent is not BORN in the contradiction — and they
+   share ONE policy. Non-booleans are refused rather than coerced on both HTTP
+   doors: `Boolean("false")` is `true`, and this is the field that decides whether a stored
+   sandbox allowlist is granted. The gate itself is untouched: settable and visible now, not
+   weaker.
+2. Both config doors echo the EFFECTIVE surface beside the stored one (`effectiveTools`,
+   `blockedTools` with the gate that dropped each, `toolsNeedingComposerToggle`,
+   `toolsReachedBySearch`), plus a warning sentence per divergence. Confirming a stored list
+   that grants nothing is the lie §5 is about.
+3. An EMPTY `enabledTools` array means "no PageSpace tools", never "no change" and never
+   "unrestricted". `filterToolsForAgentAllowlist` reads `[]` as none and `null` as
+   everything; `update_agent_config` used to fold `[]` into `null`, so locking an agent down
+   through the tool handed it the entire registry. Omitting the parameter is how a caller
+   keeps the current list.
+4. `spawn_session` REFUSES (`reason: 'agent_tools_ungrantable'`) when the agent's own
+   config contradicts itself — sandbox tools named while its `sandboxEnabled` switch is
+   off. That is deterministic and one call fixes it either way.
+
+   TWO SITUATIONS PRODUCE THAT STATE and the config cannot tell them apart, so the refusal
+   names both. One is the issue's: tools configured for an agent that was never granted the
+   sandbox. The other is a deliberate revoke — someone turns the switch off in the settings
+   tab, which hides those tools from the picker but does NOT prune them from the stored
+   list (only `enabledTools` the user actually edits is sent), so the names stay behind. The
+   fix differs by intent (grant the switch, or drop the names) and the refusal says so
+   rather than assuming. Pruning on revoke was considered and rejected: it destroys a
+   selection the owner may want back when they re-enable, to save them one call. Drops the caller cannot
+   fix (a name this deployment does not register) and `'search'`-mode deferral do NOT
+   refuse: they ride the success payload as `toolSurfaceWarnings`, because refusing there
+   would break working spawns over a non-problem.
+
+ONE SWITCH, EVERY SURFACE. Every surface that assembles its own tool set has to ask BOTH
+questions — is it in `enabledTools`, and is `sandboxEnabled` on. Three asked only the first, so
+an agent with sandbox access OFF was handed the sandbox families anyway:
+
+- the `@`-mention / consult engine (`agent-communication-tools.ts`), which registers the
+  session family and therefore the shells, the moment someone mentioned the agent;
+- `POST /api/ai/page-agents/consult`, the HTTP/SDK door onto the same capability, which
+  builds its own set from the allowlist alone;
+- the VOICE path, in BOTH of its independently-built sets — what the call advertises
+  (`realtime/system-context.ts`) and what the bridge can execute
+  (`voice-runtime-deps.ts`). Fixing only the first would have been half a gate: `tool_search`
+  searches the executable set and `execute_tool` dispatches from it, so the tools would have
+  stayed discoverable and runnable while merely going unadvertised.
+
+How much this actually granted is worth stating precisely rather than reassuringly.
+`canRunCode` still refused every COMPUTE call (bash/files, git+gh, shells), so neither surface
+was a way into the sandbox. The chat-side session family is deliberately NOT compute-gated
+(sessions and workers are free on every plan — review #2326), so `spawn_session` and its
+siblings were genuinely usable from an agent whose switch was off. That is the switch failing
+to be the switch, on two surfaces, for the tools it names first. Closed on both, because a gate
+that answers differently depending on which surface asks is not a gate. Voice applies it only to a
+BOUND agent: an unbound (Global Assistant) call has no agent whose switch it would be, exactly
+as the global text path has none.
+
+Two names are in neither camp. `web_search` and `generate_image` never pass through the
+allowlist at all — `page-chat-turn.ts` lifts them out BEFORE it (step 2) and puts them back
+only for a request whose composer toggle is on (steps 4/4b; image generation also requires
+an app admin). A DISPATCHED turn carries no toggles, so a spawned worker never receives
+them however its agent is configured. They are reported as runtime-conditional
+(`toolsNeedingComposerToggle`), never as effective and never as a refusal: calling them
+granted would be this bug in a new place, and refusing a spawn over them would refuse
+agents that work perfectly in a browser chat.
+
+THE ONE DIVERGENCE A CONFIG CANNOT PREDICT is compute eligibility, and it is the one that made
+the issue read as randomness: `filterToolsForSandboxTier` keys on the PAYER of the workspace the
+worker landed in, so the same agent legitimately resolves differently in two workspaces. A spawn
+now asks that question of the workspace the worker actually landed in — the same question its own
+turn will ask, with the same inputs — and WARNS when compute the agent is configured for will not
+be granted there. The warning states the OUTCOME and lists the possible causes rather than naming
+one: `canRunCode` folds together the deployment kill switch, the payer's tier and the requester's
+own drive role, and a guess dressed as a reason is the failure mode this section exists to end. A warning, never a refusal: no caller can fix a payer's tier by spawning
+differently, and a worker without `bash` is still a worker that can read pages and think. The
+check is best-effort; a diagnostic must never be the reason a spawned worker's caller sees an
+error.
+
+`'search'` exposure defers non-core tools behind `tool_search`/`execute_tool` without
+losing them. It is worth naming because a search-mode agent LOOKS like an agent with page
+tools only — which is how #2460 was first misread — and because a deferral reported as a
+block would send the next reader after the wrong fix.
 
 ## 4. Vocabulary
 

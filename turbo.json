@@ -34,6 +34,8 @@
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", "tsconfig*.json"]
     },
+    "@pagespace/android#typecheck": { "dependsOn": [] },
+    "@pagespace/ios#typecheck": { "dependsOn": [] },
     "test": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", "vitest.config.*", "src/**/*.test.{ts,tsx}"],
@@ -48,6 +50,10 @@
       "cache": false,
       "dependsOn": ["build"],
       "outputs": ["dist-electron/**"]
+    },
+    "package:coder": {
+      "cache": false,
+      "outputs": ["dist-electron-coder/**"]
     },
     "capture": {
       "cache": false,
@@ -74,6 +80,7 @@
     "GOOGLE_AI_API_KEY",
     "OPENROUTER_DEFAULT_API_KEY",
     "PAGESPACE_URL",
+    "PAGESPACE_APP_VARIANT",
     "NEXT_PUBLIC_*"
   ]
 }

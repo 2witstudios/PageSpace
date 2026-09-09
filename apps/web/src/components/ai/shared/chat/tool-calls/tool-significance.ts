@@ -17,7 +17,7 @@ export type RunStatus = 'running' | 'error' | 'complete';
  * for a RichDiffRenderer usage per entry) so this list can't silently drift
  * from the renderers it's meant to describe.
  */
-export const DIFF_TOOL_NAMES = new Set(['replace_lines', 'insert_content', 'edit', 'write']);
+export const DIFF_TOOL_NAMES = new Set(['replace_lines', 'insert_content', 'edit', 'write', 'copy_content']);
 
 export function isDiffTool(toolName: string): boolean {
   return DIFF_TOOL_NAMES.has(toolName);

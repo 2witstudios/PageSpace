@@ -10,6 +10,10 @@
  */
 import { eq, and } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { replaceFromDocument } from '@pagespace/lib/sheets/store';
+import { sheetTabs } from '@pagespace/db/schema/sheets';
+import { PageType } from '@pagespace/lib/utils/enums';
 import type { SyncMentionsResult } from '@/services/api/page-mention-service';
 import { computePageMutation } from './page-mutation-plan';
 import type { RollbackDeps, PageMutationMeta, PageUpdateWithRevisionOptions } from './deps';
@@ -38,7 +42,17 @@ export async function applyPageUpdateWithRevision(
     contentRefAfter,
     stateHashBefore,
     stateHashAfter,
-  } = computePageMutation(currentPage, updateData);
+  } = computePageMutation(
+    // A sheet's current content is its rows, not the empty column. Reading the
+    // column made EVERY rollback of a sheet — including a pure rename or move —
+    // compute `nextContent = ''`, write a zero-byte `page_versions` entry into
+    // the history that backup and restore read, and stamp `pages.stateHash`
+    // with the empty-document hash.
+    isSheetType(currentPage.type as PageType)
+      ? { ...currentPage, content: (await deps.readSheetDocument(pageId, deps.db as never)) ?? currentPage.content }
+      : currentPage,
+    updateData
+  );
 
   const [updated] = await deps.db
     .update(pages)
@@ -53,6 +67,29 @@ export async function applyPageUpdateWithRevision(
 
   if (!updated) {
     throw new Error('Page was modified while applying rollback');
+  }
+
+  // A sheet's content lives in its rows, so the UPDATE above restored nothing
+  // a reader consults. Rolling a spreadsheet back returned 200, bumped the
+  // revision, repopulated a column nothing reads, and changed nothing the user
+  // could see. Route the restored document into the rows, then clear the
+  // column so the two cannot disagree.
+  if (updateData.content !== undefined && isSheetType(currentPage.type as PageType)) {
+    if (nextContent.trim()) {
+      await replaceFromDocument(
+        { pageId },
+        nextContent,
+        { userId: options?.userId ?? undefined },
+        deps.db as never
+      );
+    } else {
+      // Rolling back TO an empty sheet must empty it. Skipping the write and
+      // only blanking the column reported success, bumped the revision and left
+      // every row in place — so undoing the edit that first populated a blank
+      // sheet appeared to work and changed nothing.
+      await deps.db.delete(sheetTabs).where(eq(sheetTabs.pageId, pageId));
+    }
+    await deps.db.update(pages).set({ content: '' }).where(eq(pages.id, pageId));
   }
 
   let mentionsResult: SyncMentionsResult | undefined;

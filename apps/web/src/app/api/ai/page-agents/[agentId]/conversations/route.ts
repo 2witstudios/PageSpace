@@ -230,8 +230,21 @@ export async function POST(
     // Eagerly persist ownership so privacy filtering works immediately.
     // isShared defaults to false — conversation is private to this user.
     if (sessionId !== null) {
+      // WHERE the caller wants it, when a human picked a pane. A preference only
+      // — the placement policy still refuses a pane it may not give up, and an
+      // id naming nothing in this tree loses to the default. Not validated
+      // beyond its type for that reason: it cannot address anything outside the
+      // workspace this write has already gated on above.
+      const activeNodeId =
+        typeof body.activeNodeId === 'string' && body.activeNodeId.length > 0 ? body.activeNodeId : null;
       try {
-        await createConversationInSession({ conversationId, userId: auth.userId, agentPageId: agentId, workspaceId: sessionId });
+        await createConversationInSession({
+          conversationId,
+          userId: auth.userId,
+          agentPageId: agentId,
+          workspaceId: sessionId,
+          ...(activeNodeId === null ? {} : { activeNodeId }),
+        });
       } catch (error) {
         if (error instanceof SessionFullError) {
           return sessionConversationLimitExceeded(request, auth.userId, sessionId, 'page-agents/conversations');

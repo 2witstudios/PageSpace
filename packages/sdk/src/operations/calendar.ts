@@ -50,10 +50,19 @@
  * strict ISO 8601 date or datetime string. A *naive* datetime (no `Z`/offset,
  * e.g. `"2026-02-19T19:00:00"`) is interpreted server-side in the request's
  * own `timezone` field (`isNaiveISODatetime` + `parseNaiveDatetimeInTimezone`)
- * — NOT UTC. A datetime carrying `Z` or an explicit offset is an absolute
- * instant and `timezone` has no effect on it. `startDate`/`endDate` on
- * `calendar.list` go through plain `z.coerce.date()` server-side (no naive
- * reinterpretation) since listing has no single owning timezone.
+ * — NOT UTC. Omitting `timezone` is not the same as sending `"UTC"`: the
+ * server resolves an absent field against the caller's profile timezone and
+ * only then falls back to UTC (`resolveTimezone`), matching `tasks.create` and
+ * `tasks.setTrigger`. `create` also stores the resolved zone on the event, so
+ * a later `update` that omits `timezone` reinterprets against the event's own
+ * zone rather than the editor's. A datetime carrying `Z` or an explicit offset
+ * is an absolute instant and `timezone` has no effect on it.
+ *
+ * `startDate`/`endDate` on `calendar.list` are absolute instants and are never
+ * reinterpreted against a caller timezone — a listing spans events that each
+ * own a different zone, so there is nothing to reinterpret it in. A naive value
+ * there is read as UTC (server-side, deterministically — it does not depend on
+ * where the server runs).
  */
 import { z } from 'zod';
 import { defineOperation } from '../registry/define.js';

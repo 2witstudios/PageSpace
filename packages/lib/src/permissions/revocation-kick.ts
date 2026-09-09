@@ -25,12 +25,13 @@
  * **THE EPIC'S ROOMS ARE ENUMERATED** (security review HIGH 3). Drive- and
  * page-scoped rooms are DERIVABLE from the revoked id; the Agent-Session SSoT
  * epic's two new rooms are not. `conv:<conversationId>` carries full message
- * content and `session:<workspaceId>` carries pane grids, both keyed by ids a
+ * content and `session:<workspaceId>` carries node trees, both keyed by ids a
  * revocation does not know — so both hooks now enumerate what the revoked
  * grant covered and kick those rooms too. Before this, a member who lost page
  * access (or the whole drive) was evicted from the page/drive rooms and kept
- * receiving `conversation:message_created` payloads and `workspace:updated`
- * grids until their socket happened to reconnect, because outbound fan-out
+ * receiving `conversation:message_created` payloads and
+ * `workspace:nodes-updated` trees until their socket happened to reconnect,
+ * because outbound fan-out
  * has no re-check by design. Note the asymmetry that gave it away:
  * conversation UN-SHARE got a bespoke wildcard kick; permission revocation —
  * the wider case — did not.

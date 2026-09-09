@@ -19,6 +19,7 @@ import {
   getPrincipalBatchPagePermissions,
 } from '@/lib/auth';
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
+import { optionalAbsoluteInstant, exclusiveEndBound } from '@/lib/validation/date-params';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -34,8 +35,9 @@ const querySchema = z.object({
   // Filter parameters - status accepts any string for custom statuses
   status: z.string().optional(),
   priority: z.enum(['low', 'medium', 'high']).optional(),
-  startDate: z.coerce.date().optional(),
-  endDate: z.coerce.date().optional(),
+  // Absolute instants, not wall-clock times — see optionalAbsoluteInstant.
+  startDate: optionalAbsoluteInstant,
+  endDate: optionalAbsoluteInstant,
   // New filter parameters
   search: z.string().optional(),
   assigneeId: z.string().optional(),
@@ -67,6 +69,8 @@ export async function GET(request: Request) {
 
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
+  // Kept raw: only exclusiveEndBound can tell a date-only bound from an instant.
+  const rawEndDate = searchParams.get('endDate');
 
   try {
     // Parse and validate query parameters
@@ -247,9 +251,9 @@ export async function GET(request: Request) {
       filterConditions.push(gte(taskItems.createdAt, params.startDate));
     }
     if (params.endDate) {
-      const endOfDay = new Date(params.endDate);
-      endOfDay.setDate(endOfDay.getDate() + 1);
-      filterConditions.push(lt(taskItems.createdAt, endOfDay));
+      // A date-only bound covers the whole day; an explicit instant means that
+      // instant. See exclusiveEndBound.
+      filterConditions.push(lt(taskItems.createdAt, exclusiveEndBound(rawEndDate, params.endDate)));
     }
     // Search filter (case-insensitive title/description). Title lives on pages,
     // so match it via a subquery against pages.title.

@@ -1,9 +1,14 @@
-import { eq, inArray, or, and, ne, isNull } from 'drizzle-orm';
+import { eq, inArray, or, and, ne, isNull, gte, asc } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { users } from '@pagespace/db/schema/auth';
 import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
-import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
-import { drives, pages } from '@pagespace/db/schema/core';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
+import { driveEnvLocal, type DriveEnvLocalCapabilities } from '@pagespace/db/schema/drive-env-local';
+import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
+import { aiStreamSessions, aiStreamFrames } from '@pagespace/db/schema/ai-streams';
+import { drives, pages, tags } from '@pagespace/db/schema/core';
+import { contentTags } from '@pagespace/db/schema/content-tags';
+import { sheetTabs, sheetRows } from '@pagespace/db/schema/sheets';
 import { aiUsageLogs, activityLogs, systemLogs, apiMetrics, errorLogs, errorResolutions } from '@pagespace/db/schema/monitoring';
 import { files, filePages } from '@pagespace/db/schema/storage';
 import { driveMembers } from '@pagespace/db/schema/members';
@@ -14,7 +19,7 @@ import { taskLists, taskItems } from '@pagespace/db/schema/tasks';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { notifications } from '@pagespace/db/schema/notifications';
 import { displayPreferences } from '@pagespace/db/schema/display-preferences';
-import { userPersonalization } from '@pagespace/db/schema/personalization';
+import { userPersonalization, personalizationCandidates } from '@pagespace/db/schema/personalization';
 import { userHotkeyPreferences } from '@pagespace/db/schema/hotkeys';
 import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
 import { userToastNotificationPreferences } from '@pagespace/db/schema/toast-notification-preferences';
@@ -66,6 +71,45 @@ export interface UserPageExport {
   driveId: string;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * One tab of a spreadsheet, with its cells.
+ *
+ * Sheets stopped living in `pages.content` when they moved to a row store, so
+ * the `pages` collector — which reads that column — now returns an empty body
+ * for every SHEET page. Without this collector a subject access request would
+ * silently answer LESS than before the change, which is exactly the Art 15
+ * failure `gdpr-export-coverage.ts` was written to prevent.
+ *
+ * Both halves of each cell are carried: `raw` is what the person authored (a
+ * literal, or a formula) and `value` is what it evaluated to. Exporting only
+ * one would either hide their work or hide its result.
+ */
+export interface UserSheetExport {
+  pageId: string;
+  pageTitle: string;
+  driveId: string;
+  tabIndex: number;
+  tabName: string;
+  rowCount: number;
+  columnCount: number;
+  /**
+   * Tab-level state the subject authored: frozen panes, column formats and
+   * widths, row heights, named ranges. It is as much their work as the cell
+   * contents, and an export that returned only cells would be answering less
+   * than the sheet actually holds.
+   */
+  frozenRows: number | null;
+  frozenColumns: number | null;
+  columnFormats: unknown;
+  columnWidths: unknown;
+  rowHeights: unknown;
+  ranges: unknown;
+  rows: {
+    rowIndex: number;
+    cells: Record<string, { raw: string; value?: string | number | boolean; error?: string }>;
+  }[];
 }
 
 export interface UserMessageExport {
@@ -225,6 +269,43 @@ export interface UserPersonalizationExport {
 }
 
 /**
+ * One INFERENCE the memory cron drew about the subject, and the words of theirs
+ * it drew it from.
+ *
+ * This is the most sensitive row shape in the personalization area and the one
+ * a subject is most likely to be surprised by, so it is exported in full rather
+ * than summarised. `claim` is a machine-authored assertion ABOUT the person —
+ * derived personal data under Art 4(1), which Art 15(1)(a)-(b) covers whether
+ * or not it was ever promoted into the profile — and `evidence` is a verbatim
+ * quote of their own message that the system retained as its justification.
+ *
+ * Candidates that were rejected, or that are still awaiting corroboration, are
+ * included deliberately. "We inferred this about you, and did not act on it"
+ * is precisely the processing a subject access request exists to disclose, and
+ * withholding it would disclose only the flattering half of the record.
+ *
+ * `claimKey` is omitted: it is a lowercased, punctuation-stripped derivative of
+ * `claim` that exists solely for deduplication, so it carries no information
+ * the subject cannot already read in `claim`.
+ */
+export interface UserPersonalizationCandidateExport {
+  /** Which profile page this claim was staged for. */
+  field: string;
+  /** The inference itself, as written by the model. */
+  claim: string;
+  /** The subject's own words that the system retained as support for the claim. */
+  evidence: string;
+  /** Distinct days the claim was re-observed on. */
+  occurrences: number;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+  /** Set when the claim was written into the subject's profile. */
+  promotedAt: Date | null;
+  /** Set when the claim was evaluated and declined. */
+  rejectedAt: Date | null;
+}
+
+/**
  * One PTY the subject opened inside a workspace.
  *
  * `spriteExecId` is deliberately absent: it names an exec session on a VM in
@@ -278,6 +359,39 @@ export interface UserAgentWorkspaceExport {
   createdAt: Date | null;
   updatedAt: Date | null;
   shells: UserAgentWorkspaceShellExport[];
+  /**
+   * The workspace's NODES — its membership and its layout, which are one thing
+   * (`agent_workspace_nodes`).
+   *
+   * Carried for an `owner` entry only, and empty for a `participant` one, under
+   * the same Art 15(4) line the shells draw: a workspace's tree says which
+   * threads and terminals it holds and where each one sits, which describes the
+   * OWNER's working context. The subject's own conversations inside someone
+   * else's workspace still travel — `collectUserMessages` exports them under
+   * its own boundary — but the other person's arrangement of them does not.
+   */
+  nodes: UserAgentWorkspaceNodeExport[];
+}
+
+/**
+ * One node of a workspace's tree: what it is, where it sits, and what it shows.
+ *
+ * `targetKind`/`targetId` are the polymorphic binding — a conversation, a
+ * shell, or a page. The ids travel because they are how the rest of the bundle
+ * joins up: without them a reader could see that a workspace held four panes
+ * and not which of their own exported conversations were in them.
+ */
+export interface UserAgentWorkspaceNodeExport {
+  id: string;
+  parentId: string | null;
+  position: number;
+  nodeType: string;
+  axis: string | null;
+  fraction: number | null;
+  targetKind: string | null;
+  targetId: string | null;
+  createdAt: Date | null;
+  updatedAt: Date | null;
 }
 
 /**
@@ -287,6 +401,13 @@ export interface UserAgentWorkspaceExport {
  * generated `UIMessagePart[]` buffer — message CONTENT — and it is the only
  * record of a generation that was interrupted before its assistant row was
  * materialized.
+ *
+ * `frames` is that same content in its successor form. `ai_stream_frames` is
+ * the durable, append-only log of the raw `UIMessageChunk`s the generation
+ * emitted, and it is what `parts` becomes once the frame-log writer lands and
+ * the `parts` column is dropped. Both are carried here for exactly the span in
+ * which both can hold rows: a subject access request answered mid-migration
+ * must not depend on which side of that rollout the generation ran on.
  *
  * Excludes `channelId`, `browserSessionId`, `streamId`, `rawPartsCount`,
  * `lastHeartbeatAt` and `abortRequestedAt`: multicast routing keys, client
@@ -301,14 +422,48 @@ export interface UserStreamStateExport {
   status: 'streaming' | 'complete' | 'aborted';
   /** Checkpointed generation content. */
   parts: unknown[];
+  /**
+   * The raw frame log for this generation, flattened into seq order across the
+   * batch rows that hold it. Empty for a generation whose frames were already
+   * swept, and — until the frame-log writer lands — for every generation.
+   */
+  frames: unknown[];
   startedAt: Date;
   completedAt: Date | null;
+}
+
+/**
+ * One tag the subject APPLIED — `content_tags.createdBy = userId`.
+ *
+ * The tag's `name` is joined in rather than its id: the vocabulary row belongs
+ * to the drive (`tags` is ORGANISATION_OWNED in the coverage registry), so an
+ * opaque `tagId` would disclose the act without disclosing what was said. What
+ * is the subject's here is the ACT of classification — this person said this
+ * thing is a `#risk` — and that only means anything with the word attached.
+ *
+ * The anchor is carried verbatim. For a `text` tag it holds the quoted text the
+ * subject selected, which is their own content and has no other home in the
+ * bundle.
+ */
+export interface UserContentTagExport {
+  tagName: string | null;
+  pageId: string;
+  pageTitle: string | null;
+  targetKind: string;
+  anchor: unknown;
+  anchorStatus: string | null;
+  channelMessageId: string | null;
+  aiMessageId: string | null;
+  source: string;
+  confidence: number | null;
+  createdAt: Date;
 }
 
 export interface AllUserData {
   profile: UserProfileExport;
   drives: UserDriveExport[];
   pages: UserPageExport[];
+  sheets: UserSheetExport[];
   messages: UserMessageExport[];
   files: UserFileExport[];
   activity: UserActivityExport[];
@@ -322,8 +477,12 @@ export interface AllUserData {
   displayPreferences: UserDisplayPreferenceExport[];
   settings: UserSettingsExport;
   personalization: UserPersonalizationExport | null;
+  personalizationCandidates: UserPersonalizationCandidateExport[];
   agentWorkspaces: UserAgentWorkspaceExport[];
   streamState: UserStreamStateExport[];
+  contentTags: UserContentTagExport[];
+  /** Machines the subject enrolled as local environments — their own devices. */
+  localEnvironments: UserLocalEnvironmentExport[];
 }
 
 export async function collectUserProfile(database: DB, userId: string): Promise<UserProfileExport | null> {
@@ -416,6 +575,97 @@ export async function collectUserPages(
     })
     .from(pages)
     .where(inArray(pages.driveId, driveIds));
+}
+
+/**
+ * Every sheet in the subject's drives, tab by tab.
+ *
+ * Rows are read in pages rather than one query: a sheet is now allowed to hold
+ * hundreds of thousands of rows, and an unbounded select over all of them would
+ * be the kind of memory spike that takes the export down. Nothing is truncated
+ * — an Art 15 response that silently drops rows is worse than a slow one.
+ */
+export async function collectUserSheets(
+  database: DB,
+  userId: string,
+  preloadedDriveIds?: string[],
+): Promise<UserSheetExport[]> {
+  const driveIds = preloadedDriveIds ?? (await collectUserDrives(database, userId)).map(d => d.id);
+  if (driveIds.length === 0) return [];
+
+  const tabs = await database
+    .select({
+      tabId: sheetTabs.id,
+      pageId: sheetTabs.pageId,
+      pageTitle: pages.title,
+      driveId: pages.driveId,
+      tabIndex: sheetTabs.tabIndex,
+      tabName: sheetTabs.name,
+      rowCount: sheetTabs.rowCount,
+      columnCount: sheetTabs.columnCount,
+      frozenRows: sheetTabs.frozenRows,
+      frozenColumns: sheetTabs.frozenColumns,
+      columnFormats: sheetTabs.columnFormats,
+      columnWidths: sheetTabs.columnWidths,
+      rowHeights: sheetTabs.rowHeights,
+      ranges: sheetTabs.ranges,
+    })
+    .from(sheetTabs)
+    .innerJoin(pages, eq(sheetTabs.pageId, pages.id))
+    .where(inArray(pages.driveId, driveIds));
+
+  const PAGE_SIZE = 2000;
+  const out: UserSheetExport[] = [];
+
+  for (const tab of tabs) {
+    const rows: UserSheetExport['rows'] = [];
+    let cursor = 0;
+
+    for (;;) {
+      const batch = await database
+        .select({ rowIndex: sheetRows.rowIndex, cells: sheetRows.cells })
+        .from(sheetRows)
+        .where(and(eq(sheetRows.tabId, tab.tabId), gte(sheetRows.rowIndex, cursor)))
+        .orderBy(asc(sheetRows.rowIndex))
+        .limit(PAGE_SIZE);
+
+      if (batch.length === 0) break;
+
+      for (const row of batch) {
+        const cells: UserSheetExport['rows'][number]['cells'] = {};
+        for (const [label, cell] of Object.entries(row.cells ?? {})) {
+          cells[label] = {
+            raw: cell.raw,
+            ...(cell.value !== undefined ? { value: cell.value } : {}),
+            ...(cell.error ? { error: cell.error.type } : {}),
+          };
+        }
+        rows.push({ rowIndex: row.rowIndex, cells });
+      }
+
+      cursor = batch[batch.length - 1].rowIndex + 1;
+      if (batch.length < PAGE_SIZE) break;
+    }
+
+    out.push({
+      pageId: tab.pageId,
+      pageTitle: tab.pageTitle,
+      driveId: tab.driveId,
+      tabIndex: tab.tabIndex,
+      tabName: tab.tabName,
+      rowCount: tab.rowCount,
+      columnCount: tab.columnCount,
+      frozenRows: tab.frozenRows,
+      frozenColumns: tab.frozenColumns,
+      columnFormats: tab.columnFormats,
+      columnWidths: tab.columnWidths,
+      rowHeights: tab.rowHeights,
+      ranges: tab.ranges,
+      rows,
+    });
+  }
+
+  return out;
 }
 
 export async function collectUserMessages(database: DB, userId: string): Promise<UserMessageExport[]> {
@@ -860,6 +1110,22 @@ export async function collectUserSettings(database: DB, userId: string): Promise
   };
 }
 
+/**
+ * The subject's personalization profile.
+ *
+ * The content lives as pages in their Home drive; the bio/writingStyle/rules
+ * COLUMNS are only a fallback for users the backfill has not reached, and are
+ * cleared once a page holds the content. Reading the columns alone would
+ * therefore return three nulls for every migrated user and quietly understate
+ * the profile — so this resolves the page pointers and reads the pages, falling
+ * back to the column only where no pointer exists.
+ *
+ * The pages are ALSO carried in `pages.json` (they are ordinary pages in a
+ * drive the subject owns). That duplication is deliberate: this file is where a
+ * reader looks to answer "what does the AI know about me?", and a category that
+ * silently emptied itself after a migration is exactly the kind of omission the
+ * export coverage guard exists to prevent.
+ */
 export async function collectUserPersonalization(database: DB, userId: string): Promise<UserPersonalizationExport | null> {
   const result = await database
     .select({
@@ -869,12 +1135,79 @@ export async function collectUserPersonalization(database: DB, userId: string): 
       enabled: userPersonalization.enabled,
       createdAt: userPersonalization.createdAt,
       updatedAt: userPersonalization.updatedAt,
+      bioPageId: userPersonalization.bioPageId,
+      writingStylePageId: userPersonalization.writingStylePageId,
+      rulesPageId: userPersonalization.rulesPageId,
     })
     .from(userPersonalization)
     .where(eq(userPersonalization.userId, userId))
     .limit(1);
 
-  return result[0] ?? null;
+  const row = result[0];
+  if (!row) return null;
+
+  const { bioPageId, writingStylePageId, rulesPageId, ...profile } = row;
+  // Truthiness, not `!== null`: a pointer can arrive undefined as well as null
+  // (an older row, or a projection that omits the column), and an undefined id
+  // would otherwise reach `inArray` as a phantom lookup.
+  const pageIds = [bioPageId, writingStylePageId, rulesPageId].filter(
+    (id): id is string => Boolean(id),
+  );
+
+  if (pageIds.length === 0) return profile;
+
+  const memoryPages = await database
+    .select({ id: pages.id, content: pages.content, isTrashed: pages.isTrashed })
+    .from(pages)
+    .where(inArray(pages.id, pageIds));
+
+  // A trashed page is content the subject deleted; report it as absent rather
+  // than disclosing what they removed.
+  const contentById = new Map(
+    memoryPages.filter((p) => !p.isTrashed).map((p) => [p.id, p.content ?? '']),
+  );
+
+  return {
+    ...profile,
+    bio: bioPageId ? (contentById.get(bioPageId) ?? null) : profile.bio,
+    writingStyle: writingStylePageId
+      ? (contentById.get(writingStylePageId) ?? null)
+      : profile.writingStyle,
+    rules: rulesPageId ? (contentById.get(rulesPageId) ?? null) : profile.rules,
+  };
+}
+
+/**
+ * Every inference the memory cron staged about the subject — promoted, declined
+ * and still-pending alike.
+ *
+ * Sorted oldest-first in memory rather than with `ORDER BY` so the query shape
+ * stays identical to every other collector here (select/from/where). The row
+ * count is bounded by what one user's discovery passes produce, so the sort is
+ * trivial, and matching the shared shape keeps this collector working with the
+ * same test harness as its neighbours.
+ */
+export async function collectUserPersonalizationCandidates(
+  database: DB,
+  userId: string,
+): Promise<UserPersonalizationCandidateExport[]> {
+  const rows = await database
+    .select({
+      field: personalizationCandidates.field,
+      claim: personalizationCandidates.claim,
+      evidence: personalizationCandidates.evidence,
+      occurrences: personalizationCandidates.occurrences,
+      firstSeenAt: personalizationCandidates.firstSeenAt,
+      lastSeenAt: personalizationCandidates.lastSeenAt,
+      promotedAt: personalizationCandidates.promotedAt,
+      rejectedAt: personalizationCandidates.rejectedAt,
+    })
+    .from(personalizationCandidates)
+    .where(eq(personalizationCandidates.userId, userId));
+
+  return [...rows].sort(
+    (a, b) => new Date(a.firstSeenAt).getTime() - new Date(b.firstSeenAt).getTime(),
+  );
 }
 
 /**
@@ -901,8 +1234,8 @@ export async function collectUserPersonalization(database: DB, userId: string): 
  *     shell inside someone else's workspace travels — as a `participant` entry
  *     carrying the shells and nothing descriptive about the other person's
  *     workspace — and another member's shell inside the SUBJECT's workspace
- *     does NOT. `conversations.workspaceId` binds the threads, which
- *     `collectUserMessages` already exports under its own boundary.
+ *     does NOT. The threads themselves are bound by `agent_workspace_nodes`,
+ *     and `collectUserMessages` already exports them under its own boundary.
  */
 export async function collectUserAgentWorkspaces(
   database: DB,
@@ -945,10 +1278,43 @@ export async function collectUserAgentWorkspaces(
     shellsByWorkspace.set(workspaceId, bucket);
   }
 
+  // The owned workspaces' trees — membership AND layout, which stopped being
+  // two things. One query for all of them; a workspace with no tree yet simply
+  // has no rows.
+  const ownedIdList = ownedWorkspaces.map((workspace) => workspace.id);
+  const ownedNodes =
+    ownedIdList.length === 0
+      ? []
+      : await database
+          .select({
+            rootId: agentWorkspaceNodes.rootId,
+            id: agentWorkspaceNodes.id,
+            parentId: agentWorkspaceNodes.parentId,
+            position: agentWorkspaceNodes.position,
+            nodeType: agentWorkspaceNodes.nodeType,
+            axis: agentWorkspaceNodes.axis,
+            fraction: agentWorkspaceNodes.fraction,
+            targetKind: agentWorkspaceNodes.targetKind,
+            targetId: agentWorkspaceNodes.targetId,
+            createdAt: agentWorkspaceNodes.createdAt,
+            updatedAt: agentWorkspaceNodes.updatedAt,
+          })
+          .from(agentWorkspaceNodes)
+          .where(inArray(agentWorkspaceNodes.rootId, ownedIdList));
+
+  const nodesByWorkspace = new Map<string, UserAgentWorkspaceNodeExport[]>();
+  for (const node of ownedNodes) {
+    const { rootId, ...rest } = node;
+    const bucket = nodesByWorkspace.get(rootId) ?? [];
+    bucket.push(rest);
+    nodesByWorkspace.set(rootId, bucket);
+  }
+
   const result: UserAgentWorkspaceExport[] = ownedWorkspaces.map((workspace) => ({
     ...workspace,
     role: 'owner' as const,
     shells: shellsByWorkspace.get(workspace.id) ?? [],
+    nodes: nodesByWorkspace.get(workspace.id) ?? [],
   }));
 
   // Subject-owned shells that live in somebody else's workspace. The shells are
@@ -967,6 +1333,10 @@ export async function collectUserAgentWorkspaces(
       createdAt: null,
       updatedAt: null,
       shells,
+      // Withheld with the rest of the host workspace's description — the tree
+      // is the OWNER's arrangement of their own working context, and the
+      // subject's presence in it as a shell operator does not make it theirs.
+      nodes: [],
     });
   }
 
@@ -995,6 +1365,16 @@ export async function collectUserAgentWorkspaces(
  * It stops there. A row triggered by ANOTHER HUMAN inside the subject's shared
  * conversation stays out: `parts` is that person's generated content, and
  * Art 15(4) forbids letting one subject's access right override another's.
+ *
+ * ── Why `ai_stream_frames` rides this collector rather than its own ──────────
+ * The frame log has no `user_id` of its own; it is keyed by `message_id` and
+ * carries `conversation_id` solely to inherit the cascade. So the only thing
+ * that can say whose content a frame is, is the session row for its
+ * `message_id` — which means the disclosure boundary above is already the
+ * correct one, and a separate collector would have to re-derive it. Fetching
+ * frames for exactly the sessions this collector returns keeps the Art 15(4)
+ * line in ONE place: a generation withheld above cannot leak through its
+ * frames, because its messageId never reaches the second query.
  */
 export async function collectUserStreamState(
   database: DB,
@@ -1019,7 +1399,166 @@ export async function collectUserStreamState(
       ),
     );
 
-  return rows.map((row) => ({ ...row, parts: row.parts ?? [] }));
+  const framesByMessage = await collectStreamFrames(database, rows.map((row) => row.messageId));
+
+  return rows.map((row) => ({
+    ...row,
+    parts: row.parts ?? [],
+    frames: framesByMessage.get(row.messageId) ?? [],
+  }));
+}
+
+/**
+ * Flatten `ai_stream_frames` into one frame array per messageId.
+ *
+ * A row covers `[from_seq, from_seq + frame_count)`, so ordering by `from_seq`
+ * and concatenating reproduces the emitted sequence exactly — the same read the
+ * runtime's own cursor join performs, minus the slicing, because an export
+ * wants the whole stream rather than a suffix.
+ */
+async function collectStreamFrames(
+  database: DB,
+  messageIds: string[],
+): Promise<Map<string, unknown[]>> {
+  const byMessage = new Map<string, unknown[]>();
+  if (messageIds.length === 0) return byMessage;
+
+  const batches = await database
+    .select({
+      messageId: aiStreamFrames.messageId,
+      frames: aiStreamFrames.frames,
+    })
+    .from(aiStreamFrames)
+    .where(inArray(aiStreamFrames.messageId, messageIds))
+    .orderBy(aiStreamFrames.messageId, aiStreamFrames.fromSeq);
+
+  for (const batch of batches) {
+    const existing = byMessage.get(batch.messageId);
+    if (existing) existing.push(...(batch.frames ?? []));
+    else byMessage.set(batch.messageId, [...(batch.frames ?? [])]);
+  }
+
+  return byMessage;
+}
+
+/**
+ * Every tag the subject applied, across every target kind.
+ *
+ * Registered WITH its collector at the moment the table was added rather than
+ * when its writer arrives — the same call `ai_stream_frames` above records, and
+ * for the same reason: a table that reaches `master` unexported is exactly the
+ * failure `gdpr-export-coverage.ts` exists to catch, and "nothing writes it
+ * yet" is a state that expires quietly.
+ *
+ * SCOPED TO THE SUBJECT'S CURRENT DRIVES, not to `createdBy` alone — the same
+ * boundary `collectUserPages` draws, and it has to be drawn here for the same
+ * reason. Removing someone from a drive deletes their `drive_members` row and
+ * nothing else, so their `content_tags.createdBy` values survive the removal.
+ * Filtering on `createdBy` by itself would therefore let a FORMER member pull
+ * live page titles, the drive's shared tag names, and the verbatim text an
+ * anchor quotes out of a drive they can no longer read, through their own
+ * account export. Art 15 is a right to one's own data, not a channel back into
+ * a workspace one has left.
+ *
+ * The consequence is deliberate and worth stating: a tag the subject applied in
+ * a drive they have since left is NOT in their export. That is the boundary
+ * `pages`, `drives` and the rest of this file already draw, and a category that
+ * drew a wider one would be the leak, not a courtesy.
+ *
+ * `leftJoin` on both sides deliberately. `tags.id` is a cascade FK so a row
+ * cannot outlive its vocabulary entry, and `pageId` is notNull for the same
+ * reason — but an inner join would silently DROP a row if either ever became
+ * nullable, and silently dropping rows is the failure mode this whole file is
+ * built against. A null `tagName` in the bundle is visible; a missing line is
+ * not.
+ */
+export async function collectUserContentTags(
+  database: DB,
+  userId: string,
+  preloadedDriveIds?: string[],
+): Promise<UserContentTagExport[]> {
+  const driveIds = preloadedDriveIds ?? (await collectUserDrives(database, userId)).map(d => d.id);
+
+  if (driveIds.length === 0) return [];
+
+  return database
+    .select({
+      tagName: tags.name,
+      pageId: contentTags.pageId,
+      pageTitle: pages.title,
+      targetKind: contentTags.targetKind,
+      anchor: contentTags.anchor,
+      anchorStatus: contentTags.anchorStatus,
+      channelMessageId: contentTags.channelMessageId,
+      aiMessageId: contentTags.aiMessageId,
+      source: contentTags.source,
+      confidence: contentTags.confidence,
+      createdAt: contentTags.createdAt,
+    })
+    .from(contentTags)
+    .leftJoin(tags, eq(tags.id, contentTags.tagId))
+    // innerJoin on `pages` here, unlike the `tags` join above: the drive filter
+    // is only enforceable through the page row, so a tag whose page is missing
+    // must not slip past the scope check on a NULL `driveId`.
+    .innerJoin(pages, eq(pages.id, contentTags.pageId))
+    .where(and(eq(contentTags.createdBy, userId), inArray(pages.driveId, driveIds)));
+}
+
+/**
+ * A machine the subject enrolled as a local environment (`drive_env_local`,
+ * selected by `ownerId`). This is the subject's OWN device — a label they
+ * chose, their machine's public key and fingerprint, when it enrolled and was
+ * last seen — so it is carried whole, including revoked enrollments (a
+ * revocation is a fact about their machine, not a reason to hide it). The env
+ * it backs is drive-owned and excluded (`drive_envs`); only its name and drive
+ * ride along as the address the subject would recognise. No private material
+ * exists to export: the row never held any (epic invariant 2).
+ */
+export interface UserLocalEnvironmentExport {
+  envId: string;
+  driveId: string;
+  envName: string;
+  label: string;
+  /** NULL until the machine enrolled (the row exists from creation, with only the label and owner). */
+  machinePublicKey: string | null;
+  machineKeyFingerprint: string | null;
+  serverKeyId: string | null;
+  bindPolicy: string;
+  capabilities: DriveEnvLocalCapabilities | null;
+  enrolledAt: Date | null;
+  lastSeenAt: Date | null;
+  revokedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export async function collectUserLocalEnvironments(database: DB, userId: string): Promise<UserLocalEnvironmentExport[]> {
+  const rows = await database
+    .select({
+      envId: driveEnvLocal.envId,
+      driveId: driveEnvs.driveId,
+      envName: driveEnvs.name,
+      label: driveEnvLocal.label,
+      machinePublicKey: driveEnvLocal.machinePublicKey,
+      machineKeyFingerprint: driveEnvLocal.machineKeyFingerprint,
+      serverKeyId: driveEnvLocal.serverKeyId,
+      bindPolicy: driveEnvLocal.bindPolicy,
+      capabilities: driveEnvLocal.capabilities,
+      enrolledAt: driveEnvLocal.enrolledAt,
+      lastSeenAt: driveEnvLocal.lastSeenAt,
+      revokedAt: driveEnvLocal.revokedAt,
+      createdAt: driveEnvLocal.createdAt,
+      updatedAt: driveEnvLocal.updatedAt,
+    })
+    .from(driveEnvLocal)
+    .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId))
+    .where(eq(driveEnvLocal.ownerId, userId));
+  // Ordered in JS rather than by `orderBy`: the unit suite's query-chain mock
+  // does not model `orderBy`, and this collector's rows are few (one per
+  // enrolled machine), so sorting after the fetch costs nothing.
+  return rows
+    .map((row) => ({ ...row, capabilities: row.capabilities ?? null }))
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 }
 
 export async function collectAllUserData(database: DB, userId: string): Promise<AllUserData | null> {
@@ -1032,8 +1571,9 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
   // Positional: this destructuring order must exactly match the Promise.all array
   // order below (each collector returns a differently-shaped array, so TypeScript
   // cannot catch a reorder/insert mismatch here).
-  const [userPages, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userAgentWorkspaces, userStreamState] = await Promise.all([
+  const [userPages, userSheets, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userStreamState, userContentTags, userLocalEnvironments] = await Promise.all([
     collectUserPages(database, userId, driveIds),
+    collectUserSheets(database, userId, driveIds),
     collectUserMessages(database, userId),
     collectUserFiles(database, userId),
     collectUserActivity(database, userId),
@@ -1047,14 +1587,18 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     collectUserDisplayPreferences(database, userId),
     collectUserSettings(database, userId),
     collectUserPersonalization(database, userId),
+    collectUserPersonalizationCandidates(database, userId),
     collectUserAgentWorkspaces(database, userId),
     collectUserStreamState(database, userId),
+    collectUserContentTags(database, userId, driveIds),
+    collectUserLocalEnvironments(database, userId),
   ]);
 
   return {
     profile,
     drives: userDrives,
     pages: userPages,
+    sheets: userSheets,
     messages: userMessages,
     files: userFiles,
     activity,
@@ -1068,7 +1612,10 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     displayPreferences: userDisplayPreferences,
     settings: userSettings,
     personalization: userPersonalizationData,
+    personalizationCandidates: userPersonalizationCandidates,
     agentWorkspaces: userAgentWorkspaces,
     streamState: userStreamState,
+    contentTags: userContentTags,
+    localEnvironments: userLocalEnvironments,
   };
 }

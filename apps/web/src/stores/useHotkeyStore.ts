@@ -1,5 +1,11 @@
 import { create } from 'zustand';
 import { getHotkeyDefinition } from '@/lib/hotkeys/registry';
+import {
+  isMacPlatform,
+  isUsableBinding,
+  resolveEventKey,
+  splitBinding,
+} from '@/lib/hotkeys/binding';
 
 interface HotkeyBinding {
   hotkeyId: string;
@@ -11,6 +17,7 @@ interface HotkeyState {
   loaded: boolean;
   setUserBindings: (bindings: HotkeyBinding[]) => void;
   updateBinding: (hotkeyId: string, binding: string) => void;
+  removeBinding: (hotkeyId: string) => void;
   reset: () => void;
 }
 
@@ -20,9 +27,30 @@ export const useHotkeyStore = create<HotkeyState>((set) => ({
 
   setUserBindings: (bindings) => {
     const map = new Map<string, string>();
+
     for (const { hotkeyId, binding } of bindings) {
+      // An empty binding means "disabled" and is intentional.
+      if (binding === '') {
+        map.set(hotkeyId, binding);
+        continue;
+      }
+
+      // Skip anything that cannot fire, so the default takes over. The old
+      // capture widget accepted a bare key, so a stored "N" is a real
+      // possibility, and it would fire against the global listeners while the
+      // user is just reading; the other unusable shape is an Alt binding
+      // holding a macOS-composed character ("Alt+Π"), which never matched
+      // anything. Everything else — shifted punctuation, long-tail named keys
+      // — still matches and is kept untouched.
+      //
+      // The row itself is left on the server. It is what tells Settings the
+      // shortcut was reset, and the notice there is derived from the payload
+      // rather than remembered here — see `unusablePreferences`.
+      if (!isUsableBinding(binding)) continue;
+
       map.set(hotkeyId, binding);
     }
+
     set({ userBindings: map, loaded: true });
   },
 
@@ -34,19 +62,47 @@ export const useHotkeyStore = create<HotkeyState>((set) => ({
     });
   },
 
+  removeBinding: (hotkeyId) => {
+    set((state) => {
+      const newMap = new Map(state.userBindings);
+      newMap.delete(hotkeyId);
+      return { userBindings: newMap };
+    });
+  },
+
   reset: () => {
     set({ userBindings: new Map(), loaded: false });
   },
 }));
 
-/** Get the effective binding for a hotkey (user override or default) */
+/**
+ * Get the effective binding for a hotkey (user override or default).
+ *
+ * Defaults are written with `Meta` meaning "the platform command key", so on
+ * non-Mac platforms they resolve to Ctrl. User overrides are recorded from a
+ * real key press on the user's own machine and are used exactly as captured.
+ */
 export function getEffectiveBinding(hotkeyId: string): string {
   const state = useHotkeyStore.getState();
   if (state.userBindings.has(hotkeyId)) {
     return state.userBindings.get(hotkeyId)!;
   }
   const definition = getHotkeyDefinition(hotkeyId);
-  return definition?.defaultBinding ?? '';
+  if (!definition) return '';
+  return resolvePlatformBinding(definition.defaultBinding);
+}
+
+/**
+ * Rewrite `Meta` to `Ctrl` in a default binding when not on a Mac.
+ *
+ * `isMac` is explicit for render paths: the server has no `navigator`, so
+ * detecting the platform during render would produce different markup on the
+ * server and the client. Callers that render pass the post-mount value.
+ */
+export function resolvePlatformBinding(binding: string, isMac = isMacPlatform()): string {
+  if (!binding || isMac) return binding;
+  if (!binding.startsWith('Meta+')) return binding;
+  return `Ctrl+${binding.slice('Meta+'.length)}`;
 }
 
 interface ParsedBinding {
@@ -59,37 +115,36 @@ interface ParsedBinding {
 
 /** Parse a binding string like "Ctrl+Shift+K" into components */
 export function parseBinding(binding: string): ParsedBinding {
-  const parts = binding.split('+');
-  const key = parts[parts.length - 1];
-  const modifiers = parts.slice(0, -1).map((m) => m.toLowerCase());
+  const { modifiers, key } = splitBinding(binding);
+  const lower = modifiers.map((m) => m.toLowerCase());
 
   return {
-    ctrl: modifiers.includes('ctrl'),
-    meta: modifiers.includes('meta'),
-    shift: modifiers.includes('shift'),
-    alt: modifiers.includes('alt'),
+    ctrl: lower.includes('ctrl'),
+    meta: lower.includes('meta'),
+    shift: lower.includes('shift'),
+    alt: lower.includes('alt'),
     key: key.length === 1 ? key.toLowerCase() : key,
   };
 }
 
-/** Check if a keyboard event matches a binding string */
+/**
+ * Check if a keyboard event matches a binding string.
+ *
+ * The key token comes from the same `resolveEventKey` the settings capture
+ * widget uses, so what gets recorded and what gets matched cannot drift.
+ */
 export function matchesKeyEvent(binding: string, event: KeyboardEvent): boolean {
   if (!binding) return false;
 
   const parsed = parseBinding(binding);
-
-  // On macOS, Alt/Option remaps e.key for many letters (e.g. Alt+N → "~").
-  // Fall back to e.code for alt+single-letter bindings so they work cross-platform.
-  let eventKey = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-  if (event.altKey && parsed.alt && parsed.key.length === 1 && event.code.startsWith('Key')) {
-    eventKey = event.code.slice(3).toLowerCase();
-  }
+  const eventKey = resolveEventKey(event);
+  if (!eventKey) return false;
 
   return (
     event.ctrlKey === parsed.ctrl &&
     event.metaKey === parsed.meta &&
     event.shiftKey === parsed.shift &&
     event.altKey === parsed.alt &&
-    eventKey === parsed.key
+    eventKey.toLowerCase() === parsed.key.toLowerCase()
   );
 }

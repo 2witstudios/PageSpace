@@ -10,11 +10,15 @@ import { and, eq, gte, lte } from '@pagespace/db/operators';
 import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { pages } from '@pagespace/db/schema/core';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { aggregateUsageBreakdown, resolveUsageWindow, type UsageBreakdown } from './usage-breakdown';
+import { allowanceRefills } from '@pagespace/lib/billing/credit-pricing';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 
 /**
- * Spend-by-feature, spend-by-model, and (for source:'terminal') spend-by-agent-session
- * for the user's current billing period. Spend is the ledger's precise charged amount
+ * Spend-by-feature, spend-by-model, spend-by-agent-session and spend-by-environment
+ * (the last two both from source:'terminal' rows, split by the storage meter's model
+ * label) for the user's current billing period. Spend is the ledger's precise charged amount
  * (`chargeMillicents`, post-markup) — never the raw provider `cost`. The join drops
  * usage rows whose AI log has been purged by retention, which is acceptable for a
  * "recent usage" view.
@@ -25,7 +29,10 @@ import { aggregateUsageBreakdown, resolveUsageWindow, type UsageBreakdown } from
  * unresolvable), so every row this query returns for `userId` is already scoped to
  * a session they own or a run they footed the bill for directly.
  */
-export async function getUserUsageBreakdown(userId: string): Promise<UsageBreakdown> {
+export async function getUserUsageBreakdown(
+  userId: string,
+  tier: SubscriptionTier = 'free',
+): Promise<UsageBreakdown> {
   const [balance] = await db
     .select({
       periodStart: creditBalances.monthlyPeriodStart,
@@ -37,9 +44,13 @@ export async function getUserUsageBreakdown(userId: string): Promise<UsageBreakd
 
   // A stale window (periodEnd in the past — renewal never landed) falls back to
   // the trailing lookback so current spend is never hidden; see resolveUsageWindow.
+  // A NON-refilling tier (free: one-time starter grant) has no renewal at all, so
+  // its stamped period end is informational only: report null so the card never
+  // says "renews <date>", mirroring getCreditBalance. Spend is still counted from
+  // the grant onward (periodStart).
   const { periodStart, periodEnd } = resolveUsageWindow({
     periodStart: balance?.periodStart ?? null,
-    periodEnd: balance?.periodEnd ?? null,
+    periodEnd: allowanceRefills(tier) ? (balance?.periodEnd ?? null) : null,
     now: new Date(),
   });
 
@@ -58,10 +69,20 @@ export async function getUserUsageBreakdown(userId: string): Promise<UsageBreakd
       pageId: aiUsageLogs.pageId,
       pageTitle: pages.title,
       durationMs: aiUsageLogs.duration,
+      // ENVIRONMENT attribution. `aiUsageLogs.sessionId` is a shared analytics
+      // column many sources write, so this join is only MEANINGFUL for the env
+      // storage rows the aggregator selects by model — every other row simply
+      // fails to match a `drive_envs` id and comes back with a null name, which
+      // the aggregator never reads. Left-joined (not inner) so a DELETED
+      // environment still surfaces its spend, under "Deleted environment",
+      // rather than disappearing — the same rule `pages` follows above.
+      sessionId: aiUsageLogs.sessionId,
+      envName: driveEnvs.name,
     })
     .from(creditLedger)
     .innerJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
     .leftJoin(pages, eq(aiUsageLogs.pageId, pages.id))
+    .leftJoin(driveEnvs, eq(aiUsageLogs.sessionId, driveEnvs.id))
     .where(
       and(
         eq(creditLedger.userId, userId),

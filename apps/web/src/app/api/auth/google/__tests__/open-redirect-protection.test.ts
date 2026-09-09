@@ -150,7 +150,7 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-vi.mock('@/lib/onboarding/home-drive', () => ({
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
   provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'existing-drive', created: false }),
 }));
 
@@ -272,9 +272,12 @@ describe('Open Redirect Protection', () => {
       expect(data.error).toBe('Invalid return URL. Must be a relative path.');
     });
 
-    it('given javascript: URL, should reject with 400', async () => {
+    it('given javascript: in the path, should reject with 400', async () => {
+      // A colon in a QUERY VALUE is data and now passes validation (the OAuth
+      // consent redirect_uri fix) — the scheme-smuggling shape that must stay
+      // rejected is a colon in the PATH portion.
       const request = createSigninRequest({
-        returnUrl: '/dashboard?next=javascript:alert(1)',
+        returnUrl: '/javascript:alert(1)',
         platform: 'web',
       });
 

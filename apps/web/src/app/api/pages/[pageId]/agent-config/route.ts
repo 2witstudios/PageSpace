@@ -3,6 +3,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrin
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
+import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { validateAgentModelSelection } from '@/lib/ai/core/ai-providers-config';
@@ -91,6 +92,7 @@ export async function GET(
       pageTreeScope: page.pageTreeScope ?? 'children',
       toolExposureMode: page.toolExposureMode ?? 'upfront',
       sandboxEnabled: page.sandboxEnabled ?? false,
+      defaultEnvId: page.defaultEnvId ?? null,
     });
   } catch (error) {
     loggers.api.error('Error fetching page agent configuration:', error as Error);
@@ -127,6 +129,7 @@ export async function PATCH(
       pageTreeScope,
       toolExposureMode,
       sandboxEnabled,
+      defaultEnvId,
       expectedRevision,
     } = body;
 
@@ -231,7 +234,55 @@ export async function PATCH(
     }
 
     if (sandboxEnabled !== undefined) {
-      updateData.sandboxEnabled = Boolean(sandboxEnabled);
+      // REJECTED, not coerced, on both doors that write this field: `Boolean("false")`
+      // is `true`, and this switch decides whether a stored sandbox allowlist is
+      // granted at all. Hardening only the sibling route would leave the trap
+      // reachable through this one.
+      if (typeof sandboxEnabled !== 'boolean') {
+        return NextResponse.json(
+          { error: 'sandboxEnabled must be a boolean' },
+          { status: 400 }
+        );
+      }
+      updateData.sandboxEnabled = sandboxEnabled;
+    }
+
+    if (defaultEnvId !== undefined) {
+      // Reject, not coerce — mirrors sandboxEnabled's rule above. `""` is
+      // invalid input, not "None": the settings picker's "None" option sends
+      // `null` explicitly.
+      if (defaultEnvId !== null && typeof defaultEnvId !== 'string') {
+        return NextResponse.json(
+          { error: 'defaultEnvId must be a string or null' },
+          { status: 400 }
+        );
+      }
+      if (defaultEnvId === '') {
+        return NextResponse.json(
+          { error: 'defaultEnvId must be a non-empty string or null' },
+          { status: 400 }
+        );
+      }
+      if (defaultEnvId === null) {
+        updateData.defaultEnvId = null;
+      } else {
+        // `resolveEnvInDrive` collapses "no such env" and "exists but belongs
+        // to a different drive" into a single null — deliberately, per its
+        // own doc comment, so this route cannot become the oracle a caller
+        // uses to enumerate env ids across drives it can't see (review —
+        // general-purpose self-review, PR #2513: the earlier hand-rolled
+        // version split these into 404 vs 400, reopening exactly the leak
+        // `resolveEnvInDrive` and the spawn route's collapsed `env_not_found`
+        // both exist to close).
+        const env = await resolveEnvInDrive(defaultEnvId, page.driveId);
+        if (!env) {
+          return NextResponse.json(
+            { error: 'Environment not found' },
+            { status: 404 }
+          );
+        }
+        updateData.defaultEnvId = defaultEnvId;
+      }
     }
 
     // Only update if there are changes
@@ -304,6 +355,9 @@ export async function PATCH(
       visibleToGlobalAssistant: responsePage.visibleToGlobalAssistant ?? true,
       includePageTree: responsePage.includePageTree ?? false,
       pageTreeScope: responsePage.pageTreeScope ?? 'children',
+      toolExposureMode: responsePage.toolExposureMode ?? 'upfront',
+      sandboxEnabled: responsePage.sandboxEnabled ?? false,
+      defaultEnvId: responsePage.defaultEnvId ?? null,
     });
   } catch (error) {
     loggers.api.error('Error updating page agent configuration:', error as Error);

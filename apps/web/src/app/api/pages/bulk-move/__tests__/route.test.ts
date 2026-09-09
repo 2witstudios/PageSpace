@@ -56,6 +56,16 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
 
+// The cross-drive service consults the memory-page guard, which resolves
+// through @pagespace/lib's BUILT dist — whose `@pagespace/db/db` import this
+// file's db mock does not intercept. Left unmocked this route test would reach
+// a real database: green in CI where Postgres exists, failing anywhere else.
+// Real constants kept so a reworded refusal cannot pass silently.
+vi.mock('@pagespace/lib/memory/memory-pages', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/memory/memory-pages')>();
+  return { ...actual, findProtectedMemoryPages: vi.fn().mockResolvedValue(new Set<string>()) };
+});
+
 vi.mock('@pagespace/lib/pages/circular-reference-guard', () => ({
   validatePageMove: vi.fn().mockResolvedValue({ valid: true }),
 }));
@@ -128,6 +138,10 @@ vi.mock('@/lib/canvas/publish-page', () => ({
 // ── Imports (after mocks) ───────────────────────────────────────────────
 
 import { POST } from '../route';
+import {
+  findProtectedMemoryPages,
+  MEMORY_PAGE_MOVE_ERROR,
+} from '@pagespace/lib/memory/memory-pages';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 import { authenticateRequestWithOptions, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent } from '@/lib/websocket';
@@ -230,6 +244,25 @@ describe('POST /api/pages/bulk-move', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setupSuccessScenario();
+    vi.mocked(findProtectedMemoryPages).mockResolvedValue(new Set<string>());
+  });
+
+  // ── Memory page protection ──────────────────────────────────────────
+
+  describe('memory page protection', () => {
+    it('refuses to move a memory page out of its drive', async () => {
+      // pageService.updatePage's guard does not run on this route — it moves
+      // pages through the cross-drive service instead. Without the guard there,
+      // this endpoint could relocate a memory page out of the Home drive its
+      // pointers assume.
+      vi.mocked(findProtectedMemoryPages).mockResolvedValue(new Set(['page-1']));
+
+      const response = await POST(createRequest(validBody));
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toBe(MEMORY_PAGE_MOVE_ERROR);
+    });
   });
 
   // ── Authentication ──────────────────────────────────────────────────

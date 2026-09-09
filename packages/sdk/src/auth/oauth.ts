@@ -64,6 +64,8 @@ export interface OAuthTokenProviderOptions {
 const DEFAULT_SKEW_MS = 60_000;
 
 export class OAuthTokenProvider implements AuthProvider {
+  /** A refresh grant is exactly what this provider has, so the client's one auth retry is worth spending here. */
+  readonly canRefresh = true;
   #tokens: OAuthTokens;
   #status: 'authenticated' | 'unauthenticated' = 'authenticated';
   readonly #now: () => number;

@@ -19,6 +19,21 @@
  *   Never use !isCloud() to gate integrations — it incorrectly restricts tenant.
  */
 
+/** The three deployment modes; anything unrecognized is treated as `cloud`. */
+export type DeploymentMode = 'cloud' | 'tenant' | 'onprem';
+
+/**
+ * The one place the raw `DEPLOYMENT_MODE` string becomes a typed mode.
+ *
+ * Exists so mode-aware policy can be written as a PURE function of the mode
+ * (deterministic, testable, no env stubbing) with a single env-reading edge —
+ * the same split `areCloudIntegrationsAllowed` already uses.
+ */
+export function getDeploymentMode(): DeploymentMode {
+  const raw = process.env.DEPLOYMENT_MODE;
+  return raw === 'onprem' || raw === 'tenant' ? raw : 'cloud';
+}
+
 /**
  * Pure predicate: are cloud integrations (external OAuth/GitHub/Calendar
  * providers — international-transfer surfaces, GDPR Art 44/46) allowed for the

@@ -246,7 +246,7 @@ describe('conversationRepository.createConversation', () => {
     expect(onConflictDoNothing).toHaveBeenCalled();
   });
 
-  it('carries title inside the INSERT (workspaceId is never a param here — binding is claimed separately, never at creation)', async () => {
+  it('carries title inside the INSERT, and no workspace at all — membership is a node write, never a column here', async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
       .mockImplementationOnce(() => mockChatMessagesLookup([]));
@@ -258,11 +258,16 @@ describe('conversationRepository.createConversation', () => {
 
     expect(outcome).toBe('created');
     expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'conv-bound', workspaceId: null, title: 'Worker: research' })
+      expect.objectContaining({ id: 'conv-bound', title: 'Worker: research' })
     );
+    // Stronger than the `workspaceId: null` this used to assert: the column is
+    // GONE, so the honest claim is that the insert names no workspace at all.
+    // A drizzle insert carrying an unknown key would be a runtime error, not a
+    // silently-ignored one, which is exactly why it is worth pinning.
+    expect(Object.keys(valuesMock.mock.calls[0][0])).not.toContain('workspaceId');
   });
 
-  it('defaults title to null when opts omit it, always inserting workspaceId: null', async () => {
+  it('defaults title to null when opts omit it, and still names no workspace', async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
       .mockImplementationOnce(() => mockChatMessagesLookup([]));
@@ -271,8 +276,9 @@ describe('conversationRepository.createConversation', () => {
     await conversationRepository.createConversation('conv-unbound', 'user-1', 'agent-1');
 
     expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'conv-unbound', workspaceId: null, title: null })
+      expect.objectContaining({ id: 'conv-unbound', title: null })
     );
+    expect(Object.keys(valuesMock.mock.calls[0][0])).not.toContain('workspaceId');
   });
 
   it("reports 'exists' when RETURNING yields no row — a concurrent first-write won and this caller's insert did NOT persist", async () => {
@@ -396,7 +402,7 @@ describe('conversationRepository.autoTitleConversation', () => {
   // that's what makes this safe to call on every message without a separate
   // "is this the first message" lookup, and race-safe under concurrent calls.
   it('updates title guarded by "title IS NULL" in the WHERE clause', async () => {
-    const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, workspaceId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 1 }]);
+    const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), isActive: true, rev: 1 }]);
     const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
     const setMock = vi.fn().mockReturnValue({ where: whereMock });
     mockDb.update = vi.fn().mockReturnValue({ set: setMock });
@@ -432,7 +438,7 @@ describe('conversationRepository.autoTitleConversation', () => {
 
 describe('conversationRepository.setConversationShared', () => {
   it('should update isShared to true for a conversation', async () => {
-    const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, workspaceId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 1 }]);
+    const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), isActive: true, rev: 1 }]);
     const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
     const setMock = vi.fn().mockReturnValue({ where: whereMock });
     mockUpdateChain.set.mockReturnValue({ where: whereMock });
@@ -447,7 +453,7 @@ describe('conversationRepository.setConversationShared', () => {
   });
 
   it('should update isShared to false for a conversation', async () => {
-    const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, workspaceId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 1 }]);
+    const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), isActive: true, rev: 1 }]);
     const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
     const setMock = vi.fn().mockReturnValue({ where: whereMock });
     mockDb.update = vi.fn().mockReturnValue({ set: setMock });
@@ -483,7 +489,7 @@ describe('conversationRepository.setConversationShared', () => {
     const returningMock = vi.fn().mockResolvedValue([
       // The post-update row: isShared is already false here, which is exactly
       // what used to shrink the audience.
-      { id: 'conv_abc', userId: OWNER, isShared: false, workspaceId: null, type: 'page', contextId: PAGE, title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 7 },
+      { id: 'conv_abc', userId: OWNER, isShared: false, type: 'page', contextId: PAGE, title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), isActive: true, rev: 7 },
     ]);
     const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
     const setMock = vi.fn().mockReturnValue({ where: whereMock });
@@ -679,7 +685,7 @@ describe('conversationRepository.setConversationShared', () => {
   it('uses the updated row for the owner on a real un-share, without a second read', async () => {
     const OWNER = 'owner-1';
     const returningMock = vi.fn().mockResolvedValue([
-      { id: 'conv_abc', userId: OWNER, isShared: false, workspaceId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 2 },
+      { id: 'conv_abc', userId: OWNER, isShared: false, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), isActive: true, rev: 2 },
     ]);
     const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
     const setMock = vi.fn().mockReturnValue({ where: whereMock });
@@ -701,7 +707,7 @@ describe('conversationRepository.setConversationShared', () => {
    */
   it('never evicts on a SHARE', async () => {
     const returningMock = vi.fn().mockResolvedValue([
-      { id: 'conv_abc', userId: 'owner-1', isShared: true, workspaceId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 2 },
+      { id: 'conv_abc', userId: 'owner-1', isShared: true, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), isActive: true, rev: 2 },
     ]);
     const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
     const setMock = vi.fn().mockReturnValue({ where: whereMock });
@@ -715,7 +721,7 @@ describe('conversationRepository.setConversationShared', () => {
 
 describe('conversationRepository.softDeleteConversation', () => {
   it("deactivates the canonical conversations row, not just its messages — review finding (chatgpt-codex-connector on PR #2296): every reader gating on conversations.isActive (session listings/caps, the v1/MCP API, retention purge) previously kept treating a page conversation deleted from History as live forever", async () => {
-    const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, workspaceId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 1 }]);
+    const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), isActive: true, rev: 1 }]);
     const whereMock = vi.fn(() =>
       Object.assign(Promise.resolve(undefined), { returning: returningMock }),
     );
@@ -753,7 +759,7 @@ describe('conversationRepository.softDeleteConversation', () => {
   });
 
   it('does not touch conversations.isActive at all if the message sweep throws — the transaction rolls back atomically', async () => {
-    const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, workspaceId: null, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), closedInWorkspaceAt: null, isActive: true, rev: 1 }]);
+    const returningMock = vi.fn().mockResolvedValue([{ id: 'conv_abc', userId: 'owner-1', isShared: false, type: 'page', contextId: 'agent_1', title: null, lastMessageAt: null, createdAt: new Date('2025-01-01'), isActive: true, rev: 1 }]);
     const whereMock = vi
       .fn()
       // First statement: the conversations tombstone (ends `.returning()`).

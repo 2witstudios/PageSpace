@@ -25,12 +25,21 @@ export interface ChatInputProps {
   onStop: () => void;
   /** Whether AI is currently streaming */
   isStreaming: boolean;
+  /** A Stop has been requested and has not resolved yet — see InputActions. */
+  isStopping?: boolean;
   /** Whether the input is disabled */
   disabled?: boolean;
   /** Placeholder text */
   placeholder?: string;
   /** Drive ID for mention suggestions */
   driveId?: string;
+  /**
+   * Drive scope for the `/` command picker — defaults to `driveId`. Set it
+   * when the two differ (an agent conversation scopes commands to the AGENT's
+   * drive while mentions stay on the route's), and see `ChatTextareaProps`
+   * for the invariant it must satisfy.
+   */
+  commandDriveId?: string;
   /** Enable cross-drive mention search */
   crossDrive?: boolean;
   /** Hide the model/provider selector in footer (for compact layouts) */
@@ -61,10 +70,6 @@ export interface ChatInputProps {
   selectedModel?: string | null;
   /** Handler when provider/model changes (for page-level settings) */
   onProviderModelChange?: (provider: string, model: string) => void;
-  /** Callback when voice mode button is clicked */
-  onVoiceModeClick?: () => void;
-  /** Whether voice mode is currently active */
-  isVoiceModeActive?: boolean;
   /** Image attachments for vision support */
   attachments?: ImageAttachment[];
   /** Handler to add image files */
@@ -107,9 +112,11 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       onSend,
       onStop,
       isStreaming,
+      isStopping = false,
       disabled = false,
       placeholder = 'Type your message...',
       driveId,
+      commandDriveId,
       crossDrive = false,
       hideModelSelector = false,
       variant = 'main',
@@ -125,8 +132,6 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       selectedProvider: propProvider,
       selectedModel: propModel,
       onProviderModelChange,
-      onVoiceModeClick,
-      isVoiceModeActive = false,
       attachments,
       onAddFiles,
       onRemoveFile,
@@ -264,6 +269,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             onSend={handleSend}
             placeholder={placeholder}
             driveId={driveId}
+            commandDriveId={commandDriveId}
             crossDrive={crossDrive}
             disabled={effectiveDisabled}
             variant={variant}
@@ -273,6 +279,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
 
           <InputActions
             isStreaming={isStreaming}
+            isStopping={isStopping}
             onSend={handleSend}
             onStop={onStop}
             disabled={!canSend}
@@ -303,8 +310,6 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           isMicSupported={isSupported}
           micError={speechError}
           onClearMicError={clearSpeechError}
-          onVoiceModeClick={onVoiceModeClick}
-          isVoiceModeActive={isVoiceModeActive}
           selectedProvider={currentProvider}
           selectedModel={currentModel}
           onProviderModelChange={handleProviderModelChange}

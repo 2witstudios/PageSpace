@@ -88,16 +88,9 @@ export function useOpenPagePane({
       handledRef.current.add(toolPart.toolCallId);
       if (isFirstSighting) continue;
 
-      useAgentWorkspaceStore.getState().openPage(
-        sessionId,
-        {
-          kind: 'page',
-          name: toolPart.output.title ?? 'Page',
-          targetId: toolPart.output.pageId,
-          agentPageId: null,
-        },
-        { excludeTargetId: conversationId, preferSplit: true },
-      );
+      useAgentWorkspaceStore
+        .getState()
+        .openPage(sessionId, toolPart.output.pageId, { excludeTargetId: conversationId, preferSplit: true });
     }
   }, [sessionId, conversationId, messages]);
 }

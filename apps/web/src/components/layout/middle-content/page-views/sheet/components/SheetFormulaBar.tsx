@@ -1,4 +1,7 @@
+"use client";
+
 import React from 'react';
+import { Columns3, FunctionSquare, Rows3 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { MentionPickerPortal } from '@/components/mentions/MentionPickerPortal';
@@ -12,10 +15,6 @@ interface SheetFormulaBarProps {
   currentError?: string;
 
   isReadOnly: boolean;
-  canUndo: boolean;
-  canRedo: boolean;
-  onUndo: () => void;
-  onRedo: () => void;
   onAddRow: () => void;
   onAddColumn: () => void;
 
@@ -36,31 +35,24 @@ interface SheetFormulaBarProps {
   };
 }
 
-const UndoIcon = ({ size }: { size: number }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M3 7v6h6" />
-    <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
-  </svg>
-);
-
-const RedoIcon = ({ size }: { size: number }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M21 7v6h-6" />
-    <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" />
-  </svg>
-);
-
-/** The responsive formula bar: cell/range info, the mention-aware formula input, undo/redo/add controls, and the error line. */
+/**
+ * The formula bar: the address chip, the mention-aware formula input, and the
+ * structural add buttons.
+ *
+ * Undo and redo used to live here as two hand-drawn inline SVGs at the lucide
+ * default stroke weight, which read heavier than every other icon in the
+ * product. They now sit in the toolbar with the rest of the commands, so this
+ * row is one line instead of three.
+ *
+ * Breakpoints are container queries, not `sm:` — the sheet lives in a resizable
+ * pane, so what matters is how wide the pane is, not the window.
+ */
 export const SheetFormulaBar: React.FC<SheetFormulaBarProps> = ({
   isRange,
   selectionAddress,
   currentDisplay,
   currentError,
   isReadOnly,
-  canUndo,
-  canRedo,
-  onUndo,
-  onRedo,
   onAddRow,
   onAddColumn,
   formulaInputRef,
@@ -72,37 +64,23 @@ export const SheetFormulaBar: React.FC<SheetFormulaBarProps> = ({
   driveId,
   mention,
 }) => (
-  <div className="border-b bg-muted/40">
-    {/* Cell info row - responsive layout */}
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-2 pb-1 sm:px-4 sm:pt-3">
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] font-medium uppercase text-muted-foreground sm:text-xs">
-          {isRange ? 'Range' : 'Cell'}
-        </span>
-        <span className="font-semibold text-sm sm:text-base">{selectionAddress}</span>
-      </div>
-      <div className="hidden text-xs text-muted-foreground sm:block">
-        Value: {currentDisplay || '—'}
-      </div>
-      {/* Mobile action buttons - visible only on small screens */}
-      <div className="ml-auto flex items-center gap-1 sm:hidden">
-        <Button variant="ghost" size="sm" onClick={onUndo} disabled={isReadOnly || !canUndo} className="h-7 w-7 p-0" aria-label="Undo">
-          <UndoIcon size={14} />
-        </Button>
-        <Button variant="ghost" size="sm" onClick={onRedo} disabled={isReadOnly || !canRedo} className="h-7 w-7 p-0" aria-label="Redo">
-          <RedoIcon size={14} />
-        </Button>
-        <Button variant="ghost" size="sm" onClick={onAddColumn} disabled={isReadOnly} className="h-7 px-2 text-xs" aria-label="Add column">
-          +Col
-        </Button>
-        <Button variant="ghost" size="sm" onClick={onAddRow} disabled={isReadOnly} className="h-7 px-2 text-xs" aria-label="Add row">
-          +Row
-        </Button>
-      </div>
-    </div>
-    {/* Formula input row */}
-    <div className="flex items-center gap-2 px-3 pb-2 sm:gap-3 sm:px-4 sm:pb-3">
-      <span className="hidden text-xs font-medium uppercase text-muted-foreground sm:block">Formula</span>
+  <div className="@container px-4 pt-2">
+    <div className="flex items-center gap-2">
+      {/* The address chip: monospace and fixed-width so the input does not
+          shift as the selection moves between A1 and AB100. */}
+      <span
+        className={cn(
+          'shrink-0 rounded-md border border-[var(--separator)] bg-muted/50 px-2 py-1',
+          'min-w-[72px] text-center font-mono text-xs tabular-nums text-foreground',
+        )}
+        aria-label={isRange ? 'Selected range' : 'Selected cell'}
+        title={isRange ? 'Selected range' : 'Selected cell'}
+      >
+        {selectionAddress}
+      </span>
+
+      <FunctionSquare size={16} className="hidden shrink-0 text-muted-foreground @[420px]:block" aria-hidden="true" />
+
       <div className="relative flex-1">
         <input
           ref={formulaInputRef}
@@ -112,12 +90,13 @@ export const SheetFormulaBar: React.FC<SheetFormulaBarProps> = ({
           onChange={(event) => onFormulaChange(event.target.value)}
           onKeyDown={onFormulaKeyDown}
           disabled={isReadOnly}
+          aria-label="Cell value or formula"
           className={cn(
-            'w-full rounded border border-input bg-background px-2 py-1.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20',
-            'sm:py-1',
-            isReadOnly && 'cursor-not-allowed opacity-75'
+            'w-full rounded-md border border-input bg-background px-2 py-1 font-mono text-sm shadow-xs transition-[color,box-shadow] outline-none',
+            'focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]',
+            isReadOnly && 'cursor-not-allowed opacity-75',
           )}
-          placeholder="Enter value or formula"
+          placeholder="Enter a value or formula"
         />
         <MentionPickerPortal
           isOpen={mention.isOpen}
@@ -129,25 +108,43 @@ export const SheetFormulaBar: React.FC<SheetFormulaBarProps> = ({
           onClose={mention.onClose}
         />
       </div>
-      {/* Desktop action buttons */}
-      <div className="hidden items-center gap-2 sm:flex">
-        <Button variant="ghost" size="sm" onClick={onUndo} disabled={isReadOnly || !canUndo} title="Undo (Ctrl+Z)" className="h-8 w-8 p-0">
-          <UndoIcon size={16} />
+
+      <span className="hidden shrink-0 text-xs text-muted-foreground @[640px]:block">
+        {currentDisplay || '—'}
+      </span>
+
+      <div className="flex shrink-0 items-center gap-1">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onAddColumn}
+          disabled={isReadOnly}
+          className="h-8 px-2"
+          aria-label="Add column"
+          title="Add column"
+        >
+          <Columns3 size={16} />
+          <span className="hidden @[520px]:inline">Column</span>
         </Button>
-        <Button variant="ghost" size="sm" onClick={onRedo} disabled={isReadOnly || !canRedo} title="Redo (Ctrl+Shift+Z)" className="h-8 w-8 p-0">
-          <RedoIcon size={16} />
-        </Button>
-        <div className="mx-1 h-4 w-px bg-border" />
-        <Button variant="outline" size="sm" onClick={onAddColumn} disabled={isReadOnly}>
-          + Column
-        </Button>
-        <Button variant="outline" size="sm" onClick={onAddRow} disabled={isReadOnly}>
-          + Row
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onAddRow}
+          disabled={isReadOnly}
+          className="h-8 px-2"
+          aria-label="Add row"
+          title="Add row"
+        >
+          <Rows3 size={16} />
+          <span className="hidden @[520px]:inline">Row</span>
         </Button>
       </div>
     </div>
+
     {currentError && (
-      <div className="px-3 pb-2 text-xs text-destructive sm:px-4 sm:pb-3">Error: {currentError}</div>
+      <p className="pt-1 text-xs text-destructive" role="status">
+        {currentError}
+      </p>
     )}
   </div>
 );

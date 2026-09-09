@@ -64,10 +64,7 @@ vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
   },
 }));
 
-vi.mock('../../../../../../lib/ai/core/timestamp-utils', () => ({
-  isNaiveISODatetime: vi.fn(() => false),
-  parseNaiveDatetimeInTimezone: vi.fn((dt: string) => new Date(dt)),
-}));
+// timestamp-utils is pure; the real parser is used rather than a partial stub.
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isUserDriveMember: vi.fn(),

@@ -2,7 +2,6 @@ import { pgTable, text, timestamp, jsonb, boolean, bigint, index, check } from '
 import { relations, sql } from 'drizzle-orm';
 import { users } from './auth';
 import { pages } from './core';
-import { agentWorkspaces } from './agent-workspaces';
 import { createId } from '@paralleldrive/cuid2';
 
 /**
@@ -15,19 +14,6 @@ export const conversations = pgTable('conversations', {
   title: text('title'), // Auto-generated from first message or user-defined
   type: text('type').notNull(), // 'global' | 'page' | 'drive'
   contextId: text('contextId'), // null for global, pageId for page chats, driveId for drive chats
-  /**
-   * The agent session (working context / sandbox) this thread lives in, or
-   * NULL for a plain chat with no session. The binding is write-once: set
-   * either at creation, or — for a conversation that has never had one — by
-   * exactly one guarded claim of the caller's own row
-   * (`conversationRepository.claimConversation`, `WHERE workspaceId IS NULL AND
-   * userId = :caller`; see `apps/web/src/lib/agent-workspaces/claim-conversation-in-workspace.ts`).
-   * It never re-points an already-bound row: a thread's history and its
-   * filesystem always agree, so moving a thread to another session is a
-   * fork, never a rebind. ON DELETE SET NULL: deleting a session keeps its
-   * threads as plain history (also reachable via the same claim path again).
-   */
-  workspaceId: text('workspaceId').references(() => agentWorkspaces.id, { onDelete: 'set null' }),
   /**
    * THE PAGE LINK FOR A `type='client'` THREAD — the API-managed conversations
    * `POST /api/v1/conversations` mints for pagespace-cli and other
@@ -56,9 +42,10 @@ export const conversations = pgTable('conversations', {
    * `POST /api/v1/chat/completions` against the thread claims it
    * (`conversationRepository.stampClientConversationPage`, `WHERE type='client'
    * AND "agentPageId" IS NULL`); later requests naming a different agent never
-   * re-point it, for the same reason `workspaceId` is write-once.
+   * re-point it — a thread's history and the agent that wrote it always agree,
+   * so re-homing one is a fork, never a rebind.
    *
-   * `ON DELETE SET NULL`, matching `workspaceId` and NOT the
+   * `ON DELETE SET NULL`, and NOT the
    * `chat_messages.pageId` cascade it replaces: this column must not become an
    * implicit deleter of `conversations` rows, because SET NULL is also what
    * makes a *soft*-deleted or moved page harmless.
@@ -79,15 +66,6 @@ export const conversations = pgTable('conversations', {
    * is defined exactly once.
    */
   agentPageId: text('agentPageId').references(() => pages.id, { onDelete: 'set null' }),
-  /**
-   * Stamped when this thread is closed OUT OF its session's listing — a fact
-   * separate from `isActive` (history soft-delete) on purpose: closing from
-   * the session must never touch history. NULL = open in the session's
-   * working set; set = closed from the listing (and, symmetrically, no
-   * longer counted against the session's conversation cap). Reopening is
-   * just clearing the stamp.
-   */
-  closedInWorkspaceAt: timestamp('closedInWorkspaceAt', { mode: 'date' }),
   /**
    * Monotonic per-conversation revision counter (Agent-Session Single Source
    * of Truth epic, Phase 2). Every committed message/conversation mutation
@@ -127,7 +105,6 @@ export const conversations = pgTable('conversations', {
   userTypeIdx: index('conversations_user_id_type_idx').on(table.userId, table.type),
   userLastMessageIdx: index('conversations_user_id_last_message_at_idx').on(table.userId, table.lastMessageAt),
   contextIdx: index('conversations_context_id_idx').on(table.contextId),
-  workspaceIdx: index('conversations_workspace_id_idx').on(table.workspaceId),
   planPageIdx: index('conversations_plan_page_id_idx').on(table.planPageId),
   /**
    * The `type='client'` half of `unifiedPageScope()`. Page-scoped reads join
@@ -202,6 +179,13 @@ export const conversations = pgTable('conversations', {
  * the backfill or forced us to invent attribution we do not have. The rule is
  * documented and tested, not enforced by the database.
  */
+/**
+ * The value `messages.source` carries for a turn spoken into a live voice call.
+ * Named once so the UI's glyph check, the realtime writer and the seed builder
+ * cannot drift onto three spellings of one string.
+ */
+export const MESSAGE_SOURCE_VOICE = 'voice';
+
 export const messages = pgTable('messages', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   conversationId: text('conversationId').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
@@ -235,6 +219,26 @@ export const messages = pgTable('messages', {
    * conversation's business (`derivedPageId()`).
    */
   sourceAgentId: text('sourceAgentId').references(() => pages.id, { onDelete: 'set null' }),
+  /**
+   * The TRANSPORT this row was authored over — `'voice'` for a turn spoken into
+   * a live realtime call, NULL for a typed one.
+   *
+   * A column and not a jsonb flag because it is a fact about the row that two
+   * unrelated readers need cheaply: the UI, to mark a spoken turn (the mic
+   * glyph) so a thread is honest about how it was made; and the realtime SEED
+   * builder, which replays prior turns into a new call and can only tell a
+   * spoken turn from a typed one if the row says so.
+   *
+   * NULLABLE, not `default 'text'`: purely widening, so every pre-existing row
+   * and every INSERT from old code during a rolling deploy stays valid, and
+   * "unknown/typed" needs no backfill to be correct. Read it through
+   * {@link MESSAGE_SOURCE_VOICE} rather than a string literal.
+   *
+   * NOT an enum column and NOT CHECK-constrained: a one-way CHECK on a table
+   * this size is a migration hazard for a value with exactly one non-null
+   * member today, and the write path is a single repository.
+   */
+  source: text('source'),
 }, (table) => ({
   conversationIdx: index('messages_conversation_id_idx').on(table.conversationId),
   conversationCreatedAtIdx: index('messages_conversation_id_created_at_idx').on(table.conversationId, table.createdAt),
@@ -251,10 +255,6 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
   user: one(users, {
     fields: [conversations.userId],
     references: [users.id],
-  }),
-  workspace: one(agentWorkspaces, {
-    fields: [conversations.workspaceId],
-    references: [agentWorkspaces.id],
   }),
   planPage: one(pages, {
     fields: [conversations.planPageId],

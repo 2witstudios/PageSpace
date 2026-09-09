@@ -4,10 +4,11 @@ vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('203.0.113.7'),
 }));
 
-vi.mock('@/lib/auth/auth-helpers', () => ({
-  isSafeNextPath: vi.fn(),
-  SIGNIN_NEXT_ALLOWED_PREFIXES: ['/oauth/consent'],
-}));
+// The real predicate + allowlist from the implementation leaf (url-utils), not
+// a stub: mocking isSafeNextPath is exactly how the consent-URL regression
+// below shipped unnoticed. Only the Node-only parts of the auth-helpers barrel
+// ('server-only', the '@/lib/auth' graph) are kept out of the test.
+vi.mock('@/lib/auth/auth-helpers', () => import('@/lib/auth/url-utils'));
 
 const checkDistributedRateLimit = vi.fn();
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
@@ -36,8 +37,14 @@ vi.mock('@pagespace/lib/services/email-service', () => ({
 }));
 
 import { GET } from '../route';
-import { isSafeNextPath } from '@/lib/auth/auth-helpers';
 import { parseMagicLinkStepUpNext } from '@pagespace/lib/auth/step-up-decisions';
+
+// The exact `next` the consent page stores during `pagespace login`: its own
+// URL, whose query embeds the CLI's percent-encoded loopback redirect_uri.
+const CLI_CONSENT_URL =
+  '/oauth/consent?client_id=psc_cli&redirect_uri=http%3A%2F%2F127.0.0.1%3A51739%2Fcallback' +
+  '&response_type=code&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM' +
+  '&code_challenge_method=S256&scope=drive.read+drive.write&state=xyzABC123';
 
 const ALLOWED = { allowed: true, attemptsRemaining: 9 };
 
@@ -88,7 +95,6 @@ describe('GET /api/auth/step-up/magic-link/verify', () => {
     });
     completeMagicLinkStepUp.mockResolvedValue({ ok: true, data: { stepUpToken: 'ps_stepup_abc' } });
     vi.mocked(parseMagicLinkStepUpNext).mockReturnValue('/oauth/consent?client_id=x');
-    vi.mocked(isSafeNextPath).mockReturnValue(true);
 
     const res = await GET(verifyReq('ps_magic_x') as never);
 
@@ -101,6 +107,39 @@ describe('GET /api/auth/step-up/magic-link/verify', () => {
     expect(location.hash).toBe('#step_up_token=ps_stepup_abc');
     expect(location.search).not.toContain('step_up_token');
     expect(res.headers.get('cache-control')).toContain('no-store');
+  });
+
+  it('redirects the CLI consent URL — encoded loopback redirect_uri intact — with the token in the fragment (regression)', async () => {
+    verifyMagicLinkToken.mockResolvedValue({
+      ok: true,
+      data: { userId: 'user-1', isNewUser: false, metadata: JSON.stringify({ purpose: 'step_up' }) },
+    });
+    completeMagicLinkStepUp.mockResolvedValue({ ok: true, data: { stepUpToken: 'ps_stepup_abc' } });
+    vi.mocked(parseMagicLinkStepUpNext).mockReturnValue(CLI_CONSENT_URL);
+
+    const res = await GET(verifyReq('ps_magic_x') as never);
+
+    expect(res.status).toBe(302);
+    const location = new URL(res.headers.get('location') ?? '');
+    expect(location.pathname).toBe('/oauth/consent');
+    expect(location.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:51739/callback');
+    expect(location.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(location.searchParams.get('state')).toBe('xyzABC123');
+    expect(location.hash).toBe('#step_up_token=ps_stepup_abc');
+  });
+
+  it('renders the terminal page instead of redirecting when the stored next is hostile (real predicate)', async () => {
+    verifyMagicLinkToken.mockResolvedValue({
+      ok: true,
+      data: { userId: 'user-1', isNewUser: false, metadata: JSON.stringify({ purpose: 'step_up' }) },
+    });
+    completeMagicLinkStepUp.mockResolvedValue({ ok: true, data: { stepUpToken: 'ps_stepup_abc' } });
+    vi.mocked(parseMagicLinkStepUpNext).mockReturnValue('https://evil.com/phish');
+
+    const res = await GET(verifyReq('ps_magic_x') as never);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('location')).toBeNull();
   });
 
   it('marks every response no-store — success page, failure page, and redirect alike', async () => {

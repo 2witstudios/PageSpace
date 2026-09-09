@@ -33,7 +33,7 @@ import {
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, discardUsageOutcome, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
@@ -747,7 +747,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
 
     // Track AI usage
     const usage = result.usage;
-    AIMonitoring.trackUsage({
+    discardUsageOutcome(AIMonitoring.trackUsage({
       userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
@@ -761,7 +761,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
       openrouterGenerationIds: extractOpenRouterGenerationIds(result.steps),
       success: true,
       holdId,
-    });
+    }));
     // trackUsage owns the hold release from here.
     holdHandedOff = true;
 

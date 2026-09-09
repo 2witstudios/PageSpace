@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { adaptSandboxHandleToExecutableSandbox, createExecClientFromSandboxHost } from '../sandbox-host-adapter';
-import type { SandboxHandle, SandboxHost } from '../../sandbox-host';
+import { SPRITE_SANDBOX_CAPABILITIES, type SandboxHandle, type SandboxHost } from '../../sandbox-host';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
 
 const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
@@ -8,6 +8,7 @@ const substrate = { kind: 'sprite' as const };
 
 function fakeHandle(over: Partial<SandboxHandle> = {}): SandboxHandle {
   return {
+    capabilities: SPRITE_SANDBOX_CAPABILITIES,
     sandboxId: 'm1',
     spriteInstanceId: null,
     exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
@@ -19,6 +20,17 @@ function fakeHandle(over: Partial<SandboxHandle> = {}): SandboxHandle {
     },
     listStreams: async () => [],
     killSession: async () => {},
+    services: {
+      create: async () => {},
+      list: async () => [],
+      get: async () => null,
+      start: async () => {},
+      stop: async () => {},
+      remove: async () => {},
+    },
+    urlInfo: async () => ({ url: null, auth: 'unknown' }),
+    setUrlAuth: async () => {},
+    powerState: async () => 'unknown' as const,
     ...over,
   };
 }
@@ -148,5 +160,24 @@ describe('adaptSandboxHandleToExecutableSandbox — the Sprite INSTANCE id must 
     const sandbox = adaptSandboxHandleToExecutableSandbox(fakeHandle({ spriteInstanceId: null }));
 
     expect(sandbox.spriteInstanceId).toBeNull();
+  });
+});
+
+/**
+ * The capability the CHECKPOINT gate reads (`tool-runners.ts`) arrives on the
+ * `ExecutableSandbox` only because this adapter carries it across. Dropping it
+ * here is invisible in exactly the way dropping `spriteInstanceId` used to be:
+ * every call still works while the gate loses its only structural signal that
+ * a substrate cannot snapshot its filesystem (invariant 12), and a destructive
+ * agent batch then runs unprotected.
+ */
+describe('adaptSandboxHandleToExecutableSandbox — advertised capabilities', () => {
+  it("should carry the handle's capabilities through, verbatim", () => {
+    const local = { exec: true, fs: true, stream: false, checkpoint: false, preview: false, services: false } as const;
+    expect(adaptSandboxHandleToExecutableSandbox(fakeHandle({ capabilities: local })).capabilities).toEqual(local);
+  });
+
+  it('should carry a Sprite handle\'s full set too — not a hard-coded default that would mask a narrower substrate', () => {
+    expect(adaptSandboxHandleToExecutableSandbox(fakeHandle()).capabilities).toEqual(SPRITE_SANDBOX_CAPABILITIES);
   });
 });

@@ -1,5 +1,6 @@
 import { getConnection, checkConnectionHealth } from '@/lib/websocket';
 import { logger } from '@pagespace/lib/logging/logger';
+import { RequestCorrelator, CorrelationError } from '@/lib/env-bridge/correlator';
 
 /**
  * MCP Bridge - Server-side WebSocket manager for tool execution
@@ -8,7 +9,9 @@ import { logger } from '@pagespace/lib/logging/logger';
  * clients for executing MCP tools locally on the user's machine.
  *
  * Features:
- * - Tool execution request/response matching
+ * - Tool execution request/response matching (the shared `RequestCorrelator`;
+ *   this bridge keeps its 30s default, the env bridge takes its deadlines from
+ *   `resolveTimeout`)
  * - Timeout handling (30s default)
  * - Connection status checking
  * - Error handling and logging
@@ -30,16 +33,10 @@ interface ToolExecutionResponse {
   error?: string;
 }
 
-interface PendingRequest {
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
-  timeout: NodeJS.Timeout;
-}
-
 export class MCPBridge {
-  private pendingRequests: Map<string, PendingRequest> = new Map();
   private readonly defaultTimeout = 30000; // 30 seconds
   private readonly logger = logger.child({ component: 'mcp-bridge' });
+  private readonly correlator = new RequestCorrelator<unknown>();
 
   /**
    * Execute a tool on the user's desktop via WebSocket
@@ -95,39 +92,25 @@ export class MCPBridge {
       action: 'send_tool_request',
     });
 
-    // Return a promise that will be resolved when we receive the response
-    return new Promise((resolve, reject) => {
-      // Set up timeout
-      const timeout = setTimeout(() => {
-        this.pendingRequests.delete(requestId);
-        reject(
-          new Error(
-            `Tool execution timeout after ${this.defaultTimeout}ms: ${serverName}.${toolName}`
-          )
-        );
-      }, this.defaultTimeout);
-
-      // Store the pending request
-      this.pendingRequests.set(requestId, {
-        resolve,
-        reject,
-        timeout,
+    // The correlator registers the id, arms the 30s deadline and puts the
+    // request on the wire; its typed failures are mapped back to this bridge's
+    // historical error messages so callers see exactly what they always did.
+    return this.correlator
+      .open({
+        id: requestId,
+        group: userId,
+        timeoutMs: this.defaultTimeout,
+        send: () => connection.send(JSON.stringify(request)),
+      })
+      .catch((error: unknown) => {
+        if (error instanceof CorrelationError && error.kind === 'timeout') {
+          throw new Error(`Tool execution timeout after ${this.defaultTimeout}ms: ${serverName}.${toolName}`);
+        }
+        if (error instanceof CorrelationError && error.kind === 'send_failed') {
+          throw new Error(`Failed to send tool execution request: ${error.message.replace(/^Failed to send request: /, '')}`);
+        }
+        throw error;
       });
-
-      // Send the request to the desktop client
-      try {
-        connection.send(JSON.stringify(request));
-      } catch (error) {
-        // Clean up if send fails
-        clearTimeout(timeout);
-        this.pendingRequests.delete(requestId);
-        reject(
-          new Error(
-            `Failed to send tool execution request: ${error instanceof Error ? error.message : String(error)}`
-          )
-        );
-      }
-    });
   }
 
   /**
@@ -139,9 +122,7 @@ export class MCPBridge {
    * @param response - The tool execution response from the desktop
    */
   handleToolResponse(response: ToolExecutionResponse): void {
-    const pending = this.pendingRequests.get(response.id);
-
-    if (!pending) {
+    if (!this.correlator.has(response.id)) {
       this.logger.warn('Received response for unknown request ID', {
         requestId: response.id,
         action: 'handle_tool_response',
@@ -150,20 +131,14 @@ export class MCPBridge {
       return;
     }
 
-    // Clear the timeout
-    clearTimeout(pending.timeout);
-
-    // Remove from pending requests
-    this.pendingRequests.delete(response.id);
-
-    // Resolve or reject the promise
+    // Resolve or reject the promise (the correlator clears the deadline and forgets the id)
     if (response.success) {
       this.logger.info('Tool execution succeeded', {
         requestId: response.id,
         action: 'handle_tool_response',
         status: 'success',
       });
-      pending.resolve(response.result);
+      this.correlator.resolve(response.id, response.result);
     } else {
       this.logger.error('Tool execution failed', {
         requestId: response.id,
@@ -171,7 +146,8 @@ export class MCPBridge {
         action: 'handle_tool_response',
         status: 'failed',
       });
-      pending.reject(
+      this.correlator.reject(
+        response.id,
         new Error(response.error || 'Tool execution failed with unknown error')
       );
     }
@@ -187,7 +163,7 @@ export class MCPBridge {
     // belong to which user. For simplicity, we'll just note this in the logs.
     this.logger.info('User disconnected, pending requests will timeout', {
       userId,
-      pendingCount: this.pendingRequests.size,
+      pendingCount: this.correlator.pendingCount(),
       action: 'cancel_user_requests',
     });
   }
@@ -207,7 +183,7 @@ export class MCPBridge {
    * Get the number of pending requests
    */
   getPendingRequestCount(): number {
-    return this.pendingRequests.size;
+    return this.correlator.pendingCount();
   }
 }
 

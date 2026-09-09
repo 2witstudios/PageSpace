@@ -18,6 +18,7 @@ import { useFindStore } from '@/stores/useFindStore';
 import { dispatchFind, getPluginMatches } from '@/lib/editor/find-plugin';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
+import DocumentConflictGate from './DocumentConflictGate';
 
 interface DocumentViewProps {
   pageId: string;
@@ -51,6 +52,9 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
     updateContentFromServer,
     saveWithDebounce,
     forceSave,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
   } = useDocument(pageId);
 
   // Track editor focus state for pull-to-refresh
@@ -331,6 +335,15 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
         )}
       </AnimatePresence>
 
+      {/* Save conflict — persistent until the user picks a side. The local
+          buffer is untouched and autosave is paused while this is shown. */}
+      <DocumentConflictGate
+        conflict={conflict}
+        onResolve={resolveConflict}
+        isResolving={isResolvingConflict}
+        previewMode={documentState?.contentMode === 'markdown' ? 'plain' : 'rich'}
+      />
+
       {/* Read-only indicator */}
       {isReadOnly && (
         <div className="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 px-4 py-2">
@@ -347,7 +360,7 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
         disabled={isPullToRefreshDisabled}
         className="flex-1"
       >
-        <CustomScrollArea className={`h-full ${isReadOnly ? 'bg-gray-50/50 dark:bg-gray-900/20' : ''}`}>
+        <CustomScrollArea className={`h-full ${isReadOnly ? 'bg-muted/30 dark:bg-muted/20' : ''}`}>
           <div className={`flex justify-center items-start p-4 ${activeView === 'code' ? 'h-full' : ''}`}>
             <AnimatePresence mode="wait">
               {activeView === 'code' ? (

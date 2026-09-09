@@ -84,7 +84,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 vi.mock('@/lib/ai/core/provider-factory', () => ({
-  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.4-nano' }),
   isProviderError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r && 'status' in r),
 }));
 vi.mock('@/lib/ai/core/system-prompt', () => ({
@@ -126,7 +126,7 @@ vi.mock('@/lib/ai/core/ai-tools', async () => {
 });
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
-  filterToolsForDispatchCredentials: vi.fn((tools: unknown) => tools),
+  filterToolsForEphemeralWorkspace: vi.fn((tools: unknown) => tools),
   filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn((tools: unknown) => tools),
@@ -225,7 +225,7 @@ const agentPage = {
   driveId: 'drive-abc',
   systemPrompt: null,
   aiProvider: 'openai',
-  aiModel: 'openai/gpt-5.3-chat',
+  aiModel: 'openai/gpt-5.4-nano',
   includeDrivePrompt: false,
 };
 
@@ -634,8 +634,8 @@ describe('POST /api/v1/chat/completions', () => {
 
   test('thread mode: calls getMessagesForPage with pageId and conversationId', async () => {
     const dbMessages = [
-      { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior message', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
-      { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior response', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
+      { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior message', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const, source: null },
+      { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior response', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const, source: null },
     ];
     vi.mocked(messageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
@@ -669,8 +669,8 @@ describe('POST /api/v1/chat/completions', () => {
 
   test('thread mode: DB history messages are prepended before the new user message', async () => {
     const dbMessages = [
-      { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior question', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
-      { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior answer', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
+      { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior question', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const, source: null },
+      { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior answer', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const, source: null },
     ];
     vi.mocked(messageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
     await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
@@ -704,6 +704,65 @@ describe('POST /api/v1/chat/completions', () => {
       should: 'hoist the caller system content into the system: option instead of silently dropping it',
       actual: typeof systemArg === 'string' && systemArg.includes('Answer only JSON'),
       expected: true,
+    });
+  });
+
+  test('openai mode: a request without conversation_id persists nothing and still streams', async () => {
+    // #2414: the route used to save both sides of a stateless call against a
+    // freshly minted conversationId that had no `conversations` row. That
+    // column is NOT NULL with an FK, so the save died 23503 in setup and 500'd
+    // every default-shaped request. The documented contract for this path is
+    // "nothing is kept" (docs/features/agent-api), so the writes go, not the
+    // FK — creating the row would have made the stateless path durable.
+    const response = await POST(makeRequest(validBody));
+    await response.text();
+    assert({
+      given: 'a request with no conversation_id — the documented stateless path',
+      should: 'return a 200 stream while writing no conversation and no message',
+      actual: {
+        status: response.status,
+        conversationsCreated: vi.mocked(conversationRepository.createConversation).mock.calls.length,
+        messagesSaved: vi.mocked(messageRepository.savePageMessage).mock.calls.length,
+      },
+      expected: { status: 200, conversationsCreated: 0, messagesSaved: 0 },
+    });
+  });
+
+  test('openai mode: a stateless call is still billed for what it burned', async () => {
+    // Not persisting is not the same as not charging: the provider ran.
+    const response = await POST(makeRequest(validBody));
+    await response.text();
+    const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0]?.[0];
+    assert({
+      given: 'a stateless call that finished normally',
+      should: 'still track usage once, against the in-request correlation id',
+      actual: {
+        count: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+        conversationId: call?.conversationId,
+        success: call?.success,
+      },
+      expected: { count: 1, conversationId: 'test-id-123', success: true },
+    });
+  });
+
+  test('thread mode: a supplied conversation_id is what makes the exchange durable', async () => {
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
+    await response.text();
+    const roles = vi.mocked(messageRepository.savePageMessage).mock.calls.map(c => c[0].role);
+    const convIds = vi.mocked(messageRepository.savePageMessage).mock.calls.map(c => c[0].conversationId);
+    assert({
+      given: 'a thread-mode request whose conversations row already exists',
+      should: 'persist both sides against that conversation, without re-creating it',
+      actual: {
+        roles,
+        convIds: [...new Set(convIds)],
+        conversationsCreated: vi.mocked(conversationRepository.createConversation).mock.calls.length,
+      },
+      expected: {
+        roles: ['user', 'assistant'],
+        convIds: ['conv-abc'],
+        conversationsCreated: 0,
+      },
     });
   });
 
@@ -838,8 +897,7 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
       type: 'client',
       lastMessageAt: null,
@@ -877,8 +935,7 @@ describe('POST /api/v1/chat/completions', () => {
         createdAt: new Date(),
         updatedAt: new Date(),
         isShared: false,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
         type: 'page',
         lastMessageAt: null,
@@ -926,8 +983,7 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
@@ -967,8 +1023,7 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
@@ -996,8 +1051,7 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
@@ -1029,8 +1083,7 @@ describe('POST /api/v1/chat/completions', () => {
         createdAt: new Date(),
         updatedAt: new Date(),
         isShared: false,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
         type: 'page',
         lastMessageAt: null,
@@ -1064,7 +1117,9 @@ describe('POST /api/v1/chat/completions', () => {
       },
     })) as unknown as typeof streamText);
 
-    const response = await POST(makeRequest(validBody));
+    // conversation_id supplied: persistence is what this test is about, and a
+    // stateless call deliberately writes nothing (#2414).
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
     await response.text();
 
     const saveCalls = vi.mocked(messageRepository.savePageMessage).mock.calls;
@@ -1132,19 +1187,23 @@ describe('POST /api/v1/chat/completions', () => {
       },
     })) as unknown as typeof streamText);
 
-    const response = await POST(makeRequest(validBody));
+    // conversation_id supplied so the assistant row is actually written —
+    // otherwise "saved without toolCalls" would pass on a save that never
+    // happened (#2414).
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
     await response.text();
 
     const saveCalls = vi.mocked(messageRepository.savePageMessage).mock.calls;
     const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
     assert({
       given: 'a stream with steps but no tool calls',
-      should: 'save the assistant message without toolCalls or toolResults',
+      should: 'save the assistant message, with no toolCalls or toolResults on it',
       actual: {
+        saved: assistantSave !== undefined,
         toolCalls: assistantSave?.[0]?.toolCalls,
         toolResults: assistantSave?.[0]?.toolResults,
       },
-      expected: { toolCalls: undefined, toolResults: undefined },
+      expected: { saved: true, toolCalls: undefined, toolResults: undefined },
     });
   });
 
@@ -1188,7 +1247,9 @@ describe('POST /api/v1/chat/completions', () => {
     // here must NOT strand the gate's hold + in-flight slot until TTL.
     vi.mocked(messageRepository.savePageMessage).mockRejectedValueOnce(new Error('db write failed'));
 
-    const response = await POST(makeRequest(validBody));
+    // Thread mode: only a durable call persists the user message at all, so
+    // that save is the setup step this leak regression can throw from (#2414).
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
 
     assert({
       given: 'a throw during pre-stream setup (user-message persistence) after the hold is placed',
@@ -1339,7 +1400,9 @@ describe('POST /api/v1/chat/completions', () => {
       () => new Promise<void>((resolve) => setTimeout(() => { released = true; resolve(); }, 0)),
     );
 
-    const response = await POST(makeRequest(validBody));
+    // Thread mode for the same reason as the test above: the stateless path
+    // never reaches savePageMessage (#2414).
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
 
     assert({
       given: 'a pre-stream setup failure whose hold release resolves on a later tick',
@@ -1359,8 +1422,7 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
@@ -1388,8 +1450,7 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: true,
-  workspaceId: null,
-  closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+  agentPageId: null, rev: 0,
   planPageId: null,
       type: 'page',
       lastMessageAt: null,

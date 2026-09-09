@@ -34,112 +34,110 @@ const NON_OPENROUTER_AI_PROVIDERS = new Set<string>([
  */
 export const AI_PRICING = {
   // OpenRouter - Anthropic (source: openrouter.ai/api/v1/models)
-  'anthropic/claude-opus-5': { input: 5.00, output: 25.00 },
-  'anthropic/claude-opus-5-fast': { input: 10.00, output: 50.00 },
-  'anthropic/claude-sonnet-5': { input: 2.00, output: 10.00 },
-  'anthropic/claude-fable-5': { input: 10.00, output: 50.00 },
-  'anthropic/claude-opus-4.8': { input: 5.00, output: 25.00 },
-  'anthropic/claude-opus-4.8-fast': { input: 10.00, output: 50.00 },
-  'anthropic/claude-opus-4.7': { input: 5.00, output: 25.00 },
-  'anthropic/claude-opus-4.7-fast': { input: 30.00, output: 150.00 },
-  'anthropic/claude-opus-4.6': { input: 5.00, output: 25.00 },
+  'anthropic/claude-opus-5': { input: 5, output: 25 },
+  'anthropic/claude-opus-5-fast': { input: 10, output: 50 },
+  'anthropic/claude-sonnet-5': { input: 2, output: 10 },
+  'anthropic/claude-fable-5': { input: 10, output: 50 },
+  'anthropic/claude-opus-4.8': { input: 5, output: 25 },
+  'anthropic/claude-opus-4.8-fast': { input: 10, output: 50 },
+  'anthropic/claude-opus-4.7': { input: 5, output: 25 },
+  'anthropic/claude-opus-4.7-fast': { input: 30, output: 150 },
+  'anthropic/claude-opus-4.6': { input: 5, output: 25 },
   'anthropic/claude-opus-4.6-fast': { input: 30.00, output: 150.00 },
-  'anthropic/claude-sonnet-4.6': { input: 3.00, output: 15.00 },
-  'anthropic/claude-opus-4.5': { input: 5.00, output: 25.00 },
-  'anthropic/claude-sonnet-4.5': { input: 3.00, output: 15.00 },
-  'anthropic/claude-haiku-4.5': { input: 1.00, output: 5.00 },
-  'anthropic/claude-opus-4.1': { input: 15.00, output: 75.00 },
-  'anthropic/claude-opus-4': { input: 15.00, output: 75.00 },
-  'anthropic/claude-sonnet-4': { input: 3.00, output: 15.00 },
+  'anthropic/claude-sonnet-4.6': { input: 3, output: 15 },
+  'anthropic/claude-opus-4.5': { input: 5, output: 25 },
+  'anthropic/claude-sonnet-4.5': { input: 3, output: 15 },
+  'anthropic/claude-haiku-4.5': { input: 1, output: 5 },
+  'anthropic/claude-opus-4.1': { input: 15, output: 75 },
+  'anthropic/claude-opus-4': { input: 15, output: 75 },
+  'anthropic/claude-sonnet-4': { input: 3, output: 15 },
   'anthropic/claude-3.5-sonnet': { input: 3.00, output: 15.00 },
   'anthropic/claude-3.5-haiku': { input: 1.00, output: 5.00 },
   'anthropic/claude-3-haiku': { input: 0.25, output: 1.25 },
 
   // OpenRouter - OpenAI (source: openrouter.ai/api/v1/models)
-  'openai/gpt-5.6-sol-pro': { input: 5.00, output: 30.00 },
-  'openai/gpt-5.6-sol': { input: 5.00, output: 30.00 },
-  'openai/gpt-5.6-terra-pro': { input: 2.50, output: 15.00 },
-  'openai/gpt-5.6-terra': { input: 2.50, output: 15.00 },
-  'openai/gpt-5.6-luna-pro': { input: 1.00, output: 6.00 },
-  'openai/gpt-5.6-luna': { input: 1.00, output: 6.00 },
-  'openai/gpt-5.5-pro': { input: 30.00, output: 180.00 },
-  'openai/gpt-5.2-pro': { input: 21.00, output: 168.00 },
-  'openai/gpt-5.2-chat': { input: 1.75, output: 14.00 },
-  'openai/gpt-5.1-chat': { input: 1.25, output: 10.00 },
-  'openai/gpt-5.1-codex-max': { input: 1.25, output: 10.00 },
-  'openai/gpt-5-pro': { input: 15.00, output: 120.00 },
-  'openai/gpt-5-codex': { input: 1.25, output: 10.00 },
-  'openai/o3': { input: 2.00, output: 8.00 },
-  'openai/o3-pro': { input: 20.00, output: 80.00 },
-  'openai/o4-mini': { input: 1.10, output: 4.40 },
-  'openai/gpt-4.1': { input: 2.00, output: 8.00 },
-  'openai/gpt-4.1-mini': { input: 0.40, output: 1.60 },
-  'openai/gpt-5.5': { input: 5.00, output: 30.00 },
-  'openai/gpt-5.4-pro': { input: 30.00, output: 180.00 },
-  'openai/gpt-5.4': { input: 2.50, output: 15.00 },
-  'openai/gpt-5.4-mini': { input: 0.75, output: 4.50 },
-  'openai/gpt-5.4-nano': { input: 0.20, output: 1.25 },
-  'openai/gpt-5.3-chat': { input: 1.75, output: 14.00 },
+  'openai/gpt-5.6-sol-pro': { input: 2, output: 10 },
+  'openai/gpt-5.6-sol': { input: 2, output: 10 },
+  'openai/gpt-5.6-terra-pro': { input: 2, output: 12 },
+  'openai/gpt-5.6-terra': { input: 2, output: 12 },
+  'openai/gpt-5.6-luna-pro': { input: 0.2, output: 1.2 },
+  'openai/gpt-5.6-luna': { input: 0.2, output: 1.2 },
+  'openai/gpt-5.5-pro': { input: 30, output: 180 },
+  'openai/gpt-5.2-pro': { input: 21, output: 168 },
+  'openai/gpt-5.2-chat': { input: 1.75, output: 14 },
+  'openai/gpt-5.1-codex-max': { input: 1.25, output: 10 },
+  'openai/gpt-5-pro': { input: 15, output: 120 },
+  'openai/o3': { input: 2, output: 8 },
+  'openai/o3-pro': { input: 20, output: 80 },
+  'openai/o4-mini': { input: 1.1, output: 4.4 },
+  'openai/gpt-4.1': { input: 2, output: 8 },
+  'openai/gpt-4.1-mini': { input: 0.4, output: 1.6 },
+  'openai/gpt-5.5': { input: 5, output: 30 },
+  'openai/gpt-5.4-pro': { input: 30, output: 180 },
+  'openai/gpt-5.4': { input: 2.5, output: 15 },
+  'openai/gpt-5.4-mini': { input: 0.75, output: 4.5 },
+  'openai/gpt-5.4-nano': { input: 0.2, output: 1.25 },
   'openai/gpt-5.3-chat-latest': { input: 1.75, output: 14.00 },
-  'openai/gpt-5.3-codex': { input: 1.75, output: 14.00 },
-  'openai/gpt-5.2': { input: 1.75, output: 14.00 },
-  'openai/gpt-5.2-codex': { input: 1.75, output: 14.00 },
+  'openai/gpt-5.3-codex': { input: 1.75, output: 14 },
+  'openai/gpt-5.2': { input: 1.75, output: 14 },
+  'openai/gpt-5.2-codex': { input: 1.75, output: 14 },
   'openai/gpt-5.2-mini': { input: 0.35, output: 2.80 },
   'openai/gpt-5.2-nano': { input: 0.07, output: 0.56 },
-  'openai/gpt-5.1': { input: 1.25, output: 10.00 },
-  'openai/gpt-5.1-codex': { input: 1.25, output: 10.00 },
-  'openai/gpt-5.1-codex-mini': { input: 0.25, output: 2.00 },
-  'openai/gpt-4o': { input: 2.50, output: 10.00 },
-  'openai/gpt-4o-mini': { input: 0.15, output: 0.60 },
-  'openai/o3-deep-research': { input: 10.00, output: 40.00 },
-  'openai/o4-mini-deep-research': { input: 2.00, output: 8.00 },
-  'openai/gpt-5': { input: 1.25, output: 10.00 },
-  'openai/gpt-5-mini': { input: 0.25, output: 2.00 },
-  'openai/gpt-5-nano': { input: 0.05, output: 0.40 },
+  'openai/gpt-5.1': { input: 1.25, output: 10 },
+  'openai/gpt-5.1-codex': { input: 1.25, output: 10 },
+  'openai/gpt-5.1-codex-mini': { input: 0.25, output: 2 },
+  'openai/gpt-4o': { input: 2.5, output: 10 },
+  'openai/gpt-4o-mini': { input: 0.15, output: 0.6 },
+  'openai/gpt-5': { input: 1.25, output: 10 },
+  'openai/gpt-5-mini': { input: 0.25, output: 2 },
+  'openai/gpt-5-nano': { input: 0.05, output: 0.4 },
   'openai/gpt-oss-120b': { input: 0.037, output: 0.17 },
-  'openai/gpt-oss-20b': { input: 0.03, output: 0.14 },
+  'openai/gpt-oss-20b': { input: 0.03, output: 0.13 },
 
   // OpenRouter - Google (source: openrouter.ai/api/v1/models)
-  'google/gemini-3.6-flash': { input: 1.50, output: 7.50 },
-  'google/gemini-3.5-flash-lite': { input: 0.30, output: 2.50 },
-  'google/gemini-3.5-flash': { input: 1.50, output: 9.00 },
-  'google/gemini-3.1-flash-lite-image': { input: 0.25, output: 1.50 },
-  'google/gemini-3.1-flash-image': { input: 0.50, output: 3.00 },
-  'google/gemini-3-pro-image': { input: 2.00, output: 12.00 },
-  'google/gemini-3.1-pro-preview': { input: 2.00, output: 12.00 },
-  'google/gemini-3.1-pro-preview-customtools': { input: 2.00, output: 12.00 },
-  'google/gemini-3.1-flash-lite': { input: 0.25, output: 1.50 },
-  'google/gemini-3.1-flash-lite-preview': { input: 0.25, output: 1.50 },
-  'google/gemini-3.1-flash-image-preview': { input: 0.50, output: 3.00 },
-  'google/gemini-3-flash-preview': { input: 0.50, output: 3.00 },
-  'google/gemini-2.5-pro': { input: 1.25, output: 10.00 },
-  'google/gemini-2.5-flash': { input: 0.30, output: 2.50 },
-  'google/gemini-2.5-flash-lite': { input: 0.10, output: 0.40 },
+  'google/gemini-3.7-flash': { input: 0.375, output: 1.875 },
+  'google/gemini-3.6-flash': { input: 0.75, output: 3.75 },
+  'google/gemini-3.5-flash-lite': { input: 0.3, output: 2.5 },
+  'google/gemini-3.5-flash': { input: 1.5, output: 9 },
+  'google/gemini-3.1-flash-lite-image': { input: 0.25, output: 1.5 },
+  'google/gemini-3.1-flash-image': { input: 0.5, output: 3 },
+  'google/gemini-3-pro-image': { input: 2, output: 12 },
+  'google/gemini-3.1-pro-preview': { input: 2, output: 12 },
+  'google/gemini-3.1-pro-preview-customtools': { input: 2, output: 12 },
+  'google/gemini-3.1-flash-lite': { input: 0.25, output: 1.5 },
+  'google/gemini-3.1-flash-lite-preview': { input: 0.25, output: 1.5 },
+  'google/gemini-3.1-flash-image-preview': { input: 0.5, output: 3 },
+  'google/gemini-3-flash-preview': { input: 0.5, output: 3 },
+  'google/gemini-2.5-pro': { input: 1.25, output: 10 },
+  'google/gemini-2.5-flash': { input: 0.3, output: 2.5 },
+  'google/gemini-2.5-flash-lite': { input: 0.1, output: 0.4 },
   'google/gemini-2.5-flash-lite-preview-06-17': { input: 0.10, output: 0.40 },
   'google/gemini-2.0-pro': { input: 1.25, output: 5.00 },
-  'google/gemma-4-31b-it': { input: 0.14, output: 0.40 },
-  'google/gemma-4-26b-a4b-it': { input: 0.12, output: 0.35 },
+  'google/gemma-4-31b-it': { input: 0.09, output: 0.34 },
+  'google/gemma-4-26b-a4b-it': { input: 0.07, output: 0.34 },
 
   // OpenRouter - Meta (source: openrouter.ai/api/v1/models)
   'meta/muse-spark-1.1': { input: 1.25, output: 4.25 },
-  'meta-llama/llama-4-maverick': { input: 0.20, output: 0.80 },
-  'meta-llama/llama-4-scout': { input: 0.10, output: 0.30 },
-  'meta-llama/llama-3.3-70b-instruct': { input: 0.13, output: 0.40 },
+  'meta-llama/llama-4-maverick': { input: 0.2, output: 0.8 },
+  'meta-llama/llama-4-scout': { input: 0.11, output: 0.34 },
+  'meta-llama/llama-3.3-70b-instruct': { input: 0.71, output: 0.71 },
   'meta-llama/llama-3.1-405b-instruct': { input: 3.00, output: 3.00 },
 
   // OpenRouter - Mistral (source: openrouter.ai/api/v1/models)
-  'mistralai/mistral-large-2512': { input: 0.50, output: 1.50 },
-  'mistralai/mistral-medium-3-5': { input: 1.50, output: 7.50 },
-  'mistralai/mistral-medium-3': { input: 0.40, output: 2.00 },
-  'mistralai/devstral-2512': { input: 0.40, output: 2.00 },
-  'mistralai/mistral-small-2603': { input: 0.15, output: 0.60 },
-  'mistralai/mistral-medium-3.1': { input: 0.40, output: 2.00 },
-  'mistralai/mistral-small-3.2-24b-instruct': { input: 0.10, output: 0.30 },
-  'mistralai/codestral-2508': { input: 0.30, output: 0.90 },
+  'mistralai/mistral-large-2512': { input: 0.5, output: 1.5 },
+  'mistralai/mistral-medium-3-5': { input: 1.5, output: 7.5 },
+  'mistralai/mistral-medium-3': { input: 0.4, output: 2 },
+  'mistralai/devstral-2512': { input: 0.44, output: 2.2 },
+  'mistralai/mistral-small-2603': { input: 0.15, output: 0.6 },
+  'mistralai/mistral-medium-3.1': { input: 0.4, output: 2 },
+  'mistralai/mistral-small-3.2-24b-instruct': { input: 0.075, output: 0.2 },
+  'mistralai/codestral-2508': { input: 0.3, output: 0.9 },
   'mistralai/devstral-medium': { input: 0.40, output: 2.00 },
   'mistralai/devstral-small': { input: 0.10, output: 0.30 },
 
   // Z.ai GLM direct — GLM Coder Plan supported models only (source: z.ai/guides/overview/pricing)
+  // GLM-5.3 rates unpublished at launch (2026-08-14); GLM-5.2 rates as placeholder.
+  'glm-5.3':     { input: 1.40, output: 4.40 },
   'glm-5.2':     { input: 1.40, output: 4.40 },
   'glm-5.1':     { input: 1.40, output: 4.40 },
   'glm-5-turbo': { input: 1.20, output: 4.00 },
@@ -150,65 +148,63 @@ export const AI_PRICING = {
   'glm-5':       { input: 1.00, output: 3.20 },
 
   // OpenRouter - Chinese/Asian (source: openrouter.ai/api/v1/models)
-  'z-ai/glm-5.2': { input: 0.6692, output: 2.1032 },
-  'z-ai/glm-5.1': { input: 0.966, output: 3.036 },
-  'z-ai/glm-5-turbo': { input: 1.20, output: 4.00 },
-  'z-ai/glm-5': { input: 0.95, output: 2.55 },
-  'z-ai/glm-4.7-flash': { input: 0.06, output: 0.40 },
-  'z-ai/glm-4.7': { input: 0.40, output: 1.75 },
-  'z-ai/glm-4.6': { input: 0.50, output: 2.00 },
-  'z-ai/glm-4.5v': { input: 0.60, output: 1.80 },
-  'z-ai/glm-4.5': { input: 0.60, output: 2.20 },
+  'z-ai/glm-5.2': { input: 1.19, output: 3.74 },
+  'z-ai/glm-5.1': { input: 1.26, output: 3.96 },
+  'z-ai/glm-5-turbo': { input: 1.2, output: 4 },
+  'z-ai/glm-5': { input: 0.6, output: 1.92 },
+  'z-ai/glm-4.7-flash': { input: 0.06, output: 0.4 },
+  'z-ai/glm-4.7': { input: 0.4, output: 1.75 },
+  'z-ai/glm-4.6': { input: 0.43, output: 1.75 },
+  'z-ai/glm-4.5v': { input: 0.6, output: 1.8 },
+  'z-ai/glm-4.5': { input: 0.6, output: 2.2 },
   'z-ai/glm-4.5-air': { input: 0.13, output: 0.85 },
   'z-ai/glm-4-32b': { input: 0.35, output: 1.55 },
   'qwen/qwen3.7-plus': { input: 0.32, output: 1.28 },
   'qwen/qwen3.7-max': { input: 1.475, output: 4.425 },
-  'qwen/qwen3.6-max-preview': { input: 1.04, output: 6.24 },
+  'qwen/qwen3.6-max-preview': { input: 1.027, output: 6.162 },
   'qwen/qwen3.6-plus': { input: 0.325, output: 1.95 },
   'qwen/qwen3.6-flash': { input: 0.1875, output: 1.125 },
-  'qwen/qwen3.6-35b-a3b': { input: 0.14, output: 1.00 },
-  'qwen/qwen3.6-27b': { input: 0.30, output: 2.00 },
-  'qwen/qwen3.5-plus-20260420': { input: 0.30, output: 1.80 },
+  'qwen/qwen3.6-35b-a3b': { input: 0.1, output: 0.9 },
+  'qwen/qwen3.6-27b': { input: 0.6, output: 3.6 },
+  'qwen/qwen3.5-plus-20260420': { input: 0.3, output: 1.8 },
   'qwen/qwen3.5-flash-02-23': { input: 0.065, output: 0.26 },
   'qwen/qwen3.5-397b-a17b': { input: 0.39, output: 2.34 },
-  'qwen/qwen3.5-122b-a10b': { input: 0.26, output: 2.08 },
-  'qwen/qwen3.5-35b-a3b': { input: 0.14, output: 1.00 },
+  'qwen/qwen3.5-122b-a10b': { input: 0.29, output: 2.4 },
+  'qwen/qwen3.5-35b-a3b': { input: 0.25, output: 1.25 },
   'qwen/qwen3.5-27b': { input: 0.195, output: 1.56 },
-  'qwen/qwen3-max-thinking': { input: 0.78, output: 3.90 },
-  'qwen/qwen3-max': { input: 0.78, output: 3.90 },
-  'qwen/qwen3-235b-a22b-thinking-2507': { input: 0.30, output: 3.00 },
-  'qwen/qwen3-235b-a22b-2507': { input: 0.09, output: 0.55 },
-  'qwen/qwen3-coder': { input: 0.30, output: 1.00 },
-  'moonshotai/kimi-k3': { input: 3.00, output: 15.00 },
-  'moonshotai/kimi-k2.7-code': { input: 0.73, output: 3.50 },
-  'moonshotai/kimi-k2.6': { input: 0.646, output: 2.72 },
-  'moonshotai/kimi-k2-thinking': { input: 0.60, output: 2.50 },
-  'moonshotai/kimi-k2': { input: 0.57, output: 2.30 },
-  'minimax/minimax-m3': { input: 0.30, output: 1.20 },
-  'minimax/minimax-m2.7': { input: 0.25, output: 1.00 },
-  'minimax/minimax-m2.5': { input: 0.15, output: 0.90 },
-  'minimax/minimax-m2.1': { input: 0.30, output: 1.20 },
-  'minimax/minimax-m1': { input: 0.55, output: 2.20 },
-  'bytedance-seed/seed-2.0-lite': { input: 0.25, output: 2.00 },
-  'bytedance-seed/seed-2.0-mini': { input: 0.10, output: 0.40 },
+  'qwen/qwen3-max-thinking': { input: 0.78, output: 3.9 },
+  'qwen/qwen3-max': { input: 0.78, output: 3.9 },
+  'qwen/qwen3-235b-a22b-thinking-2507': { input: 0.23, output: 2.3 },
+  'qwen/qwen3-235b-a22b-2507': { input: 0.0875, output: 0.35 },
+  'qwen/qwen3-coder': { input: 0.3, output: 1 },
+  'moonshotai/kimi-k3': { input: 3, output: 15 },
+  'moonshotai/kimi-k2.7-code': { input: 0.66, output: 3.4 },
+  'moonshotai/kimi-k2.6': { input: 0.95, output: 4 },
+  'moonshotai/kimi-k2-thinking': { input: 0.6, output: 2.5 },
+  'moonshotai/kimi-k2': { input: 0.57, output: 2.3 },
+  'minimax/minimax-m3': { input: 0.3, output: 1.2 },
+  'minimax/minimax-m2.7': { input: 0.3, output: 1.2 },
+  'minimax/minimax-m2.5': { input: 0.27, output: 1.08 },
+  'minimax/minimax-m2.1': { input: 0.3, output: 1.2 },
+  'minimax/minimax-m1': { input: 0.55, output: 2.2 },
+  'bytedance-seed/seed-2.0-lite': { input: 0.25, output: 2 },
+  'bytedance-seed/seed-2.0-mini': { input: 0.1, output: 0.4 },
 
   // OpenRouter - DeepSeek (source: openrouter.ai/api/v1/models)
-  'deepseek/deepseek-v4-pro': { input: 0.435, output: 0.87 },
-  'deepseek/deepseek-v4-flash': { input: 0.14, output: 0.28 },
-  'deepseek/deepseek-v3.2': { input: 0.269, output: 0.40 },
-  'deepseek/deepseek-v3.1-terminus': { input: 0.27, output: 1.00 },
-  'deepseek/deepseek-r1-0528': { input: 0.50, output: 2.15 },
+  'deepseek/deepseek-v4-pro': { input: 0.87, output: 1.74 },
+  'deepseek/deepseek-v4-flash': { input: 0.0871, output: 0.1742 },
+  'deepseek/deepseek-v3.2': { input: 0.269, output: 0.4 },
+  'deepseek/deepseek-v3.1-terminus': { input: 0.27, output: 1 },
+  'deepseek/deepseek-r1-0528': { input: 0.5, output: 2.15 },
 
   // OpenRouter - AI21
-  'ai21/jamba-mini-1.7': { input: 0.50, output: 0.70 },
-  'ai21/jamba-large-1.7': { input: 2.00, output: 8.00 },
 
   // OpenRouter - xAI (source: openrouter.ai/api/v1/models)
-  'x-ai/grok-4.5': { input: 2.00, output: 6.00 },
-  'x-ai/grok-4.3': { input: 1.25, output: 2.50 },
-  'x-ai/grok-4.20': { input: 1.25, output: 2.50 },
+  'x-ai/grok-4.5': { input: 2, output: 6 },
+  'x-ai/grok-4.3': { input: 1.25, output: 2.5 },
+  'x-ai/grok-4.20': { input: 1.25, output: 2.5 },
   'x-ai/grok-4.20-multi-agent': { input: 1.25, output: 2.50 },
-  'x-ai/grok-build-0.1': { input: 1.00, output: 2.00 },
+  'x-ai/grok-build-0.1': { input: 1, output: 2 },
   // Delisted from OpenRouter + removed from the selectable catalog, but pricing is kept
   // as a superset so any lingering saved selection still meters correctly (not $0).
   'x-ai/grok-4-fast': { input: 0.20, output: 0.50 },
@@ -333,6 +329,197 @@ export const AI_PRICING = {
   'mistral': { input: 0, output: 0 },
   'phi3': { input: 0, output: 0 },
   
+  // OpenRouter - additional models added for existing providers
+  // Qwen
+  'qwen/qwen-2.5-72b-instruct': { input: 0.36, output: 0.4 },
+  'qwen/qwen-2.5-7b-instruct': { input: 0.1, output: 0.2 },
+  'qwen/qwen-plus': { input: 0.26, output: 0.78 },
+  'qwen/qwen-plus-2025-07-28': { input: 0.26, output: 0.78 },
+  'qwen/qwen3-14b': { input: 0.12, output: 0.24 },
+  'qwen/qwen3-235b-a22b': { input: 0.455, output: 1.82 },
+  'qwen/qwen3-30b-a3b': { input: 0.12, output: 0.5 },
+  'qwen/qwen3-30b-a3b-instruct-2507': { input: 0.0482, output: 0.1931 },
+  'qwen/qwen3-30b-a3b-thinking-2507': { input: 0.2, output: 2.4 },
+  'qwen/qwen3-32b': { input: 0.08, output: 0.28 },
+  'qwen/qwen3-8b': { input: 0.117, output: 0.455 },
+  'qwen/qwen3-coder-30b-a3b-instruct': { input: 0.07, output: 0.28 },
+  'qwen/qwen3-coder-flash': { input: 0.195, output: 0.975 },
+  'qwen/qwen3-coder-next': { input: 0.12, output: 0.8 },
+  'qwen/qwen3-coder-plus': { input: 0.65, output: 3.25 },
+  'qwen/qwen3-next-80b-a3b-instruct': { input: 0.1, output: 1.1 },
+  'qwen/qwen3-next-80b-a3b-thinking': { input: 0.15, output: 1.2 },
+  'qwen/qwen3-vl-235b-a22b-instruct': { input: 0.21, output: 1.9 },
+  'qwen/qwen3-vl-235b-a22b-thinking': { input: 0.4, output: 4 },
+  'qwen/qwen3-vl-30b-a3b-instruct': { input: 0.13, output: 0.52 },
+  'qwen/qwen3-vl-30b-a3b-thinking': { input: 0.2, output: 2.4 },
+  'qwen/qwen3-vl-32b-instruct': { input: 0.104, output: 0.416 },
+  'qwen/qwen3-vl-8b-instruct': { input: 0.117, output: 0.455 },
+  'qwen/qwen3-vl-8b-thinking': { input: 0.18, output: 2.1 },
+  'qwen/qwen3.5-9b': { input: 0.1, output: 0.15 },
+  'qwen/qwen3.5-plus-02-15': { input: 0.26, output: 1.56 },
+  'qwen/qwen3.7-flash': { input: 0.03, output: 0.13 },
+  'qwen/qwen3.8-2.4t-a95b': { input: 2, output: 6 },
+  'qwen/qwen3.8-27b': { input: 0.425, output: 2.55 },
+  'qwen/qwen3.8-flash': { input: 0.15, output: 0.47 },
+  'qwen/qwen3.8-max': { input: 2, output: 6 },
+  // Z.ai
+  'z-ai/glm-4.6v': { input: 0.3, output: 0.9 },
+  'z-ai/glm-5.2:free': { input: 0, output: 0 },
+  'z-ai/glm-5.3': { input: 1.4, output: 4.4 },
+  'z-ai/glm-5.3-flash': { input: 0.075, output: 0.25 },
+  'z-ai/glm-5v-turbo': { input: 1.2, output: 4 },
+  // Meta
+  'meta-llama/llama-3.1-70b-instruct': { input: 0.4, output: 0.4 },
+  'meta-llama/llama-3.1-8b-instruct': { input: 0.05, output: 0.08 },
+  'meta/muse-glimmer-30b': { input: 0.35, output: 1.5 },
+  'meta/muse-spark-1.2': { input: 1.25, output: 4.25 },
+  'meta/muse-spark-1.2-contributor': { input: 0.1, output: 0.2 },
+  // DeepSeek
+  'deepseek/deepseek-chat': { input: 0.2574, output: 1.0287 },
+  'deepseek/deepseek-chat-v3-0324': { input: 0.25, output: 1 },
+  'deepseek/deepseek-chat-v3.1': { input: 0.55, output: 1.65 },
+  'deepseek/deepseek-r1': { input: 0.7, output: 2.5 },
+  'deepseek/deepseek-v3.2-exp': { input: 0.27, output: 0.41 },
+  'deepseek/deepseek-v4-flash-0731': { input: 0.07, output: 0.14 },
+  'deepseek/deepseek-v4-flash-vision-exp': { input: 0.22, output: 0.66 },
+  'deepseek/deepseek-v4-pro-0813': { input: 0.66, output: 1.98 },
+  // Google
+  'google/gemini-2.5-flash-image': { input: 0.3, output: 2.5 },
+  'google/gemini-2.5-pro-preview': { input: 1.25, output: 10 },
+  'google/gemini-2.5-pro-preview-05-06': { input: 1.25, output: 10 },
+  'google/gemini-3-pro-image-preview': { input: 2, output: 12 },
+  'google/gemma-3-12b-it': { input: 0.05, output: 0.15 },
+  'google/gemma-3-27b-it': { input: 0.08, output: 0.45 },
+  'google/gemma-4-26b-a4b-it:free': { input: 0, output: 0 },
+  'google/gemma-4-31b-it:free': { input: 0, output: 0 },
+  // ByteDance Seed
+  'bytedance-seed/seed-1.6': { input: 0.25, output: 2 },
+  'bytedance-seed/seed-1.6-flash': { input: 0.075, output: 0.3 },
+  'bytedance-seed/seed-2-1-turbo': { input: 0.5, output: 2.5 },
+  'bytedance-seed/seed-2.0-code': { input: 0.5, output: 3 },
+  // SpaceXAI
+  'x-ai/grok-4.6': { input: 2, output: 6 },
+  // MoonshotAI
+  'moonshotai/kimi-k2-0905': { input: 0.6, output: 2.5 },
+  'moonshotai/kimi-k2.5': { input: 0.6, output: 3 },
+  // OpenAI
+  'openai/gpt-3.5-turbo': { input: 0.5, output: 1.5 },
+  'openai/gpt-3.5-turbo-0613': { input: 1, output: 2 },
+  'openai/gpt-3.5-turbo-16k': { input: 3, output: 4 },
+  'openai/gpt-4': { input: 30, output: 60 },
+  'openai/gpt-4-turbo': { input: 10, output: 30 },
+  'openai/gpt-4-turbo-preview': { input: 10, output: 30 },
+  'openai/gpt-4.1-nano': { input: 0.1, output: 0.4 },
+  'openai/gpt-4o-2024-05-13': { input: 5, output: 15 },
+  'openai/gpt-4o-2024-08-06': { input: 2.5, output: 10 },
+  'openai/gpt-4o-2024-11-20': { input: 2.5, output: 10 },
+  'openai/gpt-4o-mini-2024-07-18': { input: 0.15, output: 0.6 },
+  'openai/gpt-5-image': { input: 10, output: 10 },
+  'openai/gpt-5-image-mini': { input: 2.5, output: 2 },
+  'openai/gpt-5.4-image-2': { input: 8, output: 15 },
+  'openai/gpt-audio': { input: 2.5, output: 10 },
+  'openai/gpt-audio-mini': { input: 0.6, output: 2.4 },
+  'openai/gpt-chat-latest': { input: 5, output: 30 },
+  'openai/gpt-oss-safeguard-20b': { input: 0.075, output: 0.3 },
+  'openai/o1': { input: 15, output: 60 },
+  'openai/o3-mini': { input: 1.1, output: 4.4 },
+  'openai/o3-mini-high': { input: 1.1, output: 4.4 },
+  'openai/o4-mini-high': { input: 1.1, output: 4.4 },
+  // MiniMax
+  'minimax/minimax-m2': { input: 0.255, output: 1.02 },
+  'minimax/minimax-m2.7:free': { input: 0, output: 0 },
+  'minimax/minimax-m3:free': { input: 0, output: 0 },
+  // Mistral
+  'mistralai/ministral-14b-2512': { input: 0.2, output: 0.2 },
+  'mistralai/ministral-3b-2512': { input: 0.1, output: 0.1 },
+  'mistralai/ministral-8b-2512': { input: 0.15, output: 0.15 },
+  'mistralai/mistral-large': { input: 2, output: 6 },
+  'mistralai/mistral-large-2407': { input: 2, output: 6 },
+  'mistralai/mistral-nemo': { input: 0.019, output: 0.03 },
+  'mistralai/mistral-saba': { input: 0.2, output: 0.6 },
+  'mistralai/mixtral-8x22b-instruct': { input: 2, output: 6 },
+  'mistralai/voxtral-small-24b-2507': { input: 0.1, output: 0.3 },
+
+
+  // OpenRouter - newly added providers (source: openrouter.ai/api/v1/models)
+  // AionLabs
+  'aion-labs/aion-2.0': { input: 0.8, output: 1.6 },
+  'aion-labs/aion-3.0': { input: 3, output: 6 },
+  'aion-labs/aion-3.0-mini': { input: 0.7, output: 1.4 },
+  // Amazon
+  'amazon/nova-2-lite-v1': { input: 0.3, output: 2.5 },
+  'amazon/nova-lite-v1': { input: 0.06, output: 0.24 },
+  'amazon/nova-micro-v1': { input: 0.035, output: 0.14 },
+  'amazon/nova-premier-v1': { input: 2.5, output: 12.5 },
+  'amazon/nova-pro-v1': { input: 0.8, output: 3.2 },
+  // Arcee AI
+  'arcee-ai/trinity-large-thinking': { input: 0.22, output: 0.85 },
+  'arcee-ai/virtuoso-large': { input: 0.75, output: 1.2 },
+  // Cohere
+  'cohere/command-r-08-2024': { input: 0.15, output: 0.6 },
+  'cohere/command-r-plus-08-2024': { input: 2.5, output: 10 },
+  'cohere/north-mini-code:free': { input: 0, output: 0 },
+  // Dots Studio
+  'dots-studio/dots-3-note-preview:free': { input: 0, output: 0 },
+  // IBM
+  'ibm-granite/granite-4.1-8b': { input: 0.05, output: 0.1 },
+  // InclusionAI
+  'inclusionai/ling-3.0-flash': { input: 0.021, output: 0.063 },
+  'inclusionai/ling-3.0-flash-fin:free': { input: 0, output: 0 },
+  // Kwaipilot
+  'kwaipilot/kat-coder-air-v2.5': { input: 0.15, output: 0.6 },
+  'kwaipilot/kat-coder-pro-v2': { input: 0.3, output: 1.2 },
+  'kwaipilot/kat-coder-pro-v2.5': { input: 0.74, output: 2.96 },
+  // LiquidAI
+  'liquid/lfm-2.5-2.6b:free': { input: 0, output: 0 },
+  // Meituan
+  'meituan/longcat-2.0': { input: 0.3, output: 1.2 },
+  // Nex AGI
+  'nex-agi/nex-n2-mini': { input: 0.025, output: 0.1 },
+  'nex-agi/nex-n2-pro': { input: 0.25, output: 1 },
+  // NVIDIA
+  'nvidia/nemotron-3-nano-30b-a3b': { input: 0.05, output: 0.2 },
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': { input: 0, output: 0 },
+  'nvidia/nemotron-3-super-120b-a12b': { input: 0.085, output: 0.4 },
+  'nvidia/nemotron-3-super-120b-a12b:free': { input: 0, output: 0 },
+  'nvidia/nemotron-3-ultra-550b-a55b': { input: 0.5, output: 2.2 },
+  'nvidia/nemotron-3-ultra-550b-a55b:free': { input: 0, output: 0 },
+  'nvidia/nemotron-3.5-lightning': { input: 0.1, output: 0.25 },
+  'nvidia/nemotron-3.5-lightning:free': { input: 0, output: 0 },
+  // Poolside
+  'poolside/laguna-s-2.1': { input: 0.09, output: 0.18 },
+  'poolside/laguna-s-2.1:free': { input: 0, output: 0 },
+  'poolside/laguna-xs-2.1': { input: 0.06, output: 0.12 },
+  'poolside/laguna-xs-2.1:free': { input: 0, output: 0 },
+  // Reka
+  'rekaai/reka-edge': { input: 0.1, output: 0.1 },
+  // Relace
+  'relace/relace-search': { input: 1, output: 3 },
+  // Sakana
+  'sakana/fugu-ultra': { input: 5, output: 30 },
+  'sakana/sakana-namazu': { input: 0.95, output: 4 },
+  // Sao10K
+  'sao10k/l3.1-euryale-70b': { input: 0.85, output: 0.85 },
+  // StepFun
+  'stepfun/step-3.5-flash': { input: 0.1, output: 0.3 },
+  'stepfun/step-3.7-flash': { input: 0.2, output: 1.15 },
+  // Tencent
+  'tencent/hy3': { input: 0.132, output: 0.528 },
+  'tencent/hy3-preview': { input: 0.18, output: 0.6 },
+  // TheDrummer
+  'thedrummer/unslopnemo-12b': { input: 0.4, output: 0.4 },
+  // Thinking Machines
+  'thinkingmachines/inkling': { input: 0.95, output: 4.05 },
+  'thinkingmachines/inkling-small': { input: 0.45, output: 1.2 },
+  'thinkingmachines/inkling-small:free': { input: 0, output: 0 },
+  'thinkingmachines/inkling:free': { input: 0, output: 0 },
+  // Upstage
+  'upstage/solar-pro-3': { input: 0.15, output: 0.6 },
+  'upstage/solar-pro4': { input: 0.03, output: 0.12 },
+  // Xiaomi
+  'xiaomi/mimo-v2.5': { input: 0.14, output: 0.28 },
+  'xiaomi/mimo-v2.5-pro': { input: 0.435, output: 0.87 },
+
   // Default/Unknown models
   'default': { input: 0, output: 0 }
 } as const;
@@ -375,10 +562,8 @@ export const MODEL_CONTEXT_WINDOWS = {
   'openai/gpt-5.5-pro': 1050000,
   'openai/gpt-5.2-pro': 400000,
   'openai/gpt-5.2-chat': 128000,
-  'openai/gpt-5.1-chat': 128000,
   'openai/gpt-5.1-codex-max': 400000,
   'openai/gpt-5-pro': 400000,
-  'openai/gpt-5-codex': 400000,
   'openai/o3': 200000,
   'openai/o3-pro': 200000,
   'openai/o4-mini': 200000,
@@ -389,7 +574,6 @@ export const MODEL_CONTEXT_WINDOWS = {
   'openai/gpt-5.4': 1050000,
   'openai/gpt-5.4-mini': 400000,
   'openai/gpt-5.4-nano': 400000,
-  'openai/gpt-5.3-chat': 128000,
   'openai/gpt-5.3-chat-latest': 272000,
   'openai/gpt-5.3-codex': 400000,
   'openai/gpt-5.2': 400000,
@@ -401,8 +585,6 @@ export const MODEL_CONTEXT_WINDOWS = {
   'openai/gpt-5.1-codex-mini': 400000,
   'openai/gpt-4o': 128000,
   'openai/gpt-4o-mini': 128000,
-  'openai/o3-deep-research': 200000,
-  'openai/o4-mini-deep-research': 200000,
   'openai/gpt-5': 400000,
   'openai/gpt-5-mini': 400000,
   'openai/gpt-5-nano': 400000,
@@ -410,6 +592,7 @@ export const MODEL_CONTEXT_WINDOWS = {
   'openai/gpt-oss-20b': 131072,
 
   // OpenRouter Models - Google
+  'google/gemini-3.7-flash': 1048576,
   'google/gemini-3.6-flash': 1048576,
   'google/gemini-3.5-flash-lite': 1048576,
   'google/gemini-3.5-flash': 1048576,
@@ -420,7 +603,7 @@ export const MODEL_CONTEXT_WINDOWS = {
   'google/gemini-3.1-pro-preview-customtools': 1048576,
   'google/gemini-3.1-flash-lite': 1048576,
   'google/gemini-3.1-flash-lite-preview': 1048576,
-  'google/gemini-3.1-flash-image-preview': 131072,
+  'google/gemini-3.1-flash-image-preview': 65536,
   'google/gemini-3-flash-preview': 1048576,
   'google/gemini-2.5-pro': 1048576,
   'google/gemini-2.5-flash': 1048576,
@@ -445,12 +628,13 @@ export const MODEL_CONTEXT_WINDOWS = {
   'mistralai/mistral-medium-3-5': 262144,
   'mistralai/mistral-small-2603': 262144,
   'mistralai/mistral-medium-3.1': 131072,
-  'mistralai/mistral-small-3.2-24b-instruct': 256000,
+  'mistralai/mistral-small-3.2-24b-instruct': 131072,
   'mistralai/codestral-2508': 256000,
   'mistralai/devstral-medium': 128000,
   'mistralai/devstral-small': 128000,
 
   // Z.ai GLM direct — GLM Coder Plan supported models only
+  'glm-5.3':     1000000,
   'glm-5.2':     1000000,
   'glm-5.1':     202752,
   'glm-5-turbo': 202752,
@@ -484,7 +668,7 @@ export const MODEL_CONTEXT_WINDOWS = {
   'qwen/qwen3.5-27b': 262144,
   'qwen/qwen3-max-thinking': 262144,
   'qwen/qwen3-max': 262144,
-  'qwen/qwen3-235b-a22b-thinking-2507': 262144,
+  'qwen/qwen3-235b-a22b-thinking-2507': 131072,
   'qwen/qwen3-235b-a22b-2507': 262144,
   'qwen/qwen3-coder': 262144,
   'qwen/qwen3.7-max': 1000000,
@@ -509,8 +693,6 @@ export const MODEL_CONTEXT_WINDOWS = {
   'deepseek/deepseek-r1-0528': 163840,
 
   // OpenRouter Models - AI21
-  'ai21/jamba-mini-1.7': 256000,
-  'ai21/jamba-large-1.7': 256000,
 
   // OpenRouter Models - xAI (source: openrouter.ai/api/v1/models)
   'x-ai/grok-4.5': 500000,
@@ -637,6 +819,197 @@ export const MODEL_CONTEXT_WINDOWS = {
   'gemma2': 8192,
   'mistral': 32000,
   'phi3': 128000,
+
+  // OpenRouter - additional models added for existing providers
+  // Qwen
+  'qwen/qwen-2.5-72b-instruct': 32768,
+  'qwen/qwen-2.5-7b-instruct': 32768,
+  'qwen/qwen-plus': 1000000,
+  'qwen/qwen-plus-2025-07-28': 1000000,
+  'qwen/qwen3-14b': 131072,
+  'qwen/qwen3-235b-a22b': 131072,
+  'qwen/qwen3-30b-a3b': 131072,
+  'qwen/qwen3-30b-a3b-instruct-2507': 262144,
+  'qwen/qwen3-30b-a3b-thinking-2507': 81920,
+  'qwen/qwen3-32b': 131072,
+  'qwen/qwen3-8b': 131072,
+  'qwen/qwen3-coder-30b-a3b-instruct': 262144,
+  'qwen/qwen3-coder-flash': 1000000,
+  'qwen/qwen3-coder-next': 262144,
+  'qwen/qwen3-coder-plus': 1000000,
+  'qwen/qwen3-next-80b-a3b-instruct': 262144,
+  'qwen/qwen3-next-80b-a3b-thinking': 262144,
+  'qwen/qwen3-vl-235b-a22b-instruct': 262144,
+  'qwen/qwen3-vl-235b-a22b-thinking': 131072,
+  'qwen/qwen3-vl-30b-a3b-instruct': 262144,
+  'qwen/qwen3-vl-30b-a3b-thinking': 262144,
+  'qwen/qwen3-vl-32b-instruct': 131072,
+  'qwen/qwen3-vl-8b-instruct': 262144,
+  'qwen/qwen3-vl-8b-thinking': 131072,
+  'qwen/qwen3.5-9b': 262144,
+  'qwen/qwen3.5-plus-02-15': 1000000,
+  'qwen/qwen3.7-flash': 1000000,
+  'qwen/qwen3.8-2.4t-a95b': 1048576,
+  'qwen/qwen3.8-27b': 1000000,
+  'qwen/qwen3.8-flash': 1000000,
+  'qwen/qwen3.8-max': 1000000,
+  // Z.ai
+  'z-ai/glm-4.6v': 131072,
+  'z-ai/glm-5.2:free': 256000,
+  'z-ai/glm-5.3': 1048576,
+  'z-ai/glm-5.3-flash': 1310720,
+  'z-ai/glm-5v-turbo': 202752,
+  // Meta
+  'meta-llama/llama-3.1-70b-instruct': 131072,
+  'meta-llama/llama-3.1-8b-instruct': 131072,
+  'meta/muse-glimmer-30b': 131072,
+  'meta/muse-spark-1.2': 1048576,
+  'meta/muse-spark-1.2-contributor': 1048576,
+  // DeepSeek
+  'deepseek/deepseek-chat': 163840,
+  'deepseek/deepseek-chat-v3-0324': 163840,
+  'deepseek/deepseek-chat-v3.1': 163840,
+  'deepseek/deepseek-r1': 64000,
+  'deepseek/deepseek-v3.2-exp': 163840,
+  'deepseek/deepseek-v4-flash-0731': 1310720,
+  'deepseek/deepseek-v4-flash-vision-exp': 1048576,
+  'deepseek/deepseek-v4-pro-0813': 1048576,
+  // Google
+  'google/gemini-2.5-flash-image': 32768,
+  'google/gemini-2.5-pro-preview': 1048576,
+  'google/gemini-2.5-pro-preview-05-06': 1048576,
+  'google/gemini-3-pro-image-preview': 65536,
+  'google/gemma-3-12b-it': 131072,
+  'google/gemma-3-27b-it': 262144,
+  'google/gemma-4-26b-a4b-it:free': 262144,
+  'google/gemma-4-31b-it:free': 262144,
+  // ByteDance Seed
+  'bytedance-seed/seed-1.6': 262144,
+  'bytedance-seed/seed-1.6-flash': 262144,
+  'bytedance-seed/seed-2-1-turbo': 262144,
+  'bytedance-seed/seed-2.0-code': 262144,
+  // SpaceXAI
+  'x-ai/grok-4.6': 500000,
+  // MoonshotAI
+  'moonshotai/kimi-k2-0905': 262144,
+  'moonshotai/kimi-k2.5': 262144,
+  // OpenAI
+  'openai/gpt-3.5-turbo': 16385,
+  'openai/gpt-3.5-turbo-0613': 4095,
+  'openai/gpt-3.5-turbo-16k': 16385,
+  'openai/gpt-4': 8191,
+  'openai/gpt-4-turbo': 128000,
+  'openai/gpt-4-turbo-preview': 128000,
+  'openai/gpt-4.1-nano': 1047576,
+  'openai/gpt-4o-2024-05-13': 128000,
+  'openai/gpt-4o-2024-08-06': 128000,
+  'openai/gpt-4o-2024-11-20': 128000,
+  'openai/gpt-4o-mini-2024-07-18': 128000,
+  'openai/gpt-5-image': 400000,
+  'openai/gpt-5-image-mini': 400000,
+  'openai/gpt-5.4-image-2': 272000,
+  'openai/gpt-audio': 128000,
+  'openai/gpt-audio-mini': 128000,
+  'openai/gpt-chat-latest': 400000,
+  'openai/gpt-oss-safeguard-20b': 131072,
+  'openai/o1': 200000,
+  'openai/o3-mini': 200000,
+  'openai/o3-mini-high': 200000,
+  'openai/o4-mini-high': 200000,
+  // MiniMax
+  'minimax/minimax-m2': 204800,
+  'minimax/minimax-m2.7:free': 196608,
+  'minimax/minimax-m3:free': 1048576,
+  // Mistral
+  'mistralai/ministral-14b-2512': 262144,
+  'mistralai/ministral-3b-2512': 131072,
+  'mistralai/ministral-8b-2512': 262144,
+  'mistralai/mistral-large': 128000,
+  'mistralai/mistral-large-2407': 131072,
+  'mistralai/mistral-nemo': 131072,
+  'mistralai/mistral-saba': 32768,
+  'mistralai/mixtral-8x22b-instruct': 65536,
+  'mistralai/voxtral-small-24b-2507': 32000,
+
+
+  // OpenRouter - newly added providers
+  // AionLabs
+  'aion-labs/aion-2.0': 131072,
+  'aion-labs/aion-3.0': 131072,
+  'aion-labs/aion-3.0-mini': 131072,
+  // Amazon
+  'amazon/nova-2-lite-v1': 1000000,
+  'amazon/nova-lite-v1': 300000,
+  'amazon/nova-micro-v1': 128000,
+  'amazon/nova-premier-v1': 1000000,
+  'amazon/nova-pro-v1': 300000,
+  // Arcee AI
+  'arcee-ai/trinity-large-thinking': 262144,
+  'arcee-ai/virtuoso-large': 131072,
+  // Cohere
+  'cohere/command-r-08-2024': 128000,
+  'cohere/command-r-plus-08-2024': 128000,
+  'cohere/north-mini-code:free': 256000,
+  // Dots Studio
+  'dots-studio/dots-3-note-preview:free': 512000,
+  // IBM
+  'ibm-granite/granite-4.1-8b': 131072,
+  // InclusionAI
+  'inclusionai/ling-3.0-flash': 262144,
+  'inclusionai/ling-3.0-flash-fin:free': 262144,
+  // Kwaipilot
+  'kwaipilot/kat-coder-air-v2.5': 256000,
+  'kwaipilot/kat-coder-pro-v2': 262144,
+  'kwaipilot/kat-coder-pro-v2.5': 262144,
+  // LiquidAI
+  'liquid/lfm-2.5-2.6b:free': 65536,
+  // Meituan
+  'meituan/longcat-2.0': 1048756,
+  // Nex AGI
+  'nex-agi/nex-n2-mini': 262144,
+  'nex-agi/nex-n2-pro': 262144,
+  // NVIDIA
+  'nvidia/nemotron-3-nano-30b-a3b': 262144,
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': 256000,
+  'nvidia/nemotron-3-super-120b-a12b': 1000000,
+  'nvidia/nemotron-3-super-120b-a12b:free': 262144,
+  'nvidia/nemotron-3-ultra-550b-a55b': 262144,
+  'nvidia/nemotron-3-ultra-550b-a55b:free': 1000000,
+  'nvidia/nemotron-3.5-lightning': 262144,
+  'nvidia/nemotron-3.5-lightning:free': 1000000,
+  // Poolside
+  'poolside/laguna-s-2.1': 1048576,
+  'poolside/laguna-s-2.1:free': 262144,
+  'poolside/laguna-xs-2.1': 262144,
+  'poolside/laguna-xs-2.1:free': 262144,
+  // Reka
+  'rekaai/reka-edge': 16384,
+  // Relace
+  'relace/relace-search': 256000,
+  // Sakana
+  'sakana/fugu-ultra': 1000000,
+  'sakana/sakana-namazu': 262144,
+  // Sao10K
+  'sao10k/l3.1-euryale-70b': 131072,
+  // StepFun
+  'stepfun/step-3.5-flash': 262144,
+  'stepfun/step-3.7-flash': 262144,
+  // Tencent
+  'tencent/hy3': 262144,
+  'tencent/hy3-preview': 262144,
+  // TheDrummer
+  'thedrummer/unslopnemo-12b': 1024000,
+  // Thinking Machines
+  'thinkingmachines/inkling': 1048576,
+  'thinkingmachines/inkling-small': 1048576,
+  'thinkingmachines/inkling-small:free': 1048576,
+  'thinkingmachines/inkling:free': 1048576,
+  // Upstage
+  'upstage/solar-pro-3': 131072,
+  'upstage/solar-pro4': 524288,
+  // Xiaomi
+  'xiaomi/mimo-v2.5': 1050000,
+  'xiaomi/mimo-v2.5-pro': 1050000,
 
   // Default
   'default': 200000 // Updated default for newer models
@@ -876,9 +1249,81 @@ export interface AIUsageData {
 }
 
 /**
- * Track AI usage with automatic cost calculation
+ * What one `trackAIUsage` call durably achieved. The seam used to return
+ * `Promise<void>` and swallow every failure below it, so no caller could tell a
+ * committed charge from a lost one — and every meter that advances a watermark
+ * after awaiting it (the sandbox storage reconcile, the realtime shell settle, the
+ * published-app awake meter) could close a window over a charge that never landed.
+ *
+ * READ {@link UsageTrackingOutcome.persisted} FIRST: it is the load-bearing field,
+ * and {@link UsageTrackingOutcome.creditsSettled} is deliberately NOT a second one.
  */
-export async function trackAIUsage(data: AIUsageData): Promise<void> {
+export interface UsageTrackingOutcome {
+  /**
+   * The `ai_usage_logs` row for this call is durably written.
+   *
+   * THIS is what a meter gates its watermark/window on, because this row is what
+   * every recovery path keys off: `credit-backfill.ts` sweeps usage rows that have
+   * no ledger entry and re-runs the charge. With the row, a charge is at worst
+   * late. Without it there is nothing to recover from and the spend is gone for
+   * good — the provider already billed us and nobody will ever bill the payer.
+   *
+   * False means: keep the window OPEN. Nothing was written, so the next tick
+   * re-bills the same span and cannot double-charge for it.
+   */
+  persisted: boolean;
+  /**
+   * The credit settle completed IN-LINE — or there was legitimately nothing to
+   * settle (a metering-exempt provider, a token-less failure, a $0 call, or a
+   * deployment with billing off).
+   *
+   * NOT a watermark gate, and gating on it would be a bug in the opposite
+   * direction. `consumeCredits` reports `deferred` for a claim/settle that did not
+   * land, and the backfill cron then settles that very charge from the usage row —
+   * so a meter that held its window open on `creditsSettled === false` would bill
+   * the payer a second time for a span the cron is already collecting. Reported so
+   * failures are visible in logs and counters, nothing more.
+   */
+  creditsSettled: boolean;
+}
+
+/**
+ * Explicitly drop a tracking outcome, for a call site that is pure telemetry and
+ * has no window, watermark or hold to keep open on a failure. Named rather than
+ * implicit so "this call ignores the outcome" is a decision visible in the diff,
+ * not the absence of one — and so a future meter added at such a site is not
+ * silently born with the old swallow. `trackAIUsage` already logs the failure at
+ * ERROR; this only stops the promise floating.
+ */
+export function discardUsageOutcome(tracking: Promise<UsageTrackingOutcome>): void {
+  // `Promise.resolve` rather than `tracking.then` directly: the only job here is to
+  // stop the promise floating, and it must not itself become a new way for a call
+  // site to blow up on something it has explicitly declared it does not care about.
+  void Promise.resolve(tracking).then(
+    () => undefined,
+    () => undefined,
+  );
+}
+
+/**
+ * Nothing was confirmed written and nothing was billed — every failure path's
+ * outcome. FROZEN because this one object is handed to every caller on every
+ * failure: an unfrozen shared literal is one careless `outcome.persisted = true`
+ * away from making a meter believe every later failure succeeded.
+ */
+const USAGE_TRACKING_LOST: UsageTrackingOutcome = Object.freeze({
+  persisted: false,
+  creditsSettled: false,
+});
+
+/**
+ * Track AI usage with automatic cost calculation.
+ *
+ * Never throws (an AI request must not die because a monitoring write did), but it
+ * no longer hides that: the {@link UsageTrackingOutcome} it resolves with says
+ * whether the usage row landed and whether the charge settled.
+ */
+export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutcome> {
   try {
     // Calculate tokens if not provided
     let { inputTokens, outputTokens, totalTokens } = data;
@@ -999,6 +1444,29 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
         },
         reconcileStatus,
       });
+      // `writeAiUsage` CATCHES its own failure and returns null rather than
+      // throwing, so a null id here is a lost usage row — the one unrecoverable
+      // outcome in this function, since the backfill cron's orphan sweep reads
+      // `ai_usage_logs` and therefore has nothing to find. Report it instead of
+      // falling through to the hold release as if nothing had gone wrong.
+      if (!aiUsageLogId) {
+        // A metering-exempt provider never owed anything, so the lost row costs
+        // observability rather than revenue — say which, so an operator reading the
+        // log is not sent hunting for money that was never going to be charged.
+        const exempt = isMeteringExempt(data.provider);
+        loggers.ai.error(
+          exempt
+            ? 'AI usage row was NOT persisted (metering-exempt provider) — observability only, nothing was owed'
+            : 'AI usage row was NOT persisted — this spend is unbilled and unrecoverable',
+          new Error('writeAiUsage returned no id'),
+          { model: data.model, provider: data.provider, source: data.source, holdId: data.holdId },
+        );
+        // The gate's reservation would otherwise sit against the payer's spendable
+        // balance until its TTL, and nothing downstream will ever settle it.
+        if (data.holdId) await releaseHold(data.holdId);
+        return { persisted: false, creditsSettled: exempt };
+      }
+
       // Bill when real tokens were consumed, regardless of success. A token-less
       // failure (pre-generation error) carries 0 tokens and is skipped; a
       // zero-charge call still reaches consumeCredits, which settles it as
@@ -1009,8 +1477,17 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
         // shared credit pool. The gate is normally skipped for this provider so no
         // hold exists; release one defensively if a caller placed it anyway.
         if (data.holdId) await releaseHold(data.holdId);
-      } else if (aiUsageLogId && (success || (totalTokens ?? 0) > 0)) {
-        await consumeCredits({
+        // Nothing was owed, so nothing is outstanding: a settle that was never
+        // meant to happen is `creditsSettled: true`, not a silent false that would
+        // read as a failure in every meter's log.
+        return { persisted: true, creditsSettled: true };
+      }
+
+      if (success || (totalTokens ?? 0) > 0) {
+        // `consumeCredits` never throws; the `.catch` here is belt-and-braces for a
+        // future rejection, and its outcome — not the mere fact that it resolved —
+        // is what `creditsSettled` reports.
+        const settle = await consumeCredits({
           aiUsageLogId,
           userId: data.userId,
           costDollars: cost,
@@ -1020,32 +1497,62 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
           conversationId: data.conversationId,
           pageId: data.pageId,
           markupBpsOverride: data.markupBpsOverride,
-        })
-          .catch((error) => {
-            loggers.ai.debug('credit consume failed', { error: (error as Error).message });
+        }).catch((error) => {
+          loggers.ai.debug('credit consume failed', { error: (error as Error).message });
+          return 'deferred' as const;
+        });
+        if (settle !== 'settled') {
+          // The usage row IS written, so the backfill cron owns this charge from
+          // here (pending sweep for a claimed row, orphan sweep for an unclaimed
+          // one). Logged at WARN, not ERROR: late is not lost.
+          loggers.ai.warn('credit settle did not complete in-line; left to the backfill cron', {
+            aiUsageLogId,
+            status: settle,
+            model: data.model,
+            provider: data.provider,
+            source: data.source,
           });
-      } else if (data.holdId) {
+        }
+        return { persisted: true, creditsSettled: settle === 'settled' };
+      }
+
+      if (data.holdId) {
         // Token-less failure (pre-generation error): nothing to bill, but the gate
         // already placed a hold. Release it now instead of leaving it to the cron.
         await releaseHold(data.holdId);
       }
+      // Deliberately unbilled (a pre-generation failure that burned no tokens) —
+      // an outcome, not a loss.
+      return { persisted: true, creditsSettled: true };
     } catch (error) {
-      // This swallow is the ONLY thing standing between a failed usage write and a silent
-      // billing gap: if writeAiUsage (or the settle below it) throws, the provider has
-      // already charged us but no ai_usage_logs row exists — so nothing debits the user and
-      // the orphan sweep, which keys off ai_usage_logs, can never find it. Log at ERROR (not
-      // debug) so unbilled spend is visible instead of disappearing into a debug channel.
+      // A throw here means the provider has already charged us but no ai_usage_logs
+      // row exists — so nothing debits the user and the orphan sweep, which keys off
+      // ai_usage_logs, can never find it. Logged at ERROR (not debug) so unbilled
+      // spend is visible instead of disappearing into a debug channel, and — unlike
+      // before — REPORTED to the caller, so a meter can keep its window open over it
+      // instead of advancing a watermark past a charge that never landed.
       loggers.ai.error('AI usage tracking failed — spend may be UNBILLED', error as Error, {
         model: data.model,
         provider: data.provider,
         source: data.source,
         holdId: data.holdId,
       });
+      // The reservation would otherwise sit against the payer's spendable balance
+      // until its TTL. Nothing above committed a charge against it on this path —
+      // the throw means `writeAiUsage`/`consumeCredits` never confirmed one — so
+      // there is nothing this release could double-free.
+      if (data.holdId) await releaseHold(data.holdId);
+      return USAGE_TRACKING_LOST;
     }
   } catch (error) {
-    loggers.ai.debug('AI usage calculation failed', { 
-      error: (error as Error).message 
+    loggers.ai.debug('AI usage calculation failed', {
+      error: (error as Error).message
     });
+    // Same reasoning as the inner catch above: a stranded hold outlives its TTL
+    // suppressing the payer's balance for nothing, and nothing on this path could
+    // have confirmed a charge against it.
+    if (data.holdId) await releaseHold(data.holdId);
+    return USAGE_TRACKING_LOST;
   }
 }
 
@@ -1067,11 +1574,12 @@ export interface AIToolUsage {
   pageId?: string;
 }
 
-export function trackAIToolUsage(data: AIToolUsage): Promise<void> {
+export function trackAIToolUsage(data: AIToolUsage): Promise<UsageTrackingOutcome> {
   // Return (not just call) trackAIUsage so the same durability guarantee applies
   // here: a caller that `await`s trackAIToolUsage waits for the tool-analytics log
   // (and its zero-charge ledger settlement) to persist before returning, instead
-  // of resolving immediately and risking a dropped write on a serverless freeze.
+  // of resolving immediately and risking a dropped write on a serverless freeze —
+  // and receives the same {@link UsageTrackingOutcome} it would from trackAIUsage.
   return trackAIUsage({
     userId: data.userId,
     provider: data.provider,

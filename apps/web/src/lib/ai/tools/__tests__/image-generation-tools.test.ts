@@ -5,7 +5,12 @@ import type { ToolExecutionContext } from '@/lib/ai/core/types';
 // --- module mocks (no real billing / OpenRouter / S3 / DB) ---
 const canConsumeAI = vi.fn<(...a: unknown[]) => unknown>();
 const releaseHold = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
-const trackUsage = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
+// `trackUsage` reports whether the usage row landed (`UsageTrackingOutcome`); a
+// stub resolving with nothing would claim a LOST charge on every image call.
+const PERSISTED_SETTLE = { persisted: true, creditsSettled: true } as const;
+const trackUsage = vi.fn<(...a: unknown[]) => Promise<typeof PERSISTED_SETTLE>>(
+  async () => PERSISTED_SETTLE,
+);
 const generateImageBytes = vi.fn<(...a: unknown[]) => unknown>();
 const createImageFilePage = vi.fn<(...a: unknown[]) => unknown>();
 
@@ -85,7 +90,7 @@ beforeEach(() => {
   releaseHold.mockReset();
   releaseHold.mockResolvedValue(undefined);
   trackUsage.mockReset();
-  trackUsage.mockResolvedValue(undefined);
+  trackUsage.mockResolvedValue(PERSISTED_SETTLE);
   generateImageBytes.mockReset();
   createImageFilePage.mockReset();
   dbState.role = 'user';

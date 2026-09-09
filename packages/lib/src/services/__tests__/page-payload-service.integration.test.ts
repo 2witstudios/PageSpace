@@ -16,6 +16,7 @@ import { drives, pages } from '@pagespace/db/schema/core';
 import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { connections } from '@pagespace/db/schema/social';
 import { loadPagePayload } from '../page-payload-service';
+import { setCells } from '../../sheets/store';
 import { PageType } from '../../utils/enums';
 
 describe('loadPagePayload (integration)', () => {
@@ -205,6 +206,52 @@ describe('loadPagePayload (integration)', () => {
     // bounded walk tops out at the cap + 1 (seed row + cap recursive steps).
     expect(payload.breadcrumb.length).toBeLessThanOrEqual(256);
     expect(payload.breadcrumb[payload.breadcrumb.length - 1]?.id).toBe(a.id);
+  });
+
+  describe('sheets are served from rows, not from pages.content', () => {
+    it('materialises an unmigrated sheet and serves the projection', async () => {
+      const owner = await factories.createUser();
+      const drive = await factories.createDrive(owner.id);
+      const sheet = await factories.createPage(drive.id, {
+        type: 'SHEET',
+        title: 'Orders',
+        position: 0,
+        content:
+          '#%PAGESPACE_SHEETDOC v1\npage_id = "x"\n\n[[sheets]]\nname = "Sheet1"\norder = 0\n\n[sheets.meta]\nrowCount = 5\ncolumnCount = 3\n\n[sheets.cells.A1]\nvalue = "from document"\n',
+      });
+
+      const payload = await loadPagePayload(owner.id, sheet.id);
+      expect(payload.page.content).toContain('from document');
+    });
+
+    it('shows a row write that never touched pages.content', async () => {
+      // THE failure this cutover exists to close. A form submission wrote to
+      // `sheet_rows` while the editor read `pages.content`, so the owner of the
+      // sheet could not see the submission — and their next save re-serialised
+      // a document that had never contained it.
+      const owner = await factories.createUser();
+      const drive = await factories.createDrive(owner.id);
+      const sheet = await factories.createPage(drive.id, {
+        type: 'SHEET',
+        title: 'Responses',
+        position: 0,
+      });
+
+      await setCells({ pageId: sheet.id }, [{ address: 'A1', value: 'submitted' }], {
+        userId: owner.id,
+      });
+
+      const payload = await loadPagePayload(owner.id, sheet.id);
+      expect(payload.page.content).toContain('submitted');
+
+      // And the column itself is not what answered.
+      const [row] = await db
+        .select({ content: pages.content })
+        .from(pages)
+        .where(eq(pages.id, sheet.id))
+        .limit(1);
+      expect(row.content).not.toContain('submitted');
+    });
   });
 
   it('grants access to a user with a future-expiring view grant', async () => {

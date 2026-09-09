@@ -108,8 +108,6 @@ const mockConversation = (overrides: Partial<{
   lastMessageAt: new Date(),
   createdAt: new Date(),
   updatedAt: new Date(),
-  workspaceId: null,
-  closedInWorkspaceAt: null,
 });
 
 const mockMessage = (overrides: Partial<{
@@ -137,6 +135,7 @@ const mockMessage = (overrides: Partial<{
   editedAt: null as Date | null,
   toolCalls: null as unknown,
   toolResults: null as unknown,
+  source: null,
 });
 
 const createContext = (id: string, messageId: string) => ({

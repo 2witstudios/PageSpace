@@ -66,8 +66,10 @@ export const buildMagicLinkPorts = (): MagicLinkPorts => ({
   }) => {
     const { token, hash, tokenPrefix } = generateToken('ps_magic');
     const metadataObj: Record<string, unknown> = {};
-    if (platform === 'desktop' && deviceId) {
-      metadataObj.platform = platform;
+    const boundDevice = boundDevicePlatform(platform, deviceId);
+    if (boundDevice) {
+      metadataObj.platform = boundDevice;
+      // Non-null whenever boundDevice is — that is what the predicate decides.
       metadataObj.deviceId = deviceId;
       if (deviceName) metadataObj.deviceName = deviceName;
     }
@@ -87,10 +89,9 @@ export const buildMagicLinkPorts = (): MagicLinkPorts => ({
     return { token };
   },
 
-  sendMagicLinkEmail: async ({ email, token, next }) => {
+  sendMagicLinkEmail: async ({ email, token, next, platform, deviceId }) => {
     try {
-      const nextSuffix = next ? `&next=${encodeURIComponent(next)}` : '';
-      const magicLinkUrl = `${resolveAppUrl()}/api/auth/magic-link/verify?token=${encodeURIComponent(token)}${nextSuffix}`;
+      const magicLinkUrl = buildMagicLinkUrl({ token, next, platform, deviceId });
       await sendEmail({
         to: email,
         subject: 'Sign in to PageSpace',
@@ -104,3 +105,55 @@ export const buildMagicLinkPorts = (): MagicLinkPorts => ({
     }
   },
 });
+
+/** Path prefix of the in-app magic-link page; must match the AASA and resolver. */
+const MAGIC_LINK_APP_PATH = '/auth/magic-link';
+
+/**
+ * Which device-bound platform this link belongs to, or `null` for an ordinary
+ * browser link.
+ *
+ * One predicate, because two callers ask the same question and must not drift:
+ * the token metadata records the binding, and the emailed URL has to match it.
+ * A universal link with no binding behind it would open the app and then fail
+ * to sign it in — the original bug, silently restored.
+ */
+function boundDevicePlatform(
+  platform: 'web' | 'desktop' | 'ios' | 'android' | undefined,
+  deviceId: string | undefined,
+): 'desktop' | 'ios' | 'android' | null {
+  if (!deviceId || platform === undefined || platform === 'web') return null;
+  return platform;
+}
+
+/**
+ * The URL the email carries.
+ *
+ * A link requested from the iOS / Android shell is a universal link
+ * (`/auth/magic-link/<token>`, claimed in the AASA and routed by
+ * `apps/web/src/lib/navigation/deep-links.ts`) so the tap lands in the app,
+ * whose page redeems the token into the Keychain. Everything else keeps the
+ * plain verify endpoint: that path is deliberately NOT claimed, so a link
+ * requested from Safari on an iPhone stays in Safari where its cookie works.
+ */
+function buildMagicLinkUrl({
+  token,
+  next,
+  platform,
+  deviceId,
+}: {
+  token: string;
+  next?: string;
+  platform?: 'web' | 'desktop' | 'ios' | 'android';
+  deviceId?: string;
+}): string {
+  const base = resolveAppUrl();
+  const encodedToken = encodeURIComponent(token);
+  const boundDevice = boundDevicePlatform(platform, deviceId);
+  if (boundDevice === 'ios' || boundDevice === 'android') {
+    const nextSuffix = next ? `?next=${encodeURIComponent(next)}` : '';
+    return `${base}${MAGIC_LINK_APP_PATH}/${encodedToken}${nextSuffix}`;
+  }
+  const nextSuffix = next ? `&next=${encodeURIComponent(next)}` : '';
+  return `${base}/api/auth/magic-link/verify?token=${encodedToken}${nextSuffix}`;
+}

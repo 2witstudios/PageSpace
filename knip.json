@@ -52,7 +52,8 @@
         "postcss",
         "tailwindcss",
         "tw-animate-css",
-        "@radix-ui/react-navigation-menu"
+        "@radix-ui/react-navigation-menu",
+        "@radix-ui/react-slider"
       ]
     },
     "apps/admin": {
@@ -118,6 +119,7 @@
         "src/schema/calendar.ts",
         "src/schema/chat.ts",
         "src/schema/commands.ts",
+        "src/schema/content-tags.ts",
         "src/schema/contact.ts",
         "src/schema/conversations.ts",
         "src/schema/core.ts",
@@ -134,7 +136,6 @@
         "src/schema/hotkeys.ts",
         "src/schema/incidents.ts",
         "src/schema/integrations.ts",
-        "src/schema/agent-workspace-layout.ts",
         "src/schema/machine-sprite-reclaims.ts",
         "src/schema/members.ts",
         "src/schema/monitoring.ts",
@@ -145,6 +146,8 @@
         "src/schema/pending-invites.ts",
         "src/schema/pending-page-invites.ts",
         "src/schema/personalization.ts",
+        "src/schema/published-app-subscriptions.ts",
+        "src/schema/published-apps.ts",
         "src/schema/published-pages.ts",
         "src/schema/push-notifications.ts",
         "src/schema/rate-limit-buckets.ts",
@@ -174,13 +177,14 @@
     },
     "packages/lib": {
       "entry": [
-        "src/agent-workspaces/contract.ts",
+        "src/agent-workspaces/session-contract.ts",
+        "src/agent-workspaces/workspace-fractions.ts",
+        "src/agent-workspaces/shells-contract.ts",
         "src/agent-workspaces/decide-workspace-access.ts",
         "src/agent-workspaces/plan-workspace-lifecycle.ts",
         "src/agent-workspaces/plan-spawn-worker.ts",
         "src/agent-workspaces/redact-conversation-listing.ts",
         "src/agent-workspaces/workspace-sprite-key.ts",
-        "src/agent-workspaces/workspace-layout-verbs.ts",
         "src/ai/context-window.ts",
         "src/ai/global-channel-id.ts",
         "src/ai/model-defaults.ts",
@@ -289,6 +293,11 @@
         "src/config/env-validation.ts",
         "src/consent/index.ts",
         "src/content/activity-diff-utils.ts",
+        "src/content/anchoring/anchor.ts",
+        "src/content/anchoring/reanchor.ts",
+        "src/content/anchoring/resolve.ts",
+        "src/content/anchoring/text-projection.ts",
+        "src/content/anchoring/types.ts",
         "src/content/diff-generator.ts",
         "src/content/diff-utils.ts",
         "src/content/export-utils.ts",
@@ -298,6 +307,7 @@
         "src/content/tree-utils.ts",
         "src/content/version-resolver.ts",
         "src/deployment-mode.ts",
+        "src/drive-envs/env-sprite-key.ts",
         "src/email-templates/BroadcastEmail.tsx",
         "src/email-templates/FeedbackNotificationEmail.tsx",
         "src/email-templates/MagicLinkEmail.tsx",
@@ -406,11 +416,21 @@
         "src/services/agent-workspaces/agent-workspaces-store.ts",
         "src/services/agent-workspaces/agent-workspaces.ts",
         "src/services/agent-workspaces/shell-scrollback.ts",
+        "src/services/agent-workspaces/workspace-lock.ts",
         "src/services/agent-workspaces/workspace-shells-store.ts",
         "src/services/agent-workspaces/workspace-shells.ts",
         "src/services/agent-workspaces/workspace-status.ts",
-        "src/services/agent-workspaces/workspace-layout-store.ts",
         "src/services/agent-workspaces/shell-types.ts",
+        "src/services/app-hosting/app-hosting-env.ts",
+        "src/services/app-hosting/dedicated-tier.ts",
+        "src/services/app-hosting/dedicated-tier-service.ts",
+        "src/services/app-hosting/app-replay-key.ts",
+        "src/services/app-hosting/parked-page.ts",
+        "src/services/app-hosting/provisioner-core.ts",
+        "src/services/app-hosting/provisioner.ts",
+        "src/services/app-hosting/router-core.ts",
+        "src/services/app-hosting/router.ts",
+        "src/services/app-hosting/routing-env.ts",
         "src/services/attachment-upload-core.ts",
         "src/services/attachment-upload-repository.ts",
         "src/services/attachment-upload.ts",
@@ -431,6 +451,8 @@
         "src/services/drive-search-service.ts",
         "src/services/drive-service.ts",
         "src/services/email-service.ts",
+        "src/services/fly/flaps-client.ts",
+        "src/services/fly/flaps-retry.ts",
         "src/services/invites/index.ts",
         "src/services/memory-monitor.ts",
         "src/services/notification-email-service.ts",
@@ -445,6 +467,23 @@
         "src/services/sandbox/containment.ts",
         "src/services/sandbox/egress-ip.ts",
         "src/services/sandbox/egress-lockdown.ts",
+        "src/services/sandbox/preview/preview-relay.ts",
+        "src/services/sandbox/preview/dev-preview-core.ts",
+        "src/services/sandbox/preview/dev-preview-env.ts",
+        "src/services/sandbox/preview/preview-host.ts",
+        "src/services/sandbox/preview/preview-grant.ts",
+        "src/services/sandbox/preview/preview-forward-gate.ts",
+        "src/services/sandbox/preview/preview-proxy-policy.ts",
+        "src/services/sandbox/preview/dev-preview-effects.ts",
+        "src/services/sandbox/preview/dev-preview-store.ts",
+        "src/services/sandbox/preview/dev-preview-grants-store.ts",
+        "src/services/sandbox/preview/ports-watch.ts",
+        "src/services/sandbox/preview/dev-preview-detection.ts",
+        "src/services/sandbox/preview/dev-preview-status.ts",
+        "src/services/sandbox/preview/dev-preview-lock.ts",
+        "src/services/sandbox/preview/dev-preview-contract.ts",
+        "src/services/sandbox/preview/preview-access.ts",
+        "src/services/sandbox/preview/preview-ws-tunnel.ts",
         "src/services/sandbox/egress.ts",
         "src/services/sandbox/execution-policy.ts",
         "src/services/sandbox/git-tool-runners.ts",
@@ -483,6 +522,8 @@
         "src/services/validated-service-token.ts",
         "src/sheets/io.ts",
         "src/sheets/sheet.ts",
+        "src/tags/tag-core.ts",
+        "src/tags/tag-service.ts",
         "src/types.ts",
         "src/utils/api-utils.ts",
         "src/utils/enums.ts",
@@ -494,6 +535,7 @@
         "src/utils/utils.ts",
         "src/validators/custom-domain.ts",
         "src/validators/email.ts",
+        "src/validators/fly-ownership.ts",
         "src/validators/id-validators.ts",
         "src/validators/subdomain.ts"
       ],
@@ -509,8 +551,20 @@
         "@types/xlsx"
       ]
     },
+    "packages/editor": {
+      "entry": [
+        "src/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ],
+      "ignore": [
+        "src/**/__tests__/**"
+      ]
+    },
     "apps/android": {
       "ignoreDependencies": [
+        "@capawesome/capacitor-badge",
         "@capacitor/app",
         "@capacitor/browser",
         "@capacitor/preferences",
@@ -538,7 +592,8 @@
     "packages/cli": {
       "entry": [
         "src/bin.ts",
-        "src/bin-pagespace-mcp.ts"
+        "src/bin-pagespace-mcp.ts",
+        "scripts/bundle-lib-core.mjs"
       ],
       "project": [
         "src/**/*.ts"

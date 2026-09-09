@@ -92,21 +92,16 @@
       "evidence": [
         {
           "file": "apps/web/src/lib/realtime/__tests__/session-directory-listener.test.ts",
-          "name": "should write the new conversation straight into its session listing, with no request",
-          "suite": "web-unit"
-        },
-        {
-          "file": "apps/web/src/lib/realtime/__tests__/session-directory-listener.test.ts",
-          "name": "given the row is already there (the originating surface wrote it optimistically), should MERGE not duplicate",
+          "name": "should re-read the session listings — the payload no longer says which one to patch",
           "suite": "web-unit"
         },
         {
           "file": "apps/web/src/lib/agent-workspaces/__tests__/create-conversation-in-workspace.test.ts",
-          "name": "a title travels to the creator AT BIRTH — the label the sidebar shows (codex P2)",
+          "name": "creates a GLOBAL thread on that same transaction",
           "suite": "web-unit"
         }
       ],
-      "notes": "These three prove the claim ONE LAYER BELOW the user-visible surface, and the seam above them is now covered end-to-end by `sidebar-renders-server-created-conversation-end-to-end`. CAVEAT WORTH KEEPING, found by writing that spec: the listener test drives `handleCreated` with a payload carrying a `workspaceId`, and on the session-spawn path no such payload is ever emitted. Creation and session-binding are decoupled by design (`create-conversation-in-workspace.ts` — a sessionless conversation is an ordinary state), so `conversation:created` fires first with `workspaceId: null`, which the listener correctly declines to insert anywhere, and it is the CLAIM's `conversation:updated { workspaceId }` that updates the sidebar, via `revalidateWorkspaceListings`. So the no-round-trip property these tests pin is real for the branch they exercise, but the spawn story is served by one event-driven refetch rather than by that branch. Event-driven either way — which is the guarantee — but not request-free, and the difference is worth not overclaiming."
+      "notes": "These prove the claim ONE LAYER BELOW the user-visible surface, and the seam above them is now covered end-to-end by `sidebar-renders-server-created-conversation-end-to-end`. THE CAVEAT THAT USED TO SIT HERE IS NOW THE IMPLEMENTATION. It read: the listener test drives `handleCreated` with a payload carrying a `workspaceId`, and on the session-spawn path no such payload is ever emitted — creation and membership are decoupled by design, so `conversation:created` fires with `workspaceId: null`, which the listener declines to insert anywhere. That column is now DROPPED (`conversations.workspaceId` / `closedInWorkspaceAt` are gone; membership is an `agent_workspace_nodes` row), so the branch the caveat described as unreachable has been deleted and `conversation:created` re-reads the listing unconditionally. The guarantee is unchanged and the overclaim is gone with the branch: this is event-driven, one refetch, never request-free — which is what the caveat already said was actually happening."
     },
     {
       "id": "sidebar-renders-server-created-conversation-end-to-end",
@@ -232,16 +227,11 @@
         },
         {
           "file": "apps/web/src/lib/repositories/__tests__/message-order-stability.integration.test.ts",
-          "name": "getRecentPageMessagesForUser selects a deterministic WINDOW, not just a deterministic order",
-          "suite": "web-unit"
-        },
-        {
-          "file": "apps/web/src/lib/repositories/__tests__/message-order-stability.integration.test.ts",
           "name": "repeated reads of the same tied rows agree with each other",
           "suite": "web-unit"
         }
       ],
-      "notes": "ORDER BY \"createdAt\" alone is a PARTIAL order: the column is a millisecond timestamp, and a burst inside one millisecond (a user turn and its tool rows, an interrupt and the row that replaces it) leaves Postgres free to return heap order on one call and index order on the next. Consumers treat the result as a transcript — the pane renders it in returned order and the AI history is replayed into a prompt in returned order — so an unstable read is a different prompt, not a cosmetic defect. It surfaced as a rare unreproducible failure in chat-mutation-matrix.integration.test.ts > interrupt and resume; the nondeterminism was in the reader. The DESC-window citation is the non-obvious one: a DESC reader must tiebreak DESC or LIMIT n selects a deterministic ordering of a nondeterministic set of rows."
+      "notes": "ORDER BY \"createdAt\" alone is a PARTIAL order: the column is a millisecond timestamp, and a burst inside one millisecond (a user turn and its tool rows, an interrupt and the row that replaces it) leaves Postgres free to return heap order on one call and index order on the next. Consumers treat the result as a transcript — the pane renders it in returned order and the AI history is replayed into a prompt in returned order — so an unstable read is a different prompt, not a cosmetic defect. It surfaced as a rare unreproducible failure in chat-mutation-matrix.integration.test.ts > interrupt and resume; the nondeterminism was in the reader. The DESC-window case \u2014 a DESC reader must tiebreak DESC, or LIMIT n selects a deterministic ordering of a NONDETERMINISTIC SET of rows \u2014 no longer has an instance to cite: its only reader was getRecentPageMessagesForUser, the consult route's cross-conversation fallback, removed when that route stopped reading outside the conversation it writes to. The hazard is recorded here rather than dropped with the test, because it is invisible until someone adds the next DESC+LIMIT transcript reader. recomputeLastMessageAt is DESC+LIMIT 1 but is NOT one: it reads a single max timestamp, where tied rows are interchangeable by definition."
     },
     {
       "id": "no-wider-audience-than-pre-epic",
@@ -368,7 +358,7 @@
           "suite": "web-unit"
         }
       ],
-      "notes": "CLOSED BY #2365, which is why the gap text is gone rather than softened: gdpr-export.ts now has collectUserAgentWorkspaces and collectUserStreamState, and the route test that used to lock the omission in ('appends all data categories to archive') was replaced by one that asserts the bundle's file list exactly. The second half of the old gap — no 'every table is accounted for' drift guard for the GDPR export, the way the tenant export has one — is closed by gdpr-export-coverage.ts, which records a decision for all 128 schema tables and fails on a table that is neither exported nor excused. The Art 15/Art 17 citation is the one that keeps this honest over time: it pins the export against what the erasure purge deletes, so content the subject can have destroyed can never stop being content they can read. The integration citations REFUSE to skip without DATABASE_URL (they throw, with a comment saying why), so they do not share the silent-green caveat noted on gdpr-export-agent-authored-messages. The adjacent TENANT-export hole this note used to flag as open — TABLE_IMPORT_ORDER carrying agent_workspaces but neither agent_workspace_shells nor ai_stream_sessions — is closed under `tenant-export-column-drift-guarded`, and closed with DIFFERENT answers on purpose: the shells now travel, ai_stream_sessions deliberately does not. Art 15 asks what data about you exists; a tenant bundle asks what a working instance should be reconstituted from, and a `status = streaming` checkpoint row answers the first question and not the second."
+      "notes": "CLOSED BY #2365, which is why the gap text is gone rather than softened: gdpr-export.ts now has collectUserAgentWorkspaces and collectUserStreamState, and the route test that used to lock the omission in ('appends all data categories to archive') was replaced by one that asserts the bundle's file list exactly. The second half of the old gap — no 'every table is accounted for' drift guard for the GDPR export, the way the tenant export has one — is closed by gdpr-export-coverage.ts, which records a decision for all 129 schema tables and fails on a table that is neither exported nor excused. The Art 15/Art 17 citation is the one that keeps this honest over time: it pins the export against what the erasure purge deletes, so content the subject can have destroyed can never stop being content they can read. The integration citations REFUSE to skip without DATABASE_URL (they throw, with a comment saying why), so they do not share the silent-green caveat noted on gdpr-export-agent-authored-messages. The adjacent TENANT-export hole this note used to flag as open — TABLE_IMPORT_ORDER carrying agent_workspaces but neither agent_workspace_shells nor ai_stream_sessions — is closed under `tenant-export-column-drift-guarded`, and closed with DIFFERENT answers on purpose: the shells now travel, ai_stream_sessions deliberately does not. Art 15 asks what data about you exists; a tenant bundle asks what a working instance should be reconstituted from, and a `status = streaming` checkpoint row answers the first question and not the second."
     },
     {
       "id": "erasure-reaches-stream-session-content",
@@ -410,7 +400,7 @@
         },
         {
           "file": "apps/web/src/lib/ai/tools/__tests__/session-tools-schema.test.ts",
-          "name": "exposes exactly the thirteen tool names",
+          "name": "exposes exactly the fourteen tool names",
           "suite": "web-unit"
         }
       ],

@@ -92,6 +92,14 @@ vi.mock('@pagespace/lib/services/page-content-store', () => ({
 
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn() },
+  // These are pure-telemetry call sites: they hand the tracking promise to a NAMED
+  // discard rather than leaving it to float, so the mocked module has to provide it.
+  discardUsageOutcome: (tracking: Promise<unknown>) => {
+    void Promise.resolve(tracking).then(
+      () => undefined,
+      () => undefined,
+    );
+  },
   extractOpenRouterCostDollars: vi.fn(() => 0),
   extractOpenRouterGenerationIds: vi.fn(() => []),
 }));

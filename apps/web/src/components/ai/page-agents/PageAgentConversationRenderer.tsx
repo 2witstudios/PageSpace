@@ -208,7 +208,7 @@ export const PageAgentConversationRenderer: React.FC<PageAgentConversationRender
 
             {/* Response with markdown */}
             {response && (
-              <div className="bg-white dark:bg-gray-900 rounded-md p-3 border border-gray-200 dark:border-gray-800">
+              <div className="bg-card rounded-md p-3 border border-border">
                 <div className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Response
                 </div>

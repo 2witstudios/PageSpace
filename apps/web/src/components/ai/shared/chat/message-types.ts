@@ -23,6 +23,19 @@ export interface ConversationMessage extends UIMessage {
    * read as `'complete'` server-side by default.
    */
   status?: 'streaming' | 'complete' | 'interrupted';
+  /**
+   * The TRANSPORT this row was authored over (see `messages.source`) —
+   * `'voice'` for a turn spoken into a live realtime call, null/absent for a
+   * typed one.
+   *
+   * Rendered as a mic glyph rather than left invisible because a thread that
+   * mixes spoken and typed turns without saying which is which is a thread that
+   * misrepresents itself: the phrasing, the length and the errors of a spoken
+   * sentence are all different, and a reader who does not know it was dictated
+   * reads it as sloppy typing. Compared through {@link MESSAGE_SOURCE_VOICE},
+   * never a bare string literal.
+   */
+  source?: string | null;
 }
 
 /**

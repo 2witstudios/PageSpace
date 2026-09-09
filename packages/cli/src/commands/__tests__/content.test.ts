@@ -196,3 +196,61 @@ describe('createPagesReplaceLinesHandler', () => {
     expect(stderr.lines.join('')).toContain('409 revision conflict');
   });
 });
+
+describe('pages replace-lines — staleness guard and content-mode warning (#2463)', () => {
+  const okResult = (extra: Record<string, unknown> = {}) => ({
+    pageId: 'pg_1',
+    pageTitle: null,
+    totalLines: 3,
+    numberedLines: [],
+    operation: 'replace' as const,
+    affectedLines: '1-2',
+    ...extra,
+  });
+
+  it('forwards --expect-lines to the SDK', async () => {
+    const replaceLines = vi.fn(async () => okResult());
+    const handler = createPagesReplaceLinesHandler({
+      readStdin: async () => 'new content',
+      readFile: async () => 'unused',
+    });
+    const ctx = createFakeContext({ sdk: fakeSdk({ pages: { replaceLines } }) });
+
+    const code = await handler(ctx, commandIntent(['pg_1', '--start', '1', '--end', '2', '--expect-lines', '81']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(replaceLines).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedTotalLines: 81 }),
+    );
+  });
+
+  it('rejects a non-numeric --expect-lines as a usage error before reading input', async () => {
+    const replaceLines = vi.fn(async () => okResult());
+    const readStdin = vi.fn(async () => 'new content');
+    const handler = createPagesReplaceLinesHandler({ readStdin, readFile: async () => 'unused' });
+    const ctx = createFakeContext({ sdk: fakeSdk({ pages: { replaceLines } }) });
+
+    const code = await handler(ctx, commandIntent(['pg_1', '--start', '1', '--expect-lines', 'many']));
+
+    expect(code).toBe(EXIT_USAGE_ERROR);
+    expect(readStdin).not.toHaveBeenCalled();
+    expect(replaceLines).not.toHaveBeenCalled();
+  });
+
+  it('prints a content-mode warning to stderr, not swallowed', async () => {
+    const replaceLines = vi.fn(async () =>
+      okResult({ contentModeWarning: 'This page is in html contentMode but holds content with no HTML block structure.' }),
+    );
+    const handler = createPagesReplaceLinesHandler({
+      readStdin: async () => 'new content',
+      readFile: async () => 'unused',
+    });
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ sdk: fakeSdk({ pages: { replaceLines } }), stderr });
+
+    const code = await handler(ctx, commandIntent(['pg_1', '--start', '1']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(stderr.lines.join('')).toContain('html contentMode');
+  });
+});

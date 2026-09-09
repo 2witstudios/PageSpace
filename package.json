@@ -23,7 +23,7 @@
     "db:provision:admin-users": "bun run --filter '@pagespace/db' db:provision:admin-users",
     "test": "./scripts/test-with-db.sh",
     "test:turbo": "turbo run test",
-    "test:unit": "turbo run test --filter=@pagespace/lib && bun run --filter 'web' test",
+    "test:unit": "turbo run test --filter=@pagespace/lib --filter=@pagespace/editor && bun run --filter 'web' test",
     "test:watch": "bun run --filter '@pagespace/lib' test -- --watch",
     "test:ui": "bun run --filter '@pagespace/lib' test -- --ui",
     "test:coverage": "turbo run test:coverage",
@@ -32,6 +32,9 @@
     "dev:desktop": "bun run --filter 'desktop' dev",
     "build:desktop": "bun run --filter 'desktop' build",
     "package:desktop": "bun run --filter 'desktop' package",
+    "dev:desktop:coder": "bun run --filter 'desktop' dev:coder",
+    "build:desktop:coder": "bun run --filter 'desktop' build:coder",
+    "package:desktop:coder": "bun run --filter 'desktop' package:coder",
     "check:fetch": "node scripts/check-fetch-auth.js",
     "knip": "knip",
     "knip:fix": "knip --fix",
@@ -80,7 +83,8 @@
     "react-dom": "^19.1.2",
     "@types/react": "^19.1.13",
     "@types/react-dom": "^19.1.9",
-    "mdast-util-to-hast": "^13.2.1"
+    "mdast-util-to-hast": "^13.2.1",
+    "yjs": "13.6.32"
   },
   "trustedDependencies": [
     "@tensorflow/tfjs-node",

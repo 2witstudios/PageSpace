@@ -12,6 +12,12 @@ import { GeneratedImageRenderer } from './GeneratedImageRenderer';
 import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
 import { renderToolContent } from './registry';
 import { dispatchToolCall, resolveIntegrationToolLabel } from './tool-call-dispatch';
+import { TOOL_NAME_MAP, describeToolCall, formatToolName } from '@/lib/ai/tools/tool-labels';
+
+// Re-exported from its new home so existing importers keep working. The table
+// moved to `lib/` because the voice reducer needs the same words and cannot
+// import from `components/`.
+export { TOOL_NAME_MAP };
 
 export interface ToolPart {
   type: string;
@@ -42,84 +48,6 @@ const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
     return value as Record<string, unknown>;
   }
   return null;
-};
-
-// Tool name mapping (display labels for the collapsible header)
-export const TOOL_NAME_MAP: Record<string, string> = {
-  // Drive tools
-  'list_drives': 'Workspaces',
-  'create_drive': 'Create Workspace',
-  'rename_drive': 'Rename Workspace',
-  'update_drive_context': 'Update Context',
-  'set_home_page': 'Set Home Page',
-  // Member tools
-  'list_drive_members': 'Members',
-  'list_collaborators': 'Collaborators',
-  // Role management tools
-  'list_drive_roles': 'Roles',
-  'get_drive_role': 'Role',
-  'create_drive_role': 'Create Role',
-  'update_drive_role': 'Update Role',
-  'delete_drive_role': 'Delete Role',
-  'set_role_page_permissions': 'Set Role Page Access',
-  'set_role_drive_wide_permissions': 'Set Role Drive Access',
-  'remove_role_page_permissions': 'Remove Role Page Access',
-  // Page read tools
-  'list_pages': 'Pages',
-  'read_page': 'Read Page',
-  'list_trash': 'Trash',
-  'list_conversations': 'Conversations',
-  'read_conversation': 'Conversation',
-  'send_channel_message': 'Send Message',
-  'delete_channel_message': 'Delete Message',
-  // Page write tools
-  'replace_lines': 'Edit Document',
-  'insert_content': 'Insert Content',
-  'create_page': 'Create Page',
-  'rename_page': 'Rename Page',
-  'trash_page': 'Move to Trash',
-  'trash_drive': 'Move Drive to Trash',
-  'restore_page': 'Restore',
-  'restore_drive': 'Restore Drive',
-  'move_page': 'Move Page',
-  'edit_sheet_cells': 'Edit Sheet',
-  // Search tools
-  'regex_search': 'Search',
-  'glob_search': 'Find Pages',
-  'multi_drive_search': 'Search All',
-  // Task tools
-  'update_task': 'Update Task',
-  'create_task': 'Create Task',
-  'delete_task': 'Delete Task',
-  'reorder_task': 'Reorder Task',
-  'get_assigned_tasks': 'Assigned Tasks',
-  'create_task_status': 'Create Status',
-  // Agent tools
-  'update_agent_config': 'Configure Agent',
-  'list_agents': 'Agents',
-  'multi_drive_list_agents': 'All Agents',
-  'ask_agent': 'Ask Agent',
-  'ask_user': 'Question',
-  // Web
-  'web_search': 'Web Search',
-  'web_fetch': 'Fetch Page',
-  // Activity
-  'get_activity': 'Activity',
-  // Calendar tools
-  'list_calendar_events': 'Calendar',
-  'get_calendar_event': 'Event',
-  'check_calendar_availability': 'Availability',
-  'create_calendar_event': 'Create Event',
-  'update_calendar_event': 'Update Event',
-  'delete_calendar_event': 'Delete Event',
-  'rsvp_calendar_event': 'RSVP',
-  'invite_calendar_attendees': 'Invite Attendees',
-  'remove_calendar_attendee': 'Remove Attendee',
-  // Workflow tools
-  'create_workflow': 'Create Workflow',
-  'list_workflows': 'Workflows',
-  'update_workflow': 'Update Workflow',
-  'delete_workflow': 'Delete Workflow',
 };
 
 /**
@@ -174,50 +102,19 @@ export function useToolCallDisplay(part: ToolPart, toolName: string) {
     return safeJsonParse(output);
   }, [output]);
 
-  // Memoize formatted tool name
-  const formattedToolName = useMemo(() => {
-    return (
-      resolveIntegrationToolLabel(toolName) ||
-      TOOL_NAME_MAP[toolName] ||
-      toolName.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
-    );
-  }, [toolName]);
+  // Memoize formatted tool name. The integration override stays here: it is the
+  // one part that depends on the integrations registry, which `lib/ai/tools/
+  // tool-labels.ts` deliberately does not.
+  const formattedToolName = useMemo(
+    () => resolveIntegrationToolLabel(toolName) || formatToolName(toolName),
+    [toolName],
+  );
 
   // Memoize descriptive title
-  const descriptiveTitle = useMemo(() => {
-    if (!parsedInput) return formattedToolName;
-    const params = parsedInput as Record<string, unknown>;
-
-    // Add context to title based on tool type
-    if (params.title && typeof params.title === 'string') {
-      return `${formattedToolName}: ${params.title}`;
-    }
-    if (params.name && typeof params.name === 'string') {
-      return `${formattedToolName}: ${params.name}`;
-    }
-    if (params.query && typeof params.query === 'string') {
-      const truncated = params.query.length > 30 ? params.query.slice(0, 30) + '...' : params.query;
-      return `${formattedToolName}: ${truncated}`;
-    }
-    if (params.pattern && typeof params.pattern === 'string') {
-      return `${formattedToolName}: ${params.pattern}`;
-    }
-    if (params.driveSlug && typeof params.driveSlug === 'string') {
-      return `${formattedToolName}: ${params.driveSlug}`;
-    }
-    if (params.owner && params.repo && typeof params.owner === 'string' && typeof params.repo === 'string') {
-      const suffix = params.path && typeof params.path === 'string' ? `/${params.path}` : '';
-      return `${formattedToolName}: ${params.owner}/${params.repo}${suffix}`;
-    }
-    if (params.channel && typeof params.channel === 'string') {
-      return `${formattedToolName}: ${params.channel}`;
-    }
-    if (params.repo && typeof params.repo === 'string') {
-      return `${formattedToolName}: ${params.repo}`;
-    }
-
-    return formattedToolName;
-  }, [parsedInput, formattedToolName]);
+  const descriptiveTitle = useMemo(
+    () => describeToolCall(toolName, parsedInput, formattedToolName),
+    [toolName, parsedInput, formattedToolName],
+  );
 
   // Build rich content via the tool renderer registry
   const richContent = useMemo(

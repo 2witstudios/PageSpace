@@ -13,6 +13,7 @@ import type { ConversationMessage, TextPart } from './message-types';
 import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart, isToolRunGroupPart } from './message-types';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
 import { ImageMessageContent } from './ImageMessageContent';
+import { SpokenTurnGlyph, isSpokenTurn } from './SpokenTurnGlyph';
 import styles from './CompactMessageRenderer.module.css';
 
 interface CompactTextBlockProps {
@@ -24,12 +25,16 @@ interface CompactTextBlockProps {
   onEdit?: () => void;
   onDelete?: () => void;
   onRetry?: () => void;
+  /** A retry is already in flight — see MessageActionButtons.retryDisabled. */
+  retryDisabled?: boolean;
   onUndoFromHere?: () => void;
   isEditing?: boolean;
   onSaveEdit?: (newContent: string) => Promise<void>;
   onCancelEdit?: () => void;
   /** Whether this message is currently being streamed (for progressive markdown rendering) */
   isStreaming?: boolean;
+  /** Turn was spoken into a live voice call, not typed. */
+  spoken?: boolean;
 }
 
 /**
@@ -45,11 +50,13 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
   onEdit,
   onDelete,
   onRetry,
+  retryDisabled = false,
   onUndoFromHere,
   isEditing,
   onSaveEdit,
   onCancelEdit,
-  isStreaming = false
+  isStreaming = false,
+  spoken = false
 }) => {
   const content = parts.map(part => part.text).join('');
 
@@ -58,7 +65,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
   return (
     <div
       className={`group relative text-xs mb-1 min-w-0 max-w-full ${role === 'user'
-          ? 'p-2 rounded-md bg-primary/10 dark:bg-accent/20 ml-2'
+          ? 'p-2 rounded-md bg-primary-soft ml-2'
           : ''
         }`}
     >
@@ -90,19 +97,21 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
           </div>
           {/* Always show footer with buttons; timestamp only when createdAt exists */}
           <div className="flex items-center justify-between mt-1">
-            <div className="text-[10px] text-gray-500">
+            <div className="flex items-center gap-1 text-[10px] text-gray-500">
               {createdAt && (
                 <>
                   {new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   {editedAt && <span className="ml-1">(edited)</span>}
                 </>
               )}
+              {spoken && <SpokenTurnGlyph />}
             </div>
             {onEdit && onDelete && !isEditing && (
               <MessageActionButtons
                 onEdit={onEdit}
                 onDelete={onDelete}
                 onRetry={onRetry}
+                retryDisabled={retryDisabled}
                 onUndoFromHere={onUndoFromHere}
                 compact
               />
@@ -121,6 +130,11 @@ interface CompactMessageRendererProps {
   onEdit?: (messageId: string, newContent: string) => Promise<void>;
   onDelete?: (messageId: string) => Promise<void>;
   onRetry?: (messageId: string) => void;
+  /**
+   * A retry is already in flight for this conversation. Passed down to the retry affordances
+   * only — a second retry regenerates a second time and bills for it.
+   */
+  retryDisabled?: boolean;
   onUndoFromHere?: (messageId: string) => void;
   onTaskUpdate?: (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => void;
   isLastAssistantMessage?: boolean;
@@ -142,6 +156,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
   onEdit,
   onDelete,
   onRetry,
+  retryDisabled = false,
   onUndoFromHere,
   onTaskUpdate,
   isLastAssistantMessage = false,
@@ -257,11 +272,13 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
                 onEdit={onEdit ? () => setIsEditing(true) : undefined}
                 onDelete={onDelete ? () => setShowDeleteDialog(true) : undefined}
                 onRetry={canRetry ? handleRetry : undefined}
+                retryDisabled={retryDisabled}
                 onUndoFromHere={hasToolCalls && onUndoFromHere ? () => onUndoFromHere(message.id) : undefined}
                 isEditing={isEditing}
                 onSaveEdit={handleSaveEdit}
                 onCancelEdit={() => setIsEditing(false)}
                 isStreaming={isStreaming}
+                spoken={isSpokenTurn(message)}
               />
             );
           } else if (isFileGroupPart(group)) {
@@ -326,6 +343,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
                 variant="ghost"
                 size="sm"
                 onClick={handleRetry}
+                disabled={retryDisabled}
                 className="h-4 px-0.5"
                 title="Retry this message"
                 aria-label="Retry this message"

@@ -75,6 +75,33 @@ export const sessionRepository = {
     }) as Promise<SessionRecord | undefined>;
   },
 
+  /**
+   * A live session BY ID, for credentials derived from a session that do not
+   * carry its token — today, the dev-preview cookie.
+   *
+   * `findActiveSession` above is keyed on the token hash, which the preview
+   * origin never sees: it holds a signed cookie naming the session, not the
+   * session's secret. This is the read that lets a per-request gate ask "is
+   * the session that minted this still usable?" without the token.
+   *
+   * Read-only by design — no lazy revoke, no `lastUsedAt` touch. It is driven
+   * by subresource requests from an untrusted origin, so it must not write.
+   */
+  findActiveSessionById: async (sessionId: string): Promise<SessionRecord | undefined> => {
+    return db.query.sessions.findFirst({
+      where: and(
+        eq(sessions.id, sessionId),
+        isNull(sessions.revokedAt),
+        gt(sessions.expiresAt, new Date()),
+      ),
+      with: {
+        user: {
+          columns: { id: true, tokenVersion: true, role: true, adminRoleVersion: true, suspendedAt: true },
+        },
+      },
+    }) as Promise<SessionRecord | undefined>;
+  },
+
   // Look up a session by hash in ANY state (revoked, expired, or active). Used by the
   // failure-reason classifier when findActiveSession finds nothing, to split "revoked" vs
   // "grace-expired" vs "genuinely never existed". No revoked/expiry predicate, no user join.
@@ -134,6 +161,21 @@ export const sessionRepository = {
     const result = await db.update(sessions)
       .set({ revokedAt: new Date(), revokedReason: reason })
       .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));
+    return result.rowCount ?? 0;
+  },
+
+  // Revoke every active session bound to ONE resource — e.g. every `env:bridge`
+  // socket token of a local environment (`resourceType = 'drive_env'`,
+  // `resourceId = envId`) when that environment is revoked (Codex C4). Same
+  // shape as `revokeAllForUser`: only live sessions, one UPDATE.
+  revokeAllForResource: async (resourceType: string, resourceId: string, reason: string): Promise<number> => {
+    const result = await db.update(sessions)
+      .set({ revokedAt: new Date(), revokedReason: reason })
+      .where(and(
+        eq(sessions.resourceType, resourceType),
+        eq(sessions.resourceId, resourceId),
+        isNull(sessions.revokedAt),
+      ));
     return result.rowCount ?? 0;
   },
 

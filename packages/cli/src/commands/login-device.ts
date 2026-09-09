@@ -29,6 +29,7 @@ import { runDeviceLogin } from '../auth/device-flow.js';
 import type { DeviceAuthorization, PollDeviceToken, RequestDeviceAuthorization } from '../auth/device-flow.js';
 import type { ConfirmIdentity, DiscoverMetadata, WaitMs } from '../auth/loopback-flow.js';
 import { DEFAULT_LOGIN_SCOPE } from './login.js';
+import { shellQuote } from '../shell-quote.js';
 
 export interface LoginDeviceHandlerDeps {
   readonly createCredentialStore: () => CredentialStore;
@@ -68,7 +69,14 @@ export function createLoginDeviceHandler(deps: LoginDeviceHandlerDeps): CommandH
     if (existing && !intent.flags.yes) {
       const keyNote = keyName === DEFAULT_PROFILE_NAME ? '' : ` (key "${keyName}")`;
       ctx.stderr.write(
-        `A stored credential for ${host}${keyNote} already exists. Re-run with --yes to overwrite it, or "pagespace logout --host ${host}" first.\n`,
+        // The suggested logout must name the SAME key this message is about.
+        // Without `--key`, `logout` resolves the name independently and lands
+        // on `default` — and logout is destructive: it revokes the refresh
+        // token server-side before deleting it. So telling someone blocked by
+        // key "ci" to run a bare logout was telling them to revoke their
+        // personal login. Quoted and equals-joined for the same reason
+        // `keys create` is (see `shell-quote.ts`).
+        `A stored credential for ${host}${keyNote} already exists. Re-run with --yes to overwrite it, or "pagespace logout --host=${shellQuote(host)}${keyName === DEFAULT_PROFILE_NAME ? '' : ` --key=${shellQuote(keyName)}`}" first.\n`,
       );
       return EXIT_RUNTIME_ERROR;
     }

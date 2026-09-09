@@ -399,7 +399,16 @@ export const activityLogs = pgTable('activity_logs', {
   logHash: text('logHash'),  // SHA-256 hash of current entry
   chainSeed: text('chainSeed'),  // Initial seed for hash chain verification (only set on first entry)
 }, (table) => ({
-  contentSizeLimit: check('activity_logs_content_size_limit', sql`${table.contentSize} IS NULL OR ${table.contentSize} <= 1048576`),
+  // Bounds the INLINE snapshot only. When content is offloaded to the blob
+  // store, `contentRef` points at it and `contentSize` describes that external
+  // object, which is legitimately unbounded — a 1MB+ sheet doc would otherwise
+  // fail this CHECK and roll back the user's page write (the activity insert
+  // shares the mutation transaction). See prepareActivityInsert, which drops an
+  // oversized `contentSnapshot` app-side.
+  contentSizeLimit: check(
+    'activity_logs_content_size_limit',
+    sql`${table.contentRef} IS NOT NULL OR ${table.contentSize} IS NULL OR ${table.contentSize} <= 1048576`
+  ),
   streamPair: check('activity_logs_stream_pair', sql`(${table.streamId} IS NULL) = (${table.streamSeq} IS NULL)`),
   changeGroupPair: check('activity_logs_change_group_pair', sql`(${table.changeGroupId} IS NULL) = (${table.changeGroupType} IS NULL)`),
   timestampIdx: index('idx_activity_logs_timestamp').on(table.timestamp),

@@ -7,6 +7,7 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { pageVersions, driveBackups } from '@pagespace/db/schema/versioning';
 import { messages, conversations } from '@pagespace/db/schema/conversations';
+import { aiStreamFrames } from '@pagespace/db/schema/ai-streams';
 import { runMonitoringRetentionCleanup } from './monitoring-retention';
 import {
   resolveChatRetentionDays,
@@ -181,6 +182,43 @@ export async function cleanupSoftDeletedChatRecords(database: DB): Promise<Clean
   ];
 }
 
+/**
+ * How long an AI stream's raw frames may survive without anything having claimed them.
+ *
+ * `ai_stream_frames` is normally self-clearing: the writer deletes a message's log the moment
+ * a terminal `messages` row for it is confirmed (the generation's own save, or a crash
+ * recovery's materialization). This sweep is the BACKSTOP for the case where neither ran at
+ * all — the owning process died before it could save, and nothing has since polled, sent, or
+ * stopped anything on that conversation to trigger a recovery. Without it those frames are
+ * message CONTENT sitting in a table with no reader and no expiry.
+ *
+ * 24 hours, chosen against the recovery path rather than picked round. A row is judged dead
+ * and materialized well inside two hours (`RECONCILE_BACKSTOP_MS`, stream-liveness.ts — twice
+ * the one-hour stream lifetime horizon), but only when something looks: a client polling
+ * `/active-streams`, the next send's takeover, a Stop. That trigger can be arbitrarily
+ * delayed — a user who closes the tab on a crashed stream and comes back tomorrow. A day of
+ * headroom means such a recovery still folds the real frames; past it the recovery still
+ * happens, just from the `parts` snapshot, which is the documented fallback. The daily cron
+ * cadence makes the effective window 24-48h.
+ *
+ * Aged per ROW, on `created_at`, which is the table's only index and the only column that can
+ * be swept without a join. For a stream still running after a full day this could in
+ * principle age out its early batches while later ones survive — leaving a log that no longer
+ * starts at seq 0. That is safe rather than corrupting: the reader requires a contiguous
+ * prefix from seq 0 and answers "no log" otherwise, so such a stream degrades to the `parts`
+ * fallback instead of replaying a message missing its beginning.
+ */
+const STREAM_FRAME_RETENTION_MS = 24 * 60 * 60 * 1000;
+
+export async function cleanupAbandonedStreamFrames(database: DB): Promise<CleanupResult> {
+  const cutoff = new Date(Date.now() - STREAM_FRAME_RETENTION_MS);
+  const result = await database
+    .delete(aiStreamFrames)
+    .where(lt(aiStreamFrames.createdAt, cutoff))
+    .returning({ messageId: aiStreamFrames.messageId });
+  return { table: 'ai_stream_frames', deleted: result.length };
+}
+
 export async function runRetentionCleanup(database: DB): Promise<CleanupResult[]> {
   const [expiryResults, chatResults, monitoringResults] = await Promise.all([
     Promise.all([
@@ -197,5 +235,25 @@ export async function runRetentionCleanup(database: DB): Promise<CleanupResult[]
     cleanupSoftDeletedChatRecords(database),
     runMonitoringRetentionCleanup(),
   ]);
-  return [...expiryResults, ...chatResults, ...monitoringResults];
+  // SEQUENCED AFTER the chat sweep, not run alongside it, for the reason
+  // `cleanupSoftDeletedChatRecords` sequences its own two statements: that function's
+  // `conversations` DELETE CASCADES into `ai_stream_frames`, so running this direct sweep
+  // concurrently puts two statements with an overlapping row set on the same table, taking
+  // locks in different orders — and a deadlock aborts the whole retention run. The overlap is
+  // narrow in steady state (a row must be older than a day AND belong to a conversation
+  // soft-deleted a month ago), but the ordering discipline this file already established for
+  // exactly this table graph should not have an exception (review finding — adversarial pass).
+  //
+  // Costs one extra round trip and makes the counts unambiguous: this reports what age-based
+  // sweeping removed, and whatever the cascade took was already condemned.
+  //
+  // ONE BEHAVIOUR CHANGE WORTH NAMING: a rejection anywhere in the group above now skips this
+  // sweep entirely, where previously it was already in flight and would have completed. That
+  // is the right trade — the alternative is the deadlock this sequencing exists to avoid — and
+  // it self-heals, because the next daily run covers whatever a failed run left behind. It is
+  // deliberately NOT wrapped in its own try/catch: a retention run that partly failed should
+  // surface as a failure to the cron route, not be quietly completed around.
+  const streamFrameResults = await cleanupAbandonedStreamFrames(database);
+
+  return [...expiryResults, ...chatResults, ...monitoringResults, streamFrameResults];
 }

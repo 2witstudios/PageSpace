@@ -4,6 +4,10 @@ import {
   createSpritesSandboxClient,
   isSpriteGoneStatus,
   isSpriteNotFoundError,
+  spriteNameFor,
+  SPRITE_NAME_MAX,
+  LEGACY_SPRITE_NAME_MAX,
+  checkSpriteUrlLabelFits,
   classifyProvisionError,
   planProvisionFailure,
   readSessionInfoId,
@@ -18,12 +22,21 @@ import {
   type SpriteCommandLike,
   type SpriteFsLike,
   type SpriteCheckpointStreamLike,
+  runSpawned,
+  findSentinel,
 } from '../sprites';
 import { SandboxProvisionError } from '../../sandbox-options';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
 import { hashSandboxEgressPolicy, egressLockdownToken } from '../../egress-lockdown';
 import { SANDBOX_ROOT } from '../../sandbox-paths';
-import { parentDir, fsRecoveryExec, spawnWithSelfHealingCwd } from '../sprites';
+import {
+  parentDir,
+  fsRecoveryExec,
+  spawnWithSelfHealingCwd,
+  readPortNotification,
+  serviceLogErrorMessage,
+  drainServiceLogStream,
+} from '../sprites';
 
 const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
 
@@ -158,6 +171,12 @@ function fakeSprite(
     createCheckpoint: async () => fakeCheckpointStream(),
     destroy: async () => {},
     killSession: async () => {},
+    updateURLSettings: async () => {},
+    listServices: async () => [],
+    createService: async () => ({ processAll: async () => {}, close: () => {} }),
+    startService: async () => ({ processAll: async () => {}, close: () => {} }),
+    stopService: async () => ({ processAll: async () => {}, close: () => {} }),
+    deleteService: async () => {},
     ...over,
   };
 }
@@ -294,6 +313,81 @@ describe('fsRecoveryExec (pure)', () => {
   });
 });
 
+describe('readPortNotification (pure)', () => {
+  it('given a well-formed port_opened frame, should parse it', () => {
+    expect(readPortNotification({ type: 'port_opened', port: 8124, address: '10.0.0.1', pid: 383 })).toEqual({
+      type: 'port_opened',
+      port: 8124,
+      address: '10.0.0.1',
+      pid: 383,
+    });
+  });
+
+  it('given a port_closed frame with no address/pid, should parse the required fields only', () => {
+    expect(readPortNotification({ type: 'port_closed', port: 3000 })).toEqual({ type: 'port_closed', port: 3000 });
+  });
+
+  it('given a session_info frame, should return undefined — not every control frame is a port event', () => {
+    expect(readPortNotification({ type: 'session_info', session_id: '1' })).toBeUndefined();
+  });
+
+  it('given a frame with a non-numeric port, should return undefined rather than trust the wire', () => {
+    expect(readPortNotification({ type: 'port_opened', port: '8124' })).toBeUndefined();
+  });
+
+  it('given a non-object message, should return undefined', () => {
+    expect(readPortNotification('raw text output')).toBeUndefined();
+    expect(readPortNotification(null)).toBeUndefined();
+  });
+});
+
+describe('serviceLogErrorMessage (pure)', () => {
+  it('given a non-error event, should return undefined', () => {
+    expect(serviceLogErrorMessage({ type: 'started' })).toBeUndefined();
+    expect(serviceLogErrorMessage({ type: 'complete' })).toBeUndefined();
+  });
+
+  it('given an error event with data, should return the data', () => {
+    expect(serviceLogErrorMessage({ type: 'error', data: 'boom' })).toBe('boom');
+  });
+
+  it('given an error event with no data, should fall back to a generic message', () => {
+    expect(serviceLogErrorMessage({ type: 'error' })).toBe('service log stream reported an error');
+  });
+});
+
+describe('drainServiceLogStream (pure-ish: fake stream, no network)', () => {
+  function fakeStream(events: Array<{ type: string; data?: string }>) {
+    let closed = false;
+    return {
+      processAll: async (handler: (event: { type: string; data?: string }) => void | Promise<void>) => {
+        for (const event of events) await handler(event);
+      },
+      close: () => { closed = true; },
+      wasClosed: () => closed,
+    };
+  }
+
+  it('given a stream with no error event, should resolve', async () => {
+    const stream = fakeStream([{ type: 'started' }, { type: 'complete' }]);
+    await expect(drainServiceLogStream(stream)).resolves.toBeUndefined();
+  });
+
+  it('given a stream with an error event, should reject with its message', async () => {
+    const stream = fakeStream([{ type: 'started' }, { type: 'error', data: 'port already bound' }]);
+    await expect(drainServiceLogStream(stream)).rejects.toThrow(/port already bound/);
+  });
+
+  it('given a stream whose processAll never settles (close() does not force it to), should still reject on timeout rather than hang forever', async () => {
+    const stream = {
+      processAll: () => new Promise<void>(() => {}), // never resolves, even after close()
+      close: vi.fn(),
+    };
+    await expect(drainServiceLogStream(stream, 5)).rejects.toThrow(/timed out/);
+    expect(stream.close).toHaveBeenCalled();
+  });
+});
+
 describe('spawnWithSelfHealingCwd (pure)', () => {
   assert({
     given: 'a command, its args, and a cwd',
@@ -310,6 +404,70 @@ describe('spawnWithSelfHealingCwd (pure)', () => {
     should: 'keep it a positional arg (the arg-array no-injection invariant holds)',
     actual: spawnWithSelfHealingCwd({ command: 'bash', args: [], cwd: '/workspace; rm -rf /' })[1].slice(2),
     expected: ['sh', '/workspace; rm -rf /', 'bash'],
+  });
+});
+
+describe('sprite names fit the URL label', () => {
+  const KEY = `pgs-env-${'a'.repeat(64)}`; // a real key: 8-char prefix + 64 hex
+
+  it('cuts the key to SPRITE_NAME_MAX so `<name>-<org>.sprites.app` stays a legal DNS label; the legacy name is the old 63', () => {
+    expect(SPRITE_NAME_MAX).toBe(48);
+    expect(spriteNameFor(KEY)).toHaveLength(48);
+    expect(spriteNameFor(KEY)).toBe(spriteNameFor(KEY));
+    expect(spriteNameFor(KEY, LEGACY_SPRITE_NAME_MAX)).toHaveLength(63);
+    // Room for a `-` plus an org suffix of up to 14 chars inside 63.
+    expect(`${spriteNameFor(KEY)}-bskrl`.length).toBeLessThanOrEqual(63);
+    expect(`${spriteNameFor(KEY, LEGACY_SPRITE_NAME_MAX)}-bskrl`.length).toBeGreaterThan(63);
+  });
+
+  function sdkWith(existing: string[]) {
+    const { sdk, calls, sprite } = makeSdk({
+      getSprite: async (name) => {
+        if (!existing.includes(name)) throw Object.assign(new Error('sprite not found'), { status: 404 });
+        return { ...sprite, name };
+      },
+    });
+    return { sdk, calls };
+  }
+
+  it('resumes by the short name when it exists — no legacy lookup, no create', async () => {
+    const { sdk, calls } = sdkWith([spriteNameFor(KEY)]);
+    const handle = await createSpritesSandboxClient({ sdk }).getOrCreate({ name: KEY, options });
+    expect(handle.sandboxId).toBe(spriteNameFor(KEY));
+    expect(calls.created).toEqual([]);
+  });
+
+  it('resumes a sprite created under the LEGACY 63-char name — its disk and sessions, not a fresh VM — and creates nothing', async () => {
+    const { sdk, calls } = sdkWith([spriteNameFor(KEY, LEGACY_SPRITE_NAME_MAX)]);
+    const handle = await createSpritesSandboxClient({ sdk }).getOrCreate({ name: KEY, options });
+    expect(handle.sandboxId).toBe(spriteNameFor(KEY, LEGACY_SPRITE_NAME_MAX));
+    expect(calls.created).toEqual([]);
+  });
+
+  it('creates under the SHORT name when neither exists', async () => {
+    const { sdk, calls } = sdkWith([]);
+    const handle = await createSpritesSandboxClient({ sdk }).getOrCreate({ name: KEY, options });
+    expect(calls.created).toEqual([spriteNameFor(KEY)]);
+    expect(handle.sandboxId).toBe('session-key'); // makeSdk's fake returns its fixed sprite on create
+  });
+
+  it('checks the URL the platform returns for a FRESH sprite: a label over 63 is reported (the reserve is too small), a fitting one is not', () => {
+    const long = { name: 'x', url: `https://${'a'.repeat(64)}.sprites.app` };
+    const ok = { name: 'x', url: `https://${'a'.repeat(48)}-bskrl.sprites.app` };
+    expect(checkSpriteUrlLabelFits(long)).toBe(false);
+    expect(checkSpriteUrlLabelFits(ok)).toBe(true);
+    expect(checkSpriteUrlLabelFits({ name: 'x' })).toBe(true);
+    expect(checkSpriteUrlLabelFits({ name: 'x', url: 'not a url' })).toBe(true);
+  });
+
+  it('a non-not-found error from the legacy lookup surfaces instead of creating a duplicate', async () => {
+    const { sdk } = makeSdk({
+      getSprite: async (name) => {
+        if (name === spriteNameFor(KEY)) throw Object.assign(new Error('sprite not found'), { status: 404 });
+        throw Object.assign(new Error('rate limited'), { status: 429 });
+      },
+    });
+    await expect(createSpritesSandboxClient({ sdk }).getOrCreate({ name: KEY, options })).rejects.toThrow();
   });
 });
 
@@ -1608,5 +1766,42 @@ describe('withKillSession', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('runSpawned — the stdout sentinel short-circuit', () => {
+  // Measured 2026-09-08: the Sprites runtime holds an exec socket open ~5s on a
+  // fresh sprite and ~10s on a long-lived one AFTER the process exits, and the
+  // SDK emits `exit` only on close. A command that ends with `<sentinel> <code>`
+  // must therefore resolve on that LINE, without waiting for a close that a
+  // 5s cap can never see.
+  it('resolves on the sentinel line for a command whose socket never closes, strips the line, reports the code, and kills the socket', async () => {
+    const command = fakeCommand({ stdout: ['LISTEN 0 511 *:3000 *:*\n', '__END__ 0\n'], hang: true });
+    const result = await runSpawned(command, 0, 2_000, '__END__');
+    expect(result).toEqual({ exitCode: 0, stdout: 'LISTEN 0 511 *:3000 *:*', stderr: '' });
+    expect(command.killed).toEqual(['SIGKILL']);
+  });
+
+  it('carries a non-zero code through the sentinel', async () => {
+    const command = fakeCommand({ stdout: ['__END__ 127\n'], hang: true });
+    expect((await runSpawned(command, 0, 2_000, '__END__')).exitCode).toBe(127);
+  });
+
+  it('is inert without a sentinel: the same hanging command still runs to the timeout', async () => {
+    const command = fakeCommand({ stdout: ['__END__ 0\n'], hang: true });
+    await expect(runSpawned(command, 0, 50)).rejects.toThrow(/timed out/);
+  });
+});
+
+describe('findSentinel', () => {
+  it('needs a COMPLETE line — a sentinel at the end of a chunk with no newline is not yet an answer', () => {
+    // `12` might be the first two bytes of `127`.
+    expect(findSentinel('out\n__END__ 12', '__END__')).toBeNull();
+    expect(findSentinel('out\n__END__ 127\n', '__END__')).toEqual({ stdout: 'out', exitCode: 127 });
+  });
+
+  it('ignores a sentinel with no numeric code, and returns the stdout BEFORE the line', () => {
+    expect(findSentinel('__END__ nope\n', '__END__')).toBeNull();
+    expect(findSentinel('a\nb\n__END__ 0\ntrailing\n', '__END__')).toEqual({ stdout: 'a\nb', exitCode: 0 });
   });
 });

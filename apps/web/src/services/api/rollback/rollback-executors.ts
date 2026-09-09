@@ -59,6 +59,12 @@ export async function rollbackPageChange(
     return { restoredValues: { isTrashed: true }, pageMutationMeta };
   }
 
+  if (plan.kind === 'not-rollbackable') {
+    // Refused, not silently no-op'd. Returning 200 having restored nothing is
+    // the failure mode this replaced.
+    throw new Error(plan.reason);
+  }
+
   const { updateData, restoreOrphanedChildren } = plan;
   const pageMutationMeta = await applyPageUpdateWithRevision(deps, activity.pageId, updateData, pageUpdateContext);
 

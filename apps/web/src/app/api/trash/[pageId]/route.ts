@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq, sql } from '@pagespace/db/operators'
-import { pages, favorites, pageTags } from '@pagespace/db/schema/core'
+import { pages, favorites } from '@pagespace/db/schema/core'
 import { pagePermissions } from '@pagespace/db/schema/members'
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { deleteConversationsForPages, type DbHandle } from '@pagespace/lib/repositories/conversation-cleanup';
@@ -28,7 +28,10 @@ async function recursivelyDelete(pageId: string, tx: DbHandle) {
 
     await tx.delete(pagePermissions).where(eq(pagePermissions.pageId, pageId));
     await tx.delete(favorites).where(eq(favorites.pageId, pageId));
-    await tx.delete(pageTags).where(eq(pageTags.pageId, pageId));
+    // No tag delete here: `page_tags` is gone and `content_tags."pageId"` is
+    // notNull with ON DELETE CASCADE, so the `pages` delete below takes every
+    // tag assignment on this page with it — including the message-anchored
+    // ones, which is exactly why that column is denormalized onto every row.
 
     // Permanent delete of a page must take its chat history with it (epic
     // "Agent-Session Single Source of Truth", Phase 4 / D6). Explicit, because

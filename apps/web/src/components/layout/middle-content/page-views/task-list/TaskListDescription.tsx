@@ -4,6 +4,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { type Editor } from '@tiptap/react';
 import { useDocument } from '@/hooks/useDocument';
+import DocumentConflictGate from '@/components/layout/middle-content/page-views/document/DocumentConflictGate';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { useEditingStore } from '@/stores/useEditingStore';
 
@@ -30,6 +31,9 @@ export function TaskListDescriptionContent({
     saveWithDebounce,
     forceSave,
     initializeAndActivate,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
   } = useDocument(pageId);
 
   // Seed the store from the parent's already-loaded page content to avoid a
@@ -73,6 +77,11 @@ export function TaskListDescriptionContent({
 
   return (
     <div className={className}>
+      <DocumentConflictGate
+        conflict={conflict}
+        onResolve={resolveConflict}
+        isResolving={isResolvingConflict}
+      />
       <RichEditor
         value={content}
         onChange={handleChange}

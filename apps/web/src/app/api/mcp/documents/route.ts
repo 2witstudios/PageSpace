@@ -5,18 +5,20 @@ import { pages } from '@pagespace/db/schema/core';
 import { taskItems, taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { fetchEnrichedTasks, serializeTaskItem } from '@/lib/ai/tools/task-helpers';
-import { backfillMissingTaskItems, ensureTaskListForPage, seedDefaultTaskStatusConfigs } from '@/services/api/task-sync-service';
+import { backfillMissingTaskItems, ensureTaskListForPage, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { computeHasContent } from '@/app/api/pages/[pageId]/tasks/task-utils';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { isCodePage } from '@pagespace/lib/content/page-types.config';
-import { isSheetType, parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
+import { isSheetType, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
+import { setCells, readSheetDocument, SheetAddressError } from '@pagespace/lib/sheets/store';
+import { logSheetCellActivity } from '@/services/api/sheet-activity';
 import { z } from 'zod/v4';
-import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
-import { serializePageContentForAI } from '@/lib/ai/core/page-serializer';
+import { deleteLines, insertLines, LineRangeError, replaceLines, type LineEditResult } from '@/lib/editor/line-edit';
+import { describeContentModeMismatch, isRawTextPage, serializePageContentForAI } from '@/lib/ai/core/page-serializer';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateMCPRequest, isAuthError, isMCPAuthResult, getPrincipalAccessLevel } from '@/lib/auth';
+import { writeDeniedDetails } from '../write-denied-details';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 
@@ -37,6 +39,34 @@ async function getDriveIdFromPage(pageId: string): Promise<string | null> {
   }
 }
 
+
+type LineEditOutcome =
+  | { ok: true; edit: LineEditResult }
+  | { ok: false; response: NextResponse };
+
+/**
+ * Run a line edit, turning its failures into the right HTTP answer. A crippled
+ * edit that reports success is the worst outcome here (#2463): an out-of-range
+ * address is a 400, and an edit addressed against a document length the caller
+ * no longer has is a 409 naming both counts. Anything else is a real fault and
+ * rethrows to the 500 handler.
+ */
+function runLineEdit(compute: () => LineEditResult, totalLines: number): LineEditOutcome {
+  try {
+    return { ok: true, edit: compute() };
+  } catch (error) {
+    if (!(error instanceof LineRangeError)) throw error;
+    return {
+      ok: false,
+      response: NextResponse.json({
+        error: error.kind === 'stale' ? 'Document changed since it was read' : 'Line number out of range',
+        message: error.message,
+        totalLines,
+        suggestion: 'Re-read the page with operation: "read" and re-address the edit.',
+      }, { status: error.kind === 'stale' ? 409 : 400 }),
+    };
+  }
+}
 
 // Split content into lines and add line numbers
 function getNumberedLines(content: string): string[] {
@@ -112,6 +142,10 @@ const lineOperationSchema = z.object({
   endLine: z.number().min(1).optional(),
   content: z.string().optional(),
   cells: z.array(cellUpdateSchema).optional(),
+  // Optional staleness guard for write operations: the totalLines the caller
+  // read before addressing this edit. Supplying it turns "the document grew
+  // since I looked" from a silent partial overwrite into a 409.
+  expectedTotalLines: z.number().int().min(0).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -129,7 +163,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { operation, pageId, startLine, endLine, content, cells } = lineOperationSchema.parse(body);
+    const { operation, pageId, startLine, endLine, content, cells, expectedTotalLines } = lineOperationSchema.parse(body);
 
     // Check drive scope restrictions before permission check
     if (allowedDriveIds.length > 0) {
@@ -181,7 +215,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
           {
             error: 'Write permission required',
-            details: `The '${operation}' operation requires edit access to this document`
+            details: writeDeniedDetails(operation, 'document')
           },
           { status: 403 }
         );
@@ -220,23 +254,45 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const rawContent = page.content || '';
-
     // CODE and markdown pages have natural line structure (and CODE may
     // contain raw HTML/XML that addLineBreaksForAI would mangle); HTML
     // documents are normalized. Shared with the internal read_page/
     // replace_lines tools via serializePageContentForAI so both surfaces
     // agree on line numbers.
-    const isRawText = page.contentMode === 'markdown' || isCodePage(page.type as PageType);
-    const serializedContent = serializePageContentForAI(page);
+    const isRawText = isRawTextPage(page);
+
+    // Sheets serialise from their rows — `pages.content` is empty for a
+    // materialised sheet, so reading the column would return a blank grid.
+    //
+    // Only for operations that actually read the text. Building the projection
+    // unconditionally made `edit-cells` stream every row and serialise the
+    // whole document just to compute line numbers it never looks at,
+    // reintroducing the O(document) cost per addressed write on exactly the
+    // large sheets this exists to avoid.
+    const needsDocumentText = operation !== 'edit-cells';
+    const readablePage =
+      needsDocumentText && isSheetType(page.type as PageType)
+        ? { ...page, content: (await readSheetDocument(pageId)) ?? page.content }
+        : page;
+    const serializedContent = serializePageContentForAI(readablePage);
     const lines = serializedContent.split('\n');
+    // Surfaced on every read and every write: an html-mode page that holds raw
+    // JSON or markdown numbers its lines by its own newlines, and the agent
+    // editing it deserves to know that before it writes HTML into it (#2463).
+    const contentModeWarning = describeContentModeMismatch(readablePage);
 
     switch (operation) {
       case 'read': {
         auditRequest(req, { eventType: 'data.read', userId, resourceType: 'page', resourceId: pageId, details: { source: 'mcp', operation: 'read' } });
 
         if (page.type === PageType.TASK_LIST) {
-          const taskList = await ensureTaskListForPage(db, {
+          // In a transaction: ensureTaskListForPage's create branch seeds the
+          // vocabulary and then conforms any rows already under the page, and a
+          // page CAN hold task rows with no task_lists row of its own — there is
+          // no foreign key between them, only pages.parentId. Committing the
+          // configs without the conform is permanent, since the repair below
+          // only fires while the vocabulary is empty.
+          const taskList = await db.transaction((tx) => ensureTaskListForPage(tx, {
             pageId,
             title: page.title,
             userId,
@@ -244,7 +300,7 @@ export async function POST(req: NextRequest) {
               createdAt: new Date().toISOString(),
               autoCreated: true,
             },
-          });
+          }));
 
           // Self-heal: ensure every child TASK_LIST page has a task_items row.
           // Mirrors the same call in /api/pages/[pageId]/tasks/route.ts:143.
@@ -261,7 +317,8 @@ export async function POST(req: NextRequest) {
             await backfillMissingTaskItems(db, { parentId: pageId, childPageIds, userId });
           }
 
-          const [tasks, statusConfigs] = await Promise.all([
+          // Both are re-read after the repair below, which writes twice.
+          let [tasks, statusConfigs] = await Promise.all([
             fetchEnrichedTasks(pageId),
             // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
             db.query.taskStatusConfigs.findMany({
@@ -272,14 +329,49 @@ export async function POST(req: NextRequest) {
 
           // Legacy task_lists row (e.g. seeded by a pre-fix lazy-init path) with no
           // configs — backfill now instead of leaving it half-initialized forever.
-          // Best-effort: this read already has a correct in-memory fallback
-          // (DEFAULT_TASK_STATUSES below), so a transient backfill failure must not
-          // fail the whole read — it'll simply retry on the next read of this page.
+          //
+          // INHERITED, not defaults, and the same call the web route makes. This
+          // repair only fires while the vocabulary is empty, so whichever client
+          // touches the page first decides it permanently: an agent reading a
+          // sub-task before anyone opens it in the UI would otherwise stamp the
+          // four built-ins onto a list whose ancestor defines its own, and every
+          // later PATCH against an inherited slug 400s.
+          //
+          // In ONE transaction, as the create-path seed above now is too. Both
+          // run the same two-write sequence, and "a list being created has no
+          // rows to conform" — which stood here — is a claim about legacy data
+          // that nothing establishes: task_items are tied to their list only
+          // through pages.parentId, with no foreign key to task_lists, so a page
+          // can hold task rows while its own task_lists row is missing. That is
+          // precisely the half-initialised state these read paths exist to find.
+          //
+          // Here the seed inserts the configs and then conforms
+          // any rows already in the list to them, and this repair only ever
+          // runs while the vocabulary is empty — so a half-applied repair is a
+          // permanent one: the configs commit, the rows keep slugs the list no
+          // longer defines, and no later read comes back for them. There is no
+          // "it'll retry next time" here, whatever an earlier comment claimed.
+          //
+          // Still best-effort at the outer level: this read has a correct
+          // in-memory fallback, so a failed repair must not fail the read.
           if (statusConfigs.length === 0) {
             try {
-              await seedDefaultTaskStatusConfigs(db, taskList.id);
+              await db.transaction((tx) =>
+                seedInheritedTaskStatusConfigs(tx, taskList.id, pageId));
+              // Re-read BOTH. The repair seeds the vocabulary and then conforms
+              // the rows to it, and everything above was read before either.
+              // Reporting the new vocabulary beside the old statuses would name
+              // slugs the response itself says do not exist.
+              [tasks, statusConfigs] = await Promise.all([
+                fetchEnrichedTasks(pageId),
+                // eslint-disable-next-line no-restricted-syntax -- unbounded on purpose: the read it replaces is unbounded, and the seeding path it re-reads no longer caps either. Reporting 200 of a 260-status vocabulary beside rows the sweep just moved to a slug at position 259 names statuses the same response says do not exist.
+                db.query.taskStatusConfigs.findMany({
+                  where: eq(taskStatusConfigs.taskListId, taskList.id),
+                  orderBy: [asc(taskStatusConfigs.position)],
+                }),
+              ]);
             } catch (error) {
-              loggers.api.error('Failed to backfill default task status configs', error as Error);
+              loggers.api.error('Failed to backfill inherited task status configs', error as Error);
             }
           }
 
@@ -558,6 +650,7 @@ export async function POST(req: NextRequest) {
           content: rangeContent,
           ...(fileMetadata && { fileMetadata }),
           ...(isRangeRequest && { rangeStart: effectiveStart, rangeEnd: effectiveEnd }),
+          ...(contentModeWarning && { contentModeWarning }),
         });
       }
 
@@ -568,19 +661,23 @@ export async function POST(req: NextRequest) {
 
         const actualEndLine = endLine || startLine;
 
-        if (startLine > lines.length || actualEndLine > lines.length) {
-          return NextResponse.json({ error: 'Line number out of range' }, { status: 400 });
-        }
-
-        // Replace lines (convert to 0-based index)
-        const newLines = [
-          ...lines.slice(0, startLine - 1),
-          ...content.split('\n'),
-          ...lines.slice(actualEndLine),
-        ];
-
-        const joined = newLines.join('\n');
-        const newContent = isRawText ? joined : addLineBreaksForAI(joined);
+        // One shared line-accounting rule with the in-app replace_lines tool
+        // (`@/lib/editor/line-edit`). The input is the SAME projection `read`
+        // numbered lines against, so the edit addresses exactly the lines the
+        // caller was shown; the output is already canonical, so this route no
+        // longer re-normalizes what it stores and no longer reports a count
+        // taken before that pass.
+        const outcome = runLineEdit(() => replaceLines({
+          content: serializedContent,
+          startLine,
+          endLine: actualEndLine,
+          replacement: content,
+          isRawText,
+          expectedTotalLines,
+        }), lines.length);
+        if (!outcome.ok) return outcome.response;
+        const { edit } = outcome;
+        const newContent = edit.newContent;
 
         const actorInfo = await getActorInfo(userId);
         await applyPageMutation({
@@ -618,10 +715,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
           pageId,
           pageTitle: page.title,
-          totalLines: newLines.length,
+          totalLines: edit.newLineCount,
+          previousTotalLines: edit.previousLineCount,
           numberedLines,
           operation: 'replace',
           affectedLines: `${startLine}-${actualEndLine}`,
+          ...(contentModeWarning && { contentModeWarning }),
         });
       }
 
@@ -630,16 +729,16 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: 'startLine and content are required for insert' }, { status: 400 });
         }
 
-        // Insert at line (convert to 0-based index)
-        const insertIndex = Math.min(startLine - 1, lines.length);
-        const newLines = [
-          ...lines.slice(0, insertIndex),
-          ...content.split('\n'),
-          ...lines.slice(insertIndex),
-        ];
-
-        const joined = newLines.join('\n');
-        const newContent = isRawText ? joined : addLineBreaksForAI(joined);
+        const outcome = runLineEdit(() => insertLines({
+          content: serializedContent,
+          startLine,
+          insertion: content,
+          isRawText,
+          expectedTotalLines,
+        }), lines.length);
+        if (!outcome.ok) return outcome.response;
+        const { edit } = outcome;
+        const newContent = edit.newContent;
 
         const actorInfo = await getActorInfo(userId);
         await applyPageMutation({
@@ -678,10 +777,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
           pageId,
           pageTitle: page.title,
-          totalLines: newLines.length,
+          totalLines: edit.newLineCount,
+          previousTotalLines: edit.previousLineCount,
           numberedLines,
           operation: 'insert',
           insertedAt: startLine,
+          ...(contentModeWarning && { contentModeWarning }),
         });
       }
 
@@ -692,18 +793,16 @@ export async function POST(req: NextRequest) {
 
         const actualEndLine = endLine || startLine;
 
-        if (startLine > lines.length || actualEndLine > lines.length) {
-          return NextResponse.json({ error: 'Line number out of range' }, { status: 400 });
-        }
-
-        // Delete lines (convert to 0-based index)
-        const newLines = [
-          ...lines.slice(0, startLine - 1),
-          ...lines.slice(actualEndLine),
-        ];
-
-        const joined = newLines.join('\n');
-        const newContent = isRawText ? joined : addLineBreaksForAI(joined);
+        const outcome = runLineEdit(() => deleteLines({
+          content: serializedContent,
+          startLine,
+          endLine: actualEndLine,
+          isRawText,
+          expectedTotalLines,
+        }), lines.length);
+        if (!outcome.ok) return outcome.response;
+        const { edit } = outcome;
+        const newContent = edit.newContent;
 
         const actorInfo = await getActorInfo(userId);
         await applyPageMutation({
@@ -741,10 +840,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
           pageId,
           pageTitle: page.title,
-          totalLines: newLines.length,
+          totalLines: edit.newLineCount,
+          previousTotalLines: edit.previousLineCount,
           numberedLines,
           operation: 'delete',
           deletedLines: `${startLine}-${actualEndLine}`,
+          ...(contentModeWarning && { contentModeWarning }),
         });
       }
 
@@ -771,39 +872,42 @@ export async function POST(req: NextRequest) {
           }, { status: 400 });
         }
 
-        // Parse existing sheet content
-        const sheetData = parseSheetContent(rawContent);
-
-        // Apply cell updates
-        const updatedSheet = updateSheetCells(sheetData, cells);
-
-        // Serialize back to TOML format
-        const newContent = serializeSheetContent(updatedSheet, { pageId });
-
-        // Summarize changes for response and metadata
+        // Addressed cell writes, not a document rewrite.
+        //
+        // This used to parse the whole sheet, splice the cells in and
+        // re-serialise all of it — O(document) per call, and it needed a guard
+        // against an unreadable parse replacing the spreadsheet with just these
+        // cells. `setCells` writes the named cells and recomputes only what
+        // depended on them; there is no document to misread.
         const formulaCount = cells.filter(c => c.value.trim().startsWith('=')).length;
         const valueCount = cells.filter(c => c.value.trim() !== '' && !c.value.trim().startsWith('=')).length;
         const clearCount = cells.filter(c => c.value.trim() === '').length;
 
         const actorInfo = await getActorInfo(userId);
-        await applyPageMutation({
+        const setResult = await setCells(
+          { pageId },
+          cells,
+          { userId, actorEmail: actorInfo.actorEmail }
+        );
+
+        // Still an activity entry and still a workflow trigger. Dropping
+        // `applyPageMutation` dropped both, so an agent's edit became invisible
+        // to page history and silently stopped firing workflows on the sheet.
+        await logSheetCellActivity({
           pageId,
-          operation: 'update',
-          updates: { content: newContent },
-          updatedFields: ['content'],
-          expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
-          context: {
-            userId,
-            actorEmail: actorInfo.actorEmail,
-            actorDisplayName: actorInfo.actorDisplayName,
-            metadata: {
-              source: 'mcp',
-              mcpOperation: 'edit-cells',
-              cellsUpdated: cells.length,
-              valuesSet: valueCount,
-              formulasSet: formulaCount,
-              cellsCleared: clearCount,
-            },
+          driveId: page.driveId,
+          pageTitle: page.title,
+          userId,
+          actorEmail: actorInfo.actorEmail,
+          actorDisplayName: actorInfo.actorDisplayName,
+          metadata: {
+            source: 'mcp',
+            mcpOperation: 'edit-cells',
+            cellsUpdated: cells.length,
+            valuesSet: valueCount,
+            formulasSet: formulaCount,
+            cellsCleared: clearCount,
+            recomputed: setResult.recomputed.length,
           },
         });
 
@@ -830,9 +934,10 @@ export async function POST(req: NextRequest) {
             formulasSet: formulaCount,
             cellsCleared: clearCount,
             sheetDimensions: {
-              rows: updatedSheet.rowCount,
-              columns: updatedSheet.columnCount,
+              rows: setResult.rowCount,
+              columns: setResult.columnCount,
             },
+            recomputed: setResult.recomputed.length,
           },
           updatedCells: cells.map(c => ({
             address: c.address.toUpperCase(),
@@ -856,6 +961,26 @@ export async function POST(req: NextRequest) {
         { status: error.expectedRevision === undefined ? 428 : 409 }
       );
     }
+    // A caller-supplied address that cannot be stored is a 400, not a 500.
+    // `isValidCellAddress` accepts `A0` and `A9999999999`, so both clear this
+    // route's own validation and only fail inside the store — and an agent that
+    // receives "Failed to perform document operation" cannot correct itself.
+    if (error instanceof SheetAddressError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+
+    // The sheet's stored document could not be read. This used to be an
+    // explicit 409 on `edit-cells` ("refusing to overwrite it"); the guard went
+    // away with the read-modify-write, but the condition still exists inside
+    // `materializeFromDocument` and deserves the same answer rather than a
+    // generic 500.
+    if (error instanceof Error && error.message.includes('could not be read')) {
+      return NextResponse.json({
+        error: error.message,
+        message: 'The stored sheet document needs repair before this sheet can be edited.',
+      }, { status: 409 });
+    }
+
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: error.issues }, { status: 400 });
     }

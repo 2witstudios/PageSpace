@@ -67,6 +67,14 @@ import {
   trashPage,
 } from './operations/pages.js';
 import { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
+import {
+  appendRows as appendSheetRows,
+  deleteRows as deleteSheetRows,
+  describeSheet,
+  getRows as getSheetRows,
+  queryRows as querySheetRows,
+  updateCells as updateSheetCells,
+} from './operations/sheets.js';
 import { exportPageMarkdown, exportSheetCsv } from './operations/export.js';
 import { listDriveMembers } from './operations/members.js';
 import {
@@ -89,8 +97,9 @@ import {
   setTaskTrigger,
   updateTask,
 } from './operations/tasks.js';
-import { listMcpTokens, revokeMcpToken } from './operations/mcp-tokens.js';
+import { describeSelfKey, listMcpTokens, revokeMcpToken } from './operations/mcp-tokens.js';
 import { globSearch, multiDriveSearch, regexSearch } from './operations/search.js';
+import { cancelUpload, completeUpload, presignUpload } from './operations/uploads.js';
 import { createWorkflow, deleteWorkflow, listWorkflows, updateWorkflow } from './operations/workflows.js';
 import type { Operation } from './registry/define.js';
 import { createRegistry, type OperationRegistry } from './registry/registry.js';
@@ -125,6 +134,23 @@ const DEFAULT_OPERATIONS_MAP = {
     insertLines: insertLines,
     deleteLines: deleteLines,
     editCells: editSheetCells,
+  },
+  /**
+   * Sheet ROWS — the tabular view. `pages.editCells` remains the A1-addressed
+   * editing verb on the documents endpoint; these treat the same sheet as a
+   * table to filter, sort, page and append to.
+   *
+   * Each method is the camelCase of its wire operation (`query-rows` →
+   * `queryRows`), so the facade name and the `operation` field on the request
+   * never drift apart.
+   */
+  sheets: {
+    queryRows: querySheetRows,
+    getRows: getSheetRows,
+    describe: describeSheet,
+    appendRows: appendSheetRows,
+    updateCells: updateSheetCells,
+    deleteRows: deleteSheetRows,
   },
   roles: {
     list: listDriveRoles,
@@ -164,6 +190,7 @@ const DEFAULT_OPERATIONS_MAP = {
   tokens: {
     list: listMcpTokens,
     revoke: revokeMcpToken,
+    describeSelf: describeSelfKey,
   },
   search: {
     glob: globSearch,
@@ -207,6 +234,17 @@ const DEFAULT_OPERATIONS_MAP = {
     update: updateWorkflow,
     delete: deleteWorkflow,
   },
+  /**
+   * The two API legs of a direct-to-storage upload, plus the slot release.
+   * The binary PUT between them is not here and cannot be: it targets object
+   * storage, not PageSpace. `uploadFile` (uploads/upload-file.ts) composes all
+   * three and is what callers should reach for.
+   */
+  uploads: {
+    presign: presignUpload,
+    complete: completeUpload,
+    cancel: cancelUpload,
+  },
 } as const;
 
 type OperationsMap = Record<string, Record<string, Operation>>;
@@ -229,7 +267,14 @@ export interface PageSpaceClientOptions {
   readonly auth: AuthProvider;
   /** Defaults to the global `fetch`. Injected so tests never touch the network. */
   readonly fetch?: typeof fetch;
-  /** Defaults to 30s. */
+  /**
+   * Per-request wall-clock deadline. Defaults to 30s.
+   *
+   * Supplying this EXPLICITLY overrides an operation's own
+   * `timeoutMsOverride` — see `resolveTimeoutMs`. Leaving it unset keeps each
+   * operation's declared default, so an existing caller's behaviour does not
+   * move.
+   */
   readonly timeoutMs?: number;
   readonly retryPolicy?: Partial<RetryPolicy>;
   /** Overrides the request's X-PageSpace-API-Version header; defaults to MIN_SERVER_API_VERSION. */
@@ -260,6 +305,31 @@ function toValidationIssues(issues: ReadonlyArray<{ path: PropertyKey[]; message
     path: issue.path.filter((segment): segment is string | number => typeof segment === 'string' || typeof segment === 'number'),
     message: issue.message,
   }));
+}
+
+/**
+ * Which deadline governs one request.
+ *
+ * An operation's `timeoutMsOverride` is a per-operation DEFAULT, never a
+ * ceiling. It used to be read as `op.timeoutMsOverride ?? clientTimeout`,
+ * which silently discarded an explicit client setting: a caller who
+ * constructed `new PageSpaceClient({ timeoutMs: 600_000 })` still got
+ * `agents.ask`'s 120s, and there was no layer — client option, CLI flag or
+ * env var — at which anyone could ask to wait longer for a consult whose
+ * duration is inherently unbounded (a 20-step tool loop against an arbitrary
+ * model). Being unable to raise a deadline is what turned a slow consult into
+ * paid-for work the caller could never receive.
+ *
+ * Precedence: an explicit client `timeoutMs` > the operation's declared
+ * default > the client's own fallback. Pure; no clock, no I/O.
+ */
+export function resolveTimeoutMs(
+  explicitTimeoutMs: number | undefined,
+  operationOverrideMs: number | undefined,
+  fallbackMs: number,
+): number {
+  if (explicitTimeoutMs !== undefined) return explicitTimeoutMs;
+  return operationOverrideMs ?? fallbackMs;
 }
 
 function delay(ms: number): Promise<void> {
@@ -314,6 +384,8 @@ export class PageSpaceClient {
   readonly #auth: AuthProvider;
   readonly #fetch: typeof fetch;
   readonly #timeoutMs: number;
+  /** Whether `timeoutMs` was supplied by the caller, which is what lets it beat an operation's own default. */
+  readonly #timeoutMsExplicit: number | undefined;
   readonly #retryPolicy: RetryPolicy;
   readonly #registry: OperationRegistry;
   readonly #skipVersionCheck: boolean;
@@ -326,6 +398,7 @@ export class PageSpaceClient {
     this.#auth = options.auth;
     this.#fetch = options.fetch ?? fetch.bind(globalThis);
     this.#timeoutMs = options.timeoutMs ?? 30_000;
+    this.#timeoutMsExplicit = options.timeoutMs;
     this.#retryPolicy = { ...DEFAULT_RETRY_POLICY, ...options.retryPolicy };
     this.#skipVersionCheck = options.skipVersionCheck ?? false;
     this.#jitter = options.jitter ?? Math.random;
@@ -373,7 +446,11 @@ export class PageSpaceClient {
         const descriptor = buildRequest(op, input, this.#config);
         raw = await executeRequest(
           { ...descriptor, headers: { ...descriptor.headers, Authorization: `Bearer ${token}` } },
-          { fetch: this.#fetch, timeoutMs: op.timeoutMsOverride ?? this.#timeoutMs, abortFactory: this.#abortFactory },
+          {
+            fetch: this.#fetch,
+            timeoutMs: resolveTimeoutMs(this.#timeoutMsExplicit, op.timeoutMsOverride, this.#timeoutMs),
+            abortFactory: this.#abortFactory,
+          },
         );
       } catch (error) {
         if (idempotent && (isNetworkError(error) || isTimeoutError(error)) && retryAttempt < this.#retryPolicy.maxRetries) {
@@ -400,7 +477,15 @@ export class PageSpaceClient {
         return parsed;
       }
 
-      if (isAuthenticationError(parsed) && !usedAuthRetry) {
+      // One auth retry, and only for a provider that can actually produce a
+      // different credential on the second pass (AuthProvider.canRefresh). A
+      // static token has no refresh grant behind it, so retrying re-sends the
+      // identical bearer for an identical 401 — and the provider's own
+      // "nothing left to give you" error replaces whatever the server said,
+      // which is how a route refusing a credential CLASS surfaced as a dead
+      // key (#2464). Undeclared means `true`: providers written before this
+      // flag existed all had a refresh path.
+      if (isAuthenticationError(parsed) && !usedAuthRetry && this.#auth.canRefresh !== false) {
         usedAuthRetry = true;
         this.#auth.invalidate();
         continue;

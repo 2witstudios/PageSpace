@@ -12,6 +12,15 @@
  * call for the rest of a long-lived process (e.g. an MCP server) even
  * though the token was never actually revoked.
  *
+ * `canRefresh: false` (see AuthProvider) keeps PageSpaceClient's auth retry
+ * away from this provider entirely, so the branch below is now reached only
+ * by a caller that invalidates and retries by hand. That matters because a
+ * 401 does NOT prove the token is dead: `/api/auth/mcp-tokens` answers a
+ * perfectly live mcp_* key with "MCP tokens are not permitted for this
+ * endpoint" — a refusal of the credential CLASS, not of the credential — and
+ * the retry used to overwrite exactly that message with this one (#2464).
+ * The wording below no longer claims to know which it was.
+ *
  * The token is held in a private class field, which util.inspect/JSON.stringify
  * never surface — logging or serializing this provider cannot leak it.
  */
@@ -19,6 +28,7 @@ import { AuthenticationError } from '../errors.js';
 import type { AuthProvider } from './provider.js';
 
 export class StaticTokenProvider implements AuthProvider {
+  readonly canRefresh = false;
   readonly #token: string;
   #invalidated = false;
 
@@ -29,7 +39,11 @@ export class StaticTokenProvider implements AuthProvider {
   async getAccessToken(): Promise<string> {
     if (this.#invalidated) {
       this.#invalidated = false;
-      throw new AuthenticationError('Static token was invalidated and has no refresh path; re-issue a new credential');
+      throw new AuthenticationError(
+        'The last request with this static token was refused, and a static token has no refresh path to retry with. ' +
+          'That refusal does not necessarily mean the token is invalid — an endpoint may simply not accept this ' +
+          'credential type. Check the refusal the server actually returned before re-issuing the credential.',
+      );
     }
     return this.#token;
   }

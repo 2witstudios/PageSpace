@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { API_CONTRACT_VERSION } from '@pagespace/lib/api-contract-version';
+import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
+import { previewFrameSrcEntry } from '@pagespace/lib/services/sandbox/preview/preview-host';
 import { HANDOFF_BRIDGE_ROUTE_PATHS } from '@/app/api/auth/_shared/handoffBridgeRoutes';
 
 export const NONCE_HEADER = 'x-nonce';
@@ -147,7 +149,23 @@ export const buildCSPPolicy = (nonce: string): string => {
   // (packages/lib/src/canvas/csp.ts) — so author-linked Google Fonts stylesheets
   // need to be allowed here too, not just in the canvas baseline policy.
   const styleSrc = ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'];
-  const frameSrc: string[] = [];
+  // `'self'` FIRST and unconditionally. The in-app canvas view frames a real
+  // same-origin URL (`/api/canvas/[pageId]/preview`) rather than inlining the
+  // document with `srcDoc`, and `frame-src` does NOT fall back to `default-src`
+  // once it is present — so the moment any external origin is appended below,
+  // an allowlist without `'self'` blocks every canvas page from rendering.
+  // That is exactly what happened in cloud, where the Google/Stripe entries are
+  // added and nothing else was: the directive existed, `'self'` was not in it.
+  // Onprem and tenant were unaffected only by accident — the list stayed empty
+  // there, the directive was omitted, and the `default-src 'self'` fallback
+  // carried it.
+  const frameSrc: string[] = ["'self'"];
+  // Dev-server preview: the dashboard frames each holder's dedicated preview
+  // origin (`<kind>-<id>.preview.<apex>`, a PageSpace-owned apex — never
+  // `*.sprites.app`). Exactly the wildcard, only when the feature is
+  // configured; a dark deployment's policy is byte-identical to before.
+  const previewApex = isDevPreviewEnabled() ? resolveDevPreviewApex() : null;
+  if (previewApex !== null) frameSrc.push(previewFrameSrcEntry(previewApex));
 
   // Cloud-only: Google and Stripe external origins
   if (IS_CLOUD) {
@@ -180,7 +198,7 @@ export const buildCSPPolicy = (nonce: string): string => {
     'font-src': ["'self'", 'data:', 'https://fonts.gstatic.com'],
     // Monaco and other browser tooling may initialize workers from blob URLs.
     'worker-src': ["'self'", 'blob:'],
-    ...(frameSrc.length > 0 ? { 'frame-src': frameSrc } : {}),
+    'frame-src': frameSrc,
     'frame-ancestors': ["'none'"],
     'base-uri': ["'self'"],
     'form-action': ["'self'"],
@@ -206,11 +224,12 @@ type SecurityHeadersOptions = {
   isAPIRoute?: boolean;
   disableCOEP?: boolean;
   skipCSP?: boolean;
+  sameOriginFrameable?: boolean;
 };
 
 export const applySecurityHeaders = (
   response: NextResponse,
-  { nonce, isProduction, isSecure = false, isAPIRoute = false, disableCOEP = false, skipCSP = false }: SecurityHeadersOptions
+  { nonce, isProduction, isSecure = false, isAPIRoute = false, disableCOEP = false, skipCSP = false, sameOriginFrameable = false }: SecurityHeadersOptions
 ): NextResponse => {
   // `skipCSP` lets a route own its own Content-Security-Policy header (see
   // isHandoffBridgeRoute). Browsers enforce the INTERSECTION of every CSP header
@@ -220,7 +239,12 @@ export const applySecurityHeaders = (
     const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
     response.headers.set('Content-Security-Policy', csp);
   }
-  response.headers.set('X-Frame-Options', 'DENY');
+  // DENY blocks framing even from the same origin, so a route the dashboard
+  // frames ITSELF (the canvas preview — see isCanvasPreviewRoute) must relax to
+  // SAMEORIGIN or render blank. This is the legacy half of the control; the
+  // route's own policy carries `frame-ancestors 'self'`, which modern browsers
+  // prefer over this header. Never widened beyond same-origin.
+  response.headers.set('X-Frame-Options', sameOriginFrameable ? 'SAMEORIGIN' : 'DENY');
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   response.headers.set('Permissions-Policy', PERMISSIONS_POLICY);
@@ -299,6 +323,29 @@ export const isPublishedSiteHost = (host: string | null | undefined): boolean =>
 export const isHandoffBridgeRoute = (pathname: string): boolean =>
   (HANDOFF_BRIDGE_ROUTE_PATHS as readonly string[]).includes(pathname);
 
+/**
+ * The published-app serving edge. It answers a routing decision either as a
+ * bodiless `fly-replay` (no CSP needed) or as its OWN styled parked /
+ * unavailable / not-found page, which carries a bespoke CSP allowing the inline
+ * style attributes it is built from — the page must be self-contained, because
+ * fetching a stylesheet to render "this app is paused" adds a dependency to the
+ * one response that has to work when things are broken.
+ *
+ * Same reasoning as isHandoffBridgeRoute: the API CSP's `default-src 'none'`
+ * falls style-src back to 'none', and browsers enforce the intersection of every
+ * delivered CSP — so without this the customer-facing enforcement page renders
+ * as unstyled text.
+ */
+export const APP_ROUTER_ROUTE_PATH = '/api/app-hosting/router';
+
+/**
+ * Routes that deliver their own Content-Security-Policy and must not have the
+ * middleware's layered on top. One predicate so the middleware asks the question
+ * once rather than growing a chain of ORs.
+ */
+export const routeOwnsItsOwnCsp = (pathname: string): boolean =>
+  isHandoffBridgeRoute(pathname) || pathname === APP_ROUTER_ROUTE_PATH;
+
 export const shouldDisableCOEP = (pathname: string): boolean =>
   pathname.startsWith('/settings/plan') ||
   pathname.startsWith('/settings/billing') ||
@@ -309,6 +356,7 @@ type CreateSecureResponseOptions = {
   isAPIRoute?: boolean;
   disableCOEP?: boolean;
   skipCSP?: boolean;
+  sameOriginFrameable?: boolean;
 };
 
 const buildSecureResponse = (
@@ -317,7 +365,7 @@ const buildSecureResponse = (
   request?: Request,
   options: CreateSecureResponseOptions = {},
 ): { response: NextResponse; nonce: string } => {
-  const { isAPIRoute = false, disableCOEP = false, skipCSP = false } = options;
+  const { isAPIRoute = false, disableCOEP = false, skipCSP = false, sameOriginFrameable = false } = options;
   const nonce = generateNonce();
   const isSecure = isSecureRequest(request);
   const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
@@ -334,7 +382,7 @@ const buildSecureResponse = (
   const response = make(requestHeaders);
 
   // Also set CSP on response headers for browser enforcement
-  applySecurityHeaders(response, { nonce, isProduction, isSecure, isAPIRoute, disableCOEP, skipCSP });
+  applySecurityHeaders(response, { nonce, isProduction, isSecure, isAPIRoute, disableCOEP, skipCSP, sameOriginFrameable });
 
   return { response, nonce };
 };

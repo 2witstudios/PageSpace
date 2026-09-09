@@ -92,4 +92,22 @@ describe('respondWithHelpAnswer', () => {
     await expect(drain(response)).resolves.toBeUndefined();
     expect(persist).toHaveBeenCalledTimes(1);
   });
+
+  it('marks the response INLINE so a detached client does not mistake it for a stream', async () => {
+    // This reply has no lifecycle, no channel and no `chat:stream_start` behind it — a
+    // deliberate choice (see page-chat-turn.ts) rather than an oversight. Unmarked, it is
+    // byte-identical in shape to an old server's streamed body, and a detached client cancels
+    // it after the `start` frame and subscribes to a channel that does not exist: a 404 join,
+    // a fruitless poll, and an empty bubble over a locked composer. The client cannot infer
+    // this; the server has to say.
+    const response = await respondWithHelpAnswer({
+      senderId: 'user-1',
+      driveId: null,
+      originalMessages,
+      persist: vi.fn().mockResolvedValue(true),
+    });
+
+    expect(response.headers.get('X-Stream-Mode')).toBe('inline');
+    await drain(response);
+  });
 });

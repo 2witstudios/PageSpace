@@ -28,11 +28,22 @@ vi.mock('@pagespace/lib/services/agent-workspaces/agent-workspace-tenant', () =>
 }));
 vi.mock('@/lib/agent-workspaces/workspace-conversations-runtime', () => ({
   listAllConversationsPaginated: (...args: unknown[]) => mockListAllConversationsPaginated(...args),
-  encodeCursor: (sortKey: Date | string, id: string) =>
-    Buffer.from(JSON.stringify({ sortKey: new Date(sortKey).toISOString(), id })).toString('base64url'),
 }));
 
 import { GET } from '../route';
+
+/**
+ * The fixtures below double as the mocked runtime's OUTPUT and as the expected
+ * response. Those two shapes are no longer identical: a server row carries
+ * `sortKeyValue` (the ordering key the route mints its cursor from) and
+ * `toWireRow` strips it before responding. Expectations go through this so the
+ * strip is asserted rather than assumed — drop the strip in the route and every
+ * `toEqual` below fails.
+ */
+function wire<T extends { sortKeyValue?: unknown }>(row: T): Omit<T, 'sortKeyValue'> {
+  const { sortKeyValue: _sortKeyValue, ...rest } = row;
+  return rest;
+}
 
 const AUTH_ADMIN = { userId: 'user-1', role: 'admin' };
 const AUTH_NON_ADMIN = { userId: 'user-2', role: 'user' };
@@ -44,6 +55,9 @@ const GLOBAL_ROW = {
   agentPageId: null,
   pageTitle: null,
   lastMessageAt: '2026-07-28T00:00:00.000Z',
+  // The ordering key the query sorted by; the route mints its cursor from
+  // this rather than re-deriving one from the display timestamps.
+  sortKeyValue: '2026-07-28T00:00:00.000Z',
   createdAt: '2026-07-27T00:00:00.000Z',
   workspaceId: null,
   sessionName: null,
@@ -58,6 +72,9 @@ const PAGE_ROW = {
   agentPageId: 'agent-1',
   pageTitle: 'My Agent',
   lastMessageAt: '2026-07-28T00:00:00.000Z',
+  // The ordering key the query sorted by; the route mints its cursor from
+  // this rather than re-deriving one from the display timestamps.
+  sortKeyValue: '2026-07-28T00:00:00.000Z',
   createdAt: '2026-07-27T00:00:00.000Z',
   workspaceId: null,
   sessionName: null,
@@ -76,6 +93,9 @@ const SESSION_GLOBAL_ROW = {
   agentPageId: null,
   pageTitle: null,
   lastMessageAt: '2026-07-28T00:00:00.000Z',
+  // The ordering key the query sorted by; the route mints its cursor from
+  // this rather than re-deriving one from the display timestamps.
+  sortKeyValue: '2026-07-28T00:00:00.000Z',
   createdAt: '2026-07-27T00:00:00.000Z',
   workspaceId: 'session-1',
   sessionName: 'My Sandbox',
@@ -97,7 +117,7 @@ describe('GET /api/agent-workspaces/conversations', () => {
     const response = await GET(new Request('http://localhost/api/agent-workspaces/conversations'));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      conversations: [GLOBAL_ROW],
+      conversations: [wire(GLOBAL_ROW)],
       pagination: { hasMore: false, nextCursor: null, limit: 20 },
     });
     expect(mockListAllConversationsPaginated).toHaveBeenCalledWith(
@@ -150,7 +170,7 @@ describe('GET /api/agent-workspaces/conversations', () => {
       const body = await response.json();
 
       expect(mockGetBatchPagePermissions).toHaveBeenCalledWith('user-1', ['agent-1']);
-      expect(body.conversations).toEqual([PAGE_ROW, GLOBAL_ROW]);
+      expect(body.conversations).toEqual([wire(PAGE_ROW), wire(GLOBAL_ROW)]);
     });
 
     it('masks pageTitle/driveId — but keeps the conversation row — when the requester can no longer view the page', async () => {
@@ -163,8 +183,8 @@ describe('GET /api/agent-workspaces/conversations', () => {
       const body = await response.json();
 
       expect(body.conversations).toEqual([
-        { ...PAGE_ROW, pageTitle: null, driveId: null },
-        GLOBAL_ROW,
+        wire({ ...PAGE_ROW, pageTitle: null, driveId: null }),
+        wire(GLOBAL_ROW),
       ]);
     });
 
@@ -174,7 +194,7 @@ describe('GET /api/agent-workspaces/conversations', () => {
       const response = await GET(new Request('http://localhost/api/agent-workspaces/conversations'));
       const body = await response.json();
 
-      expect(body.conversations[0]).toEqual({ ...PAGE_ROW, pageTitle: null, driveId: null });
+      expect(body.conversations[0]).toEqual(wire({ ...PAGE_ROW, pageTitle: null, driveId: null }));
     });
 
     it('batch-checks once for every distinct agentPageId, never per-row (no N+1)', async () => {
@@ -211,7 +231,7 @@ describe('GET /api/agent-workspaces/conversations', () => {
       const response = await GET(new Request('http://localhost/api/agent-workspaces/conversations?driveId=drive-1'));
       const body = await response.json();
 
-      expect(body.conversations).toEqual([GLOBAL_ROW]);
+      expect(body.conversations).toEqual([wire(GLOBAL_ROW)]);
     });
 
     it('still masks (keeps the row) rather than dropping when driveId is NOT scoped', async () => {
@@ -220,7 +240,7 @@ describe('GET /api/agent-workspaces/conversations', () => {
       const response = await GET(new Request('http://localhost/api/agent-workspaces/conversations'));
       const body = await response.json();
 
-      expect(body.conversations).toEqual([{ ...PAGE_ROW, pageTitle: null, driveId: null }, GLOBAL_ROW]);
+      expect(body.conversations).toEqual([wire({ ...PAGE_ROW, pageTitle: null, driveId: null }), wire(GLOBAL_ROW)]);
     });
 
     it('keeps the row in full when driveId is scoped and the page IS accessible', async () => {
@@ -229,7 +249,7 @@ describe('GET /api/agent-workspaces/conversations', () => {
       const response = await GET(new Request('http://localhost/api/agent-workspaces/conversations?driveId=drive-1'));
       const body = await response.json();
 
-      expect(body.conversations).toEqual([PAGE_ROW, GLOBAL_ROW]);
+      expect(body.conversations).toEqual([wire(PAGE_ROW), wire(GLOBAL_ROW)]);
     });
   });
 
@@ -261,7 +281,7 @@ describe('GET /api/agent-workspaces/conversations', () => {
         { ownerId: 'user-1', driveId: 'drive-1' },
         { limit: 20, cursor: 'cursor-1' },
       );
-      expect(body.conversations).toEqual([{ ...GLOBAL_ROW, conversationId: 'conv-global-2' }]);
+      expect(body.conversations).toEqual([wire({ ...GLOBAL_ROW, conversationId: 'conv-global-2' })]);
       expect(body.pagination).toEqual({ hasMore: false, nextCursor: null, limit: 20 });
     });
 
@@ -297,9 +317,9 @@ describe('GET /api/agent-workspaces/conversations', () => {
         .mockResolvedValueOnce({
           // 3 visible rows against a limit of 2 — pushes `visible` past `limit`.
           conversations: [
-            { ...GLOBAL_ROW, conversationId: 'conv-a', lastMessageAt: '2026-07-29T00:00:00.000Z' },
-            { ...GLOBAL_ROW, conversationId: 'conv-b', lastMessageAt: '2026-07-28T00:00:00.000Z' },
-            { ...GLOBAL_ROW, conversationId: 'conv-c', lastMessageAt: '2026-07-27T00:00:00.000Z' },
+            { ...GLOBAL_ROW, conversationId: 'conv-a', lastMessageAt: '2026-07-29T00:00:00.000Z', sortKeyValue: '2026-07-29T00:00:00.000Z' },
+            { ...GLOBAL_ROW, conversationId: 'conv-b', lastMessageAt: '2026-07-28T00:00:00.000Z', sortKeyValue: '2026-07-28T00:00:00.000Z' },
+            { ...GLOBAL_ROW, conversationId: 'conv-c', lastMessageAt: '2026-07-27T00:00:00.000Z', sortKeyValue: '2026-07-27T00:00:00.000Z' },
           ],
           pagination: { hasMore: true, nextCursor: 'cursor-2', limit: 2 },
         });
@@ -349,7 +369,7 @@ describe('GET /api/agent-workspaces/conversations', () => {
       const body = await response.json();
 
       expect(mockResolveDriveMembership).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-2' });
-      expect(body.conversations).toEqual([SESSION_GLOBAL_ROW, GLOBAL_ROW]);
+      expect(body.conversations).toEqual([wire(SESSION_GLOBAL_ROW), wire(GLOBAL_ROW)]);
     });
 
     it('masks the session-derived fields (keeps the row, as the conversation is still readable) when unscoped and access is lost', async () => {
@@ -364,8 +384,8 @@ describe('GET /api/agent-workspaces/conversations', () => {
       const body = await response.json();
 
       expect(body.conversations).toEqual([
-        { ...SESSION_GLOBAL_ROW, workspaceId: null, driveId: null, sessionName: null, sessionEndedAt: null },
-        GLOBAL_ROW,
+        wire({ ...SESSION_GLOBAL_ROW, workspaceId: null, driveId: null, sessionName: null, sessionEndedAt: null }),
+        wire(GLOBAL_ROW),
       ]);
     });
 
@@ -379,7 +399,7 @@ describe('GET /api/agent-workspaces/conversations', () => {
         { ownerId: 'user-1', driveId: 'drive-2' },
         { limit: 20, cursor: undefined },
       );
-      expect(body.conversations).toEqual([GLOBAL_ROW]);
+      expect(body.conversations).toEqual([wire(GLOBAL_ROW)]);
     });
 
     it('keeps the row in full when driveId is scoped and access is NOT lost', async () => {
@@ -388,7 +408,7 @@ describe('GET /api/agent-workspaces/conversations', () => {
       const response = await GET(new Request('http://localhost/api/agent-workspaces/conversations?driveId=drive-2'));
       const body = await response.json();
 
-      expect(body.conversations).toEqual([SESSION_GLOBAL_ROW, GLOBAL_ROW]);
+      expect(body.conversations).toEqual([wire(SESSION_GLOBAL_ROW), wire(GLOBAL_ROW)]);
     });
 
     it('never checks drive membership for a driveless global-assistant conversation (no session, nothing to check)', async () => {

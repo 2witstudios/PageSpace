@@ -8,10 +8,14 @@ import { NONCE_HEADER } from '@/middleware/security-headers';
  * Request-time API, so calling this opts the caller into dynamic rendering —
  * no separate `connection()` call is needed alongside it.
  *
- * Server Component only. Shared by every layout that needs the nonce (root
- * layout for its own inline scripts/ThemeProvider; dashboard layout for
- * threading it into Canvas's NonceProvider) so the read logic can't drift
- * between call sites.
+ * Server Component only. Used by the root layout for its own inline
+ * scripts/ThemeProvider.
+ *
+ * The dashboard layout used to read this too, to thread the nonce down to
+ * `CanvasFrame` — a `srcDoc` iframe inherits the embedder's nonce-based CSP, so
+ * author `<script>` tags had to carry a matching nonce. The canvas preview is now
+ * a real navigation serving its own policy, so nothing is inherited and no nonce
+ * needs threading; that whole context was removed with it.
  */
 export async function getRequestNonce(): Promise<string | undefined> {
   const requestHeaders = await headers();

@@ -1,6 +1,13 @@
 /**
- * Discovery symmetry + shared-metadata redaction (epic Phase 2), against a
+ * Discovery symmetry + shared-metadata visibility (epic Phase 2), against a
  * REAL migration-built Postgres.
+ *
+ * NOTE. The redaction this file pins gained a second job in the cross-member
+ * reach change: it is the ADDRESSABILITY rule as well as the title rule. A row
+ * that reads `(private thread)` here is one `send_session`/`read_session`/
+ * `kill_session` refuse as nonexistent, on the same predicate
+ * (`isConversationVisibleToViewer`). So these assertions now also pin what a
+ * member's agent may touch, not only what it may read.
  *
  * PR #2336 flagged (deliberately out of scope there): `list_sessions`' cross-
  * workspace listing was scoped to workspaces the caller OWNS, while
@@ -30,11 +37,12 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { and, eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
+import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { factories } from '@pagespace/db/test/factories';
-import { PRIVATE_THREAD_REDACTION } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
+import { PRIVATE_THREAD_REDACTION, isConversationVisibleToViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { buildSessionToolsDeps } from '@/lib/ai/tools/session-tools-runtime';
 import { createConversationInSession, spawnSession } from '../agent-workspaces-runtime';
@@ -110,6 +118,15 @@ describe('discovery symmetry + shared-metadata redaction (issue #2262 finding 6,
     expect(titleById.get(ownerSharedId)).toBe('team notes');
     expect(titleById.get(ownerPrivateId)).toBe(PRIVATE_THREAD_REDACTION);
     expect(JSON.stringify(listed)).not.toContain('owner secret plans');
+    // And the redacted row is precisely the one the verbs refuse — the two
+    // are one predicate, against these same real rows.
+    expect(
+      isConversationVisibleToViewer({
+        viewerId: member.id,
+        workspaceOwnerId: owner.id,
+        conversation: { ownerId: owner.id, isShared: false, title: 'owner secret plans' },
+      }),
+    ).toBe(false);
 
     // 2. SYMMETRY — the id the listing surfaced is spawnable-into, through
     // the same gate the explicit-workspaceId path always enforced.
@@ -123,13 +140,20 @@ describe('discovery symmetry + shared-metadata redaction (issue #2262 finding 6,
       agentPageId: null,
       name: 'member worker',
       workspace: workspaceId,
+      allowedDriveIds: [],
     });
     expect(spawnedInto).toEqual({ ok: true, workspaceId });
-    const [memberWorker] = await db
-      .select()
-      .from(conversations)
-      .where(eq(conversations.id, memberWorkerId));
-    expect(memberWorker.workspaceId).toBe(workspaceId);
+    // MEMBERSHIP IS THE NODE. This asserted `conversations.workspaceId`, which
+    // nothing writes since membership moved to the tree — so it compared two
+    // nulls and passed for no reason.
+    const [memberWorkerNode] = await db
+      .select({ rootId: agentWorkspaceNodes.rootId })
+      .from(agentWorkspaceNodes)
+      .where(
+        and(eq(agentWorkspaceNodes.targetKind, 'chat'), eq(agentWorkspaceNodes.targetId, memberWorkerId)),
+      )
+      .limit(1);
+    expect(memberWorkerNode?.rootId).toBe(workspaceId);
 
     // 3. The workspace's OWNER sees everything in their own workspace,
     // unchanged — including the member's thread title. (Their shared listing
@@ -159,6 +183,7 @@ describe('discovery symmetry + shared-metadata redaction (issue #2262 finding 6,
       agentPageId: null,
       name: 'trespasser',
       workspace: workspaceId,
+      allowedDriveIds: [],
     });
     expect(refused).toMatchObject({ ok: false, reason: 'workspace_not_found' });
   });

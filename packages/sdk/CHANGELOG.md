@@ -2,6 +2,114 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.3.0] — 2026-09-06
+
+### Added
+
+- **`client.uploads` + `uploadFile` — a file can now reach a drive from outside a browser.** The SDK
+  had no upload path at all, so `pages.create({ type: 'FILE' })` produced a page with no way to
+  attach bytes. Three operations model the JSON legs (`uploads.presign`, `uploads.complete`,
+  `uploads.cancel`) and `uploadFile` composes them around the binary `PUT` — which stays a raw
+  `fetch`, because it targets object storage rather than PageSpace and the transport serializes
+  JSON only. Two server behaviours are handled rather than left to callers: the deduplication fast
+  path still calls `complete` (that is what creates the page, so skipping it silently produces
+  none, and it is reported as `deduplicated: true`), and every failure after the reservation
+  releases the slot. The cross-tenant 409 — bytes that exist globally but which this caller has
+  never referenced — is deliberately not a success branch, so it cannot be mistaken for
+  deduplication.
+- **`UploadSlotLostError` names the cause the server's message omits.** A reservation the server
+  cannot find comes back as `Invalid or expired jobId`, but expiry is only one of two causes: slot
+  metadata lives in an in-process map, so `presign` and `complete` must reach the same replica.
+  Machine callers, which put a large upload between the two calls, are far likelier to hit that
+  than the browser client the current design was built for. The original error is kept on `cause`.
+- **Uploads refuse a cleartext storage target and will not follow a redirect.** `redirect: 'error'`,
+  because a presigned `PUT` is terminal and a redirect would forward the file bytes to a host the
+  signature was never issued for; and a plaintext `http://` target is refused unless it is loopback
+  or the caller passes `allowInsecureStorageUrl`, so a server misconfigured with a cleartext S3
+  endpoint cannot silently downgrade every upload.
+
+- **`pages.replaceLines`/`insertLines`/`deleteLines` accept `expectedTotalLines`** — the optional
+  staleness guard: the document length the caller believes it is editing. A mismatch is refused
+  (409) instead of applying the edit to lines the caller has not seen. Their results now also model
+  `previousTotalLines` and `contentModeWarning`, and `pages.read` models `contentModeWarning` — a
+  bare `z.object` had been stripping them, so the warning never reached the caller.
+
+## [2.2.0] — 2026-08-23
+
+### Added
+
+- **`client.sheets` — a spreadsheet is queryable data, not a document you download.** Six operations
+  over `POST /api/mcp/sheets`: `queryRows` (filter with nested `and`/`or`/`not`, project with
+  `select`, sort with `orderBy`, page with `limit`/`offset`), `getRows` (positional paging by row
+  index), `describe` (tabs, row and column counts, frozen rows — without reading a row),
+  `appendRows`, `updateCells` (A1 addresses, and unlike the older `documents.editSheetCells` it can
+  reach a tab other than the first) and `deleteRows`. Asking a 100,000-row sheet for twelve matching
+  rows now transfers twelve rows.
+
+  Filters compare against the **computed** value, so a formula column matches on its result rather
+  than its `=` text. Every cell carries both: `raw` is what was authored, `value` what it evaluates
+  to. `SheetWhereInput` is exported for building filters in typed code.
+
+  `queryRows` returns `total` — the full match count, not the page size — so a caller can report
+  "20 of 4,312" without a second request. `getRows` returns `nextFromRow`, a **position**, not a
+  count: advancing by `rows.length` loops forever on a sparse tab, following `nextFromRow`
+  terminates.
+
+  `describe` deliberately takes no `tabIndex`. The route resolves the tab before dispatch, so
+  passing one 409s before `describe` runs — precisely for the caller who does not yet know which
+  tabs exist. `deleteRows` requires both `fromRow` and `count`; neither is defaulted, because a
+  wrong guess destroys data.
+
+- **`documents.editSheetCells` now reports `recomputed`** in its `stats` — how many dependent cells
+  were recalculated. The server had always returned it; the output schema didn't declare it, so zod
+  stripped it before any consumer saw it.
+
+- **`tokens.describeSelf`** (`GET /api/auth/key`) — describes the credential making the call: its
+  drive scopes, the role granted in each, and the effective `{canView, canEdit, canShare,
+  canDelete}` that role resolves to server-side. Unlike `tokens.list`/`tokens.revoke`, it accepts an
+  `mcp_` token, because a credential describing ITSELF is not the same authority as one enumerating
+  every key its owner holds. Pass `pageId` to also resolve a specific page, which can be strictly
+  narrower than its drive (a `MEMBER` grant edits at the drive root and can be view-only on a
+  document inside it); `page.permissions: null` means the page is out of reach entirely, which is
+  deliberately not the same as all-false. It carries no identity fields — a key still cannot learn
+  who owns it.
+- **`tokens.list` now surfaces each drive scope's `role`, `customRoleId` and `customRoleName`.** The
+  server had always returned them; the output schema didn't declare them, so zod stripped the answer
+  to "what was this key granted" before any consumer saw it. They default to `null` against a server
+  that omits them.
+
+### Removed
+
+- **`'MACHINE'` is no longer an accepted page type.** `pageTypeSchema` — and therefore
+  `pages.create`, `pages.list`, search filters and the `type` on every page response — no longer
+  accepts or emits it. 2.1.0 renamed `'TERMINAL'` to `'MACHINE'`; this removes the type outright,
+  because the feature it named was deleted server-side. A call passing `'MACHINE'` now fails
+  client-side in schema validation rather than server-side as an unknown type. **This is a narrowing
+  of accepted input in a minor release**, which strict semver would call breaking; it is shipped as
+  a minor because the endpoint rejects the value either way and there is no migration to perform.
+
+### Changed
+
+- **Calendar timezone resolution is documented as it actually behaves.** Omitting `timezone` is not
+  the same as sending `"UTC"`: the server resolves an absent field against the caller's profile
+  timezone and only then falls back to UTC, matching `tasks.create`/`tasks.setTrigger`.
+  `calendar.create` stores the resolved zone on the event, so a later `update` that omits `timezone`
+  reinterprets against the event's own zone rather than the editor's. `startDate`/`endDate` on
+  `calendar.list` are absolute instants and are never reinterpreted. No SDK code changed; the
+  previous documentation described behaviour that did not match the server.
+
+### Fixed
+
+- **A 401 that refuses a credential CLASS no longer surfaces as a dead token.** `AuthProvider` gained
+  an optional `canRefresh`, and `PageSpaceClient` now spends its single auth retry only on a provider
+  that can actually produce a different credential. `StaticTokenProvider` declares `canRefresh:
+  false`: retrying re-sent the identical bearer, and the second pass failed inside the provider, so
+  the provider's "no refresh path" error replaced whatever the server had said — turning
+  "MCP tokens are not permitted for this endpoint" into "Static token was invalidated". The server's
+  own refusal now reaches the caller intact, and `StaticTokenProvider`'s own message no longer claims
+  to know that the token is invalid. **Custom `AuthProvider` implementations need no change** —
+  an omitted `canRefresh` keeps the previous retry behaviour.
+
 ## [2.1.0] — 2026-07-10
 
 ### Changed

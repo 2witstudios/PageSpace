@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { listMachineDiffFiles, readMachineDiffPair, resolveMachineMergeBase } from '../machine-diff';
 import type { GitSandboxRunDeps } from '../git-tool-runners';
-import type { SandboxHandle } from '../sandbox-host';
+import { SPRITE_SANDBOX_CAPABILITIES, type SandboxHandle } from '../sandbox-host';
 import type { SandboxActorContext } from '../tool-runners';
 import type { ExecutableSandbox, RunCommandArgs, SandboxRunResult } from '../sandbox-client/types';
 
@@ -70,6 +70,7 @@ function scriptGit(
 function makeHandle(files: Record<string, string>): { handle: SandboxHandle; reads: string[] } {
   const reads: string[] = [];
   const handle: SandboxHandle = {
+    capabilities: SPRITE_SANDBOX_CAPABILITIES,
     sandboxId: 'sbx-1',
     spriteInstanceId: null,
     exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
@@ -85,6 +86,17 @@ function makeHandle(files: Record<string, string>): { handle: SandboxHandle; rea
     },
     listStreams: async () => [],
     killSession: async () => {},
+    services: {
+      create: async () => {},
+      list: async () => [],
+      get: async () => null,
+      start: async () => {},
+      stop: async () => {},
+      remove: async () => {},
+    },
+    urlInfo: async () => ({ url: null, auth: 'unknown' }),
+    setUrlAuth: async () => {},
+    powerState: async () => 'unknown' as const,
   };
   return { handle, reads };
 }

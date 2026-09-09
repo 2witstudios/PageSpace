@@ -107,14 +107,18 @@ describe('DELETE /api/agent-workspaces/[workspaceId]/conversations/[conversation
     expect(response.status).toBe(404);
   });
 
-  it("409s the session's LAST open listing, as a rate-limit refusal rather than an authz denial", async () => {
-    mockCloseConversationInSession.mockResolvedValue('last_conversation');
+  it("closes the workspace's LAST thread on screen — there is no never-empty refusal left", async () => {
+    // The 409 this replaces existed because closing removed a thread from the
+    // workspace's listing, and removing the last one emptied the workspace
+    // (contract invariant 3). Closing is a `move` now: the thread stays a
+    // member, so the workspace it leaves is still not empty and there is
+    // nothing to refuse. Closing the last thread leaves an EMPTY GRID, which is
+    // what closing the last PANE already did.
+    mockCloseConversationInSession.mockResolvedValue('closed');
     const response = await del();
-    expect(response.status).toBe(409);
-    expect(await response.json()).toEqual(
-      expect.objectContaining({ reason: 'last_conversation' }),
-    );
-    expect(mockAuditRequest).toHaveBeenCalledWith(
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(mockAuditRequest).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ eventType: 'security.rate.limited' }),
     );

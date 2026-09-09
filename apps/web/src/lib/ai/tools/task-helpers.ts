@@ -6,6 +6,11 @@ import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespa
 import type { ToolExecutionContext } from '../core/types';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canActorEditPage } from './actor-permissions';
+import {
+  seedInheritedTaskStatusConfigs,
+  resolveSeedStatus,
+  resolveSeedCompletedAt,
+} from '@/services/api/task-sync-service';
 import { logPageActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskTriggerWorkflow, disableTaskTriggers } from '@/lib/workflows/task-trigger-helpers';
@@ -15,6 +20,7 @@ import { reorderTaskListChildPages } from '@/services/api/task-reorder-service';
 import { compareByPagePosition, computeTaskMovePosition } from '@/services/api/task-ordering';
 import { computeReorderPlan } from '@pagespace/lib/services/reorder';
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
+import { parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
 
 /**
  * The Drizzle transaction handle passed to `db.transaction(async (tx) => ...)`.
@@ -363,6 +369,12 @@ export async function createTask(
 ) {
   const { pageId, title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, position, agentTrigger } = params;
 
+  // The caller's timezone, resolved upstream onto the execution context. A naive
+  // due date ("2026-02-19T19:00:00") is a wall-clock time and is read in it;
+  // absolute values are untouched (#2404).
+  const taskTimezone = context.timezone || 'UTC';
+  const parsedDueDate = dueDate ? parseDatetimeInTimezone(dueDate, taskTimezone) : null;
+
   // Reject blank/whitespace titles, matching the update path and REST task route.
   const trimmedTitle = title.trim();
   if (!trimmedTitle) {
@@ -394,18 +406,24 @@ export async function createTask(
   });
 
   if (!taskList) {
-    // Auto-create task_list record for this page
-    const [newTaskList] = await db.insert(taskLists).values({
-      userId,
-      pageId,
-      title: taskListPage.title,
-      status: 'pending',
-      metadata: {
-        createdAt: new Date().toISOString(),
-        autoCreated: true,
-      },
-    }).returning();
-    taskList = newTaskList;
+    // Auto-create task_list record for this page, inheriting its ancestor's
+    // vocabulary like every other lazy-init path. Whichever path touches a
+    // sub-list first decides its statuses permanently, so seeding nothing here
+    // left this one deciding them by omission.
+    taskList = await db.transaction(async (tx) => {
+      const [newTaskList] = await tx.insert(taskLists).values({
+        userId,
+        pageId,
+        title: taskListPage.title,
+        status: 'pending',
+        metadata: {
+          createdAt: new Date().toISOString(),
+          autoCreated: true,
+        },
+      }).returning();
+      await seedInheritedTaskStatusConfigs(tx, newTaskList.id, pageId);
+      return newTaskList;
+    });
   }
 
   // Get next page position for the child document — the single ordering rail (#2143).
@@ -457,7 +475,16 @@ export async function createTask(
   }
 
   // Validate custom status if provided
-  const resolvedStatus = status || 'pending';
+  //
+  // The default comes from the LIST, not from the literal 'pending'. That
+  // literal was safe only while every lazy-init seeded DEFAULT_TASK_STATUSES;
+  // now that sub-lists inherit their ancestor's vocabulary, a list under a
+  // customised root may not define 'pending' at all — and this branch is
+  // unguarded, because the validation below only runs when a status was passed
+  // explicitly. The row would then carry a slug its own list does not define:
+  // unclassifiable by isCompletedStatus, rendered by the dropdown's raw-slug
+  // fallback with no matching option, and missing from status-filtered queries.
+  const resolvedStatus = status || await resolveSeedStatus(db, taskList!.id);
   // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const statusConfigsForList = await db.query.taskStatusConfigs.findMany({
     where: eq(taskStatusConfigs.taskListId, taskList!.id),
@@ -469,6 +496,10 @@ export async function createTask(
       throw new Error(`Invalid status "${status}". Valid: ${statusConfigsForList.map(c => c.slug).join(', ')}`);
     }
   }
+  // Same rule the REST route applies: a done-group status has to arrive with a
+  // completion time, or the row reads as finished to the client while every
+  // counter that asks the database (`completedAt IS NOT NULL`) cannot see it.
+  const resolvedCompletedAt = await resolveSeedCompletedAt(db, taskList!.id, resolvedStatus);
 
   // Create task list page and task in transaction
   const result = await db.transaction(async (tx) => {
@@ -492,10 +523,11 @@ export async function createTask(
       userId,
       pageId: taskPage.id,
       status: resolvedStatus,
+      completedAt: resolvedCompletedAt,
       priority: priority || 'medium',
       assigneeId: primaryUserId,
       assigneeAgentId: primaryAgentId,
-      dueDate: dueDate ? new Date(dueDate) : null,
+      dueDate: parsedDueDate,
       metadata: {
         createdAt: new Date().toISOString(),
         note,
@@ -529,8 +561,8 @@ export async function createTask(
         taskId: newTask.id,
         taskMetadata: newTask.metadata as Record<string, unknown> | null,
         agentTrigger,
-        dueDate: dueDate ? new Date(dueDate) : null,
-        timezone: context.timezone || 'UTC',
+        dueDate: parsedDueDate,
+        timezone: taskTimezone,
       });
     }
 

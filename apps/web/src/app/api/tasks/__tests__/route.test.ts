@@ -155,6 +155,8 @@ const createPageFixture = (overrides: Partial<{
   toolExposureMode: 'upfront' as const,
   userScopedAccess: false,
   sandboxEnabled: false,
+  defaultEnvId: null,
+  siteMode: false,
   description: null,
   fileSize: null,
   mimeType: null,

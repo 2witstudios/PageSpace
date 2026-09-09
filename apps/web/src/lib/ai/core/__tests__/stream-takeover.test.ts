@@ -203,18 +203,21 @@ describe('takeOverConversationStreams', () => {
   // Codex review finding: a recovered reply timestamped at reap time (instead of the stream's
   // actual start) can sort after a user's later follow-up message. Carrying startedAt through
   // is what lets materializeInterruptedStream's defensive insert-if-missing path get this right.
-  it("passes the row's actual startedAt through to materializeInterruptedStream, not takeover time", async () => {
+  // It hands over the NAME only. The row's content columns used to ride this call — but by the
+  // time the destructive write ran they were a copy read before a whole abort round trip, and at
+  // N>1 they had been judged dead against THIS instance's clock. The materializer takes an
+  // atomic reap claim instead, so what it acts on (including `startedAt`, which stamps the
+  // recovered reply) comes back from the same statement that fences the write.
+  it('names the dead row to materializeInterruptedStream rather than passing its stale content', async () => {
     const longAgo = new Date(Date.now() - 30 * 60 * 1000);
     mockAbortStreamByMessageId.mockReturnValue({ aborted: false, reason: 'Stream not found or already completed' });
     mockSelectWhere.mockResolvedValueOnce([
-      { messageId: 'msg-dead', userId: 'user-1', lastHeartbeatAt: longAgo, startedAt: longAgo, parts: [] },
+      { messageId: 'msg-dead', userId: 'user-1', lastHeartbeatAt: longAgo, startedAt: longAgo },
     ]);
 
     await takeOverConversationStreams(ARGS);
 
-    expect(mockMaterializeInterruptedStream).toHaveBeenCalledWith(
-      expect.objectContaining({ startedAt: longAgo }),
-    );
+    expect(mockMaterializeInterruptedStream).toHaveBeenCalledWith({ messageId: 'msg-dead' });
   });
 
   // A liveness guess must never gate the abort. The heartbeat can lag (a slow DB write,
@@ -294,22 +297,20 @@ describe('takeOverConversationStreams', () => {
   // Multiple in-flight rows reconciled in the same takeover must each get their OWN
   // materialization call, carrying their OWN parts snapshot — a shared/blended write here
   // would cross-contaminate two different replies.
-  it('given two dead rows in the same takeover, should materialize each independently with its own parts', async () => {
+  it('given two dead rows in the same takeover, should materialize each independently', async () => {
     const longAgo = new Date(Date.now() - 30 * 60 * 1000);
     mockAbortStreamByMessageId.mockReturnValue({ aborted: false, reason: 'Stream not found or already completed' });
     mockSelectWhere.mockResolvedValueOnce([
-      { messageId: 'msg-a', userId: 'user-1', lastHeartbeatAt: longAgo, startedAt: longAgo, parts: [{ type: 'text', text: 'A' }] },
-      { messageId: 'msg-b', userId: 'user-1', lastHeartbeatAt: longAgo, startedAt: longAgo, parts: [{ type: 'text', text: 'B' }] },
+      { messageId: 'msg-a', userId: 'user-1', lastHeartbeatAt: longAgo, startedAt: longAgo },
+      { messageId: 'msg-b', userId: 'user-1', lastHeartbeatAt: longAgo, startedAt: longAgo },
     ]);
 
     await takeOverConversationStreams(ARGS);
 
-    expect(mockMaterializeInterruptedStream).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: 'msg-a', parts: [{ type: 'text', text: 'A' }] }),
-    );
-    expect(mockMaterializeInterruptedStream).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: 'msg-b', parts: [{ type: 'text', text: 'B' }] }),
-    );
+    // One claim per row — each stands or falls on its own, so a peer already reaping msg-a
+    // cannot stop msg-b being recovered.
+    expect(mockMaterializeInterruptedStream).toHaveBeenCalledWith({ messageId: 'msg-a' });
+    expect(mockMaterializeInterruptedStream).toHaveBeenCalledWith({ messageId: 'msg-b' });
   });
 
   // A failed takeover must degrade to the OLD behaviour (a concurrent generation), not

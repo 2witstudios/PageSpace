@@ -282,3 +282,24 @@ describe('renderPublishedSheet', () => {
     expect(out).toContain('<title>Untitled</title>');
   });
 });
+
+describe('renderPublishedPage — site mode', () => {
+  it('given siteMode, should emit the site CSP so the published page matches its preview', () => {
+    const out = renderPublishedPage({ html: '<p>x</p>', siteMode: true });
+    expect(out).toMatch(/script-src[^;"]*\bhttps:/);
+    expect(out).toMatch(/connect-src[^;"]*\bhttps:/);
+  });
+
+  it('given no siteMode, should keep the baseline CSP', () => {
+    const out = renderPublishedPage({ html: '<p>x</p>' });
+    expect(out).not.toMatch(/connect-src[^;"]*\bhttps:/);
+  });
+
+  it('given siteMode, should preserve an external https url() in author CSS', () => {
+    const out = renderPublishedPage({
+      html: '<style>body{background:url("https://cdn.example.com/bg.png")}</style><p>x</p>',
+      siteMode: true,
+    });
+    expect(out).toContain('https://cdn.example.com/bg.png');
+  });
+});

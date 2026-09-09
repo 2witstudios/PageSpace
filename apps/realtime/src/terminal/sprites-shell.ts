@@ -6,6 +6,8 @@ import type {
 import { readSessionInfoId, spawnWithSelfHealingCwd } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { isAgentActive } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
+import { buildSandboxEnv } from '@pagespace/lib/services/sandbox/sandbox-env';
+import type { ServerEnv } from '@pagespace/lib/config/env-validation';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   EMPTY_SEEN,
@@ -528,7 +530,60 @@ const MAX_HELD_SIDE_BYTES = 256 * 1024;
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-const TERMINAL_ENV = { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' };
+/**
+ * The interactive shell's environment, rebuilt per shell.
+ *
+ * The tty settings are this surface's own (a batch `runCommand` has no terminal
+ * to describe); everything else is whatever `buildSandboxEnv` says, called here
+ * exactly as the `bash` tool calls it. Calling the FUNCTION rather than copying
+ * {@link SANDBOX_BASE_ENV} means the two surfaces share the RULE — what a
+ * sandbox is allowed to receive, and which values the sandbox owns outright — so
+ * a change to that rule cannot land on the tool and skip every terminal.
+ *
+ * What it does NOT give us, and the docblock should not pretend otherwise: the
+ * two surfaces read DIFFERENT SOURCES. The tool builds from `getValidatedEnv()`
+ * in the web service (zod defaults and all); this builds from the raw
+ * `process.env` of the realtime service, which is deliberately lean and does not
+ * satisfy the web schema — validating here would throw and take every terminal
+ * down, the same reason `resolveSpritesToken` reads it raw. So the day a host
+ * key joins `SANDBOX_ENV_ALLOWLIST`, it reaches a terminal only if the REALTIME
+ * deployment also sets it — and it reaches it UNVALIDATED, where the tool surface
+ * would have forwarded a value the web schema had already checked (`WEB_APP_URL`
+ * is `z.string().url()` there; whatever string this host happens to hold, here).
+ * Provisioning both services, and satisfying the schema in both, is part of
+ * adding such a key; the sandbox-owned values (the ones #2466 was actually about)
+ * are a constant and are identical either way.
+ *
+ * Called per shell rather than once at import: with an empty allowlist the two
+ * are equivalent, but a module-level snapshot would freeze whatever `process.env`
+ * held at import time, which is correct today only because `index.ts` happens to
+ * import `./instrument` (and its `dotenv.config()`) first. Nothing enforces that
+ * ordering, and a per-call build costs nothing.
+ *
+ * The two surfaces used to disagree outright: the tool forwarded the host's
+ * `NODE_ENV` while the PTY set none, so the same sandbox answered
+ * `env | grep NODE_ENV` differently depending on which tool asked, and an agent
+ * that debugged a failing `npm install` in the terminal was looking at a
+ * different environment from the one that ran it (#2466).
+ *
+ * Reattach is the exception, and it cannot be otherwise: `attachSession` joins a
+ * process that is already running, and a running process's environment is fixed
+ * at spawn. So a shell created before this shipped keeps the env it was born
+ * with — including the old `NODE_ENV=production` — for as long as it lives, and
+ * the way out is to kill it and open a fresh one, not to reconnect. Exec
+ * sessions do not survive a Sprite pause either, so the window closes on its own.
+ */
+export function terminalEnv(): Record<string, string> {
+  return {
+    // Sandbox env first, tty settings last: the ownership described above has to
+    // hold at runtime too, so a `TERM`/`LANG` that ever reaches the sandbox env
+    // can never quietly reset this surface's terminal type or locale.
+    ...buildSandboxEnv({ env: process.env as Partial<ServerEnv> }),
+    TERM: 'xterm-256color',
+    COLORTERM: 'truecolor',
+    LANG: 'en_US.UTF-8',
+  };
+}
 
 export function openPtyShell({
   sprite,
@@ -1064,7 +1119,7 @@ export function openPtyShell({
       tty: true,
       cols: lastCols,
       rows: lastRows,
-      env: TERMINAL_ENV,
+      env: terminalEnv(),
     });
     current.on('message', (message) => {
       const id = readSessionInfoId(message);

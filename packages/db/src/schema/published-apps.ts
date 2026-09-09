@@ -1,0 +1,750 @@
+import { pgTable, text, integer, bigint, doublePrecision, date, timestamp, index, uniqueIndex, pgEnum, check } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
+import { createId } from '@paralleldrive/cuid2';
+import { users } from './auth';
+import { drives } from './core';
+import { driveEnvs } from './drive-envs';
+
+/**
+ * The lifecycle of a published app, as a state machine.
+ *
+ *   provisioning → building → deploying → running ⇄ stopped
+ *                                            ↓         ↓
+ *                                          parked ←────┘
+ *   (any) → destroying → (row deleted)
+ *   (any) → failed
+ *
+ * `stopped` is US stopping an idle app (the metering boundary — see lastStopAt);
+ * `parked` is the credit gate refusing to wake it. The distinction matters because
+ * a stopped app wakes on the next request and a parked one does NOT: parking is
+ * enforcement, and the router serves a parked page instead of starting a machine.
+ */
+export const publishedAppStatus = pgEnum('published_app_status', [
+  'provisioning',
+  'building',
+  'deploying',
+  'running',
+  'stopped',
+  'parked',
+  'destroying',
+  'failed',
+]);
+export type PublishedAppStatus = (typeof publishedAppStatus.enumValues)[number];
+
+/**
+ * 'metered' drains credits per awake-second and is subject to the balance gate.
+ * 'dedicated' is the flat monthly SKU: same pipeline, minus the gate, exempt from
+ * the idle reaper. The tier is the ONLY difference between the two products.
+ */
+export const publishedAppTier = pgEnum('published_app_tier', ['metered', 'dedicated']);
+export type PublishedAppTier = (typeof publishedAppTier.enumValues)[number];
+
+/**
+ * publishedApps — the Fly SERVING RECORD of a published environment: one row per
+ * published env, one Fly app each.
+ *
+ * The row is the SOURCE OF TRUTH FOR A BILLING RESOURCE, and it is written BEFORE
+ * the Fly app exists. That ordering is the whole safety property: a crash between
+ * "we inserted the row" and "Fly created the app" leaves a harmless orphan row we
+ * can retry or reap, whereas the reverse ordering would leave a Fly app that bills
+ * forever with nothing in our database pointing at it. Never reorder those two
+ * steps, and never delete a row because provisioning failed — `flyAppName` is
+ * derived from `id` and is the only handle that can destroy the Fly app, so a row
+ * deleted after a partial create strands exactly the resource it was tracking.
+ * (Deleting it is in fact safe TODAY, but only because the AFTER DELETE trigger
+ * below rescues the name into `app_hosting_reclaims` first. Don't rely on that as
+ * a design; rely on not deleting.)
+ *
+ * NETWORK: every published app is created on ONE SHARED Fly network, never a
+ * per-app one. Per-app 6PN isolation was the original design (epic decision D2)
+ * and the Phase 0 spike refuted it: fly-replay cannot cross networks — the proxy
+ * answers 502 `cross-network replays are not allowed` — which would break the
+ * entire routing tier. `networkName` here is an AUDIT column recording what an app
+ * was actually created with, so a later change to the shared-network constant is
+ * visible per app. Its value always comes from that constant; nothing derives a
+ * network from the app id.
+ */
+export const publishedApps = pgTable('published_apps', {
+  /**
+   * Generated client-side (cuid2) so it exists BEFORE the first Fly API call —
+   * `flyAppName` is derived from it, which is what lets us name the resource we
+   * are about to create and record the name in the same transaction.
+   */
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+
+  /**
+   * The ENVIRONMENT this app serves — the publish target, and the only thing this
+   * row hangs off. One published app per env, enforced here.
+   *
+   * Publishing is something you do TO an environment: the Fly serving tier is
+   * built FROM an env's contents at publish time. It is deliberately NOT an env
+   * itself and has no session surface, which is why the pointer runs this way
+   * (hosting row → env) and never the reverse: `drive_envs` carries Sprite
+   * pointers only, and nothing on it may ever name a Fly app. That partition is
+   * what keeps the two teardown outboxes separate — Sprite pointers are rescued
+   * into `machine_sprite_reclaims`, Fly app names into `app_hosting_reclaims`.
+   *
+   * WHAT gets published is not recorded here. Promotion (which commit, which
+   * build) is a later concern and lands as its own additive column when it
+   * exists; a source pointer invented now would be a second, unsynchronised
+   * answer to a question the env already answers.
+   *
+   * Cascading: deleting the env destroys its hosting row, and the AFTER DELETE
+   * trigger below rescues `flyAppName` on the way out — an env delete can
+   * therefore never strand a billing Fly app. The reverse is NOT true and must
+   * not become true: unpublishing deletes this row and leaves the env alone.
+   */
+  envId: text('envId').notNull().unique().references(() => driveEnvs.id, { onDelete: 'cascade' }),
+
+  /**
+   * Denormalized from the env so the claim and metering queries don't join
+   * through `drive_envs` on every tick. Cascades independently: a permanent
+   * drive delete must reach this row even if the env rows go first. The service
+   * layer validates that `envId`'s env really belongs to this drive — the
+   * database cannot express that cross-row agreement, so the write path owns it.
+   */
+  driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
+
+  /** Who pays. Resolved drive-owner-else-app-owner, matching `resolveSessionPayerId` semantics. */
+  ownerId: text('ownerId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+
+  /**
+   * The Fly app name (`pgs-app-<id>`) — globally unique, and the ONLY handle that
+   * can destroy the Fly app. This is the value the reclaim outbox rescues when the
+   * row dies.
+   */
+  flyAppName: text('flyAppName').notNull().unique(),
+
+  /**
+   * The Fly network this app was created on. AUDIT ONLY — always written from the
+   * single shared-network constant, never derived per app. See the table docblock
+   * for why per-app networks are forbidden.
+   */
+  networkName: text('networkName').notNull(),
+
+  /**
+   * Served as `<subdomain>.<published-apps apex>`. Its own namespace: published
+   * apps get a separate PSL-listed apex from `drives.publishSubdomain` (which
+   * lives on `*.pagespace.site`), so a collision across the two is not possible
+   * and is not defended against here.
+   */
+  subdomain: text('subdomain').notNull().unique(),
+
+  status: publishedAppStatus('status').default('provisioning').notNull(),
+
+  /**
+   * Fixed small guest for v1 (shared-1x/512MB): the unit-economics guardrail that
+   * bounds worst-case cost per app. The CHECK below is the enforcement of that
+   * decision — widening the allowed set later is an additive migration.
+   */
+  guestPreset: text('guestPreset').default('shared-cpu-1x-512').notNull(),
+
+  /**
+   * The pinned `sha256:…` digest this app serves. NULL until the first build lands.
+   * Deploys are blue/green from a pinned digest — never in-place config surgery —
+   * because a machine's rootfs assembles at CREATE, not at start.
+   */
+  imageDigest: text('imageDigest'),
+
+  /**
+   * The registry size of `imageDigest`, in bytes (config blob + every layer, as
+   * the manifest reports them). NULL until a build records one.
+   *
+   * THIS IS THE IDLE-COST LEVER, which is why it is a persisted column rather
+   * than something the economics dashboard derives on demand. A published app
+   * that is stopped costs nothing per second and still costs rootfs storage at
+   * $0.15/GB-month — for the fleet, that fixed drip is the whole per-app floor,
+   * and it is set by whatever the build pushed. Recording it at build time is
+   * also the only moment the number is knowable cheaply: reading it later means
+   * a registry round-trip per app, and reading it after the image is replaced
+   * means it is gone.
+   *
+   * Written in the SAME statement as `imageDigest`, because a size attributed to
+   * the wrong digest is worse than no size at all.
+   */
+  imageSizeBytes: bigint('imageSizeBytes', { mode: 'number' }),
+
+  /**
+   * When `imageSizeBytes` was recorded — i.e. which build's manifest it came
+   * from, expressed as a time rather than a digest.
+   *
+   * Exists because the storage meter cannot use a measurement it cannot date. The
+   * shared reconcile prices a window from a MEASURED footprint and reports a
+   * staleness signal from the measurement's age, and its `pickBillableGB` treats
+   * either column being NULL as "never measured" — so a size with no timestamp
+   * would bill the conservative 0 floor forever while the watermark advanced over
+   * real rootfs the platform is paying Fly for.
+   *
+   * Written in the SAME statement as `imageSizeBytes`, and enforced as such by
+   * `published_apps_image_size_measured_coherent` below — `transitionPublishedApp`
+   * is the single writer and stamps this whenever the patch carries a size,
+   * including when the size is cleared back to NULL.
+   */
+  imageSizeMeasuredAt: timestamp('imageSizeMeasuredAt', { mode: 'date', withTimezone: true }),
+
+  tier: publishedAppTier('tier').default('metered').notNull(),
+
+  /** The current Fly machine. NULL before the first create and between blue/green swaps. */
+  machineId: text('machineId'),
+
+  /**
+   * The awake-seconds boundaries. Our orchestrator owns every start/stop (autostop
+   * is off) precisely so these are exact API-call timestamps rather than inferred
+   * from proxy behavior — they are what the credit drain bills against.
+   */
+  lastWakeAt: timestamp('lastWakeAt', { mode: 'date', withTimezone: true }),
+  lastStopAt: timestamp('lastStopAt', { mode: 'date', withTimezone: true }),
+
+  /**
+   * When the serving edge last replayed a request to this app — the IDLE REAPER's
+   * only evidence that anybody is still using it.
+   *
+   * It has to be recorded here because nothing else knows: a replayed response
+   * never passes back through us (Fly hands it straight to the client), and Fly's
+   * own machine events record starts and stops, not traffic. So the router stamps
+   * this at the one moment it is certain — when it emits `fly-replay` — and the
+   * reaper reads it. An app whose machine is serving requests it never routed
+   * through us (a direct 6PN caller) is invisible to this column by design: those
+   * requests bypass the balance gate too, and the reaper stopping such an app is
+   * the correct outcome, not a bug.
+   *
+   * THROTTLED, never per-request: the stamp's write is guarded on its own age
+   * (see `PUBLISHED_APP_HIT_STAMP_INTERVAL_SECONDS`), so the hot path pays an
+   * indexed no-op statement rather than a row write on every asset of every page.
+   * The consequence is that this column trails real traffic by up to that
+   * interval, which is why the reaper's idle threshold is measured in minutes.
+   *
+   * NULL means "never routed to since this column existed" — the reaper falls back
+   * to `lastWakeAt`, so an app woken and never hit is still reapable.
+   */
+  lastHitAt: timestamp('lastHitAt', { mode: 'date', withTimezone: true }),
+
+  /**
+   * The UTC day `awakeSecondsToday` counts, as a date — the counter's own reset
+   * signal, carried in the row rather than inferred from `updatedAt`.
+   *
+   * A DATE and not a timestamp: the cap is a per-UTC-day budget, the same shape as
+   * the payer-level `dailyExposureCapForTier` this is the per-app analog of, and a
+   * date makes "is this counter still about today" a value comparison rather than
+   * a range calculation in three places.
+   */
+  awakeSecondsDay: date('awakeSecondsDay', { mode: 'string' }),
+
+  /**
+   * Awake seconds billed for this app on `awakeSecondsDay` — the RUNAWAY BOUND on
+   * a single app, and the counter the daily cap is judged against.
+   *
+   * A persisted counter rather than a query over `ai_usage_logs`, because it is
+   * read on the wake path (once per cold request) and advanced by every settle:
+   * the counter rides in the SAME statement as the watermark it belongs to, so a
+   * settle can never bill seconds that the cap does not see. Deriving it instead
+   * would mean a per-payer aggregate on the hottest path in the system, and would
+   * still be wrong for exactly the seconds in flight.
+   *
+   * Fractional (a settle bills fractional seconds), never negative, and reset by
+   * whichever settle first lands on a new UTC day — no cron sweeps it.
+   */
+  awakeSecondsToday: doublePrecision('awakeSecondsToday').default(0).notNull(),
+
+  /**
+   * The awake window BILLED THROUGH — the metering watermark, and the only column
+   * the awake-seconds drain reads to decide what it owes.
+   *
+   * Stamped to the wake instant when the wake seam starts a machine, advanced
+   * MONOTONICALLY by each heartbeat settle, and cleared to NULL by the final
+   * settle at stop. Deliberately a separate column from `lastWakeAt`, which is the
+   * BOUNDARY stamp and must not move: a heartbeat that advanced `lastWakeAt`
+   * itself would erase the record of when this awake period actually began, which
+   * is the one thing the weekly `fly_instance_up` reconcile compares against.
+   *
+   * NULL therefore means "no awake window is open" — either the app has never been
+   * woken, or its last window was settled and closed. A NULL here on a `running`
+   * row is an anomaly the meter counts (`unstamped`) and repairs by stamping NOW,
+   * never retroactively: an unknown window start must cost the payer nothing
+   * rather than an invented amount.
+   */
+  awakeBilledThrough: timestamp('awakeBilledThrough', { mode: 'date', withTimezone: true }),
+
+  /**
+   * The credit HOLD placed by the wake gate, carried for the life of the awake
+   * window so every settle in that window bills against the reservation the gate
+   * actually made.
+   *
+   * A hold is a reservation, not a charge: it is what stops a fleet of concurrent
+   * wakes from collectively overshooting a balance that each of them individually
+   * cleared. It is released (or settled against) at stop. NULL on an app that was
+   * woken on a billing-disabled deployment with no ceiling configured, where the
+   * gate takes the query-free unlimited path and places no hold at all — so this
+   * being NULL is never on its own evidence that a wake skipped the gate.
+   */
+  awakeHoldId: text('awakeHoldId'),
+
+  /**
+   * Watermark for the ROOTFS storage drain — the published-app half of the shared
+   * storage reconcile, exactly as `drive_envs.storageLastBilledAt` is the env half.
+   *
+   * A stopped published app costs zero awake-seconds and still costs Fly
+   * $0.15/GB-month for the image its machine assembles from, which is the entire
+   * per-app idle floor. That drip is billed by the SAME meter, on the same cron and
+   * behind the same advisory lock as session and env persistence — a third row
+   * source, not a third meter.
+   *
+   * Defaults to now() so a row provisioned today can never bill retroactively for
+   * time before it existed.
+   */
+  storageLastBilledAt: timestamp('storageLastBilledAt', { mode: 'date', withTimezone: true })
+    .defaultNow()
+    .notNull(),
+
+  /** Why a `failed` row failed — the operator's first read when an app won't provision. */
+  lastError: text('lastError'),
+
+  /**
+   * When a worker last took this row to work on it — the claim LEASE.
+   *
+   * `FOR UPDATE SKIP LOCKED` alone does NOT claim anything. Those locks live and
+   * die with their transaction, so a claim query that only selects hands the same
+   * rows to the next worker the instant it commits — which is before the caller has
+   * done any work. The claim has to be a WRITE inside the locking transaction, and
+   * this column is that write.
+   *
+   * A lease rather than a permanent flag because a worker that crashes mid-provision
+   * would otherwise strand its rows forever, and nothing would ever finish them.
+   * Past the lease horizon the row is claimable again — see
+   * `PUBLISHED_APP_CLAIM_LEASE_MS`.
+   */
+  claimedAt: timestamp('claimedAt', { mode: 'date', withTimezone: true }),
+
+  /**
+   * WHICH claim holds this row — a fresh opaque token per successful claim.
+   *
+   * `claimedAt` says a lease exists; this says whose it is. A worker whose work
+   * outlived its lease must not be able to release (or report on) a row the next
+   * worker legitimately took over, so every write that ends a claim carries this
+   * token as a predicate.
+   *
+   * Deliberately not `claimedAt` itself: Postgres keeps microseconds and a JS Date
+   * holds milliseconds, so a stamp read back through the driver never equals the
+   * stored value and the fence would silently match nothing — failing OPEN in the
+   * one place that must fail closed. (The same reasoning as
+   * `broadcast_recipients.claimed_by`, which this copies.)
+   */
+  claimedBy: text('claimedBy'),
+
+  createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt', { mode: 'date', withTimezone: true })
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
+}, (table) => ({
+  driveIdx: index('published_apps_drive_idx').on(table.driveId),
+  ownerIdx: index('published_apps_owner_idx').on(table.ownerId),
+  // The claim query's access path: "oldest rows in these statuses, skip-locked".
+  statusIdx: index('published_apps_status_idx').on(table.status, table.updatedAt),
+  // The idle reaper's access path: "running rows, least recently hit first". The
+  // reaper scans only `running` rows and orders by recency, so the status column
+  // leads and the recency column follows — the same shape as the claim index above.
+  idleIdx: index('published_apps_idle_idx').on(table.status, table.lastHitAt),
+
+  // Enforce the coherence a bad write could otherwise manufacture — each of these
+  // states would be read by the router or the metering cron as real, servable truth.
+
+  // A machine cannot serve an image we never pinned. A `running` row with no digest
+  // means we lost track of what code is live, which is unrecoverable by inspection.
+  servingRequiresImage: check(
+    'published_apps_serving_requires_image',
+    sql`${table.status} NOT IN ('running', 'deploying') OR ${table.imageDigest} IS NOT NULL`,
+  ),
+  // A `running` row with no machineId is an app we are billing and cannot stop.
+  runningRequiresMachine: check(
+    'published_apps_running_requires_machine',
+    sql`${table.status} <> 'running' OR ${table.machineId} IS NOT NULL`,
+  ),
+  // Parking IS the credit-exhaustion state, and a dedicated app skips the balance
+  // gate by definition — so a parked dedicated row describes an enforcement action
+  // that cannot have happened.
+  parkedIsMeteredOnly: check(
+    'published_apps_parked_is_metered_only',
+    sql`${table.status} <> 'parked' OR ${table.tier} = 'metered'`,
+  ),
+  // The sellable guest sizes. Mirrors `PUBLISHED_APP_GUEST_PRESETS` in
+  // `services/app-hosting/dedicated-tier.ts`, which is the catalogue this list is
+  // generated from by hand; widening it is an additive migration and the pair is
+  // pinned by a test that writes a rejected preset to a real Postgres.
+  guestPresetAllowed: check(
+    'published_apps_guest_preset_allowed',
+    sql`${table.guestPreset} IN ('shared-cpu-1x-512', 'shared-cpu-1x-1024', 'shared-cpu-2x-2048', 'shared-cpu-4x-4096')`,
+  ),
+  // A METERED app may only run the v1 small guest, and this is an economics
+  // constraint rather than a preference. The awake-seconds meter prices every
+  // second at ONE fixed shape (`PUBLISHED_APP_GUEST_SHAPE`, which is this preset),
+  // because a published app's guest was a constant when that meter was written. A
+  // metered row on a larger preset would therefore be under-billed by exactly the
+  // difference between the two shapes — silently, with no error and no drift
+  // signal, for as long as the app ran. Bigger sizes are unlocked by moving to the
+  // DEDICATED tier, whose flat price is derived from the size it is selling.
+  //
+  // Stated as an implication on `metered` rather than as a per-tier allow-list so
+  // that adding a preset to the list above does not silently become a metered
+  // size: a new preset is dedicated-only here by construction, and making one
+  // metered-legal is a deliberate second edit that has to face this comment.
+  meteredGuestPreset: check(
+    'published_apps_metered_guest_preset',
+    sql`${table.tier} <> 'metered' OR ${table.guestPreset} = 'shared-cpu-1x-512'`,
+  ),
+  // A negative image size is not a small number, it is a corrupt one — and it
+  // would land in the economics dashboard's SUM as a silent credit against every
+  // other app's storage cost.
+  imageSizeNonNeg: check(
+    'published_apps_image_size_nonneg',
+    sql`${table.imageSizeBytes} IS NULL OR ${table.imageSizeBytes} >= 0`,
+  ),
+  subdomainNonEmpty: check(
+    'published_apps_subdomain_nonempty',
+    sql`length(${table.subdomain}) > 0`,
+  ),
+  // A lease with no holder cannot be fenced, and a holder with no lease never
+  // expires — either half alone is a claim that fails open. Written as a
+  // biconditional rather than a one-way implication, which would constrain only
+  // one of the two bad states.
+  claimCoherent: check(
+    'published_apps_claim_coherent',
+    sql`(${table.claimedAt} IS NULL) = (${table.claimedBy} IS NULL)`,
+  ),
+  // A size the meter cannot date is a size the meter cannot use — it reads as
+  // "never measured" and bills the 0 floor while the watermark advances over real
+  // rootfs. Biconditional rather than a one-way implication so the reverse (a
+  // measurement time for a size that was never recorded) is equally unrepresentable.
+  imageSizeMeasuredCoherent: check(
+    'published_apps_image_size_measured_coherent',
+    sql`(${table.imageSizeBytes} IS NULL) = (${table.imageSizeMeasuredAt} IS NULL)`,
+  ),
+  // A negative awake counter is not a small number, it is a corrupt one — and it
+  // would hide a runaway app from the daily cap that exists to stop it.
+  awakeSecondsTodayNonNeg: check(
+    'published_apps_awake_seconds_today_nonneg',
+    sql`${table.awakeSecondsToday} >= 0`,
+  ),
+  // Seconds counted against no day cannot be reset and cannot be judged: the cap
+  // would compare today's budget against an accumulation of unknown age. One-way
+  // on purpose — a day with a zero count is the ordinary state of a row whose
+  // first settle of the day has not landed yet.
+  awakeCounterNeedsDay: check(
+    'published_apps_awake_counter_needs_day',
+    sql`${table.awakeSecondsDay} IS NOT NULL OR ${table.awakeSecondsToday} = 0`,
+  ),
+  // An open awake window with no wake boundary is a window with no origin: the
+  // weekly reconcile compares our billed span against `fly_instance_up` from
+  // `lastWakeAt`, and a watermark without one cannot be checked against anything.
+  awakeWindowNeedsWake: check(
+    'published_apps_awake_window_needs_wake',
+    sql`${table.awakeBilledThrough} IS NULL OR ${table.lastWakeAt} IS NOT NULL`,
+  ),
+}));
+
+/**
+ * appDeployTokenMints — the audit trail for per-app Fly deploy tokens.
+ *
+ * `POST /v1/apps/{app}/deploy_token` mints a credential whose blast radius is
+ * exactly one app: full machine CRUD on its own app, 403 on every sibling app, on
+ * the org list, and on app create (verified by the Phase 0 spike). That makes it
+ * a safe thing to hand a build job. Two properties make a mint record mandatory:
+ *
+ *   1. The response is `{"token": "FlyV1 fm2_…,fm2_…"}` and NOTHING else — no id,
+ *      no expires_at, no metadata. Fly gives us no handle to the token it just
+ *      created, so THIS TABLE IS THE ONLY RECORD THAT A MINT EVER HAPPENED.
+ *   2. A deploy token can mint a new deploy token for its own app. A leaked one
+ *      therefore extends its own life indefinitely, and revocation has to happen
+ *      at the app level — destroying the Fly app is the kill switch. "How many
+ *      tokens exist for this app and why" is consequently a security question.
+ *
+ * A side table rather than columns on `published_apps` because minting repeats
+ * (build, rotation, renewal) and a single-row overwrite would erase exactly the
+ * history being kept.
+ *
+ * The TOKEN VALUE IS NEVER STORED. It is returned to the caller and forgotten;
+ * persisting a self-renewing app-scoped credential would turn this audit table
+ * into a breach target worth more than the app it protects.
+ */
+export const appDeployTokenMints = pgTable('app_deploy_token_mints', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+
+  publishedAppId: text('publishedAppId')
+    .notNull()
+    .references(() => publishedApps.id, { onDelete: 'cascade' }),
+
+  /** Denormalized: the exact blast radius of the token that was minted. */
+  flyAppName: text('flyAppName').notNull(),
+
+  /**
+   * When the mint was ATTEMPTED — this row is inserted BEFORE the Fly call, not
+   * after it. See `outcome`: until that settles, this is the instant a credential
+   * may have come into existence, not proof that one did.
+   */
+  mintedAt: timestamp('mintedAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+
+  /**
+   * The two-phase record: 'pending' → 'minted' | 'failed'.
+   *
+   * Writing the row after a successful mint loses the credential entirely if the
+   * process dies in between — and what is lost is the ONLY evidence a
+   * self-renewing, app-scoped token exists. So the intent is recorded first and
+   * settled second, which inverts the loss: the failure mode becomes a row
+   * describing a token that was never issued, which is noise, rather than a token
+   * nobody can account for, which is a security incident.
+   *
+   * A row still 'pending' well past its request is therefore a RECONCILIATION
+   * ITEM, not a bug: a mint may or may not have happened. The only safe resolution
+   * is at the app level — Fly hands back no token id, so a suspect app is
+   * remediated by destroying it (which revokes every token scoped to it), never by
+   * assuming the mint failed.
+   *
+   * NO BACKFILL accompanies the migration that added this column, and none is
+   * possible: the migration that CREATES this table (0264) is in the same
+   * unreleased release, so no database has ever held a row here. `runMigrations`
+   * applies every pending entry in one invocation, which means 0264 and 0266 land
+   * together on every deployment, empty table first. Were legacy rows possible they
+   * would have to be stamped `outcome = 'minted', settledAt = "mintedAt"`, since
+   * the pre-two-phase code only ever inserted after a successful mint.
+   */
+  outcome: text('outcome').default('pending').notNull(),
+
+  /** When `outcome` stopped being 'pending'. NULL exactly while it is. */
+  settledAt: timestamp('settledAt', { mode: 'date', withTimezone: true }),
+
+  /**
+   * The `expiry` string sent to Fly, verbatim (e.g. '48h'). Fly echoes nothing
+   * back, so this is our only record of the lifetime we asked for — and thus the
+   * only basis for deciding a mint is old enough to be worth worrying about.
+   */
+  expiry: text('expiry').notNull(),
+
+  /** Why it was minted ('build' | 'rotate') — the question an audit record has to answer. */
+  purpose: text('purpose').notNull(),
+}, (table) => ({
+  appIdx: index('app_deploy_token_mints_app_idx').on(table.publishedAppId, table.mintedAt),
+  expiryNonEmpty: check('app_deploy_token_mints_expiry_nonempty', sql`length(${table.expiry}) > 0`),
+  purposeNonEmpty: check('app_deploy_token_mints_purpose_nonempty', sql`length(${table.purpose}) > 0`),
+  outcomeAllowed: check(
+    'app_deploy_token_mints_outcome_allowed',
+    sql`${table.outcome} IN ('pending', 'minted', 'failed')`,
+  ),
+  // Biconditional: a settled row must say when, and a pending one must not claim
+  // it already settled. The reconciler reads exactly this pair.
+  settledCoherent: check(
+    'app_deploy_token_mints_settled_coherent',
+    sql`(${table.outcome} = 'pending') = (${table.settledAt} IS NULL)`,
+  ),
+}));
+
+/**
+ * appHostingReclaims — the teardown OUTBOX for published Fly apps.
+ *
+ * A published Fly app is a real, billing resource. The only way to find one is its
+ * `flyAppName`, and that name lives on `published_apps` — which FK-cascades off
+ * `drive_envs.id` AND `drives.id` (and through them off `users.id`). So every path
+ * that hard-deletes an environment or a drive destroys the only pointer to an app
+ * that may still be serving and billing: deleting an env, a permanent drive delete,
+ * the 30-day GDPR purge, the account-erasure worker, and any path someone adds
+ * tomorrow. This is not hypothetical — the Sprites equivalent of exactly this
+ * bug put a stuck, unreferenced microVM into production that had to be killed by
+ * hand, which is why `machine_sprite_reclaims` exists and why this table copies it.
+ *
+ * Guarding each delete path is the obvious fix and it is the WRONG one: it is
+ * unenforceable (there is always one more path), and it cannot work for erasure —
+ * GDPR Art. 17 must not be blocked by a Fly app we failed to kill.
+ *
+ * So this table inverts the dependency. It holds nothing but a name, and it has NO
+ * FOREIGN KEYS — nothing can cascade it away. An `AFTER DELETE` trigger on
+ * `published_apps` copies the name in here as the row is destroyed. Postgres fires
+ * row-level triggers for rows deleted by a referential CASCADE exactly as it does
+ * for a direct DELETE, so ONE trigger on `published_apps` captures the name no
+ * matter which table's delete started it — an env delete, a drive delete, a user
+ * erasure, or a hand-run `DELETE FROM published_apps` in psql. The insert is part
+ * of the deleting transaction: either the pointer moves here, or the delete does
+ * not commit.
+ *
+ * The pointer therefore OUTLIVES the resource, which is the invariant that matters.
+ * The drain cron (epic Phase 5) destroys the Fly app with an idempotent kill and
+ * removes each row only once the app is CONFIRMED gone — so a failed kill is
+ * retried forever rather than forgotten.
+ */
+export const appHostingReclaims = pgTable('app_hosting_reclaims', {
+  /**
+   * The Fly app to destroy. PRIMARY KEY, so the trigger can `ON CONFLICT`: the same
+   * app enqueued twice (a re-delete after a failed kill) is one unit of work.
+   */
+  flyAppName: text('flyAppName').primaryKey(),
+
+  /**
+   * The `published_apps` row that died. Provenance only, and deliberately NOT a
+   * foreign key — an FK here would let the very cascade this table exists to
+   * survive delete the rescued pointer.
+   */
+  publishedAppId: text('publishedAppId'),
+
+  /**
+   * The machine that was live when this pointer was rescued. The kill is
+   * NAME-keyed and a Fly app name could be re-created later, so this is the
+   * reconciler's identity guard: destroy the app at this name only if it is still
+   * the one we meant. NULL when the app had no machine yet (destroy is then
+   * unambiguous — there is nothing running to protect).
+   */
+  machineId: text('machineId'),
+
+  /** When the pointer was rescued — i.e. when its `published_apps` row was destroyed. */
+  recordedAt: timestamp('recordedAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+
+  /** Kill attempts so far. A high count is a Fly app that cannot be killed — a real, billing anomaly worth alerting on. */
+  attempts: integer('attempts').default(0).notNull(),
+
+  /** When the last kill was attempted, and why it failed — the health signal for a stuck reclaim. */
+  lastAttemptAt: timestamp('lastAttemptAt', { mode: 'date', withTimezone: true }),
+  lastError: text('lastError'),
+}, (table) => ({
+  // The cron drains oldest-first, so it can be capped without starving a row.
+  recordedAtIdx: index('app_hosting_reclaims_recorded_at_idx').on(table.recordedAt),
+  attemptsNonNeg: check('app_hosting_reclaims_attempts_nonneg', sql`${table.attempts} >= 0`),
+}));
+
+/**
+ * publishedAppMachineEvents — the LOCAL MIRROR of a published app's machine
+ * lifecycle, and the primary billing record for awake-seconds.
+ *
+ * Fly keeps only the MOST RECENT 20 EVENTS per machine, with no pagination and no
+ * time window (measured in the Phase 0 spike — see `listMachineEvents`). Twenty
+ * events is about five stop/start cycles, so on a busy app that endpoint has
+ * forgotten yesterday by lunchtime. **Awake-seconds history therefore cannot be
+ * rebuilt from Fly after the fact.** It has to be written down as it happens, and
+ * this table is where.
+ *
+ * Two origins, one shape:
+ *  - `orchestrator` — OUR OWN start/stop API call, written in the same step as the
+ *    call itself. `autostop` is off precisely so that every awake boundary is one
+ *    of these: an API call we made, at a time we know exactly, rather than a proxy
+ *    behavior we would have to infer.
+ *  - `fly` — an event mirrored from `GET /machines/{id}/events`, captured
+ *    opportunistically right after our own call while the last-20 window still
+ *    contains it. This is CONFIRMATION and drift detection, never the source: a
+ *    machine can also go down for reasons we did not ask for (an OOM kill, a host
+ *    migration), and those only ever appear here.
+ *
+ * The two are kept as separate rows rather than reconciled into one because they
+ * answer different questions — "what did we ask for" and "what did Fly do" — and
+ * collapsing them would lose exactly the disagreement the weekly `fly_instance_up`
+ * reconcile exists to find.
+ *
+ * Deliberately FK-CASCADED off `published_apps`, unlike `app_hosting_reclaims`
+ * next door, which is FK-free on purpose. The difference is what each table is FOR:
+ * a reclaim pointer must outlive its row because it is the only handle that can
+ * stop a resource from billing, whereas these events are an operational record for
+ * reconciling a LIVE app. The money they produced already lives in the credit
+ * ledger and `ai_usage_logs`, which no app delete touches; the weekly reconcile
+ * only ever enumerates live rows; and unbounded retention with no owner would need
+ * a purge cron of its own to stop growing. Destroying the app therefore takes its
+ * event mirror with it, and loses nothing that is anybody's evidence of a charge.
+ */
+export const publishedAppMachineEvents = pgTable('published_app_machine_events', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+
+  publishedAppId: text('publishedAppId')
+    .notNull()
+    .references(() => publishedApps.id, { onDelete: 'cascade' }),
+
+  /** Denormalized so an operator reading this table alone can address the Fly resources it names. */
+  flyAppName: text('flyAppName').notNull(),
+  machineId: text('machineId').notNull(),
+
+  /** 'orchestrator' (our own API call) | 'fly' (mirrored from the last-20 event window). */
+  origin: text('origin').notNull(),
+
+  /**
+   * The awake boundary this event marks: 'start' or 'stop'. NORMALIZED, because
+   * the billing question is only ever which direction the machine crossed —
+   * Fly's own vocabulary is preserved verbatim in `flyEventType` beside it rather
+   * than being flattened away.
+   */
+  action: text('action').notNull(),
+
+  /**
+   * Fly's own event id, when this row mirrors one. NULL for an `orchestrator` row:
+   * our API call has no Fly event id (the response carries none), and the event
+   * Fly logs for it arrives separately as its own `fly` row.
+   *
+   * The unique index below is keyed on this, so re-reading the last-20 window —
+   * which the mirror does on every start and stop — inserts each Fly event exactly
+   * once no matter how many times it is seen.
+   */
+  flyEventId: text('flyEventId'),
+
+  /** Fly's raw `type` and `status` strings, kept verbatim: the normalization above is ours, and a future Fly event type must not be silently retyped as one we already understand. */
+  flyEventType: text('flyEventType'),
+  flyEventStatus: text('flyEventStatus'),
+
+  /**
+   * When the boundary happened. For an `orchestrator` row this is the instant we
+   * made the call; for a `fly` row it is Fly's own event timestamp. This is the
+   * column the awake-seconds arithmetic reads — never `recordedAt`, which can lag
+   * it by however long the mirroring write took.
+   */
+  occurredAt: timestamp('occurredAt', { mode: 'date', withTimezone: true }).notNull(),
+
+  /** When WE wrote the row. Distinct from `occurredAt` so mirroring lag is visible rather than folded into the billed span. */
+  recordedAt: timestamp('recordedAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  // The reconcile's access path: one app's boundaries, in time order.
+  appIdx: index('published_app_machine_events_app_idx').on(table.publishedAppId, table.occurredAt),
+  // Idempotent mirroring. PARTIAL, because `orchestrator` rows carry no Fly event
+  // id and a plain unique index would collapse every one of them into a single
+  // permitted row per machine — silently discarding the primary billing record
+  // this table exists to keep.
+  flyEventUnique: uniqueIndex('published_app_machine_events_fly_event_unique')
+    .on(table.machineId, table.flyEventId)
+    .where(sql`"flyEventId" IS NOT NULL`),
+  originAllowed: check(
+    'published_app_machine_events_origin_allowed',
+    sql`${table.origin} IN ('orchestrator', 'fly')`,
+  ),
+  actionAllowed: check(
+    'published_app_machine_events_action_allowed',
+    sql`${table.action} IN ('start', 'stop')`,
+  ),
+  // Our own call has no Fly event id, and a mirrored Fly event is worthless
+  // without one — it is the only thing that makes re-reading the window idempotent.
+  flyEventIdCoherent: check(
+    'published_app_machine_events_fly_event_id_coherent',
+    sql`(${table.origin} = 'fly') = (${table.flyEventId} IS NOT NULL)`,
+  ),
+}));
+
+export const publishedAppsRelations = relations(publishedApps, ({ one, many }) => ({
+  env: one(driveEnvs, {
+    fields: [publishedApps.envId],
+    references: [driveEnvs.id],
+  }),
+  drive: one(drives, {
+    fields: [publishedApps.driveId],
+    references: [drives.id],
+  }),
+  owner: one(users, {
+    fields: [publishedApps.ownerId],
+    references: [users.id],
+  }),
+  deployTokenMints: many(appDeployTokenMints),
+}));
+
+export const appDeployTokenMintsRelations = relations(appDeployTokenMints, ({ one }) => ({
+  publishedApp: one(publishedApps, {
+    fields: [appDeployTokenMints.publishedAppId],
+    references: [publishedApps.id],
+  }),
+}));
+
+export type PublishedApp = typeof publishedApps.$inferSelect;
+export type NewPublishedApp = typeof publishedApps.$inferInsert;
+export type AppDeployTokenMint = typeof appDeployTokenMints.$inferSelect;
+export type NewAppDeployTokenMint = typeof appDeployTokenMints.$inferInsert;
+export type PublishedAppMachineEvent = typeof publishedAppMachineEvents.$inferSelect;
+export type NewPublishedAppMachineEvent = typeof publishedAppMachineEvents.$inferInsert;
+export type AppHostingReclaim = typeof appHostingReclaims.$inferSelect;
+export type NewAppHostingReclaim = typeof appHostingReclaims.$inferInsert;

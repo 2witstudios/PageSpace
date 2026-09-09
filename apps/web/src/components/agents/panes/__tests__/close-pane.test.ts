@@ -1,240 +1,185 @@
 /**
- * The pane grid's close decision as data — the rule worth pinning is the
- * missing level the audit follow-up restores: closing the last pane bound to
- * a conversation closes THAT listing, and only the session's LAST open
- * listing closing ends the session — never the grid's pane count alone.
+ * What closing a pane MEANS.
+ *
+ * Three branches. Two of them — the layout close and the thread close — turn on
+ * what the pane HOLDS; the third turns on how many panes are left, and it is
+ * decided first.
+ *
+ * Nearly every fixture below used to be a SINGLE-pane workspace, because the
+ * pane count was not part of the decision. It is now, so each of them gained a
+ * second pane and exercises the branch it was written for again. The ones that
+ * were about the last pane specifically are the `end-session` pins, inverted
+ * from the "we no longer do that" assertions they were.
  */
 import { describe, it, expect } from 'vitest';
+import type { PaneNode } from '@pagespace/lib/agent-workspaces/workspace-node';
 import { decideClosePane, type SessionConversationSummary } from '../close-pane';
-import type { PaneState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
 
-const chatPane = (id: string, conversationId: string | null, agentPageId: string | null = null): PaneState => ({
-  id,
-  scope: { kind: 'chat', name: 'Conversation', targetId: conversationId, agentPageId },
-});
+const WS = 'ws-1';
 
-const terminalPane = (id: string, shellId: string | null = 'shell-1'): PaneState => ({
-  id,
-  scope: { kind: 'terminal', name: 'shell', targetId: shellId, agentPageId: null },
-});
+function chat(id: string, conversationId: string, parentId: string = WS): PaneNode {
+  return { nodeType: 'pane', id, parentId, position: 0, target: { kind: 'chat', id: conversationId } };
+}
+function terminal(id: string, shellId: string): PaneNode {
+  return { nodeType: 'pane', id, parentId: WS, position: 0, target: { kind: 'terminal', id: shellId } };
+}
+function picker(id: string): PaneNode {
+  return { nodeType: 'pane', id, parentId: WS, position: 0, target: null };
+}
+/**
+ * A second pane, so a fixture exercises the branch it was written for rather
+ * than the last-pane branch above it. Deliberately a chat with its own thread —
+ * a kind the decision has to look past, not a picker it would skip anyway.
+ */
+const OTHER = chat('n-other', 'c-other');
 
-const pickerPane = (id: string): PaneState => ({ id, scope: null });
+const listing = (...ids: string[]): SessionConversationSummary[] =>
+  ids.map((conversationId) => ({ conversationId, agentPageId: null, lastMessageAt: null }));
 
-const listing = (
-  conversationId: string,
-  agentPageId: string | null = null,
-  lastMessageAt: string | null = null,
-): SessionConversationSummary => ({ conversationId, agentPageId, lastMessageAt });
+/** Every case below is a member who MAY end the workspace unless it says otherwise. */
+const decide = (params: Omit<Parameters<typeof decideClosePane>[0], 'canEndSession'> & { canEndSession?: boolean }) =>
+  decideClosePane({ canEndSession: true, ...params });
 
 describe('decideClosePane', () => {
-  it('given a pane id not in the grid, should no-op', () => {
+  it('should do nothing for a node the workspace does not hold', () => {
+    expect(decide({ panes: [chat('n1', 'c1'), OTHER], nodeId: 'ghost', activeConversations: listing('c1') })).toEqual({
+      action: 'noop',
+    });
+  });
+
+  it('should be a pure layout close for a picker pane', () => {
+    expect(decide({ panes: [picker('n1'), OTHER], nodeId: 'n1', activeConversations: listing() })).toEqual({
+      action: 'close-pane',
+    });
+  });
+
+  it('should be a pure layout close for a terminal pane', () => {
     expect(
-      decideClosePane({ panes: [chatPane('p1', 'conv-1')], paneId: 'missing', activeConversations: [] }),
-    ).toEqual({ action: 'noop' });
+      decide({ panes: [terminal('n1', 'shell-1'), OTHER], nodeId: 'n1', activeConversations: listing() }),
+    ).toEqual({ action: 'close-pane' });
   });
 
-  describe('non-chat panes (picker, terminal, mid-mint)', () => {
-    it('closes the picker pane as a pure layout act when other panes remain', () => {
-      expect(
-        decideClosePane({
-          panes: [pickerPane('p1'), chatPane('p2', 'conv-1')],
-          paneId: 'p1',
-          activeConversations: [listing('conv-1')],
-        }),
-      ).toEqual({ action: 'close-pane' });
+  it('should close the THREAD for a chat pane whose listing is open', () => {
+    expect(decide({ panes: [chat('n1', 'c1'), OTHER], nodeId: 'n1', activeConversations: listing('c1') })).toEqual({
+      action: 'close-conversation',
+      conversationId: 'c1',
+    });
+  });
+
+  /**
+   * "Not yet loaded" is not "loaded and empty". Treating it as the latter would
+   * silently make this a pure layout close while the thread's listing stays open
+   * server-side, lingering in the sidebar and holding a cap slot with no pane
+   * left to retry the close from.
+   */
+  it('should do nothing while the listing has not resolved', () => {
+    expect(decide({ panes: [chat('n1', 'c1'), OTHER], nodeId: 'n1', activeConversations: null })).toEqual({
+      action: 'noop',
+    });
+  });
+
+  it('should be a pure layout close when the listing resolved WITHOUT this thread', () => {
+    // Somebody else already closed it: there is no listing left to follow.
+    expect(decide({ panes: [chat('n1', 'c1'), OTHER], nodeId: 'n1', activeConversations: listing('c2') })).toEqual({
+      action: 'close-pane',
+    });
+  });
+
+  it('should close the thread for a node nested below a split, like any other', () => {
+    // Where a pane SITS was never part of this decision — what it reads is the
+    // listing — and depth is what "somewhere other than the root's own
+    // children" means now.
+    expect(
+      decide({ panes: [chat('n1', 'c1', 's1'), OTHER], nodeId: 'n1', activeConversations: listing('c1') }),
+    ).toEqual({ action: 'close-conversation', conversationId: 'c1' });
+  });
+
+  /**
+   * THE LAST PANE. These three used to assert the opposite — that the decision
+   * would NOT offer to end the workspace — which was the node-tree cutover's
+   * behaviour and the one the product asked to have back. Inverted deliberately:
+   * closing the last pane would leave a session holding nothing, and a user
+   * stranded in an empty grid with no visible way forward is what shipped.
+   */
+  describe('the last pane', () => {
+    it('should offer to end the workspace when the last CHAT pane closes', () => {
+      const decision = decide({
+        panes: [chat('only', 'c1')],
+        nodeId: 'only',
+        activeConversations: listing('c1'),
+      });
+      expect(decision).toEqual({ action: 'end-session' });
     });
 
-    it('ends the session when the picker is the grid\'s only pane and nothing else is open', () => {
-      expect(decideClosePane({ panes: [pickerPane('p1')], paneId: 'p1', activeConversations: [] })).toEqual({
+    it('should offer to end the workspace when the last pane is a PICKER', () => {
+      // `panes` is every pane of every kind, so "last pane of any kind" needs
+      // no per-kind branch — decided above the target-kind test for exactly
+      // this reason.
+      expect(decide({ panes: [picker('only')], nodeId: 'only', activeConversations: listing() })).toEqual({
         action: 'end-session',
       });
     });
 
-    it('closes a terminal pane as layout-only when other panes remain', () => {
-      expect(
-        decideClosePane({
-          panes: [terminalPane('p1'), chatPane('p2', 'conv-1')],
-          paneId: 'p1',
-          activeConversations: [listing('conv-1')],
-        }),
-      ).toEqual({ action: 'close-pane' });
+    it('should offer to end the workspace when the last pane is a TERMINAL', () => {
+      expect(decide({ panes: [terminal('only', 'shell-1')], nodeId: 'only', activeConversations: listing() })).toEqual(
+        { action: 'end-session' },
+      );
     });
 
-    it('ends the session when a terminal is the grid\'s only pane and nothing else is open', () => {
-      expect(decideClosePane({ panes: [terminalPane('p1')], paneId: 'p1', activeConversations: [] })).toEqual({
+    it('should offer to end the workspace even while the listing has NOT resolved', () => {
+      // Decided ABOVE the `activeConversations === null` guard. Ending destroys
+      // the tree and the sandbox and never consults the listing, so behind that
+      // guard this would silently no-op while the listing loaded — which reads
+      // to the user as the click being ignored.
+      expect(decide({ panes: [chat('only', 'c1')], nodeId: 'only', activeConversations: null })).toEqual({
         action: 'end-session',
       });
     });
 
-    it('a chat pane still mid-mint (targetId null) is treated like a non-chat pane', () => {
+    it('should still NOT rebind the last pane to some other open thread', () => {
+      // The retired branch stays retired: ending is what the user asked for and
+      // is confirmed first, where a rebind was a guess nobody asked for.
+      const decision = decide({
+        panes: [picker('only')],
+        nodeId: 'only',
+        activeConversations: listing('c-other'),
+      });
+      expect(decision).toEqual({ action: 'end-session' });
+      expect(decision).not.toHaveProperty('rebindTo');
+    });
+
+    it('should do nothing for a node the workspace does not hold, even as its only pane', () => {
+      // The lookup still comes first: a stale close for a node that is gone is
+      // not a reason to offer to end the workspace.
+      expect(decide({ panes: [chat('only', 'c1')], nodeId: 'ghost', activeConversations: listing('c1') })).toEqual({
+        action: 'noop',
+      });
+    });
+
+    it('should fall back to the ordinary close for a member who may NOT end the workspace', () => {
+      // `DELETE /api/agent-workspaces/{id}` is gated by `checkSessionEndAccess`,
+      // stricter than the access that let them reach the pane. Offering a
+      // confirm they would obey and then be refused for is worse than leaving
+      // them the previous behaviour: an empty grid someone else can end.
       expect(
         decideClosePane({
-          panes: [chatPane('p1', null), chatPane('p2', 'conv-1')],
-          paneId: 'p1',
-          activeConversations: [listing('conv-1')],
+          panes: [chat('only', 'c1')],
+          nodeId: 'only',
+          activeConversations: listing('c1'),
+          canEndSession: false,
+        }),
+      ).toEqual({ action: 'close-conversation', conversationId: 'c1' });
+    });
+
+    it('should fall back to a pure layout close for a picker, for that same member', () => {
+      expect(
+        decideClosePane({
+          panes: [picker('only')],
+          nodeId: 'only',
+          activeConversations: listing(),
+          canEndSession: false,
         }),
       ).toEqual({ action: 'close-pane' });
-    });
-
-    describe('grid-last, but the session still has an open listing with no pane here', () => {
-      it('a lone terminal pane rebinds to the most recently active open conversation instead of ending the session', () => {
-        expect(
-          decideClosePane({
-            panes: [terminalPane('p1')],
-            paneId: 'p1',
-            activeConversations: [
-              listing('conv-old', 'agent-1', '2026-01-01T00:00:00.000Z'),
-              listing('conv-new', 'agent-2', '2026-01-15T00:00:00.000Z'),
-            ],
-          }),
-        ).toEqual({ action: 'rebind-pane', conversationId: 'conv-new', agentPageId: 'agent-2' });
-      });
-
-      it('a lone picker pane rebinds the same way', () => {
-        expect(
-          decideClosePane({
-            panes: [pickerPane('p1')],
-            paneId: 'p1',
-            activeConversations: [listing('conv-1', 'agent-1')],
-          }),
-        ).toEqual({ action: 'rebind-pane', conversationId: 'conv-1', agentPageId: 'agent-1' });
-      });
-
-      it('a lone still-minting chat pane rebinds the same way', () => {
-        expect(
-          decideClosePane({
-            panes: [chatPane('p1', null)],
-            paneId: 'p1',
-            activeConversations: [listing('conv-1', 'agent-1')],
-          }),
-        ).toEqual({ action: 'rebind-pane', conversationId: 'conv-1', agentPageId: 'agent-1' });
-      });
-
-      it('given an unloaded (null) listing, never guesses at ending the session — no-ops instead', () => {
-        // Unlike a CONFIRMED-empty listing (which still ends the session),
-        // never-resolved is unknown: offering "End session" here could
-        // delete another still-open conversation's shared sandbox on a
-        // guess. Nothing happens; the close can be retried once known.
-        expect(decideClosePane({ panes: [terminalPane('p1')], paneId: 'p1', activeConversations: null })).toEqual({
-          action: 'noop',
-        });
-      });
-    });
-  });
-
-  describe('a duplicate view (the same conversation open in another pane)', () => {
-    it('closes as layout-only — the OTHER pane keeps the listing open', () => {
-      expect(
-        decideClosePane({
-          panes: [chatPane('p1', 'conv-1'), chatPane('p2', 'conv-1')],
-          paneId: 'p1',
-          activeConversations: [listing('conv-1')],
-        }),
-      ).toEqual({ action: 'close-pane' });
-    });
-  });
-
-  describe('the listing has not loaded, or no longer lists this conversation', () => {
-    it('given a null (unloaded) listing, should never act on the unverified state — not grid-last', () => {
-      // Genuinely unknown (never resolved, or the fetch failed) is NOT the
-      // same fact as "resolved and confirmed not open" (the next test) — a
-      // layout-only close here would leave the conversation's actual listing
-      // open server-side with no pane left to retry the close from (caught
-      // in review). `noop`, same discipline as the grid-last case below.
-      expect(
-        decideClosePane({
-          panes: [chatPane('p1', 'conv-1'), terminalPane('p2')],
-          paneId: 'p1',
-          activeConversations: null,
-        }),
-      ).toEqual({ action: 'noop' });
-    });
-
-    it('given a null listing AND the pane is grid-last, should no-op rather than guess at ending the session', () => {
-      expect(
-        decideClosePane({ panes: [chatPane('p1', 'conv-1')], paneId: 'p1', activeConversations: null }),
-      ).toEqual({ action: 'noop' });
-    });
-
-    it('given the conversation absent from a loaded listing (closed elsewhere), should fall back the same way', () => {
-      expect(
-        decideClosePane({
-          panes: [chatPane('p1', 'conv-1'), terminalPane('p2')],
-          paneId: 'p1',
-          activeConversations: [listing('conv-other')],
-        }),
-      ).toEqual({ action: 'close-pane' });
-    });
-  });
-
-  describe('the last pane bound to an open-listed conversation, other listings exist', () => {
-    it('given the pane is NOT grid-last, should close the conversation with no rebind', () => {
-      expect(
-        decideClosePane({
-          panes: [chatPane('p1', 'conv-1'), terminalPane('p2')],
-          paneId: 'p1',
-          activeConversations: [listing('conv-1'), listing('conv-2')],
-        }),
-      ).toEqual({ action: 'close-conversation', conversationId: 'conv-1', rebindTo: null, rebindAgentPageId: null });
-    });
-
-    it('given the pane IS grid-last, should close the conversation and rebind to the most recently active other listing', () => {
-      expect(
-        decideClosePane({
-          panes: [chatPane('p1', 'conv-1')],
-          paneId: 'p1',
-          activeConversations: [
-            listing('conv-1'),
-            listing('conv-old', 'agent-2', '2026-01-01T00:00:00.000Z'),
-            listing('conv-new', 'agent-3', '2026-01-15T00:00:00.000Z'),
-          ],
-        }),
-      ).toEqual({
-        action: 'close-conversation',
-        conversationId: 'conv-1',
-        rebindTo: 'conv-new',
-        rebindAgentPageId: 'agent-3',
-      });
-    });
-
-    it('treats a never-messaged other listing as older than any messaged one when rebinding', () => {
-      expect(
-        decideClosePane({
-          panes: [chatPane('p1', 'conv-1')],
-          paneId: 'p1',
-          activeConversations: [listing('conv-1'), listing('conv-never', 'agent-2', null), listing('conv-messaged', 'agent-3', '2026-01-01T00:00:00.000Z')],
-        }),
-      ).toEqual({
-        action: 'close-conversation',
-        conversationId: 'conv-1',
-        rebindTo: 'conv-messaged',
-        rebindAgentPageId: 'agent-3',
-      });
-    });
-  });
-
-  describe("the session's LAST open listing (per the client's OWN snapshot)", () => {
-    // Never short-circuit straight to `end-session` here — the client's
-    // resolved-but-possibly-STALE snapshot showing no other listings must
-    // not itself trigger the destructive whole-session confirm. Always
-    // attempt the scoped close and let the SERVER's own never-empty guard be
-    // the authority; the existing 409 `last_conversation` handling in
-    // `AgentPanes` falls back to the confirm dialog once the server actually
-    // says so (caught in review).
-    it('attempts the scoped close (not a direct end-session) even though other (terminal) panes remain in the grid', () => {
-      expect(
-        decideClosePane({
-          panes: [chatPane('p1', 'conv-1'), terminalPane('p2')],
-          paneId: 'p1',
-          activeConversations: [listing('conv-1')],
-        }),
-      ).toEqual({ action: 'close-conversation', conversationId: 'conv-1', rebindTo: null, rebindAgentPageId: null });
-    });
-
-    it('attempts the scoped close (not a direct end-session) when it is also the grid\'s only pane', () => {
-      expect(
-        decideClosePane({ panes: [chatPane('p1', 'conv-1')], paneId: 'p1', activeConversations: [listing('conv-1')] }),
-      ).toEqual({ action: 'close-conversation', conversationId: 'conv-1', rebindTo: null, rebindAgentPageId: null });
     });
   });
 });

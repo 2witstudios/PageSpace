@@ -22,9 +22,18 @@ vi.mock('@/lib/workflows/task-trigger-helpers', () => ({
   recomputeTaskTriggerMetadata: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/ai/core/personalization-utils', () => ({
-  getUserTimezone: vi.fn().mockResolvedValue(undefined),
-}));
+// The route resolves its timezone through resolveTimezone. Wiring the mock's
+// resolveTimezone to the mocked getUserTimezone keeps the existing profile /
+// UTC assertions below testing the route end to end; the precedence rule
+// itself is pinned in personalization-utils.test.ts.
+vi.mock('@/lib/ai/core/personalization-utils', () => {
+  const getUserTimezone = vi.fn().mockResolvedValue(undefined);
+  return {
+    getUserTimezone,
+    resolveTimezone: async (explicit: string | null | undefined, userId: string) =>
+      explicit?.trim() || (await getUserTimezone(userId)) || 'UTC',
+  };
+});
 
 vi.mock('@/lib/websocket', () => ({
   broadcastTaskEvent: vi.fn(),

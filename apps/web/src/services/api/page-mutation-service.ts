@@ -6,8 +6,12 @@ import { inferChangeGroupType, createChangeGroupId } from '@pagespace/lib/monito
 import { computePageStateHash, createPageVersion, type PageVersionSource } from '@pagespace/lib/services/page-version-service'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { writePageContent } from '@pagespace/lib/services/page-content-store';
+import { reanchorPageTags } from '@pagespace/lib/tags/tag-service';
 import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/content/page-content-format';
 import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { replaceFromDocument, readSheetDocument } from '@pagespace/lib/sheets/store';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { syncMentions, type SyncMentionsResult } from '@/services/api/page-mention-service';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 
@@ -100,7 +104,30 @@ export async function applyPageMutation({
   const changeGroupId = context.changeGroupId ?? createChangeGroupId();
   const changeGroupType = context.changeGroupType ?? inferChangeGroupType({ isAiGenerated: context.isAiGenerated });
 
-  const previousContent = currentPage.content ?? '';
+  // A sheet's previous content is its rows, not its column.
+  //
+  // `pages.content` is empty for a materialised sheet, so hashing it produced a
+  // `stateHashBefore` over the empty string while `stateHashAfter` covered the
+  // real document — making the before/after pair in the activity chain
+  // meaningless for exactly the pages that change most. One projection read on
+  // the editor save path, which is already O(document).
+  const isSheetPage = isSheetType(currentPage.type as PageType);
+  const storedContent = currentPage.content ?? '';
+
+  // Projected for EVERY sheet mutation, including rename, move and trash.
+  //
+  // An earlier version skipped the projection for non-content mutations as an
+  // optimisation. That was wrong twice over: `nextContent` fell back to the
+  // empty column, so renaming a 100k-row sheet wrote a ZERO-BYTE
+  // `page_versions` entry that a restore would bring back blank, and the
+  // state-hash pair stopped describing the same content.
+  //
+  // Renames are rare and the projection is bounded by the sheet; correctness
+  // first. Read through `database` so a caller-supplied transaction sees its
+  // own uncommitted writes rather than a stale snapshot.
+  const previousContent = isSheetPage
+    ? (await readSheetDocument(pageId, database as never)) ?? storedContent
+    : storedContent;
   const nextContent = updates.content !== undefined ? String(updates.content) : previousContent;
 
   const contentFormatBefore = detectPageContentFormat(previousContent);
@@ -169,6 +196,23 @@ export async function applyPageMutation({
 
   const stateHashAfter = computePageStateHash(nextPageState);
 
+  // A sheet's content lives in rows, so a content write to one takes a
+  // different path entirely.
+  //
+  // Everything that edits page content funnels through here — the editor, the
+  // AI write tools, `/api/mcp/documents`, the page service — so routing sheets
+  // once, here, is what stops rows and `pages.content` being two competing
+  // sources of truth. It also removes the whole O(document) apparatus for
+  // sheets: no blob snapshot, no page version, and no full-document payload in
+  // the activity log. The sheet's own change log records the edit instead.
+  const isSheetContentWrite = updates.content !== undefined && isSheetPage;
+
+  // The inline snapshot is skipped for sheets; the blob REFERENCE is not.
+  //
+  // `contentSnapshot` is the multi-megabyte inline copy that caused the write
+  // amplification. `contentRef` is a 64-character hash of a content-addressed
+  // blob, and it is what `rollback/content-snapshot.ts` reads to rebuild a
+  // restore payload. Dropping both is what made Undo a silent no-op on sheets.
   const shouldSnapshotBefore = updates.content !== undefined;
   let contentSnapshotRef: string | null = null;
   let contentSnapshotSize = 0;
@@ -186,6 +230,17 @@ export async function applyPageMutation({
   const newValues: Record<string, unknown> = {};
 
   for (const field of safeUpdatedFields) {
+    // A sheet's content is never carried INLINE in the activity log's value
+    // payloads. Two copies of a multi-megabyte document per edit is the write
+    // amplification that made a 1MB sheet fail its CHECK constraint and roll
+    // the user's write back.
+    //
+    // The blob reference is still recorded (`contentRef`/`contentSize` below),
+    // which is what activity rollback resolves the restore payload from — so
+    // Undo on a sheet edit still has something to restore. Skipping both left
+    // `restoreFields(['content'], previousValues)` with nothing to find, and
+    // Undo returned 200 while doing nothing.
+    if (isSheetContentWrite && field === 'content') continue;
     if (field in currentPage) {
       previousValues[field] = (currentPage as Record<string, unknown>)[field];
     }
@@ -197,6 +252,22 @@ export async function applyPageMutation({
   let deferredTrigger: DeferredWorkflowTrigger | undefined;
 
   const applyMutationInTx = async (transaction: typeof db) => {
+    // BEFORE the column is blanked below.
+    //
+    // `replaceFromDocument` goes through `ensureTab`, which materialises a
+    // never-migrated sheet from `pages.content`. Running it after the update
+    // would have it read the empty string this mutation just wrote and
+    // materialise a single blank tab — permanently losing every tab of a
+    // multi-tab sheet on its first save.
+    if (isSheetContentWrite) {
+      await replaceFromDocument(
+        { pageId },
+        nextContent,
+        { userId: context.userId, actorEmail: context.actorEmail ?? undefined, changeGroupId },
+        transaction
+      );
+    }
+
     const updateWhere = expectedRevision !== undefined
       ? and(eq(pages.id, pageId), eq(pages.revision, expectedRevision))
       : eq(pages.id, pageId);
@@ -205,6 +276,8 @@ export async function applyPageMutation({
       .update(pages)
       .set({
         ...updates,
+        // Rows are the truth for a sheet; the column would be a stale copy.
+        ...(isSheetContentWrite ? { content: '' } : {}),
         revision: nextRevision,
         stateHash: stateHashAfter,
         updatedAt: new Date(),
@@ -225,10 +298,107 @@ export async function applyPageMutation({
         mentionedByUserId: context.userId,
         driveId: currentPage.driveId,
       });
+
+      // FORWARD-PORT CONTENT TAG ANCHORS. This is the primary anchoring
+      // mechanism and this is its only call site: `previousContent` and
+      // `nextContent` exist together in exactly one place in the codebase, and
+      // that place is this transaction. Without the hook every edit falls
+      // through to quote repair, which is the accuracy floor rather than the
+      // target — tags on actively-edited pages would decay while tags on stale
+      // pages kept working, which is backwards for retrieval.
+      //
+      // IN the transaction, on `transaction`: the sweep must commit with the
+      // content it describes. Ported outside it, anchors can point at a
+      // revision that then rolls back, or the page can commit with only some
+      // of its anchors moved.
+      //
+      // BOTH MODES ARE PASSED EXPLICITLY, always. The `pages` row has already
+      // been updated by this point, so letting the service read the stored mode
+      // would give it the NEW mode for BOTH revisions — which is precisely the
+      // broken case for `convert-content-mode`: the old HTML then projects as
+      // raw text and every correctly built anchor fails its hash check.
+      //
+      // `currentPage` is a full row read before the update, so it still holds
+      // the old mode. For an ordinary edit the two are equal and the service
+      // treats it as a normal transition; when they differ it knows the change
+      // is a DECLARED conversion rather than the accidental format flip its
+      // guard exists to catch, and routes the anchors to quote repair.
+      const previousContentMode = currentPage.contentMode;
+      const nextContentMode =
+        typeof updates.contentMode === 'string' ? updates.contentMode : previousContentMode;
+
+      // A SWEEP FAILURE MUST NOT FAIL THE SAVE — and catching the exception is
+      // NOT enough to achieve that. Postgres marks the ENTIRE transaction
+      // aborted on any statement error, so a failed UPDATE inside the sweep
+      // poisons this transaction even though `reanchorPageTags` swallows the
+      // error and returns a result. Every statement after it — createPageVersion,
+      // the activity log — would then fail with "current transaction is aborted"
+      // and roll back the page edit, which is the opposite of best-effort.
+      //
+      // The sweep therefore runs in a SAVEPOINT (drizzle's nested transaction).
+      // On success it is released and the ported anchors commit with the
+      // content. On failure it is rolled back, which clears the aborted state
+      // and leaves the outer transaction healthy to finish the save. Anchors are
+      // recoverable by a later repair pass; a refused page save is not.
+      //
+      // The throw is what triggers the rollback: `reanchorPageTags` returns a
+      // result rather than throwing, so a non-ok result has to be converted into
+      // one for the savepoint to unwind.
+      try {
+        await transaction.transaction(async (savepoint) => {
+          const reanchored = await reanchorPageTags(pageId, previousContent, nextContent, {
+            executor: savepoint,
+            oldContentMode: previousContentMode,
+            newContentMode: nextContentMode,
+          });
+          if (!reanchored.ok) {
+            throw new Error(`reanchorPageTags returned ${reanchored.error}`);
+          }
+
+          // SURFACE THE DEGRADED OUTCOMES. The sweep can succeed while still
+          // failing to forward-port: an anchor whose hash did not describe the
+          // predecessor, or a page whose projection format changed underneath
+          // us, both fall back to quote repair — a real result, but a weaker
+          // one than an exact port, and previously invisible. The summary was
+          // computed and then discarded here, so nothing anywhere could tell a
+          // degraded page from a healthy one.
+          //
+          // Logged only when something actually degraded, so an ordinary save
+          // stays silent.
+          const { repairedStaleHash, repairedFormatFlip, newlyOrphaned } = reanchored.data;
+          // `newlyOrphaned`, NOT `orphaned`. An anchor that is already orphaned
+          // and whose quote is still gone resolves as orphaned again on every
+          // edit, so alerting on the total would warn on every save — every
+          // autosave keystroke — for a page that did not degrade at all.
+          if (repairedStaleHash > 0 || repairedFormatFlip > 0 || newlyOrphaned > 0) {
+            loggers.api.warn('Content tag anchors degraded during a page mutation', {
+              pageId,
+              ...reanchored.data,
+            });
+          }
+        });
+      } catch (error) {
+        loggers.api.error(
+          'Failed to re-anchor content tags after a page mutation; the save continues',
+          error as Error,
+          { pageId },
+        );
+      }
     }
 
     // Create page version BEFORE acquiring the activity chain lock,
     // so disk I/O (compression + fs.writeFile) doesn't hold the global lock.
+    //
+    // Sheets get versions too, and the content is the PROJECTED document
+    // (`nextContent`), not the blanked column. Skipping this removed sheet
+    // version history outright, which is what drive backup, drive restore and
+    // page rollback all read — a backup taken after the migration would store a
+    // zero-byte version for every spreadsheet, and restoring it would bring the
+    // sheet back empty.
+    //
+    // One content-addressed blob per DOCUMENT save. Addressed cell writes
+    // (MCP, the SDK, form submissions) never reach here, so they stay O(1) and
+    // are attributed through `sheet_changes` instead.
     await createPageVersion({
       pageId,
       driveId: currentPage.driveId,
@@ -253,7 +423,7 @@ export async function applyPageMutation({
       resourceTitle: nextPageState.title ?? undefined,
       driveId: currentPage.driveId,
       pageId,
-      contentSnapshot: shouldSnapshotBefore ? previousContent : undefined,
+      contentSnapshot: shouldSnapshotBefore && !isSheetContentWrite ? previousContent : undefined,
       contentFormat: shouldSnapshotBefore ? contentFormatBefore : undefined,
       contentRef: contentSnapshotRef ?? undefined,
       contentSize: contentSnapshotSize || undefined,

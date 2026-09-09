@@ -15,7 +15,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const {
   mockCreateStreamLifecycle,
-  mockLifecyclePushPart,
   mockLifecycleFinish,
   mockBroadcastChatUserMessage,
   mockSaveGlobalAssistantMessageToDatabase,
@@ -24,7 +23,6 @@ const {
   mockAuthUser,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
-  mockLifecyclePushPart: vi.fn(),
   mockLifecycleFinish: vi.fn(),
   mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
   mockSaveGlobalAssistantMessageToDatabase: vi.fn().mockResolvedValue(undefined),
@@ -168,7 +166,7 @@ vi.mock('@pagespace/lib/billing/credit-gate', () => ({
 }));
 
 vi.mock('@/lib/ai/core/provider-factory', () => ({
-  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.4-nano' }),
   updateUserProviderSettings: vi.fn(),
   createProviderErrorResponse: vi.fn(),
   isProviderError: vi.fn().mockReturnValue(false),
@@ -291,7 +289,7 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   ADMIN_ONLY_PROVIDERS: new Set<string>([]),
   resolveProviderModel: vi.fn((sp: string, sm: string) => ({
     provider: sp && sm ? sp : 'openai',
-    model: sm || 'openai/gpt-5.3-chat',
+    model: sm || 'openai/gpt-5.4-nano',
   })),
 }));
 vi.mock('@/lib/ai/core/tool-utils', () => ({
@@ -320,6 +318,15 @@ const mockAuth = (): SessionAuthResult => ({
   adminRoleVersion: 0,
 });
 
+/** Minimal channel stand-in — the turn strategy subscribes to this to build its response. */
+const makeFakeChannel = () => ({
+  messageId: 'msg-1', nextSeq: 0, firstAvailableSeq: 0, finished: false, aborted: false,
+  subscriberCount: 0, append: () => {}, finish: () => {}, getFrames: () => [],
+  subscribe: () => () => {},
+  subscribeReadable: () => new ReadableStream({ start(c) { c.close(); } }),
+}) as never;
+
+
 const makeRequest = (body: Record<string, unknown>) =>
   new Request('https://example.com/api/ai/global/url-conv-id/messages', {
     method: 'POST',
@@ -327,7 +334,7 @@ const makeRequest = (body: Record<string, unknown>) =>
     body: JSON.stringify({
       messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
       selectedProvider: 'openai',
-      selectedModel: 'openai/gpt-5.3-chat',
+      selectedModel: 'openai/gpt-5.4-nano',
       ...body,
     }),
   });
@@ -344,7 +351,7 @@ describe('POST /api/ai/global/[id]/messages — conversation identity resolution
     captured.streamTextOptions = {};
     captured.totalUsage = { inputTokens: 10, outputTokens: 5, totalTokens: 15 };
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
-    mockCreateStreamLifecycle.mockResolvedValue({ pushPart: mockLifecyclePushPart, finish: mockLifecycleFinish });
+    mockCreateStreamLifecycle.mockResolvedValue({ channel: makeFakeChannel(), finish: mockLifecycleFinish, getParts: vi.fn().mockResolvedValue([]) });
   });
 
   it('given the body includes a conversationId different from the URL segment, should resolve using the BODY id, not the URL id', async () => {

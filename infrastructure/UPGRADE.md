@@ -13,6 +13,153 @@ emits everything below.
 > It is a provisioning tool for new tenants only. Upgrades are always
 > append-only edits to the existing `.env`.
 
+## 2026-08 — ⚠️ Minimum upgrade path: workspace membership becomes a node tree (`0255` → `0256`)
+
+**Two separate concerns, with different audiences — read the one that is yours:**
+
+- **The minimum upgrade path** (immediately below) is a DATA-LOSS hazard, and it
+  applies only to tenant / self-host deployments that **skip releases**. Cloud
+  rolls every release in order and is not exposed to it.
+- **The deploy window** (`⚠️ 0256 has a deploy window` further down) is an
+  AVAILABILITY concern and applies to **every** deployment, cloud included.
+
+A workspace's membership (which threads belong to a session) and its layout
+(where each one is shown) used to be two structures — `conversations."workspaceId"`
+plus four `agent_workspace_pane_*` / `_layout_*` tables. They are now one flat
+tree in `agent_workspace_nodes`. That moved in three steps, and the third one is
+destructive:
+
+| step | migration | what it does |
+|------|-----------|--------------|
+| expand | `0255_clear_phil_sheldon` | creates `agent_workspace_nodes` / `agent_workspace_node_revs`. Purely additive. |
+| backfill | *(a script, run between releases)* | derives every existing workspace's tree from the legacy rows |
+| contract | `0256_parched_bloodscream` | `DROP TABLE` on all four legacy tables, `DROP COLUMN` on `conversations."workspaceId"` and `"closedInWorkspaceAt"` |
+
+**THE RULE: you must pass through a release that carries `0255` and stop there
+long enough to run the backfill. Do not jump a pre-`0255` deployment straight to
+this release.**
+
+`runMigrations` applies every pending migration in ONE invocation, so a
+deployment sitting below `0255` that pulls this release applies `0255` and
+`0256` back to back. `0255` creates the node tables EMPTY; `0256` then deletes
+the only rows that could have filled them. **The backfill script that bridged
+them is deleted in this release** — its source tables no longer exist, so it
+cannot run and is not shipped. The result of skipping is every session opening
+empty, with its threads reachable only through past-conversation history, and
+nothing left in the database to repair it from.
+
+For a version-skipping upgrade:
+
+1. **Take a database snapshot.** This is the only migration in this epic that
+   destroys data, and there is no reverse migration.
+2. Upgrade to a release containing `0255` and **not** `0256`, and let it come
+   up.
+3. Run the node backfill **from that release's migrate image** — not from this
+   one. `scripts/backfill-agent-workspace-nodes.ts` is DELETED here, because
+   after `0256` the tables it reads no longer exist, so it cannot run and is not
+   shipped. Pull the `0255` release's image explicitly and run
+   `bun scripts/backfill-agent-workspace-nodes.ts` on it (dry by default; re-run
+   with `--apply`). It is safe to re-run — it skips any workspace already
+   through the node model.
+4. Confirm the census reports zero skipped workspaces and `members in == pane
+   nodes out`, then upgrade to this release.
+
+If you have already upgraded past `0255` and only then discovered the data is
+gone, the backfill cannot help: its source tables were dropped. Restore the
+snapshot from step 1 and start again. That is the whole reason step 1 is step 1.
+
+**Already at `0255` with the backfill run?** Nothing to do for the data —
+`0256` applies cleanly and touches no node row. (Still read the deploy-order
+section below, which applies to every deployment including cloud.)
+
+**Run the check below BEFORE applying `0256`, while the database is still at
+`0255`.** It reads `conversations."workspaceId"` and `"closedInWorkspaceAt"`,
+which are the columns `0256` drops — afterwards it cannot run at all, and there
+is no post-`0256` equivalent, because the whole question is about data that will
+no longer exist. This is a pre-flight, not a post-check.
+
+It should return only conversations whose session has since been ENDED (ending a
+session destroys its tree, and nothing retires the legacy column, so a pointer
+with no node is expected and benign):
+
+```sql
+SELECT c.id, c."workspaceId", w."endedAt"
+  FROM conversations c
+  LEFT JOIN agent_workspaces w ON w.id = c."workspaceId"
+ WHERE c."workspaceId" IS NOT NULL AND c."isActive" AND c."closedInWorkspaceAt" IS NULL
+   AND NOT EXISTS (SELECT 1 FROM agent_workspace_nodes n
+                    WHERE n."targetKind" = 'chat' AND n."targetId" = c.id);
+```
+
+Any row whose `endedAt` is NULL is membership that is about to be lost — stop
+and run the backfill before upgrading.
+
+To confirm afterwards that the tree is intact, ask a node-only question instead
+— every live workspace should hold a root:
+
+```sql
+SELECT w.id, w."endedAt",
+       (SELECT count(*) FROM agent_workspace_nodes n WHERE n."rootId" = w.id) AS nodes
+  FROM agent_workspaces w
+ WHERE w."endedAt" IS NULL
+   AND NOT EXISTS (SELECT 1 FROM agent_workspace_nodes n
+                    WHERE n."rootId" = w.id AND n."nodeType" = 'root');
+```
+
+### ⚠️ `0256` has a deploy window, and it is ACCEPTED — know what it costs
+
+**This applies to EVERY deployment, cloud included — it is not a
+version-skipping concern.** No data is at risk; this is availability only.
+
+`0256` is a CONTRACT migration, so the usual order is backwards for it. The
+pipeline (`.github/workflows/docker-images.yml`) runs the migrate one-shot and
+only then rolls `web`, which means the PREVIOUS image serves against the
+contracted schema for the length of that roll. That image still declares both
+columns in its Drizzle schema, and Drizzle names every declared column
+explicitly rather than emitting `SELECT *`:
+
+```
+select "id", "userId", "title", "type", "contextId", "workspaceId",
+       "closedInWorkspaceAt", "agentPageId", … from "conversations"
+```
+
+so every unprojected `.select().from(conversations)` fails with
+`column "workspaceId" does not exist` (SQLSTATE 42703) until the roll finishes.
+Three such selects exist, and one of them is on the main chat path:
+
+| what | file |
+|---|---|
+| `conversationRepository.getConversation()` — **17 non-test callers**, including `handle-chat-turn.ts` and `page-chat-turn.ts` (sending a message), the sandbox/session agent tools, the claim route, and the `/api/v1` conversation routes | `apps/web/src/lib/repositories/conversation-repository.ts:738` |
+| `GET /api/v1/conversations` (the public API pagespace-cli uses) | `apps/web/src/app/api/v1/conversations/route.ts:90` |
+| `GET /api/ai/global/[id]/messages` (global-assistant history) | `apps/web/src/app/api/ai/global/[id]/messages/route.ts:36` |
+
+This is the same shape as `0252`'s window (documented below) but with a **much**
+wider blast radius. `0252` degraded the Agents sidebar and the layout endpoints;
+this one reaches `getConversation`, which sits on the chat turn itself — so in
+the pipeline's default order, **sending a message 500s for the length of the
+roll**, not merely a sidebar.
+
+**This window is a deliberate, accepted trade for this release**, on the same
+reasoning `0252` was accepted: the degradation is bounded to the migrate→roll
+gap and it is loud (500s), not silent, and no data is at risk in either
+direction. Ship it in the default order and the window closes on its own when
+the roll completes.
+
+**If you want to avoid it, you can, and it costs nothing:** the NEW image is
+forward compatible with the un-contracted schema — it never names either column,
+and both are nullable, so it runs correctly against a database that still has
+them. Any deployment that would rather not take the window can simply invert the
+order for this one release:
+
+1. Deploy `web` (and `realtime`) on the new image FIRST, against the database
+   still at `0255`.
+2. Run the migrate one-shot once the roll has completed.
+
+That is the recommended sequence for a self-host stack upgrading by hand, where
+inverting costs nothing. Cloud takes the default order and the window with it.
+
+## 2026-08 — `agent_sessions` becomes `agent_workspaces` (epic #2161, Phase 5)
+
 ## 2026-08 — `agent_sessions` becomes `agent_workspaces` (epic #2161, Phase 5)
 
 **Applies to every deployment.** Migration `0254_agent_workspaces_rename` renames

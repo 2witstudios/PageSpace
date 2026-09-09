@@ -286,14 +286,10 @@ describe('GET /api/ai/chat/active-streams', () => {
 
       await GET(makeRequest());
 
-      expect(mockMaterializeInterruptedStream).toHaveBeenCalledWith({
-        messageId: 'msg-dead',
-        channelId: mockChannelId,
-        conversationId: 'conv-1',
-        userId: 'user-2',
-        parts,
-        startedAt: longAgo,
-      });
+      // The NAME only. This route's copy of the row is up to a request old, and at N>1 it was
+      // judged dead against THIS instance's clock — the two weaknesses the materializer's atomic
+      // reap claim re-checks in one statement on Postgres's own clock.
+      expect(mockMaterializeInterruptedStream).toHaveBeenCalledWith({ messageId: 'msg-dead' });
     });
 
     // A page channel carries EVERY conversation on it, including other members' PRIVATE ones.

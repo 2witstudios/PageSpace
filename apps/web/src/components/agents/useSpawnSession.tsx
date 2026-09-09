@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Bot, SquareTerminal } from 'lucide-react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Bot, Boxes, Laptop, Plus, SquareTerminal, Zap } from 'lucide-react';
 import { toast } from 'sonner';
+import { useSWRConfig } from 'swr';
 
 import {
   CommandDialog,
@@ -10,13 +11,40 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  CommandSeparator,
 } from '@/components/ui/command';
 import { post } from '@/lib/auth/auth-fetch';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import { useDriveEnvs, driveEnvsKey } from '@/hooks/drive-envs/useDriveEnvs';
+import { reportDriveEnvWriteFailure } from '@/hooks/drive-envs/drive-env-writes';
+import { useDriveStore } from '@/hooks/useDrive';
+import { canManageDrive } from '@/hooks/usePermissions';
+import { useEditingSession } from '@/stores/useEditingSession';
 import type { DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
+import { MAX_DRIVE_ENV_LABEL_LENGTH, MAX_DRIVE_ENV_NAME_LENGTH, type DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
+import { LocalEnvEnrollmentPanel, type LocalEnvEnrollmentIssue } from './LocalEnvEnrollment';
 
 export type SpawnKind = 'agent' | 'shell' | 'assistant';
+
+/**
+ * What the create step asks for. A cloud sandbox is the default and the common
+ * case, and its request body is `{ name }` — byte-identical to before a
+ * substrate existed. A LOCAL environment ([D-3]: the user's own machine as a
+ * substrate of an ordinary environment) also names the machine.
+ */
+type NewEnvironmentInput = { name: string; substrate: 'sprite' } | { name: string; substrate: 'local'; label: string };
+
+/**
+ * A local create's handoff, held until the person has read it: the env it
+ * belongs to and the one-time code the API returned. Rendered from this and
+ * from nothing else — there is no endpoint that returns an existing code.
+ */
+interface PendingEnrollment {
+  envName: string;
+  machineLabel: string;
+  issue: LocalEnvEnrollmentIssue;
+}
 
 /** What the palette's first step picked — drives the naming step's placeholder and spawn() call. */
 export interface SpawnPick {
@@ -24,6 +52,22 @@ export interface SpawnPick {
   agentPageId: string | null;
   /** The sensible default: the agent's title, "Shell", or "Global Assistant". */
   label: string;
+  /**
+   * WHERE the session runs, in three states rather than two.
+   *
+   * `undefined` = not chosen yet, which is what makes the environment step
+   * appear; `null` = the ephemeral default (the session owns its own sandbox,
+   * gone when it ends); a string = the drive environment it runs INSIDE,
+   * sharing that environment's persistent filesystem with every other session
+   * in it. The `undefined`/`null` split is load-bearing: "ephemeral" is a real
+   * choice a user makes, not the absence of one, so it cannot be the same value
+   * as "has not answered yet".
+   *
+   * A drive with no environments never shows the step, and the pick goes
+   * straight to naming with this left unset — the flow is byte-for-byte what it
+   * was before environments existed.
+   */
+  envId?: string | null;
 }
 
 /**
@@ -46,45 +90,91 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
   const selectSession = useAgentSurfaceStore((state) => state.selectSession);
 
-  const [spawnTarget, setSpawnTarget] = useState<{ driveId: string | null; driveName: string | null } | null>(null);
+  /**
+   * The OPENING: which drive this palette was opened for, and — when it was
+   * opened from one environment's row — which environment that row already
+   * answered "where should it run?" with. Both belong to the opening rather
+   * than to the pick, which does not exist until the target step is answered,
+   * so they live and die together instead of as two states that could disagree.
+   */
+  const [spawnTarget, setSpawnTarget] = useState<{
+    driveId: string | null;
+    driveName: string | null;
+    /** The row's environment, or null when the flow was opened without one. */
+    envId: string | null;
+  } | null>(null);
   // Set once a target (agent/shell/assistant) is picked in the palette's first
   // step — its presence is what swaps the dialog to the naming step. Null
   // driveId + kind 'assistant' is the only shape `openAssistantSpawn` ever
   // produces (it skips the picker entirely).
   const [spawnPick, setSpawnPick] = useState<SpawnPick | null>(null);
   const [spawning, setSpawning] = useState(false);
+  /**
+   * Which step asked for a new environment, or null when none did.
+   *
+   * It is both the "is the create step on screen" flag and the return address:
+   * from the target step, creating one returns THERE (the environment now
+   * exists and the env step will offer it); from the env step, the newly
+   * created environment is the answer to the question that step was asking, so
+   * the flow goes straight on to naming with it selected.
+   */
+  const [newEnvFrom, setNewEnvFrom] = useState<'target' | 'env' | null>(null);
+  /**
+   * The enrollment code of a LOCAL environment just created, until dismissed.
+   *
+   * Set whenever a local create lands — NOT gated on `flowToken` like the rest
+   * of the continuation, and that is the point: the code exists on the wire
+   * exactly once, so a create that lands after the palette was closed must
+   * still put it in front of the person rather than drop it. (Losing it is
+   * recoverable now — the row offers "Show a new code" — but recoverable is
+   * not a reason to lose it.) While set, the palette is open on this step
+   * regardless of whether a spawn flow is still on screen behind it.
+   */
+  const [enrollment, setEnrollment] = useState<PendingEnrollment | null>(null);
+  /**
+   * WHICH OPENING OF THIS PALETTE A DEFERRED ANSWER BELONGS TO.
+   *
+   * Creating an environment is a network round trip, and the flow that started
+   * it can be gone by the time it lands: Escape closes the palette while the
+   * POST is still out, and the next thing the user opens is a DIFFERENT flow,
+   * with its own target and possibly its own drive. Without something to check
+   * against, the late continuation writes into whatever is on screen now — it
+   * would select an environment belonging to another drive, drop the row preset
+   * the new flow was opened with, or close a create step the user is typing in.
+   *
+   * Bumped on every open and every close, so a continuation can ask whether the
+   * flow it belongs to is still the one in front of the user. Only the STATE
+   * continuation is gated: the environment really was created, so its toast and
+   * its cache write stand either way.
+   */
+  const flowToken = useRef(0);
 
   const spawn = useCallback(
-    async (input: { driveId: string | null; agentPageId: string | null; kind: SpawnKind; name: string }) => {
+    async (input: { driveId: string | null; envId: string | null; agentPageId: string | null; kind: SpawnKind; name: string }) => {
       if (spawning) return;
       setSpawning(true);
       try {
         if (input.kind === 'shell') {
           const created = await post<{ session: { workspaceId: string }; shellId: string; shellName: string }>(
             '/api/agent-workspaces',
-            { driveId: input.driveId, firstThing: 'shell', name: input.name },
+            { driveId: input.driveId, envId: input.envId, firstThing: 'shell', name: input.name },
           );
           setSpawnTarget(null);
           setSpawnPick(null);
           onSpawned?.();
           // useAgentSurfaceStore has no shell concept — land by selecting the
-          // session there, then placing the pane directly on the workspace
-          // store, mirroring AgentPanes.tsx's handleReattachShell. The shell
-          // is named independently server-side (spawnShell, no name passed) —
-          // use its own name, not the session label, so the pane title
-          // matches the shell row shown in the sidebar.
+          // session there, then placing the node directly on the workspace
+          // store. The shell's NAME is no longer passed: a node holds an id and
+          // nothing else, and the title is resolved per viewer beside the tree
+          // (`targets[]`), so the pane header and the sidebar row now read the
+          // same authorized answer instead of two independently-carried copies.
           selectSession(created.session.workspaceId);
-          useAgentWorkspaceStore.getState().openConversation(created.session.workspaceId, {
-            kind: 'terminal',
-            name: created.shellName,
-            targetId: created.shellId,
-            agentPageId: null,
-          });
+          useAgentWorkspaceStore.getState().openShell(created.session.workspaceId, created.shellId);
           return;
         }
         const created = await post<{ session: { workspaceId: string }; conversationId: string }>(
           '/api/agent-workspaces',
-          { driveId: input.driveId, agentPageId: input.agentPageId, name: input.name },
+          { driveId: input.driveId, envId: input.envId, agentPageId: input.agentPageId, name: input.name },
         );
         setSpawnTarget(null);
         setSpawnPick(null);
@@ -111,24 +201,66 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
   // A drive group's "+" opens the picker first so the naming step's
   // placeholder can reflect whichever agent/shell was chosen.
   const openSpawn = useCallback((driveId: string, driveName: string | null) => {
-    setSpawnTarget({ driveId, driveName });
+    flowToken.current += 1;
+    setSpawnTarget({ driveId, driveName, envId: null });
     setSpawnPick(null);
+    setNewEnvFrom(null);
+  }, []);
+
+  /**
+   * The same flow, opened from one ENVIRONMENT's row — its "+" in the sidebar.
+   * The row is the answer to "where should it run?", so that step never appears
+   * and the user picks a target and names it, exactly as they would in a drive
+   * with no environments at all.
+   */
+  const openSpawnInEnv = useCallback((driveId: string, driveName: string | null, envId: string) => {
+    flowToken.current += 1;
+    setSpawnTarget({ driveId, driveName, envId });
+    setSpawnPick(null);
+    setNewEnvFrom(null);
   }, []);
 
   // The Assistant group has nothing to pick (the assistant IS the
   // counterpart), so this skips straight to naming.
   const openAssistantSpawn = useCallback(() => {
-    setSpawnTarget({ driveId: null, driveName: null });
+    flowToken.current += 1;
+    setSpawnTarget({ driveId: null, driveName: null, envId: null });
     setSpawnPick({ kind: 'assistant', agentPageId: null, label: 'Global Assistant' });
+    setNewEnvFrom(null);
   }, []);
 
   const handleSubmitName = useCallback(
     (name: string) => {
       if (!spawnTarget || !spawnPick) return;
-      void spawn({ driveId: spawnTarget.driveId, agentPageId: spawnPick.agentPageId, kind: spawnPick.kind, name });
+      void spawn({
+        driveId: spawnTarget.driveId,
+        // `undefined` (the step was skipped because the drive has none) and
+        // `null` (the user chose ephemeral) mean the same thing to the server.
+        envId: spawnPick.envId ?? null,
+        agentPageId: spawnPick.agentPageId,
+        kind: spawnPick.kind,
+        name,
+      });
     },
     [spawn, spawnTarget, spawnPick],
   );
+
+  // The targeted drive's environments — ONE fetch, keyed on whichever drive the
+  // palette is currently open for, and none at all while it is closed or the
+  // target is the global assistant (which lives outside any drive and so has no
+  // environments to offer). Shares its SWR key with the sidebar's environment
+  // rows, so an environment created there is offered here without a second
+  // request.
+  // `isLoading` is consumed, not discarded, and that is load-bearing rather
+  // than tidy: `envs` is `[]` BOTH while the listing is in flight and when the
+  // drive genuinely has none, so a step decision that reads only `.length`
+  // cannot tell "no environments" from "not answered yet". See `step` below.
+  const {
+    envs: paletteEnvs,
+    isLoading: paletteEnvsLoading,
+    error: paletteEnvsError,
+    mutate: retryPaletteEnvs,
+  } = useDriveEnvs(spawnTarget?.driveId ?? null);
 
   const paletteAgents = useMemo(
     () => (spawnTarget ? (agentsByDrive.find((entry) => entry.driveId === spawnTarget.driveId)?.agents ?? []) : []),
@@ -145,51 +277,254 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
     [agentsByDrive, spawnTarget],
   );
 
+  /**
+   * Whether the requester may create an environment in the targeted drive.
+   *
+   * Resolved HERE rather than passed in, from the same two facts the sidebar's
+   * own environment affordances used before this moved: environment CRUD is
+   * drive OWNER/ADMIN, and a drive on its way to deletion is not offered new
+   * infrastructure inside it. Computing it in the hook is what lets every
+   * caller (the sidebar, the Agents header) get the entry point without
+   * threading a permission through. A drive the store does not hold — the
+   * driveless Assistant target, an orphan group — resolves to `false`, which is
+   * the right answer for both.
+   */
+  const drives = useDriveStore((state) => state.drives);
+  const canCreateEnv = useMemo(() => {
+    if (!spawnTarget?.driveId) return false;
+    const drive = drives.find((entry) => entry.id === spawnTarget.driveId);
+    if (!drive || drive.isTrashed) return false;
+    return canManageDrive(drive);
+  }, [drives, spawnTarget]);
+
+  /**
+   * Whether the create step may offer "This computer" ([D-3]). The deployment
+   * flag (`LOCAL_ENVS_ENABLED`) is server-side and rides the drive entry the
+   * way `sandboxEligible` does; unlike that one it defaults FALSE while the
+   * entry has not resolved, because the option's absence is the safe state.
+   * Same permission bar as any create — a local env is still an env.
+   */
+  const canCreateLocalEnv = useMemo(
+    () => canCreateEnv && (agentsByDrive.find((entry) => entry.driveId === spawnTarget?.driveId)?.localEnvsEnabled ?? false),
+    [canCreateEnv, agentsByDrive, spawnTarget],
+  );
+
+  const { mutate: globalMutate } = useSWRConfig();
+
+  /**
+   * Create an environment from inside the palette, and answer what the palette
+   * should do next — `'retry'` on the one refusal retyping fixes (a name
+   * already taken), which keeps the step open with the user's text.
+   *
+   * On success it publishes the new environment into the SHARED environments
+   * key, so the sidebar's rows show it without knowing this happened — and so
+   * this palette's own next step is reading a listing that contains it.
+   */
+  const createEnvironment = useCallback(
+    async (input: NewEnvironmentInput): Promise<'retry' | 'failed' | { envId: string; local: boolean }> => {
+      const driveId = spawnTarget?.driveId;
+      if (!driveId) return 'failed';
+      let created: { env: DriveEnvDTO; enrollment?: LocalEnvEnrollmentIssue };
+      try {
+        // The cloud body is `{ name }` and nothing else — a user who never
+        // wants a local env must not be able to tell this shipped.
+        const body = input.substrate === 'local' ? { name: input.name, substrate: 'local', label: input.label } : { name: input.name };
+        created = await post<{ env: DriveEnvDTO; enrollment?: LocalEnvEnrollmentIssue }>(`/api/drives/${encodeURIComponent(driveId)}/envs`, body);
+      } catch (error) {
+        // `'retry'` is the one refusal retyping fixes; everything else has been
+        // toasted and is `'failed'`.
+        return reportDriveEnvWriteFailure(error, 'Could not create the environment') === 'retry' ? 'retry' : 'failed';
+      }
+      // PUBLISHED, not merely re-asked for. A bare `mutate(key)` is only a
+      // revalidation: the cache goes on holding the PREVIOUS listing until the
+      // network answers, and `isLoading` stays false throughout because data is
+      // already loaded (it flags a first load, not a refresh). So for the whole
+      // width of that request the step machine — which decides on `envs.length`
+      // and `isLoading` — reads "this drive has no environments" about a drive
+      // that just got one, and the two ways that lands are both silent: a quick
+      // pick goes straight to naming and spawns EPHEMERALLY into a drive whose
+      // environment the user just deliberately made, or the response arrives
+      // while they are typing a name and the form is swapped for the env step
+      // mid-keystroke. Writing the row in first means the answer is already
+      // true when the next render asks; the revalidation behind it only
+      // confirms it, and settles the ordering the server sorts by.
+      // Said out loud, because nothing else says it any more. The dialog this
+      // replaced closed onto the sidebar, where the new row appearing WAS the
+      // confirmation; the palette covers that, and the target step it returns
+      // to looks identical to the one it left. The other environment writes
+      // (delete, rebuild) already answer this way.
+      toast.success(`Created “${created.env.name}”`);
+      globalMutate(
+        driveEnvsKey(driveId),
+        (current?: { envs: DriveEnvDTO[] }) => {
+          const known = current?.envs ?? [];
+          // A revalidation already in flight may have brought it in first.
+          return known.some((env) => env.id === created.env.id)
+            ? { envs: known }
+            : { envs: [...known, created.env] };
+        },
+        { revalidate: true },
+      );
+      // A LOCAL create carries the one-time code. Shown now, unconditionally —
+      // see `enrollment` for why this is not behind the flow token.
+      if (created.env.substrate === 'local' && created.enrollment) {
+        setEnrollment({ envName: created.env.name, machineLabel: created.env.label, issue: created.enrollment });
+      }
+      return { envId: created.env.id, local: created.env.substrate === 'local' };
+    },
+    [spawnTarget, globalMutate],
+  );
+
+  const handleCreateEnv = useCallback(
+    async (input: NewEnvironmentInput) => {
+      const from = newEnvFrom;
+      const token = flowToken.current;
+      const result = await createEnvironment(input);
+      // The flow that asked is gone — closed, or replaced by another opening.
+      // Its answer must not be applied to whatever took its place.
+      if (flowToken.current !== token) return;
+      // Retryable: hold the step, with what the user typed still in it.
+      if (result === 'retry') return;
+      // Not retryable: hand them back the step they came from rather than
+      // stranding them on a form that will refuse the same way again.
+      if (result === 'failed') {
+        setNewEnvFrom(null);
+        return;
+      }
+      if (from === 'env' && !result.local) {
+        // The environment the env step was asking about now exists, and it is
+        // the answer: go on to naming with it selected rather than making the
+        // user pick the thing they just created.
+        setSpawnPick((current) => (current ? { ...current, envId: result.envId } : current));
+      } else if (result.local) {
+        // A LOCAL environment is not an answer yet: no machine has enrolled, so
+        // a session bound to it would be refused (`not_connected`). The code
+        // step is on screen on top of this flow; when it is dismissed, the env
+        // step re-asks with the new environment listed, and any row preset is
+        // dropped for the same reason as the target case below.
+        setSpawnTarget((current) => (current ? { ...current, envId: null } : current));
+      } else {
+        // From the TARGET step, where the OPENING may already carry an
+        // environment: this flow can have been started by one environment's "+"
+        // in the sidebar, which pre-answered "where should it run?". Making a
+        // NEW environment is a newer intent than that row's, and spawning into
+        // the row's environment anyway would be the palette quietly overruling
+        // what the user just did. Dropping the row's answer lets the env step
+        // ask once, now with both to choose between.
+        setSpawnTarget((current) => (current ? { ...current, envId: null } : current));
+      }
+      setNewEnvFrom(null);
+    },
+    [createEnvironment, newEnvFrom],
+  );
+
   const paletteElement = (
     <SpawnSessionPalette
-      open={spawnTarget !== null}
+      open={spawnTarget !== null || enrollment !== null}
       driveName={spawnTarget?.driveName ?? null}
       agents={paletteAgents}
+      envs={paletteEnvs}
+      envsLoading={paletteEnvsLoading}
+      envsError={paletteEnvsError}
+      onRetryEnvs={retryPaletteEnvs}
       canRunSandbox={canRunSandbox}
+      canCreateEnv={canCreateEnv}
+      canCreateLocalEnv={canCreateLocalEnv}
+      enrollment={enrollment}
+      onDismissEnrollment={() => setEnrollment(null)}
+      newEnvFrom={newEnvFrom}
+      onStartNewEnv={setNewEnvFrom}
+      onCancelNewEnv={() => setNewEnvFrom(null)}
+      onCreateEnv={handleCreateEnv}
       pick={spawnPick}
       spawning={spawning}
       onOpenChange={(open) => {
         if (open) return;
+        flowToken.current += 1;
         setSpawnTarget(null);
         setSpawnPick(null);
+        setNewEnvFrom(null);
+        setEnrollment(null);
       }}
-      onPickTarget={setSpawnPick}
+      onPickTarget={(pick) =>
+        // The opening's environment, when it had one, is the answer the env
+        // step would otherwise ask for — carried onto the pick so the step
+        // machine reads it as already given.
+        setSpawnPick({ ...pick, ...(spawnTarget?.envId != null && { envId: spawnTarget.envId }) })
+      }
+      onPickEnv={(envId) => setSpawnPick((current) => (current ? { ...current, envId } : current))}
       onSubmitName={handleSubmitName}
     />
   );
 
-  return { openSpawn, openAssistantSpawn, spawning, paletteElement };
+  return { openSpawn, openSpawnInEnv, openAssistantSpawn, spawning, paletteElement };
 }
 
 /**
  * The spawn palette for a new session, Raycast-style: search or arrow-key to
  * a target and hit Enter — the same keyboard-first pattern `QuickCreatePalette`
  * established for page creation, reused here so a future mouseless-navigation
- * pass has one command-palette idiom to build on, not two. Two steps: pick a
- * target (an agent, Shell, or Global Assistant — `openAssistantSpawn` skips
- * straight here since it has nothing else to choose), then name the session.
- * Naming is always the last step, even for a one-click assistant spawn, so
- * every session gets a deliberate name.
+ * pass has one command-palette idiom to build on, not two. Pick a target (an
+ * agent, Shell, or Global Assistant — `openAssistantSpawn` skips straight past
+ * this since it has nothing else to choose), say where it runs when the drive
+ * has environments, then name the session. Naming is always the last step, even
+ * for a one-click assistant spawn, so every session gets a deliberate name.
+ *
+ * CREATING an environment is here too, on both of the steps that talk about
+ * them, and that is the whole reason it stopped being an icon button in the
+ * sidebar: the selector that offers environments as somewhere to run is the
+ * selector that should offer making one. From the target step it is reachable
+ * even in a drive with none (where the env step never renders at all); from the
+ * env step the environment just created becomes the answer to the question that
+ * step was asking.
  */
 function SpawnSessionPalette({
   open,
   driveName,
   agents,
+  envs,
+  envsLoading,
+  envsError,
+  onRetryEnvs,
   canRunSandbox,
+  canCreateEnv,
+  canCreateLocalEnv,
+  enrollment,
+  onDismissEnrollment,
+  newEnvFrom,
+  onStartNewEnv,
+  onCancelNewEnv,
+  onCreateEnv,
   pick,
   spawning,
   onOpenChange,
   onPickTarget,
+  onPickEnv,
   onSubmitName,
 }: {
   open: boolean;
   driveName: string | null;
   agents: DriveWithAgents['agents'];
+  /**
+   * The drive's environments. EMPTY IS THE COMMON CASE and it removes the step
+   * entirely — a drive that has never made one never sees a question about it.
+   *
+   * Always read together with `envsLoading`: an empty array on its own does not
+   * mean "this drive has none".
+   */
+  envs: DriveEnvDTO[];
+  /**
+   * Whether that listing is still in flight. The step machine WAITS on this
+   * rather than treating a not-yet-arrived listing as an answer — see `step`.
+   */
+  envsLoading: boolean;
+  /**
+   * Whether that listing FAILED. The third fact `[]` collapses, and the one
+   * that survives after `envsLoading` goes false — so it needs its own step
+   * for the same reason loading did.
+   */
+  envsError: unknown;
+  onRetryEnvs: () => void;
   /**
    * Whether the requester can actually run this drive's sandbox (the
    * actor-aware server verdict: kill switch + the payer's tier + the
@@ -202,13 +537,70 @@ function SpawnSessionPalette({
    * naming step.
    */
   canRunSandbox: boolean;
+  /** Whether to offer creating one at all — drive OWNER/ADMIN, on a live drive. */
+  canCreateEnv: boolean;
+  /** Whether the create step may offer "This computer" — `canCreateEnv` AND the deployment flag. Off ⇒ no choice is rendered at all. */
+  canCreateLocalEnv: boolean;
+  /** A just-created LOCAL env's one-time code, shown until dismissed; pre-empts every other step. */
+  enrollment: PendingEnrollment | null;
+  onDismissEnrollment: () => void;
+  /**
+   * Which step asked to create an environment, or null when none did. Doubles
+   * as the create step's on-screen flag and its return address.
+   */
+  newEnvFrom: 'target' | 'env' | null;
+  onStartNewEnv: (from: 'target' | 'env') => void;
+  onCancelNewEnv: () => void;
+  onCreateEnv: (input: NewEnvironmentInput) => Promise<void>;
   pick: SpawnPick | null;
   spawning: boolean;
   onOpenChange: (open: boolean) => void;
   onPickTarget: (pick: SpawnPick) => void;
+  /** `null` is the ephemeral default — a real answer, not a cleared one. */
+  onPickEnv: (envId: string | null) => void;
   onSubmitName: (name: string) => void;
 }) {
   const [name, setName] = useState('');
+  // The environment's name, kept apart from the session's: the create step can
+  // be refused (a name already taken) and hold its text while the session name
+  // below is still blank, and neither must ever prefill the other.
+  const [envName, setEnvName] = useState('');
+  // The substrate choice and the machine label, reset with the step like the
+  // name. Cloud is the default every time; nothing remembers "local".
+  const [envSubstrate, setEnvSubstrate] = useState<'sprite' | 'local'>('sprite');
+  const [envLabel, setEnvLabel] = useState('');
+  const [creatingEnv, setCreatingEnv] = useState(false);
+  const createEnvInputId = useId();
+  const substrateGroupId = useId();
+  /**
+   * WHICH ATTEMPT AT CREATING ONE the pending request belongs to.
+   *
+   * `creatingEnv` is what disables this form while its POST is out, and a
+   * settling request clears it — but the request that settles is not
+   * necessarily the one on screen. Abandon a create (Escape), open another, and
+   * start its request: the FIRST one landing would clear the second's loading
+   * state and hand back an enabled button over a POST still in flight, which is
+   * a second, non-idempotent create one keystroke away.
+   *
+   * Bumped whenever the create step changes, so a late `finally` can tell
+   * whether the attempt it belongs to is still the one being shown.
+   */
+  const createAttempt = useRef(0);
+
+  // The repo rule for a surface holding text the user typed, and here it is a
+  // REGRESSION GUARD as much as a convention: this form used to be
+  // `DriveEnvNameDialog`, which registered, and moving it into the palette
+  // would otherwise have quietly dropped the protection on the way. A
+  // background revalidation or an auth refresh landing mid-type must not tear
+  // down what someone is halfway through naming.
+  useEditingSession(`spawn-new-env-${createEnvInputId}`, newEnvFrom !== null, 'form', {
+    componentName: 'SpawnSessionPalette',
+  });
+  // The code step too: it is not typed text, but it IS the one rendering of a
+  // credential, and a refresh tearing it down would be the same loss.
+  useEditingSession(`spawn-enrollment-${createEnvInputId}`, enrollment !== null, 'form', {
+    componentName: 'SpawnSessionPalette',
+  });
 
   // Blank by default every time a new naming step starts — a stale typed
   // value from resolving one spawn must never prefill the next.
@@ -216,22 +608,356 @@ function SpawnSessionPalette({
     if (open) setName('');
   }, [open, pick]);
 
+  // Cleared when the create step OPENS, not when it closes: a 409 keeps the
+  // step open with what the user typed, so only a fresh opening may blank it.
+  useEffect(() => {
+    // Every change of step — opened, cancelled, closed with the palette —
+    // retires whatever attempt was outstanding.
+    createAttempt.current += 1;
+    if (newEnvFrom === null) return;
+    setEnvName('');
+    setEnvSubstrate('sprite');
+    setEnvLabel('');
+    // `creatingEnv` too, and for a reason worth naming: a create still in
+    // flight when the palette was closed never runs its `finally` against a
+    // visible form, so without this the next create step would open with its
+    // button already reading "Creating…" and disabled forever.
+    setCreatingEnv(false);
+  }, [newEnvFrom]);
+
+  // WHICH OF THE FOUR STEPS IS ON SCREEN, decided in one place rather than by
+  // ternaries that could disagree. The environment step exists only when there
+  // is something to choose between: no environments in the drive means
+  // `pick.envId` is never asked for and the flow is the original two steps.
+  //
+  // `'pending'` is the step that stops a race, and it is not cosmetic. The
+  // listing is `[]` while it is still in flight, so a step machine reading only
+  // `envs.length` treats "not answered yet" as "this drive has none" — and the
+  // two failure modes that follows are both silent. A fast pick lands straight
+  // on the name step and spawns with `envId: null`, quietly ephemeral in a
+  // drive that HAS environments; or the listing arrives while the user is
+  // already typing a name, the step recomputes to `'env'`, and the name form is
+  // replaced mid-keystroke (with `setName('')` wiping what they wrote). Both
+  // are likeliest from a cold cache — opening the palette from a header that
+  // never rendered the sidebar's environment rows and so never warmed the key.
+  //
+  // Waiting is therefore the only honest answer while the question is open. It
+  // costs a beat exactly once per drive, and never once the SWR key is warm.
+  //
+  // `'error'` is the same argument one step further. A FAILED listing also
+  // leaves `envs` at `[]`, and unlike loading it never resolves on its own —
+  // so without its own step the palette would sail past a question it could
+  // not ask and spawn ephemerally into a drive whose environments it simply
+  // failed to read. That is the silent-wrong-answer case again, just reached
+  // by a different route.
+  //
+  // `'new-env'` PRE-EMPTS all of them, because it is a question asked ON TOP of
+  // whichever step asked it — the target step and the env step both open it,
+  // and `newEnvFrom` is what each of them returns to.
+  //
+  // `'enrollment'` pre-empts even that: it is the one-time code of a local env
+  // that was just created, and it is shown wherever the flow is — or is not,
+  // since a create can land after the palette closed.
+  const step: 'target' | 'pending' | 'error' | 'env' | 'name' | 'new-env' | 'enrollment' =
+    enrollment !== null
+      ? 'enrollment'
+      : newEnvFrom !== null
+      ? 'new-env'
+      : pick === null
+        ? 'target'
+        : pick.envId !== undefined
+          ? 'name'
+          : envsLoading
+            ? 'pending'
+            : envsError != null
+              ? 'error'
+              : envs.length > 0
+                ? 'env'
+                : 'name';
+  const chosenEnv = pick?.envId ? (envs.find((env) => env.id === pick.envId) ?? null) : null;
+
+  // The picked agent's own default env (a PREFERENCE from its Settings
+  // screen, set there via PageAgentSettingsTab), when it still exists in this
+  // drive's listing. This only ever PRE-HIGHLIGHTS the 'env' step below — it
+  // never sets `pick.envId` itself, so "New sandbox" and every other
+  // environment stay one arrow-key away, fully overridable. A stale default
+  // (the env was deleted after being assigned) simply fails to match here and
+  // the list renders in its ordinary order — no error state needed.
+  const defaultEnv = pick?.agentPageId
+    ? (envs.find((env) => env.id === agents.find((agent) => agent.id === pick.agentPageId)?.defaultEnvId) ?? null)
+    : null;
+  const otherEnvs = defaultEnv ? envs.filter((env) => env.id !== defaultEnv.id) : envs;
+
   return (
     <CommandDialog
       open={open}
       onOpenChange={onOpenChange}
-      title={pick ? 'Name your session' : 'New session'}
+      title={
+        step === 'enrollment'
+          ? `Enrol ${enrollment?.machineLabel ?? 'your computer'}`
+          : step === 'new-env'
+          ? 'New environment'
+          : step === 'target'
+            ? 'New session'
+            : step === 'env' || step === 'pending' || step === 'error'
+              ? 'Where should it run?'
+              : 'Name your session'
+      }
       description={
-        pick
-          ? `Leave blank to use "${pick.label}"`
-          : driveName
-            ? `Choose an agent to start a session with in ${driveName}`
-            : 'Choose an agent to start a session with'
+        step === 'enrollment'
+          ? 'Run these on the computer to connect it. The code is shown here once; a new one is a menu away if you lose it.'
+          : step === 'new-env'
+          ? `A persistent machine ${driveName ? `${driveName}'s` : 'this drive’s'} sessions can run inside, sharing one filesystem that survives every session that ends. Name it for what it is for — “dev”, “staging”, “data-import”.`
+        : step === 'name'
+          ? chosenEnv
+            ? `In ${chosenEnv.name} · leave blank to use "${pick?.label ?? 'this session'}"`
+            : `Leave blank to use "${pick?.label ?? 'this session'}"`
+          : step === 'pending'
+            ? 'Checking this drive for environments…'
+            : step === 'error'
+              ? 'This drive’s environments could not be loaded.'
+            : step === 'env'
+              ? 'A session in an environment shares that environment’s files, and they stay there when the session ends.'
+              : driveName
+                ? `Choose an agent to start a session with in ${driveName}`
+                : 'Choose an agent to start a session with'
       }
       showCloseButton={false}
-      className="max-w-[420px]"
+      className={step === 'enrollment' ? 'max-w-[560px]' : 'max-w-[420px]'}
     >
-      {pick ? (
+      {step === 'enrollment' && enrollment ? (
+        <div className="space-y-4 p-4">
+          <LocalEnvEnrollmentPanel envName={enrollment.envName} machineLabel={enrollment.machineLabel} enrollment={enrollment.issue} />
+          <div className="flex justify-end">
+            <button
+              type="button"
+              className="rounded-md border border-input px-3 py-1.5 text-sm hover:bg-accent"
+              onClick={onDismissEnrollment}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      ) : step === 'new-env' ? (
+        /* The create form lives IN the palette rather than in a dialog over it:
+           this is one continuous keyboard flow, and a second Radix layer would
+           put two focus traps on screen at once. Cancel returns to whichever
+           step asked. */
+        <form
+          className="space-y-3 p-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const trimmed = envName.trim();
+            const trimmedLabel = envLabel.trim();
+            if (!trimmed || creatingEnv) return;
+            // Local only when it was OFFERED: a stale 'local' can never reach
+            // the request if the option is not on screen.
+            const local = canCreateLocalEnv && envSubstrate === 'local';
+            if (local && !trimmedLabel) return;
+            const attempt = createAttempt.current;
+            setCreatingEnv(true);
+            void onCreateEnv(local ? { name: trimmed, substrate: 'local', label: trimmedLabel } : { name: trimmed, substrate: 'sprite' }).finally(() => {
+              // Only the attempt still on screen may re-enable the form. An
+              // older one landing must leave the current request's POST looking
+              // exactly as in-flight as it is.
+              if (createAttempt.current === attempt) setCreatingEnv(false);
+            });
+          }}
+        >
+          <input
+            autoFocus
+            aria-label="Environment name"
+            value={envName}
+            onChange={(event) => setEnvName(event.target.value)}
+            maxLength={MAX_DRIVE_ENV_NAME_LENGTH}
+            placeholder="dev"
+            disabled={creatingEnv}
+            className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          />
+          {/* The substrate ([D-3]): a machine is a KIND of environment, chosen
+              here, not a second concept with its own flow. Rendered only when
+              the deployment offers it — with the flag off the form is exactly
+              the form it was. Native radios, so the choice is keyboard-native
+              inside the palette's focus trap. */}
+          {canCreateLocalEnv && (
+            <fieldset className="space-y-1.5" disabled={creatingEnv}>
+              <legend className="text-xs font-medium text-muted-foreground">Runs on</legend>
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name={substrateGroupId}
+                  aria-label="Cloud sandbox"
+                  className="mt-1"
+                  checked={envSubstrate === 'sprite'}
+                  onChange={() => setEnvSubstrate('sprite')}
+                />
+                <span>
+                  <span className="font-medium">Cloud sandbox</span>
+                  <span className="block text-xs text-muted-foreground">A machine PageSpace runs for this drive.</span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name={substrateGroupId}
+                  aria-label="This computer"
+                  className="mt-1"
+                  checked={envSubstrate === 'local'}
+                  onChange={() => setEnvSubstrate('local')}
+                />
+                <span>
+                  <span className="font-medium">This computer</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Your own machine, enrolled with the PageSpace CLI. You will be shown a one-time code next.
+                  </span>
+                </span>
+              </label>
+              {envSubstrate === 'local' && (
+                <input
+                  aria-label="Machine label"
+                  value={envLabel}
+                  onChange={(event) => setEnvLabel(event.target.value)}
+                  maxLength={MAX_DRIVE_ENV_LABEL_LENGTH}
+                  placeholder="Machine label, e.g. my-laptop"
+                  className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                />
+              )}
+            </fieldset>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              type="submit"
+              className="rounded-md border border-input px-3 py-1.5 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={creatingEnv || envName.trim().length === 0 || (canCreateLocalEnv && envSubstrate === 'local' && envLabel.trim().length === 0)}
+            >
+              {creatingEnv ? 'Creating…' : 'Create environment'}
+            </button>
+            <button
+              type="button"
+              className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+              onClick={onCancelNewEnv}
+              disabled={creatingEnv}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : step === 'pending' ? (
+        /* Deliberately inert — no input to focus and nothing selectable. The
+           question ("where should it run?") is already on screen; only its
+           options are missing, so this holds the user's place rather than
+           showing them a form that is about to be replaced. */
+        <div className="p-4 text-sm text-muted-foreground" role="status">
+          Looking for environments in this drive…
+        </div>
+      ) : step === 'error' ? (
+        /* Not a hard block. The user came here to start a session and may
+           genuinely want an ephemeral one — but that has to be a CHOICE they
+           make knowing the environment list is missing, not a default they
+           fall into because a request failed. Retry first, escape hatch
+           second, both spelled out. */
+        <div className="space-y-3 p-4">
+          <p className="text-sm text-muted-foreground">
+            We could not check which environments this drive has. Try again, or start a session in a
+            new sandbox of its own.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-md border border-input px-3 py-1.5 text-sm hover:bg-accent"
+              onClick={onRetryEnvs}
+              disabled={spawning}
+            >
+              Try again
+            </button>
+            <button
+              type="button"
+              className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+              onClick={() => onPickEnv(null)}
+              disabled={spawning}
+            >
+              Use a new sandbox
+            </button>
+          </div>
+        </div>
+      ) : step === 'env' ? (
+        <>
+          <CommandInput placeholder="Search environments…" autoFocus />
+          <CommandList>
+            <CommandGroup>
+              {/* Ordering decides cmdk's INITIAL highlight, not just visual
+                  position: cmdk (uncontrolled, no `value` prop threaded down
+                  from this dialog) highlights the first rendered, non-disabled
+                  item on mount — so the configured default, when there is
+                  one, must render BEFORE "New sandbox" or the advertised
+                  preselection is cosmetic and Enter still picks ephemeral
+                  (review — chatgpt-codex-connector, PR #2513). With no
+                  default, "New sandbox" leads exactly as before: it is what
+                  every session was before environments existed and what most
+                  still should be. */}
+              {defaultEnv && (
+                <CommandItem
+                  key={defaultEnv.id}
+                  value={`${defaultEnv.id}-in ${defaultEnv.name}`}
+                  disabled={spawning}
+                  onSelect={() => onPickEnv(defaultEnv.id)}
+                >
+                  <Boxes className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <span className="truncate">in {defaultEnv.name}</span>
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">Default</span>
+                </CommandItem>
+              )}
+              <CommandItem
+                value="ephemeral-New sandbox"
+                disabled={spawning}
+                onSelect={() => onPickEnv(null)}
+              >
+                <Zap className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span className="truncate">New sandbox</span>
+                <span className="ml-auto shrink-0 text-xs text-muted-foreground">Ephemeral</span>
+              </CommandItem>
+              {otherEnvs.map((env) => (
+                <CommandItem
+                  key={env.id}
+                  value={`${env.id}-in ${env.name}`}
+                  disabled={spawning}
+                  onSelect={() => onPickEnv(env.id)}
+                >
+                  {/* A LOCAL env is somebody's computer, and says so. */}
+                  {env.substrate === 'local' ? (
+                    <Laptop className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  ) : (
+                    <Boxes className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  )}
+                  <span className="truncate">in {env.name}</span>
+                  {env.substrate === 'local' && (
+                    <span className="ml-auto shrink-0 truncate text-xs text-muted-foreground">on {env.label}</span>
+                  )}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+            {/* Creating one is an answer to the question this step is asking —
+                the new environment becomes the pick and the flow goes on to
+                naming. Only shown to someone who may create one; a member sees
+                the environments they can use and nothing they cannot do. */}
+            {canCreateEnv && (
+              <>
+                <CommandSeparator />
+                <CommandGroup>
+                  <CommandItem
+                    value="new-environment-New environment"
+                    disabled={spawning}
+                    onSelect={() => onStartNewEnv('env')}
+                  >
+                    <Plus className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span className="truncate">New environment…</span>
+                  </CommandItem>
+                </CommandGroup>
+              </>
+            )}
+          </CommandList>
+        </>
+      ) : step === 'name' ? (
         <form
           className="p-3"
           onSubmit={(event) => {
@@ -249,7 +975,7 @@ function SpawnSessionPalette({
               event.preventDefault();
               onSubmitName(name);
             }}
-            placeholder={pick.label}
+            placeholder={pick?.label ?? 'Session'}
             disabled={spawning}
             className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
           />
@@ -303,6 +1029,29 @@ function SpawnSessionPalette({
                 )}
               </CommandItem>
             </CommandGroup>
+            {/* Its own group, below a separator, because it does not belong to
+                the list above it: everything there is something to start a
+                session WITH, and this is infrastructure to start sessions IN.
+                It replaced an icon button in the sidebar — a named row in the
+                selector that already offers environments is where the act
+                belongs, and it is reachable here even in a drive that has none
+                (where the env step never appears). */}
+            {canCreateEnv && (
+              <>
+                <CommandSeparator />
+                <CommandGroup>
+                  <CommandItem
+                    value="new-environment-New environment"
+                    disabled={spawning}
+                    onSelect={() => onStartNewEnv('target')}
+                  >
+                    <Boxes className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span className="truncate">New environment</span>
+                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">Setup</span>
+                  </CommandItem>
+                </CommandGroup>
+              </>
+            )}
           </CommandList>
         </>
       )}

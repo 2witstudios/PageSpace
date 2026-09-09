@@ -36,6 +36,12 @@ export interface AgentData {
   isTrashed: boolean;
   systemPrompt?: string | null;
   enabledTools?: string[] | null;
+  /**
+   * The per-agent sandbox switch, settable at BIRTH. An agent created with
+   * sandbox tools in `enabledTools` and no way to say the switch is on was born
+   * in the contradiction issue #2460 is about.
+   */
+  sandboxEnabled?: boolean;
   aiProvider?: string | null;
   aiModel?: string | null;
   createdBy?: string | null;
@@ -128,6 +134,12 @@ export const pageAgentRepository = {
       aiProvider: agent.aiProvider,
       aiModel: agent.aiModel,
       toolExposureMode: agent.toolExposureMode,
+      // Coerced rather than passed through: the column is NOT NULL with a
+      // default, but this shape is what decides whether the sandbox family is
+      // offered, and `undefined` reaching a Boolean gate is the kind of
+      // "falsy so it looked fine" that made issue #2460 invisible for a week.
+      sandboxEnabled: Boolean(agent.sandboxEnabled),
+      defaultEnvId: agent.defaultEnvId,
       isTrashed: agent.isTrashed,
     };
   },
@@ -191,6 +203,8 @@ export interface AgentDetails {
   aiProvider: string | null;
   aiModel: string | null;
   toolExposureMode: 'upfront' | 'search' | null;
+  sandboxEnabled: boolean;
+  defaultEnvId: string | null;
   isTrashed: boolean;
 }
 
@@ -205,6 +219,21 @@ export interface AgentConfigUpdate {
   includePageTree?: boolean;
   pageTreeScope?: 'children' | 'drive';
   toolExposureMode?: 'upfront' | 'search';
+  /**
+   * The per-agent sandbox switch. Writable here for the same reason it is
+   * writable from `update_agent_config` (issue #2460): a door that can store a
+   * sandbox tool allowlist but not the switch that grants it can only produce
+   * configs that mean nothing.
+   */
+  sandboxEnabled?: boolean;
+  /**
+   * The drive Environment pre-selected when spawning a new session for this
+   * agent — see `pages.defaultEnvId`'s own column comment. `null` clears a
+   * previously assigned default; the caller (the route) is responsible for
+   * proving the env exists and belongs to the agent's own drive before this
+   * ever reaches the update.
+   */
+  defaultEnvId?: string | null;
 }
 
 export interface UpdatedAgent {

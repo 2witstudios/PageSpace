@@ -485,46 +485,31 @@ describe('readMarkedStreams — what the watcher is allowed to act on', () => {
 });
 
 describe('reconcileDeadStreamRows — materializes each dead row as an interrupted message', () => {
-  // Only rows still 'streaming' may be reconciled. Drop this predicate and a stream that
-  // terminated on its own between the caller's read and here would be picked up and
-  // materialized a second time (materializeInterruptedStream's own guard makes that a no-op
-  // rather than data corruption, but this SELECT is the first line of defense).
-  it('reads only rows still marked streaming', async () => {
-    mockSelectWhere.mockResolvedValueOnce([]);
-
+  // ── IT NO LONGER READS THE ROW, AND THAT IS THE POINT ───────────────────────────────────────
+  //
+  // This used to run its own wide SELECT (channelId, conversationId, userId, parts,
+  // rawPartsCount, startedAt) and hand the result to the materializer — one of three identical
+  // copies of that query across the reap paths, each of them acting on a row that was already
+  // seconds old by the time the destructive write landed. The materializer takes an atomic reap
+  // claim now, so the read and the fence are one statement. Two cases that pinned that SELECT —
+  // its `status='streaming'` predicate, and its read-failure degradation — are deleted rather
+  // than adapted: they pinned a query that no longer exists, and the invariants they stood for
+  // moved into `claimDeadStream`, where `stream-reap-claim.test.ts` pins them.
+  it('hands each messageId straight to materializeInterruptedStream, reading nothing itself', async () => {
     await reconcileDeadStreamRows({ messageIds: ['msg-dead'] });
 
     assert({
       given: 'messageIds the caller proved dead',
-      should: 'only read rows still marked streaming — one that terminated on its own is left alone',
-      actual: selectConditions().find((c) => c.field === 'ai_stream_sessions.status')?.value,
-      expected: 'streaming',
-    });
-  });
-
-  it('hands each row it reads to materializeInterruptedStream with its full parts snapshot and startedAt', async () => {
-    const parts = [{ type: 'text', text: 'partial reply' }];
-    const startedAt = new Date('2026-07-15T00:00:00.000Z');
-    mockSelectWhere.mockResolvedValueOnce([
-      { messageId: 'msg-dead', channelId: 'page-1', conversationId: 'conv-1', userId: 'user-1', parts, startedAt },
-    ]);
-
-    await reconcileDeadStreamRows({ messageIds: ['msg-dead'] });
-
-    assert({
-      given: 'a dead row read fresh from the DB',
-      should: 'materialize it as an interrupted message rather than just wiping the session row',
-      actual: mockMaterializeInterruptedStream.mock.calls[0][0],
-      expected: { messageId: 'msg-dead', channelId: 'page-1', conversationId: 'conv-1', userId: 'user-1', parts, startedAt },
+      should: 'name them to the materializer and issue no SELECT of its own — a copy read here would be stale by the time the write ran',
+      actual: {
+        materialized: mockMaterializeInterruptedStream.mock.calls.map(([arg]) => arg),
+        ownReads: mockSelectWhere.mock.calls.length,
+      },
+      expected: { materialized: [{ messageId: 'msg-dead' }], ownReads: 0 },
     });
   });
 
   it('materializes multiple dead rows independently', async () => {
-    mockSelectWhere.mockResolvedValueOnce([
-      { messageId: 'msg-a', channelId: 'page-1', conversationId: 'conv-1', userId: 'user-1', parts: [] },
-      { messageId: 'msg-b', channelId: 'page-2', conversationId: 'conv-2', userId: 'user-2', parts: [] },
-    ]);
-
     await reconcileDeadStreamRows({ messageIds: ['msg-a', 'msg-b'] });
 
     expect(mockMaterializeInterruptedStream).toHaveBeenCalledTimes(2);
@@ -537,19 +522,7 @@ describe('reconcileDeadStreamRows — materializes each dead row as an interrupt
     expect(mockMaterializeInterruptedStream).not.toHaveBeenCalled();
   });
 
-  it('warns and does not throw when the read itself fails, reporting nothing reconciled', async () => {
-    mockSelectWhere.mockRejectedValueOnce(new Error('db down'));
-
-    await expect(reconcileDeadStreamRows({ messageIds: ['msg-dead'] })).resolves.toEqual([]);
-    expect(mockLoggerWarn).toHaveBeenCalled();
-    expect(mockMaterializeInterruptedStream).not.toHaveBeenCalled();
-  });
-
   it('returns only the messageIds materializeInterruptedStream actually succeeded on', async () => {
-    mockSelectWhere.mockResolvedValueOnce([
-      { messageId: 'msg-ok', channelId: 'page-1', conversationId: 'conv-1', userId: 'user-1', parts: [], startedAt: new Date() },
-      { messageId: 'msg-failed', channelId: 'page-1', conversationId: 'conv-2', userId: 'user-2', parts: [], startedAt: new Date() },
-    ]);
     mockMaterializeInterruptedStream
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false);
@@ -557,7 +530,7 @@ describe('reconcileDeadStreamRows — materializes each dead row as an interrupt
     const reconciled = await reconcileDeadStreamRows({ messageIds: ['msg-ok', 'msg-failed'] });
 
     assert({
-      given: 'one row that materializes successfully and one that does not',
+      given: 'one row that materializes successfully and one that does not (failed, fenced off, or unclaimable)',
       should: 'report only the successful one as reconciled — never claim a retryable ghost row was handled',
       actual: reconciled,
       expected: ['msg-ok'],

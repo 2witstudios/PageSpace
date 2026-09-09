@@ -148,6 +148,15 @@ export function allDrivesDowngradeConfirmMessage(keyName: string, driveCount: nu
 export interface KeyDriveScope {
   readonly id: string;
   readonly name: string;
+  /**
+   * The role granted on THIS drive. `null` is INHERIT — the key acts as its
+   * owner there — which is why every display below spells that out rather than
+   * leaving the column blank: "blank" reads as "unknown", and not knowing what
+   * a key could do is the whole complaint behind issue #2470.
+   */
+  readonly role: 'OWNER' | 'ADMIN' | 'MEMBER' | null;
+  readonly customRoleId: string | null;
+  readonly customRoleName: string | null;
 }
 
 export interface KeySummary {
@@ -182,11 +191,28 @@ export function describeEmptyDriveScopes(isScoped: boolean): string {
   return isScoped ? 'NO ACCESS (orphaned)' : 'all drives';
 }
 
+/**
+ * One drive scope as `name (role)`. A custom role prints by NAME, falling back
+ * to its id when the server didn't resolve one (a role deleted out from under
+ * the key) — printing a bare id would be indistinguishable from a built-in role
+ * name, and printing nothing would hide that the key is scoped by a role at all.
+ *
+ * Grant only, never effective permissions: what MEMBER resolves to depends on
+ * the drive's custom roles and each page's privacy, and that resolution lives
+ * server-side (`pagespace keys describe`). Re-deriving it here from the role
+ * string would be a second permission model that drifts from the one that
+ * actually gates requests.
+ */
+export function formatDriveScopeGrant(scope: KeyDriveScope): string {
+  if (scope.customRoleId !== null) return `${scope.name} (${scope.customRoleName ?? scope.customRoleId})`;
+  return `${scope.name} (${scope.role === null ? 'inherits your access' : scope.role.toLowerCase()})`;
+}
+
 function formatDriveScopeNames(driveScopes: readonly KeyDriveScope[], isScoped: boolean): string {
   if (driveScopes.length === 0) return describeEmptyDriveScopes(isScoped);
-  const visibleNames = driveScopes.slice(0, 3).map((drive) => drive.name);
-  const remaining = driveScopes.length - visibleNames.length;
-  return remaining > 0 ? `${visibleNames.join(', ')} +${remaining} more` : visibleNames.join(', ');
+  const visible = driveScopes.slice(0, 3).map(formatDriveScopeGrant);
+  const remaining = driveScopes.length - visible.length;
+  return remaining > 0 ? `${visible.join(', ')} +${remaining} more` : visible.join(', ');
 }
 
 /** Compact vertical blocks fit inside clack.note's bordered width better than one long row per key. */
@@ -210,7 +236,7 @@ export function keySelectOptions(keys: readonly KeySummary[], activeKeyId: strin
   return keys.map((key) => {
     const scopes =
       key.driveScopes.length > 0
-        ? key.driveScopes.map((drive) => drive.name).join(', ')
+        ? key.driveScopes.map(formatDriveScopeGrant).join(', ')
         : describeEmptyDriveScopes(key.isScoped);
     return {
       value: key.id,
@@ -226,4 +252,4 @@ export function preselectedDriveIds(key: KeySummary): readonly string[] {
 }
 
 export const NON_INTERACTIVE_KEYS_MESSAGE =
-  'pagespace keys requires an interactive terminal. Use "pagespace keys create", "pagespace keys list", "pagespace keys revoke", or "pagespace keys use" instead.';
+  'pagespace keys requires an interactive terminal. Use "pagespace keys create", "pagespace keys list", "pagespace keys describe", "pagespace keys revoke", or "pagespace keys use" instead.';

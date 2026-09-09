@@ -119,6 +119,36 @@ export const aiStreamSessions = pgTable('ai_stream_sessions', {
   // anyone holding a messageId. (The one deliberate exception, `markAbortRequestedAsOwner`, is
   // the takeover path, and it is documented at its definition.)
   abortRequestedAt: timestamp('abort_requested_at', { mode: 'date' }),
+
+  // THE REAP FENCE. Which instance is currently allowed to destroy this row's content.
+  //
+  // Reaping a dead stream is two destructive writes — settle the row to 'aborted' with
+  // `parts: []`, and DELETE the durable frame log — and until this column existed the only
+  // thing standing between them and a LIVE generation was a process-local Map
+  // (`frame-log-writer.ts`'s `writers`) plus a liveness predicate evaluated against the
+  // READING instance's clock. Both fail at N>1. The Map is empty on every instance but the
+  // generator's, so instance B's reap sails past the refusal that exists to stop it; and two
+  // machines' clocks drift, so B can compute "provably dead" for a row A is still beating on.
+  // The result is not a cosmetic race: A's frames are destroyed mid-generation, B settles the
+  // row to 'aborted', and the live stream becomes invisible to /active-streams, unjoinable,
+  // and un-Stoppable (`markAbortRequested` carries `eq(status,'streaming')`) — while it keeps
+  // calling tools and keeps billing.
+  //
+  // So the eligibility decision is moved INTO a WHERE clause that Postgres evaluates at write
+  // time: ONE clock, ONE statement, and the check and the act are the same act. See
+  // `claimDeadStream` (apps/web/src/lib/ai/core/stream-reap-claim.ts). The winner's
+  // `reap_claimed_at` value is its token, and every destructive write it then issues carries
+  // that value as a predicate — so a claim that was superseded (or a heartbeat that landed in
+  // between) makes the write match zero rows instead of landing on a live stream.
+  //
+  // NULLABLE AND SELF-EXPIRING. A crashed reaper must not wedge the row forever, so a claim
+  // older than REAP_CLAIM_TTL_MS is re-claimable by the next sweep. The row deliberately stays
+  // 'streaming' for the whole reap, which is what makes that retry possible.
+  //
+  // NOT an owner token, and a previous design that made it one was wrong: the reap only fires
+  // once the claimant has already concluded the owner is dead, so recording who the owner WAS
+  // tells the claimant nothing it did not already believe.
+  reapClaimedAt: timestamp('reap_claimed_at', { mode: 'date' }),
 }, (table) => ({
   channelStatusIdx: index('ai_stream_sessions_channel_status_idx').on(table.channelId, table.status),
   // Per-conversation in-flight lookup for the takeover guard in POST /api/ai/chat.
@@ -158,4 +188,72 @@ export const aiPendingAbortIntents = pgTable('ai_pending_abort_intents', {
   createdAt:      timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
   pk: primaryKey({ columns: [table.conversationId, table.userId] }),
+}));
+
+/**
+ * The durable, append-only frame log: the authoritative record of what a generation
+ * actually streamed.
+ *
+ * WHY THIS REPLACES `ai_stream_sessions.parts`.
+ *
+ * `parts` held a periodically-rewritten, merged, byte-capped snapshot of a SECOND, lossy
+ * copy of the stream — the `chunkToPart` projection, which forwarded four chunk types and
+ * dropped reasoning, files, sources, step boundaries and every `data-*` part the routes
+ * write straight to the writer. That was a different representation from the one the HTTP
+ * response body carried, and that fork is what every re-attach, every crash recovery, and a
+ * year of client reconciliation machinery was built on top of. Here the stored form is the
+ * raw `UIMessageChunk` frames exactly as the AI SDK emitted them, and parts are computed
+ * from them by the fold when someone needs to render or persist a message.
+ *
+ * SEQ NUMBERS FRAMES, NOT ROWS. A row covers `[from_seq, from_seq + frame_count)`. A reader
+ * holding cursor X asks
+ *   WHERE message_id = $1 AND from_seq + frame_count > $X ORDER BY from_seq
+ * and slices `X - from_seq` off the first row. Exact, and it retires the "how many raw
+ * frames does this merged snapshot already reflect" arithmetic that `raw_parts_count` /
+ * `skipReplayCount` existed to answer — where under-skipping duplicated visible text and
+ * over-skipping left a silent, permanent gap.
+ *
+ * CHEAPER THAN WHAT IT REPLACES. The old checkpoint rewrote the ENTIRE converged parts array
+ * into one jsonb column every ~1s — O(n²) in message size, with a dead tuple and TOAST churn
+ * on one hot row per write (~600 KB for a 20 KB reply). This writes each frame once (~25 KB
+ * for the same reply) into an append-only table with no updates and no dead tuples.
+ *
+ * RETENTION. Rows are deleted once the terminal assistant message is confirmed persisted —
+ * the same write-then-settle ordering `materializeInterruptedStream` already documents, and
+ * for the same reason: settling first can lose the only copy of the content. A time-based
+ * backstop sweep covers rows whose stream died before either path ran.
+ *
+ * ROLLOUT. Additive. `ai_stream_sessions.parts` and `raw_parts_count` are dropped one deploy
+ * LATER, not here: during a rolling deploy an old worker is still writing `parts` for streams
+ * it owns, and a new reader must be able to fall back to that snapshot for a stream this
+ * table knows nothing about. Expand, migrate readers, then contract.
+ */
+export const aiStreamFrames = pgTable('ai_stream_frames', {
+  messageId:  text('message_id').notNull(),
+  /**
+   * Carried solely to inherit the cascade, and it is load-bearing for exactly the reason
+   * `ai_stream_sessions.conversation_id` became a real FK: these rows hold MESSAGE CONTENT.
+   * `parts` used to survive a user deletion, which was a real GDPR leak; frames are the same
+   * content by a different name, so they must cascade the same way or this change quietly
+   * reopens the hole that migration 0250 closed.
+   *
+   * Keyed on the conversation rather than on `message_id` deliberately: the assistant
+   * placeholder row a frame's `message_id` would reference is inserted best-effort at stream
+   * start (a failed insert is tolerated and logged), so an FK there could reject the frame
+   * write itself — trading a durability hole for a durability failure. The conversation
+   * always exists by the time a generation starts.
+   */
+  conversationId: text('conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
+  /** First seq in this batch. The row covers [from_seq, from_seq + frame_count). */
+  fromSeq:    integer('from_seq').notNull(),
+  frameCount: integer('frame_count').notNull(),
+  /** Raw `UIMessageChunk`s, in seq order. Never queried into — only ever read whole. */
+  frames:     jsonb('frames').$type<unknown[]>().notNull(),
+  /** Serialized size of this batch, for the per-stream durable budget. */
+  byteSize:   integer('byte_size').notNull(),
+  createdAt:  timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.messageId, table.fromSeq] }),
+  // The retention backstop's only scan.
+  createdAtIdx: index('ai_stream_frames_created_at_idx').on(table.createdAt),
 }));

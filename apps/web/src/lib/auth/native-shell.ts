@@ -2,16 +2,24 @@
 // pull in the Node-only '@/lib/auth' barrel.
 
 /**
- * True when the request comes from the PageSpace Electron desktop shell,
- * detected by the `Electron/<version>` product token Chromium appends to the
- * shell's UA PLUS the app's own name token — `PageSpace/<version>` in packaged
- * builds (electron-builder `productName`) or `desktop/<version>` in dev
- * (package.json `name`); both are what `app.getName()` yields, and the desktop
- * app never overrides its UA. Requiring the app token keeps third-party
- * Electron browsers on the normal signin redirect; accepting either spelling
- * keeps every shipped AND dev shell covered — a false negative here would
- * reintroduce the desktop logout bounce, so the app-token check is
- * deliberately the OR of both known spellings.
+ * True when the request comes from one of the PageSpace Electron desktop
+ * shells, detected by the `Electron/<version>` product token Chromium appends
+ * to the shell's UA PLUS the app's own name token, which is whatever
+ * `app.getName()` yields and which the desktop app never overrides:
+ * `PageSpace/<version>` or `PageSpaceCoder/<version>` in packaged builds
+ * (electron-builder `productName`), or `desktop/<version>` in dev
+ * (package.json `name`). Requiring the app token keeps third-party Electron
+ * browsers on the normal signin redirect; accepting every spelling keeps every
+ * shipped AND dev shell covered — a false negative here would reintroduce the
+ * desktop logout bounce, so the app-token check is deliberately the OR of all
+ * known spellings.
+ *
+ * Two traps for anyone adding the next shell. Chromium STRIPS SPACES from the
+ * app name when it builds the UA, so productName "PageSpace Coder" ships as
+ * `PageSpaceCoder/` — the spaced spelling never appears and matches nothing.
+ * And `PageSpaceCoder/` does not contain `PageSpace/`, so a second app is not
+ * covered by the first app's token. Take the expected value from a real
+ * packaged build, not from the productName.
  *
  * Used only to relax the middleware's page-navigation signin bounce — never an
  * auth boundary. The shell navigates with cookies while its real credential
@@ -20,7 +28,9 @@
  * authenticated. A spoofed UA therefore gains nothing: the shell pages are
  * public, and every API route still validates its own credentials.
  */
+const APP_NAME_TOKENS = ['PageSpace/', 'PageSpaceCoder/', 'desktop/'];
+
 export function isElectronShell(userAgent: string | null | undefined): boolean {
   if (!userAgent || !userAgent.includes('Electron/')) return false;
-  return userAgent.includes('PageSpace/') || userAgent.includes('desktop/');
+  return APP_NAME_TOKENS.some((token) => userAgent.includes(token));
 }

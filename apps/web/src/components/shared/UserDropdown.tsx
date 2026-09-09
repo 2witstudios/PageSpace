@@ -27,6 +27,7 @@ import { isOnPrem } from '@/lib/deployment-mode';
 import useSWR from 'swr';
 import { FeedbackDialog } from './FeedbackDialog';
 import { formatCreditCount } from '@/lib/subscription/credits';
+import { TIER_PLAN_LIMITS, toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 
 const LOW_BALANCE_THRESHOLD_PCT = 15;
 
@@ -56,6 +57,13 @@ export default function UserDropdown() {
       revalidateOnFocus: false,
     }
   );
+
+  // Tier label: prefer the fresh /api/subscriptions/status value, fall back to
+  // the tier /api/auth/me already gave us so the label is right on first paint,
+  // and coerce through the canonical vocabulary (unknown/missing => 'free').
+  const tierName = TIER_PLAN_LIMITS[
+    toSubscriptionTier(subscriptionInfo?.subscriptionTier ?? user?.subscriptionTier)
+  ].name;
 
   // Derive credit balance display values
   const spendable = balance?.spendable ?? 0;
@@ -131,7 +139,7 @@ export default function UserDropdown() {
             <DropdownMenuItem onClick={() => router.push('/settings/billing')}>
               <CreditCard className="mr-2 h-4 w-4" />
               <span>
-                Billing ({subscriptionInfo?.subscriptionTier === 'free' ? 'Free' : subscriptionInfo?.subscriptionTier === 'pro' ? 'Pro' : 'Business'})
+                Billing ({tierName})
               </span>
             </DropdownMenuItem>
           )}

@@ -9,6 +9,7 @@ COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 COPY package.json bun.lock ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/lib/package.json ./packages/lib/
+COPY packages/editor/package.json ./packages/editor/
 COPY packages/sdk/package.json ./packages/sdk/
 COPY packages/cli/package.json ./packages/cli/
 COPY apps/admin/package.json ./apps/admin/
@@ -79,7 +80,7 @@ ENV SENTRY_PROJECT=$SENTRY_PROJECT
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # Build dependent packages first (db + lib must compile before web)
-RUN bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build
+RUN bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build && bun run --filter '@pagespace/editor' build
 
 # Build with development env to ensure Tailwind v4 processes correctly
 # Increased memory for Scribe.js and other heavy dependencies

@@ -28,24 +28,86 @@ import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { findSessionRecord, getSandboxHost } from './agent-workspaces-runtime';
+import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
+import { findSessionRecord, getSandboxHost, resolveSessionLiveSandboxId } from './agent-workspaces-runtime';
 
 export type ResolveSessionSandboxHandleResult =
   | { ok: true; handle: SandboxHandle }
-  /** `not_started` = the session never acquired a sandbox (or it was ended); `vanished` = it recorded one the platform no longer has. */
-  | { ok: false; reason: 'not_found' | 'not_started' | 'vanished' };
+  /**
+   * `not_started` = the session never acquired a sandbox (or it was ended);
+   * `vanished` = it recorded one the platform no longer has;
+   * `not_authorized` = the requester may reach this session but may not spend
+   * its compute (see below). All three answer the SAME on the wire — the
+   * family policy this route surface already follows — but they are distinct
+   * here so a caller can audit the one that is a denial rather than a state.
+   */
+  | { ok: false; reason: ResolveSessionSandboxHandleDenial };
 
-/** Attach (never provision) to a session's recorded Sprite. */
+/** The denial reasons, named so the routes' status/wire maps stay exhaustive by type. */
+export type ResolveSessionSandboxHandleDenial = 'not_found' | 'not_started' | 'vanished' | 'not_authorized';
+
+/**
+ * Attach (never provision) to the machine a session's work runs on.
+ *
+ * **`requesterId` is REQUIRED, and this function applies the code-execution
+ * gate itself.** `decideAgentSessionAccess` is deliberately capability-free —
+ * the session SURFACE (list, detail, panes) is free to any drive member, and
+ * every chokepoint that SPENDS COMPUTE consults `canRunCode` on its own
+ * (`ensureAgentSessionSandbox`'s authorize seam, the tool gate, the realtime
+ * shell-attach wiring). This is such a chokepoint and was missing from that
+ * list: it hands back a live handle that the files, diff and git-blob routes
+ * read AND WRITE through, and those routes gate on `checkSessionAccess` alone.
+ *
+ * That gap mattered little while the handle could only ever be a session's own
+ * ephemeral sandbox. It matters a great deal now that an env-bound session
+ * resolves the ENVIRONMENT's machine: the disk is shared by every session in
+ * the drive and outlives all of them, so an un-gated write is a write into
+ * other people's working tree, by someone the drive never granted compute to.
+ */
 export async function resolveSessionSandboxHandle(
   workspaceId: string,
+  requesterId: string,
 ): Promise<ResolveSessionSandboxHandleResult> {
   const session = await findSessionRecord(workspaceId);
   if (!session) return { ok: false, reason: 'not_found' };
-  if (session.sandboxId === null || session.spriteTornDownAt !== null) {
-    return { ok: false, reason: 'not_started' };
-  }
+  // The capability gate, asked BEFORE anything about the machine is revealed.
+  //
+  // Through `canRunCodeForSession` rather than a hand-rolled `canRunCode` call,
+  // because that helper is ALREADY the answer this session's GET returns as
+  // `sandboxEligible` — the field the client uses to disable the Shell and
+  // reattach controls for a requester who may not spend compute. Sharing it
+  // means the server cannot enforce a different rule than the UI advertises,
+  // and there is no second argument list to drift.
+  //
+  // Which is exactly what had gone wrong: `sandboxEligible`'s own docblock
+  // names the enforcement points that back it — "shells POST, realtime attach"
+  // — and these three browse routes were not among them. The UI hid the
+  // controls; nothing stopped the request.
+  const eligible = await canRunCodeForSession({
+    userId: requesterId,
+    driveId: session.driveId,
+    ownerId: session.ownerId,
+  });
+  if (!eligible) return { ok: false, reason: 'not_authorized' };
+  // An ENDED session may not touch a filesystem, and for an env-bound one that
+  // has to be said out loud. An ordinary ended session is refused by the
+  // pointer check below anyway — ending it stamps `spriteTornDownAt` — but
+  // ending an env session deliberately kills nothing, so its environment is
+  // still running and `resolveSessionLiveSandboxId` still answers with the
+  // machine's address (which is correct: `killSessionShellById` needs it to
+  // reach the PTYs that session left behind). Without this line the files,
+  // diff and git-blob routes would keep READING AND WRITING a drive's shared
+  // disk under a session the API itself reports as `'ended'`.
+  if (session.endedAt !== null) return { ok: false, reason: 'not_started' };
+  // WHICH row owns the machine is `resolveSessionLiveSandboxId`'s question: an
+  // env-bound session's own pointer is CHECK-forbidden to be anything but null,
+  // so reading it here would answer `not_started` for the session's whole life
+  // — the file browser, the diff panel and the git-blob viewer all denying a
+  // session whose environment is running.
+  const sandboxId = await resolveSessionLiveSandboxId(session);
+  if (sandboxId === null) return { ok: false, reason: 'not_started' };
   const host = await getSandboxHost();
-  const handle = await host.attach({ sandboxId: session.sandboxId }).catch(() => null);
+  const handle = await host.attach({ sandboxId }).catch(() => null);
   if (!handle) return { ok: false, reason: 'vanished' };
   return { ok: true, handle };
 }

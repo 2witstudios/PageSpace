@@ -510,9 +510,17 @@ export function computeMarginPct(realCostCents: number, chargedCents: number): n
 }
 
 // Cloud vendors route through OpenRouter; local providers use their own backends.
+// Hand-kept in sync with CLOUD_VENDOR_PROVIDERS in
+// apps/web/src/lib/ai/core/ai-providers-config.ts (admin can't import the web
+// app's module) — a vendor added there without updating here miscounts real
+// OpenRouter cost as 'estimate' in margin/revenue analytics.
 const CLOUD_VENDOR_PROVIDERS = new Set<string>([
   'openai', 'anthropic', 'google', 'xai', 'deepseek', 'qwen', 'mistral',
-  'moonshot', 'minimax', 'meta', 'bytedance', 'ai21', 'inception', 'writer',
+  'moonshot', 'minimax', 'meta', 'bytedance', 'inception', 'writer', 'zai',
+  'aion-labs', 'amazon', 'arcee-ai', 'cohere', 'dots-studio', 'ibm-granite',
+  'inclusionai', 'kwaipilot', 'liquid', 'meituan', 'nex-agi', 'nvidia',
+  'poolside', 'rekaai', 'relace', 'sakana', 'sao10k', 'stepfun', 'tencent',
+  'thedrummer', 'thinkingmachines', 'upstage', 'xiaomi',
 ]);
 
 function getBackendProvider(uiProvider: string): string {

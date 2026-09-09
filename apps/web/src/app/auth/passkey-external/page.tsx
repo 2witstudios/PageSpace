@@ -35,6 +35,7 @@ function PasskeyExternalContent() {
     runPasskeyExternalCeremony({
       deviceId: params.deviceId,
       deviceName: params.deviceName,
+      shell: params.shell,
     })
       .then((result) => {
         if (unmounted) return;

@@ -1,0 +1,2 @@
+ALTER TABLE "activity_logs" DROP CONSTRAINT "activity_logs_content_size_limit";--> statement-breakpoint
+ALTER TABLE "activity_logs" ADD CONSTRAINT "activity_logs_content_size_limit" CHECK ("activity_logs"."contentRef" IS NOT NULL OR "activity_logs"."contentSize" IS NULL OR "activity_logs"."contentSize" <= 1048576);

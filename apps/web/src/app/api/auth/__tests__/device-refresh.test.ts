@@ -186,6 +186,30 @@ describe('/api/auth/device/refresh', () => {
       expect(webToken).toBe('ps_sess_mock-session-token');
     });
 
+    // A device row is only stamped 'android' by the NATIVE sign-in routes, which
+    // append a session cookie themselves. Without this branch the WebView would
+    // keep the cookie of the session this refresh just replaced, so page
+    // navigation (which Next.js middleware gates on the cookie) would start
+    // failing on the first rotation while Bearer API calls kept working.
+    it('returns a session cookie AND a bearer token for the android platform', async () => {
+      const androidDeviceRecord = { ...mockDeviceRecord, platform: 'android' };
+      vi.mocked(validateDeviceToken).mockResolvedValue(androidDeviceRecord as never);
+
+      const request = new Request('http://localhost/api/auth/device/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validPayload),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.sessionToken).toBe('ps_sess_mock-session-token');
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][1]).toBe('ps_sess_mock-session-token');
+    });
+
     it('creates new session for mobile/desktop', async () => {
       // Arrange
       const request = new Request('http://localhost/api/auth/device/refresh', {

@@ -9,6 +9,7 @@
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
+import { assertNoContentWrite } from './page-write-guard';
 
 // Types for repository operations
 export interface AgentRecord {
@@ -25,6 +26,13 @@ export interface AgentRecord {
   includeDrivePrompt: boolean;
   includePageTree: boolean;
   pageTreeScope: 'children' | 'drive' | null;
+  /**
+   * The per-agent sandbox switch. Read here because an agent's stored tool
+   * allowlist cannot be described honestly without it: while this is false the
+   * whole sandbox family is stripped whatever `enabledTools` says (issue #2460).
+   */
+  sandboxEnabled: boolean;
+  toolExposureMode: 'upfront' | 'search';
   userScopedAccess: boolean;
   revision: number;
   stateHash?: string | null;
@@ -64,6 +72,8 @@ export const agentRepository = {
         includeDrivePrompt: pages.includeDrivePrompt,
         includePageTree: pages.includePageTree,
         pageTreeScope: pages.pageTreeScope,
+        sandboxEnabled: pages.sandboxEnabled,
+        toolExposureMode: pages.toolExposureMode,
         userScopedAccess: pages.userScopedAccess,
         revision: pages.revision,
         stateHash: pages.stateHash,
@@ -86,6 +96,8 @@ export const agentRepository = {
       visibleToGlobalAssistant: agent.visibleToGlobalAssistant ?? true,
       includeDrivePrompt: agent.includeDrivePrompt ?? false,
       includePageTree: agent.includePageTree ?? false,
+      sandboxEnabled: agent.sandboxEnabled ?? false,
+      toolExposureMode: agent.toolExposureMode ?? 'upfront',
       userScopedAccess: agent.userScopedAccess ?? false,
     };
   },
@@ -97,6 +109,8 @@ export const agentRepository = {
     agentId: string,
     config: AgentConfigUpdate
   ): Promise<void> => {
+    assertNoContentWrite(config, 'agentRepository.updateConfig');
+
     const updateData: Record<string, unknown> = {
       ...config,
       updatedAt: config.updatedAt ?? new Date(),

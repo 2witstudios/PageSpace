@@ -8,6 +8,7 @@ import { pages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
+import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { computeSandboxEligibilityByDrive, resolveEditableDriveIds } from './sandbox-eligibility-by-drive';
@@ -30,6 +31,7 @@ interface AgentSummary {
   enabledTools?: string[];
   enabledToolsCount?: number;
   hasSystemPrompt: boolean;
+  defaultEnvId?: string | null;
 }
 
 /**
@@ -129,7 +131,10 @@ export async function GET(request: Request) {
       agents: AgentSummary[];
       /** Whether THIS REQUESTER can use the sandbox in this drive (payer tier + actor edit access + kill switch). */
       sandboxEligible: boolean;
+      /** The deployment's `LOCAL_ENVS_ENABLED` — how the create step learns whether to offer "This computer". */
+      localEnvsEnabled: boolean;
     }[] = [];
+    const localEnvsEnabled = isLocalEnvsEnabled();
     const allAccessibleAgents: AgentSummary[] = [];
 
     // Get agents from each accessible drive (filtered by MCP scope)
@@ -147,7 +152,8 @@ export async function GET(request: Request) {
           aiModel: pages.aiModel,
           content: pages.content,
           createdAt: pages.createdAt,
-          updatedAt: pages.updatedAt
+          updatedAt: pages.updatedAt,
+          defaultEnvId: pages.defaultEnvId
         })
         .from(pages)
         .where(and(
@@ -177,6 +183,7 @@ export async function GET(request: Request) {
             driveName: drive.name,
             driveSlug: drive.slug,
             hasSystemPrompt: !!agent.systemPrompt,
+            defaultEnvId: agent.defaultEnvId,
           };
 
           // Add system prompt if requested
@@ -209,6 +216,7 @@ export async function GET(request: Request) {
           agentCount: accessibleAgentsInDrive.length,
           agents: accessibleAgentsInDrive,
           sandboxEligible: sandboxEligibleByDrive.get(drive.id) ?? false,
+          localEnvsEnabled,
         });
       }
     }

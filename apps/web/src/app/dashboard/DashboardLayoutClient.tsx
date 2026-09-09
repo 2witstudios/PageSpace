@@ -5,9 +5,9 @@ import Layout from "@/components/layout/Layout";
 import { PushNotificationManager } from "@/components/PushNotificationManager";
 import { PushActionHandler } from "@/components/PushActionHandler";
 import QuickCreatePalette from "@/components/create/QuickCreatePalette";
+import { OnboardingGate } from "@/components/onboarding/OnboardingGate";
 import { useHotkeyPreferences } from "@/hooks/useHotkeyPreferences";
 import { useDesktopExchangeHandler } from "@/hooks/useDesktopExchangeHandler";
-import { NonceProvider } from "@/contexts/NonceContext";
 
 // Routes that render full-page content instead of CenterPanel
 const FULL_PAGE_ROUTES = [
@@ -23,7 +23,7 @@ const FULL_PAGE_ROUTES = [
   '/dashboard/trash',
 ];
 
-export default function DashboardLayoutClient({ children, nonce }: { children: React.ReactNode; nonce?: string }) {
+export default function DashboardLayoutClient({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   useHotkeyPreferences();
@@ -37,11 +37,12 @@ export default function DashboardLayoutClient({ children, nonce }: { children: R
 
 
   return (
-    <NonceProvider nonce={nonce}>
+    <>
       <PushNotificationManager />
       <PushActionHandler />
       <QuickCreatePalette />
+      <OnboardingGate />
       {isFullPageRoute ? <Layout>{children}</Layout> : <Layout />}
-    </NonceProvider>
+    </>
   );
 }

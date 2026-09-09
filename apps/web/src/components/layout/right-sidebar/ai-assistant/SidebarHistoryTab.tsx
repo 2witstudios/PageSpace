@@ -239,7 +239,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
     setLoadingMore(true);
     try {
       const response = await fetchWithAuth(
-        `/api/ai/global?paginated=true&limit=30&cursor=${nextCursor}&direction=before`
+        `/api/ai/global?paginated=true&limit=30&cursor=${encodeURIComponent(nextCursor)}`
       );
       if (response.ok) {
         const data = await response.json();
@@ -331,7 +331,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
             onClick={() => handleConversationClick(conversation.id)}
             className={`py-1 px-3 cursor-pointer hover:bg-accent/50 transition-colors relative ${
               conversation.id === activeConversationId
-                ? 'bg-accent/50 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-primary'
+                ? 'bg-primary-soft before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-primary'
                 : ''
             }`}
           >

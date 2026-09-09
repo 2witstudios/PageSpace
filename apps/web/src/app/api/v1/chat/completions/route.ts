@@ -23,7 +23,7 @@ import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { sanitizeMessagesForModel, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { filterToolsForDispatchCredentials, filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
@@ -36,6 +36,7 @@ import { buildToolSummaryEvent } from '@/lib/ai/openai-api/build-tool-summary-ev
 import { validateConversationAccess } from '@/lib/ai/openai-api/v1-conversations';
 import { extractToolCallsFromSteps } from '@/lib/ai/openai-api/extract-tool-calls-from-steps';
 import { resolveHoldDisposition } from '@/lib/ai/openai-api/resolve-hold-disposition';
+import { describeErrorCause } from '@/lib/ai/openai-api/describe-error-cause';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
@@ -49,6 +50,7 @@ import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
+import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 
 export const maxDuration = 300;
 
@@ -317,12 +319,12 @@ export async function POST(request: Request): Promise<Response> {
       // Tier strips only COMPUTE tools; the chat-only session family stays
       // available to free payers (sessions/chat are free on every plan).
       filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
-      // This route authenticates via MCP/API credentials, never a browser
-      // session cookie — spawn_session/send_session dispatch by forwarding
-      // the caller's cookie and could only ever refuse here, so the
-      // dispatch-dependent pair is stripped (same posture as non-interactive
-      // workflow runs; codex round 8).
-      filteredTools = filterToolsForDispatchCredentials(filteredTools, false) as ToolSet;
+      // spawn_session/send_session used to be stripped here: this route
+      // authenticates via MCP/API credentials, never a browser session cookie,
+      // and dispatch worked by forwarding that cookie — so the pair could only
+      // ever refuse (codex round 8). Dispatch signs its own hop now, so an SDK,
+      // CLI or Claude-Code caller on an API key can drive a worker like any
+      // other client, and the token's drive ceiling rides the signed payload.
       const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
       filteredTools = exposure.tools;
       toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
@@ -359,12 +361,12 @@ export async function POST(request: Request): Promise<Response> {
       // Tier strips only COMPUTE tools; the chat-only session family stays
       // available to free payers (sessions/chat are free on every plan).
       filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
-      // This route authenticates via MCP/API credentials, never a browser
-      // session cookie — spawn_session/send_session dispatch by forwarding
-      // the caller's cookie and could only ever refuse here, so the
-      // dispatch-dependent pair is stripped (same posture as non-interactive
-      // workflow runs; codex round 8).
-      filteredTools = filterToolsForDispatchCredentials(filteredTools, false) as ToolSet;
+      // spawn_session/send_session used to be stripped here: this route
+      // authenticates via MCP/API credentials, never a browser session cookie,
+      // and dispatch worked by forwarding that cookie — so the pair could only
+      // ever refuse (codex round 8). Dispatch signs its own hop now, so an SDK,
+      // CLI or Claude-Code caller on an API key can drive a worker like any
+      // other client, and the token's drive ceiling rides the signed payload.
       const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
       filteredTools = exposure.tools;
       toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
@@ -393,6 +395,28 @@ export async function POST(request: Request): Promise<Response> {
     // 8. Build message context and save new user message
     const isThreadMode = incomingConversationId !== undefined;
     const conversationId = isThreadMode ? incomingConversationId : createId();
+
+    // `conversation_id` IS the persistence switch, and its absence means the
+    // caller opted out. The public contract is explicit — "Each call is
+    // stateless by default: you send the messages, the agent replies, nothing
+    // is kept. Pass a conversation_id and the thread becomes durable"
+    // (apps/marketing/src/app/docs/features/agent-api/page.tsx) — so a default
+    // call must persist NOTHING, and this route was trying to save both sides
+    // of it anyway. `messages.conversationId` is NOT NULL with an FK to
+    // `conversations.id`, and the minted id has no row, so every one of those
+    // saves died 23503 in setup and 500'd the request before streaming (#2414).
+    //
+    // Creating the row instead would have "fixed" the 500 by making the
+    // stateless path durable: prompts a caller deliberately left unthreaded
+    // would land in the agent's history, visible in the app. That is the wrong
+    // half of the contract to change. Skipping the writes honours it and
+    // removes the FK violation at the same time.
+    //
+    // The id itself lives on as an in-request correlation key — tool
+    // attribution (`aiConversationId`) and the usage row both take it, and
+    // neither column carries an FK — so nothing downstream needs a real row.
+    const persistConversation = isThreadMode;
+
     const userMessage = messages[messages.length - 1];
 
     let inferenceMessages = messages;
@@ -450,7 +474,7 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const userMessageId = userMessage.id;
-    if (userMessage && userMessage.role === 'user') {
+    if (persistConversation && userMessage && userMessage.role === 'user') {
       await messageRepository.savePageMessage({
         messageId: userMessageId,
         pageId,
@@ -532,7 +556,10 @@ export async function POST(request: Request): Promise<Response> {
       const assistantId = createId();
       const extracted = extractToolCallsFromSteps(steps ?? []);
       const hasContent = text !== undefined || extracted.toolCalls.length > 0;
-      if (hasContent) {
+      // Both halves of the exchange follow the one switch: a stateless call
+      // keeps the reply no more than it keeps the prompt. The billing that
+      // follows is unconditional — an unpersisted turn is still real spend.
+      if (persistConversation && hasContent) {
         await messageRepository.savePageMessage({
           messageId: assistantId,
           pageId,
@@ -550,7 +577,7 @@ export async function POST(request: Request): Promise<Response> {
             },
           }),
         }).catch((err: unknown) => {
-          loggers.ai.error('OpenAI API: failed to save assistant message', err as Error);
+          loggers.ai.error('OpenAI API: failed to save assistant message', err as Error, describeErrorCause(err));
         });
       }
 
@@ -586,6 +613,10 @@ export async function POST(request: Request): Promise<Response> {
       messages: compactedModelMessages,
       tools: finalTools,
       stopWhen: stopConditions,
+      // Per-step cap: history is prepared once, but this loop runs many model
+      // calls, so one run's oversized tool payloads would otherwise accumulate
+      // for its whole duration (#2461 — see cap-step-tool-payloads.ts).
+      prepareStep: ({ messages: stepMessages }) => ({ messages: capStepToolPayloads(stepMessages) }),
       // Aborts when the consumer closes the connection (see abortController above).
       abortSignal: abortController.signal,
       experimental_context: {
@@ -750,7 +781,13 @@ export async function POST(request: Request): Promise<Response> {
   } catch (setupError) {
     // Pre-stream failure (capabilities / convertToModelMessages / persistence). No provider
     // tokens were billed; the finally frees the hold. Return 500 like the in-app chat route.
-    loggers.ai.error('OpenAI API: request setup failed before streaming', setupError as Error, { pageId });
+    // ...with the driver's own diagnostics, not just Drizzle's `Failed query:`
+    // wrapper — a constraint violation should name its constraint in the log
+    // rather than requiring the schema to be read by hand (#2414).
+    loggers.ai.error('OpenAI API: request setup failed before streaming', setupError as Error, {
+      pageId,
+      ...describeErrorCause(setupError),
+    });
     return NextResponse.json({ error: 'Failed to process chat request. Please try again.' }, { status: 500 });
   } finally {
     // Setup-phase disposition is always 'release' (resolveHoldDisposition); only act when the

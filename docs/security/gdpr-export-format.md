@@ -20,7 +20,7 @@ out-of-band knowledge.
 
 ```json
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "1.1.0",
   "generator": "PageSpace GDPR export",
   "exportedAt": "2026-06-24T00:00:00.000Z",
   "format": "native",
@@ -39,9 +39,24 @@ out-of-band knowledge.
 Per-category JSON files: `profile.json`, `drives.json`, `pages.json`,
 `messages.json`, `files-metadata.json`, `activity.json`, `system-logs.json`,
 `api-metrics.json`, `error-logs.json`, `ai-usage.json`, `tasks.json`,
-`sessions.json`, `notifications.json`, `display-preferences.json`, and
-`personalization.json` (only when the user has personalization). Shapes are
-the `*Export` interfaces in
+`sessions.json`, `notifications.json`, `display-preferences.json`,
+`settings.json`, `agent-workspaces.json`, `stream-state.json`,
+`personalization-candidates.json`, `content-tags.json`, and
+`personalization.json` (only when the user has personalization).
+
+This list is a hand-maintained copy of `buildNativeExportFiles`, and it had
+drifted: four categories added by earlier work (`settings`, `agent-workspaces`,
+`stream-state`, `personalization-candidates`) were missing from it, so a
+recipient reading this doc did not know they existed. The authoritative list is
+the function; `gdpr-export-coverage.test.ts` asserts that every registered
+category actually ships a file, which is the guard this prose does not have.
+
+`content-tags.json` carries the tags the subject APPLIED — the act of
+classification, with the tag's name joined in and, for an anchored tag, the
+passage they selected. The tag VOCABULARY itself belongs to the drive rather
+than the person and is not exported.
+
+Shapes are the `*Export` interfaces in
 `packages/lib/src/compliance/export/gdpr-export.ts`. `system-logs.json`,
 `api-metrics.json`, and `error-logs.json` cover rows in the monitoring tables
 keyed to the user's (nullable, non-FK) `userId` — a deliberately

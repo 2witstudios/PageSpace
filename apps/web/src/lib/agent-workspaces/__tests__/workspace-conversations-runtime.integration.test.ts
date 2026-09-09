@@ -32,7 +32,8 @@ import { eq, sql } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { factories } from '@pagespace/db/test/factories';
-import { listAllConversationsPaginated, decodeCursor } from '../workspace-conversations-runtime';
+import { listAllConversationsPaginated } from '../workspace-conversations-runtime';
+import { decodeCursor } from '@/lib/conversations/conversation-recency';
 import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;

@@ -136,4 +136,56 @@ test.describe('chat e2e harness smoke', () => {
     expect((await mockStreams(request)).open).toBe(0);
 
   });
+
+  // THE HEADLINE CLAIM OF THE CLIENT-DETACH CHANGE, in a real browser.
+  //
+  // "A user cannot send a message, open another chat, send a second one, and trust the first
+  // completes" was the bug. Every surface passed a constant `useChat` id, so ONE AI SDK `Chat`
+  // served every conversation on it — and a `Chat` cannot consume two response bodies at once.
+  // The old client therefore called `stop()` on the first read for every cross-conversation
+  // send, and refused the second outright ("The previous response is still wrapping up") when
+  // the status would not settle in 1.5s.
+  //
+  // `held` mode is what makes this deterministic: both generations stay open until released, so
+  // "two at once" is an assertion about the mock's own count rather than about timing.
+  test('a second send while the first is still generating: both stream, neither is stopped', async ({
+    browser,
+    baseURL,
+    request,
+  }) => {
+    await setStreamConfig(request, { mode: 'held' });
+    const user = await seedUser();
+    const agentA = await createAgentPage(user.driveId, user.userId);
+    const agentB = await createAgentPage(user.driveId, user.userId);
+
+    const page = await authedPage(browser, user.sessionToken, baseURL!);
+
+    await gotoChatPage(page, user.driveId, agentA);
+    await sendChatMessage(page.getByTestId('session-chat'), 'first question');
+    await expect
+      .poll(() => mockStreams(request).then((s) => s.held), { timeout: 30_000 })
+      .toBe(1);
+
+    // Straight to the other conversation and send again — no settle wait, and the composer
+    // must accept it rather than refusing.
+    await gotoChatPage(page, user.driveId, agentB);
+    await sendChatMessage(page.getByTestId('session-chat'), 'second question');
+
+    // TWO generations live at the same time. Under the old design the first was stopped to
+    // make room for this one, so this count could never reach 2.
+    await expect
+      .poll(() => mockStreams(request).then((s) => s.held), { timeout: 30_000 })
+      .toBe(2);
+
+    // And the first is still going after the surface that started it was unmounted by the
+    // navigation — "send a message and leave", which is what moving the subscription out of
+    // the component tree buys.
+    await gotoChatPage(page, user.driveId, agentA);
+    await expect(page.getByTestId('chat-stop')).toBeVisible();
+
+    await releaseStreams(request);
+    await expect
+      .poll(() => mockStreams(request).then((s) => s.open), { timeout: 30_000 })
+      .toBe(0);
+  });
 });

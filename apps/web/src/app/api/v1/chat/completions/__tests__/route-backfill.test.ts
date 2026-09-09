@@ -99,7 +99,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 vi.mock('@/lib/ai/core/provider-factory', () => ({
-  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.4-nano' }),
   isProviderError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r && 'status' in r),
 }));
 
@@ -123,7 +123,7 @@ vi.mock('@/lib/ai/core/ai-tools', () => ({
 
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
-  filterToolsForDispatchCredentials: vi.fn((tools: unknown) => tools),
+  filterToolsForEphemeralWorkspace: vi.fn((tools: unknown) => tools),
   filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn((tools: unknown) => tools),
@@ -205,7 +205,7 @@ const agentPage = {
   driveId: 'drive-abc',
   systemPrompt: null,
   aiProvider: 'openai',
-  aiModel: 'openai/gpt-5.3-chat',
+  aiModel: 'openai/gpt-5.4-nano',
   includeDrivePrompt: false,
 };
 
@@ -247,6 +247,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       editedAt: null,
       toolCalls: JSON.stringify([{ toolCallId: 'tc-1', toolName: 'Read', input: {} }]),
       toolResults: null,
+      source: null,
       status: 'complete' as const,
     }]);
 
@@ -259,8 +260,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  workspaceId: null,
-      closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+      agentPageId: null, rev: 0,
       planPageId: null,
       type: 'page',
       lastMessageAt: null,
@@ -317,6 +317,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       editedAt: null,
       toolCalls: JSON.stringify([{ toolCallId: 'tc-1', toolName: 'Read', input: {} }]),
       toolResults: null,
+      source: null,
       status: 'complete' as const,
     }]);
 
@@ -329,8 +330,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  workspaceId: null,
-      closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+      agentPageId: null, rev: 0,
       planPageId: null,
       type: 'page',
       lastMessageAt: null,
@@ -376,8 +376,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  workspaceId: null,
-      closedInWorkspaceAt: null, agentPageId: null, rev: 0,
+      agentPageId: null, rev: 0,
       planPageId: null,
       type: 'page',
       lastMessageAt: null,

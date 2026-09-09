@@ -1,6 +1,11 @@
 import { PageType } from '../utils/enums';
 import { getPageTypeConfig } from './page-types.config';
-import { parseSheetContent, SHEET_DEFAULT_ROWS, SHEET_DEFAULT_COLUMNS } from '../sheets/sheet';
+import {
+  parseSheetContent,
+  parseSheetContentSafe,
+  SHEET_DEFAULT_ROWS,
+  SHEET_DEFAULT_COLUMNS,
+} from '../sheets/sheet';
 
 export interface ValidationResult {
   valid: boolean;
@@ -32,9 +37,12 @@ function isValidSheetContent(content: string): boolean {
 
   // If content was provided but we got default empty sheet, it's invalid
   if (trimmed !== '' && isDefaultEmptySheet) {
-    // Check if it's valid JSON or SheetDoc format
+    // The magic prefix alone proves nothing — content whose TOML body is
+    // malformed carries it too, and accepting that here is what lets corrupt
+    // content reach storage and read back as an empty sheet. Require the body
+    // to actually parse.
     if (trimmed.startsWith('#%PAGESPACE_SHEETDOC')) {
-      return true; // SheetDoc format is valid
+      return parseSheetContentSafe(content).ok;
     }
 
     try {

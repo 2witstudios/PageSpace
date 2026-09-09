@@ -30,6 +30,8 @@ export interface ChatLayoutProps {
   onStop: () => void;
   /** Whether AI is currently streaming */
   isStreaming: boolean;
+  /** A Stop has been requested and has not resolved yet — see useStopStream/InputActions. */
+  isStopping?: boolean;
   /** Whether the chat is loading/initializing */
   isLoading: boolean;
   /** Whether the input is disabled */
@@ -80,6 +82,7 @@ export interface ChatLayoutProps {
     onSend: () => void;
     onStop: () => void;
     isStreaming: boolean;
+    isStopping?: boolean;
     disabled?: boolean;
     placeholder?: string;
     driveId?: string;
@@ -139,6 +142,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       onSend,
       onStop,
       isStreaming,
+      isStopping = false,
       isLoading,
       disabled = false,
       placeholder = 'Type your message...',
@@ -245,6 +249,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
           onSend,
           onStop,
           isStreaming,
+          isStopping,
           disabled: disabled || isLoading,
           placeholder,
           driveId,

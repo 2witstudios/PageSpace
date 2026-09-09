@@ -9,7 +9,7 @@ import {
   deleteMachinePath,
   verifyMachinePathsWithinScope,
 } from '../machine-fs';
-import type { SandboxHandle } from '../sandbox-host';
+import { SPRITE_SANDBOX_CAPABILITIES, type SandboxHandle } from '../sandbox-host';
 import type { RunCommandArgs, SandboxRunResult } from '../sandbox-client/types';
 import type { WriteFileEntry } from '../sandbox-client/types';
 
@@ -24,6 +24,7 @@ function makeHandle(overrides: {
   writeFiles?: (files: WriteFileEntry[]) => Promise<void>;
 }): SandboxHandle {
   return {
+    capabilities: SPRITE_SANDBOX_CAPABILITIES,
     sandboxId: 'sbx-test',
     spriteInstanceId: null,
     exec: overrides.exec ?? (async () => ({ exitCode: 0, stdout: '', stderr: '' })),
@@ -35,6 +36,17 @@ function makeHandle(overrides: {
     },
     listStreams: async () => [],
     killSession: async () => {},
+    services: {
+      create: async () => {},
+      list: async () => [],
+      get: async () => null,
+      start: async () => {},
+      stop: async () => {},
+      remove: async () => {},
+    },
+    urlInfo: async () => ({ url: null, auth: 'unknown' }),
+    setUrlAuth: async () => {},
+    powerState: async () => 'unknown' as const,
   };
 }
 

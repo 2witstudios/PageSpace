@@ -15,7 +15,8 @@ import { createTaskAssignedNotification } from '@pagespace/lib/notifications/not
 import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers, createTaskTriggerWorkflow, type TaskTriggerWorkflowResult } from '@/lib/workflows/task-trigger-helpers';
 import { checkSubTasksComplete, SUBTASKS_INCOMPLETE_STATUS } from '@/lib/tasks/completion-guard';
 import { reorderTaskPeers } from '@/lib/ai/tools/task-helpers';
-import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
+import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
+import { isNaiveISODatetime, parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
 import { decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -112,7 +113,14 @@ export async function PATCH(
       if (status === 'completed') {
         updates.completedAt = new Date();
         statusMovedToDone = !existingTask.completedAt;
-      } else if (existingTask.status === 'completed' && status !== 'completed') {
+      } else if (existingTask.completedAt) {
+        // Keyed on the STAMP, not on the old slug being the literal 'completed'.
+        // A row can arrive in a config-less list already stamped while carrying
+        // some other slug — normalizeStatusForList returns early when the
+        // destination has no vocabulary, so a cross-list move leaves 'shipped'
+        // and its timestamp intact — and testing the slug then left the stamp
+        // behind on a move to an open status: a non-done row that every
+        // `completedAt IS NOT NULL` counter still reads as finished.
         updates.completedAt = null;
       }
     }
@@ -194,8 +202,25 @@ export async function PATCH(
     updates.assigneeAgentId = assigneeAgentId || null;
   }
 
+  // Resolve the timezone once, before the due date is read: explicit body value
+  // wins, else the caller's profile timezone, else UTC. A naive
+  // "2026-02-19T19:00:00" is a wall-clock time with no meaning until it has a
+  // zone, and the trigger workflow below must schedule against the very same
+  // instant this write stores (#2404). An absolute due date needs no zone, so
+  // the profile lookup stays skipped in the common case.
+  const dueDateNeedsTimezone = typeof dueDate === 'string' && isNaiveISODatetime(dueDate);
+  const resolvedTimezone = (agentTrigger || dueDateNeedsTimezone)
+    ? await resolveTimezone(typeof timezone === 'string' ? timezone : null, userId)
+    : 'UTC';
+  // Only a string can be naive. Anything else — an epoch number, say — keeps the
+  // prior `new Date()` behaviour instead of being stringified into an Invalid
+  // Date; this route parses an unvalidated body, so that input is reachable.
+  const parsedDueDate = dueDate
+    ? (typeof dueDate === 'string' ? parseDatetimeInTimezone(dueDate, resolvedTimezone) : new Date(dueDate))
+    : null;
+
   if (dueDate !== undefined) {
-    updates.dueDate = dueDate ? new Date(dueDate) : null;
+    updates.dueDate = parsedDueDate;
   }
 
   // Validate agentTrigger shape up front (before any writes), mirroring the POST route.
@@ -217,7 +242,7 @@ export async function PATCH(
     if (triggerType !== 'due_date' && triggerType !== 'completion') {
       return NextResponse.json({ error: 'agentTrigger.triggerType must be "due_date" or "completion"' }, { status: 400 });
     }
-    const effectiveDueDate = dueDate !== undefined ? (dueDate ? new Date(dueDate) : null) : existingTask.dueDate;
+    const effectiveDueDate = dueDate !== undefined ? parsedDueDate : existingTask.dueDate;
     if (triggerType === 'due_date' && !effectiveDueDate) {
       return NextResponse.json({ error: 'Due date is required for due_date triggers' }, { status: 400 });
     }
@@ -254,6 +279,15 @@ export async function PATCH(
     [updatedTask] = await db.transaction(async (tx) => {
       // Update the task (only if there are field-level updates)
       let task: typeof taskItems.$inferSelect = existingTask;
+      // A title-only edit touches the linked PAGE, not this row — but the row's
+      // `updatedAt` is what the broadcast carries, and clients tell their own
+      // echo from a foreign one by matching that stamp. Leaving it untouched
+      // makes two tabs renaming the same task within the echo TTL broadcast the
+      // SAME stamp, so the second tab reads the first's edit as its own and
+      // drops it. A renamed task IS a changed task; stamp it.
+      if (trimmedTitle !== undefined) {
+        updates.updatedAt = new Date();
+      }
       if (Object.keys(updates).length > 0) {
         [task] = await tx.update(taskItems)
           .set(updates)
@@ -365,9 +399,6 @@ export async function PATCH(
   // Create the agent trigger workflow after the transaction commits, mirroring update_task.
   let agentTriggerResult: TaskTriggerWorkflowResult | undefined;
   if (normalizedAgentTrigger && taskListPage?.driveId) {
-    const resolvedTimezone = typeof timezone === 'string' && timezone.trim()
-      ? timezone.trim()
-      : (await getUserTimezone(userId)) || 'UTC';
     agentTriggerResult = await createTaskTriggerWorkflow({
       database: db,
       driveId: taskListPage.driveId,
@@ -382,7 +413,7 @@ export async function PATCH(
 
   // Task trigger cascades (after transaction commits)
   if (dueDate !== undefined) {
-    void syncTaskDueDateTrigger(taskId, dueDate ? new Date(dueDate) : null);
+    void syncTaskDueDateTrigger(taskId, parsedDueDate);
   }
   if (statusMovedToDone) {
     void cancelTaskDueDateTrigger(taskId, 'Task completed before due date');

@@ -99,6 +99,19 @@ describe('buildTaskItemInsert', () => {
       pageId: 'p1',
       status: 'pending',
       priority: 'medium',
+      // Explicitly null rather than absent: a seeded done-group status has to
+      // be stampable, and leaving the column off would make every caller that
+      // resolves one silently write an unstamped complete row.
+      completedAt: null,
+    });
+  });
+
+  it('carries the completedAt a caller resolved for a done-group seed', () => {
+    const at = new Date('2026-01-02T03:04:05.000Z');
+    expect(
+      buildTaskItemInsert({ pageId: 'p1', userId: 'u1', status: 'shipped', completedAt: at }),
+    ).toEqual({
+      userId: 'u1', pageId: 'p1', status: 'shipped', priority: 'medium', completedAt: at,
     });
   });
 

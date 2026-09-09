@@ -1,16 +1,24 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
-import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
-import { User, Pencil, BookOpen, Loader2, ArrowLeft, Info, Save } from 'lucide-react';
+import {
+  User,
+  Pencil,
+  BookOpen,
+  Loader2,
+  ArrowLeft,
+  Info,
+  ExternalLink,
+  FolderOpen,
+} from 'lucide-react';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 const fetcher = async (url: string) => {
@@ -21,12 +29,37 @@ const fetcher = async (url: string) => {
   return response.json();
 };
 
-interface PersonalizationData {
-  bio: string;
-  writingStyle: string;
-  rules: string;
-  enabled: boolean;
+type MemoryField = 'bio' | 'writingStyle' | 'rules';
+
+interface MemoryPageSummary {
+  field: MemoryField;
+  title: string;
+  pageId: string | null;
+  href: string | null;
+  preview: string;
+  isEmpty: boolean;
 }
+
+interface PersonalizationData {
+  enabled: boolean;
+  memoryFolderHref: string | null;
+  pages: MemoryPageSummary[];
+}
+
+const FIELD_META: Record<MemoryField, { icon: typeof User; description: string }> = {
+  bio: {
+    icon: User,
+    description: 'Your background, expertise, and how you think about problems.',
+  },
+  writingStyle: {
+    icon: Pencil,
+    description: 'How the AI should write — both replying to you and drafting as you.',
+  },
+  rules: {
+    icon: BookOpen,
+    description: 'Instructions the AI should follow in every workspace.',
+  },
+};
 
 export default function PersonalizationSettingsPage() {
   const { user, isLoading: authLoading } = useAuth();
@@ -37,68 +70,46 @@ export default function PersonalizationSettingsPage() {
     fetcher
   );
 
-  const [formState, setFormState] = useState<PersonalizationData>({
-    bio: '',
-    writingStyle: '',
-    rules: '',
-    enabled: true,
-  });
-  const [isDirty, setIsDirty] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+  const [enabled, setEnabled] = useState(true);
+  const [isTogglePending, setIsTogglePending] = useState(false);
 
-  // Redirect if not authenticated
   useEffect(() => {
     if (!authLoading && !user) {
       router.push('/auth/signin');
     }
   }, [authLoading, user, router]);
 
-  // Initialize form state from server data
   useEffect(() => {
     if (data?.personalization) {
-      setFormState(data.personalization);
-      setIsDirty(false);
+      setEnabled(data.personalization.enabled);
     }
   }, [data]);
 
-  const handleFieldChange = (field: keyof PersonalizationData, value: string | boolean) => {
-    setFormState((prev) => ({ ...prev, [field]: value }));
-    setIsDirty(true);
-  };
+  /**
+   * Only one PATCH is ever in flight.
+   *
+   * Without this, rapid toggling starts overlapping writes and the responses
+   * can settle out of order, leaving the server on the OLDER value while the
+   * switch shows the newer one — a silent disagreement about whether the
+   * profile is being injected at all.
+   */
+  const handleToggleEnabled = async (next: boolean) => {
+    if (isTogglePending) return;
 
-  const handleToggleEnabled = async (enabled: boolean) => {
-    // Update locally immediately
-    setFormState((prev) => ({ ...prev, enabled }));
+    const previous = enabled;
+    setEnabled(next);
+    setIsTogglePending(true);
 
     try {
-      await patch('/api/settings/personalization', { enabled });
-      toast.success(enabled ? 'AI personalization enabled' : 'AI personalization disabled');
-      // Update SWR cache with current formState (including unsaved edits) to prevent useEffect reset
-      mutate({ personalization: { ...formState, enabled } }, { revalidate: false });
-    } catch (error) {
-      // Revert on error
-      setFormState((prev) => ({ ...prev, enabled: !enabled }));
-      toast.error('Failed to update personalization setting');
-      console.error('Error updating personalization:', error);
-    }
-  };
-
-  const handleSave = async () => {
-    setIsSaving(true);
-    try {
-      await patch('/api/settings/personalization', {
-        bio: formState.bio,
-        writingStyle: formState.writingStyle,
-        rules: formState.rules,
-      });
-      toast.success('Personalization settings saved');
-      setIsDirty(false);
+      await patch('/api/settings/personalization', { enabled: next });
+      toast.success(next ? 'AI personalization enabled' : 'AI personalization disabled');
       mutate();
     } catch (error) {
-      toast.error('Failed to save personalization settings');
-      console.error('Error saving personalization:', error);
+      setEnabled(previous);
+      toast.error('Failed to update personalization setting');
+      console.error('Error updating personalization:', error);
     } finally {
-      setIsSaving(false);
+      setIsTogglePending(false);
     }
   };
 
@@ -109,6 +120,9 @@ export default function PersonalizationSettingsPage() {
       </div>
     );
   }
+
+  const personalization = data?.personalization;
+  const pages = personalization?.pages ?? [];
 
   return (
     <div className="container max-w-4xl mx-auto py-10 px-10 space-y-8">
@@ -127,7 +141,8 @@ export default function PersonalizationSettingsPage() {
           Personalization
         </h1>
         <p className="text-muted-foreground mt-2">
-          Customize how PageSpace AI interacts with you. This information will be included in AI conversations to provide more relevant responses.
+          What the AI knows about you lives as pages in the Memory folder of your Home drive. Edit
+          them like any other page — the AI reads whatever is there.
         </p>
       </div>
 
@@ -137,107 +152,84 @@ export default function PersonalizationSettingsPage() {
             <div>
               <CardTitle>AI Personalization</CardTitle>
               <CardDescription>
-                When enabled, your personalization settings will be included in AI system prompts.
+                When enabled, your memory pages are included in AI system prompts.
               </CardDescription>
             </div>
             <Switch
               id="personalization-enabled"
-              checked={formState.enabled}
+              checked={enabled}
+              // Belt and braces with the early return in the handler: this makes
+              // the control visibly inert while a write is in flight, and the
+              // handler guard is what actually holds if a change still lands.
+              disabled={isTogglePending}
               onCheckedChange={handleToggleEnabled}
             />
           </div>
         </CardHeader>
       </Card>
 
-      <Card className={!formState.enabled ? 'opacity-60' : ''}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <User className="h-5 w-5" />
-            About You
-          </CardTitle>
-          <CardDescription>
-            Tell the AI about yourself - your role, expertise, and background.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Textarea
-            id="bio"
-            placeholder="e.g., I'm a software engineer specializing in React and TypeScript. I work on a B2B SaaS product and often need help with complex state management and API design..."
-            value={formState.bio}
-            onChange={(e) => handleFieldChange('bio', e.target.value)}
-            disabled={!formState.enabled}
-            className="min-h-[120px] resize-y"
-          />
-        </CardContent>
-      </Card>
-
-      <Card className={!formState.enabled ? 'opacity-60' : ''}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Pencil className="h-5 w-5" />
-            Writing Style
-          </CardTitle>
-          <CardDescription>
-            Describe how you&apos;d like the AI to communicate with you.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Textarea
-            id="writingStyle"
-            placeholder="e.g., Be concise and direct. Use bullet points for lists. Provide code examples when explaining technical concepts. Avoid overly formal language..."
-            value={formState.writingStyle}
-            onChange={(e) => handleFieldChange('writingStyle', e.target.value)}
-            disabled={!formState.enabled}
-            className="min-h-[120px] resize-y"
-          />
-        </CardContent>
-      </Card>
-
-      <Card className={!formState.enabled ? 'opacity-60' : ''}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <BookOpen className="h-5 w-5" />
-            Custom Rules
-          </CardTitle>
-          <CardDescription>
-            Add any specific instructions or rules for the AI to follow.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Textarea
-            id="rules"
-            placeholder="e.g., Always suggest TypeScript solutions over JavaScript. When writing code, include error handling. Prefer functional programming patterns..."
-            value={formState.rules}
-            onChange={(e) => handleFieldChange('rules', e.target.value)}
-            disabled={!formState.enabled}
-            className="min-h-[120px] resize-y"
-          />
-        </CardContent>
-      </Card>
-
-      <div className="flex justify-end gap-4">
+      {personalization?.memoryFolderHref && (
         <Button
-          onClick={handleSave}
-          disabled={!isDirty || isSaving || !formState.enabled}
+          variant="outline"
+          onClick={() => router.push(personalization.memoryFolderHref!)}
+          className="w-full justify-start"
         >
-          {isSaving ? (
-            <>
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              Saving...
-            </>
-          ) : (
-            <>
-              <Save className="h-4 w-4 mr-2" />
-              Save Changes
-            </>
-          )}
+          <FolderOpen className="h-4 w-4 mr-2" />
+          Open Memory folder
         </Button>
+      )}
+
+      <div className={enabled ? 'space-y-4' : 'space-y-4 opacity-60'}>
+        {pages.map((page) => {
+          const Icon = FIELD_META[page.field].icon;
+
+          return (
+            <Card key={page.field}>
+              <CardHeader>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <Icon className="h-5 w-5" />
+                      {page.title}
+                    </CardTitle>
+                    <CardDescription>{FIELD_META[page.field].description}</CardDescription>
+                  </div>
+                  {page.href && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => router.push(page.href!)}
+                    >
+                      <ExternalLink className="h-4 w-4 mr-2" />
+                      Edit page
+                    </Button>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent>
+                {page.isEmpty ? (
+                  <p className="text-sm text-muted-foreground italic">
+                    {page.href
+                      ? 'Nothing here yet. Open the page to write something, or let the AI fill it in as it learns.'
+                      : 'This page has not been created yet.'}
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap line-clamp-4">
+                    {page.preview}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })}
       </div>
 
       <Alert>
         <Info className="h-4 w-4" />
         <AlertDescription>
-          <strong>Privacy Note:</strong> Your personalization data is included in AI prompts to customize responses. When using cloud AI providers, this data is sent to those services according to their privacy policies.
+          <strong>Privacy Note:</strong> Your personalization data is included in AI prompts to
+          customize responses. When using cloud AI providers, this data is sent to those services
+          according to their privacy policies.
         </AlertDescription>
       </Alert>
     </div>

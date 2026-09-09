@@ -16,6 +16,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { neutralizeDashboardLinks } from '@pagespace/lib/publish/neutralize-dashboard-links';
 import { marked } from 'marked';
 import { renderPublishedPage, renderPublishedDocument, renderPublishedCode, renderPublishedSheet } from './render-published';
+import { readSheetDocument } from '@pagespace/lib/sheets/store';
 import {
   buildPublishedKey,
   putPublishedArtifact,
@@ -178,8 +179,13 @@ async function preparePublishContent(params: {
   currentPageId: string;
   currentPath: string;
   actingUserId: string;
+  /**
+   * Mirrors `pages.siteMode`. CANVAS only — the DOCUMENT/CODE/SHEET pipelines
+   * pass an explicit stricter `cspOverride`, which wins regardless.
+   */
+  siteMode?: boolean;
 }): Promise<PreparedPublishContent> {
-  const { type, content, contentMode, driveId, subdomain, homePageId, currentPageId, currentPath, actingUserId } = params;
+  const { type, content, contentMode, driveId, subdomain, homePageId, currentPageId, currentPath, actingUserId, siteMode } = params;
 
   switch (type) {
     case PageType.CANVAS: {
@@ -188,7 +194,7 @@ async function preparePublishContent(params: {
         html: assetHtml, driveId, subdomain, homePageId, currentPageId, currentPath, db,
       });
       const { meta, html: bodyHtml } = extractAndStripOgMeta(rewrittenHtml);
-      return { meta, body: bodyHtml, render: (args) => renderPublishedPage({ html: bodyHtml, ...args }) };
+      return { meta, body: bodyHtml, render: (args) => renderPublishedPage({ html: bodyHtml, siteMode, ...args }) };
     }
     case PageType.DOCUMENT: {
       const rawHtml = contentMode === 'markdown' ? await marked.parse(content ?? '') : (content ?? '');
@@ -207,8 +213,13 @@ async function preparePublishContent(params: {
       // generics/comparisons in it, so leave it empty like SHEET's non-prose
       // content (an empty derived description, same accepted tradeoff).
       return { meta: {}, body: '', render: (args) => renderPublishedCode({ code: content ?? '', ...args }) };
-    case PageType.SHEET:
-      return { meta: {}, body: '', render: (args) => renderPublishedSheet({ serializedContent: content ?? '', ...args }) };
+    case PageType.SHEET: {
+      // From rows, with the document column as the fallback for a sheet that
+      // has not been materialised yet. Publishing `content` directly would
+      // render a blank grid for every migrated sheet.
+      const serialized = (await readSheetDocument(currentPageId)) ?? content ?? '';
+      return { meta: {}, body: '', render: (args) => renderPublishedSheet({ serializedContent: serialized, ...args }) };
+    }
     default:
       throw new PublishError(`Cannot publish page type: ${type}`, 400);
   }
@@ -229,7 +240,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // ------------------------------------------------------------------
   const page = await db.query.pages.findFirst({
     where: eq(pages.id, pageId),
-    columns: { id: true, type: true, title: true, content: true, contentMode: true, driveId: true },
+    columns: { id: true, type: true, title: true, content: true, contentMode: true, driveId: true, siteMode: true },
   });
 
   if (!page) {
@@ -308,6 +319,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     currentPageId: pageId,
     currentPath: path,
     actingUserId: userId,
+    siteMode: page.siteMode,
   });
   const { meta, body: bodyHtml } = prepared;
   const assetBaseUrl = getPublishAssetBaseUrl();
@@ -696,7 +708,7 @@ async function renderNotFoundPageHtml(params: {
         eq(pages.isTrashed, false),
         inArray(pages.type, getPublishablePageTypes()),
       ),
-      columns: { type: true, title: true, content: true, contentMode: true },
+      columns: { type: true, title: true, content: true, contentMode: true, siteMode: true },
     });
     if (!page) return null;
 
@@ -710,6 +722,7 @@ async function renderNotFoundPageHtml(params: {
       currentPageId: pageId,
       currentPath: '',
       actingUserId: ownerId,
+      siteMode: page.siteMode,
     });
     const { meta } = prepared;
     const favicon = resolveFaviconTags(meta.faviconHref, publishFaviconUrl, FAVICON_BASE_URL);

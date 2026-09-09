@@ -58,7 +58,10 @@ describe('DELETE /api/agent-workspaces/[workspaceId]/shells/[shellId]', () => {
     const response = await del();
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true, killed: true });
-    expect(mockKillShellById).toHaveBeenCalledWith(SHELL_ID);
+    // Addressed by shell AND by the acting human: the kill takes the shell's
+    // pane with it through the membership funnel, which never takes a caller's
+    // word for who is acting (#2462).
+    expect(mockKillShellById).toHaveBeenCalledWith({ shellId: SHELL_ID, actingUserId: 'user-1' });
   });
 
   it('given a shell that is already gone, should 404 — which the client treats as success', async () => {
@@ -101,5 +104,22 @@ describe('DELETE /api/agent-workspaces/[workspaceId]/shells/[shellId]', () => {
     mockKillShellById.mockResolvedValue({ ok: false, reason: 'error' });
     const response = await del();
     expect(response.status).toBe(502);
+  });
+
+  /**
+   * 502 means "upstream hiccup, try again". A substrate with no
+   * interactive-stream surface (a local environment) has no shell process and
+   * never will, so a retry can never succeed — the status has to say something
+   * a client can act on correctly.
+   */
+  it('given an environment with NO terminal support, should 409 rather than 502 — the refusal is permanent', async () => {
+    mockKillShellById.mockResolvedValue({ ok: false, reason: 'unsupported' });
+
+    const response = await del();
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual(
+      expect.objectContaining({ reason: 'unsupported', error: expect.stringContaining('does not support terminal sessions') }),
+    );
   });
 });

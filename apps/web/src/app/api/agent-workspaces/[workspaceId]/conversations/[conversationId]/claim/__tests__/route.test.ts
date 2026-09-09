@@ -87,6 +87,44 @@ describe('POST /api/agent-workspaces/[workspaceId]/conversations/[conversationId
     );
   });
 
+  it('forwards the pane the History pick was made from, as a placement preference', async () => {
+    // A claim ADMITS, and admitting places — so without this the reopened
+    // thread lands in whichever pane qualifies first rather than the one whose
+    // History the user opened.
+    const response = await POST(
+      new Request(`http://localhost/api/agent-workspaces/${SESSION_ID}/conversations/${CONVERSATION_ID}/claim`, {
+        method: 'POST',
+        body: JSON.stringify({ activeNodeId: 'node-7' }),
+      }),
+      params,
+    );
+    expect(response.status).toBe(200);
+    expect(mockClaimConversationInSession).toHaveBeenCalledWith({
+      conversationId: CONVERSATION_ID,
+      userId: AUTH_USER.userId,
+      workspaceId: SESSION_ID,
+      activeNodeId: 'node-7',
+    });
+  });
+
+  it('claims without a preference when the body carries an unusable one, rather than refusing', async () => {
+    // A preference, not an instruction: this route has never required a body,
+    // and an unusable one must not become the first way to fail a claim.
+    const response = await POST(
+      new Request(`http://localhost/api/agent-workspaces/${SESSION_ID}/conversations/${CONVERSATION_ID}/claim`, {
+        method: 'POST',
+        body: JSON.stringify({ activeNodeId: 42 }),
+      }),
+      params,
+    );
+    expect(response.status).toBe(200);
+    expect(mockClaimConversationInSession).toHaveBeenCalledWith({
+      conversationId: CONVERSATION_ID,
+      userId: AUTH_USER.userId,
+      workspaceId: SESSION_ID,
+    });
+  });
+
   it("403s + audits when the caller can no longer view a page conversation's agent — owning the conversation is not permission to use the agent (review finding — chatgpt-codex-connector)", async () => {
     mockGetConversation.mockResolvedValue({
       userId: AUTH_USER.userId,

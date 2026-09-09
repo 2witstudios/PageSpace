@@ -1,14 +1,10 @@
 'use client';
 
 import React, { createContext, useContext, ReactNode, useReducer, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
 import {
-  useChatTransport,
-  buildChatConfig,
-  GLOBAL_CHAT_ID,
   conversationIdentityReducer,
   conversationIdFrom,
   isResolving,
@@ -28,12 +24,21 @@ import { buildConversationCacheHandlers } from '@/hooks/conversationCacheSocketH
 import { useConversationSubscription } from '@/hooks/useConversationSubscription';
 import { DerivedStreamingRegistrations } from '@/components/ai/shared/DerivedStreamingRegistrations';
 import { SessionDirectoryListener } from '@/lib/realtime/session-directory-listener';
+import { WorkspaceNodesListener } from '@/lib/realtime/workspace-nodes-listener';
 
 /**
- * Global Chat Context — two tiers to minimize re-render noise:
+ * Global Chat Context — conversation identity + controls, and the app-wide listeners that
+ * must outlive every chat surface.
  *
- * 1. GlobalChatConversationContext — conversation identity + controls, rarely changes
- * 2. GlobalChatConfigContext — chatConfig (stable)
+ * NO CONFIG TIER (client detach). `GlobalChatConfigContext` published a `chatConfig` — a
+ * `DefaultChatTransport` plus the stable `useChat` id both global-mode surfaces fed into
+ * their own `useChat`. It existed because the transport had to be built ONCE and shared: a
+ * `Chat` binds its transport in its constructor and every surface passed a constant id, so
+ * rebuilding one per surface produced instances that were constructed and thrown away.
+ *
+ * There is no transport object any more. `useChatSession` sends with `fetch`, so each surface
+ * builds its own send shell from values it already has, and nothing has to be hoisted into a
+ * context to be kept singular.
  *
  * NO MESSAGE TIER (PR 5B). `initialMessages`/`isMessagesLoading` used to live here as a
  * fetched-messages slot the surfaces watched and copied into their useChat instances via
@@ -73,20 +78,11 @@ interface GlobalChatConversationContextValue {
   latestGlobalConversationAdded: ChatGlobalConversationAddedPayload | null;
 }
 
-interface GlobalChatConfigContextValue {
-  chatConfig: {
-    id: string;
-    transport: DefaultChatTransport<UIMessage>;
-    onError: (error: Error) => void;
-  } | null;
-}
-
 // ============================================
 // Contexts
 // ============================================
 
 const GlobalChatConversationContext = createContext<GlobalChatConversationContextValue | undefined>(undefined);
-const GlobalChatConfigContext = createContext<GlobalChatConfigContextValue | undefined>(undefined);
 
 // ============================================
 // Provider
@@ -280,23 +276,6 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   // cache action is idempotent by construction.
   useConversationSubscription(currentConversationId, { channelId: null, agentPageId: null });
 
-  const apiEndpoint = currentConversationId ? `/api/ai/global/${currentConversationId}/messages` : '';
-  const transport = useChatTransport(currentConversationId, apiEndpoint, channelId);
-
-  const chatConfig = useMemo(() => {
-    if (!currentConversationId || !transport) return null;
-    return buildChatConfig({
-      id: GLOBAL_CHAT_ID,
-      transport,
-      onError: (error: Error) => {
-        console.error('Global Chat Error:', error);
-        if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {
-          console.error('Authentication failed - user may need to log in again');
-        }
-      },
-    });
-  }, [currentConversationId, transport]);
-
   // Kept for API compatibility (no current callers) — routes through the
   // same synchronous IDENTITY_SET path as loadConversation/createNewConversation.
   const setCurrentConversationId = useCallback((id: string | null) => {
@@ -325,13 +304,9 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     latestGlobalConversationAdded,
   ]);
 
-  const configContextValue: GlobalChatConfigContextValue = useMemo(() => ({
-    chatConfig,
-  }), [chatConfig]);
-
   return (
     <GlobalChatConversationContext.Provider value={conversationContextValue}>
-      <GlobalChatConfigContext.Provider value={configContextValue}>
+      <>
         {/* THE app-wide editing-store streaming registration (PR 5A, leaf 5.7) — replaces five
             independent mount sites, this provider's included. Mounted here because this provider
             wraps the entire Layout, so it outlives every chat surface and covers conversations no
@@ -343,8 +318,14 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
             provider wraps the whole Layout, so one mount covers every sidebar and
             pane strip, and N mounts would mean N revalidations per event. */}
         <SessionDirectoryListener />
+        {/* THE app-wide LAYOUT listener — a sibling of the line above, not a
+            branch inside it. The directory listener owns SWR surgery on the
+            conversation listings; this one owns the node tree in
+            `useAgentWorkspaceStore`, which is not in SWR at all. One mount for
+            the same reason: N copies would be N adoptions per event. */}
+        <WorkspaceNodesListener />
         {children}
-      </GlobalChatConfigContext.Provider>
+      </>
     </GlobalChatConversationContext.Provider>
   );
 }
@@ -366,14 +347,3 @@ export function useGlobalChatConversation() {
   return context;
 }
 
-/**
- * Chat configuration.
- * Stable — only changes on conversation switch.
- */
-export function useGlobalChatConfig() {
-  const context = useContext(GlobalChatConfigContext);
-  if (!context) {
-    throw new Error('useGlobalChatConfig must be used within a GlobalChatProvider');
-  }
-  return context;
-}

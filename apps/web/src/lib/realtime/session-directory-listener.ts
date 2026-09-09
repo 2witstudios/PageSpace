@@ -8,10 +8,8 @@ import {
   forgetConversationInCache,
   revalidateWorkspaceListings,
   touchConversationInCache,
-  upsertConversationInCache,
 } from '@/components/agents/panes/workspace-conversations';
 import type { ConversationDirectoryPayload } from '@/lib/websocket/conversation-events';
-import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
 
 /**
  * `useSessionDirectoryListener` — the DIRECTORY plane (Agent-Session Single
@@ -32,19 +30,48 @@ import { conversationPageId } from '@pagespace/lib/conversations/conversation-pa
  * event. Nothing here is per-surface.
  *
  * TARGETED SURGERY WHERE THE PAYLOAD ALLOWS, REVALIDATION WHERE IT DOESN'T. A
- * `created` event carries the whole conversation, so the row is written straight
- * into the cache and the sidebar updates with no request at all. A `reopened`
- * does not (the row left the cache when it closed, and the event is id-level),
- * so it re-reads. Both are event-driven; the difference is only whether a
- * network round-trip is needed to know what to draw.
+ * `lastMessageAt` change names the one row to patch, so it is patched in place;
+ * a rename or a share flip changes what a row renders, so the listing re-reads.
+ * Both are event-driven; the difference is only whether a network round-trip is
+ * needed to know what to draw.
+ *
+ * **`created` / `deleted` RE-READ, and they used to do surgery.**
+ * Each one carried `payload.workspaceId` — "which workspace's listing does this
+ * row belong to" — and wrote (or dropped) the row in exactly that session's
+ * cache entry. That column is gone: membership is a node in
+ * `agent_workspace_nodes`, so the event names the conversation and nothing else,
+ * and there is no key left to aim a patch at. Re-reading is what the module
+ * already does whenever the payload cannot say where to write
+ * (`reopened` has always worked this way) — the same event-driven liveness at
+ * the cost of one request.
+ *
+ * That is a RESTORATION, not a regression. The surgery had already stopped
+ * happening for the case it was written for: nothing had written a non-null
+ * `workspaceId` since the membership chokepoint landed, so a worker an agent
+ * spawned reached `handleCreated` with a null and took the `return` branch —
+ * back to waiting for the 120s poll, which is the exact problem this listener
+ * exists to solve. A re-read is slower than a patch and far faster than a poll.
+ *
+ * **`closed` IS THE EXCEPTION, AND IT IS NOT NEGOTIABLE.** It was swept into the
+ * re-read group with `created`/`deleted` on the same "the payload no longer says
+ * which workspace" reasoning, and that reasoning does not hold for a REMOVAL:
+ * dropping a row needs to know the conversation, not the workspace. The listing
+ * cache can find it — a thread is a member of at most one workspace (the node
+ * table's global chat-target uniqueness), so `forgetConversationInCache` sweeps
+ * every session's row and at most one matches. Making this a re-read cost the
+ * plane its one event that needs no request at all, and put a closed thread's
+ * sidebar row back on the 120s backstop poll whenever the refetch is slow,
+ * blocked or failing. `apps/e2e/tests/18-sidebar-directory-live.spec.ts` blocks
+ * the listing GET at the network for the whole assertion window precisely so
+ * that a re-read cannot pass for a fix.
+ *
+ * The TREE — which panes a workspace draws — is a different plane and this
+ * module deliberately does not touch it: it arrives on
+ * `workspace:nodes-updated`, which `workspace-nodes-listener.ts` owns.
  *
  * DEDUPED AGAINST THE LEGACY PATH. `chat:global_conversation_added` still fires
- * in parallel during the migration window and `SidebarHistoryTab` still consumes
- * it — but into its own local list, not this SWR cache, so the two cannot
- * double-count each other. Within this cache, `upsertConversationInCache` is
- * idempotent by conversation id, so a redelivery (or a race with the
- * originating surface's own optimistic `recordMintedConversation`) merges
- * instead of prepending a second row.
+ * in parallel and `SidebarHistoryTab` still consumes it — but into its own local
+ * list, not this SWR cache, so the two cannot double-count each other.
  *
  * BEST-EFFORT, like every other broadcast. A missed directory event costs at
  * most one stale listing until the 120s backstop poll (or the next event) — the
@@ -61,43 +88,20 @@ export function useSessionDirectoryListener(): void {
   useEffect(() => {
     if (!socket) return;
 
-    const handleCreated = (payload: ConversationDirectoryPayload) => {
-      const { workspaceId, conversation } = payload;
-      // A conversation with no workspace is not in any session listing — nothing
-      // to insert it into. (Its own surfaces learn about it through their own
-      // paths; this listener owns session listings only.)
-      if (!workspaceId || !conversation) {
-        if (workspaceId) revalidateWorkspaceListings(mutate);
-        return;
-      }
-      upsertConversationInCache(mutate, workspaceId, {
-        conversationId: conversation.id,
-        // The listing's `agentPageId` IS the conversation's `contextId` for a
-        // page-anchored thread; a global-assistant thread has no agent page.
-        agentPageId: conversationPageId(conversation),
-        lastMessageAt: conversation.lastMessageAt,
-        title: conversation.title,
-        type: conversation.type,
-        contextId: conversation.contextId,
-        isShared: conversation.isShared,
-      });
-    };
+    // A thread arriving in, or leaving, a workspace changes which rows the
+    // listing holds — and the payload no longer names the workspace, so the
+    // listing has to say which. See the module doc.
+    const handleMembershipChanged = () => revalidateWorkspaceListings(mutate);
+
+    // THE ONE EVENT SERVED WITHOUT A REQUEST. A close names the row to remove
+    // and the cache already holds everything else about it, so this is a local,
+    // non-revalidating write — see the module doc for why it must stay one.
+    const handleClosed = (payload: ConversationDirectoryPayload) =>
+      forgetConversationInCache(mutate, null, payload.conversationId);
 
     const handleUpdated = (payload: ConversationDirectoryPayload) => {
       const changes = payload.changes;
       if (!changes) return;
-      // A workspace re-binding moves the row between sessions — which row lives
-      // where is exactly what this cache holds, so re-read rather than guess.
-      if (changes.workspaceId !== undefined) {
-        revalidateWorkspaceListings(mutate);
-        return;
-      }
-      // `closedInWorkspaceAt` moving is a listing membership change in either
-      // direction; the listing query owns that predicate, so re-read.
-      if (changes.closedInWorkspaceAt !== undefined) {
-        revalidateWorkspaceListings(mutate);
-        return;
-      }
       if (changes.lastMessageAt !== undefined) {
         touchConversationInCache(mutate, payload.conversationId, changes.lastMessageAt);
       }
@@ -119,21 +123,13 @@ export function useSessionDirectoryListener(): void {
       }
     };
 
-    const handleRemoved = (payload: ConversationDirectoryPayload) => {
-      if (!payload.workspaceId) return;
-      forgetConversationInCache(mutate, payload.workspaceId, payload.conversationId);
-    };
-
-    // Reopen restores a row this cache dropped, and the event is id-level — the
-    // conversation body has to come from the server.
-    const handleReopened = () => revalidateWorkspaceListings(mutate);
     const handleSessionLifecycle = () => revalidateWorkspaceListings(mutate);
 
-    socket.on(CONVERSATION_EVENTS.created, handleCreated);
+    socket.on(CONVERSATION_EVENTS.created, handleMembershipChanged);
     socket.on(CONVERSATION_EVENTS.updated, handleUpdated);
-    socket.on(CONVERSATION_EVENTS.closed, handleRemoved);
-    socket.on(CONVERSATION_EVENTS.deleted, handleRemoved);
-    socket.on(CONVERSATION_EVENTS.reopened, handleReopened);
+    socket.on(CONVERSATION_EVENTS.closed, handleClosed);
+    socket.on(CONVERSATION_EVENTS.deleted, handleMembershipChanged);
+    socket.on(CONVERSATION_EVENTS.reopened, handleMembershipChanged);
     for (const event of SESSION_LIFECYCLE_EVENTS) socket.on(event, handleSessionLifecycle);
 
     // A reconnect missed whatever was emitted while we were away, and the
@@ -143,11 +139,11 @@ export function useSessionDirectoryListener(): void {
     socket.on('connect', handleSessionLifecycle);
 
     return () => {
-      socket.off(CONVERSATION_EVENTS.created, handleCreated);
+      socket.off(CONVERSATION_EVENTS.created, handleMembershipChanged);
       socket.off(CONVERSATION_EVENTS.updated, handleUpdated);
-      socket.off(CONVERSATION_EVENTS.closed, handleRemoved);
-      socket.off(CONVERSATION_EVENTS.deleted, handleRemoved);
-      socket.off(CONVERSATION_EVENTS.reopened, handleReopened);
+      socket.off(CONVERSATION_EVENTS.closed, handleClosed);
+      socket.off(CONVERSATION_EVENTS.deleted, handleMembershipChanged);
+      socket.off(CONVERSATION_EVENTS.reopened, handleMembershipChanged);
       for (const event of SESSION_LIFECYCLE_EVENTS) socket.off(event, handleSessionLifecycle);
       socket.off('connect', handleSessionLifecycle);
     };

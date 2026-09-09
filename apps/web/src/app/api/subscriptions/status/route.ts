@@ -4,7 +4,8 @@ import { db } from '@pagespace/db/db'
 import { eq, and, inArray, desc } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
-import { getStorageConfigFromSubscription, type SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { getStorageConfigFromSubscription } from '@pagespace/lib/services/subscription-utils';
+import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 export async function GET(request: NextRequest) {
@@ -43,13 +44,14 @@ export async function GET(request: NextRequest) {
     }
 
     // Compute storage config from subscription tier
-    const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
+    // Coerce the untyped column through the canonical vocabulary (schema contract).
+    const subscriptionTier = toSubscriptionTier(user.subscriptionTier);
     const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'subscription_status', resourceId: 'self', details: { tier: subscriptionTier } });
 
     return NextResponse.json({
-      subscriptionTier: user.subscriptionTier,
+      subscriptionTier,
       stripeCustomerId: user.stripeCustomerId,
       subscription: subscription ? {
         status: subscription.status,

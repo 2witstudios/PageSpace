@@ -22,7 +22,8 @@ const { mockIsCapacitorApp, mockGetPlatform } = vi.hoisted(() => {
 });
 
 // Mock useCapacitor module
-vi.mock('../useCapacitor', () => ({
+vi.mock('@/lib/capacitor-bridge', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/capacitor-bridge')>()),
   isCapacitorApp: () => mockIsCapacitorApp(),
   getPlatform: () => mockGetPlatform(),
 }));

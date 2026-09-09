@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ChevronLeft, Shield, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock, Loader2, Star, Image as ImageIcon, FileWarning } from 'lucide-react';
 import Link from 'next/link';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
@@ -16,7 +17,7 @@ import { toast } from 'sonner';
 import { fetchWithAuth, del, patch } from '@/lib/auth/auth-fetch';
 import useSWR from 'swr';
 import { normalizeHostname, validateCustomDomain, buildDnsInstructions } from '@pagespace/lib/validators/custom-domain';
-import { selectPrimaryActiveDomain } from '@pagespace/lib/canvas/primary-host';
+import { selectPrimaryActiveDomain, isEligibleForPrimaryHost } from '@pagespace/lib/canvas/primary-host';
 import { PagePickerPopover } from '@/components/common/PagePickerPopover';
 import { PageType } from '@pagespace/lib/utils/enums';
 
@@ -27,16 +28,47 @@ interface CustomDomain {
   status: 'pending' | 'verified' | 'failed' | 'dns_failed' | 'provisioning' | 'active' | 'cert_failed';
   isPrimary: boolean;
   createdAt: string;
+  /**
+   * Platform-owned alias (e.g. pagespace.ai, or the docs/blog subdomains).
+   * Registered by a platform admin, not a customer, and excluded from
+   * primary-host selection unless explicitly flagged `isPrimary` — mirrors
+   * `getActiveDomainRecords` in apps/web/src/lib/canvas/custom-domain-mirror.ts.
+   */
+  platformOwned: boolean;
   /** Canvas page overriding this domain's root ('/'); null = use the drive-wide home page. */
   publishLandingPageId: string | null;
   /** Canvas page overriding this domain's 404.html; null = use the drive-wide 404 page. */
   publishNotFoundPageId: string | null;
+  /** What this domain routes to. null = the drive's static published site; a published_apps id = that app. */
+  publishedAppId: string | null;
+  /**
+   * What the customer must publish in DNS for a certificate stuck on Fly's
+   * `_fly-ownership` TXT check, or null when nothing is owed.
+   *
+   * Recomputed by the list route on every load rather than stored — it would be
+   * stale the moment the customer fixed their zone. Optional because it is only
+   * present for a domain still in a non-terminal cert state.
+   */
+  ownershipInstruction?: string | null;
 }
 
 interface DomainsResponse {
   domains: CustomDomain[];
   /** Maximum custom domains allowed by the drive owner's plan (0 = not available). */
   limit: number;
+}
+
+interface DriveAppOption {
+  id: string;
+  envId: string;
+  envName: string;
+  subdomain: string;
+  url: string;
+  status: string;
+}
+
+interface DriveAppsResponse {
+  apps: DriveAppOption[];
 }
 
 interface SubdomainResponse {
@@ -130,6 +162,36 @@ export default function DomainsSettingsPage() {
     drive && canManage ? `/api/drives/${driveId}/subdomain` : null,
     fetcher
   );
+
+  const { data: appsData } = useSWR<DriveAppsResponse>(
+    drive && canManage ? `/api/drives/${driveId}/published-apps` : null,
+    fetcher
+  );
+
+  const [settingTargetId, setSettingTargetId] = useState<string | null>(null);
+
+  const handleSetDomainTarget = async (domainId: string, publishedAppId: string | null) => {
+    if (settingTargetId) return;
+    setSettingTargetId(domainId);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ publishedAppId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        toast.error(data.error ?? 'Failed to update domain target');
+        return;
+      }
+      await mutateDomains();
+      toast.success(publishedAppId ? 'Domain now routes to the published app' : 'Domain now routes to the static site');
+    } catch {
+      toast.error('Failed to update domain target');
+    } finally {
+      setSettingTargetId(null);
+    }
+  };
 
   useEffect(() => {
     if (subdomainData?.subdomain) setSubdomainInput(subdomainData.subdomain);
@@ -230,7 +292,11 @@ export default function DomainsSettingsPage() {
       const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}/cert/refresh`, {
         method: 'POST',
       });
-      const data = await res.json().catch(() => ({})) as { status?: string; error?: string };
+      const data = await res.json().catch(() => ({})) as {
+        status?: string;
+        error?: string;
+        ownershipInstruction?: string | null;
+      };
       if (!res.ok) {
         if (res.status === 503) {
           toast.error('SSL provisioning is not yet configured');
@@ -242,6 +308,12 @@ export default function DomainsSettingsPage() {
       await mutateDomains();
       if (data.status === 'active') {
         toast.success('SSL certificate is active');
+      } else if (data.ownershipInstruction) {
+        // The certificate is blocked on a DNS record the customer has not
+        // published. "Check back in a few minutes" would be false here: this is
+        // the one waiting state that never resolves on its own, so it gets the
+        // actual instruction and a duration long enough to copy a record out of.
+        toast.warning(data.ownershipInstruction, { duration: 30_000 });
       } else if (data.status === 'provisioning') {
         toast.success('SSL cert provisioned — check back in a few minutes');
       } else if (data.status === 'cert_failed') {
@@ -395,6 +467,7 @@ export default function DomainsSettingsPage() {
         driveId={driveId}
         domains={domainsData?.domains ?? []}
         limit={domainsData?.limit ?? null}
+        apps={appsData?.apps ?? []}
         newDomain={newDomain}
         onNewDomainChange={setNewDomain}
         onAdd={handleAddDomain}
@@ -404,6 +477,7 @@ export default function DomainsSettingsPage() {
         onSetPrimary={handleSetPrimary}
         onSetLandingPage={handleSetDomainLandingPage}
         onSetNotFoundPage={handleSetDomainNotFoundPage}
+        onSetTarget={handleSetDomainTarget}
         isAdding={isAddingDomain}
         removingId={removingDomainId}
         verifyingId={verifyingDomainId}
@@ -411,6 +485,7 @@ export default function DomainsSettingsPage() {
         settingPrimaryId={settingPrimaryId}
         savingLandingPageId={savingLandingPageId}
         savingNotFoundPageId={savingNotFoundPageId}
+        settingTargetId={settingTargetId}
         verifyReasons={verifyReasons}
         isPlatformAdmin={isPlatformAdmin}
       />
@@ -727,6 +802,7 @@ interface CustomDomainsCardProps {
   domains: CustomDomain[];
   /** null = still loading; 0 = not available on plan; N = max allowed */
   limit: number | null;
+  apps: DriveAppOption[];
   newDomain: string;
   onNewDomainChange: (v: string) => void;
   onAdd: () => void;
@@ -736,6 +812,7 @@ interface CustomDomainsCardProps {
   onSetPrimary: (id: string) => void;
   onSetLandingPage: (domainId: string, pageId: string | null) => void;
   onSetNotFoundPage: (domainId: string, pageId: string | null) => void;
+  onSetTarget: (domainId: string, publishedAppId: string | null) => void;
   isAdding: boolean;
   removingId: string | null;
   verifyingId: string | null;
@@ -743,6 +820,7 @@ interface CustomDomainsCardProps {
   settingPrimaryId: string | null;
   savingLandingPageId: string | null;
   savingNotFoundPageId: string | null;
+  settingTargetId: string | null;
   verifyReasons: Record<string, string | undefined>;
   isPlatformAdmin: boolean;
 }
@@ -751,7 +829,7 @@ const EDGE_IPV4 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV4 ?? '';
 const EDGE_IPV6 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV6 ?? '';
 const CNAME_TARGET = process.env.NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET ?? '';
 
-function CustomDomainsCard({ driveId, domains, limit, newDomain, onNewDomainChange, onAdd, onRemove, onVerify, onRefreshCert, onSetPrimary, onSetLandingPage, onSetNotFoundPage, isAdding, removingId, verifyingId, refreshingCertId, settingPrimaryId, savingLandingPageId, savingNotFoundPageId, verifyReasons, isPlatformAdmin }: CustomDomainsCardProps) {
+function CustomDomainsCard({ driveId, domains, limit, apps, newDomain, onNewDomainChange, onAdd, onRemove, onVerify, onRefreshCert, onSetPrimary, onSetLandingPage, onSetNotFoundPage, onSetTarget, isAdding, removingId, verifyingId, refreshingCertId, settingPrimaryId, savingLandingPageId, savingNotFoundPageId, settingTargetId, verifyReasons, isPlatformAdmin }: CustomDomainsCardProps) {
   // A platform admin keeps the input usable regardless of the drive's plan tier
   // — the backend's platform-domain path skips the subscription cap, and a
   // non-platform hostname over cap still gets the server's 403 + toast.
@@ -768,7 +846,8 @@ function CustomDomainsCard({ driveId, domains, limit, newDomain, onNewDomainChan
     refreshingCertId !== null ||
     settingPrimaryId !== null ||
     savingLandingPageId !== null ||
-    savingNotFoundPageId !== null;
+    savingNotFoundPageId !== null ||
+    settingTargetId !== null;
   // The EFFECTIVE primary is what the published site actually serves — an
   // explicitly-flagged active domain, else the earliest-created active one. Badge
   // and "Make primary" key off this (not the raw `isPrimary` flag) so a migrated
@@ -780,7 +859,10 @@ function CustomDomainsCard({ driveId, domains, limit, newDomain, onNewDomainChan
     () =>
       selectPrimaryActiveDomain(
         domains
-          .filter((d) => d.status === 'active')
+          // Literally the same predicate the server's getActiveDomainRecords
+          // applies, so the badge can never disagree with what the published
+          // site canonicalizes.
+          .filter((d) => d.status === 'active' && isEligibleForPrimaryHost(d))
           .map((d) => ({ id: d.id, hostname: d.hostname, createdAt: new Date(d.createdAt), isPrimary: d.isPrimary })),
       )?.id ?? null,
     [domains],
@@ -849,18 +931,21 @@ function CustomDomainsCard({ driveId, domains, limit, newDomain, onNewDomainChan
                 key={domain.id}
                 driveId={driveId}
                 domain={domain}
+                apps={apps}
                 onRemove={onRemove}
                 onVerify={onVerify}
                 onRefreshCert={onRefreshCert}
                 onSetPrimary={onSetPrimary}
                 onSetLandingPage={onSetLandingPage}
                 onSetNotFoundPage={onSetNotFoundPage}
+                onSetTarget={onSetTarget}
                 showPrimaryControls={showPrimaryControls}
                 isEffectivePrimary={domain.id === effectivePrimaryId}
                 isRemoving={removingId === domain.id}
                 isVerifying={verifyingId === domain.id}
                 isRefreshingCert={refreshingCertId === domain.id}
                 isSettingPrimary={settingPrimaryId === domain.id}
+                isSettingTarget={settingTargetId === domain.id}
                 anyBusy={anyBusy}
                 verifyReason={verifyReasons[domain.id]}
               />
@@ -877,35 +962,41 @@ function CustomDomainsCard({ driveId, domains, limit, newDomain, onNewDomainChan
 function DomainRow({
   driveId,
   domain,
+  apps,
   onRemove,
   onVerify,
   onRefreshCert,
   onSetPrimary,
   onSetLandingPage,
   onSetNotFoundPage,
+  onSetTarget,
   showPrimaryControls,
   isEffectivePrimary,
   isRemoving,
   isVerifying,
   isRefreshingCert,
   isSettingPrimary,
+  isSettingTarget,
   anyBusy,
   verifyReason,
 }: {
   driveId: string;
   domain: CustomDomain;
+  apps: DriveAppOption[];
   onRemove: (id: string) => void;
   onVerify: (id: string) => void;
   onRefreshCert: (id: string) => void;
   onSetPrimary: (id: string) => void;
   onSetLandingPage: (domainId: string, pageId: string | null) => void;
   onSetNotFoundPage: (domainId: string, pageId: string | null) => void;
+  onSetTarget: (domainId: string, publishedAppId: string | null) => void;
   showPrimaryControls: boolean;
   isEffectivePrimary: boolean;
   isRemoving: boolean;
   isVerifying: boolean;
   isRefreshingCert: boolean;
   isSettingPrimary: boolean;
+  isSettingTarget: boolean;
   anyBusy: boolean;
   verifyReason: string | undefined;
 }) {
@@ -1067,6 +1158,35 @@ function DomainRow({
         <p className="text-xs text-destructive bg-destructive/5 rounded px-2 py-1">{verifyReason}</p>
       )}
 
+      {/*
+        A certificate waiting on an ownership TXT is the ONE cert state that never
+        resolves on its own, so the instruction has to be visible without the
+        customer first guessing to press "Check SSL". Rendered in the row, beside
+        the DNS records panel it mirrors, rather than only as a toast that takes
+        the record name and value away with it.
+      */}
+      {domain.status === 'provisioning' && domain.ownershipInstruction && (
+        <div className="bg-muted rounded p-3 space-y-2">
+          <p className="text-xs text-muted-foreground">
+            SSL is waiting on a DNS record you still need to add:
+          </p>
+          {/*
+            `break-words`, not `break-all`, and no `font-mono`: this is a prose
+            sentence with a hostname and a record value embedded in it, unlike the
+            DNS panel below, which is a table of bare field values. `break-all`
+            would chop ordinary words mid-character, and monospacing the whole
+            sentence makes it harder to read to save the few tokens that benefit.
+            `break-words` still wraps the long `_fly-ownership.<host>` label rather
+            than letting it overflow the row.
+          */}
+          <p className="text-xs break-words">{domain.ownershipInstruction}</p>
+          <p className="text-xs text-muted-foreground">
+            Once it propagates, click Check SSL — the certificate cannot be issued until this
+            record resolves.
+          </p>
+        </div>
+      )}
+
       {showDns && (
         <div className="bg-muted rounded p-3 space-y-2">
           <p className="text-xs text-muted-foreground">
@@ -1091,6 +1211,37 @@ function DomainRow({
 
       {domain.status === 'active' && (
         <div className="grid gap-3 sm:grid-cols-2 pt-2 border-t">
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label className="text-xs text-muted-foreground">Routes to</Label>
+            <Select
+              value={domain.publishedAppId ?? '__static__'}
+              onValueChange={(value) => onSetTarget(domain.id, value === '__static__' ? null : value)}
+              disabled={anyBusy}
+            >
+              <SelectTrigger className="h-9">
+                {isSettingTarget ? (
+                  <span className="flex items-center gap-2 text-sm">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Updating…
+                  </span>
+                ) : (
+                  <SelectValue />
+                )}
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__static__">This drive&apos;s static site</SelectItem>
+                {apps.map((app) => (
+                  <SelectItem key={app.id} value={app.id}>
+                    {app.envName} ({app.subdomain})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {domain.publishedAppId && !apps.some((app) => app.id === domain.publishedAppId) && (
+              <p className="text-xs text-muted-foreground">
+                This domain points at a published app that no longer exists — pick a new target or switch back to the static site.
+              </p>
+            )}
+          </div>
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">Landing page</Label>
             <PagePickerPopover

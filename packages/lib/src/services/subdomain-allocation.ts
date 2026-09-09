@@ -1,4 +1,45 @@
-import { resolveUniquePublishSubdomain } from '../validators/subdomain';
+import {
+  resolveUniquePublishSubdomain,
+  normalizeSubdomain,
+  DEFAULT_SUBDOMAIN_BASE,
+  MAX_SUBDOMAIN_LENGTH,
+} from '../validators/subdomain';
+
+/**
+ * How much of the normalized base to filter a `fetchTaken` DB read on.
+ *
+ * `resolveUniquePublishSubdomain` only ever proposes `base`, `base-2`,
+ * `base-3`, … with `base` clamped (`clampBaseForSuffix`) to leave room for the
+ * `-<suffix>` tail so every candidate stays within `MAX_SUBDOMAIN_LENGTH` (63)
+ * characters. That clamp only ever TRUNCATES the base from the right — it
+ * never changes the leading characters — so every candidate this allocator
+ * could ever produce starts with at least the first `maxBase` characters of
+ * the (un-truncated) normalized base, where `maxBase` shrinks only as the
+ * suffix grows more digits. Reaching a suffix with more than
+ * `MAX_SUBDOMAIN_LENGTH / 2` digits — i.e. more than 10^31 consecutive
+ * collisions against the exact same base — never happens, so filtering a
+ * `fetchTaken` query to rows sharing this half-length prefix can never hide a
+ * real collision (a false "free" candidate): every row that could possibly
+ * collide with a candidate is included, and cutting the prefix at half the
+ * max length is exactly what keeps the bound provably ahead of any suffix
+ * width this system will ever produce.
+ */
+export const SUBDOMAIN_COLLISION_PREFIX_LENGTH = Math.floor(MAX_SUBDOMAIN_LENGTH / 2);
+
+/**
+ * The prefix a `fetchTaken` callback should filter its query on (e.g.
+ * `LIKE '<prefix>%'`) for a given allocation `base` — see
+ * {@link SUBDOMAIN_COLLISION_PREFIX_LENGTH}. Mirrors
+ * `resolveUniquePublishSubdomain`'s own normalization/fallback so the prefix
+ * always matches what the allocator will actually try, and is itself capped
+ * to `SUBDOMAIN_COLLISION_PREFIX_LENGTH` so the filter can never be longer
+ * than what's provably safe.
+ */
+export function subdomainCollisionPrefix(base: string): string {
+  const normalized = normalizeSubdomain(base);
+  const fallback = normalized.length > 0 ? normalized : DEFAULT_SUBDOMAIN_BASE;
+  return fallback.slice(0, SUBDOMAIN_COLLISION_PREFIX_LENGTH);
+}
 
 /**
  * Detect a PostgreSQL unique_violation (SQLSTATE 23505), including when the

@@ -9,19 +9,14 @@ export type { ConversationIdentityResolveResult } from './useConversationIdentit
 export { useMessageActions } from './useMessageActions';
 export { useCacheMessageActions } from './useCacheMessageActions';
 export { useProviderSettings } from './useProviderSettings';
-export { useChatTransport } from './useChatTransport';
 export { useStreamingRegistration } from './useStreamingRegistration';
 export { useSendHandoff } from './useSendHandoff';
-export { useConversationSendHandoff, HANDOFF_REFUSED_MESSAGE } from './useConversationSendHandoff';
 export { useResumeBootstrap } from './useResumeBootstrap';
 export { useAnswerAskUser } from './useAnswerAskUser';
 export { useChatErrorCause } from './useChatErrorCause';
 
+export { useChatSession } from './useChatSession';
+export type { ChatSessionStatus, UseChatSessionResult } from './useChatSession';
+
 // Pure functions (no hooks, no side effects)
-export {
-  GLOBAL_CHAT_ID,
-  AGENT_CHAT_ID,
-  SIDEBAR_AGENT_CHAT_ID,
-  buildChatConfig,
-} from '../chat-config';
 export { buildGlobalChatRequestBody } from '../global-chat-request-body';

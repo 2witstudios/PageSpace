@@ -58,7 +58,7 @@ vi.mock('archiver', () => ({
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
-import { buildNativeExportFiles } from '@pagespace/lib/compliance/export/export-format';
+import { buildNativeExportFiles, EXPORT_SCHEMA_VERSION } from '@pagespace/lib/compliance/export/export-format';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { GET } from '../route';
 
@@ -83,6 +83,7 @@ const mockUserData = {
   profile: { id: 'user-1', email: 'test@example.com' },
   drives: [{ id: 'drive-1', name: 'My Drive' }],
   pages: [{ id: 'page-1', title: 'Page 1' }],
+  sheets: [],
   messages: [],
   files: [],
   activity: [],
@@ -96,6 +97,7 @@ const mockUserData = {
   displayPreferences: [],
   settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [] },
   personalization: null,
+  personalizationCandidates: [],
   // The categories the "Agent-Session Single Source of Truth" epic added. They
   // were missing from the export for the whole epic, and THIS FILE is why
   // nobody noticed: the category assertion below used to be a hand-written list
@@ -103,6 +105,8 @@ const mockUserData = {
   // could never fail it. It is now derived — see the test.
   agentWorkspaces: [{ id: 'ws-1', role: 'owner', name: 'Working context', shells: [] }],
   streamState: [{ messageId: 'sm-1', conversationId: 'c-1', status: 'complete', parts: [] }],
+  contentTags: [{ tagName: 'risk', pageId: 'p-1', pageTitle: 'Page', targetKind: 'page', anchor: null, anchorStatus: null, channelMessageId: null, aiMessageId: null, source: 'user', confidence: null }],
+  localEnvironments: [{ envId: 'env-1', driveId: 'd-1', envName: 'my-mac', label: 'jono-macstudio', machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:abc', serverKeyId: 'k1', bindPolicy: 'owner', capabilities: null, enrolledAt: null, lastSeenAt: null, revokedAt: null, createdAt: new Date('2026-09-04T00:00:00.000Z'), updatedAt: new Date('2026-09-04T00:00:00.000Z') }],
 };
 
 describe('GET /api/account/export', () => {
@@ -236,6 +240,8 @@ describe('GET /api/account/export', () => {
       const names = buildNativeExportFiles(mockUserData as never).map((f) => f.name);
       expect(names).toContain('agent-workspaces.json');
       expect(names).toContain('stream-state.json');
+      // The machines the subject enrolled as local environments are a first-class category.
+      expect(names).toContain('local-environments.json');
     });
 
     it('manifest.json documents the schema version and file inventory', async () => {
@@ -248,7 +254,13 @@ describe('GET /api/account/export', () => {
       );
       expect(manifestCall).toBeDefined();
       const manifest = JSON.parse(manifestCall![0] as string);
-      expect(manifest.schemaVersion).toBe('1.0.0');
+      // Against the exported constant, not a hardcoded literal. A pinned
+      // version string turns every LEGITIMATE bump into a red test here, which
+      // is pressure not to bump — and the manifest's whole job is to let a
+      // recipient tell one bundle inventory from another. The substance is
+      // asserted below: that the manifest actually lists the files shipped.
+      expect(manifest.schemaVersion).toBe(EXPORT_SCHEMA_VERSION);
+      expect(manifest.schemaVersion).toMatch(/^\d+\.\d+\.\d+$/);
       expect(manifest.format).toBe('native');
       expect(Array.isArray(manifest.files)).toBe(true);
       expect(manifest.files.some((f: { name: string }) => f.name === 'pages.json')).toBe(true);

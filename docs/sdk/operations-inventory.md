@@ -78,7 +78,34 @@ Column key — **Tool**: MCP tool name (`tools.js` line of its schema). **Input*
 
 | Tool | Input | Call | Route | Response (route truth) |
 |---|---|---|---|---|
-| `edit_sheet_cells` (tools.js:308) | `pageId*`, `cells*[]{address*,value*}` | POST `/api/mcp/documents` `{operation:'edit-cells', pageId, cells}` (page.js:379–385) | `mcp/documents/route.ts:85` (see §3) | `{pageId, pageTitle, cellsUpdated, operation:'edit-cells', stats{valuesSet,formulasSet,cellsCleared,sheetDimensions{rows,columns}}, updatedCells[{address,type}]}` (`:538–556`). Non-sheet page → 400 with `pageType` (`:469–473`); invalid A1 address → 400 (`:481–487`). |
+| `edit_sheet_cells` (tools.js:308) | `pageId*`, `cells*[]{address*,value*}` | POST `/api/mcp/documents` `{operation:'edit-cells', pageId, cells}` (page.js:379–385) | `mcp/documents/route.ts:85` (see §3) | `{pageId, pageTitle, cellsUpdated, operation:'edit-cells', stats{valuesSet,formulasSet,cellsCleared,sheetDimensions{rows,columns},recomputed}, updatedCells[{address,type}]}` (`:538–556`). Non-sheet page → 400 with `pageType` (`:469–473`); invalid A1 address → 400 (`:481–487`). |
+
+### 2.6b Sheet rows (6 SDK operations)
+
+Not from the original `tools.js` inventory — the tabular surface added when sheets became
+row-backed, over `POST /api/mcp/sheets` (`apps/web/src/app/api/mcp/sheets/route.ts`). SDK
+namespace `sheets.*`; CLI verbs `pagespace sheets <verb>`. Each method is the camelCase of its
+wire `operation`, so the facade name and the request body cannot drift.
+
+Filters and sorts run against the MATERIALISED cell value, so a formula column compares as its
+result rather than its source. Row indexes are 0-based everywhere, matching the store.
+
+| SDK | CLI | Input | Response (route truth) |
+|---|---|---|---|
+| `sheets.queryRows` | `sheets query` | `pageId*`, `tabIndex`, `where`, `orderBy[]`, `select[]`, `limit`, `offset` | `{pageId, pageTitle, tabIndex, rows[]{rowIndex,cells}, total, hasMore}` |
+| `sheets.getRows` | `sheets rows` | `pageId*`, `tabIndex`, `fromRow`, `limit` | `{pageId, pageTitle, tabIndex, rows[], rowCount, columnCount, nextFromRow, hasMore}` |
+| `sheets.describe` | `sheets describe` | `pageId*`, `tabIndex` | `{pageId, pageTitle, tabs[]{tabIndex,name,rowCount,columnCount,frozenRows}}` |
+| `sheets.appendRows` | `sheets append` | `pageId*`, `tabIndex`, `rows*[]` (column letter → text) | `{pageId, pageTitle, firstRowIndex, appended, rowCount}` |
+| `sheets.updateCells` | `sheets update-cells` | `pageId*`, `tabIndex`, `cells*[]{address*,value*}` | `{pageId, pageTitle, cellsUpdated, recomputed, rowCount, columnCount}` |
+| `sheets.deleteRows` | `sheets delete-rows` | `pageId*`, `tabIndex`, `fromRow*`, `count*` | `{pageId, pageTitle, deleted, rowCount}` |
+
+`sheets.updateCells` and `pages.editCells` (§2.6) overlap deliberately: `editCells` reports richer
+per-cell stats but only ever addresses tab 0, while `updateCells` takes `tabIndex` and is therefore
+the only way to write to a second tab. `deleteRows` requires both bounds — neither is defaulted,
+because a guessed `count` deletes the wrong rows irreversibly.
+
+`nextFromRow` is a POSITION, not a count. A caller advancing by `rows.length` loops forever on a
+sparse tab (rows 0-9, then 500-509); following `nextFromRow` terminates.
 
 ### 2.7 Task management (6 tools)
 
@@ -103,7 +130,7 @@ Column key — **Tool**: MCP tool name (`tools.js` line of its schema). **Input*
 
 | Tool | Input | Call | Route | Response (route truth) |
 |---|---|---|---|---|
-| `update_agent_config` (tools.js:706) | `agentPath*`, `agentId*`, `systemPrompt?`, `enabledTools?[]`, `aiProvider?`, `aiModel?` | PUT `/api/ai/page-agents/{agentId}/config` (agent.js:17) | `ai/page-agents/[agentId]/config/route.ts:57` | `{success:true, id, title, type:'AI_CHAT', message, summary, updatedFields[], agentConfig{...}, stats{...}, nextSteps[]}` (`:249–279`). Invalid tool names → 400 listing available tools (`:136–141`). Route also accepts `agentDefinition`, `visibleToGlobalAssistant`, `toolExposureMode` ('upfront'/'search'), `expectedRevision` (409/428) (`:70–80`) — unexposed by the tool. `agentPath` is decorative (never sent). |
+| `update_agent_config` (tools.js:706) | `agentPath*`, `agentId*`, `systemPrompt?`, `enabledTools?[]`, `aiProvider?`, `aiModel?` | PUT `/api/ai/page-agents/{agentId}/config` (agent.js:17) | `ai/page-agents/[agentId]/config/route.ts:57` | `{success:true, id, title, type:'AI_CHAT', message, summary, updatedFields[], agentConfig{...}, stats{...}, nextSteps[]}` (`:249–279`). Invalid tool names → 400 listing available tools (`:136–141`). Route also accepts `agentDefinition`, `visibleToGlobalAssistant`, `toolExposureMode` ('upfront'/'search'), `sandboxEnabled` (boolean; non-boolean → 400), `expectedRevision` (409/428) (`:70–80`). `agentConfig` now reports the EFFECTIVE surface beside the stored one (`effectiveTools`, `blockedTools[{tool,gate}]`, `toolsNeedingComposerToggle`, `toolsReachedBySearch`, `sandboxEnabled`) plus `warnings[]` — naming sandbox tools in `enabledTools` grants nothing while `sandboxEnabled` is false (issue #2460). `agentPath` is decorative (never sent). |
 | `list_agents` (tools.js:742) | `driveId*`, `driveSlug?`, `includeSystemPrompt?`, `includeTools?` | GET `/api/drives/{driveId}/agents?includeSystemPrompt&includeTools[&driveSlug]` (agent.js:74–83) | `drives/[driveId]/agents/route.ts:33` | `{success:true, driveId, driveName, driveSlug, agents:[AgentSummary], count, summary, stats, nextSteps}` (`:145–165`). `driveSlug` query param is ignored by the route. Per-agent view-permission filtering (`:100–102`). |
 | `multi_drive_list_agents` (tools.js:769) | `includeSystemPrompt?`, `includeTools?`, `groupByDrive?` | GET `/api/ai/page-agents/multi-drive?…` (agent.js:131–137) | `ai/page-agents/multi-drive/route.ts:35` | `{success:true, totalCount, driveCount, summary, stats, nextSteps}` + (`groupByDrive` ? `agentsByDrive:[{driveId,driveName,driveSlug,agentCount,agents[]}]` : `agents:[]`) (`:167–198`). |
 | `ask_agent` (tools.js:791) | `agentPath*`, `agentId*`, `question*`, `context?` | POST `/api/ai/page-agents/consult` `{agentId, question, context}` (agent.js:232) | `ai/page-agents/consult/route.ts:156` | `{success:true, agent{id,title,systemPrompt(preview),provider,model,enabledToolsCount}, question, response, context, metadata}` (`:560–572`). Credit-gated (402-class errors via `creditGateErrorResponse`) and admin-only-provider gated (`:233–246`). `agentPath` never sent. |
@@ -200,7 +227,7 @@ Input schema (zod, `:76–83`): `{operation: 'read'|'replace'|'insert'|'delete'|
 | `replace` (`:282`) | `startLine`, `content` (`endLine` defaults to `startLine`) | `{…, operation:'replace', affectedLines:'s-e'}` (`:335–342`) | 400 missing/out-of-range (`:283–291`); 409/428 revision mismatch (`:564–572`) |
 | `insert` (`:345`) | `startLine`, `content` (insert index clamps to EOF) | `{…, operation:'insert', insertedAt}` (`:394–401`) | 400 missing |
 | `delete` (`:404`) | `startLine` (`endLine` optional) | `{…, operation:'delete', deletedLines:'s-e'}` (`:456–463`) | 400 missing/out-of-range |
-| `edit-cells` (`:466`) | `cells[]` non-empty; page must be SHEET | `{pageId,pageTitle,cellsUpdated,operation,stats{valuesSet,formulasSet,cellsCleared,sheetDimensions},updatedCells[]}` (`:538–556`) | 400 non-sheet (`:469`), invalid A1 address (`:481–487`) |
+| `edit-cells` (`:466`) | `cells[]` non-empty; page must be SHEET | `{pageId,pageTitle,cellsUpdated,operation,stats{valuesSet,formulasSet,cellsCleared,sheetDimensions,recomputed},updatedCells[]}` (`:538–556`) | 400 non-sheet (`:469`), invalid A1 address (`:481–487`) |
 
 All mutations go through `applyPageMutation` with `expectedRevision` (optimistic concurrency), emit websocket `content-updated`, and audit-log with `source:'mcp'` (`:302–342` etc.). Zod failure → 400 `{error: issues}` (`:574–576`).
 

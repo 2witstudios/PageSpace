@@ -88,6 +88,7 @@ describe('getAgentById', () => {
     aiProvider: null,
     aiModel: null,
     toolExposureMode: 'upfront' as const,
+    sandboxEnabled: true,
     isTrashed: false,
   };
 
@@ -105,6 +106,10 @@ describe('getAgentById', () => {
     const agent = await pageAgentRepository.getAgentById('agent_1');
 
     expect(agent).toMatchObject({ id: 'agent_1', title: 'Test Agent', type: 'AI_CHAT' });
+    // The sandbox switch travels with the rest of the agent's tool config: the
+    // voice path reads it from here, and a shape that dropped it would offer a
+    // switched-off agent the sandbox families (issue #2460).
+    expect(agent?.sandboxEnabled).toBe(true);
   });
 
   it('returns null when the agent does not exist', async () => {

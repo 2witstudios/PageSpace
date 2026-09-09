@@ -17,30 +17,27 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, desc, eq, exists, isNotNull, sql } from '@pagespace/db/operators';
+import { and, eq, exists, isNotNull, sql } from '@pagespace/db/operators';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
+import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { pages } from '@pagespace/db/schema/core';
 import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
-
-export interface PastConversationRow {
-  conversationId: string;
-  title: string | null;
-  type: string;
-  /** The page id when `type === 'page'`, else null. */
-  agentPageId: string | null;
-  /** The agent page's own title (distinct from the conversation's own title), when `type === 'page'`. */
-  pageTitle: string | null;
-  /** Real recency — see `recencyExpr` below. Never simply `conversations.lastMessageAt`, which stays null forever for `type: 'page'`. */
-  lastMessageAt: Date | null;
-  createdAt: Date;
-  workspaceId: string | null;
-  /** '' when the session has no display name, mirroring `toAgentSessionDTO`'s `name ?? ''`. */
-  sessionName: string | null;
-  sessionEndedAt: Date | null;
-  /** Resolved from the page's drive, the session's drive, or (for `type: 'client'`) the conversation's own contextId. Null only for a driveless global-assistant conversation. */
-  driveId: string | null;
-}
+// Recency, the sort key and the cursor codecs are declared ONCE, in the module
+// both history listings import — see that file's header for the drift that
+// motivated it.
+import {
+  recencyExpr,
+  sortKeyExpr,
+  newestFirst,
+  encodeCursor,
+  decodeCursor,
+  olderThanCursor,
+} from '@/lib/conversations/conversation-recency';
+// The row shape is declared ONCE, in the wire contract both ends import, so
+// the client cannot silently drift from what this file actually emits — see
+// that file's header for the bug that motivated it.
+import type { PastConversationServerRow } from './past-conversation-dto';
 
 export interface ListAllConversationsPaginatedInput {
   limit?: number;
@@ -49,7 +46,7 @@ export interface ListAllConversationsPaginatedInput {
 }
 
 export interface PaginatedPastConversationsResult {
-  conversations: PastConversationRow[];
+  conversations: PastConversationServerRow[];
   pagination: {
     hasMore: boolean;
     nextCursor: string | null;
@@ -82,6 +79,8 @@ export interface PaginatedPastConversationsResult {
  * placeholder, so a global conversation can never be placeholder-only in a
  * committed state.
  */
+
+
 const hasActiveMessage = exists(
   db
     .select({ one: sql`1` })
@@ -95,96 +94,33 @@ const hasActiveMessage = exists(
     ),
 );
 
-/**
- * The real "last activity" timestamp — NOT `conversations.lastMessageAt`,
- * which nothing ever sets for `type: 'page'`/`type: 'client'` conversations
- * (grepping every `.set({...lastMessageAt...})` call in this codebase turns up
- * exactly two call sites, both in the global-assistant message routes).
- * Sorting or displaying recency by `conversations.lastMessageAt` alone left
- * every page-agent conversation permanently ordered by its CREATION time,
- * however recently it was actually used (review finding).
- *
- * Reads the unified `messages` table since the merge (Phase 4 / D6). The
- * `COALESCE` fallback to `lastMessageAt` is KEPT rather than deleted: it still
- * carries a conversation whose messages were all soft-deleted or are all
- * mid-flight, and — during the expand window — one whose legacy rows the
- * backfill has not copied across yet. For a global thread the two agree to
- * within the write itself (`lastMessageAt` is stamped in the same transaction
- * as the row), so the MAX simply becomes the more precise of the two.
- */
-const recencyExpr = sql<Date | null>`COALESCE(
-  (SELECT MAX(${messages.createdAt}) FROM messages
-   WHERE ${messages.conversationId} = ${conversations.id}
-     AND ${messages.isActive} = true
-     AND ${messages.status} != 'streaming'),
-  ${conversations.lastMessageAt}
-)`;
-
-/**
- * The sort/cursor key. NOT just `recencyExpr`: a brand-new agent-session
- * conversation can have zero messages yet — recency null — and still needs a
- * sensible position (its own creation time).
- */
-const sortKeyExpr = sql<Date>`COALESCE(${recencyExpr}, ${conversations.createdAt})`;
-
 /** `pages.driveId` for a page conversation, `agentWorkspaces.driveId` for a session-bound one, the conversation's own contextId for a `type: 'client'` one (that column holds an optional driveId for API-managed conversations — see `buildCreateConversationPayload`) — else null (a driveless global-assistant conversation). */
 const resolvedDriveIdExpr = sql<string | null>`COALESCE(${pages.driveId}, ${agentWorkspaces.driveId}, CASE WHEN ${conversations.type} = 'client' THEN ${conversations.contextId} ELSE NULL END)`;
 
 /**
- * The cursor is an OPAQUE token encoding the sort key the caller last saw —
- * NOT just a bare conversationId re-resolved against LIVE data. `sortKeyExpr`
- * is derived from `chat_messages`, which can change between one page fetch
- * and the next: if the cursor conversation receives a new message in that
- * window, re-deriving its sortKey fresh would shift the boundary FORWARD,
- * re-admitting rows already shown on the previous page. Worse, if the cursor
- * row disappeared entirely (deleted), a live re-lookup finds nothing and
- * silently applies no boundary at all, returning page one again instead of
- * the requested next page (review finding). Freezing the observed sort key
- * into the cursor itself removes the live dependency — and the extra DB
- * round-trip a live lookup needed — entirely.
+ * The chat-bound nodes, as a joinable relation — a thread's MEMBERSHIP.
+ *
+ * A plain `leftJoin` on `agent_workspace_nodes` would also match this thread's
+ * page and terminal siblings, so the `targetKind = 'chat'` predicate has to sit
+ * INSIDE the joined relation rather than in the outer WHERE: in the outer one it
+ * would turn the left join into an inner one for every row it did not match, and
+ * quietly drop every conversation that belongs to no workspace.
+ *
+ * At most one row per conversation by construction — the table's global
+ * `UNIQUE (targetId) WHERE targetKind = 'chat'` — so this join can never
+ * multiply the listing.
+ *
+ * BUILT PER CALL, not once at module scope. A subquery alias is cheap to
+ * construct, and building it at import time makes importing this module do
+ * query-builder work — which every suite that mocks `db` then has to model,
+ * for a value none of them use.
  */
-export function encodeCursor(sortKey: Date | string, id: string): string {
-  // The driver doesn't hydrate a raw computed SQL expression into a real
-  // `Date` the way it does a schema-known timestamp COLUMN (confirmed
-  // against real Postgres via drizzle's own query builder: `sortKeyExpr`'s
-  // runtime value is a STRING, e.g. `"2026-07-28 12:00:00.123456"`, with full
-  // microsecond precision — Postgres timestamps carry six fractional digits,
-  // a plain JS `Date` only three). Round-tripping that string through
-  // `new Date(...).toISOString()` truncates it to milliseconds — verified
-  // against the real test DB that this silently collapses two distinct
-  // sub-millisecond sort keys onto the same encoded value, making the next
-  // page's boundary re-admit a row it should have excluded (review finding).
-  // Preserve a string AS GIVEN; only a genuine `Date` (e.g. a plain
-  // `createdAt` fallback, which is already millisecond-limited at the
-  // column level) goes through `toISOString()`.
-  const encoded = typeof sortKey === 'string' ? sortKey : sortKey.toISOString();
-  return Buffer.from(JSON.stringify({ sortKey: encoded, id })).toString('base64url');
-}
-
-export function decodeCursor(cursor: string): { sortKey: string; id: string } | null {
-  try {
-    const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
-    if (
-      typeof parsed !== 'object' ||
-      parsed === null ||
-      typeof (parsed as { sortKey?: unknown }).sortKey !== 'string' ||
-      typeof (parsed as { id?: unknown }).id !== 'string'
-    ) {
-      return null;
-    }
-    const sortKey = (parsed as { sortKey: string }).sortKey;
-    // Validate it's a real, parseable timestamp — but return the ORIGINAL
-    // string, not a `new Date(sortKey)` reconstruction, which would
-    // re-truncate any sub-millisecond precision right back out again.
-    if (Number.isNaN(new Date(sortKey).getTime())) return null;
-    return { sortKey, id: (parsed as { id: string }).id };
-  } catch {
-    // Malformed/tampered cursor — same treatment as a cursor whose id no
-    // longer resolves to anything: ignored, not an error (fails open to
-    // page one, consistent with how this listing already treats an unknown
-    // cursor id).
-    return null;
-  }
+function membershipNodeRelation() {
+  return db
+    .select({ targetId: agentWorkspaceNodes.targetId, rootId: agentWorkspaceNodes.rootId })
+    .from(agentWorkspaceNodes)
+    .where(eq(agentWorkspaceNodes.targetKind, 'chat'))
+    .as('membership_node');
 }
 
 /**
@@ -207,6 +143,7 @@ export async function listAllConversationsPaginated(
   options: ListAllConversationsPaginatedInput = {},
 ): Promise<PaginatedPastConversationsResult> {
   const { limit = 20, cursor } = options;
+  const membershipNode = membershipNodeRelation();
   const maxLimit = Math.min(Math.max(limit, 1), 100);
 
   const conditions = [
@@ -215,10 +152,10 @@ export async function listAllConversationsPaginated(
     hasActiveMessage,
   ];
 
-  // Deliberately NOT filtering out `closedInWorkspaceAt IS NOT NULL` here: a
-  // conversation closed from its session is still valid past-conversation
-  // HISTORY, just no longer part of the session's LIVE tree — that exclusion
-  // belongs to `listSessionConversationsBulk` (the sidebar), not this listing.
+  // Deliberately NOT filtering by where a thread's node SITS: a conversation
+  // closed off its workspace's grid is still valid past-conversation HISTORY,
+  // just parked — and a thread in no workspace at all is history too. This
+  // listing is about what a user has said, not about what is on screen.
 
   if (filter.driveId) {
     const driveId = filter.driveId;
@@ -226,7 +163,7 @@ export async function listAllConversationsPaginated(
     // mode — there is no drive for it to belong to.
     conditions.push(sql`(
       (${conversations.type} = 'page' AND ${pages.driveId} = ${driveId})
-      OR (${isNotNull(conversations.workspaceId)} AND ${agentWorkspaces.driveId} = ${driveId})
+      OR (${isNotNull(membershipNode.rootId)} AND ${agentWorkspaces.driveId} = ${driveId})
       OR (${conversations.type} = 'client' AND ${conversations.contextId} = ${driveId})
     )`);
   }
@@ -235,7 +172,7 @@ export async function listAllConversationsPaginated(
     const decoded = decodeCursor(cursor);
     if (decoded) {
       conditions.push(
-        sql`(${sortKeyExpr} < ${decoded.sortKey} OR (${sortKeyExpr} = ${decoded.sortKey} AND ${conversations.id} < ${decoded.id}))`,
+        olderThanCursor(decoded),
       );
     }
   }
@@ -249,17 +186,25 @@ export async function listAllConversationsPaginated(
       lastMessageAt: recencyExpr,
       sortKeyValue: sortKeyExpr,
       createdAt: conversations.createdAt,
-      workspaceId: conversations.workspaceId,
+      // MEMBERSHIP, from the tree — the node that binds this thread names the
+      // workspace it belongs to, where this used to read the conversation's own
+      // column. A thread with no node is in no workspace and gets a null here:
+      // that is the only shape of "not a member" there is now, because the node
+      // IS the membership and there is no off-grid state for one to sit in. The
+      // thread itself is untouched either way — it stays in this listing as
+      // past-conversation history.
+      workspaceId: membershipNode.rootId,
       sessionName: agentWorkspaces.name,
       sessionEndedAt: agentWorkspaces.endedAt,
       pageTitle: pages.title,
       driveId: resolvedDriveIdExpr,
     })
     .from(conversations)
-    .leftJoin(agentWorkspaces, eq(conversations.workspaceId, agentWorkspaces.id))
+    .leftJoin(membershipNode, eq(membershipNode.targetId, conversations.id))
+    .leftJoin(agentWorkspaces, eq(agentWorkspaces.id, membershipNode.rootId))
     .leftJoin(pages, and(eq(conversations.contextId, pages.id), eq(conversations.type, 'page')))
     .where(and(...conditions))
-    .orderBy(desc(sortKeyExpr), desc(conversations.id))
+    .orderBy(...newestFirst())
     .limit(maxLimit + 1);
 
   const hasMore = rows.length > maxLimit;
@@ -279,6 +224,9 @@ export async function listAllConversationsPaginated(
       sessionName: row.sessionName,
       sessionEndedAt: row.sessionEndedAt,
       driveId: row.driveId,
+      // Server-only; the route needs it to mint a cursor for a row IT
+      // truncates after permission filtering, and `toWireRow` strips it.
+      sortKeyValue: row.sortKeyValue,
     })),
     pagination: {
       hasMore,

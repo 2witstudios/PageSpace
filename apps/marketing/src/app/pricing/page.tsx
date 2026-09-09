@@ -4,14 +4,14 @@ import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata, APP_URL } from "@/lib/metadata";
-import { MONTHLY_CREDITS } from "@/lib/credits";
+import { creditsPhrase } from "@/lib/credits";
 import {
   TIERS as PLAN_ORDER,
   TIER_PLAN_LIMITS,
   formatTierBytes,
   type SubscriptionTier,
 } from "@pagespace/lib/billing/subscription-tiers";
-import { isSandboxAvailable } from "@pagespace/lib/billing/sandbox-eligibility";
+import { isSandboxTierEligible } from "@pagespace/lib/billing/sandbox-eligibility";
 
 export const metadata = pageMetadata.pricing;
 
@@ -86,15 +86,22 @@ const plans: Plan[] = PLAN_ORDER.map((tier) => {
     highlight: copy.highlight,
     features: {
       storage: formatTierBytes(limits.quotaBytes, " "),
-      monthlyCredits: `${MONTHLY_CREDITS[tier]}/mo`,
+      monthlyCredits: creditsPhrase(tier),
       models: copy.models,
       buyMore: true,
       realtime: true,
       hierarchicalAgents: true,
-      // Derived from the same eligibility check that actually gates the
-      // feature server-side (packages/lib/src/billing/sandbox-eligibility.ts)
-      // — this row can never drift out of sync with what Free actually gets.
-      sandbox: isSandboxAvailable(tier),
+      // Derived from the same eligibility predicate that actually gates the
+      // feature server-side (SANDBOX_ELIGIBLE_TIERS, in
+      // packages/lib/src/billing/sandbox-eligibility.ts — NOT the plan-limits
+      // table the rest of this file reads) — so this row can never drift out of
+      // sync with what Free actually gets.
+      //
+      // The PURE tier predicate, deliberately, not the deployment-aware gate
+      // `isSandboxAvailable`: this is the cloud PRICE LIST, and what it must
+      // describe is what a tier buys, not what the process rendering it happens
+      // to be configured as.
+      sandbox: isSandboxTierEligible(tier),
       prioritySupport: copy.prioritySupport,
     },
   };
@@ -113,8 +120,9 @@ export default function PricingPage() {
               Simple, transparent pricing
             </h1>
             <p className="text-lg text-muted-foreground mb-4">
-              Every plan includes a monthly allowance of credits that meter
-              your usage. Run low? Buy more anytime. No hidden fees.
+              Every plan includes credits that meter your AI usage: a
+              one-time starter grant on Free, a monthly allowance on paid
+              plans. Run low? Buy more anytime. No hidden fees.
             </p>
             <p className="text-sm text-muted-foreground">
               No credit card required for the Free plan.
@@ -228,7 +236,7 @@ export default function PricingPage() {
               <tbody>
                 {[
                   { key: "storage", label: "Storage" },
-                  { key: "monthlyCredits", label: "Monthly credits" },
+                  { key: "monthlyCredits", label: "Credits" },
                   { key: "models", label: "Model access" },
                   { key: "sandbox", label: "Cloud sandbox — run code, use a terminal" },
                   { key: "buyMore", label: "Buy more credits anytime" },

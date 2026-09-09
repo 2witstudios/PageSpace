@@ -69,8 +69,8 @@ function collectToolNames(): string[] {
  *
  * WHAT THIS LEDGER DOES NOT DO is give the gap an owner (review finding). It
  * stops CI forgetting; it cannot stop an EPIC forgetting, because nobody plans
- * work by reading a `Set` in a unit test. The four pane-grid verbs below —
- * `list_panes`, `resize_pane`, `move_pane`, `arrange_panes` — are the headline
+ * work by reading a `Set` in a unit test. The five pane-grid verbs below —
+ * `list_panes`, `resize_pane`, `move_pane`, `close_pane`, `arrange_panes` — are the headline
  * capability of the agent-session epic's Phase 3 and every one of them renders
  * as a raw payload, so they are carried on that epic's open-task list too:
  * `docs/2.0-architecture/agent-sessions.md` §4, item 8. Anything added here
@@ -94,6 +94,9 @@ const PENDING_RICH_RENDERERS = new Set<string>([
   'list_panes',
   'resize_pane',
   'move_pane',
+  // `close_pane` is not a NEW gap: it replaces the capability
+  // `move_pane(toParentId: null)` carried, which had no rich renderer either.
+  'close_pane',
   'arrange_panes',
   // sandbox file family (createSandboxTools); its `bash` shares the CLI renderer
   'writeFile',

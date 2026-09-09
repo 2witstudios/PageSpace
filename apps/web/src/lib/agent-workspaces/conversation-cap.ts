@@ -1,23 +1,29 @@
 /**
- * The ONE open-conversation count for a workspace (`agent_workspaces` row).
+ * The ONE conversation count for a workspace — how many threads it HOLDS.
  *
- * "Open" means exactly: bound to this workspace (`conversations.workspaceId`),
- * history-alive (`isActive`), and not closed out of the workspace's listing
- * (`closedInWorkspaceAt IS NULL`). This single predicate is what
- * `MAX_SESSION_CONVERSATIONS` bounds everywhere it is enforced — the claim
- * path's cap, the close/reopen symmetry, the tool layer's advisory spawn
- * pre-count, and the end-session warning — and it used to be written out
- * three times, which is three chances for one copy to silently drift and
- * unbalance which listings count toward the cap (epic Phase 1, D7).
+ * "Holds" means exactly: a node of this workspace's tree is bound to the
+ * conversation. That is the whole definition now, and it is one predicate over
+ * one table rather than the three-column conjunction it replaces
+ * (`workspaceId` + `isActive` + `closedInWorkspaceAt IS NULL`), which had to be
+ * kept identical at four call sites or the cap silently drifted from the
+ * listing it was meant to bound (epic Phase 1, D7).
  *
- * `executor` defaults to the plain `db`; a caller holding its own connection
- * (a transaction, a lock-scoped client) passes that instead of this module
- * reaching for the shared pool underneath it.
+ * **Two things it deliberately does NOT do:**
+ *
+ *  - **It does not filter by `isActive`.** A history-deleted thread has its
+ *    node removed by the delete itself (`expelConversationFromSession`), so
+ *    "gone from history" and "gone from the workspace" are one write rather
+ *    than two conditions a reader has to AND together.
+ *  - **It does not enforce the cap.** `admit` does, counting the tree inside
+ *    the same locked transaction that writes it — so the ceiling cannot be
+ *    crossed by two callers who each read a number a moment earlier. This
+ *    function exists for the surfaces that want to TELL a user something before
+ *    they act, which is a different job with a different tolerance for being a
+ *    moment out of date.
  */
 
 import { db } from '@pagespace/db/db';
-import { and, count, eq, isNull } from '@pagespace/db/operators';
-import { conversations } from '@pagespace/db/schema/conversations';
+import { countChatMembers } from '@pagespace/lib/services/agent-workspaces/workspace-membership-store';
 
 /** The slice of a Drizzle client this count needs — satisfied by `db` and by a transaction alike. */
 type CountExecutor = Pick<typeof db, 'select'>;
@@ -26,15 +32,5 @@ export async function countOpenConversations(
   workspaceId: string,
   executor: CountExecutor = db,
 ): Promise<number> {
-  const [row] = await executor
-    .select({ n: count() })
-    .from(conversations)
-    .where(
-      and(
-        eq(conversations.workspaceId, workspaceId),
-        eq(conversations.isActive, true),
-        isNull(conversations.closedInWorkspaceAt),
-      ),
-    );
-  return row?.n ?? 0;
+  return countChatMembers(executor, workspaceId);
 }

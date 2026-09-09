@@ -18,6 +18,7 @@
     "@pagespace/lib": "workspace:*",
     "@sentry/node": "^10.56.0",
     "dotenv": "^17.2.0",
+    "nats": "^2.29.3",
     "socket.io": "^4.7.5"
   },
   "devDependencies": {

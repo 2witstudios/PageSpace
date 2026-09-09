@@ -54,6 +54,7 @@ import {
   isCompletedStatus,
   PRIORITY_CONFIG,
 } from './task-list-types';
+import { SubTaskProgress } from './SubTaskProgress';
 
 interface TaskKanbanViewProps {
   tasks: TaskItem[];
@@ -266,6 +267,11 @@ function TaskCard({
           <Badge className={cn('text-xs px-1.5 py-0', PRIORITY_CONFIG[task.priority].color)}>
             {PRIORITY_CONFIG[task.priority].label}
           </Badge>
+
+          {/* Sub-task progress — parity with the table's rows. Without it a
+              parent card reads as a leaf, and "In Progress" on a container tells
+              you nothing about the work underneath it. */}
+          <SubTaskProgress task={task} className="text-xs text-muted-foreground tabular-nums" />
 
           {/* Assignee */}
           {(task.assignee || task.assigneeAgent) && (
@@ -487,7 +493,7 @@ export function TaskKanbanView({
 
     // If the status changed, update it
     if (activeTask.status !== targetStatus) {
-      handlers.onStatusChange(activeTask.id, targetStatus);
+      handlers.onStatusChange(activeTask, targetStatus);
     }
 
     // Handle reordering within or across columns

@@ -1,55 +1,60 @@
 "use client";
 
+import Image from "next/image";
 import { cn } from "@/lib/utils";
-
-type ScreenshotSize = "iphone" | "ipad" | "custom";
+import { CANVAS, type ShotDevice } from "@/lib/app-store-shots";
 
 interface ScreenshotCanvasProps {
   children: React.ReactNode;
-  size?: ScreenshotSize;
-  width?: number;
-  height?: number;
-  background?: string;
+  size: ShotDevice;
   className?: string;
   id?: string;
 }
 
-const sizeConfigs = {
-  iphone: { width: 1320, height: 2868 },
-  ipad: { width: 2064, height: 2752 },
-  custom: { width: 1920, height: 1080 },
-} as const;
+/**
+ * The scrim over the backdrop. Vertical here rather than the landing page's
+ * horizontal sweep, because a store screenshot stacks copy above the device
+ * instead of setting them side by side — but the same ink (rgba(1,3,5,·)) and
+ * the same blue glow, so the two read as one system.
+ */
+const SCRIM =
+  "linear-gradient(180deg, rgba(1,3,5,0.78) 0%, rgba(1,3,5,0.45) 34%, rgba(1,3,5,0.25) 58%, rgba(1,3,5,0.85) 100%), " +
+  "radial-gradient(ellipse 62% 34% at 50% -4%, rgba(59,130,246,0.14), rgba(1,3,5,0))";
 
 export function ScreenshotCanvas({
   children,
-  size = "iphone",
-  width,
-  height,
-  background = "bg-background",
+  size,
   className,
   id = "screenshot",
 }: ScreenshotCanvasProps) {
-  const config = sizeConfigs[size];
-  const finalWidth = width ?? config.width;
-  const finalHeight = height ?? config.height;
+  const { width: finalWidth, height: finalHeight } = CANVAS[size];
 
   return (
     <div
       id={id}
-      className={cn(
-        "relative overflow-hidden",
-        background,
-        className
-      )}
+      className={cn("relative overflow-hidden", className)}
       style={{
         width: finalWidth,
         height: finalHeight,
+        // Matches the image's edge, so pre-paint and any letterboxing are the
+        // same black the landing hero sits on.
+        background: "#010305",
       }}
       data-screenshot="true"
       data-width={finalWidth}
       data-height={finalHeight}
     >
-      {children}
+      <Image
+        src="/hero-space.webp"
+        alt=""
+        fill
+        priority
+        quality={90}
+        sizes={`${finalWidth}px`}
+        style={{ objectFit: "cover", objectPosition: "50% 50%", zIndex: 0 }}
+      />
+      <div className="absolute inset-0 z-[1] pointer-events-none" style={{ background: SCRIM }} />
+      <div className="absolute inset-0 z-[2]">{children}</div>
     </div>
   );
 }
@@ -57,44 +62,39 @@ export function ScreenshotCanvas({
 interface HeadlineProps {
   children: React.ReactNode;
   className?: string;
+  style?: React.CSSProperties;
 }
 
-export function Headline({ children, className }: HeadlineProps) {
+/**
+ * Same face and weight as the landing `h1.hero-h` — Newsreader at 500 with
+ * -0.02em tracking — rather than the bold sans this used to be, so the store
+ * listing and the site do not look like two different products.
+ */
+export function Headline({ children, className, style }: HeadlineProps) {
   return (
-    <h1 className={cn(
-      "text-[120px] font-bold text-foreground tracking-tight leading-[0.95]",
-      className
-    )}>
+    <h1
+      className={cn("text-[132px] leading-[0.98] text-white", className)}
+      style={{
+        fontFamily: "var(--font-display)",
+        fontOpticalSizing: "auto",
+        fontWeight: 500,
+        letterSpacing: "-0.02em",
+        textWrap: "balance",
+        ...style,
+      }}
+    >
       {children}
     </h1>
   );
 }
 
-export function Subline({ children, className }: HeadlineProps) {
+export function Subline({ children, className, style }: HeadlineProps) {
   return (
-    <p className={cn(
-      "text-4xl text-muted-foreground leading-relaxed",
-      className
-    )}>
+    <p
+      className={cn("text-[46px] leading-[1.4]", className)}
+      style={{ color: "rgba(255,255,255,0.88)", textWrap: "pretty", ...style }}
+    >
       {children}
     </p>
-  );
-}
-
-interface TagProps {
-  children: React.ReactNode;
-  className?: string;
-}
-
-export function Tag({ children, className }: TagProps) {
-  return (
-    <span className={cn(
-      "inline-block px-6 py-3 rounded-full",
-      "text-lg font-medium",
-      "bg-foreground/5 text-foreground/70",
-      className
-    )}>
-      {children}
-    </span>
   );
 }

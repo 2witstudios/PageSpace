@@ -91,6 +91,17 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...conds: unknown[]) => conds),
   inArray: vi.fn((a: unknown, b: unknown) => [a, b]),
 }));
+
+// The memory-page guard queries personalization pointers. Left unmocked it
+// resolves through @pagespace/lib's BUILT dist, whose `@pagespace/db/db` import
+// the db mock above does not intercept — so this route test would quietly reach
+// a real database, passing in CI (where Postgres exists) and 500ing anywhere
+// else. Mock the guard so the route test stays a unit test. Real constants are
+// kept so a reworded refusal cannot pass silently.
+vi.mock('@pagespace/lib/memory/memory-pages', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/memory/memory-pages')>();
+  return { ...actual, findProtectedMemoryPages: vi.fn().mockResolvedValue(new Set<string>()) };
+});
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', parentId: 'parentId' },
 }));
@@ -105,6 +116,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db/db';
+import { findProtectedMemoryPages, MEMORY_PAGE_DELETE_ERROR } from '@pagespace/lib/memory/memory-pages';
 
 const { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, txSelect, txSelectFrom, txSelectWhere, transaction: mockTransaction } = dbTest as {
   txUpdate: ReturnType<typeof vi.fn>;
@@ -193,6 +205,32 @@ describe('DELETE /api/pages/bulk-delete', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setupSuccessScenario();
+    // Default: nothing in the batch is a memory page.
+    vi.mocked(findProtectedMemoryPages).mockResolvedValue(new Set<string>());
+  });
+
+  // ── Memory page protection ──────────────────────────────────────────
+
+  describe('memory page protection', () => {
+    it('refuses the whole batch when one page is a memory page, trashing nothing', async () => {
+      // All-or-nothing on purpose: silently trashing the other four and keeping
+      // the profile is a worse outcome than refusing, because nothing tells the
+      // user which item was skipped or why.
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        mockPage({ id: 'page-1' }),
+        mockPage({ id: 'memory-bio', title: 'About You' }),
+      ] as never);
+      vi.mocked(findProtectedMemoryPages).mockResolvedValue(new Set(['memory-bio']));
+
+      const response = await DELETE(createRequest({ pageIds: ['page-1', 'memory-bio'], trashChildren: true }));
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toBe(MEMORY_PAGE_DELETE_ERROR);
+      // The refusal must come BEFORE any write, not roll one back.
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(txUpdate).not.toHaveBeenCalled();
+    });
   });
 
   // ── Authentication ──────────────────────────────────────────────────

@@ -37,6 +37,7 @@ describe('ai-providers-config', () => {
       // Admin-only direct Z.ai Coder Plan connection: bare glm-* native ids.
       expect(AI_PROVIDERS).toHaveProperty('glm');
       expect(AI_PROVIDERS.glm.name).toBe('Z.ai (Admin)');
+      expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-5.3');
       expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-5.1');
       expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-5-turbo');
       expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-4.7');
@@ -62,6 +63,7 @@ describe('ai-providers-config', () => {
     it('uses full OpenRouter model ids as keys for cloud vendors', () => {
       expect(AI_PROVIDERS.openai.models).toHaveProperty('openai/gpt-5.6-sol');
       expect(AI_PROVIDERS.anthropic.models).toHaveProperty('anthropic/claude-opus-5');
+      expect(AI_PROVIDERS.google.models).toHaveProperty('google/gemini-3.7-flash');
       expect(AI_PROVIDERS.google.models).toHaveProperty('google/gemini-3.6-flash');
       expect(AI_PROVIDERS.xai.models).toHaveProperty('x-ai/grok-4.5');
       expect(AI_PROVIDERS.moonshot.models).toHaveProperty('moonshotai/kimi-k3');
@@ -81,6 +83,7 @@ describe('ai-providers-config', () => {
       expect(FREE_TIER_MODELS.has('openai/gpt-5.4-nano')).toBe(true);
       expect(FREE_TIER_MODELS.has('openai/gpt-5.4-mini')).toBe(true);
       expect(FREE_TIER_MODELS.has('anthropic/claude-haiku-4.5')).toBe(true);
+      expect(FREE_TIER_MODELS.has('google/gemini-3.7-flash')).toBe(true);
       expect(FREE_TIER_MODELS.has('google/gemini-3.5-flash-lite')).toBe(true);
     });
 
@@ -140,12 +143,12 @@ describe('ai-providers-config', () => {
     });
 
     it('limits free tier to the allowlist', () => {
-      expect(isModelAllowedForTier('openai/gpt-5.3-chat', 'free')).toBe(true);
+      expect(isModelAllowedForTier('openai/gpt-5.4-nano', 'free')).toBe(true);
       expect(isModelAllowedForTier('anthropic/claude-opus-4.8', 'free')).toBe(false);
     });
 
     it('treats undefined/unknown tier as free', () => {
-      expect(isModelAllowedForTier('openai/gpt-5.3-chat', undefined)).toBe(true);
+      expect(isModelAllowedForTier('openai/gpt-5.4-nano', undefined)).toBe(true);
       expect(isModelAllowedForTier('anthropic/claude-opus-4.8', undefined)).toBe(false);
     });
   });
@@ -317,7 +320,7 @@ describe('ai-providers-config', () => {
     });
 
     it('accepts a valid (provider, model) pair', () => {
-      expect(validateAgentModelSelection('openai', 'openai/gpt-5.3-chat')).toBeNull();
+      expect(validateAgentModelSelection('openai', 'openai/gpt-5.4-nano')).toBeNull();
       expect(validateAgentModelSelection('anthropic', 'anthropic/claude-opus-4.8')).toBeNull();
     });
 
@@ -357,7 +360,7 @@ describe('ai-providers-config', () => {
     it('respects deployment-mode visibility (cloud provider rejected on-prem)', () => {
       process.env.NEXT_PUBLIC_DEPLOYMENT_MODE = 'onprem';
       process.env.DEPLOYMENT_MODE = 'onprem';
-      const reason = validateAgentModelSelection('openai', 'openai/gpt-5.3-chat');
+      const reason = validateAgentModelSelection('openai', 'openai/gpt-5.4-nano');
       expect(reason).toMatch(/unknown or unavailable/i);
     });
   });

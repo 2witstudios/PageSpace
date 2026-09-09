@@ -17,7 +17,10 @@
  *
  * Pure string transform: no DOM dependency, safe to run server-side.
  */
-export function sanitizeCSS(css: string, opts?: { allowedHttpsHosts?: string[] }): string {
+export function sanitizeCSS(
+  css: string,
+  opts?: { allowedHttpsHosts?: string[]; allowAnyHttpsUrl?: boolean },
+): string {
   if (!css) return '';
 
   const allowedHttpsHosts = new Set(
@@ -25,6 +28,13 @@ export function sanitizeCSS(css: string, opts?: { allowedHttpsHosts?: string[] }
       .map((host) => normalizeAllowedHttpsHost(host))
       .filter((host): host is string => Boolean(host)),
   );
+  // Site mode (`pages.siteMode`): a real website loads stylesheets, webfonts and
+  // background images from CDNs it does not enumerate in advance, so host
+  // allowlisting is replaced by "any https origin". This widens NETWORK FETCH only
+  // — every script-execution vector below stays blocked, because none of them is a
+  // website feature and CSP does not cover the legacy ones. Plaintext `http:` stays
+  // blocked too, so a site cannot silently downgrade a subresource.
+  const allowAnyHttpsUrl = opts?.allowAnyHttpsUrl === true;
 
   let sanitized = css;
 
@@ -37,10 +47,19 @@ export function sanitizeCSS(css: string, opts?: { allowedHttpsHosts?: string[] }
     .replace(/data\s*:\s*text\/html/gi, '/* data:text/html blocked */')
     .replace(/(?<![a-zA-Z-])behavior\s*:/gi, '/* behavior blocked */');
 
-  // Block external @import statements (prevent external stylesheet loading)
+  // Block external @import statements (prevent external stylesheet loading).
+  // In site mode an https @import is a first-class website feature — it is how
+  // Google Fonts and most webfont services are consumed — so only non-https
+  // imports are blocked there.
+  const importUrlPattern = allowAnyHttpsUrl
+    ? /@import\s+url\s*\(['"]?(?!data:|https:)[^'")]+['"]?\)/gi
+    : /@import\s+url\s*\(['"]?(?!data:)[^'")]+['"]?\)/gi;
+  const importBarePattern = allowAnyHttpsUrl
+    ? /@import\s+['"](?!data:|https:)[^'"]+['"]/gi
+    : /@import\s+['"](?!data:)[^'"]+['"]/gi;
   sanitized = sanitized
-    .replace(/@import\s+url\s*\(['"]?(?!data:)[^'")]+['"]?\)/gi, '/* @import blocked */')
-    .replace(/@import\s+['"](?!data:)[^'"]+['"]/gi, '/* @import blocked */');
+    .replace(importUrlPattern, '/* @import blocked */')
+    .replace(importBarePattern, '/* @import blocked */');
 
   // Block external URLs in url() functions
   // This prevents tracking pixels, font exfiltration, and other data leakage
@@ -49,6 +68,13 @@ export function sanitizeCSS(css: string, opts?: { allowedHttpsHosts?: string[] }
     /url\s*\(\s*(['"]?)(?!data:)([^'")]+)\1\s*\)/gi,
     (match, quote, url) => {
       const trimmed = url.trim();
+      if (allowAnyHttpsUrl) {
+        try {
+          if (new URL(trimmed).protocol === 'https:') return match;
+        } catch {
+          // Relative and malformed URLs fall through to the default block.
+        }
+      }
       if (allowedHttpsHosts.size > 0) {
         try {
           const parsed = new URL(trimmed);

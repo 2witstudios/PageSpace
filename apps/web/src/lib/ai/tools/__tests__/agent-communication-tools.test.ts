@@ -178,7 +178,7 @@ vi.mock('../../core/ai-providers-config', () => ({
   AI_PROVIDERS: { openai: { name: 'OpenAI' } },
   getModelDisplayName: vi.fn(() => 'Test Model'),
   DEFAULT_PROVIDER: 'openai',
-  DEFAULT_MODEL: 'openai/gpt-5.3-chat',
+  DEFAULT_MODEL: 'openai/gpt-5.4-nano',
 }));
 
 import { agentCommunicationTools, executeAskAgent } from '../agent-communication-tools';
@@ -364,7 +364,7 @@ describe('agent-communication-tools', () => {
       vi.mocked(createAIProvider).mockResolvedValue({
         model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never,
         provider: 'openai',
-        modelName: 'openai/gpt-5.3-chat',
+        modelName: 'openai/gpt-5.4-nano',
       } as Awaited<ReturnType<typeof createAIProvider>>);
       vi.mocked(generateText).mockResolvedValue({
         text: 'Agent response',
@@ -473,6 +473,60 @@ describe('agent-communication-tools', () => {
       ).rejects.toThrow('Maximum agent consultation depth');
     });
 
+    /**
+     * Issue #2460: this engine built its own tool set (allowlist + MCP scope)
+     * and never asked `pages.sandboxEnabled`, so an @-mentioned agent with the
+     * switch OFF was handed the shell family while the same agent in a page
+     * chat correctly saw none of it. One switch, every surface.
+     */
+    describe('the per-agent sandbox switch', () => {
+      const sandboxAgent = (sandboxEnabled: boolean) => ({
+        id: 'agent-1',
+        title: 'Test Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: 'I am a helpful agent',
+        enabledTools: ['read_page', 'spawn_shell', 'spawn_session'],
+        aiProvider: null,
+        aiModel: null,
+        sandboxEnabled,
+        isTrashed: false,
+      });
+
+      const consult = async () => {
+        await executeAskAgent(
+          { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+          {
+            toolCallId: '1',
+            messages: [],
+            experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          }
+        );
+        const call = vi.mocked(generateText).mock.calls.at(-1)?.[0] as { tools?: Record<string, unknown> };
+        return Object.keys(call?.tools ?? {});
+      };
+
+      it('given the switch OFF, withholds the sandbox family even though enabledTools names it', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(sandboxAgent(false));
+
+        const toolNames = await consult();
+
+        expect(toolNames).toContain('read_page');
+        expect(toolNames).not.toContain('spawn_shell');
+        // The whole family, not just the shells — spawn_session is gated by the
+        // same switch (`SANDBOX_TOOL_NAMES`).
+        expect(toolNames).not.toContain('spawn_session');
+      });
+
+      it('given the switch ON, hands over exactly what the allowlist names', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(sandboxAgent(true));
+
+        const toolNames = await consult();
+
+        expect(toolNames).toEqual(expect.arrayContaining(['read_page', 'spawn_shell', 'spawn_session']));
+      });
+    });
+
     describe('chain context tracking', () => {
       const mockAgent = {
         id: 'agent-1',
@@ -509,13 +563,13 @@ describe('agent-communication-tools', () => {
         );
 
         // ask_agent runs a tool loop (stepCountIs(20)); it must bill the requesting
-        // user against the resolved backend model (openai/gpt-5.3-chat), not the unmetered alias,
+        // user against the resolved backend model (openai/gpt-5.4-nano), not the unmetered alias,
         // using totalUsage so every round-trip is counted.
         expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(
           expect.objectContaining({
             userId: 'user-123',
             provider: 'openai',
-            model: 'openai/gpt-5.3-chat',
+            model: 'openai/gpt-5.4-nano',
             inputTokens: 100,
             outputTokens: 200,
             totalTokens: 300,
@@ -938,7 +992,7 @@ describe('agent-communication-tools', () => {
         vi.mocked(createAIProvider).mockResolvedValue({
           model: { modelId: 'test-model' } as never,
           provider: 'openai',
-          modelName: 'openai/gpt-5.3-chat',
+          modelName: 'openai/gpt-5.4-nano',
         } as Awaited<ReturnType<typeof createAIProvider>>);
         vi.mocked(generateText).mockResolvedValue({
           text: 'Agent response',
@@ -994,7 +1048,7 @@ describe('agent-communication-tools', () => {
           pageId: 'agent-1',
           userId: 'user-123',
           provider: 'openai',
-          model: 'openai/gpt-5.3-chat',
+          model: 'openai/gpt-5.4-nano',
           plan: {
             reason: 'over-soft-threshold' as const,
             cutBeforeIndex: 0,

@@ -72,6 +72,60 @@ jobs:
       - name: Create scratch Admin database
         run: PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE pagespace_admin_test'
 
+      # packages/editor's cross-DOM parse-equality suite drives a REAL Chromium
+      # and compares its ProseMirror parse against happy-dom's over the construct
+      # corpus. Several `parseHTML` functions in the frozen collab schema read the
+      # DOM rather than the source string, so two processes can agree on
+      # SCHEMA_HASH and still disagree about what a document IS — and nothing else
+      # in the suite can catch that. The test deliberately does NOT skip when the
+      # browser is missing (a cross-DOM check that goes green with one DOM is
+      # worse than no check), so this step is required, not optional.
+      #
+      # Installed from apps/e2e, the workspace that owns Playwright; the browser
+      # cache is shared, and packages/editor's playwright-core resolves the same
+      # build. Cached on the resolved Playwright version so only the first run
+      # after a bump pays the ~170MB download — without this every push to every
+      # branch re-downloads it, and this repo has no CI concurrency group, so
+      # superseded runs never cancel and each one pays again.
+      - name: Resolve Playwright version (cache key)
+        id: playwright-version
+        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+        working-directory: packages/editor
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      # `--with-deps` unconditionally, INCLUDING on a cache hit. Skipping the apt
+      # pass when the browser binary is cached looks like a saving and is a trap:
+      # the cache restores the binary but not the system libraries it links
+      # against, so a runner image that drops one would fail to launch Chromium
+      # only on cache-hit runs — a failure that cannot reproduce on the run that
+      # populated the cache. The download is the expensive part and the cache
+      # already removes it; apt with everything present costs seconds.
+      - name: Install Chromium (cross-DOM parse-equality suite)
+        # `--with-deps` shells out to `apt-get update`, which exits non-zero if
+        # ANY configured source fails — and Playwright treats that as fatal
+        # (exit 100). The runner image ships Google's Chrome apt repo, and on
+        # 2026-09-09 it began serving a Packages.gz whose hashes did not match
+        # its own Release file, so every job in this repo failed here, deploys
+        # included, for a reason entirely outside the repo.
+        #
+        # Nothing here needs that repo. Playwright installs its own Chromium
+        # build and takes its system libraries from Ubuntu's archive, which is
+        # why all 28 ubuntu sources fetched fine while only dl.google.com broke.
+        # Dropping the source makes the apt pass depend only on what we use.
+        #
+        # The glob covers both the .list and deb822 .sources forms, and `rm -f`
+        # is a no-op if the image ever stops shipping it.
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          bunx playwright install --with-deps chromium
+        working-directory: apps/e2e
+
       # ADMIN_DATABASE_URL belongs here too, not only on the backfill/db-integration
       # steps below. The GDPR eraser's integration suite
       # (packages/lib/src/compliance/erasure/__tests__) gates its whole describe
@@ -146,6 +200,23 @@ jobs:
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
         run: bun run --filter '@pagespace/db' test:integration
 
+      # packages/lib had the same gap: a `vitest.integration.config.ts` existed
+      # but there was no script invoking it and no job running it, so ~25 suites
+      # sat dead in the tree. The sheet row store is the reason it matters now —
+      # every serious defect in that layer (whole-row jsonb upserts deleting
+      # columns, AND binding tighter than OR, Postgres declining to
+      # short-circuit a type guard beside a cast) was invisible to unit tests
+      # and only reproducible against a real database.
+      #
+      # These suites assume a UTC server: several assert on write-time clocks,
+      # and a non-UTC session timezone makes them fail by exactly the offset.
+      - name: Run packages/lib integration suites
+        env:
+          TZ: UTC
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+          ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
+        run: bun run --filter '@pagespace/lib' test:integration
+
       # infrastructure/ is not a bun workspace (see infrastructure/vitest.config.ts
       # for why it should not become one), so turbo never sees it and its ~15 test
       # files — including upgrade-doc.test.ts, the only check on the operator
@@ -179,10 +250,20 @@ jobs:
   # proved by Playwright specs that, until this job, ran only when a human remembered to run
   # them. The specs' own headers said so ("There is no e2e job in CI, so these run locally").
   #
-  # SCOPE: specs 15/16/17 only, not the whole e2e suite. These three are the epic's gate; the
+  # SCOPE: specs 15-19 only, not the whole e2e suite. These are the live-delivery gate; the
   # metering and storage specs (09-14, 08) need Stripe and real S3 credentials and cost far
   # more runner time than their regression risk here justifies. Widening the list means
   # widening `E2E_SPECS` below AND the citations in the evidence manifest.
+  #
+  # 11 (task tree) is outside for the storage reason, not a coverage judgement: every spec
+  # in it creates pages, and page creation writes a first version to object storage
+  # unconditionally (page-service.ts -> createPageVersion -> writePageContent), which this
+  # job has no credentials for. Giving the job an object store would let 11 and 08 in
+  # together, and is worth doing as its own change.
+  #
+  # 19 joins for the same reason 18 did: the sidebar Channels count is delivered over the
+  # same socket topology, both ends of its seam are unit- and integration-tested, and a typo
+  # in an event name or room fails silently as "no unread" rather than as a red test.
   #
   # The topology is reproduced deliberately and every piece of it is load-bearing — see the
   # comments on each step. Getting it wrong does not fail loudly; it makes the live-delivery
@@ -229,7 +310,7 @@ jobs:
       # NEXT_PUBLIC_REALTIME_URL is deliberately UNSET. See the proxy step.
       E2E_WEB_TARGET: http://127.0.0.1:3100
       E2E_REALTIME_TARGET: http://127.0.0.1:3001
-      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts
+      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts tests/20-pane-lifecycle.spec.ts
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -264,7 +345,11 @@ jobs:
         run: bun run build --filter=web
 
       - name: Install Playwright browsers
-        run: bunx playwright install --with-deps chromium
+        # Drops Google's Chrome apt source first — see the long comment on the
+        # identical step in the unit-tests job for why.
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          bunx playwright install --with-deps chromium
         working-directory: apps/e2e
 
       - name: Start realtime server

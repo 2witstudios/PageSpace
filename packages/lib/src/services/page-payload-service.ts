@@ -26,6 +26,7 @@ import type {
   Page,
 } from '../types';
 import { PageType } from '../utils/enums';
+import { readSheetDocument } from '../sheets/store';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Runner = typeof db | Tx;
@@ -266,6 +267,19 @@ export async function loadPagePayload(
   const run = async (runner: Runner): Promise<PagePayload> => {
     await ensurePageAccessible(runner, userId, pageId);
     const page = await fetchPageRow(runner, pageId);
+
+    // A sheet's content is generated from its rows, not read from the column.
+    //
+    // Rows are the source of truth for sheets; `pages.content` is a fallback
+    // that only matters until a sheet has been materialised. Serving the
+    // projection here is what lets the editor — and everything else that speaks
+    // the document format — keep working unchanged while writes go to rows. It
+    // also closes the split where a form submission landed in rows and was
+    // invisible to the person who owned the sheet.
+    if (page.type === PageType.SHEET) {
+      const projected = await readSheetDocument(pageId, runner as never);
+      if (projected !== null) page.content = projected;
+    }
     const [breadcrumb, context] = await Promise.all([
       fetchBreadcrumb(runner, userId, pageId),
       buildContext(runner, page),

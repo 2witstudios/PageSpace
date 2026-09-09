@@ -536,6 +536,178 @@ describe('env-validation', () => {
     });
   });
 
+  describe('local environments — the signing key is gated at boot', () => {
+    const bootable = () => {
+      process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/db';
+      process.env.CSRF_SECRET = 'b'.repeat(32);
+      process.env.ENCRYPTION_KEY = 'c'.repeat(32);
+    };
+
+    // Turning local envs on without the key would let every local-env create
+    // reach loadServerSigningKey() and answer a generic 500. Boot is where an
+    // operator finds out, not the first user.
+    it('given LOCAL_ENVS_ENABLED=true and NEITHER ENV_BRIDGE_SIGNING_KEY nor ENV_BRIDGE_SIGNING_KEYS, should refuse to boot naming the key', () => {
+      bootable();
+      process.env.LOCAL_ENVS_ENABLED = 'true';
+      delete process.env.ENV_BRIDGE_SIGNING_KEY;
+      delete process.env.ENV_BRIDGE_SIGNING_KEYS;
+      expect(() => validateEnv()).toThrow(/ENV_BRIDGE_SIGNING_KEY \(or ENV_BRIDGE_SIGNING_KEYS for rotation\) must be set when LOCAL_ENVS_ENABLED=true/);
+    });
+
+    // The rotation contract (Codex C10, PR #2543): a deployment that follows it
+    // sets ONLY the plural variable, and boot must accept that exactly as the
+    // loader does — otherwise the documented rotation-only configuration cannot start.
+    it('given LOCAL_ENVS_ENABLED=true and ONLY ENV_BRIDGE_SIGNING_KEYS (rotation form), should boot', () => {
+      bootable();
+      process.env.LOCAL_ENVS_ENABLED = 'true';
+      delete process.env.ENV_BRIDGE_SIGNING_KEY;
+      process.env.ENV_BRIDGE_SIGNING_KEYS = 'MC4CAQAwBQYDK2VwBCIEIA,MC4CAQAwBQYDK2VwBCIEIB';
+      expect(() => validateEnv()).not.toThrow();
+    });
+
+    it('given LOCAL_ENVS_ENABLED=true, a blank singular and a blank plural, should refuse to boot', () => {
+      bootable();
+      process.env.LOCAL_ENVS_ENABLED = 'true';
+      process.env.ENV_BRIDGE_SIGNING_KEY = '';
+      process.env.ENV_BRIDGE_SIGNING_KEYS = '  ';
+      expect(() => validateEnv()).toThrow(/must be set when LOCAL_ENVS_ENABLED=true/);
+    });
+
+    it('given LOCAL_ENVS_ENABLED=true and a blank key, should refuse to boot', () => {
+      bootable();
+      process.env.LOCAL_ENVS_ENABLED = 'true';
+      process.env.ENV_BRIDGE_SIGNING_KEY = '   ';
+      delete process.env.ENV_BRIDGE_SIGNING_KEYS;
+      expect(() => validateEnv()).toThrow(/must be set when LOCAL_ENVS_ENABLED=true/);
+    });
+
+    it('given LOCAL_ENVS_ENABLED=true and a key, should boot', () => {
+      bootable();
+      process.env.LOCAL_ENVS_ENABLED = 'true';
+      process.env.ENV_BRIDGE_SIGNING_KEY = 'MC4CAQAwBQYDK2VwBCIEIA';
+      expect(() => validateEnv()).not.toThrow();
+    });
+
+    // A declared-but-blank placeholder (ENV_BRIDGE_SIGNING_KEY=) reads as unset,
+    // like SANDBOX_SESSION_SECRET and the other optional secrets: a Sprite-only
+    // deployment that copied .env.example must still boot.
+    it('given the flag off and a BLANK key placeholder, should boot', () => {
+      bootable();
+      delete process.env.LOCAL_ENVS_ENABLED;
+      process.env.ENV_BRIDGE_SIGNING_KEY = '';
+      expect(() => validateEnv()).not.toThrow();
+    });
+
+    // The gate is on ENABLING, not on the variable: a deployment that has never
+    // heard of local envs must not be asked for a signing key.
+    it.each([
+      ['unset', undefined],
+      ['off', 'false'],
+      ['a stray value', '1'],
+    ])('given LOCAL_ENVS_ENABLED %s and no key, should boot', (_label, value) => {
+      bootable();
+      if (value === undefined) delete process.env.LOCAL_ENVS_ENABLED;
+      else process.env.LOCAL_ENVS_ENABLED = value;
+      delete process.env.ENV_BRIDGE_SIGNING_KEY;
+      expect(() => validateEnv()).not.toThrow();
+    });
+  });
+
+  describe('app hosting — the apex and the proxy secret are gated at boot', () => {
+    const bootable = () => {
+      process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/db';
+      process.env.CSRF_SECRET = 'b'.repeat(32);
+      process.env.ENCRYPTION_KEY = 'c'.repeat(32);
+    };
+
+    // The apex carries customer-authored SERVER code on its subdomains, so it
+    // must be on the PSL before it does — a prerequisite no code can check.
+    // What code CAN do is refuse to let a deployment inherit the apex silently:
+    // validateEnv() runs from instrumentation.ts and throws, so enabling hosting
+    // without naming the apex stops the process rather than serving on a default.
+    it('given APP_HOSTING_ENABLED=true and no PUBLISHED_APPS_APEX, should refuse to boot', () => {
+      bootable();
+      process.env.APP_HOSTING_ENABLED = 'true';
+
+      expect(() => validateEnv()).toThrow(/PUBLISHED_APPS_APEX must be set explicitly/);
+    });
+
+    it.each([
+      ['blank', ''],
+      ['whitespace only', '   '],
+    ])('given APP_HOSTING_ENABLED=true and a %s apex, should refuse to boot', (_label, value) => {
+      bootable();
+      process.env.APP_HOSTING_ENABLED = 'true';
+      process.env.PUBLISHED_APPS_APEX = value;
+
+      expect(() => validateEnv()).toThrow(/PUBLISHED_APPS_APEX must be set explicitly/);
+    });
+
+    it('given APP_HOSTING_ENABLED=true and an explicit apex, should boot', () => {
+      bootable();
+      process.env.APP_HOSTING_ENABLED = 'true';
+      process.env.PUBLISHED_APPS_APEX = 'pagespace.app';
+
+      expect(() => validateEnv()).not.toThrow();
+    });
+
+    it('given a MALFORMED runtime knob, should still boot — the resolvers fall back, app-wide validation does not', () => {
+      // Declared as plain strings rather than coerced numbers on purpose. These
+      // three knobs bound machine lifetime and per-app daily spend, and their
+      // resolvers take the documented default for anything that is not a
+      // non-negative integer — a typo must not switch off the reaper (leaving the
+      // fleet awake) or the cap, and it must not take the whole process down
+      // either, on a feature that is dark by default.
+      bootable();
+      process.env.APP_HOSTING_ENABLED = 'true';
+      process.env.PUBLISHED_APPS_APEX = 'pagespace.app';
+      process.env.PUBLISHED_APP_IDLE_STOP_SECONDS = '15m';
+      process.env.PUBLISHED_APP_HIT_STAMP_INTERVAL_SECONDS = 'sixty';
+      process.env.PUBLISHED_APP_DAILY_AWAKE_SECONDS_CAP = '-1';
+
+      expect(() => validateEnv()).not.toThrow();
+    });
+
+    // The gate is on ENABLING hosting, not on the variable: while hosting is
+    // dark the apex is unused, and requiring it would fail every deployment
+    // that has never heard of app hosting.
+    it.each([
+      ['unset', undefined],
+      ['not exactly "true"', '1'],
+    ])('given APP_HOSTING_ENABLED is %s, should boot without an apex', (_label, value) => {
+      bootable();
+      if (value === undefined) delete process.env.APP_HOSTING_ENABLED;
+      else process.env.APP_HOSTING_ENABLED = value;
+      delete process.env.PUBLISHED_APPS_APEX;
+
+      expect(() => validateEnv()).not.toThrow();
+    });
+
+    // A guessable proxy secret leaves the router endpoint a world-callable
+    // fly-replay emitter, so it is rejected rather than accepted-but-weak. The
+    // blank form still passes: that is read as "refuse everything", not "no check".
+    it('given a configured APP_ROUTER_PROXY_SECRET below 32 chars, should refuse to boot', () => {
+      bootable();
+      process.env.APP_ROUTER_PROXY_SECRET = 'a';
+
+      expect(() => validateEnv()).toThrow(/APP_ROUTER_PROXY_SECRET/);
+    });
+
+    it('given a blank APP_ROUTER_PROXY_SECRET, should boot — the router reads it as refuse-everything', () => {
+      bootable();
+      process.env.APP_ROUTER_PROXY_SECRET = '';
+
+      expect(() => validateEnv()).not.toThrow();
+    });
+
+    it('given a 32-char APP_ROUTER_PROXY_SECRET, should boot', () => {
+      bootable();
+      process.env.APP_ROUTER_PROXY_SECRET = 'p'.repeat(32);
+
+      expect(() => validateEnv()).not.toThrow();
+    });
+  });
+
   describe('getEnvErrors', () => {
     it('given valid environment, should return empty array', () => {
       process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/db';

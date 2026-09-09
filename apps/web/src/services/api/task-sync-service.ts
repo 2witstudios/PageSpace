@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db'
-import { eq, and, asc, inArray, isNotNull } from '@pagespace/db/operators'
+import { eq, ne, and, asc, desc, inArray, notInArray, isNull, isNotNull } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskAssignees, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import { taskTriggers } from '@pagespace/db/schema/task-triggers'
@@ -31,19 +31,281 @@ async function getPageType(tx: Tx, pageId: string): Promise<string | null> {
   return page?.type ?? null
 }
 
+
 /**
- * Seed the default `task_status_configs` for a `task_lists` row. Swallows a
- * unique-constraint violation on `(taskListId, slug)` — a concurrent caller may have
- * seeded the same list a moment earlier; the caller only needed the configs to exist.
+ * How far up the page tree the status-vocabulary walk will look.
+ *
+ * The bound exists so a pathological chain cannot turn a lazy list init into an
+ * unbounded query loop. It is NOT backed by a UI cap, whatever an earlier
+ * version of this comment claimed: MAX_TASK_DEPTH caps inline EXPANSION only,
+ * and opening a task's own page makes it a root list with its own add
+ * affordance, so page nesting has no limit.
+ *
+ * Past this depth a list falls back to the built-in statuses rather than
+ * failing — the same outcome as having no task-list ancestor at all. A 10-deep
+ * chain of task pages is far outside anything observed, and the alternative
+ * (an unbounded walk on a hot read path) is worse than the fallback.
  */
-export async function seedDefaultTaskStatusConfigs(tx: Tx, taskListId: string): Promise<void> {
-  try {
-    await tx.insert(taskStatusConfigs).values(
-      DEFAULT_TASK_STATUSES.map(s => ({ taskListId, ...s }))
-    )
-  } catch (err) {
-    const message = err instanceof Error ? err.message : ''
-    if (!message.includes('unique') && !message.includes('duplicate')) throw err
+export const STATUS_INHERITANCE_MAX_DEPTH = 10
+
+/**
+ * The status vocabulary a NEW sub-list should be born with: its nearest ancestor
+ * task list's, falling back to the defaults.
+ *
+ * Status configs are per-task-list and `task_items.status` is validated against
+ * the configs of the list named in the write's URL. So on a list whose owner
+ * renamed or added statuses, seeding a sub-list with DEFAULT_TASK_STATUSES puts a
+ * different vocabulary one level down — and any UI that renders the root's
+ * statuses on a nested row produces a slug the sub-list does not define, which
+ * PATCH rejects with a 400.
+ *
+ * Inheriting at seed time makes the two sides identical, so nested rows can show
+ * the root vocabulary and every option in the dropdown is one the server accepts.
+ * Crucially it does this WITHOUT weakening validation: normalizeStatusForList and
+ * the POST/PATCH slug checks keep enforcing "a task's status is always a slug its
+ * own list defines" exactly as before.
+ *
+ * No permission check on the ancestor, deliberately, and worth saying out loud
+ * because the new GET /api/pages/[pageId]/task in the same change DOES gate on
+ * the parent before returning its vocabulary. The two are different questions:
+ * that route hands a principal the parent's configs on request, which is a
+ * disclosure; this copies them into a page the principal is already looking at,
+ * the way a page inherits its drive's settings — a system-level data operation
+ * with no requester to check. Gating it would mean a viewer's read seeding the
+ * built-ins and permanently deciding the child's vocabulary by who happened to
+ * open it first, which is the bug this whole path exists to prevent.
+ *
+ * Returns rows in ancestor position order, or DEFAULT_TASK_STATUSES when no
+ * ancestor list has a vocabulary to inherit.
+ */
+export async function resolveInheritedStatusSeed(
+  tx: Tx,
+  forPageId: string,
+): Promise<{ name: string; slug: string; color: string; group: 'todo' | 'in_progress' | 'done'; position: number }[]> {
+  let cursor: string = forPageId
+  for (let depth = 0; depth < STATUS_INHERITANCE_MAX_DEPTH; depth++) {
+    const [row] = await tx
+      .select({ parentId: pages.parentId })
+      .from(pages)
+      .where(eq(pages.id, cursor))
+      .limit(1)
+    const parentId = row?.parentId ?? null
+    if (!parentId) break
+
+    const [parentPage] = await tx
+      .select({ type: pages.type })
+      .from(pages)
+      .where(eq(pages.id, parentId))
+      .limit(1)
+    // Stop at the first non-task ancestor: a task list nested under a folder
+    // inherits nothing, which is correct — it is a root list, not a sub-list.
+    if (parentPage?.type !== TASK_LIST_TYPE) break
+
+    const ancestorList = await tx.query.taskLists.findFirst({
+      where: eq(taskLists.pageId, parentId),
+    })
+    if (ancestorList) {
+      const configs = await tx
+        .select({
+          name: taskStatusConfigs.name,
+          slug: taskStatusConfigs.slug,
+          color: taskStatusConfigs.color,
+          group: taskStatusConfigs.group,
+          position: taskStatusConfigs.position,
+        })
+        .from(taskStatusConfigs)
+        .where(eq(taskStatusConfigs.taskListId, ancestorList.id))
+        .orderBy(asc(taskStatusConfigs.position))
+        // Deliberately UNBOUNDED, and the only read here that is. This copies a
+        // vocabulary wholesale, and nothing caps how many statuses a list may
+        // define — the statuses PUT takes any array. Truncating the copy would
+        // hand the child a DIFFERENT vocabulary from the one it is supposed to
+        // inherit, and if the ancestor's only done-group status fell past the
+        // cut the child would have no way to complete a task at all. A bound
+        // that can silently change meaning is worse here than a large read of
+        // rows that are a few short strings each.
+      if (configs.length > 0) return configs
+    }
+
+    cursor = parentId
+  }
+
+  return DEFAULT_TASK_STATUSES.map(s => ({ ...s }))
+}
+
+/**
+ * Seed a new `task_lists` row's vocabulary, inherited from its nearest ancestor
+ * task list. Conflict-tolerant for the same reason, and by the same means, as
+ * seedInheritedTaskStatusConfigs.
+ *
+ * Conflict tolerance is `onConflictDoNothing`, not a try/catch, for two
+ * reasons — one demonstrated, one structural. (Carried over from the default
+ * seeder this replaced; the reasoning is about the insert, not the values.)
+ *
+ * Demonstrated: a real conflict IS reachable on the repair paths, where two
+ * callers find the same config-less list and both seed it (the GET route's
+ * migration branch, the MCP read, `read_page`). A catch has to recognise the
+ * error first, and drizzle rethrows pg errors as DrizzleQueryError with the
+ * SQLSTATE on `.cause` — so a message test would have rethrown and 500'd the
+ * request. There is an integration test for exactly this race; removing the
+ * conflict clause fails it.
+ *
+ * Structural: the create paths run inside `db.transaction`, where a RAISED
+ * constraint violation aborts the transaction, and swallowing it would let the
+ * callback return while Postgres converts the COMMIT to a ROLLBACK — handing
+ * the caller a `task_lists` row that never committed. ON CONFLICT DO NOTHING
+ * never raises, so it cannot become live.
+ */
+export async function seedInheritedTaskStatusConfigs(
+  tx: Tx,
+  taskListId: string,
+  forPageId: string,
+): Promise<void> {
+  const seed = await resolveInheritedStatusSeed(tx, forPageId)
+  await tx.insert(taskStatusConfigs)
+    .values(seed.map(s => ({ taskListId, ...s })))
+    .onConflictDoNothing()
+  await conformExistingTasksToVocabulary(tx, taskListId, forPageId)
+}
+
+/**
+ * The three statuses any repair or seed needs, read directly rather than out of a
+ * page of the vocabulary.
+ *
+ * Every one of these used to come from a `findMany` capped at 200. Nothing caps how
+ * many statuses a list may define — the statuses PUT accepts any array — so that
+ * window could hide the answer and change it: a list whose only open status sits past
+ * row 200 handed new tasks a DONE slug, and `resolveSeedCompletedAt` then stamped
+ * them, so a task was born complete. A targeted read cannot be wrong that way.
+ *
+ * These are several small round trips where one ordered read would answer all of
+ * them. That is a deliberate trade, and NOT a claim about indexes — an earlier
+ * version of this comment said `(taskListId, group)` was indexed and it is not.
+ * The schema has `index(taskListId)` and `unique(taskListId, slug)`, so a group
+ * filter uses the former and scans the handful of rows it returns. Correctness
+ * first: the single read is the thing that had a window in it.
+ *
+ * `open` and `done` are the two sides of the completion boundary. Never land a row
+ * on the wrong side of it: one carrying a completion time stays complete, one without
+ * stays actionable. (The per-group deletion guard in the statuses route means a list
+ * with any configs keeps at least one of each group, so the later fallbacks are
+ * defence rather than live paths.)
+ *
+ * One resolver, used by the seed, the per-row repair and the set-based sweep alike —
+ * this rule written out three times is how the three come to disagree about which
+ * side a row belongs on.
+ */
+async function resolveVocabularyPicks(tx: Tx, taskListId: string): Promise<{
+  first: { slug: string };
+  open: { slug: string };
+  done: { slug: string };
+} | null> {
+  const byPosition = (extra?: ReturnType<typeof eq>) => ({
+    where: extra
+      ? and(eq(taskStatusConfigs.taskListId, taskListId), extra)
+      : eq(taskStatusConfigs.taskListId, taskListId),
+    orderBy: [asc(taskStatusConfigs.position)],
+  })
+  const first = await tx.query.taskStatusConfigs.findFirst(byPosition())
+  // No vocabulary at all: nothing to conform to, and nothing to seed from.
+  if (!first) return null
+
+  const open = await tx.query.taskStatusConfigs.findFirst(
+    byPosition(eq(taskStatusConfigs.group, 'todo')),
+  ) ?? await tx.query.taskStatusConfigs.findFirst(
+    byPosition(ne(taskStatusConfigs.group, 'done')),
+  ) ?? first
+  const done = await tx.query.taskStatusConfigs.findFirst(
+    byPosition(eq(taskStatusConfigs.group, 'done')),
+  ) ?? await tx.query.taskStatusConfigs.findFirst({
+    where: eq(taskStatusConfigs.taskListId, taskListId),
+    // The LAST config by position. Reading it directly is also stricter than the
+    // in-memory version this replaced, which took the 200th row and called it last.
+    orderBy: [desc(taskStatusConfigs.position)],
+  }) ?? first
+
+  return { first, open, done }
+}
+
+/**
+ * Bring a list's EXISTING task rows into the vocabulary just seeded for it.
+ *
+ * Only matters on the repair path, and it is the price of inheriting there. The
+ * old behaviour seeded DEFAULT_TASK_STATUSES, which always defines 'pending' —
+ * the schema default for `task_items.status`, and therefore exactly what a
+ * legacy row carries. Seeding the ancestor's vocabulary instead leaves those
+ * rows holding a slug their own list does not define, which is the invariant
+ * normalizeStatusForList exists to protect and which PATCH enforces with a 400.
+ *
+ * Two set-based UPDATEs rather than a read-then-loop, and that shape is
+ * load-bearing rather than a micro-optimisation. This runs ONCE per list — every
+ * caller reaches it only while the vocabulary is empty, so the pass that writes
+ * the configs is the only pass there will ever be. A row-at-a-time repair had to
+ * be bounded, and any row past the bound would have kept an undefined slug
+ * permanently: PATCH 400s on it, the badge renders the raw slug, and no later
+ * read would come back for it. There is no second chance to be partial with.
+ *
+ * Trashed pages included, deliberately. Skipping them costs nothing today and
+ * hands back a broken row the moment one is restored.
+ *
+ * TWO THINGS A REVIEWER SHOULD WEIGH, because they are escalations rather than
+ * accidents:
+ *
+ *  1. This runs on a VIEW-permission read. The lazy-init pattern already wrote
+ *     on read — the route has always inserted a task_lists row and its configs
+ *     for a viewer — but this is the first time a read rewrites task ROWS. It
+ *     is not optional: the alternative is leaving rows whose slug their own
+ *     list does not define, which PATCH answers 400 on and which the badge
+ *     renders as a raw slug. It fires only while a vocabulary is empty, i.e.
+ *     once per legacy list, and never on data created since this shipped.
+ *  2. It is not audited and does not broadcast. Every deliberate status write
+ *     logs and emits a task event; this one has no request and no actor to
+ *     attribute, so another tab keeps showing pre-sweep statuses until it
+ *     refetches. Giving the service an actor is the fix, and it is a change to
+ *     the whole service's signature rather than to this function.
+ *
+ * A row whose slug the new vocabulary DOES define is untouched — `notInArray`
+ * says so — which keeps the same promise normalizeStatusForList makes: a defined
+ * slug is never rewritten, even when its group disagrees with completedAt.
+ */
+async function conformExistingTasksToVocabulary(
+  tx: Tx,
+  taskListId: string,
+  listPageId: string,
+): Promise<void> {
+  // The vocabulary is expressed as a SUBQUERY, not a materialised slug list.
+  // Nothing caps how many statuses a list may define — the statuses PUT accepts
+  // any array — so reading them into memory under any limit would make every
+  // slug past that window read as "not defined" and rewrite perfectly valid
+  // rows. Worse, if the list's only done-group status sat past the window, a
+  // completed task would be rewritten to an OPEN status. `IN (SELECT …)` has no
+  // window to fall outside of.
+  const vocabulary = tx
+    .select({ slug: taskStatusConfigs.slug })
+    .from(taskStatusConfigs)
+    .where(eq(taskStatusConfigs.taskListId, taskListId))
+
+  const picks = await resolveVocabularyPicks(tx, taskListId)
+  if (!picks) return
+  const { open, done } = picks
+
+  const membersOfThisList = tx
+    .select({ id: pages.id })
+    .from(pages)
+    .where(eq(pages.parentId, listPageId))
+
+  for (const [replacement, completionFilter] of [
+    [open, isNull(taskItems.completedAt)],
+    [done, isNotNull(taskItems.completedAt)],
+  ] as const) {
+    await tx
+      .update(taskItems)
+      .set({ status: replacement.slug })
+      .where(and(
+        inArray(taskItems.pageId, membersOfThisList),
+        notInArray(taskItems.status, vocabulary),
+        completionFilter,
+      ))
   }
 }
 
@@ -51,7 +313,7 @@ export async function seedDefaultTaskStatusConfigs(tx: Tx, taskListId: string): 
  * Ensure a TASK_LIST page has its `task_lists` row and default `task_status_configs`
  * seeded. Idempotent — a no-op if the `task_lists` row already exists. Callers that
  * separately look up `task_status_configs` for display (the MCP documents `read` route,
- * `page-read-tools.ts`'s `read_page`) also call `seedDefaultTaskStatusConfigs` when that
+ * `page-read-tools.ts`'s `read_page`) also call `seedInheritedTaskStatusConfigs` when that
  * lookup comes back empty, so a legacy `task_lists` row missed by a pre-fix lazy-init
  * path gets backfilled on next read instead of staying half-initialized forever.
  *
@@ -81,18 +343,12 @@ export async function ensureTaskListForPage(
     }).returning()
     taskList = created
 
-    await seedDefaultTaskStatusConfigs(tx, created.id)
+    await seedInheritedTaskStatusConfigs(tx, created.id, pageId)
   }
 
   return taskList
 }
 
-/**
- * Upper bound on the status vocabulary scanned when remapping. Lists carry 4 defaults
- * and a handful of custom statuses; the cap exists to satisfy the unbounded-findMany
- * rule, and overshooting it could only cost a remap to a different valid slug.
- */
-const STATUS_CONFIG_REMAP_LIMIT = 200
 
 /**
  * Postgres caps a statement at 65535 bind parameters. The cascade binds one inArray per
@@ -155,22 +411,13 @@ async function normalizeStatusForList(
   // with the user's data.
   if (alreadyValid) return
 
-  const configs = await tx.query.taskStatusConfigs.findMany({
-    where: eq(taskStatusConfigs.taskListId, taskListId),
-    orderBy: [asc(taskStatusConfigs.position)],
-    limit: STATUS_CONFIG_REMAP_LIMIT,
-  })
+  // Never land on the wrong side of the done boundary. Read directly rather than out
+  // of a page of the vocabulary — see resolveVocabularyPicks for what a window can do
+  // to this choice.
+  const picks = await resolveVocabularyPicks(tx, taskListId)
   // A list with no configs at all has no vocabulary to conform to.
-  if (configs.length === 0) return
-
-  // Never land on the wrong side of the done boundary. (The per-group deletion guard in
-  // the statuses route means a list with any configs keeps at least one of each group,
-  // so the final `?? configs[...]` arms are defence rather than live paths.)
-  const replacement = item.completedAt
-    ? (configs.find((config) => config.group === 'done') ?? configs[configs.length - 1])
-    : (configs.find((config) => config.group === 'todo')
-        ?? configs.find((config) => config.group !== 'done')
-        ?? configs[0])
+  if (!picks) return
+  const replacement = item.completedAt !== null ? picks.done : picks.open
 
   await tx
     .update(taskItems)
@@ -178,22 +425,84 @@ async function normalizeStatusForList(
     .where(eq(taskItems.id, item.id))
 }
 
+
 /**
  * The slug a brand-new task should start in for THIS list. Defaults to 'pending' only
  * when the list still defines it; a list whose owner deleted that status (permitted via
  * migrateToSlug) gets its own first todo-group slug instead, so the seed can never be a
  * status its own list does not define.
  */
-async function resolveSeedStatus(
+export async function resolveSeedStatus(
   tx: Tx,
   taskListId: string,
-  cache?: Map<string, string>,
+  cache?: SeedCache,
 ): Promise<string> {
   const cached = cache?.get(taskListId)
-  if (cached !== undefined) return cached
-  const resolved = await resolveSeedStatusUncached(tx, taskListId)
-  cache?.set(taskListId, resolved)
+  if (cached !== undefined) return cached.slug
+  const slug = await resolveSeedStatusUncached(tx, taskListId)
+  cache?.set(taskListId, { slug })
+  return slug
+}
+
+/**
+ * The seed a whole backfill loop shares.
+ *
+ * The loop's parent — and therefore its list, its vocabulary and the seed
+ * derived from them — is fixed, so both queries behind a seed are worth
+ * resolving once for the run rather than per missing row on a read path. The
+ * `completedAt` field is absent until something asks for it, so a caller that
+ * only needs the slug never pays for the second lookup.
+ */
+export type SeedCache = Map<string, { slug: string; completedAt?: Date | null }>
+
+/**
+ * Should a task seeded with this status be stamped complete?
+ *
+ * `resolveSeedStatus` falls back to the list's first config by position, and a
+ * vocabulary whose statuses were all regrouped to `done` (permitted — the
+ * statuses PUT validates each group but never requires one per group) makes
+ * that a done slug. A row carrying a done status with a null `completedAt`
+ * reads as complete to `isCompletedStatus` while every counter that asks the
+ * database — `subTaskCompletedCount`, the header's own guard — counts
+ * `completedAt IS NOT NULL` and does not see it. The row then looks finished
+ * and blocks its parent at the same time.
+ *
+ * Every path that seeds a task goes through here, not just POST: the self-heal
+ * backfill on an ordinary read, page creation, and re-parenting all create rows
+ * the same way, and a rule applied to one of them is a divergence rather than a
+ * fix.
+ */
+export async function resolveSeedCompletedAt(
+  tx: Tx,
+  taskListId: string,
+  seedStatus: string,
+  cache?: SeedCache,
+): Promise<Date | null> {
+  const cached = cache?.get(taskListId)
+  // Only reusable when it is the SAME status: the cache is keyed by list, and a
+  // caller passing an explicit status can hand us a different one.
+  if (cached?.slug === seedStatus && cached.completedAt !== undefined) return cached.completedAt
+  const resolved = await resolveSeedCompletedAtUncached(tx, taskListId, seedStatus)
+  if (cached?.slug === seedStatus) cache?.set(taskListId, { ...cached, completedAt: resolved })
   return resolved
+}
+
+async function resolveSeedCompletedAtUncached(
+  tx: Tx,
+  taskListId: string,
+  seedStatus: string,
+): Promise<Date | null> {
+  const config = await tx.query.taskStatusConfigs.findFirst({
+    where: and(
+      eq(taskStatusConfigs.taskListId, taskListId),
+      eq(taskStatusConfigs.slug, seedStatus),
+    ),
+    columns: { group: true },
+  })
+  // No config for the slug means the list has no custom vocabulary, where the
+  // built-in rule is that only 'completed' is done.
+  if (!config) return seedStatus === 'completed' ? new Date() : null
+  return config.group === 'done' ? new Date() : null
 }
 
 async function resolveSeedStatusUncached(tx: Tx, taskListId: string): Promise<string> {
@@ -203,18 +512,23 @@ async function resolveSeedStatusUncached(tx: Tx, taskListId: string): Promise<st
       eq(taskStatusConfigs.taskListId, taskListId),
       eq(taskStatusConfigs.slug, defaultSlug),
     ),
+    columns: { group: true },
   })
-  if (hasDefault) return defaultSlug
+  // Defined is not enough — it has to still MEAN "not started". The statuses PUT
+  // lets a list regroup 'pending' into the done group and validates only that the
+  // group is one of the three literals, so a list can define 'pending' as a DONE
+  // status. Seeding it there hands the new task a done slug, and
+  // resolveSeedCompletedAt then stamps it: the task is created already finished,
+  // counted in its parent's completed total, satisfying the completion guard, and
+  // with its due-date trigger permanently disabled. The list usually has a
+  // perfectly good open status; fall through and find it.
+  if (hasDefault && hasDefault.group !== 'done') return defaultSlug
 
-  const configs = await tx.query.taskStatusConfigs.findMany({
-    where: eq(taskStatusConfigs.taskListId, taskListId),
-    orderBy: [asc(taskStatusConfigs.position)],
-    limit: STATUS_CONFIG_REMAP_LIMIT,
-  })
-  const seed = configs.find((config) => config.group === 'todo')
-    ?? configs.find((config) => config.group !== 'done')
-    ?? configs[0]
-  return seed?.slug ?? defaultSlug
+  // The open side of the vocabulary, read directly. Through a 200-row window this
+  // could miss a list's only open status and hand back a DONE slug instead — and
+  // resolveSeedCompletedAt would then stamp the new task complete on creation.
+  const picks = await resolveVocabularyPicks(tx, taskListId)
+  return picks?.open.slug ?? defaultSlug
 }
 
 /**
@@ -469,12 +783,20 @@ async function addTaskItemUnderParent(
     parentId: string;
     userId: string;
     /** Shared across a backfill loop: the parent is fixed, so the seed is too. */
-    seedStatusCache?: Map<string, string>;
+    seedStatusCache?: SeedCache;
+    /**
+     * The parent's already-resolved list. Same reasoning as seedStatusCache: the
+     * parent does not vary across a backfill loop, so re-deriving its list per
+     * missing row is a query — and a possible seeding write — repeated for
+     * nothing, inside a transaction the read is holding open.
+     */
+    taskList?: typeof taskLists.$inferSelect;
   },
 ): Promise<void> {
   const { pageId, parentId, userId, seedStatusCache } = params
 
-  const taskList = await ensureTaskListForPage(tx, { pageId: parentId, title: 'Task List', userId })
+  const taskList = params.taskList
+    ?? await ensureTaskListForPage(tx, { pageId: parentId, title: 'Task List', userId })
 
   const existing = await tx.query.taskItems.findFirst({
     where: eq(taskItems.pageId, pageId),
@@ -487,11 +809,16 @@ async function addTaskItemUnderParent(
   // ON CONFLICT DO NOTHING guards the self-heal race: concurrent GETs on a legacy list
   // can both pass the findFirst check above, and task_items.pageId is unique — without
   // this a second insert would 500 the read. The findFirst stays as a cheap fast path.
+  const seedStatus = await resolveSeedStatus(tx, taskList.id, seedStatusCache)
   await tx.insert(taskItems).values(
     buildTaskItemInsert({
       pageId,
       userId,
-      status: await resolveSeedStatus(tx, taskList.id, seedStatusCache),
+      status: seedStatus,
+      // Same rule POST applies. Without it the self-heal backfill — which runs
+      // on every list read — and page creation write a done-group status with a
+      // null completedAt, which no counter can see.
+      completedAt: await resolveSeedCompletedAt(tx, taskList.id, seedStatus, seedStatusCache),
     }),
   ).onConflictDoNothing({ target: taskItems.pageId })
 }
@@ -586,11 +913,17 @@ export async function backfillMissingTaskItems(
   if (missing.length === 0) return
 
   await database.transaction(async (tx) => {
-    // parentId is fixed for the whole loop, so its seed status is resolved once
-    // rather than re-queried for every missing row on this hot read path.
-    const seedStatusCache = new Map<string, string>()
+    // parentId is fixed for the whole loop, so everything derived from it — the
+    // list itself and the seed resolved from its vocabulary — is resolved once
+    // rather than per missing row. This runs on an ordinary list read, inside a
+    // write transaction, so a hundred missing rows meant a few hundred round
+    // trips holding it open.
+    const taskList = await ensureTaskListForPage(tx, {
+      pageId: parentId, title: 'Task List', userId,
+    })
+    const seedStatusCache: SeedCache = new Map()
     for (const pageId of missing) {
-      await addTaskItemUnderParent(tx, { pageId, parentId, userId, seedStatusCache })
+      await addTaskItemUnderParent(tx, { pageId, parentId, userId, seedStatusCache, taskList })
     }
   })
 }

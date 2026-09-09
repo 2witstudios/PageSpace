@@ -146,10 +146,35 @@ export const multiDriveListAgents = defineOperation({
 
 const toolExposureModeSchema = z.enum(['upfront', 'search']);
 
+/**
+ * STORED vs EFFECTIVE. `enabledTools` is what the agent has saved;
+ * `effectiveTools` is what it will actually be able to call once the gates
+ * downstream of the allowlist have had their say — chiefly `sandboxEnabled`,
+ * which strips the whole sandbox family whatever the allowlist names. Reporting
+ * only the stored list is what let a 24-tool sandbox config be confirmed on
+ * every write while every worker ran with page tools only (issue #2460).
+ *
+ * The effective fields are OPTIONAL so this client still parses a response from
+ * a server that predates them, rather than failing a call over a field it did
+ * not need.
+ */
+const blockedToolSchema = z.object({
+  tool: z.string(),
+  gate: z.enum(['sandbox_disabled', 'not_registered']),
+});
+
 const agentConfigSchema = z.object({
   systemPrompt: z.string().optional(),
   enabledToolsCount: z.number(),
   enabledTools: z.array(z.string()),
+  /** `null` = unrestricted (the agent stored no allowlist), not "none". */
+  effectiveTools: z.array(z.string()).nullable().optional(),
+  effectiveToolsCount: z.number().optional(),
+  blockedTools: z.array(blockedToolSchema).optional(),
+  toolsNeedingComposerToggle: z.array(z.string()).optional(),
+  /** `null` = not listed because the agent is unrestricted, not "none deferred". */
+  toolsReachedBySearch: z.array(z.string()).nullable().optional(),
+  sandboxEnabled: z.boolean().optional(),
   aiProvider: z.string(),
   aiModel: z.string(),
   hasSystemPrompt: z.boolean(),
@@ -165,6 +190,8 @@ const updateAgentConfigOutputSchema = z.object({
   summary: z.string(),
   updatedFields: z.array(z.string()),
   agentConfig: agentConfigSchema,
+  /** One sentence per divergence between the stored config and what it grants. */
+  warnings: z.array(z.string()).optional(),
   stats: z.object({
     pageType: z.literal('AI_CHAT'),
     updatedFields: z.number(),
@@ -187,12 +214,19 @@ export const updateAgentConfig = defineOperation({
     agentDefinition: z.string().nullable().optional(),
     visibleToGlobalAssistant: z.boolean().optional(),
     toolExposureMode: toolExposureModeSchema.optional(),
+    /**
+     * Whether the agent is offered the sandbox tool families at all. Naming
+     * those tools in `enabledTools` grants nothing while this is false — the
+     * trap issue #2460 documents — so a client that can set the allowlist has
+     * to be able to set this.
+     */
+    sandboxEnabled: z.boolean().optional(),
     expectedRevision: z.number().optional(),
   }),
   outputSchema: updateAgentConfigOutputSchema,
   requiredScope: 'drive',
   description:
-    'Update an AI agent\'s configuration (systemPrompt, enabledTools, aiProvider/aiModel, agentDefinition, visibleToGlobalAssistant, toolExposureMode). Route rejects a call with no updatable field (400) and an `expectedRevision` mismatch (409/428) — both surface as a classified HttpError, not a schema mismatch.',
+    'Update an AI agent\'s configuration (systemPrompt, enabledTools, aiProvider/aiModel, agentDefinition, visibleToGlobalAssistant, toolExposureMode, sandboxEnabled). The response reports the EFFECTIVE tool surface beside the stored one (`effectiveTools`, `blockedTools`, `warnings`): naming sandbox tools in `enabledTools` grants nothing while `sandboxEnabled` is false. Route rejects a call with no updatable field (400), a non-boolean `sandboxEnabled` (400), and an `expectedRevision` mismatch (409/428) — all surface as a classified HttpError, not a schema mismatch.',
 });
 
 // ---------------------------------------------------------------------------
@@ -236,16 +270,42 @@ export const askAgent = defineOperation({
     question: z.string().min(1),
     context: z.string().optional(),
     conversationId: z.string().optional(),
+    /**
+     * A caller-minted address for a NEW conversation — the answer's location,
+     * known before the request is sent.
+     *
+     * Deliberately a separate field from `conversationId` rather than a
+     * relaxation of it. `conversationId` names a conversation that must
+     * already exist and must already be readable by the caller; the route
+     * answers an unknown id there with the same 404 it gives someone else's
+     * thread, precisely so an id-guessing caller cannot tell the two apart.
+     * Folding "start a new one here" into that field would have turned that
+     * refusal into an existence oracle for every id. As its own field the
+     * distinction is explicit: `conversationId` continues, `newConversationId`
+     * creates, and the continue path's semantics do not move.
+     *
+     * WHY THIS EXISTS AT ALL: the route otherwise mints the conversation id
+     * itself and returns it only in the 200 body. A caller whose request
+     * exceeded its deadline therefore never learned where its own answer was
+     * being written — while the server, which never reads `request.signal`,
+     * ran the consult to completion and billed for it. Supplying the address
+     * up front is what makes an abandoned consult recoverable
+     * (`conversations.read`) instead of paid-for and lost.
+     */
+    newConversationId: z.string().min(1).optional(),
   }),
   outputSchema: askAgentOutputSchema,
   requiredScope: 'drive',
-  // Long-running: the route's tool loop is capped at 20 steps (#1769 fix,
-  // mirroring the internal ask_agent tool's own budget) inside one
-  // generateText call — comfortably covered by 2 minutes without masking a
-  // genuinely hung request.
+  // A per-operation DEFAULT, not a ceiling: an explicit `timeoutMs` on the
+  // client beats this (see the SDK client's `resolveTimeoutMs`). 2 minutes
+  // covers the route's 20-step tool loop (#1769 fix, mirroring the internal
+  // ask_agent tool's budget) for the common case without masking a genuinely
+  // hung request — but a tool loop against an arbitrary model has no bound
+  // this or any other constant could honestly express, which is why the
+  // caller must be able to raise it.
   timeoutMsOverride: 120_000,
   description:
-    'Consult another AI agent for specialized assistance. Non-idempotent: POST is never auto-retried by the facade (isIdempotentMethod only retries GET), so a timeout or 5xx is surfaced directly rather than retried — a retried ask would double-execute the agent. Omitting `conversationId` falls back to the agent\'s 10 most recent messages across all conversations (#1769 fix); passing one continues that exact conversation.',
+    'Consult another AI agent for specialized assistance. Non-idempotent: POST is never auto-retried by the facade (isIdempotentMethod only retries GET), so a timeout or 5xx is surfaced directly rather than retried — a retried ask would double-execute the agent. A timeout means the CALLER gave up, not that the work stopped: the route runs to completion and persists its answer, so retrieve it with `conversations.read` rather than asking again. Pass `newConversationId` to choose that conversation\'s id up front, so the answer is addressable even if the request times out; pass `conversationId` to continue an existing conversation (it must already exist and be readable); pass neither for a fresh conversation with no prior history.',
 });
 
 // ---------------------------------------------------------------------------

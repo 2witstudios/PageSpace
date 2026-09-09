@@ -15,6 +15,7 @@ import {
   createSecureResponse,
   createSecureErrorResponse,
   isHandoffBridgeRoute,
+  routeOwnsItsOwnCsp,
   isPublicPageRoute,
   isPublishedSiteHost,
   shouldDisableCOEP,
@@ -117,6 +118,25 @@ describe('Security Headers', () => {
       expect(csp).toContain("frame-ancestors 'none'");
     });
 
+    it('widens frame-src to exactly the preview wildcard ONLY when the flag is on AND an apex is configured', () => {
+      const env = { ...process.env };
+      try {
+        delete process.env.DEV_PREVIEW_ENABLED;
+        delete process.env.DEV_PREVIEW_APEX;
+        const dark = buildCSPPolicy('n');
+        process.env.DEV_PREVIEW_APEX = 'pagespace-preview.app';
+        // Apex set, flag off: byte-identical to dark.
+        expect(buildCSPPolicy('n')).toBe(dark);
+        process.env.DEV_PREVIEW_ENABLED = 'true';
+        const on = buildCSPPolicy('n');
+        expect(on).toContain('https://*.preview.pagespace-preview.app');
+        expect(on).not.toContain('sprites.app');
+        expect(on.replace(' https://*.preview.pagespace-preview.app', '')).toBe(dark);
+      } finally {
+        process.env = { ...env };
+      }
+    });
+
     it('includes base-uri self for base tag protection', () => {
       const csp = buildCSPPolicy('test-nonce');
 
@@ -191,7 +211,24 @@ describe('Security Headers', () => {
     it('allows Google accounts and Stripe iframes via frame-src', () => {
       const csp = buildCSPPolicy('test-nonce');
 
-      expect(csp).toContain('frame-src https://accounts.google.com https://js.stripe.com');
+      expect(csp).toContain('https://accounts.google.com https://js.stripe.com');
+    });
+
+    /**
+     * The in-app canvas view frames a real same-origin URL
+     * (`/api/canvas/[pageId]/preview`), and `frame-src` does not fall back to
+     * `default-src` once it is present. An allowlist carrying only the external
+     * cloud origins therefore blocks every canvas page from rendering at all —
+     * which is what shipped, because the directive only appeared in cloud mode.
+     */
+    it('keeps same-origin framing allowed alongside the external origins', () => {
+      const frameSrc = buildCSPPolicy('test-nonce')
+        .split(';')
+        .map((directive: string) => directive.trim())
+        .find((directive: string) => directive.startsWith('frame-src'));
+
+      expect(frameSrc).toBeDefined();
+      expect(frameSrc).toContain("'self'");
     });
 
     it('blocks plugins via object-src none', () => {
@@ -341,6 +378,24 @@ describe('Security Headers', () => {
       const response = NextResponse.next();
 
       applySecurityHeaders(response, { nonce: 'test', isProduction: false });
+
+      expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+    });
+
+    it('given sameOriginFrameable, should relax X-Frame-Options to SAMEORIGIN (never wider)', () => {
+      // The canvas preview is framed by the dashboard itself, and DENY blocks
+      // framing even same-origin — without this the preview renders blank.
+      const response = NextResponse.next();
+
+      applySecurityHeaders(response, { nonce: 'test', isProduction: false, sameOriginFrameable: true });
+
+      expect(response.headers.get('X-Frame-Options')).toBe('SAMEORIGIN');
+    });
+
+    it('given sameOriginFrameable is absent, should keep DENY so no other route is framable', () => {
+      const response = NextResponse.next();
+
+      applySecurityHeaders(response, { nonce: 'test', isProduction: false, isAPIRoute: true });
 
       expect(response.headers.get('X-Frame-Options')).toBe('DENY');
     });
@@ -526,6 +581,23 @@ describe('Security Headers', () => {
       expect(isHandoffBridgeRoute('/api/auth/apple/native')).toBe(false);
       expect(isHandoffBridgeRoute('/api/auth/csrf')).toBe(false);
       expect(isHandoffBridgeRoute('/api/foo')).toBe(false);
+    });
+  });
+
+  describe('routeOwnsItsOwnCsp', () => {
+    it('covers the handoff bridges and the published-app router', () => {
+      expect(routeOwnsItsOwnCsp('/api/auth/google/callback')).toBe(true);
+      expect(routeOwnsItsOwnCsp('/api/auth/apple/callback')).toBe(true);
+      expect(routeOwnsItsOwnCsp('/api/app-hosting/router')).toBe(true);
+    });
+
+    it('is false for everything else, including app-hosting siblings', () => {
+      // The API CSP is the safe default; only a route that actually delivers its
+      // own policy may opt out, and only by exact path.
+      expect(routeOwnsItsOwnCsp('/api/app-hosting')).toBe(false);
+      expect(routeOwnsItsOwnCsp('/api/app-hosting/router/x')).toBe(false);
+      expect(routeOwnsItsOwnCsp('/api/auth/csrf')).toBe(false);
+      expect(routeOwnsItsOwnCsp('/api/foo')).toBe(false);
     });
   });
 

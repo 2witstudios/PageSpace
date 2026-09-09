@@ -44,6 +44,39 @@ export const applyCellDelete = (previous: SheetData, address: string): SheetData
 };
 
 /**
+ * Clear many cells in one pass.
+ *
+ * The per-cell form clones the whole `cells` record each time, so clearing a
+ * selected column of a large sheet was quadratic — roughly one full-map copy
+ * per cell. Formatting is left untouched, as it is for a single cell: a blank
+ * but styled cell is a legitimate part of a laid-out sheet.
+ *
+ * Returns the sheet unchanged when nothing was actually cleared, so an empty
+ * selection does not push an undo entry.
+ */
+export const applyCellsDelete = (previous: SheetData, addresses: readonly string[]): SheetData => {
+  const nextCells = { ...previous.cells };
+  let removed = 0;
+
+  for (const address of addresses) {
+    if (address in nextCells) {
+      delete nextCells[address];
+      removed++;
+    }
+  }
+
+  if (removed === 0) {
+    return previous;
+  }
+
+  return {
+    ...previous,
+    version: previous.version + 1,
+    cells: nextCells,
+  };
+};
+
+/**
  * The value an edit should start with, given the current cell content and the
  * key that triggered it: a typed printable character replaces the content;
  * F2 (or no key) edits from the current value.

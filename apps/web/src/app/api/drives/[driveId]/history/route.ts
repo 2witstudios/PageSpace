@@ -7,14 +7,16 @@ import { isActivityEligibleForRollback } from '@pagespace/lib/permissions/rollba
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { optionalAbsoluteInstant } from '@/lib/validation/date-params';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
-  startDate: z.coerce.date().optional(),
-  endDate: z.coerce.date().optional(),
+  // Absolute instants, not wall-clock times — see optionalAbsoluteInstant.
+  startDate: optionalAbsoluteInstant,
+  endDate: optionalAbsoluteInstant,
   actorId: z.string().optional(),
   operation: z.string().optional(),
   resourceType: z.string().optional(),

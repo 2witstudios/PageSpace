@@ -27,10 +27,10 @@ import { sessionPost } from '../support/http';
  * nothing to converge ON.
  *
  * What replaced it, and what these specs pin:
- *  - every mutation leaves the store as ONE verb against a rev
- *    (`POST /api/agent-workspaces/[workspaceId]/workspace/verbs`);
- *  - the write lands in the pane ROWS and broadcasts `workspace:updated` on the
- *    `session:<id>` room, so the other window adopts it LIVE — no reload;
+ *  - every mutation leaves the store as ONE write against a rev
+ *    (`POST /api/agent-workspaces/[workspaceId]/nodes`);
+ *  - the write lands in the node ROWS and broadcasts `workspace:nodes-updated`
+ *    on the `session:<id>` room, so the other window adopts it LIVE — no reload;
  *  - because the rows are the truth, a window opened afterwards sees the same
  *    grid: convergence is durable, not merely a message both tabs happened to
  *    receive.
@@ -47,7 +47,7 @@ import { sessionPost } from '../support/http';
  *
  * ## Requires the realtime server
  *
- * The live half of every assertion here rides `broadcastWorkspaceUpdated` →
+ * The live half of every assertion here rides `broadcastWorkspaceNodesUpdated` →
  * `${INTERNAL_REALTIME_URL}/api/broadcast` → the `session:<id>` room. With
  * `apps/realtime` not running the broadcast logs a warn and is skipped, and the
  * "no reload" assertions fail (correctly — the delivery really is absent). Run
@@ -79,7 +79,7 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
  * realtime service is served from a DIFFERENT ORIGIN than the app — which is
  * exactly the local e2e topology, app on one port and `apps/realtime` on
  * another — that first request is not `'self'`, is not `ws:`, and the browser
- * blocks it. No socket, no `workspace:updated`, and the live assertions here
+ * blocks it. No socket, no `workspace:nodes-updated`, and the live assertions here
  * would fail for a reason that has nothing to do with the pane grid.
  *
  * This is a HARNESS artifact, not a product finding: a real deployment reaches
@@ -209,7 +209,7 @@ test.describe('pane grid — two devices on one session', () => {
     await expect(windowA.getByTestId(PANE_BAR)).toHaveCount(2);
 
     // THE ASSERTION. Window B never reloaded and never clicked anything: the
-    // second pane can only have come from `workspace:updated` on the
+    // second pane can only have come from `workspace:nodes-updated` on the
     // `session:<id>` room. This is the exact thing the blob era could not do.
     await expect(windowB.getByTestId(PANE_BAR)).toHaveCount(2, { timeout: 30_000 });
 

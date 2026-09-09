@@ -376,8 +376,8 @@ describe('getContextWindowSize', () => {
     // vendor prefix. getContextWindowSize prefers an exact match in the authoritative
     // shared catalog (MODEL_CONTEXT_WINDOWS) so truncation enforces the model's real
     // limit; the substring heuristic is only a fallback for ids absent from the catalog.
-    it('returns the catalog window for openai/gpt-5.3-chat (128k)', () => {
-      expect(getContextWindowSize('openai/gpt-5.3-chat')).toBe(128_000);
+    it('returns the catalog window for openai/gpt-5.4-nano (400k)', () => {
+      expect(getContextWindowSize('openai/gpt-5.4-nano')).toBe(400_000);
     });
 
     it('returns the catalog window for openai/gpt-5.4-mini (400k)', () => {

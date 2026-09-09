@@ -195,10 +195,15 @@ const eslintConfig = [
                 "Edge-runtime middleware graph: no database access. Persist via the /api/internal/monitoring/ingest route (Node runtime) instead.",
             },
             {
-              // Everything under @pagespace/lib except api-contract-version
-              // (a pure constant that security-headers.ts legitimately
-              // bundles into the edge build).
-              regex: "^@pagespace/lib(?!/api-contract-version$)(/.*)?$",
+              // Everything under @pagespace/lib except the pure leaves the
+              // edge build legitimately bundles: api-contract-version (a
+              // constant, security-headers.ts) and the two dev-preview leaves
+              // middleware.ts / security-headers.ts read to recognise a
+              // preview host — preview-host (string functions only) and
+              // dev-preview-env (process.env reads only; no logger, no db).
+              // Anything new added here must stay import-free of Node APIs;
+              // next.config.ts's edgeNodeOnlyGuard is the build-time backstop.
+              regex: "^@pagespace/lib(?!/api-contract-version$)(?!/services/sandbox/preview/preview-host$)(?!/services/sandbox/preview/dev-preview-env$)(/.*)?$",
               message:
                 "Edge-runtime middleware graph: @pagespace/lib is Node-only (logger uses os/process.on; many leaves import the db). Use edge-safe leaf modules under apps/web/src, e.g. @/lib/logging/edge-logger.",
             },

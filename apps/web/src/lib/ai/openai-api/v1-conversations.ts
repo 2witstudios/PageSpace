@@ -1,3 +1,5 @@
+import { readMessageText } from '@/lib/ai/core/message-utils';
+
 // Types
 
 export interface OpenAIToolCall {
@@ -133,21 +135,6 @@ export function validateConversationAccess(
   return { ok: true };
 }
 
-function extractPlainText(content: string): string {
-  try {
-    const parsed = JSON.parse(content);
-    if (typeof parsed === 'object' && !Array.isArray(parsed) && parsed !== null) {
-      if (typeof parsed.originalContent === 'string') return parsed.originalContent;
-      if (Array.isArray(parsed.textParts) && parsed.textParts.length > 0) {
-        return (parsed.textParts as string[]).filter((t): t is string => typeof t === 'string').join('');
-      }
-    }
-  } catch {
-    // plain text
-  }
-  return content;
-}
-
 function parseRawToolCalls(
   raw: unknown,
 ): Array<{ toolCallId: string; toolName: string; input: unknown }> {
@@ -197,7 +184,7 @@ export function serializeMessageRowToMessages(
   row: MessageRow,
 ): Array<OpenAIMessage | OpenAIToolResultMessage> {
   const role = row.role as 'user' | 'assistant' | 'system';
-  const text = extractPlainText(row.content);
+  const text = readMessageText(row.content);
 
   const rawCalls = parseRawToolCalls(row.toolCalls);
   const toolCalls: OpenAIToolCall[] = rawCalls.map((tc) => ({

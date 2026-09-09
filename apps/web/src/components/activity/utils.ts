@@ -1,4 +1,4 @@
-import { isToday, isYesterday, isThisWeek, format } from 'date-fns';
+import { isToday, isYesterday, isThisWeek, format, addDays, startOfDay, parseISO } from 'date-fns';
 import type {
   ActivityLog,
   ActivityGroupSummary,
@@ -279,4 +279,55 @@ export function groupConsecutiveActivities(
   }
 
   return result;
+}
+
+/**
+ * The instant bounds the activity APIs want for a day-picker range.
+ *
+ * The picker selects DAYS, in the viewer's own timezone; `startDate`/`endDate`
+ * on the API are absolute instants and `endDate` is EXCLUSIVE. So the selected
+ * end day is included by sending the start of the *next* local day — which also
+ * means the window is the user's day wherever they are, with no day arithmetic
+ * on the server, which cannot know their zone.
+ *
+ * The routes used to add a day themselves, in the server's local time. That
+ * happened to reproduce this window (the browser sent local midnight and the
+ * server added 24h) but it stretched any explicit instant a caller sent by a
+ * whole day, and depended on where the server ran (#2404).
+ */
+export function dayRangeParams(
+  startDate?: Date,
+  endDate?: Date,
+): { startDate?: string; endDate?: string } {
+  return {
+    ...(startDate ? { startDate: startOfDay(startDate).toISOString() } : {}),
+    ...(endDate ? { endDate: addDays(startOfDay(endDate), 1).toISOString() } : {}),
+  };
+}
+
+/**
+ * Read a day the user picked back out of a URL parameter.
+ *
+ * The filters live in the URL so a view can be reloaded or shared, and they are
+ * written as `YYYY-MM-DD` — a CALENDAR DAY, which only means anything in the
+ * reader's own timezone. `new Date("2026-02-19")` is the trap: ISO 8601 defines
+ * a bare date as UTC midnight, so west of Greenwich it reads back as the 18th
+ * and the whole range slides a day (#2404). `parseISO` reads a date-only value
+ * as local midnight, and still honours an explicit instant if one is present.
+ */
+export function parseDayParam(value: string | null | undefined): Date | undefined {
+  if (!value) return undefined;
+  const parsed = parseISO(value);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
+/**
+ * Write a picked day into a URL parameter, as the day the user sees.
+ *
+ * The counterpart trap to {@link parseDayParam}: `toISOString().split('T')[0]`
+ * takes the UTC day, which east of Greenwich is the day BEFORE the one that was
+ * picked (Tokyo midnight is 15:00Z the previous day). `format` is local.
+ */
+export function formatDayParam(date: Date): string {
+  return format(date, 'yyyy-MM-dd');
 }

@@ -342,6 +342,61 @@ describe('adjustFormulaReferences', () => {
     expect(adjusted).toBe(formula);
     expect(elapsedMs).toBeLessThan(1000);
   });
+
+  it('shifts a reference outside a string literal but leaves the literal alone', () => {
+    expect(adjustFormulaReferences('=IF(a2>0,"q1","")', 1, 0)).toBe('=IF(A3>0,"q1","")');
+  });
+
+  it('does not shift or reletter a lowercase-looking cell ref inside a string', () => {
+    expect(adjustFormulaReferences('=IF(A2>0,"a1","")', 1, 0)).toBe('=IF(A3>0,"a1","")');
+  });
+
+  it('leaves sheet-name-shaped and date-shaped literals untouched', () => {
+    expect(adjustFormulaReferences('=A1&"sheet2"', 1, 0)).toBe('=A2&"sheet2"');
+    expect(adjustFormulaReferences('=A1&"Q4 2026"', 1, 0)).toBe('=A2&"Q4 2026"');
+  });
+
+  it('leaves a ref-shaped literal untouched when it is the entire formula body', () => {
+    expect(adjustFormulaReferences('="A1"', 1, 1)).toBe('="A1"');
+  });
+
+  it('shifts refs on both sides of a string literal', () => {
+    expect(adjustFormulaReferences('=A1&"b2"&C1', 1, 0)).toBe('=A2&"b2"&C2');
+  });
+
+  it('handles a ref immediately adjacent to a quote', () => {
+    expect(adjustFormulaReferences('=CONCATENATE(A1,"x")', 1, 0)).toBe('=CONCATENATE(A2,"x")');
+    expect(adjustFormulaReferences('="x"&A1', 1, 0)).toBe('="x"&A2');
+  });
+
+  it('copies an unterminated trailing string literal through unchanged', () => {
+    expect(adjustFormulaReferences('=A1&"unterminated a2', 1, 0)).toBe('=A2&"unterminated a2');
+  });
+
+  it('does not shift a ref inside a second string literal after a real ref', () => {
+    expect(adjustFormulaReferences('=IF(A1="b2","c3","d4")', 1, 0)).toBe('=IF(A2="b2","c3","d4")');
+  });
+
+  it('shifts a real reference following a page-reference label containing an unmatched quote', () => {
+    // A page-reference label can hold any character, including a bare `"` —
+    // the tokenizer (`parser.ts`) scans `@[...]` verbatim up to the closing
+    // `]` with no quote-awareness at all. Misreading that quote as the start
+    // of a string literal used to swallow the rest of the formula, including
+    // the real trailing reference — leaving `A1` unshifted instead of `A2`.
+    expect(adjustFormulaReferences('=@[Budget "Q1]:A1', 1, 0)).toBe('=@[Budget "Q1]:A2');
+  });
+
+  it('leaves a page-reference label with a balanced pair of quotes untouched and still shifts the trailing ref', () => {
+    expect(adjustFormulaReferences('=@[Budget "Q1"]:A1', 1, 0)).toBe('=@[Budget "Q1"]:A2');
+  });
+
+  it('shifts a real reference following a page reference with an identifier suffix', () => {
+    expect(adjustFormulaReferences('=@[Budget](pg_1:page):A1', 1, 0)).toBe('=@[Budget](pg_1:page):A2');
+  });
+
+  it('does not let a string literal after a page reference bleed into the reference scan', () => {
+    expect(adjustFormulaReferences('=@[Budget]:A1&"x2"', 1, 0)).toBe('=@[Budget]:A2&"x2"');
+  });
 });
 
 describe('sheet sanitisation', () => {

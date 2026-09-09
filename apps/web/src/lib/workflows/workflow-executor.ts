@@ -4,7 +4,7 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { filterToolsForDispatchCredentials, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForEphemeralWorkspace, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { spawnSession, createConversationInSession, endSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
@@ -17,6 +17,9 @@ import { eq, and, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { decryptField } from '@pagespace/lib/encryption/field-crypto'
 import { pages, drives } from '@pagespace/db/schema/core'
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { readSheetDocument } from '@pagespace/lib/sheets/store';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { taskItems, taskLists, taskAssignees, taskStatusConfigs } from '@pagespace/db/schema/tasks'
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs'
 import { workflowRunSteps } from '@pagespace/db/schema/workflow-run-steps'
@@ -29,6 +32,7 @@ import { applyImplicitStepArgs } from './core/implicit-step-args';
 import { frameWebhookPayloadPrompt } from '@/lib/webhooks/webhook-payload-framing';
 import { DETERMINISTIC_TOOL_ALLOWLIST, getDeterministicTools } from '@/lib/ai/core/deterministic-tools';
 import type { z } from 'zod';
+import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 
 export type WorkflowRunSource =
   | { table: 'cron'; id: null; triggerAt: Date | null }
@@ -488,7 +492,7 @@ async function runExecution(
     const contextPageIds = input.contextPageIds ?? [];
     if (contextPageIds.length > 0) {
       const validContextPages = await db
-        .select({ id: pages.id, title: pages.title, content: pages.content })
+        .select({ id: pages.id, type: pages.type, title: pages.title, content: pages.content })
         .from(pages)
         .where(
           and(
@@ -501,7 +505,13 @@ async function runExecution(
       if (validContextPages.length > 0) {
         userMessage += '\n\n--- Reference Documents ---';
         for (const page of validContextPages) {
-          userMessage += `\n\n## ${page.title}\n${page.content || '(empty)'}`;
+          // A sheet's content is generated from its rows; `pages.content` is
+          // empty for a materialised one, so injecting the column would hand
+          // the model "(empty)" for a spreadsheet full of data.
+          const body = isSheetType(page.type as PageType)
+            ? (await readSheetDocument(page.id)) ?? page.content
+            : page.content;
+          userMessage += `\n\n## ${page.title}\n${body || '(empty)'}`;
         }
       }
     }
@@ -601,16 +611,18 @@ async function runExecution(
     // compute AND the chat-only session family, which free-tier and
     // kill-switch-off runs keep) would answer `no_session` and never execute.
     //
-    // spawn_session/send_session are stripped from EVERY workflow run —
-    // two structural mismatches, not a credential nuance (codex rounds 7, 8
-    // and 11): (1) dispatch relays a live browser request's cookie, which
-    // cron/task/calendar/webhook fires never have; (2) even a manual run
-    // executes against a RUN-SCOPED session that the `finally` below ends
-    // the moment the run finishes — a fire-and-forget worker dispatched
-    // without `wait: true` would outlive its own workspace, losing its
-    // Sprite mid-call or re-provisioning after cleanup already ran. A
-    // workflow run is a single bounded turn; it delegates by finishing, not
-    // by leaving detached workers behind.
+    // spawn_session/send_session are stripped from EVERY workflow run. This
+    // used to rest on two reasons (codex rounds 7, 8 and 11); only ONE is still
+    // true, and it is the structural one. Dispatch no longer relays a live
+    // browser request's cookie — it signs its own hop — so a cron/task/calendar/
+    // webhook fire could now dispatch perfectly well. What still stops it: a run
+    // executes against a RUN-SCOPED session that the `finally` below ends the
+    // moment the run finishes, so a fire-and-forget worker dispatched without
+    // `wait: true` would outlive its own workspace, losing its Sprite mid-call
+    // or re-provisioning after cleanup already ran. A workflow run is a single
+    // bounded turn; it delegates by finishing, not by leaving detached workers
+    // behind. Lifting this means teaching `releaseWorkflowSession` to skip
+    // teardown while the workspace still holds workers other than the run's own.
     //
     // A session is minted only when a surviving COMPUTE tool can act in a
     // fresh run-scoped workspace. When none survived, the chat-side
@@ -625,7 +637,7 @@ async function runExecution(
     // families rather than failing the workflow — the same posture as an
     // agent with the sandbox toggled off.
     let conversationId = `workflow-${input.workflowId}-${Date.now()}`;
-    availableTools = filterToolsForDispatchCredentials(availableTools, false) as ToolSet;
+    availableTools = filterToolsForEphemeralWorkspace(availableTools, false) as ToolSet;
     const sessionBackedToolsActive =
       workflowSandboxEnabled &&
       Object.keys(availableTools).some((name) => SANDBOX_COMPUTE_TOOL_NAMES.has(name));
@@ -721,6 +733,10 @@ async function runExecution(
           maxRetries: 3,
           experimental_context: executionContext,
           stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
+          // Per-step cap: history is prepared once, but this loop runs many model
+          // calls, so one run's oversized tool payloads would otherwise accumulate
+          // for its whole duration (#2461 — see cap-step-tool-payloads.ts).
+          prepareStep: ({ messages: stepMessages }) => ({ messages: capStepToolPayloads(stepMessages) }),
         })
       : await generateText({
           model: providerResult.model,

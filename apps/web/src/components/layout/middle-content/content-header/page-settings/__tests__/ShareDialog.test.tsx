@@ -243,13 +243,17 @@ describe('ShareDialog — off-platform invite branch', () => {
   });
 
   it('given /api/users/find returns 200, uses the direct grant path (not share-invite)', async () => {
-    // fetchRoleData fires on dialog open and consumes 2 fetchWithAuth calls
-    // (one for /api/drives/:driveId/roles, one for /api/pages/:pageId/role-permissions)
-    // before handleInvite can call /api/users/find
-    vi.mocked(fetchWithAuth)
-      .mockResolvedValueOnce(makeEmptyRolesResponse())
-      .mockResolvedValueOnce(makeEmptyRolesResponse())
-      .mockResolvedValueOnce(make200UserResponse());
+    // Dispatch on URL, not on call order. This used to be a positional queue
+    // that had to know dialog-open fires two calls ahead of /api/users/find;
+    // any component that later added a request shifted every entry by one and
+    // this test failed for a reason having nothing to do with what it asserts.
+    // (That is exactly what happened when the share-link section's GET moved
+    // from plain `fetch` onto `fetchWithAuth`.)
+    vi.mocked(fetchWithAuth).mockImplementation((input: unknown) => {
+      const url = String(input);
+      if (url.includes('/api/users/find')) return Promise.resolve(make200UserResponse());
+      return Promise.resolve(makeEmptyRolesResponse());
+    });
     vi.mocked(post).mockResolvedValueOnce({ id: 'perm_1' });
 
     const user = userEvent.setup();

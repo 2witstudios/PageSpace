@@ -6,12 +6,17 @@ import {
   createSecureResponse,
   createSecureRewrite,
   createSecureErrorResponse,
-  isHandoffBridgeRoute,
+  APP_ROUTER_ROUTE_PATH,
+  routeOwnsItsOwnCsp,
   isPublicPageRoute,
   isPublishedSiteHost,
   isSecureRequest,
   shouldDisableCOEP,
 } from '@/middleware/security-headers';
+import { isCanvasPreviewRoute } from '@/app/api/canvas/_shared/previewRoute';
+import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
+import { parsePreviewHost, rewritePreviewHostPath } from '@pagespace/lib/services/sandbox/preview/preview-host';
+import { DEV_PREVIEW_PATH_HEADER } from '@/lib/dev-preview/preview-path-header';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/url-utils';
 import { logSecurityEvent } from '@/lib/logging/edge-logger';
 import {
@@ -133,6 +138,31 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       return new NextResponse(null, { status: 404, headers: response.headers });
     }
 
+    // Dev-server preview hosts (`<kind>-<holderId>.preview.<apex>`): the
+    // request is for a holder's proxied dev server, not for the dashboard.
+    // Rewrite it onto the host route — the holder rides in the path, the
+    // original pathname rides along verbatim — and let NOTHING else in this
+    // middleware touch it: no session redirect (the preview host authenticates
+    // with its own host-only cookie, checked in the route), no origin
+    // validation (the caller IS a foreign origin by design), and no security
+    // headers (the app's `X-Frame-Options: DENY` and API CSP would blank the
+    // frame; the route sets the preview's own headers). Only when the feature
+    // is enabled AND an apex is configured — otherwise these hosts do not
+    // exist and the request falls through to the normal 404.
+    const previewApex = isDevPreviewEnabled() ? resolveDevPreviewApex() : null;
+    const previewHolder = previewApex === null ? null : parsePreviewHost(req.headers.get('host'), previewApex);
+    if (previewHolder !== null) {
+      const rewritten = new URL(req.url);
+      rewritten.pathname = rewritePreviewHostPath(previewHolder, pathname);
+      // The handler sees the ORIGINAL pathname after a rewrite, not this one,
+      // and cannot tell a mount-shaped preview path from a mount-carrying
+      // request by shape — so hand it the original explicitly. Overwrites
+      // any client-sent value: on a preview host this header is ours.
+      const requestHeaders = new Headers(req.headers);
+      requestHeaders.set(DEV_PREVIEW_PATH_HEADER, pathname);
+      return NextResponse.rewrite(rewritten, { request: { headers: requestHeaders } });
+    }
+
     // Non-cloud route blocking (defense-in-depth)
     // Runs before all other checks to prevent cloud-only routes from executing
     if (IS_BILLING_DISABLED && CLOUD_ONLY_ROUTE_PREFIXES.some(prefix => pathname.startsWith(prefix))) {
@@ -148,6 +178,38 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     // let alone allowed to block, regardless of ORIGIN_VALIDATION_MODE.
     if (pathname.startsWith('/api/public/forms/')) {
       const { response } = createSecureResponse(isProduction, req, { isAPIRoute: true });
+      return response;
+    }
+
+    // Published-app serving edge: pagespace-proxy calls this for EVERY request to
+    // a published app, with no session and no user — it authenticates via the
+    // APP_ROUTER_PROXY_SECRET shared secret checked inside the route, which
+    // refuses everything when that secret is unset.
+    //
+    // Returned HERE, above origin validation and above the Bearer-API OPTIONS
+    // short-circuit, and both of those positions are load-bearing:
+    //
+    //   • Origin validation is INAPPLICABLE. Valid callers are arbitrary
+    //     published-app hosts and their custom domains, with no fixed allowlist —
+    //     a published app's own fetch carries its own origin, which is not and can
+    //     never be in ours. Same rationale as the public-form route above.
+    //   • OPTIONS must REACH the route rather than be answered by the preflight
+    //     short-circuit below. A CORS preflight for a published app belongs to
+    //     that app and has to be replayed to it; answering it here would hand the
+    //     browser our CORS policy instead of the app's, so a published app could
+    //     never allow a custom request header on a cross-origin call.
+    //
+    // Without this the middleware also 401s the proxy before route.ts runs, and
+    // no published app is reachable at all.
+    if (pathname === APP_ROUTER_ROUTE_PATH) {
+      // The route delivers its own CSP for the styled parked/unavailable pages it
+      // renders; ours would intersect with and clobber it. Asked through the
+      // shared predicate rather than hardcoded `true` so there is one list of
+      // self-CSP routes rather than two places to keep in step.
+      const { response } = createSecureResponse(isProduction, req, {
+        isAPIRoute: true,
+        skipCSP: routeOwnsItsOwnCsp(pathname),
+      });
       return response;
     }
 
@@ -272,6 +334,14 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     // no auth function at all — confirmed by reading each route.ts directly.
     // `/api/contact` is the public marketing contact form (ContactForm.tsx), unauthenticated
     // by design.
+    // `/api/env-bridge/*` is the local-environment bridge: a MACHINE, which by design has
+    // no session and never will (invariant 2 — machine-held identity). Each route carries its
+    // own non-session credential and refuses without it: `enroll` presents the one-time
+    // enrollment code, `token` a challenge signed by the pinned machine key, and `ws` a Bearer
+    // `env:bridge` token whose scope, resourceType and resourceId it re-checks. Same rationale
+    // as `/api/mcp/` above. Without this the session gate answers 401 before any of them runs
+    // and the entire bridge is unreachable — route tests never saw it because they invoke the
+    // handlers directly, and the exit-gate run found it on the first real enrollment.
     if (
       pathname.startsWith('/api/auth/csrf') ||
       pathname.startsWith('/api/auth/login-csrf') ||
@@ -287,6 +357,7 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       pathname.startsWith('/api/avatar/') ||
       pathname.startsWith('/api/provisioning-status/') ||
       pathname.startsWith('/api/mcp/') ||
+      pathname.startsWith('/api/env-bridge/') ||
       pathname.startsWith('/api/drives') ||
       pathname.startsWith('/api/cron/') ||
       pathname === '/api/oauth/authorize' ||
@@ -315,9 +386,12 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       // Handoff-bridge OAuth callbacks (google/apple) return their own styled HTML
       // with a bespoke CSP — skip the middleware CSP so it doesn't intersect with
       // and clobber the route's policy (which allows the page's inline styles).
+      // Asked through `routeOwnsItsOwnCsp` so the set of self-CSP routes has one
+      // definition; the published-app router is also in that set but returns
+      // above and never reaches this branch.
       const { response } = createSecureResponse(isProduction, req, {
         isAPIRoute,
-        skipCSP: isHandoffBridgeRoute(pathname),
+        skipCSP: routeOwnsItsOwnCsp(pathname),
       });
       return response;
     }
@@ -401,7 +475,19 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
 
     // Session cookie exists - let request through
     // Route handlers will validate the session and check admin role
-    const { response } = createSecureResponse(isProduction, req, { isAPIRoute, disableCOEP: shouldDisableCOEP(pathname) });
+    //
+    // The canvas preview route returns a full HTML document carrying its own CSP
+    // (so the in-app frame runs under the same policy the published artifact
+    // does) and is framed by the dashboard itself — hence skipCSP, so the API
+    // policy doesn't intersect with and clobber it, and SAMEORIGIN framing
+    // instead of DENY. See isCanvasPreviewRoute.
+    const isPreviewRoute = isCanvasPreviewRoute(pathname);
+    const { response } = createSecureResponse(isProduction, req, {
+      isAPIRoute,
+      disableCOEP: shouldDisableCOEP(pathname),
+      skipCSP: isPreviewRoute,
+      sameOriginFrameable: isPreviewRoute,
+    });
 
     return response;
   }, event);
@@ -415,6 +501,19 @@ export const config = {
         { type: 'header', key: 'next-router-prefetch' },
         { type: 'header', key: 'purpose', value: 'prefetch' },
       ],
+    },
+    // Dev-preview hosts (`<kind>-<id>.preview.<apex>`): EVERY request must reach
+    // the middleware so it is rewritten onto the preview route — including
+    // `/_next/static/*` and `/_next/image` (a proxied Next dev server serves
+    // its own `/_next/*`, and PageSpace's own chunks/optimizer must never be
+    // reachable on a preview origin) and including prefetches (a sandbox's
+    // HTML could carry `<link rel=prefetch>`, and a request that skipped the
+    // rewrite would reach App Router routes on the preview apex, defeating
+    // host confinement). Hence a second entry with no exclusions and no
+    // `missing`, keyed on the host shape; the route still validates the apex.
+    {
+      source: '/:path*',
+      has: [{ type: 'host', value: '.*\\.preview\\..*' }],
     },
   ],
 };

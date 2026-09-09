@@ -15,7 +15,7 @@ import { PlanChangeConfirmation } from '@/components/billing/PlanChangeConfirmat
 import { PlanCard } from '@/components/billing/PlanCard';
 import { BillingGuard } from '@/components/billing/BillingGuard';
 import { getAllPlans, getPlan, getTierFromPriceId, type SubscriptionTier, type PlanDefinition } from '@/lib/subscription/plans';
-import { formatCreditCount } from '@/lib/subscription/credits';
+import { creditsCellPhrase } from '@/lib/subscription/credits';
 import type { AppliedPromo } from '@/components/billing/PromoCodeInput';
 
 interface SubscriptionData {
@@ -439,10 +439,10 @@ export default function PlanPage() {
                 </thead>
                 <tbody>
                   <tr className="border-b">
-                    <td className="py-4 pr-6">Monthly credits</td>
+                    <td className="py-4 pr-6">Credits</td>
                     {plans.map((plan) => (
                       <td key={plan.id} className="text-center py-4 px-4 font-semibold">
-                        {formatCreditCount(plan.limits.monthlyCreditsCents)} credits/mo
+                        {creditsCellPhrase(plan.id, plan.limits.monthlyCreditsCents)}
                       </td>
                     ))}
                   </tr>

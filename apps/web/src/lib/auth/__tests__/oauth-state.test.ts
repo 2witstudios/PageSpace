@@ -32,6 +32,41 @@ describe('verifyOAuthState', () => {
     expect(result.status).toBe('valid');
   });
 
+  // The shell round-trip is what lets the OAuth callback deep-link back into
+  // the desktop app that actually started the flow. If the schema dropped it,
+  // a PageSpace Coder sign-in would silently hand its exchange code to
+  // PageSpace — the callback defaults to that shell when none is present.
+  it('round-trips the desktop shell that started the flow', () => {
+    const state = createState({ platform: 'desktop', shell: 'coder', timestamp: Date.now() });
+    const result = verifyOAuthState(state);
+    expect(result.status).toBe('valid');
+    expect(result.status === 'valid' && result.data.shell).toBe('coder');
+  });
+
+  it('accepts state with no shell, as web, iOS and older desktop builds send', () => {
+    const state = createState({ platform: 'desktop', timestamp: Date.now() });
+    const result = verifyOAuthState(state);
+    expect(result.status).toBe('valid');
+    expect(result.status === 'valid' && result.data.shell).toBeUndefined();
+  });
+
+  // Phase B of the Android parity epic. Before this, 'android' was not a value
+  // the platform enum could take, so a signed state naming it was rejected as
+  // malformed at the callback — which is why no server path could ever emit the
+  // `pagespace://` handoff for Android and the custom-scheme intent filter
+  // shipped inert.
+  it('round-trips android as a platform', () => {
+    const state = createState({ platform: 'android', timestamp: Date.now() });
+    const result = verifyOAuthState(state);
+    expect(result.status).toBe('valid');
+    expect(result.status === 'valid' && result.data.platform).toBe('android');
+  });
+
+  it('rejects a shell value that is not a known app', () => {
+    const state = createState({ platform: 'desktop', shell: 'evil', timestamp: Date.now() });
+    expect(verifyOAuthState(state).status).not.toBe('valid');
+  });
+
   it('returns invalid_signature for tampered signature', () => {
     const state = Buffer.from(JSON.stringify({
       data: { returnUrl: '/dashboard' },
@@ -91,10 +126,13 @@ describe('verifyOAuthState', () => {
     expect(result.status).toBe('malformed');
   });
 
+  // Was `platform: 'android'`. Android is a supported client as of Phase B of
+  // the Android parity epic (see the round-trip test above), so this now guards
+  // the rule rather than a value that has since become legal.
   it('returns malformed for state with unknown platform value', () => {
     const state = createState({
       returnUrl: '/dashboard',
-      platform: 'android',
+      platform: 'symbian',
       timestamp: Date.now(),
     });
     const result = verifyOAuthState(state);

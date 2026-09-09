@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { z } from 'zod';
 
 /**
  * Page Write Tools Tests
@@ -59,12 +60,32 @@ vi.mock('@pagespace/lib/content/page-types.config', () => ({
     isDocumentPage: vi.fn((type) => type === 'DOCUMENT'),
     isCodePage: vi.fn((type) => type === 'CODE'),
 }));
+// `edit_sheet_cells` parses through the ok/failure API so it can refuse to
+// write over content it could not read; the mock has to expose that, or the
+// tool throws before it reaches the branch under test.
+const mockLogSheetCellActivity = vi.fn(async (..._args: unknown[]) => undefined);
+const mockSetCells = vi.fn(async (..._args: unknown[]) => ({
+  changed: ['A1'],
+  recomputed: [] as string[],
+  rowCount: 1,
+  columnCount: 1,
+}));
+const mockParseSheetContentSafe = vi.fn(() => ({
+  ok: true as const,
+  sheet: { rowCount: 10, columnCount: 5 },
+}));
 vi.mock('@pagespace/lib/sheets/sheet', () => ({
-    parseSheetContent: vi.fn(() => ({ rowCount: 10, columnCount: 5 })),
+    parseSheetContentSafe: (...args: unknown[]) => mockParseSheetContentSafe(...args as []),
     serializeSheetContent: vi.fn(() => ''),
     updateSheetCells: vi.fn((data) => data),
     isValidCellAddress: vi.fn((addr) => /^[A-Z]+\d+$/.test(addr.toUpperCase())),
     isSheetType: vi.fn((type) => type === 'SHEET'),
+}));
+vi.mock('@pagespace/lib/sheets/store', () => ({
+    setCells: (...args: unknown[]) => mockSetCells(...args as []),
+}));
+vi.mock('@/services/api/sheet-activity', () => ({
+    logSheetCellActivity: (...args: unknown[]) => mockLogSheetCellActivity(...args as []),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
@@ -139,6 +160,17 @@ vi.mock('@/services/api/page-cross-drive-move-service', () => ({
   movePagesToDrive: vi.fn(),
 }));
 
+// Keep the REAL refusal strings — the tests assert the agent is told the actual
+// user-facing reason, so a reworded constant must not silently keep passing.
+vi.mock('@pagespace/lib/memory/memory-pages', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/memory/memory-pages')>();
+  return {
+    ...actual,
+    isProtectedMemoryPage: vi.fn().mockResolvedValue(false),
+    findProtectedMemoryPages: vi.fn().mockResolvedValue(new Set<string>()),
+  };
+});
+
 vi.mock('@/lib/canvas/publish-page', () => ({
   syncPublishedHomeRoot: vi.fn(),
 }));
@@ -169,6 +201,11 @@ import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
+import {
+  isProtectedMemoryPage,
+  findProtectedMemoryPages,
+  MEMORY_PAGE_MOVE_ERROR,
+} from '@pagespace/lib/memory/memory-pages';
 import { broadcastPageEvent } from '@/lib/websocket';
 import type { ToolExecutionContext } from '../../core/types';
 
@@ -186,6 +223,8 @@ const mockCheckDriveAccess = vi.mocked(checkDriveAccess);
 const mockValidatePageMove = vi.mocked(validatePageMove);
 const mockMovePagesToDrive = vi.mocked(movePagesToDrive);
 const mockBroadcastPageEvent = vi.mocked(broadcastPageEvent);
+const mockIsProtectedMemoryPage = vi.mocked(isProtectedMemoryPage);
+const mockFindProtectedMemoryPages = vi.mocked(findProtectedMemoryPages);
 
 const ownerAccess = { isOwner: true, isAdmin: true, isMember: true, drive: null };
 const adminAccess = { isOwner: false, isAdmin: true, isMember: true, drive: null };
@@ -216,6 +255,9 @@ describe('page-write-tools', () => {
     vi.clearAllMocks();
     // Default: pages have no direct children unless a test says otherwise.
     mockPageRepo.getDirectChildren.mockResolvedValue([]);
+    // Default: nothing is a memory page unless a test says otherwise.
+    mockIsProtectedMemoryPage.mockResolvedValue(false);
+    mockFindProtectedMemoryPages.mockResolvedValue(new Set<string>());
   });
 
   describe('replace_lines', () => {
@@ -283,7 +325,7 @@ describe('page-write-tools', () => {
       const result = await pageWriteTools.replace_lines.execute!(
         { title: 'uploaded.pdf', pageId: 'page-1', startLine: 1, content: 'new' },
         context
-      );
+      ) as Record<string, unknown>;
 
       // Assert: observable error response
       if (!('error' in result)) throw new Error('Expected error result');
@@ -317,7 +359,7 @@ describe('page-write-tools', () => {
       const result = await pageWriteTools.replace_lines.execute!(
         { title: 'My Sheet', pageId: 'page-1', startLine: 1, content: 'new' },
         context
-      );
+      ) as Record<string, unknown>;
 
       // Assert: observable error response
       if (!('error' in result)) throw new Error('Expected error result');
@@ -358,7 +400,7 @@ describe('page-write-tools', () => {
       const result = await pageWriteTools.replace_lines.execute!(
         { title: 'Test Doc', pageId: 'page-1', startLine: 2, content: 'New Line 2' },
         context
-      );
+      ) as Record<string, unknown>;
 
       // Assert: observable outcomes
       if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
@@ -377,6 +419,148 @@ describe('page-write-tools', () => {
           context: expect.objectContaining({ userId: 'user-123', isAiGenerated: true }),
         })
       );
+    });
+
+    // #2463: the replacement was pushed into the line array as ONE element, so
+    // a 91-line payload reported `newLineCount: 9` — 8 surrounding lines + 1.
+    // The document on disk was right; every number the agent was told was not.
+    it('counts every line of a multi-line replacement', async () => {
+      const document = Array.from({ length: 89 }, (_, i) => `old ${i + 1}`).join('\n');
+      const payload = Array.from({ length: 91 }, (_, i) => `new ${i + 1}`).join('\n');
+
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'registry',
+        type: 'DOCUMENT',
+        content: document,
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const result = await pageWriteTools.replace_lines.execute!(
+        { title: 'registry', pageId: 'page-1', startLine: 1, endLine: 89, content: payload },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext }
+      );
+
+      const success = result as { success: boolean; newLineCount: number; previousLineCount: number; stats: { totalLines: number } };
+      expect(success.success).toBe(true);
+      expect(success.newLineCount).toBe(91);
+      expect(success.previousLineCount).toBe(89);
+      expect(success.stats.totalLines).toBe(91);
+
+      // And the stored document is exactly the payload — no stale tail.
+      const stored = mockApplyPageMutation.mock.calls.at(-1)![0].updates.content as string;
+      expect(stored).toBe(payload);
+      expect(stored.split('\n')).toHaveLength(91);
+    });
+
+    it('refuses an edit addressed against a stale line count instead of applying it', async () => {
+      const document = Array.from({ length: 89 }, (_, i) => `old ${i + 1}`).join('\n');
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'registry',
+        type: 'DOCUMENT',
+        content: document,
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const result = await pageWriteTools.replace_lines.execute!(
+        { title: 'registry', pageId: 'page-1', startLine: 1, endLine: 81, content: 'new', expectedTotalLines: 81 },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext }
+      );
+
+      const failure = result as { success: boolean; error: string; message: string; totalLines: number };
+      expect(failure.success).toBe(false);
+      expect(failure.error).toBe('Document changed since it was read');
+      expect(failure.message).toMatch(/89 lines/);
+      // The count is a field, not prose the agent has to parse out of `message`.
+      expect(failure.totalLines).toBe(89);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('answers an out-of-range edit with the real line count rather than throwing', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'Test Doc',
+        type: 'DOCUMENT',
+        content: 'a\nb\nc',
+        contentMode: 'markdown' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const result = await pageWriteTools.replace_lines.execute!(
+        { title: 'Test Doc', pageId: 'page-1', startLine: 1, endLine: 9, content: 'x' },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext }
+      );
+
+      const failure = result as { success: boolean; error: string; message: string; totalLines: number };
+      expect(failure.success).toBe(false);
+      expect(failure.error).toBe('Line number out of range');
+      expect(failure.message).toMatch(/Document has 3 lines/);
+      expect(failure.totalLines).toBe(3);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    // The guard is only meaningful as a line count. 3.5 or -1 can never equal
+    // one, so without these constraints they parse and then refuse every edit.
+    it('accepts only a non-negative integer as expectedTotalLines', () => {
+      const schema = pageWriteTools.replace_lines.inputSchema as unknown as {
+        safeParse: (v: unknown) => { success: boolean };
+      };
+      const base = { title: 'Doc', pageId: 'page-1', startLine: 1, content: 'x' };
+      expect(schema.safeParse({ ...base, expectedTotalLines: 3 }).success).toBe(true);
+      expect(schema.safeParse({ ...base, expectedTotalLines: 3.5 }).success).toBe(false);
+      expect(schema.safeParse({ ...base, expectedTotalLines: -1 }).success).toBe(false);
+    });
+
+    it('warns when an html-mode page holds non-HTML content', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'registry',
+        type: 'DOCUMENT',
+        content: '{\n  "leads": []\n}',
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const result = await pageWriteTools.replace_lines.execute!(
+        { title: 'registry', pageId: 'page-1', startLine: 2, content: '  "leads": [1],' },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext }
+      );
+
+      const success = result as { success: boolean; contentModeWarning?: string; newLineCount: number };
+      expect(success.success).toBe(true);
+      expect(success.contentModeWarning).toMatch(/html contentMode/);
+      expect(success.newLineCount).toBe(3);
     });
 
     it('replaces lines in CODE page without HTML mangling', async () => {
@@ -406,7 +590,7 @@ describe('page-write-tools', () => {
       const result = await pageWriteTools.replace_lines.execute!(
         { title: 'index.html', pageId: 'page-1', startLine: 1, content: '<div>new</div>' },
         context
-      );
+      ) as Record<string, unknown>;
 
       if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
       const success = result as { success: boolean };
@@ -425,6 +609,68 @@ describe('page-write-tools', () => {
     it('has correct tool definition', () => {
       expect(pageWriteTools.create_page).toBeDefined();
       expect(pageWriteTools.create_page.description).toContain('Create');
+    });
+
+    // #2463: create_page hard-forced 'html' at both the repository call and the
+    // response echo, so an agent that did not know to ask for markdown always
+    // landed on the mode whose line numbers are a normalized projection of
+    // TipTap markup rather than the text it wrote.
+    describe('contentMode default', () => {
+      const setupCreate = () => {
+        mockDriveRepo.findByIdBasic.mockResolvedValue({ id: 'drive-1', ownerId: 'owner-999' });
+        mockCanUserEditPage.mockResolvedValue(true);
+        mockPageRepo.getNextPosition.mockResolvedValue(1);
+        mockPageRepo.create.mockResolvedValue({ id: 'new-page-1', title: 'New Page', type: 'DOCUMENT' } as never);
+      };
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      it('creates a DOCUMENT in markdown mode when none is asked for', async () => {
+        setupCreate();
+
+        const result = await pageWriteTools.create_page.execute!(
+          { driveId: 'drive-1', title: 'New Page', type: 'DOCUMENT' },
+          context
+        );
+
+        expect(mockPageRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({ contentMode: 'markdown' })
+        );
+        // The echoed mode must be the mode that was stored — the two sites used
+        // to be able to disagree.
+        expect((result as { contentMode: string }).contentMode).toBe('markdown');
+      });
+
+      it('honours an explicit html contentMode', async () => {
+        setupCreate();
+
+        const result = await pageWriteTools.create_page.execute!(
+          { driveId: 'drive-1', title: 'New Page', type: 'DOCUMENT', contentMode: 'html' },
+          context
+        );
+
+        expect(mockPageRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({ contentMode: 'html' })
+        );
+        expect((result as { contentMode: string }).contentMode).toBe('html');
+      });
+
+      it('leaves non-document types on html — the column is meaningless for them', async () => {
+        setupCreate();
+        mockPageRepo.create.mockResolvedValue({ id: 'new-page-2', title: 'Notes', type: 'FOLDER' } as never);
+
+        const result = await pageWriteTools.create_page.execute!(
+          { driveId: 'drive-1', title: 'Notes', type: 'FOLDER' },
+          context
+        );
+
+        expect(mockPageRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({ contentMode: 'html' })
+        );
+        expect((result as { contentMode: string }).contentMode).toBe('html');
+      });
     });
 
     // Regression test for #2150: the description used to hardcode 8 page
@@ -1008,6 +1254,80 @@ describe('page-write-tools', () => {
       );
     });
 
+    // This branch walks descendants itself rather than going through
+    // pageService.recursivelyTrash, so it needs its own guard. The check at the
+    // top of the helper only sees the page the agent named — an agent told to
+    // "clean up this folder" would otherwise take a memory page down with it.
+    it('skips a protected memory page inside the cascade but still trashes its siblings', async () => {
+      mockPageRepo.findById.mockImplementation(async (id: string) => ({
+        id,
+        title: id,
+        type: 'DOCUMENT' as const,
+        content: '',
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      }));
+      mockCanUserDeletePage.mockResolvedValue(true);
+      mockPageRepo.getChildIds.mockResolvedValue(['child-1', 'memory-bio', 'child-2']);
+      mockFindProtectedMemoryPages.mockResolvedValue(new Set(['memory-bio']));
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.trash_page.execute!(
+        { id: 'page-1', withChildren: true },
+        context
+      ) as { success: boolean; childrenCount?: number };
+
+      expect(result.success).toBe(true);
+
+      const trashedIds = mockApplyPageMutation.mock.calls
+        .map(([arg]) => arg as { pageId: string; operation: string })
+        .filter((arg) => arg.operation === 'trash')
+        .map((arg) => arg.pageId);
+
+      // The unrelated children still go; the memory page does not.
+      expect(trashedIds).toContain('child-1');
+      expect(trashedIds).toContain('child-2');
+      expect(trashedIds).not.toContain('memory-bio');
+
+      // The count reported back to the model must describe what was actually
+      // trashed, or the agent tells the user it deleted something it did not.
+      expect(result.childrenCount).toBe(2);
+    });
+
+    it('checks delete permission before revealing that a page is a memory page', async () => {
+      // Same ordering as pageService.trashPage: authorization first, so a
+      // caller who cannot delete the page is not told what it holds.
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'memory-bio', title: 'About You', type: 'DOCUMENT',
+        content: '', contentMode: 'html' as const,
+        driveId: 'drive-1', parentId: null, position: 1,
+        isTrashed: false, trashedAt: null, revision: 1, stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(false);
+      mockIsProtectedMemoryPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.trash_page.execute!({ id: 'memory-bio', withChildren: false }, context)
+      ).rejects.toThrow('Insufficient permissions to trash this page');
+
+      expect(mockIsProtectedMemoryPage).not.toHaveBeenCalled();
+    });
+
     it('re-homes live children to the grandparent when withChildren is false', async () => {
       mockPageRepo.findById.mockResolvedValue({
         id: 'page-1',
@@ -1423,6 +1743,56 @@ describe('page-write-tools', () => {
     // Regression coverage for #1772: move_page only required per-page edit
     // permission, unlike /api/pages/reorder which requires drive owner/admin
     // for the same move+position operation. The bars must agree.
+    // Moving is what makes the cascade hole reachable: relocate a memory page
+    // under an ordinary page and that page's delete takes it too.
+    //
+    // Only the SAME-DRIVE move is refused here. The cross-drive path enforces
+    // it inside movePagesToDrive, because that service is shared with
+    // /api/pages/bulk-move — guarding it at this call site would leave the REST
+    // route open. See page-cross-drive-move-service.test.ts.
+    it('refuses a same-drive move of a memory page', async () => {
+      mockPageRepo.findById.mockResolvedValue(sourcePageRow({ id: 'memory-bio' }));
+      mockCheckDriveAccess.mockResolvedValue(ownerAccess);
+      mockIsProtectedMemoryPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.move_page.execute!(
+          { title: 'About You', pageId: 'memory-bio', position: 1 },
+          context
+        )
+      ).rejects.toThrow(MEMORY_PAGE_MOVE_ERROR);
+
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('checks move permission before revealing that a page is a memory page', async () => {
+      // Refusing first would tell a caller who cannot move the page at all that
+      // it holds the user's profile. pageService.updatePage checks permission
+      // first; this path must agree.
+      mockPageRepo.findById.mockResolvedValue(sourcePageRow({ id: 'memory-bio' }));
+      mockCheckDriveAccess.mockResolvedValue(deniedAccess);
+      mockIsProtectedMemoryPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'member-user' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.move_page.execute!(
+          { title: 'About You', pageId: 'memory-bio', position: 1 },
+          context
+        )
+      ).rejects.toThrow('Only drive owners and admins can move pages');
+
+      expect(mockIsProtectedMemoryPage).not.toHaveBeenCalled();
+    });
+
     it('denies a member with page-edit access but no drive owner/admin role', async () => {
       mockPageRepo.findById.mockResolvedValue({
         id: 'page-1', title: 'Test Page', type: 'DOCUMENT',
@@ -1935,6 +2305,69 @@ describe('page-write-tools', () => {
           context
         )
       ).rejects.toThrow('User authentication required');
+    });
+
+    it('writes only the addressed cells, never the rest of the sheet', async () => {
+      // Replaces "refuses to edit a sheet whose stored content could not be
+      // read". That guard protected a read-modify-write of the whole document:
+      // an unparseable read would have replaced the spreadsheet with just these
+      // cells. The tool addresses cells now, so there is no document read to
+      // fail — the stronger property is asserted directly.
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'Budget',
+        type: 'SHEET',
+        content: '',
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await pageWriteTools.edit_sheet_cells.execute!(
+        { pageId: 'page-1', cells: [{ address: 'A1', value: 'test' }] },
+        context
+      );
+
+      expect(mockSetCells).toHaveBeenCalledTimes(1);
+      const [ref, cells] = mockSetCells.mock.calls[0] as [unknown, unknown];
+      expect(ref).toEqual({ pageId: 'page-1' });
+      expect(cells).toEqual([{ address: 'A1', value: 'test' }]);
+    });
+
+    // The cap the tool actually enforces, asserted as a literal rather than
+    // imported: the number is a contract with the MODEL, carried in the schema
+    // and the description, so a test that reads it from the same constant the
+    // code does would pass even if both moved together and every published
+    // limit went stale.
+    const CELL_CAP = 500;
+
+    it(`caps the batch at ${CELL_CAP} cells and says so in the schema`, () => {
+      // The cap has to be REACHABLE by the model, not just enforced: it is the
+      // schema, and the description, that stop an agent from inferring a batch
+      // size by trial and error the way issue #2467 reports having to. An
+      // enforcement with no advertisement would just move the folklore.
+      const schema = pageWriteTools.edit_sheet_cells.inputSchema as z.ZodType<unknown>;
+      const cells = (count: number) =>
+        Array.from({ length: count }, (_, index) => ({ address: `A${index + 1}`, value: 'x' }));
+
+      expect(schema.safeParse({ pageId: 'page-1', cells: cells(CELL_CAP) }).success).toBe(true);
+      expect(schema.safeParse({ pageId: 'page-1', cells: cells(CELL_CAP + 1) }).success).toBe(false);
+      expect(pageWriteTools.edit_sheet_cells.description).toContain(String(CELL_CAP));
+    });
+
+    it('still rejects an empty batch', () => {
+      const schema = pageWriteTools.edit_sheet_cells.inputSchema as z.ZodType<unknown>;
+      expect(schema.safeParse({ pageId: 'page-1', cells: [] }).success).toBe(false);
     });
 
     it('returns error for non-sheet pages', async () => {

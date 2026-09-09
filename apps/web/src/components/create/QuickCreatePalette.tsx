@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, usePathname } from 'next/navigation';
 import {
   ArrowLeft, Upload,
   FileText, FileCode, FileSpreadsheet, FileImage, File,
@@ -30,6 +30,7 @@ import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { matchesKeyEvent, getEffectiveBinding } from '@/stores/useHotkeyStore';
 import { isEditingActive } from '@/stores/useEditingStore';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
+import { resolveSidebarVariant } from '@/components/layout/left-sidebar/sidebar-routes';
 import type { TreePage } from '@/hooks/usePageTree';
 import {
   PageType,
@@ -124,6 +125,14 @@ export default function QuickCreatePalette() {
     : Array.isArray(rawPath) ? rawPath[0]
     : undefined;
 
+  const pathname = usePathname();
+  // The Agents routes bind this hotkey to their OWN palette — the spawn
+  // selector, which is what "new" means there (a session, or an environment to
+  // run one in), not a page type. `AgentsSidebar` owns that handler, so this
+  // one must stand down or both would fire on the same keystroke. The matcher
+  // is the sidebar's own, rather than a second regex that could drift from it.
+  const onAgentsRoute = resolveSidebarVariant(pathname ?? '') === 'agents';
+
   const quickCreateOpen = useUIStore((s) => s.quickCreateOpen);
   const quickCreateParentOverride = useUIStore((s) => s.quickCreateParentOverride);
   const openQuickCreate = useUIStore((s) => s.openQuickCreate);
@@ -162,14 +171,14 @@ export default function QuickCreatePalette() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const binding = getEffectiveBinding('pages.quick-create');
-      if (matchesKeyEvent(binding, e) && !isEditingActive() && driveId && !quickCreateOpen) {
+      if (matchesKeyEvent(binding, e) && !isEditingActive() && driveId && !quickCreateOpen && !onAgentsRoute) {
         e.preventDefault();
         openQuickCreate(null);
       }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [driveId, openQuickCreate, quickCreateOpen]);
+  }, [driveId, openQuickCreate, quickCreateOpen, onAgentsRoute]);
 
   // Reset when palette closes
   useEffect(() => {

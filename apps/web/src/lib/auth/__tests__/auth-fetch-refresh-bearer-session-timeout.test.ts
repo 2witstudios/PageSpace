@@ -22,7 +22,6 @@ vi.mock('@/lib/auth/platform-storage', () => ({
     clearSession: vi.fn().mockResolvedValue(undefined),
     getDeviceInfo,
     usesBearer: vi.fn().mockReturnValue(true),
-    supportsCSRF: vi.fn().mockReturnValue(false),
     dispatchAuthEvent: vi.fn(),
   }),
   resetPlatformStorage: vi.fn(),

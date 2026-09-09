@@ -6,6 +6,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { getHotkeyDefinition } from '@/lib/hotkeys/registry';
+import { isUsableBinding } from '@/lib/hotkeys/binding';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -61,6 +62,15 @@ export async function PATCH(request: Request) {
       );
     }
 
+    // An empty binding disables the hotkey. Anything else must be in the
+    // canonical format so it can actually match a key event.
+    if (binding !== '' && !isUsableBinding(binding)) {
+      return NextResponse.json(
+        { error: 'Binding must be a supported key combination with at least one modifier' },
+        { status: 400 }
+      );
+    }
+
     // Check if preference exists
     const existingPreference = await db.query.userHotkeyPreferences.findFirst({
       where: and(
@@ -101,6 +111,59 @@ export async function PATCH(request: Request) {
     loggers.api.error('Error updating hotkey preference:', error as Error);
     return NextResponse.json(
       { error: 'Failed to update hotkey preference' },
+      { status: 500 }
+    );
+  }
+}
+
+// DELETE /api/settings/hotkey-preferences - Remove an override (back to default)
+export async function DELETE(request: Request) {
+  try {
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
+
+    const body = await request.json();
+    const { hotkeyId, ifBinding } = body;
+
+    if (!hotkeyId || typeof hotkeyId !== 'string') {
+      return NextResponse.json({ error: 'hotkeyId is required' }, { status: 400 });
+    }
+
+    if (ifBinding !== undefined && typeof ifBinding !== 'string') {
+      return NextResponse.json({ error: 'ifBinding must be a string' }, { status: 400 });
+    }
+
+    // `ifBinding` makes the delete conditional on the row still holding the
+    // value the caller inspected — the binding is its own version token.
+    // Settings uses it when dismissing the "these were reset" notice: it reads
+    // the server, decides which rows cannot fire, then deletes them, and
+    // another tab can save a real shortcut in between. Without the condition
+    // that save is discarded. Omitting it deletes unconditionally, which is
+    // what the per-shortcut Reset button means.
+    const deleted = await db
+      .delete(userHotkeyPreferences)
+      .where(and(
+        eq(userHotkeyPreferences.userId, userId),
+        eq(userHotkeyPreferences.hotkeyId, hotkeyId),
+        ifBinding === undefined ? undefined : eq(userHotkeyPreferences.binding, ifBinding)
+      ))
+      .returning({ hotkeyId: userHotkeyPreferences.hotkeyId });
+
+    // A conditional delete matching nothing is an expected outcome, not an
+    // edge: two tabs dismissing the same notice, or a dismiss racing another
+    // tab's save. Logging it as a settings change would put two records
+    // against one mutation, in exactly the cases this condition exists for.
+
+    if (deleted.length > 0) {
+      audit({ eventType: 'admin.settings.changed', userId, resourceType: 'hotkey_preference' });
+    }
+
+    return NextResponse.json({ success: true, deleted: deleted.length });
+  } catch (error) {
+    loggers.api.error('Error deleting hotkey preference:', error as Error);
+    return NextResponse.json(
+      { error: 'Failed to delete hotkey preference' },
       { status: 500 }
     );
   }

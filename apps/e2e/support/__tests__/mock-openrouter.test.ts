@@ -9,7 +9,7 @@ import { createMockOpenRouter, MOCK_COST_DOLLARS } from '../mock-openrouter';
  * the hold/release handshake and the abort safety are proven without a database, a web
  * app, or a browser.
  *
- * Every model name below is deliberately one the APP would send (`openai/gpt-5.6-luna`, the
+ * Every model name below is deliberately one the APP would send (`z-ai/glm-5.3-flash`, the
  * id it substitutes in): pacing is selected by mode alone, so these tests exercise the same
  * door a real send comes through.
  *
@@ -18,7 +18,7 @@ import { createMockOpenRouter, MOCK_COST_DOLLARS } from '../mock-openrouter';
  */
 
 /** The id the app actually sends, post model-substitution. Pacing must not depend on it. */
-const APP_MODEL = 'openai/gpt-5.6-luna';
+const APP_MODEL = 'z-ai/glm-5.3-flash';
 
 async function setMode(mode: 'instant' | 'slow' | 'held', pacing?: { chunks?: number; intervalMs?: number }) {
   await fetch(`${base}/__stream-config`, {
@@ -210,7 +210,7 @@ describe('mock OpenRouter — explicit mode override (what the app actually need
     });
 
     // The substituted model the app really sends — not a pacing model name.
-    const res = await completions('openai/gpt-5.3-chat');
+    const res = await completions('openai/gpt-5.4-nano');
     await expect.poll(readStreams).toEqual({ open: 1, held: 1 });
 
     await fetch(`${base}/__release-stream`, { method: 'POST' });
@@ -224,7 +224,7 @@ describe('mock OpenRouter — explicit mode override (what the app actually need
       body: JSON.stringify({ mode: 'slow', chunks: 3, intervalMs: 50 }),
     });
 
-    const res = await completions('openai/gpt-5.3-chat');
+    const res = await completions('openai/gpt-5.4-nano');
     const { body } = await readWithTimings(res);
     const { chunks, done } = parseSse(body);
 
@@ -245,7 +245,7 @@ describe('mock OpenRouter — explicit mode override (what the app actually need
   });
 
   it('given no mode set, should keep the instant default so metering specs are unaffected', async () => {
-    const res = await completions('openai/gpt-5.3-chat');
+    const res = await completions('openai/gpt-5.4-nano');
     const { chunks } = parseSse(await res.text());
     expect(chunks.flatMap((c) => c.choices?.[0]?.delta?.content ?? [])).toEqual(['pong']);
   });
@@ -259,7 +259,7 @@ describe('mock OpenRouter — explicit mode override (what the app actually need
     await fetch(`${base}/__reset`, { method: 'POST' });
 
     // Would hang forever if the mode leaked past reset.
-    const res = await completions('openai/gpt-5.3-chat');
+    const res = await completions('openai/gpt-5.4-nano');
     const { chunks, done } = parseSse(await res.text());
     expect(chunks.flatMap((c) => c.choices?.[0]?.delta?.content ?? [])).toEqual(['pong']);
     expect(done).toBe(true);

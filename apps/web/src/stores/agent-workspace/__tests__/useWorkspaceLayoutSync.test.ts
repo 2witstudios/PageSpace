@@ -1,5 +1,5 @@
 /**
- * THE SOCKET → STORE SEAM for one session's pane grid.
+ * THE SOCKET → STORE SEAM for one workspace's node tree.
  *
  * `placeWorkerPane` is the server half of Phase 3's capability (a pane a
  * server-side action put in front of a user); this hook is the half that makes
@@ -74,7 +74,7 @@ const SESSION = 'ws-mine';
 const OTHER_SESSION = 'ws-someone-elses';
 
 function updatePayload(workspaceId: string) {
-  return { workspaceId, rev: 12, opId: 'op-1', grid: [] };
+  return { workspaceId, rev: 12, nodes: [] };
 }
 
 let socket: MockSocket;
@@ -96,13 +96,13 @@ describe('useWorkspaceLayoutSync — room membership', () => {
 
   it('leaves the room and unregisters BOTH handlers on unmount', () => {
     const { unmount } = renderHook(() => useWorkspaceLayoutSync(SESSION));
-    expect(socket._handlerCount('workspace:updated')).toBe(1);
+    expect(socket._handlerCount('workspace:nodes-updated')).toBe(1);
     expect(socket._handlerCount('connect')).toBe(1);
 
     unmount();
 
     expect(socket.emit).toHaveBeenCalledWith('leave_session', SESSION);
-    expect(socket._handlerCount('workspace:updated')).toBe(0);
+    expect(socket._handlerCount('workspace:nodes-updated')).toBe(0);
     expect(socket._handlerCount('connect')).toBe(0);
   });
 
@@ -127,12 +127,12 @@ describe('useWorkspaceLayoutSync — room membership', () => {
   });
 });
 
-describe('useWorkspaceLayoutSync — workspace:updated', () => {
+describe('useWorkspaceLayoutSync — workspace:nodes-updated', () => {
   it('applies a payload addressed to THIS workspace', () => {
     renderHook(() => useWorkspaceLayoutSync(SESSION));
 
     const payload = updatePayload(SESSION);
-    act(() => socket._fire('workspace:updated', payload));
+    act(() => socket._fire('workspace:nodes-updated', payload));
 
     expect(mockApplyRemoteUpdate).toHaveBeenCalledWith(payload);
   });
@@ -140,7 +140,7 @@ describe('useWorkspaceLayoutSync — workspace:updated', () => {
   it('DROPS a payload addressed to a different workspace on the same socket', () => {
     renderHook(() => useWorkspaceLayoutSync(SESSION));
 
-    act(() => socket._fire('workspace:updated', updatePayload(OTHER_SESSION)));
+    act(() => socket._fire('workspace:nodes-updated', updatePayload(OTHER_SESSION)));
 
     // One socket holds many rooms; without this guard another session's grid
     // lands on this session's cache.
@@ -150,7 +150,7 @@ describe('useWorkspaceLayoutSync — workspace:updated', () => {
   it('drops a malformed payload rather than throwing inside the handler', () => {
     renderHook(() => useWorkspaceLayoutSync(SESSION));
 
-    expect(() => act(() => socket._fire('workspace:updated', undefined))).not.toThrow();
+    expect(() => act(() => socket._fire('workspace:nodes-updated', undefined))).not.toThrow();
     expect(mockApplyRemoteUpdate).not.toHaveBeenCalled();
   });
 });
@@ -205,12 +205,12 @@ describe('useWorkspaceLayoutSync — the socket is REPLACED (auth-refresh reconn
 
     // Old: fully released.
     expect(oldSocket.emit).toHaveBeenCalledWith('leave_session', SESSION);
-    expect(oldSocket._handlerCount('workspace:updated')).toBe(0);
+    expect(oldSocket._handlerCount('workspace:nodes-updated')).toBe(0);
     expect(oldSocket._handlerCount('connect')).toBe(0);
 
     // New: joined and listening.
     expect(newSocket.emit).toHaveBeenCalledWith('join_session', SESSION);
-    expect(newSocket._handlerCount('workspace:updated')).toBe(1);
+    expect(newSocket._handlerCount('workspace:nodes-updated')).toBe(1);
     expect(newSocket._handlerCount('connect')).toBe(1);
   });
 
@@ -223,12 +223,12 @@ describe('useWorkspaceLayoutSync — the socket is REPLACED (auth-refresh reconn
     rerender();
 
     const payload = updatePayload(SESSION);
-    act(() => newSocket._fire('workspace:updated', payload));
+    act(() => newSocket._fire('workspace:nodes-updated', payload));
     expect(mockApplyRemoteUpdate).toHaveBeenCalledWith(payload);
 
     // And the dead socket can no longer reach the store.
     mockApplyRemoteUpdate.mockClear();
-    act(() => oldSocket._fire('workspace:updated', updatePayload(SESSION)));
+    act(() => oldSocket._fire('workspace:nodes-updated', updatePayload(SESSION)));
     expect(mockApplyRemoteUpdate).not.toHaveBeenCalled();
   });
 });

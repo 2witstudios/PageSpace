@@ -1,11 +1,22 @@
+import { isValidElement, type ReactNode } from "react";
 import Link from "next/link";
 import { ChevronDown, ArrowRight, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
-import { MONTHLY_CREDITS, creditPacksPhrase } from "@/lib/credits";
+import { MONTHLY_CREDITS, FREE_STARTER_CREDITS, creditPacksPhrase } from "@/lib/credits";
+import { JsonLd, createFaqSchema } from "@/lib/schema";
 import { FAQHashOpener } from "./hash-opener";
+
+/** Flatten a ReactNode answer to plain text for the FAQPage schema. */
+function faqText(node: ReactNode): string {
+  if (node == null || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(faqText).join("");
+  if (isValidElement(node)) return faqText((node.props as { children?: ReactNode }).children);
+  return "";
+}
 
 export const metadata = pageMetadata.faq;
 
@@ -52,12 +63,19 @@ const faqs: FAQItem[] = [
       "Both. Individuals use it as a personal AI-powered notebook and task system. Teams use it for real-time collaboration. You can start solo and add people whenever.",
     category: "What is PageSpace?",
   },
+  {
+    id: "when-not-the-fit",
+    question: "When is PageSpace not the right fit?",
+    answer:
+      "If you want a purely offline notebook with no AI, or a single-purpose tool for one narrow job, PageSpace is more than you need. It's built for people and teams who want an AI coworker acting across their whole workspace — if you don't want AI touching your work, it isn't the right pick.",
+    category: "What is PageSpace?",
+  },
 
   // Pricing and plans
   {
     id: "is-there-a-free-plan",
     question: "Is there a free plan?",
-    answer: `Yes. The Free plan includes 500 MB of storage and ${MONTHLY_CREDITS.free}/month of credits that meter your usage. No credit card required.`,
+    answer: `Yes. The Free plan includes 500 MB of storage and ${FREE_STARTER_CREDITS} credits to get started — a one-time grant that meters your AI usage. No credit card required.`,
     category: "Pricing and plans",
   },
   {
@@ -79,13 +97,13 @@ const faqs: FAQItem[] = [
   {
     id: "how-ai-credits-work",
     question: "How do credits work?",
-    answer: `Every plan includes a monthly allowance of credits — ${MONTHLY_CREDITS.free}/month on Free, more on paid plans. Each AI action draws down credits based on what the underlying model actually costs, so a quick reply with a lightweight model costs far less than a long answer from a frontier model. Unused credits roll over and accumulate — they never expire.`,
+    answer: `Free accounts start with ${FREE_STARTER_CREDITS} credits, once; paid plans include a monthly credit allowance. Each AI action draws down credits based on what the underlying model actually costs, so a quick reply with a lightweight model costs far less than a long answer from a frontier model. Credits never expire — on paid plans, unused monthly credits roll over and accumulate.`,
     category: "Pricing and plans",
   },
   {
     id: "hit-daily-ai-limit",
     question: "What happens when I run out of credits?",
-    answer: `Everything else keeps working — your documents, tasks, channels, and collaboration are unaffected. AI features pause until you buy more credits (top-up packs come in ${creditPacksPhrase()}) or your next monthly allowance is added at your billing renewal.`,
+    answer: `Everything else keeps working — your documents, tasks, channels, and collaboration are unaffected. AI features pause until you buy more credits (top-up packs come in ${creditPacksPhrase()}), upgrade to a paid plan, or — on paid plans — your next monthly allowance is added at your billing renewal.`,
     category: "Pricing and plans",
   },
   // Getting started
@@ -269,9 +287,14 @@ const faqs: FAQItem[] = [
 
 const categories = [...new Set(faqs.map((faq) => faq.category))];
 
+const faqSchema = createFaqSchema(
+  faqs.map((faq) => ({ q: faq.question, a: faqText(faq.answer).replace(/\s+/g, " ").trim() })),
+);
+
 export default function FAQPage() {
   return (
     <div className="min-h-screen bg-background">
+      <JsonLd data={faqSchema} />
       <SiteNavbar />
       <FAQHashOpener />
 

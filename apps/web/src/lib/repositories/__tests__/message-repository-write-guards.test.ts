@@ -317,3 +317,60 @@ describe('savePageMessage — mentionNotify', () => {
     expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * `source` is written on INSERT only and deliberately left out of the conflict
+ * set, so the stored value survives a later terminal write. The broadcast has
+ * to say the same thing the row does: `isSpokenTurn` (SpokenTurnGlyph.tsx)
+ * reads this field off the event, so a mismatch makes an open thread drop the
+ * mic glyph and grow it back on refresh — a thread that changes its account of
+ * itself, which is the exact failure carrying the field was meant to prevent.
+ */
+describe('savePageMessage / saveGlobalMessage — the broadcast source is the PERSISTED one', () => {
+  const eventSource = async (): Promise<unknown> => {
+    const { conversationEvents } = await import('@/lib/websocket/conversation-events');
+    const call = vi.mocked(conversationEvents.messageCreated).mock.calls[0];
+    return (call?.[1] as { source?: unknown } | undefined)?.source;
+  };
+
+  it('given a second write with NO source over a voice row, should broadcast the stored voice value', async () => {
+    // The row already says 'voice'; this write does not mention source at all.
+    mockReturning.mockResolvedValue([{ id: 'msg-1', source: 'voice' }]);
+
+    await messageRepository.savePageMessage({ ...baseArgs });
+
+    expect(await eventSource()).toBe('voice');
+  });
+
+  it('given a fresh typed write, should broadcast null rather than invent a transport', async () => {
+    mockReturning.mockResolvedValue([{ id: 'msg-1', source: null }]);
+
+    await messageRepository.savePageMessage({ ...baseArgs });
+
+    expect(await eventSource()).toBeNull();
+  });
+
+  it('should follow the ROW over the argument when the two disagree', async () => {
+    // A caller claiming 'voice' on a row that holds null must not make an open
+    // surface render a glyph the database will not back up on refresh.
+    mockReturning.mockResolvedValue([{ id: 'msg-1', source: null }]);
+
+    await messageRepository.savePageMessage({ ...baseArgs, source: 'voice' });
+
+    expect(await eventSource()).toBeNull();
+  });
+
+  it('should hold on the global leg too', async () => {
+    mockReturning.mockResolvedValue([{ id: 'msg-1', source: 'voice' }]);
+
+    await messageRepository.saveGlobalMessage({
+      messageId: 'msg-1',
+      conversationId: 'conv-1',
+      userId: 'u1',
+      role: 'assistant',
+      content: 'spoken reply',
+    });
+
+    expect(await eventSource()).toBe('voice');
+  });
+});

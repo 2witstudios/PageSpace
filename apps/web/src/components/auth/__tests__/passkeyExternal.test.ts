@@ -188,4 +188,52 @@ describe('buildPasskeyRegisteredDeepLink', () => {
   it('returns exactly pagespace://passkey-registered with no params or trailing punctuation', () => {
     expect(buildPasskeyRegisteredDeepLink()).toBe('pagespace://passkey-registered');
   });
+
+  it('notifies the coder app on its own scheme', () => {
+    expect(buildPasskeyRegisteredDeepLink('coder')).toBe('pagespace-coder://passkey-registered');
+  });
+});
+
+/**
+ * These ceremonies run in the SYSTEM BROWSER, where `window.electron` does not
+ * exist — the handoff URL is the only thing that can tell the page which
+ * desktop app to return to. If the shell did not survive that round trip, a
+ * PageSpace Coder passkey sign-in would hand its exchange code to PageSpace.
+ */
+describe('the shell round trip through the system browser', () => {
+  it('carries the shell out to the browser and back off the URL', () => {
+    const url = buildPasskeyExternalUrl('https://pagespace.ai', {
+      deviceId: 'd-1',
+      deviceName: 'Mac',
+      shell: 'coder',
+    });
+    const parsed = parsePasskeyExternalParams(new URL(url).search);
+    expect(parsed?.shell).toBe('coder');
+    expect(buildPasskeyExchangeDeepLink('code-1', parsed?.shell)).toContain('pagespace-coder://');
+  });
+
+  it('carries the shell through the register handoff, whose token stays in the fragment', () => {
+    const url = buildPasskeyRegisterExternalUrl('https://pagespace.ai', {
+      deviceId: 'd-1',
+      deviceName: 'Mac',
+      handoffToken: 'h-1',
+      shell: 'coder',
+    });
+    const { search, hash } = new URL(url);
+    expect(search).toContain('shell=coder');
+    expect(hash).toContain('handoffToken=h-1');
+    expect(parsePasskeyRegisterExternalParams(search, hash)?.shell).toBe('coder');
+  });
+
+  it('omits the shell for PageSpace-era URLs and defaults them back to PageSpace', () => {
+    const parsed = parsePasskeyExternalParams('?deviceId=d-1&deviceName=Mac');
+    expect(parsed?.shell).toBeUndefined();
+    expect(buildPasskeyExchangeDeepLink('code-1', parsed?.shell)).toContain('pagespace://');
+  });
+
+  it('ignores an unknown shell in the URL rather than trusting it as a scheme', () => {
+    const parsed = parsePasskeyExternalParams('?deviceId=d-1&deviceName=Mac&shell=evil');
+    expect(parsed?.shell).toBeUndefined();
+    expect(buildPasskeyExchangeDeepLink('code-1', 'evil')).toContain('pagespace://');
+  });
 });

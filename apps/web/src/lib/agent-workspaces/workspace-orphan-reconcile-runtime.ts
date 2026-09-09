@@ -7,25 +7,47 @@
  *
  * Two sources, per `sprite-orphan-reconcile.ts`'s module doc:
  *
- *   (A) `machine_sprite_reclaims` — the outbox. Pointers rescued by the
- *       AFTER-DELETE trigger as an `agent_workspaces` row (or anything it
- *       cascades from — its `conversationId`/`ownerId`/`agentPageId` FKs) was
- *       destroyed. No row, nothing to restore: kill.
+ *   (A) `machine_sprite_reclaims` — the outbox. Pointers rescued by an
+ *       AFTER-DELETE trigger as a Sprite-holding row was destroyed: an
+ *       `agent_workspaces` row (or anything it cascades from — its
+ *       `ownerId`/`driveId`/`envId` FKs), or a `drive_envs` row that still
+ *       believed it held a live Sprite. No row, nothing to restore: kill.
  *
- *   (B) `agent_workspaces` rows whose teardown was REQUESTED (`endAgentSession`
- *       stamps this BEFORE it kills) but never confirmed — a kill that failed,
- *       or a process that died mid-teardown. The row survives on purpose (it
- *       is re-provisionable identity), so release here is a STAMP via the
- *       store's own `stampSpriteTornDown` CAS, never a delete.
+ *   (B) HOLDER rows whose teardown was REQUESTED but never confirmed — a kill
+ *       that failed, or a process that died mid-teardown. Both Sprite-holder
+ *       tables qualify and both are enumerated here:
+ *
+ *         - `agent_workspaces` (`endAgentSession` stamps the intent BEFORE it
+ *           kills). The row survives on purpose — it is re-provisionable
+ *           identity.
+ *         - `drive_envs`, but via `rebuildDriveEnv` ONLY. It stamps the intent
+ *           the same way and then ABORTS rather than proceed when the kill
+ *           cannot be confirmed, which is precisely how a surviving row comes
+ *           to point at a live VM nobody is retrying. An env row surviving its
+ *           machine is the normal state of an environment, not an anomaly.
+ *
+ *           `deleteDriveEnv` is deliberately NOT a producer of work for this
+ *           source: it kills only AFTER the row is gone, so it stamps no intent
+ *           (there is no row left to stamp) and a failed kill lands in the
+ *           reclaim outbox — source (A) above — rather than here.
+ *
+ *       Release is a STAMP for both, via each store's own `stampSpriteTornDown`
+ *       CAS, never a delete.
+ *
+ * THREE queries, one per source, each capped independently — see
+ * `MAX_CANDIDATES_PER_TABLE`.
  */
 
 import { and, asc, eq, isNotNull, isNull, sql } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-reclaims';
 import type { ReconcileOrphanSpritesDeps, SpriteOrphanRow } from '@pagespace/lib/services/sandbox/sprite-orphan-reconcile';
 import { SandboxSpriteReplacedError } from '@pagespace/lib/services/sandbox/sandbox-host';
-import { getAgentSessionStore, getSandboxHost } from './agent-workspaces-runtime';
+import { getAgentSessionStore } from './agent-workspaces-runtime';
+import { getSandboxHost } from './sandbox-host-runtime';
+import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /**
@@ -40,12 +62,12 @@ const LOOKAHEAD = MAX_CANDIDATES_PER_TABLE + 1;
 
 export const defaultReconcileAgentSessionOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
   async listOrphanCandidates() {
-    // allSettled, not all: the two candidate sources are INDEPENDENT (the
-    // FK-less reclaim outbox, and rows carrying a teardown intent). A failure
-    // reading one must not stop the other's Sprites from being reclaimed —
-    // otherwise a single degraded query parks every reclaim until it recovers,
-    // and those are billing VMs nobody is using.
-    const [reclaimResult, sessionResult] = await Promise.allSettled([
+    // allSettled, not all: the three candidate sources are INDEPENDENT (the
+    // FK-less reclaim outbox, and each holder table's rows carrying a teardown
+    // intent). A failure reading one must not stop the others' Sprites from
+    // being reclaimed — otherwise a single degraded query parks every reclaim
+    // until it recovers, and those are billing VMs nobody is using.
+    const [reclaimResult, sessionResult, envResult] = await Promise.allSettled([
       db
         .select({
           sandboxId: machineSpriteReclaims.sandboxId,
@@ -76,6 +98,38 @@ export const defaultReconcileAgentSessionOrphanSpritesDeps: ReconcileOrphanSprit
         )
         .orderBy(asc(agentWorkspaces.teardownRequestedAt))
         .limit(LOOKAHEAD),
+      db
+        .select({
+          envId: driveEnvs.id,
+          sandboxId: driveEnvs.sandboxId,
+          spriteInstanceId: driveEnvs.spriteInstanceId,
+          teardownRequestedAt: driveEnvs.teardownRequestedAt,
+        })
+        .from(driveEnvs)
+        .where(
+          and(
+            // The same three predicates as the session source, on the same
+            // three columns — which is the point: an env is a Sprite holder,
+            // not a second kind of thing to reclaim.
+            //
+            // `drive_envs_live_sprite_idx` covers only TWO of them: it is
+            // partial on `sandboxId IS NOT NULL AND spriteTornDownAt IS NULL`
+            // and keyed on those same columns, so it narrows the scan to rows
+            // that still believe they hold a live Sprite — the permanent
+            // majority-eliminator, since never-provisioned envs fall outside it
+            // forever. The `teardownRequestedAt` filter and the ordering below
+            // are NOT served by it and are applied on top. That is fine at this
+            // table's size (rows matching the partial predicate are the envs
+            // with machines, not all envs); if it ever stops being fine, the
+            // fix is to add `teardownRequestedAt` to the index, not to change
+            // this query.
+            isNotNull(driveEnvs.teardownRequestedAt),
+            isNull(driveEnvs.spriteTornDownAt),
+            isNotNull(driveEnvs.sandboxId),
+          ),
+        )
+        .orderBy(asc(driveEnvs.teardownRequestedAt))
+        .limit(LOOKAHEAD),
     ]);
 
     if (reclaimResult.status === 'rejected') {
@@ -86,12 +140,19 @@ export const defaultReconcileAgentSessionOrphanSpritesDeps: ReconcileOrphanSprit
     }
     if (sessionResult.status === 'rejected') {
       loggers.ai.error(
-        'Orphan reconcile: session-row listing failed; continuing with reclaim rows only',
+        'Orphan reconcile: session-row listing failed; continuing with the other sources',
         sessionResult.reason instanceof Error ? sessionResult.reason : new Error(String(sessionResult.reason)),
+      );
+    }
+    if (envResult.status === 'rejected') {
+      loggers.ai.error(
+        'Orphan reconcile: drive-env listing failed; continuing with the other sources',
+        envResult.reason instanceof Error ? envResult.reason : new Error(String(envResult.reason)),
       );
     }
     const reclaimRows = reclaimResult.status === 'fulfilled' ? reclaimResult.value : [];
     const sessionRows = sessionResult.status === 'fulfilled' ? sessionResult.value : [];
+    const envRows = envResult.status === 'fulfilled' ? envResult.value : [];
 
     return {
       rows: [
@@ -105,17 +166,39 @@ export const defaultReconcileAgentSessionOrphanSpritesDeps: ReconcileOrphanSprit
               ? [{ kind: 'agent-session', workspaceId: row.workspaceId, sandboxId: row.sandboxId, spriteInstanceId: row.spriteInstanceId }]
               : [],
           ),
+        ...envRows
+          .slice(0, MAX_CANDIDATES_PER_TABLE)
+          // Same narrowing as above: SQL already guarantees a non-null
+          // sandboxId, the filter tells the type system so.
+          .flatMap((row): SpriteOrphanRow[] =>
+            row.sandboxId
+              ? [{ kind: 'drive-env', envId: row.envId, sandboxId: row.sandboxId, spriteInstanceId: row.spriteInstanceId }]
+              : [],
+          ),
       ],
-      capped: reclaimRows.length > MAX_CANDIDATES_PER_TABLE || sessionRows.length > MAX_CANDIDATES_PER_TABLE,
+      capped:
+        reclaimRows.length > MAX_CANDIDATES_PER_TABLE ||
+        sessionRows.length > MAX_CANDIDATES_PER_TABLE ||
+        envRows.length > MAX_CANDIDATES_PER_TABLE,
       // A source we could not read at all. Distinct from `capped`: this run did
       // not merely leave a backlog, it never saw part of the field.
-      incomplete: reclaimResult.status === 'rejected' || sessionResult.status === 'rejected',
+      incomplete:
+        reclaimResult.status === 'rejected' ||
+        sessionResult.status === 'rejected' ||
+        envResult.status === 'rejected',
     };
   },
 
-  async isTeardownStillRequested(workspaceId) {
+  async isTeardownStillRequested(row) {
+    // Dispatch on the row's kind — the ONE place this cron knows there are two
+    // holder tables. The question and its answer are identical either way:
+    // does this row still carry an unconfirmed teardown intent?
+    if (row.kind === 'drive-env') {
+      const env = await (await getDriveEnvStore()).findById(row.envId);
+      return env !== null && env.teardownRequestedAt !== null && env.spriteTornDownAt === null;
+    }
     const store = await getAgentSessionStore();
-    const session = await store.findById(workspaceId);
+    const session = await store.findById(row.workspaceId);
     return session !== null && session.teardownRequestedAt !== null && session.spriteTornDownAt === null;
   },
 
@@ -142,16 +225,19 @@ export const defaultReconcileAgentSessionOrphanSpritesDeps: ReconcileOrphanSprit
     }
   },
 
-  async markSessionTornDown({ workspaceId, sandboxId, spriteInstanceId }) {
+  async markHolderTornDown(row) {
+    const { sandboxId, spriteInstanceId } = row;
+    // CAS on the INSTANCE (each store's own contract) — a concurrent
+    // re-provision's live replacement must never be marked dead. Note the
+    // stamp is `spriteTornDownAt` alone for BOTH kinds: an env has no
+    // `endedAt` column, and a session ending is not what this cron witnessed.
+    const stamps = { spriteTornDownAt: new Date() };
+    if (row.kind === 'drive-env') {
+      const envStore = await getDriveEnvStore();
+      return envStore.stampSpriteTornDown({ envId: row.envId, sandboxId, spriteInstanceId, stamps });
+    }
     const store = await getAgentSessionStore();
-    // CAS on the INSTANCE (store's own contract) — a concurrent re-provision's
-    // live replacement must never be marked dead.
-    return store.stampSpriteTornDown({
-      workspaceId,
-      sandboxId,
-      spriteInstanceId,
-      stamps: { spriteTornDownAt: new Date() },
-    });
+    return store.stampSpriteTornDown({ workspaceId: row.workspaceId, sandboxId, spriteInstanceId, stamps });
   },
 
   async releaseReclaim(sandboxId) {

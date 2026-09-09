@@ -6,6 +6,8 @@ type RegisterOptionsJSON = Parameters<typeof startRegistration>[0]['optionsJSON'
 export interface RunPasskeyRegisterExternalCeremonyInput {
   handoffToken: string;
   deviceName: string;
+  /** Which desktop app to notify once the credential is registered. */
+  shell?: unknown;
   fetchImpl?: typeof fetch;
 }
 
@@ -76,5 +78,5 @@ export async function runPasskeyRegisterExternalCeremony(
     return { ok: false, error: await readError(verifyRes, 'Registration verification failed') };
   }
 
-  return { ok: true, deepLink: buildPasskeyRegisteredDeepLink() };
+  return { ok: true, deepLink: buildPasskeyRegisteredDeepLink(input.shell) };
 }

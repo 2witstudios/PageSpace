@@ -15,7 +15,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
-import type { ChatOnFinishCallback, UIMessage } from 'ai';
+import type { UIMessage } from 'ai';
 
 const { mockFetchWithAuth } = vi.hoisted(() => ({
   mockFetchWithAuth: vi.fn(),
@@ -45,15 +45,10 @@ const chat = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@ai-sdk/react', () => ({
-  useChat: vi.fn((config: Record<string, unknown> | undefined) => {
-    if (config && typeof config.id === 'string') chat.capturedConfigs.push(config);
-    return {
-      messages: chat.state.messages,
-      status: chat.state.status,
-      error: undefined,
-      ...chat.instance,
-    };
+vi.mock('@/lib/ai/shared/hooks/useChatSession', () => ({
+  useChatSession: vi.fn((config: Record<string, unknown>) => {
+    chat.capturedConfigs.push(config);
+    return { status: chat.state.status, error: undefined, ...chat.instance };
   }),
 }));
 
@@ -104,7 +99,6 @@ import { useDriveStore, type Drive } from '@/hooks/useDrive';
 import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
-import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { useAssistantSessionChat } from '../useAssistantSessionChat';
 
 function ids(slug: string) {
@@ -126,8 +120,11 @@ function driveFixture(id: string, name: string): Drive {
 }
 
 function sentBody() {
-  const [, options] = chat.instance.sendMessage.mock.calls.at(-1) as [
+  // `sendMessage(message, conversationId, options)` — the conversation is passed EXPLICITLY at
+  // send time now, rather than latched from surface props while the POST was in flight.
+  const [, , options] = chat.instance.sendMessage.mock.calls.at(-1) as [
     UIMessage,
+    string,
     { body?: Record<string, unknown> },
   ];
   return options.body;
@@ -275,94 +272,4 @@ describe('useAssistantSessionChat — ask_user answering', () => {
   });
 });
 
-describe('useAssistantSessionChat — onFinish local commit', () => {
-  // THE pane regression: the streamed reply vanished the instant the stream completed,
-  // leaving only the sent user message (reopening from history showed it fine). The pane
-  // has no conversation-scoped channel subscriber — GlobalChatProvider's onStreamComplete
-  // is gated on the DASHBOARD's active conversation — so nothing ever committed the reply
-  // into the cache, and the mirror entry's falling-edge removal blanked the bubble.
-  // The chatConfig's onFinish must commit the finished reply locally.
-  it('given the own stream finishes, commits the reply into the cache so it survives the mirror release', async () => {
-    const { conversationId } = ids('own-finish-commit');
-    conversationMessagesActions.addOptimisticSend(conversationId, {
-      id: 'm-user-1',
-      role: 'user',
-      parts: [{ type: 'text', text: 'the question' }],
-    } as UIMessage);
 
-    const { result } = renderHook(() => useAssistantSessionChat({ conversationId, driveId: null }));
-
-    const config = chat.capturedConfigs.at(-1)!;
-    expect(typeof config.onFinish).toBe('function');
-    const onFinish = config.onFinish as ChatOnFinishCallback<UIMessage>;
-
-    const reply = {
-      id: 'm-assistant-1',
-      role: 'assistant',
-      parts: [{ type: 'text', text: 'the full reply' }],
-    } as UIMessage;
-    act(() => {
-      onFinish({ message: reply, messages: [reply], isAbort: false, isDisconnect: false, isError: false });
-    });
-
-    // Mirror entry gone (falling edge already ran / never existed) — the reply must STILL render.
-    expect(usePendingStreamsStore.getState().streams.size).toBe(0);
-    await waitFor(() => {
-      expect(result.current.messages.map((m) => m.id)).toEqual(['m-user-1', 'm-assistant-1']);
-    });
-    expect(loaders.refreshConversationSnapshot).toHaveBeenCalledWith(null, conversationId);
-  });
-
-  it('given the user Stops mid-stream, commits the partial reply with the interrupted badge', async () => {
-    const { conversationId } = ids('own-finish-abort');
-    conversationMessagesActions.seedConversation(conversationId);
-
-    const { result } = renderHook(() => useAssistantSessionChat({ conversationId, driveId: null }));
-
-    const onFinish = chat.capturedConfigs.at(-1)!.onFinish as ChatOnFinishCallback<UIMessage>;
-    const partial = {
-      id: 'm-assistant-1',
-      role: 'assistant',
-      parts: [{ type: 'text', text: 'partial…' }],
-    } as UIMessage;
-    act(() => {
-      onFinish({ message: partial, messages: [partial], isAbort: true, isDisconnect: false, isError: false });
-    });
-
-    await waitFor(() => {
-      const committed = result.current.messages.find((m) => m.id === 'm-assistant-1');
-      expect(committed).toBeDefined();
-      expect((committed as UIMessage & { status?: string }).status).toBe('interrupted');
-    });
-  });
-});
-
-describe('useAssistantSessionChat — own-stream mirror', () => {
-  // Regression, sibling of useAgentSessionChat.test.ts's: the sender's own pane went blank
-  // mid-stream while other viewers saw the reply stream in fine. useOwnStreamMirror's
-  // `ownMessages` must be useChat's OWN live-growing `messages` array, not the
-  // rendered/cache-derived array this hook also happens to bind under the name `messages` —
-  // feeding it the latter leaves usePendingStreamsStore empty for the sender.
-  it("mirrors an in-progress own-stream assistant reply into usePendingStreamsStore, from useChat's own live messages", async () => {
-    const { conversationId } = ids('own-stream-mirror');
-    chat.state.status = 'streaming';
-    chat.state.messages = [
-      { id: 'm-user-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] } as UIMessage,
-      {
-        id: 'm-assistant-1',
-        role: 'assistant',
-        parts: [{ type: 'text', text: 'Partial reply in progress...' }],
-      } as UIMessage,
-    ];
-
-    renderHook(() => useAssistantSessionChat({ conversationId, driveId: null }));
-
-    await waitFor(() => {
-      const entry = usePendingStreamsStore.getState().streams.get('m-assistant-1');
-      expect(entry).toBeDefined();
-      expect(entry?.isOwn).toBe(true);
-      expect(entry?.pageId).toBe(globalChannelId('user-1'));
-      expect(entry?.conversationId).toBe(conversationId);
-    });
-  });
-});

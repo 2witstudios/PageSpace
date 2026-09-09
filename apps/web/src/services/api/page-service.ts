@@ -21,7 +21,14 @@ import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monito
 import { logActivityWithTx, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createId } from '@paralleldrive/cuid2';
 import { applyPageMutation, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { readSheetDocument } from '@pagespace/lib/sheets/store';
 import { ensureTaskItemForPage, ensureTaskListForPage } from './task-sync-service';
+import {
+  isProtectedMemoryPage,
+  MEMORY_PAGE_DELETE_ERROR,
+  MEMORY_PAGE_MOVE_ERROR,
+} from '@pagespace/lib/memory/memory-pages';
 
 /**
  * Helper to convert DB page result to PageData type
@@ -245,6 +252,13 @@ export interface CreatePageParams {
   contentMode?: 'html' | 'markdown';
   systemPrompt?: string;
   enabledTools?: string[];
+  /**
+   * The per-agent sandbox switch, for an AI_CHAT page. Accepted at creation for
+   * the same reason the dedicated agent-create route accepts it: `enabledTools`
+   * without it can only ever store a sandbox allowlist that grants nothing
+   * (issue #2460).
+   */
+  sandboxEnabled?: boolean;
   aiProvider?: string;
   aiModel?: string;
 }
@@ -299,6 +313,12 @@ async function recursivelyTrash(
   const children = await tx.select({ id: pages.id }).from(pages).where(eq(pages.parentId, pageId));
 
   for (const child of children) {
+    // `parentId` is user-editable, so a memory page can be moved under an
+    // ordinary page and would otherwise be swept up by that page's cascade —
+    // deleting a profile as a side effect of deleting something else. The
+    // top-level guard in `trashPage` only sees the page it was asked about.
+    if (await isProtectedMemoryPage(child.id)) continue;
+
     const childTriggers = await recursivelyTrash(child.id, tx, context);
     triggers.push(...childTriggers);
   }
@@ -454,11 +474,24 @@ export const pageService = {
     ]);
 
     const pageData = toPageData(page);
+
+    // A sheet's content is generated from its rows.
+    //
+    // `pages.content` is empty for a materialised sheet, and this endpoint is
+    // what `useSheetPersistence` refetches on every `content-updated` socket
+    // event. Returning the empty column made an open, non-dirty sheet adopt a
+    // blank document, render blank, and then write that blank sheet back on the
+    // next autosave — deleting every row. Cross-sheet `@[Sheet]:A1` references
+    // read this endpoint too, and resolved against an empty grid.
+    const content = isSheetType(page.type as PageTypeEnum)
+      ? (await readSheetDocument(pageId)) ?? pageData.content ?? ''
+      : sanitizeEmptyContent(pageData.content || '');
+
     return {
       success: true,
       page: {
         ...pageData,
-        content: sanitizeEmptyContent(pageData.content || ''),
+        content,
         children: children.map(toPageData),
         messages,
       },
@@ -486,6 +519,14 @@ export const pageService = {
 
     // Validate parent change
     if (updates.parentId !== undefined) {
+      // Memory pages stay in their Memory folder. Moving one out is how it ends
+      // up under an ordinary page and inside that page's delete cascade, and it
+      // also breaks the folder link the settings screen offers. Editing the
+      // CONTENT is untouched — only relocation is refused.
+      if (await isProtectedMemoryPage(pageId)) {
+        return { success: false, error: MEMORY_PAGE_MOVE_ERROR, status: 403 };
+      }
+
       const validation = await validatePageMove(pageId, updates.parentId);
       if (!validation.valid) {
         return { success: false, error: validation.error || 'Invalid parent', status: 400 };
@@ -563,10 +604,21 @@ export const pageService = {
     }
 
     const pageData = toPageData(updatedPage);
+
+    // Same projection as `getPage`. Without it a successful sheet save answers
+    // with `content: ""` — the blanked column — and any client that adopts the
+    // response body (MCP, the SDK, an SWR cache write) sees the spreadsheet as
+    // empty. The web editor happens to read only `revision` off this, which is
+    // exactly the kind of accident that stops being true later.
+    const responseContent = isSheetType(updatedPage.type as PageTypeEnum)
+      ? (await readSheetDocument(pageId)) ?? pageData.content ?? ''
+      : pageData.content;
+
     return {
       success: true,
       page: {
         ...pageData,
+        content: responseContent,
         children: children.map(toPageData),
         messages,
       },
@@ -589,6 +641,14 @@ export const pageService = {
     const canDelete = await authorizeDelete(pageId);
     if (!canDelete) {
       return { success: false, error: 'You need delete permission to remove this page', status: 403 };
+    }
+
+    // Memory pages are structural, like the Home drive: the cron writes to them
+    // by pointer and the settings screen links to them, so deleting one leaves
+    // a profile with nowhere to live. Emptying the page is the way to erase the
+    // content; the personalization toggle is the way to stop it being used.
+    if (await isProtectedMemoryPage(pageId)) {
+      return { success: false, error: MEMORY_PAGE_DELETE_ERROR, status: 403 };
     }
 
     // Get page info before trashing
@@ -756,7 +816,7 @@ export const pageService = {
 
       // Resolve provider+model as one pair — never mix a stored provider with the
       // default model (or vice-versa). A partial user row (only one column set) would
-      // otherwise yield an impossible pair like `anthropic` + `openai/gpt-5.6-luna`
+      // otherwise yield an impossible pair like `anthropic` + `z-ai/glm-5.3-flash`
       // that the provider factory rejects on first use.
       if (user?.currentAiProvider && user.currentAiModel) {
         defaultAiProvider = user.currentAiProvider;
@@ -797,6 +857,7 @@ export const pageService = {
         aiModel?: string | null;
         systemPrompt?: string | null;
         enabledTools?: string[] | null;
+        sandboxEnabled?: boolean;
       }
 
       const pageData: PageInsertData = {
@@ -824,6 +885,10 @@ export const pageService = {
         if (params.enabledTools && params.enabledTools.length > 0) {
           pageData.enabledTools = params.enabledTools;
         }
+        if (params.sandboxEnabled !== undefined) {
+          pageData.sandboxEnabled = params.sandboxEnabled;
+        }
+
       }
 
       const contentFormat = detectPageContentFormat(pageData.content);

@@ -1,9 +1,10 @@
 import './instrument';
 import * as Sentry from '@sentry/node';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
+import type { Duplex } from 'stream';
 import { Server, Socket } from 'socket.io';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
-import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/contract';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/shells-contract';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import * as dotenv from 'dotenv';
@@ -52,7 +53,27 @@ import {
 import { buildShellCheckAuth } from './terminal/shell-access';
 import { deriveShellSessionKey } from './terminal/shell-session-key';
 import { handleShellReadRequest, handleShellSendRequest } from './terminal/shell-io';
+import { buildAppLogHandlers, type AppLogSocketLike } from './app-logs/app-log-handler';
 import { handleShellActivityRequest } from './terminal/shell-activity';
+import { buildPreviewUpgradeHandler, previewHolderForUpgrade } from './dev-preview/preview-upgrade';
+import { createDetectionRegistry, nodeWebSocketFactory } from './dev-preview/detection-registry';
+import { createDevPreviewLock, DEV_PREVIEW_DETECTOR_RETRIES } from '@pagespace/lib/services/sandbox/preview/dev-preview-lock';
+import { readDevPreviewHolderBody } from './dev-preview/holder-body';
+import {
+  buildRealtimePreviewAccessDeps,
+  createConnectScopedSandboxHost,
+  getRealtimePreviewCookieKey,
+  getRealtimePreviewStore,
+  resolveHolderSandboxId,
+} from './dev-preview/preview-runtime';
+import { resolvePreviewTarget } from '@pagespace/lib/services/sandbox/preview/preview-access';
+import { tunnelWebSocketUpgrade } from '@pagespace/lib/services/sandbox/preview/preview-ws-tunnel';
+import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
+import { resolveSpritesApiBaseUrl } from '@pagespace/lib/services/sandbox/preview/ports-watch';
+import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
+import { resolveSpritesToken } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { VOICE_BRIDGE_ROUTES } from '@pagespace/lib/realtime/voice-bridge-contract';
+import { handleRealtimeAttachRequest, defaultAttachHandlerDeps } from './voice/attach-handler';
 import { checkAgentSessionAccess } from '@pagespace/lib/services/agent-workspaces/agent-workspace-access';
 import {
   resolveSessionTenantId,
@@ -62,6 +83,8 @@ import {
 import { resolveSessionShellById } from '@pagespace/lib/services/agent-workspaces/workspace-shells';
 import { createDbSessionShellStore } from '@pagespace/lib/services/agent-workspaces/workspace-shells-store';
 import { createDbAgentSessionStore } from '@pagespace/lib/services/agent-workspaces/agent-workspaces-store';
+import { createDbDriveEnvStore } from '@pagespace/lib/services/drive-envs/drive-envs-store';
+import { ensureDriveEnvSandbox } from '@pagespace/lib/services/drive-envs/env-provision-deps';
 import { ensureAgentSessionSandbox } from '@pagespace/lib/services/agent-workspaces/agent-workspace-sprite';
 import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
 import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
@@ -118,7 +141,32 @@ const agentTerminalSessionMap = createTerminalSessionMap();
 // The shell:* family's stores (agent sessions + their shells) — created once
 // at module level, not per-connection.
 const dbAgentSessionStorePromise = createDbAgentSessionStore();
+// The drive-environment store, for sessions that run INSIDE an environment: a
+// shell opened over the socket provisions the env's Sprite exactly as a web
+// tool call does, through the same shared core.
+const dbDriveEnvStorePromise = createDbDriveEnvStore();
 const dbSessionShellStorePromise = createDbSessionShellStore();
+
+// Dev-server detection: one `ports/watch` watcher per live sprite (dark unless
+// DEV_PREVIEW_ENABLED). Asserted from two places — the web tier's signed
+// trigger (`/api/dev-preview/watch`, after a session ensure) and this
+// process's own shell open below — because the exec-WS port channel is
+// TTY-only and a watcher must exist for AGENT-launched servers too.
+const devPreviewRegistry = createDetectionRegistry({
+  featureEnabled: isDevPreviewEnabled,
+  resolveHolderSandboxId,
+  attach: async (sandboxId) => (await createConnectScopedSandboxHost()).attach({ sandboxId }).catch(() => null),
+  store: getRealtimePreviewStore(),
+  createSocket: nodeWebSocketFactory,
+  spritesToken: resolveSpritesToken,
+  spritesApiBaseUrl: resolveSpritesApiBaseUrl,
+  log: loggers.realtime,
+  // Serialized against the web tier's stop/resume on the same holder. A short
+  // budget: frames arrive seconds apart, so waiting a few hundred ms costs the
+  // chain nothing, and past it the frame defers rather than fighting.
+  lock: createDevPreviewLock({ retries: DEV_PREVIEW_DETECTOR_RETRIES, log: loggers.realtime }),
+  now: () => new Date(),
+});
 
 /**
  * Decrypt PII at the edge (GDPR #965): actorEmail is denormalized into a
@@ -152,6 +200,22 @@ async function resolveOwnerTier(ownerId: string) {
     .where(eq(users.id, ownerId))
     .limit(1);
   return toSubscriptionTier(row?.subscriptionTier);
+}
+
+/**
+ * An ENVIRONMENT's payer — the drive's OWNER — and their tier, with NO fallback.
+ *
+ * The web tier's `resolveDriveEnvPayer` says the same thing; both fail closed on
+ * a vanished drive for the same reason `resolveSessionTenantId` does. The payer
+ * id is the TENANT an env's Sprite key folds under, so substituting the acting
+ * user would derive a different Sprite NAME for the same environment and hand
+ * back a different machine — splitting one env across two identities, one per
+ * tier of the system.
+ */
+async function resolveDriveEnvPayer(driveId: string) {
+  const [drive] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, driveId)).limit(1);
+  if (!drive) return null;
+  return { payerId: drive.ownerId, tier: await resolveOwnerTier(drive.ownerId) };
 }
 
 /**
@@ -222,6 +286,17 @@ async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId:
           },
         });
       },
+      // An env-bound session provisions its ENVIRONMENT, not itself — the same
+      // `ensureDriveEnvSandbox` the web tier binds, so both processes fold one
+      // keyspace under one tenant. Routing lives inside
+      // `ensureAgentSessionSandbox`; this is only the binding it calls.
+      ensureEnvSandbox: async ({ envId, intent }) =>
+        ensureDriveEnvSandbox({
+          envId,
+          intent,
+          requesterId: userId,
+          deps: { store: await dbDriveEnvStorePromise, host, resolvePayer: resolveDriveEnvPayer },
+        }),
       checkConcurrency: async ({ ownerId, alreadyProvisioned }) => {
         // Tier of the PAYER — the session's tenant (drive owner, else session
         // owner), resolved above — not the session creator's own tier (review
@@ -246,7 +321,19 @@ async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId:
   // measurement path — is both awake and worth measuring. Throttled per session,
   // and deliberately not awaited: a billing observation must never delay opening
   // a shell.
+  //
+  // On the CREATE arm this doubles up with the provisioning hook: that arm nulls
+  // `storageMeasuredAt` in the same write, so the throttle below reads null and
+  // always fires, and two `du` walks run concurrently on the same fresh sandbox.
+  // Pre-existing and harmless in value — both read the same empty disk, each is
+  // capped at 20s, and neither is awaited — but it is two execs where one would
+  // do. Suppressing it needs the provisioner to report whether it measured,
+  // which is a change to the shared holder core.
   void measureWarmSessionStorageOnResume(row.id, result.sandboxId);
+
+  // The sprite is awake (it was just ensured for a shell): attach the
+  // dev-server watcher for its HOLDER — the env for an env-bound session.
+  void devPreviewRegistry.ensure({ holder: resolveDevPreviewHolder(row) });
 
   return { ok: true, sandboxId: result.sandboxId };
 }
@@ -941,6 +1028,50 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.end(JSON.stringify({ success: false, error: 'Internal error' }));
             });
         });
+    } else if (req.method === 'POST' && (req.url === '/api/dev-preview/watch' || req.url === '/api/dev-preview/listeners')) {
+        // The two dev-preview calls from the web tier share ONE prologue:
+        // signed like every other web→realtime call, and the body names only
+        // a HOLDER — which sprite that holder is on is re-derived from the
+        // holder's own row inside the registry, so a signed-but-wrong sprite
+        // name can never be watched or read (`readDevPreviewHolderBody`).
+        //   watch     — a session ensure just happened: start a dev-server
+        //               watcher on the holder's live sprite (202, idempotent).
+        //   listeners — a status render asks for the snapshot this process's
+        //               watcher already holds; `null` is the honest "no
+        //               snapshot in hand" (never-probe-to-render: the sprite
+        //               is not touched to answer). It ALSO re-arms a missing
+        //               watcher, throttled — this is what makes detection
+        //               survive a restart or an exhausted reconnect budget,
+        //               since nothing else would ever start one again.
+        const isWatch = req.url === '/api/dev-preview/watch';
+        readCappedBody(body => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+            const holder = readDevPreviewHolderBody(body);
+            if (holder === null) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Malformed body' }));
+                return;
+            }
+            if (isWatch) {
+                void devPreviewRegistry.ensure({ holder });
+                res.writeHead(202, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ accepted: true }));
+                return;
+            }
+            devPreviewRegistry.read({ holder }).then((read) => {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(read));
+            }).catch((error: unknown) => {
+                loggers.realtime.error('dev-preview: listeners read failed', error instanceof Error ? error : new Error(String(error)));
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Internal error' }));
+            });
+        });
     } else if (req.method === 'POST' && req.url === '/api/kick') {
         // Kick API: Remove user from rooms on permission revocation
         readCappedBody(body => {
@@ -955,6 +1086,30 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
             res.writeHead(result.status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result.body));
         });
+    } else if (req.method === 'POST' && req.url === VOICE_BRIDGE_ROUTES.attach) {
+        // Voice attach: the web tier hands over a live OpenAI realtime call so
+        // THIS process — which can hold a socket for the whole call, unlike a
+        // Next route handler — owns its tools, transcripts and metering.
+        //
+        // The body carries a live ephemeral OpenAI credential, so the signature
+        // check is not optional and runs before anything is parsed.
+        readCappedBody(body => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+
+            handleRealtimeAttachRequest(defaultAttachHandlerDeps, body).then((result) => {
+                res.writeHead(result.status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result.body));
+            }).catch((error: unknown) => {
+                loggers.realtime.error('Realtime attach request failed', error instanceof Error ? error : new Error(String(error)));
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Internal error' }));
+            });
+        });
     } else {
         res.writeHead(404);
         res.end();
@@ -962,7 +1117,27 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
 };
 
 const httpServer = createServer(requestListener);
+
+// The WebSocket half of the dev-preview proxy (HMR sockets) — see
+// `preview-ws-tunnel.ts` for why it lives here and not in the web tier. A
+// preview-host upgrade is tunnelled; a socket.io upgrade is left to engine.io
+// (whose own listener follows); anything else is closed here, because
+// `destroyUpgrade` is turned off below and this listener owns that hygiene.
+const previewUpgrade = buildPreviewUpgradeHandler({
+  resolveApex: () => (isDevPreviewEnabled() ? resolveDevPreviewApex() : null),
+  cookieKey: getRealtimePreviewCookieKey,
+  resolveTarget: (holder, userId, sessionId) => resolvePreviewTarget({ holder, userId, sessionId, deps: buildRealtimePreviewAccessDeps() }),
+  tunnel: tunnelWebSocketUpgrade,
+  spritesToken: resolveSpritesToken,
+  log: loggers.realtime,
+  now: () => new Date(),
+});
 const io = new Server(httpServer, {
+  // engine.io would otherwise destroy any upgrade socket that has not been
+  // written to within 1s of arriving — a preview tunnel writes its 101 only
+  // once the sprite answers, which after a hibernation wake takes longer.
+  // The single upgrade dispatcher below closes stray sockets itself.
+  destroyUpgrade: false,
   cors: {
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
@@ -975,6 +1150,31 @@ const io = new Server(httpServer, {
     },
     credentials: true,
   },
+});
+
+// ONE owner per upgrade socket. Node invokes every 'upgrade' listener, so
+// engine.io's own listener (registered by `new Server(httpServer)` above) and
+// the preview tunnel would both receive a preview-host `/socket.io/` upgrade
+// — a previewed app using Socket.IO's default path — and engine.io would
+// write to or destroy the socket while the tunnel was still authorizing.
+// So engine.io's listeners are taken off the server and re-dispatched from
+// here: a preview HOST goes to the tunnel exclusively, PageSpace's own
+// `/socket.io/` goes to engine.io, and anything else is closed.
+const engineUpgradeListeners = httpServer.listeners('upgrade') as Array<(req: IncomingMessage, socket: Duplex, head: Buffer) => void>;
+httpServer.removeAllListeners('upgrade');
+httpServer.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+  if (previewHolderForUpgrade(req, isDevPreviewEnabled() ? resolveDevPreviewApex() : null) !== null) {
+    previewUpgrade(req, socket, head).catch((error: unknown) => {
+      loggers.realtime.error('dev-preview: upgrade failed', error instanceof Error ? error : new Error(String(error)));
+      socket.destroy();
+    });
+    return;
+  }
+  if ((req.url ?? '').startsWith('/socket.io/')) {
+    for (const listener of engineUpgradeListeners) listener(req, socket, head);
+    return;
+  }
+  socket.destroy();
 });
 
 // AuthSocket is imported from per-event-auth.ts
@@ -1248,7 +1448,7 @@ io.on('connection', (socket: AuthSocket) => {
   });
 
   // Join an agent workspace's LAYOUT room (`session:<id>`) — where
-  // rev-carrying `workspace:updated` pane-grid events fan out (epic Phase 3).
+  // rev-carrying `workspace:nodes-updated` tree events fan out.
   // Authorization is the SAME one session-access decision the web routes run
   // (`checkAgentSessionAccess` → `decideAgentSessionAccess`): a session is a
   // drive-level workspace, so access is drive access. Deliberately NOT
@@ -1673,8 +1873,17 @@ io.on('connection', (socket: AuthSocket) => {
   socket.on('shell:resize', (payload) => shellHandlers.onResize(payload));
   socket.on('shell:disconnect', (payload) => shellHandlers.onDisconnect(payload));
 
+  // Published-app log streaming (app:logs:* family): read-only fan-out of a
+  // Fly app's NATS log firehose to every attached viewer — see app-logs/.
+  const appLogHandlers = buildAppLogHandlers(socket as unknown as AppLogSocketLike);
+  socket.on('app:logs:subscribe', (payload) => {
+    void appLogHandlers.onSubscribe(payload);
+  });
+  socket.on('app:logs:unsubscribe', (payload) => appLogHandlers.onUnsubscribe(payload));
+
   socket.on('disconnect', (reason) => {
     shellHandlers.onDisconnect();
+    appLogHandlers.onDisconnect();
     // Clean up presence tracking and broadcast updates for affected pages
     const affectedPages = presenceTracker.removeSocket(socket.id);
     for (const { pageId, driveId } of affectedPages) {

@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useCallback, useRef, useId } from 'react';
 import dynamic from 'next/dynamic';
 import { useDocument } from '@/hooks/useDocument';
+import DocumentConflictGate from '@/components/layout/middle-content/page-views/document/DocumentConflictGate';
 import { motion, AnimatePresence } from 'motion/react';
 import { usePageContentSocket } from '@/hooks/usePageContentSocket';
 import type { PageEventPayload } from '@/lib/websocket';
@@ -92,6 +93,9 @@ const CodePageView = ({ pageId, driveId: driveIdProp }: CodePageViewProps) => {
     updateContentFromServer,
     saveWithDebounce,
     forceSave,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
   } = useDocument(pageId);
 
   // Store forceSave in ref to prevent cleanup effects from re-running
@@ -260,6 +264,12 @@ const CodePageView = ({ pageId, driveId: driveIdProp }: CodePageViewProps) => {
       transition={{ duration: 0.2 }}
       className="h-full flex flex-col relative"
     >
+      <DocumentConflictGate
+        conflict={conflict}
+        onResolve={resolveConflict}
+        isResolving={isResolvingConflict}
+        previewMode="plain"
+      />
       {/* Language selector toolbar */}
       <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--separator)]">
         <Select value={language} onValueChange={setLanguage}>

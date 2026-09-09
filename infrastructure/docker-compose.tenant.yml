@@ -242,6 +242,14 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
+      # Realtime runs the terminal, and the terminal takes the SAME sandbox
+      # gates the web tier does (`acquireCodeExecutionSlot` in
+      # terminal/shell-access.ts). Those gates resolve the payer's effective
+      # tier from DEPLOYMENT_MODE, so a realtime container that does not know it
+      # is a tenant would deny every shell on a deployment whose web tier allows
+      # them. Deployment mode is a property of the DEPLOYMENT: every service
+      # running app code must be told the same thing.
+      DEPLOYMENT_MODE: tenant
       DATABASE_URL: postgresql://${POSTGRES_USER:-pagespace}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pagespace}
       PORT: "3001"
       CORS_ORIGIN: ${CORS_ORIGIN}

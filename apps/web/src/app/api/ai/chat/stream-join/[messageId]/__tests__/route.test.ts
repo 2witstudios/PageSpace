@@ -1,18 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextResponse } from 'next/server';
-import { StreamMulticastRegistry } from '@/lib/ai/core/stream-multicast-registry';
+import { StreamChannelRegistry } from '@/lib/ai/core/stream-channel-registry';
+import { openStreamChannel } from '@/lib/ai/core/stream-channel';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Fresh registry per test — module-level let, updated in beforeEach
-let testRegistry: StreamMulticastRegistry;
+let testRegistry: StreamChannelRegistry;
 
-vi.mock('@/lib/ai/core/stream-multicast-registry', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/ai/core/stream-multicast-registry')>(
-    '@/lib/ai/core/stream-multicast-registry',
+vi.mock('@/lib/ai/core/stream-channel-registry', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/ai/core/stream-channel-registry')>(
+    '@/lib/ai/core/stream-channel-registry',
   );
   return {
     ...actual,
-    get streamMulticastRegistry() {
+    get streamChannelRegistry() {
       return testRegistry;
     },
   };
@@ -29,6 +30,36 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
+}));
+
+/**
+ * The session row `stream-join-context` falls back to on a registry miss.
+ *
+ * Defaults to "no row", so every pre-existing case keeps exercising exactly the path it did:
+ * the registry answers, or nothing does. The cross-instance cases opt in.
+ */
+const mockSessionRow = vi.fn<() => Promise<unknown[]>>();
+
+/**
+ * The remote follower, mocked at its module boundary.
+ *
+ * The route's job is to acquire one, hand its channel to the SAME subscribe/SSE code a local
+ * channel goes through, and release it on every teardown path. The follower's own polling and
+ * terminal classification live in `remote-frame-follower.test.ts`.
+ */
+const mockRemoteRelease = vi.fn();
+const mockAcquireRemoteChannel = vi.fn();
+vi.mock('@/lib/ai/core/remote-frame-follower', () => ({
+  acquireRemoteChannel: (messageId: string) => mockAcquireRemoteChannel(messageId),
+}));
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: () => ({
+      from: () => ({
+        where: () => ({ limit: () => mockSessionRow() }),
+      }),
+    }),
+  },
 }));
 
 import { GET } from '../route';
@@ -80,6 +111,19 @@ const makeRequest = (signal?: AbortSignal) => {
   return request;
 };
 
+/**
+ * Append a raw frame to the channel this messageId owns.
+ *
+ * The wire carries `UIMessageChunk`s now, not the `chunkToPart` projection — so these are
+ * SDK frames (`text-delta` with a `delta`) rather than rendered parts (`text` with a `text`).
+ * Folding them back into parts is the CLIENT's job, and is covered in stream-join-client.test.ts.
+ */
+const appendTo = (messageId: string, chunk: unknown) => {
+  testRegistry.get(messageId)?.append(chunk as never);
+};
+
+const textChunk = (delta: string) => ({ type: 'text-delta', id: 't1', delta });
+
 const makeContext = (messageId: string) => ({
   params: Promise.resolve({ messageId }),
 });
@@ -88,7 +132,7 @@ const readSSEBody = async (response: Response): Promise<string> => response.text
 
 describe('GET /api/ai/chat/stream-join/[messageId]', () => {
   beforeEach(() => {
-    testRegistry = new StreamMulticastRegistry();
+    testRegistry = new StreamChannelRegistry();
     vi.clearAllMocks();
 
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth());
@@ -96,6 +140,14 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
     // Default: the caller owns the stream (canSubscribeToStream short-circuits on that).
     mockCanSubscribeToStream.mockResolvedValue(true);
     vi.mocked(canUserViewPage).mockResolvedValue(true);
+    mockSessionRow.mockResolvedValue([]);
+    // Default: a follower that yields an already-finished, empty channel, so a case that does
+    // not care about the remote path still terminates promptly.
+    mockAcquireRemoteChannel.mockImplementation((id: string) => {
+      const channel = openStreamChannel({ messageId: id });
+      channel.finish(false);
+      return { channel, release: mockRemoteRelease };
+    });
   });
 
   describe('authentication', () => {
@@ -127,15 +179,15 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
   describe('stream lookup', () => {
     it('given an unknown messageId, should return 404', async () => {
-      // Registry has no entry for mockMessageId
+      // No registry entry AND no session row — the only honest 404.
       const response = await GET(makeRequest(), makeContext(mockMessageId));
 
       expect(response.status).toBe(404);
     });
 
     it('given an already-finished messageId, should return 404', async () => {
-      testRegistry.register(mockMessageId, mockMeta);
-      testRegistry.finish(mockMessageId);
+      testRegistry.open(mockMessageId, mockMeta);
+      testRegistry.close(mockMessageId);
       // Entry is deleted — subscribe() returns null
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
@@ -144,9 +196,251 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
     });
   });
 
+  /**
+   * THE ORDERING THIS LEAF EXISTS TO FIX.
+   *
+   * The registry lookup used to sit AHEAD of the authz block — structurally, because the authz
+   * inputs (pageId, conversationId, the stream's owner) lived in the same in-memory entry as
+   * the frames. At N>1 a registry miss is the ORDINARY case, so an entire class of live streams
+   * 404'd before anyone asked who the caller was. These pin that a DB-sourced context runs the
+   * SAME authz block, verbatim, over the SAME `StreamMeta` shape.
+   */
+  describe('cross-instance authorization (registry miss, session row present)', () => {
+    const remoteRow = (over: Record<string, unknown> = {}) => [{
+      channelId: mockPageId,
+      userId: 'user-other',
+      displayName: 'Someone Else',
+      conversationId: mockConversationId,
+      browserSessionId: 'session-other',
+      status: 'streaming',
+      ...over,
+    }];
+
+    it('runs canUserViewPage against the pageId the ROW carries, not an in-memory entry', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(canUserViewPage).toHaveBeenCalledWith(mockUserId, mockPageId);
+    });
+
+    it('runs canSubscribeToStream with the row\'s OWNER, so a co-member\'s private conversation is still private', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(mockCanSubscribeToStream).toHaveBeenCalledWith({
+        userId: mockUserId,
+        streamOwnerId: 'user-other',
+        conversationId: mockConversationId,
+      });
+    });
+
+    it('given no page access to a remote stream, 403s — the same audited denial a local one gets', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+      vi.mocked(canUserViewPage).mockResolvedValue(false);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(response.status).toBe(403);
+    });
+
+    it('given page access but no conversation access, 404s without an audit denial', async () => {
+      // Deliberately NOT an audited 403: a member asking for a co-member's private stream is
+      // the ordinary consequence of a page-wide broadcast, and auditing it would write a row
+      // per member per assistant message.
+      mockSessionRow.mockResolvedValue(remoteRow());
+      mockCanSubscribeToStream.mockResolvedValue(false);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(response.status).toBe(404);
+      expect(auditRequest).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'authz.access.denied' }),
+      );
+    });
+
+    it('given a global-assistant channel owned by someone else, 403s on the synthetic channel id', async () => {
+      // `parseGlobalChannelId` short-circuits page access for `user:<id>:global` channels, and
+      // it now runs over a channelId that came from the DB. A row belonging to another user's
+      // global assistant must not be joinable.
+      mockSessionRow.mockResolvedValue(remoteRow({ channelId: 'user:user-other:global' }));
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(response.status).toBe(403);
+    });
+
+    it('given a locally-owned channel, never reads the session row at all', async () => {
+      testRegistry.open(mockMessageId, mockMeta);
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(mockSessionRow).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * SERVING a remote stream.
+   *
+   * The route body is deliberately NOT forked here: a follower tails the durable frame log and
+   * presents it as an ordinary `StreamChannel`, so the SSE framing, the ping, the recheck, the
+   * teardown and the overflow semantics below are one code path for both sources. These cases
+   * pin that the follower is wired in and released, not the follower's own behaviour
+   * (`remote-frame-follower.test.ts` covers that).
+   */
+  describe('serving a remote stream through the follower', () => {
+    const remoteRow = () => [{
+      channelId: mockPageId,
+      userId: mockUserId,
+      displayName: mockDisplayName,
+      conversationId: mockConversationId,
+      browserSessionId: mockBrowserSessionId,
+      status: 'streaming',
+    }];
+
+    it('given a remote stream, serves its frames instead of 404ing', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+      mockAcquireRemoteChannel.mockImplementation((id: string) => {
+        const channel = openStreamChannel({ messageId: id });
+        channel.append(textChunk('from the durable log') as never);
+        channel.finish(false);
+        return { channel, release: mockRemoteRelease };
+      });
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+      const body = await readSSEBody(response);
+
+      expect(response.status).toBe(200);
+      expect(body).toContain(`data: ${JSON.stringify({ seq: 0, chunk: textChunk('from the durable log') })}\n\n`);
+    });
+
+    it('labels the response with where the frames came from', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      // An N=2 smoke test has no other way to PROVE it exercised the follower rather than
+      // getting lucky with the load balancer; in production the remote share should sit near
+      // (N-1)/N.
+      expect(response.headers.get('X-Stream-Join-Source')).toBe('remote');
+    });
+
+    it('labels a locally-owned join as local', async () => {
+      testRegistry.open(mockMessageId, mockMeta);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(response.headers.get('X-Stream-Join-Source')).toBe('local');
+    });
+
+    it('labels a terminal join as terminal, and follows it rather than 404ing', async () => {
+      // Frames are deleted on the terminal write, so a terminal row is exactly the case where
+      // the follower's honest-answer logic is needed — not a case to short-circuit.
+      mockSessionRow.mockResolvedValue([{ ...remoteRow()[0], status: 'complete' }]);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('X-Stream-Join-Source')).toBe('terminal');
+    });
+
+    it('given a truncated end, tells the client to RELOAD rather than sending a bare done', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+      mockAcquireRemoteChannel.mockImplementation((id: string) => {
+        const channel = openStreamChannel({ messageId: id });
+        channel.append(textChunk('a prefix') as never);
+        channel.finish(false, { truncated: true });
+        return { channel, release: mockRemoteRelease };
+      });
+
+      const body = await readSSEBody(await GET(makeRequest(), makeContext(mockMessageId)));
+
+      // A bare `done` would leave a short reply on screen looking whole. `reload` is a different
+      // answer from `resumeFromSeq`: there is no seq to resume from, only a durable message to
+      // re-read.
+      expect(body).toContain('data: {"done":true,"aborted":false,"reload":true}\n\n');
+    });
+
+    it('releases the follower reference when the stream ends', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+      mockAcquireRemoteChannel.mockImplementation((id: string) => {
+        const channel = openStreamChannel({ messageId: id });
+        channel.finish(false);
+        return { channel, release: mockRemoteRelease };
+      });
+
+      await readSSEBody(await GET(makeRequest(), makeContext(mockMessageId)));
+
+      // A leaked reference keeps a poller hitting Postgres for a reader that has already gone.
+      expect(mockRemoteRelease).toHaveBeenCalled();
+    });
+
+    it('releases the follower reference when the client disconnects', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+      const controller = new AbortController();
+      mockAcquireRemoteChannel.mockImplementation((id: string) => ({
+        channel: openStreamChannel({ messageId: id }),
+        release: mockRemoteRelease,
+      }));
+
+      const response = await GET(makeRequest(controller.signal), makeContext(mockMessageId));
+      const reader = response.body!.getReader();
+      controller.abort();
+      await reader.read().catch(() => undefined);
+
+      expect(mockRemoteRelease).toHaveBeenCalled();
+    });
+
+    it('never acquires a follower for a locally-owned stream', async () => {
+      testRegistry.open(mockMessageId, mockMeta);
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(mockAcquireRemoteChannel).not.toHaveBeenCalled();
+    });
+
+    it('never acquires a follower for a caller who may not subscribe', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+      mockCanSubscribeToStream.mockResolvedValue(false);
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+
+      // Acquiring first would start a poller — and a DB read loop over another member's private
+      // conversation — for a request that is about to 404.
+      expect(mockAcquireRemoteChannel).not.toHaveBeenCalled();
+    });
+
+    it('given the success-path audit throws, releases the subscription and the follower before the error propagates', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+      let followedChannel: ReturnType<typeof openStreamChannel> | null = null;
+      mockAcquireRemoteChannel.mockImplementation((id: string) => {
+        followedChannel = openStreamChannel({ messageId: id });
+        return { channel: followedChannel, release: mockRemoteRelease };
+      });
+      // auditRequest is synchronous up to its DB write, so its failure is a thrown error on
+      // the success path — the last point where BOTH holds (the subscription and this
+      // reader's follower reference) are live and nothing else will release them.
+      vi.mocked(auditRequest).mockImplementation((_request, event) => {
+        if (event.eventType === 'authz.access.granted') throw new Error('audit pipeline exploded');
+      });
+
+      await expect(GET(makeRequest(), makeContext(mockMessageId)))
+        .rejects.toThrow('audit pipeline exploded');
+
+      // "Dropped in EVERY exit, not only the happy one" — an exception is an exit too.
+      expect(mockRemoteRelease).toHaveBeenCalledTimes(1);
+      expect(followedChannel!.subscriberCount).toBe(0);
+      // clearAllMocks does not undo mockImplementation, and a throwing audit left behind
+      // would fail every case that runs after this one.
+      vi.mocked(auditRequest).mockReset();
+    });
+  });
+
   describe('authorization', () => {
     it('given a user without view access, should return 403', async () => {
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
       vi.mocked(canUserViewPage).mockResolvedValue(false);
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
@@ -155,7 +449,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
     });
 
     it('given a user without view access, should emit authz.access.denied audit event', async () => {
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
       vi.mocked(canUserViewPage).mockResolvedValue(false);
 
       await GET(makeRequest(), makeContext(mockMessageId));
@@ -172,20 +466,20 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
     });
 
     it('should check permission against the pageId from stream metadata', async () => {
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       await GET(makeRequest(), makeContext(mockMessageId));
-      testRegistry.finish(mockMessageId);
+      testRegistry.close(mockMessageId);
 
       expect(canUserViewPage).toHaveBeenCalledWith(mockUserId, mockPageId);
     });
 
     it('given a global channel pageId owned by the requesting user, should allow without calling canUserViewPage', async () => {
       const globalMeta = { ...mockMeta, pageId: `user:${mockUserId}:global` };
-      testRegistry.register(mockMessageId, globalMeta);
+      testRegistry.open(mockMessageId, globalMeta);
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
-      testRegistry.finish(mockMessageId);
+      testRegistry.close(mockMessageId);
 
       expect(response.status).toBe(200);
       expect(canUserViewPage).not.toHaveBeenCalled();
@@ -193,7 +487,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
     it('given a global channel pageId owned by a different user, should return 403', async () => {
       const globalMeta = { ...mockMeta, pageId: `user:other-user-999:global` };
-      testRegistry.register(mockMessageId, globalMeta);
+      testRegistry.open(mockMessageId, globalMeta);
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
 
@@ -208,7 +502,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
   // are the two paths that matter and neither had route-level coverage before.
   describe('conversation-scoped subscription', () => {
     beforeEach(() => {
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
     });
 
     it("given another member's stream in an explicitly SHARED conversation, should still join (multiplayer must not regress)", async () => {
@@ -264,10 +558,10 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
   describe('SSE streaming', () => {
     it('given a valid messageId and authorized viewer, should return SSE response headers', async () => {
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
-      testRegistry.finish(mockMessageId);
+      testRegistry.close(mockMessageId);
 
       expect(response.status).toBe(200);
       expect(response.headers.get('Content-Type')).toBe('text/event-stream');
@@ -276,10 +570,10 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
     });
 
     it('given a successful stream join, should emit an authz.access.granted audit event', async () => {
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       await GET(makeRequest(), makeContext(mockMessageId));
-      testRegistry.finish(mockMessageId);
+      testRegistry.close(mockMessageId);
 
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),
@@ -292,45 +586,44 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       );
     });
 
-    it('given buffered parts, should stream them as SSE part frames', async () => {
-      testRegistry.register(mockMessageId, mockMeta);
-      testRegistry.push(mockMessageId, { type: 'text', text: 'hello' });
-      testRegistry.push(mockMessageId, { type: 'text', text: ' world' });
+    it('given buffered frames, should stream them as seq-addressed SSE frames', async () => {
+      testRegistry.open(mockMessageId, mockMeta);
+      appendTo(mockMessageId, textChunk('hello'));
+      appendTo(mockMessageId, textChunk(' world'));
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
-      testRegistry.finish(mockMessageId);
+      testRegistry.close(mockMessageId);
 
       const body = await readSSEBody(response);
 
-      expect(body).toContain('data: {"part":{"type":"text","text":"hello"}}\n\n');
-      expect(body).toContain('data: {"part":{"type":"text","text":" world"}}\n\n');
+      // seq-addressed raw frames, not rendered parts — and the seq is what lets a rejoining
+      // client say exactly where to resume instead of being told how many frames to skip.
+      expect(body).toContain(`data: ${JSON.stringify({ seq: 0, chunk: textChunk('hello') })}\n\n`);
+      expect(body).toContain(`data: ${JSON.stringify({ seq: 1, chunk: textChunk(' world') })}\n\n`);
     });
 
-    it('given a tool part, should stream it as an SSE part frame preserving the full tool shape', async () => {
-      testRegistry.register(mockMessageId, mockMeta);
-      const toolPart = {
-        type: 'tool-list_pages',
+    it('given a tool frame, should stream it verbatim, preserving the full shape', async () => {
+      testRegistry.open(mockMessageId, mockMeta);
+      const toolChunk = {
+        type: 'tool-output-available',
         toolCallId: 'tc1',
-        toolName: 'list_pages',
-        state: 'output-available',
-        input: { driveId: 'd1' },
         output: { pages: [] },
       } as const;
-      testRegistry.push(mockMessageId, toolPart as never);
+      appendTo(mockMessageId, toolChunk as never);
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
-      testRegistry.finish(mockMessageId);
+      testRegistry.close(mockMessageId);
 
       const body = await readSSEBody(response);
 
-      expect(body).toContain(`data: ${JSON.stringify({ part: toolPart })}\n\n`);
+      expect(body).toContain(`data: ${JSON.stringify({ seq: 0, chunk: toolChunk })}\n\n`);
     });
 
     it('given stream completion, should send [DONE] sentinel and close', async () => {
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
-      testRegistry.finish(mockMessageId);
+      testRegistry.close(mockMessageId);
 
       const body = await readSSEBody(response);
 
@@ -338,10 +631,10 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
     });
 
     it('given stream aborted, should send done sentinel with aborted=true', async () => {
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
-      testRegistry.finish(mockMessageId, true);
+      testRegistry.close(mockMessageId, true);
 
       const body = await readSSEBody(response);
 
@@ -349,32 +642,30 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
     });
 
     it('given live parts pushed after subscribe, should stream them in order', async () => {
-      testRegistry.register(mockMessageId, mockMeta);
-      testRegistry.push(mockMessageId, { type: 'text', text: 'buffered' });
+      testRegistry.open(mockMessageId, mockMeta);
+      appendTo(mockMessageId, textChunk('buffered'));
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
 
-      testRegistry.push(mockMessageId, { type: 'text', text: 'live' });
-      testRegistry.finish(mockMessageId);
+      appendTo(mockMessageId, textChunk('live'));
+      testRegistry.close(mockMessageId);
 
       const body = await readSSEBody(response);
 
-      expect(body).toContain('data: {"part":{"type":"text","text":"buffered"}}\n\n');
-      expect(body).toContain('data: {"part":{"type":"text","text":"live"}}\n\n');
+      expect(body).toContain(`data: ${JSON.stringify({ seq: 0, chunk: textChunk('buffered') })}\n\n`);
+      expect(body).toContain(`data: ${JSON.stringify({ seq: 1, chunk: textChunk('live') })}\n\n`);
       expect(body).toContain('data: {"done":true,"aborted":false}\n\n');
     });
 
-    it('given a race where subscribe returns null, should return 404', async () => {
-      // getMeta succeeds (stream registered) but subscribe returns null
-      // Simulate by registering, getting meta, then finishing before route subscribes.
-      // We achieve this by overriding getMeta to return meta while subscribe sees finished state.
-      // Simplest: use the registry — register, finish, re-set getMeta via spy.
-      const spyRegistry = new StreamMulticastRegistry();
-      spyRegistry.register(mockMessageId, mockMeta);
-
-      // getMeta returns meta even after finish by using a spy
+    it('given the channel is closed between the meta lookup and the subscribe, should 404', async () => {
+      // The narrow race the route has to survive: `getMeta` answers (the stream was known) but
+      // the channel is gone by the time we ask for it. Under the old registry this surfaced as
+      // `subscribe` returning null; the channel registry makes it a plain absent entry, so the
+      // route's own `if (!channel) 404` covers it without a special case.
+      const spyRegistry = new StreamChannelRegistry();
+      spyRegistry.open(mockMessageId, mockMeta);
       const getMetaSpy = vi.spyOn(spyRegistry, 'getMeta').mockReturnValue(mockMeta);
-      spyRegistry.finish(mockMessageId); // subscribe will now return null
+      spyRegistry.close(mockMessageId);
 
       testRegistry = spyRegistry;
 
@@ -396,7 +687,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       vi.useFakeTimers();
       let allowed = true;
       vi.mocked(canUserViewPage).mockImplementation(async () => allowed);
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
       expect(response.status).toBe(200);
@@ -405,7 +696,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
 
       // Further pushes after revocation must not reach the (already-closed) response body.
-      testRegistry.push(mockMessageId, { type: 'text', text: 'after-revoke' });
+      appendTo(mockMessageId, textChunk('after-revoke'));
 
       const body = await readSSEBody(response);
 
@@ -424,7 +715,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       vi.mocked(canUserViewPage).mockResolvedValue(true); // page access never lapses
       let subscribable = true;
       mockCanSubscribeToStream.mockImplementation(async () => subscribable);
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
       expect(response.status).toBe(200);
@@ -433,7 +724,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       subscribable = false;
       await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
 
-      testRegistry.push(mockMessageId, { type: 'text', text: 'after-unshare' });
+      appendTo(mockMessageId, textChunk('after-unshare'));
 
       const body = await readSSEBody(response);
 
@@ -445,7 +736,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       vi.useFakeTimers();
       let allowed = true;
       vi.mocked(canUserViewPage).mockImplementation(async () => allowed);
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       await GET(makeRequest(), makeContext(mockMessageId));
 
@@ -454,34 +745,34 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
       // finish() notifies subscribers via onComplete; if the route already unsubscribed,
       // this must not throw and must not double-close the (already-closed) controller.
-      expect(() => testRegistry.finish(mockMessageId)).not.toThrow();
+      expect(() => testRegistry.close(mockMessageId)).not.toThrow();
     });
 
     it('given permission remains granted at recheck time, should keep the stream open and continue delivering chunks', async () => {
       vi.useFakeTimers();
       vi.mocked(canUserViewPage).mockResolvedValue(true);
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
 
       await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
 
-      testRegistry.push(mockMessageId, { type: 'text', text: 'still-allowed' });
-      testRegistry.finish(mockMessageId);
+      appendTo(mockMessageId, textChunk('still-allowed'));
+      testRegistry.close(mockMessageId);
 
       const body = await readSSEBody(response);
 
-      expect(body).toContain('data: {"part":{"type":"text","text":"still-allowed"}}\n\n');
+      expect(body).toContain(`data: ${JSON.stringify({ seq: 0, chunk: textChunk('still-allowed') })}\n\n`);
       expect(body).toContain('data: {"done":true,"aborted":false}\n\n');
     });
 
     it('given the stream finishes naturally before any recheck fires, should clear the recheck interval', async () => {
       vi.useFakeTimers();
       vi.mocked(canUserViewPage).mockResolvedValue(true);
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       await GET(makeRequest(), makeContext(mockMessageId));
-      testRegistry.finish(mockMessageId);
+      testRegistry.close(mockMessageId);
 
       vi.mocked(canUserViewPage).mockClear();
       await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS * 3);
@@ -501,7 +792,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
         if (callCount === 1) return Promise.resolve(true);
         return new Promise((res) => { resolveRecheck = res; });
       });
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
 
@@ -518,7 +809,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
       expect(canUserViewPage).toHaveBeenCalledTimes(3);
 
-      testRegistry.finish(mockMessageId);
+      testRegistry.close(mockMessageId);
       await readSSEBody(response);
     });
 
@@ -527,7 +818,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       vi.mocked(canUserViewPage)
         .mockResolvedValueOnce(true) // initial join-time gate check
         .mockRejectedValueOnce(new Error('DB connection lost')); // first recheck tick
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
 
@@ -552,7 +843,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       vi.mocked(canUserViewPage)
         .mockResolvedValueOnce(true)
         .mockRejectedValueOnce(new Error('DB connection lost'));
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       await GET(makeRequest(), makeContext(mockMessageId));
       await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
@@ -567,7 +858,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
   describe('client disconnect', () => {
     it('given client disconnect, should unsubscribe without leaking resources', async () => {
       const abortController = new AbortController();
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       const response = await GET(makeRequest(abortController.signal), makeContext(mockMessageId));
       expect(response.status).toBe(200);
@@ -579,13 +870,13 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       await Promise.resolve();
 
       // Registry finish should not error even though route subscriber was removed
-      expect(() => testRegistry.finish(mockMessageId)).not.toThrow();
+      expect(() => testRegistry.close(mockMessageId)).not.toThrow();
     });
 
     it('given already-aborted signal, should close the stream eagerly without leaking the subscriber', async () => {
       const abortController = new AbortController();
       abortController.abort(); // aborted BEFORE GET is called
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       const response = await GET(makeRequest(abortController.signal), makeContext(mockMessageId));
 
@@ -597,13 +888,13 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
     it('given stream completes then client disconnects, should not attempt to double-close the controller', async () => {
       const abortController = new AbortController();
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       const response = await GET(makeRequest(abortController.signal), makeContext(mockMessageId));
       expect(response.status).toBe(200);
 
       // Complete the stream first
-      testRegistry.finish(mockMessageId);
+      testRegistry.close(mockMessageId);
 
       // Then abort — should be a no-op, not throw
       expect(() => abortController.abort()).not.toThrow();
@@ -626,11 +917,11 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
     it('given the stream stays open past one ping interval with no other traffic, should send a `: ping` comment frame', async () => {
       vi.useFakeTimers();
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
       await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS);
-      testRegistry.finish(mockMessageId);
+      testRegistry.close(mockMessageId);
 
       const body = await readSSEBody(response);
       expect(body).toContain(': ping\n\n');
@@ -638,11 +929,11 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
     it('given a silent multi-minute tool call, should send a ping on every tick, not just once', async () => {
       vi.useFakeTimers();
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
       await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * 3);
-      testRegistry.finish(mockMessageId);
+      testRegistry.close(mockMessageId);
 
       const body = await readSSEBody(response);
       const pingCount = body.split(': ping\n\n').length - 1;
@@ -651,12 +942,12 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
     it('given real part traffic arrives after a ping tick, both should appear in order', async () => {
       vi.useFakeTimers();
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
       await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS);
-      testRegistry.push(mockMessageId, { type: 'text', text: 'after-ping' });
-      testRegistry.finish(mockMessageId);
+      appendTo(mockMessageId, textChunk('after-ping'));
+      testRegistry.close(mockMessageId);
 
       const body = await readSSEBody(response);
       const pingIndex = body.indexOf(': ping\n\n');
@@ -667,13 +958,13 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
     it('given the stream finishes naturally, should clear the ping interval (no leaked timer)', async () => {
       vi.useFakeTimers();
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       await GET(makeRequest(), makeContext(mockMessageId));
       // Route-level timers (the 5s recheck + 20s ping) are both pending at this point,
       // alongside the registry's own unrelated per-entry cleanup timer.
       const beforeFinish = vi.getTimerCount();
-      testRegistry.finish(mockMessageId);
+      testRegistry.close(mockMessageId);
 
       // finish() clears the registry's own cleanup timer too — assert only that the route's
       // two timers (recheck + ping) are gone, not the absolute count.
@@ -683,7 +974,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
     it('given the client disconnects, should clear the ping interval (no leaked timer)', async () => {
       vi.useFakeTimers();
       const abortController = new AbortController();
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       await GET(makeRequest(abortController.signal), makeContext(mockMessageId));
       const beforeAbort = vi.getTimerCount();
@@ -698,7 +989,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       vi.useFakeTimers();
       let allowed = true;
       vi.mocked(canUserViewPage).mockImplementation(async () => allowed);
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
 
       await GET(makeRequest(), makeContext(mockMessageId));
       const beforeRevoke = vi.getTimerCount();
@@ -715,7 +1006,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       vi.useFakeTimers();
       const abortController = new AbortController();
       abortController.abort();
-      testRegistry.register(mockMessageId, mockMeta);
+      testRegistry.open(mockMessageId, mockMeta);
       // Only the registry's own (pre-existing, unrelated) per-entry cleanup timer is pending.
       const beforeGet = vi.getTimerCount();
 

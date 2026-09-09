@@ -76,13 +76,13 @@ vi.mock('@/lib/auth/google-avatar', () => ({
   resolveGoogleAvatarImage: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@/lib/onboarding/home-drive', () => ({
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
   provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'home-drive-1', created: true }),
 }));
 
 import { POST } from '../route';
 import { verifyOAuthIdToken, createOrLinkOAuthUser } from '@pagespace/lib/auth/oauth-utils';
-import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 
 const mockUser = {
   id: 'user-123',

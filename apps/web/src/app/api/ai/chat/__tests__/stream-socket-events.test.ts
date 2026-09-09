@@ -11,7 +11,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const {
   mockCreateStreamLifecycle,
-  mockLifecyclePushPart,
   mockLifecycleFinish,
   mockBroadcastChatUserMessage,
   mockSaveMessageToDatabase,
@@ -24,7 +23,6 @@ const {
   mockCanConsumeAI,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
-  mockLifecyclePushPart: vi.fn(),
   mockLifecycleFinish: vi.fn(),
   mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
   mockSaveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
@@ -72,6 +70,21 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   getAllowedDriveIds: vi.fn(() => []),
   isScopedMCPAuth: vi.fn(() => false),
+  // Same boolean as isScopedMCPAuth for these fixtures; the real helper reads
+  // through getAllowedDriveIds so it also covers dispatched service auth.
+  //
+  // Typed from the REAL exports, so a signature change here fails typecheck
+  // rather than leaving a silently stale stub. The bodies reimplement rather
+  // than delegate to the sibling `getAllowedDriveIds` mock: that mock is a
+  // fixed `() => []` in these fixtures, so delegating would make every
+  // credential read as unscoped and the scope assertions vacuous.
+  isDriveScopedPrincipal: vi.fn<typeof import('@/lib/auth').isDriveScopedPrincipal>(
+    (auth) => (('allowedDriveIds' in auth ? auth.allowedDriveIds : []) ?? []).length > 0,
+  ),
+  isServiceAuthResult: vi.fn<typeof import('@/lib/auth').isServiceAuthResult>(
+    (result): result is import('@/lib/auth').ServiceAuthResult =>
+      !('error' in result) && 'tokenType' in result && result.tokenType === 'service',
+  ),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserViewPage(auth.userId, pageId);
@@ -332,7 +345,7 @@ vi.mock('@/lib/ai/core/system-prompt', () => ({
 }));
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
-  filterToolsForDispatchCredentials: vi.fn((tools: unknown) => tools),
+  filterToolsForEphemeralWorkspace: vi.fn((tools: unknown) => tools),
   filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
@@ -431,10 +444,10 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   DYNAMIC_MODEL_PROVIDERS: new Set<string>(['ollama', 'lmstudio']),
   ADMIN_ONLY_PROVIDERS: new Set<string>([]),
   DEFAULT_PROVIDER: 'openai',
-  DEFAULT_MODEL: 'openai/gpt-5.3-chat',
+  DEFAULT_MODEL: 'openai/gpt-5.4-nano',
   resolveProviderModel: vi.fn((sp: string, sm: string) => ({
     provider: sp && sm ? sp : 'openai',
-    model: sm || 'openai/gpt-5.3-chat',
+    model: sm || 'openai/gpt-5.4-nano',
   })),
 }));
 
@@ -476,7 +489,7 @@ const mockDbRow = {
   systemPrompt: null,
   enabledTools: null,
   aiProvider: 'openai',
-  aiModel: 'openai/gpt-5.3-chat',
+  aiModel: 'openai/gpt-5.4-nano',
   driveId: 'drive-1',
   includeDrivePrompt: false,
   includePageTree: false,
@@ -484,7 +497,7 @@ const mockDbRow = {
   revision: 0,
   name: 'Auth User',
   currentAiProvider: 'openai',
-  currentAiModel: 'openai/gpt-5.3-chat',
+  currentAiModel: 'openai/gpt-5.4-nano',
   subscriptionTier: 'free',
   timezone: 'UTC',
   displayName: 'Profile User',
@@ -499,6 +512,32 @@ const mockAuth = (): SessionAuthResult => ({
   role: 'user',
   adminRoleVersion: 0,
 });
+
+/**
+ * A stand-in for the lifecycle's frame channel.
+ *
+ * The turn strategies hand the SDK stream to the pump and serve the response by SUBSCRIBING
+ * to this — so a mocked lifecycle has to carry one or the route cannot build a response at
+ * all. Only the surface `pumpAndRespond` touches is modelled; the channel's real behaviour is
+ * covered in stream-channel.test.ts, and the reduction in foldChunksToParts.test.ts.
+ */
+const makeFakeChannel = () => {
+  const frames: unknown[] = [];
+  return {
+    messageId: 'msg-1',
+    get nextSeq() { return frames.length; },
+    firstAvailableSeq: 0,
+    finished: false,
+    aborted: false,
+    subscriberCount: 0,
+    append: (chunk: unknown) => { frames.push(chunk); },
+    finish: () => {},
+    getFrames: () => frames.slice(),
+    subscribe: () => () => {},
+    subscribeReadable: () => new ReadableStream({ start(c) { c.close(); } }),
+  } as never;
+};
+
 
 // A real cuid: POST /api/ai/chat only ever CREATES a conversation from a cuid.
 const CONV_ID = 'clhjx7xu5e4yhlvpfs3h7xea';
@@ -519,7 +558,7 @@ const makeRequest = (overrides: { browserSessionId?: string | null; conversation
       chatId: 'page-1',
       conversationId: overrides.conversationId ?? CONV_ID,
       selectedProvider: 'openai',
-      selectedModel: 'openai/gpt-5.3-chat',
+      selectedModel: 'openai/gpt-5.4-nano',
     }),
   });
 };
@@ -548,9 +587,9 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     mockConversationClaimInsertRows.current = [{ isActive: true }];
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     mockCreateStreamLifecycle.mockResolvedValue({
-      pushPart: mockLifecyclePushPart,
+      channel: makeFakeChannel(),
       finish: mockLifecycleFinish,
-      getBufferedParts: vi.fn().mockReturnValue([]),
+      getParts: vi.fn().mockResolvedValue([]),
     });
   });
 
@@ -821,9 +860,9 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
         // that write and this stream-start placeholder insert.
         mockConversationActiveAtLockTime.current = false;
         return {
-          pushPart: mockLifecyclePushPart,
+          channel: makeFakeChannel(),
           finish: mockLifecycleFinish,
-          getBufferedParts: vi.fn().mockReturnValue([]),
+          getParts: vi.fn().mockResolvedValue([]),
         };
       });
 
@@ -1264,97 +1303,22 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     });
   });
 
-  describe('chunk forwarding', () => {
-    it('given a text-delta chunk, should forward a text part to lifecycle.pushPart', async () => {
-      await POST(makeRequest());
-      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
-
-      captured.streamTextOptions.onChunk?.({ chunk: { type: 'text-delta', text: 'hello', id: 'c1' } });
-
-      expect(mockLifecyclePushPart).toHaveBeenCalledWith({ type: 'text', text: 'hello' });
-    });
-
-    it('given a tool-call chunk, should forward an input-available tool part to lifecycle.pushPart', async () => {
-      await POST(makeRequest());
-      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
-
-      captured.streamTextOptions.onChunk?.({
-        chunk: { type: 'tool-call', toolCallId: 'tc1', toolName: 'list_pages', input: { driveId: 'd1' } },
-      });
-
-      expect(mockLifecyclePushPart).toHaveBeenCalledWith({
-        type: 'tool-list_pages',
-        toolCallId: 'tc1',
-        toolName: 'list_pages',
-        state: 'input-available',
-        input: { driveId: 'd1' },
-      });
-    });
-
-    it('given a tool-result chunk, should forward an output-available tool part to lifecycle.pushPart', async () => {
-      await POST(makeRequest());
-      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
-
-      captured.streamTextOptions.onChunk?.({
-        chunk: {
-          type: 'tool-result',
-          toolCallId: 'tc1',
-          toolName: 'list_pages',
-          input: { driveId: 'd1' },
-          output: { pages: [{ id: 'p1' }] },
-        },
-      });
-
-      expect(mockLifecyclePushPart).toHaveBeenCalledWith({
-        type: 'tool-list_pages',
-        toolCallId: 'tc1',
-        toolName: 'list_pages',
-        state: 'output-available',
-        input: { driveId: 'd1' },
-        output: { pages: [{ id: 'p1' }] },
-      });
-    });
-
-    it('given a tool-error chunk, should forward an output-error tool part with errorText to lifecycle.pushPart', async () => {
-      await POST(makeRequest());
-      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
-
-      captured.streamTextOptions.onChunk?.({
-        chunk: {
-          type: 'tool-error',
-          toolCallId: 'tc1',
-          toolName: 'list_pages',
-          input: { driveId: 'd1' },
-          error: new Error('drive permission denied'),
-        },
-      });
-
-      expect(mockLifecyclePushPart).toHaveBeenCalledWith({
-        type: 'tool-list_pages',
-        toolCallId: 'tc1',
-        toolName: 'list_pages',
-        state: 'output-error',
-        input: { driveId: 'd1' },
-        errorText: 'drive permission denied',
-      });
-    });
-
-    it('given a chunk type out of v1 multicast scope, should not forward anything', async () => {
-      await POST(makeRequest());
-      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
-
-      captured.streamTextOptions.onChunk?.({ chunk: { type: 'finish-step' } });
-
-      expect(mockLifecyclePushPart).not.toHaveBeenCalled();
-    });
-  });
+  // DELETED with the chunkToPart projection: the "chunk forwarding" block (text-delta,
+  // tool-call, tool-result, tool-error each asserted to arrive at lifecycle.pushPart as a
+  // rendered part).
+  //
+  // There is no forwarding left to assert. The pump captures the SDK's own UIMessageChunks
+  // verbatim and the reduction to parts happens in one place, so what those four cases really
+  // pinned — that a chunk becomes the right part — is now foldChunksToParts.test.ts's job, and
+  // it is pinned there against the SDK's own reducer rather than against a hand-written table.
+  // Not ported: keeping them would test a mock of a mechanism that no longer exists.
 
   describe('execute-end durable persistence', () => {
     it('given buffered parts exist, should persist the assistant message before lifecycle.finish()', async () => {
       mockCreateStreamLifecycle.mockResolvedValueOnce({
-        pushPart: mockLifecyclePushPart,
+        channel: makeFakeChannel(),
         finish: mockLifecycleFinish,
-        getBufferedParts: vi.fn().mockReturnValue([{ type: 'text', text: 'server reply' }]),
+        getParts: vi.fn().mockResolvedValue([{ type: 'text', text: 'server reply' }]),
       });
 
       await POST(makeRequest());
@@ -1384,9 +1348,9 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       mockGetConversation.mockResolvedValue(null); // brand-new — no existing row
       mockConversationRowExistsAtLockTime.current = false;
       mockCreateStreamLifecycle.mockResolvedValueOnce({
-        pushPart: mockLifecyclePushPart,
+        channel: makeFakeChannel(),
         finish: mockLifecycleFinish,
-        getBufferedParts: vi.fn().mockReturnValue([{ type: 'text', text: 'server reply' }]),
+        getParts: vi.fn().mockResolvedValue([{ type: 'text', text: 'server reply' }]),
       });
 
       await POST(makeRequest({ conversationId: CONV_ID }));
@@ -1419,9 +1383,9 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     it('given the run was aborted with buffered content, should persist with status interrupted', async () => {
       vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
       mockCreateStreamLifecycle.mockResolvedValueOnce({
-        pushPart: mockLifecyclePushPart,
+        channel: makeFakeChannel(),
         finish: mockLifecycleFinish,
-        getBufferedParts: vi.fn().mockReturnValue([{ type: 'text', text: 'partial reply' }]),
+        getParts: vi.fn().mockResolvedValue([{ type: 'text', text: 'partial reply' }]),
       });
 
       await POST(makeRequest());
@@ -1447,9 +1411,9 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('given a normal (non-aborted) run with buffered content, should persist with status complete', async () => {
       mockCreateStreamLifecycle.mockResolvedValueOnce({
-        pushPart: mockLifecyclePushPart,
+        channel: makeFakeChannel(),
         finish: mockLifecycleFinish,
-        getBufferedParts: vi.fn().mockReturnValue([{ type: 'text', text: 'server reply' }]),
+        getParts: vi.fn().mockResolvedValue([{ type: 'text', text: 'server reply' }]),
       });
 
       await POST(makeRequest());
@@ -1462,9 +1426,9 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('given saveMessageToDatabase rejects from the execute path, should not propagate the error', async () => {
       mockCreateStreamLifecycle.mockResolvedValueOnce({
-        pushPart: mockLifecyclePushPart,
+        channel: makeFakeChannel(),
         finish: mockLifecycleFinish,
-        getBufferedParts: vi.fn().mockReturnValue([{ type: 'text', text: 'will fail' }]),
+        getParts: vi.fn().mockResolvedValue([{ type: 'text', text: 'will fail' }]),
       });
 
       await POST(makeRequest());
@@ -1554,9 +1518,9 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       let finished = false;
       mockLifecycleFinish.mockImplementationOnce(() => { finished = true; });
       mockCreateStreamLifecycle.mockResolvedValueOnce({
-        pushPart: mockLifecyclePushPart,
+        channel: makeFakeChannel(),
         finish: mockLifecycleFinish,
-        getBufferedParts: vi.fn(() => (finished ? [] : bufferedParts)),
+        getParts: vi.fn(async () => (finished ? [] : bufferedParts)),
       });
       const { createUIMessageStream } = await import('ai');
       vi.mocked(createUIMessageStream).mockImplementationOnce(() => {
@@ -1608,9 +1572,9 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       // unlike the file's bare-signal default (see "given the run was aborted" above).
       vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
       mockCreateStreamLifecycle.mockResolvedValueOnce({
-        pushPart: mockLifecyclePushPart,
+        channel: makeFakeChannel(),
         finish: mockLifecycleFinish,
-        getBufferedParts: vi.fn().mockReturnValue([]),
+        getParts: vi.fn().mockResolvedValue([]),
         preAborted: true,
       });
 

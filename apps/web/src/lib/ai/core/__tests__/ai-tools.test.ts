@@ -21,6 +21,12 @@ vi.mock('../../tools/page-read-tools', () => ({
   },
 }));
 
+vi.mock('../../tools/copy-content-tools-runtime', () => ({
+  copyContentTools: {
+    copy_content: { name: 'copy_content', description: 'Copy content' },
+  },
+}));
+
 vi.mock('../../tools/page-write-tools', () => ({
   pageWriteTools: {
     replace_lines: { name: 'replace_lines', description: 'Replace lines' },
@@ -173,13 +179,16 @@ vi.mock('../../tools/sandbox-tools-runtime', () => ({
   }),
 }));
 
-import { pageSpaceTools, corePageSpaceTools, buildPageSpaceTools } from '../ai-tools';
+import { pageSpaceTools, corePageSpaceTools, buildPageSpaceTools, TOOL_REGISTRY } from '../ai-tools';
 import { CORE_TOOL_NAMES } from '../stub-tools';
 import { memberTools } from '../../tools/member-tools';
 import { roleManagementTools } from '../../tools/role-management-tools';
 import { driveTools } from '../../tools/drive-tools';
 import { pageReadTools } from '../../tools/page-read-tools';
 import { pageWriteTools } from '../../tools/page-write-tools';
+import { copyContentTools } from '../../tools/copy-content-tools-runtime';
+import { sheetReadTools } from '../../tools/sheet-read-tools';
+import { sheetFormatTools } from '../../tools/sheet-format-tools';
 import { searchTools } from '../../tools/search-tools';
 import { taskManagementTools } from '../../tools/task-management-tools';
 import { agentTools } from '../../tools/agent-tools';
@@ -217,6 +226,7 @@ describe('ai-tools', () => {
         'list_panes',
         'resize_pane',
         'move_pane',
+        'close_pane',
         'arrange_panes',
       ];
       const workspaceOnly = Object.fromEntries(
@@ -231,6 +241,9 @@ describe('ai-tools', () => {
         ...driveTools,
         ...pageReadTools,
         ...pageWriteTools,
+        ...copyContentTools,
+        ...sheetReadTools,
+        ...sheetFormatTools,
         ...searchTools,
         ...taskManagementTools,
         ...agentTools,
@@ -253,30 +266,13 @@ describe('ai-tools', () => {
     });
 
     it('has no key collisions between tool modules', () => {
-      const moduleKeysets = [
-        Object.keys(memberTools),
-        Object.keys(roleManagementTools),
-        Object.keys(driveTools),
-        Object.keys(pageReadTools),
-        Object.keys(pageWriteTools),
-        Object.keys(searchTools),
-        Object.keys(taskManagementTools),
-        Object.keys(agentTools),
-        Object.keys(agentCommunicationTools),
-        Object.keys(webSearchTools),
-        Object.keys(activityTools),
-        Object.keys(calendarReadTools),
-        Object.keys(calendarWriteTools),
-        Object.keys(channelTools),
-        Object.keys(workflowTools),
-        Object.keys(triggerTools),
-        Object.keys(modelTools),
-        Object.keys(commandTools),
-        Object.keys(formTools),
-        Object.keys(imageGenerationTools),
-        Object.keys(pagePaneTools),
-        Object.keys(planTools),
-      ];
+      // Derived from the registry's own per-category projection rather than a
+      // second hand-written module list: the hand list had drifted (it omitted
+      // copyContent, sheetsRead and skills), so a collision involving those
+      // modules was invisible while this case stayed green.
+      const moduleKeysets = Object.values(TOOL_REGISTRY).map((names) => [...names]);
+      expect(moduleKeysets.length).toBe(Object.keys(TOOL_REGISTRY).length);
+      expect(moduleKeysets.flat()).toEqual(expect.arrayContaining(['read_sheet', 'format_sheet', 'copy_content', 'load_skill']));
 
       const allKeys = moduleKeysets.flat();
       const uniqueKeys = new Set(allKeys);

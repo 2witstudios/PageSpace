@@ -48,6 +48,7 @@ function PasskeyRegisterExternalContent() {
     runPasskeyRegisterExternalCeremony({
       handoffToken: params.handoffToken,
       deviceName: params.deviceName,
+      shell: params.shell,
     })
       .then((result) => {
         if (unmounted) return;

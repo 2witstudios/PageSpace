@@ -39,7 +39,7 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@pagespace/lib/sheets/sheet', () => ({
   isSheetType: vi.fn(() => false),
-  parseSheetContent: vi.fn(),
+  parseSheetContentSafe: vi.fn(),
   serializeSheetContent: vi.fn(),
   updateSheetCells: vi.fn(),
   isValidCellAddress: vi.fn(() => true),
@@ -83,7 +83,6 @@ vi.mock('@/services/api/task-sync-service', () => ({
     if (existing) return existing;
     return { id: 'tl_new', pageId: params.pageId };
   }),
-  seedDefaultTaskStatusConfigs: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@/lib/ai/tools/task-helpers', () => ({
@@ -91,8 +90,8 @@ vi.mock('@/lib/ai/tools/task-helpers', () => ({
   serializeTaskItem: (...args: unknown[]) => mockSerializeTaskItem(...args),
 }));
 
-vi.mock('@pagespace/db/db', () => ({
-  db: {
+vi.mock('@pagespace/db/db', () => {
+  const dbMock: Record<string, unknown> = {
     query: {
       pages: { findFirst: (...args: unknown[]) => mockFindFirstPage(...args) },
       taskLists: { findFirst: (...args: unknown[]) => mockFindFirstTaskList(...args) },
@@ -100,8 +99,13 @@ vi.mock('@pagespace/db/db', () => ({
       channelMessages: { findMany: (...args: unknown[]) => mockFindManyChannelMessages(...args) },
     },
     select: (...args: unknown[]) => mockSelectFrom(...args),
-  },
-}));
+  };
+  // Lazy init runs in a transaction now: it seeds the vocabulary and then
+  // conforms any rows already under the page, and committing one without the
+  // other is permanent.
+  dbMock.transaction = vi.fn(async (cb: (tx: unknown) => unknown) => cb(dbMock));
+  return { db: dbMock };
+});
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
@@ -110,6 +114,11 @@ vi.mock('@pagespace/db/operators', () => ({
   count: vi.fn(() => 'count()'),
   isNotNull: vi.fn(),
   inArray: vi.fn(),
+  // The vocabulary sweep the lazy init now runs.
+  notInArray: vi.fn(),
+  isNull: vi.fn(),
+  ne: vi.fn(),
+  desc: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({

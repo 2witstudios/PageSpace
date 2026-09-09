@@ -13,6 +13,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockFindFirstDrive = vi.fn();
 const mockFindFirstPage = vi.fn();
 const mockTxInsertReturning = vi.fn();
+/** The row actually handed to the insert — what the page ends up being. */
+const mockTxInsertValues = vi.fn();
 const mockEnsureTaskItemForPage = vi.fn();
 const mockEnsureTaskListForPage = vi.fn();
 const mockCreatePageVersion = vi.fn();
@@ -31,9 +33,12 @@ vi.mock('@pagespace/db/db', () => ({
     },
     transaction: (cb: (tx: unknown) => Promise<unknown>) => cb({
       insert: () => ({
-        values: () => ({
-          returning: (...args: unknown[]) => mockTxInsertReturning(...args),
-        }),
+        values: (row: unknown) => {
+          mockTxInsertValues(row);
+          return {
+            returning: (...args: unknown[]) => mockTxInsertReturning(...args),
+          };
+        },
       }),
     }),
   },
@@ -77,6 +82,13 @@ vi.mock('@pagespace/lib/content/page-type-validators', () => ({
 vi.mock('@pagespace/lib/content/page-types.config', () => ({
   getDefaultContent: vi.fn(() => ''),
   isAIChatPage: vi.fn((type: string) => type === 'AI_CHAT'),
+  // Reached only by the AI_CHAT path's validation; the TASK_LIST cases above
+  // never touched it, which is why the mock did not have it.
+  getCreatablePageTypes: vi.fn(() => ['DOCUMENT', 'TASK_LIST', 'AI_CHAT']),
+  getPageTypeConfig: vi.fn(() => ({
+    capabilities: { canAcceptUploads: false },
+    defaultContent: '',
+  })),
 }));
 vi.mock('@pagespace/lib/utils/enums', () => ({
   PageType: { TASK_LIST: 'TASK_LIST', DOCUMENT: 'DOCUMENT', AI_CHAT: 'AI_CHAT' },
@@ -178,5 +190,71 @@ describe('pageService.createPage — TASK_LIST seeding', () => {
 
     expect(result.success).toBe(true);
     expect(mockEnsureTaskListForPage).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Issue #2460: this door accepts `enabledTools`, so without the switch beside it
+ * an AI_CHAT page could be created holding a sandbox allowlist that grants
+ * nothing — the contradiction, at birth, through the generic page API.
+ */
+describe('pageService.createPage — the per-agent sandbox switch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindFirstDrive.mockResolvedValue({ id: 'drive-1', ownerId: 'owner-1' });
+    mockFindFirstPage.mockResolvedValue(undefined);
+    mockCreatePageVersion.mockResolvedValue(undefined);
+    mockLogActivityWithTx.mockResolvedValue(undefined);
+    mockEnsureTaskItemForPage.mockResolvedValue(undefined);
+    mockTxInsertReturning.mockResolvedValue([{
+      id: 'new-agent-page',
+      title: 'Scraper Runner',
+      type: 'AI_CHAT',
+      parentId: null,
+      driveId: 'drive-1',
+      content: '',
+      contentMode: 'html',
+      position: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      revision: 0,
+      stateHash: 'state-hash',
+      isTrashed: false,
+      trashedAt: null,
+      aiProvider: 'anthropic',
+      aiModel: 'test-model',
+      systemPrompt: null,
+      enabledTools: ['bash'],
+      isPaginated: null,
+    }]);
+  });
+
+  it('stores the switch on an AI_CHAT page', async () => {
+    const result = await pageService.createPage('user-123', {
+      title: 'Scraper Runner',
+      type: 'AI_CHAT',
+      driveId: 'drive-1',
+      enabledTools: ['bash'],
+      sandboxEnabled: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockTxInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({ enabledTools: ['bash'], sandboxEnabled: true }),
+    );
+  });
+
+  it('leaves it to the column default when the caller says nothing', async () => {
+    await pageService.createPage('user-123', {
+      title: 'Scraper Runner',
+      type: 'AI_CHAT',
+      driveId: 'drive-1',
+      enabledTools: ['bash'],
+    });
+
+    const row = mockTxInsertValues.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    // Absent, not `false`: the column's own default decides, and writing an
+    // explicit false here would silently overrule a future change to it.
+    expect(row).not.toHaveProperty('sandboxEnabled');
   });
 });

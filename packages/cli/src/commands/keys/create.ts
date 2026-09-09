@@ -52,6 +52,9 @@ import type {
 } from '../../auth/loopback-flow.js';
 import { parseTokensCreateArgs, type CreateTokenArgs, type DriveScopeArg } from './args.js';
 import { renderAgentWiringGuidance } from './guidance.js';
+import { shellQuote } from '../../shell-quote.js';
+import { renderKeyDescription } from './describe.js';
+import { describeKeyPermissions, type DescribeKeyPermissions } from '../../auth/probe-permissions.js';
 
 const RESOURCE_ID_PATTERN = /^[a-z0-9]{1,32}$/;
 
@@ -232,10 +235,44 @@ export function resolveNewKeyName({
     };
   }
   const resolvedName = name ?? drives[0].id;
-  if (resolvedName === DEFAULT_PROFILE_NAME) {
+  // A key is stored under its name VERBATIM, but every lookup trims first
+  // (`auth/resolve.ts`'s `presentToken`/`resolveKeyName`). So any name that is
+  // not equal to its own trimmed form can be minted and then never found
+  // again: `--name "  x  "` writes the store under `"  x  "` while `--key`
+  // resolves `"x"` and misses. A fully blank name is the same failure at its
+  // limit — it trims to nothing, so no lookup can ever produce it.
+  //
+  // Both are refused rather than silently trimmed: an explicit `--name` with
+  // padding is a typo, and quietly storing something other than what was asked
+  // for is how the mismatch got created in the first place.
+  //
+  // Only reachable through the flag path — `wizard.ts` trims before it gets
+  // here.
+  // ORDER IS THE POINT HERE. The padding branch is the only one that SUGGESTS
+  // a replacement, so every rejection whose trimmed form is also invalid has to
+  // be caught before it — otherwise the advice names something the very next
+  // guard refuses. Both such cases exist and both were live:
+  //   "   "         → trims to "", which the blank rule rejects
+  //   "  default  " → trims to "default", which the reserved rule rejects
+  // So: blank, then reserved (tested against the TRIMMED name, since that is
+  // what the store would be keyed on), then padding.
+  const trimmedName = resolvedName.trim();
+  if (trimmedName.length === 0) {
     return {
       ok: false,
-      message: `--name "${DEFAULT_PROFILE_NAME}" is reserved for the personal credential stored by "pagespace login". Choose another key name.`,
+      message: '--name must not be blank: a key is selected by its name, so an unnamed key could never be used.',
+    };
+  }
+  if (trimmedName === DEFAULT_PROFILE_NAME) {
+    return {
+      ok: false,
+      message: `--name "${resolvedName}" is reserved for the personal credential stored by "pagespace login". Choose another key name.`,
+    };
+  }
+  if (resolvedName !== trimmedName) {
+    return {
+      ok: false,
+      message: `--name "${resolvedName}" has leading or trailing whitespace: keys are looked up by their trimmed name, so this one could be created and never found again. Use "${trimmedName}".`,
     };
   }
   return { ok: true, name: resolvedName };
@@ -250,6 +287,12 @@ export interface TokensCreateHandlerDeps {
   readonly waitMs: WaitMs;
   readonly exchangeCode: ExchangeCode;
   readonly confirmIdentity: ConfirmIdentity;
+  /**
+   * Reads the new key's effective permissions back FROM THE SERVER after a
+   * successful mint (see `probe-permissions.ts`). Injected like every other
+   * effect here so the mint flow stays testable without a network.
+   */
+  readonly describeKeyPermissions: DescribeKeyPermissions;
   readonly requestDeviceAuthorization: RequestDeviceAuthorization;
   readonly pollDeviceToken: PollDeviceToken;
   /**
@@ -268,6 +311,44 @@ export interface TokensCreateHandlerDeps {
   readonly now: () => number;
   readonly timeoutMs?: number;
   readonly maxPortAttempts?: number;
+}
+
+/**
+ * The mint's closing "and here is what it can actually do" block.
+ *
+ * Non-fatal by construction: the key is minted and stored before this runs, so
+ * a probe failure costs a summary, never the credential. It says so explicitly
+ * rather than falling silent — an agent reading only the tail of this output
+ * must not be left thinking the mint itself was the thing that went wrong.
+ *
+ * Both non-happy branches say only what went wrong. The pointer to
+ * `keys describe` is printed once, by `renderAgentWiringGuidance` at the end of
+ * every mint — repeating it here put the identical sentence on screen twice.
+ */
+async function writeEffectivePermissions(params: {
+  readonly info: OutputSink;
+  readonly host: string;
+  readonly token: string | null;
+  readonly describeKeyPermissions: DescribeKeyPermissions;
+}): Promise<void> {
+  const { info, host, token, describeKeyPermissions: describe } = params;
+  if (token === null) {
+    // The cause belongs HERE, not deferred to the `--show-token` branch below:
+    // that line only runs when `--show-token` was passed, so on the ordinary
+    // path deferring left a bare "could not be read back" with nothing to act
+    // on. The two lines do sit next to each other under `--show-token`, but
+    // they answer different questions — this one is about the permissions, that
+    // one is about the token you asked to see.
+    info.write('The key was created. Its permissions could not be read back here — it returned no raw token.\n');
+    return;
+  }
+  try {
+    info.write(`\n${renderKeyDescription(await describe({ host, accessToken: token }))}`);
+  } catch (error) {
+    info.write(
+      `The key was created. Its permissions could not be read back just now (${error instanceof Error ? error.message : String(error)}).\n`,
+    );
+  }
 }
 
 export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): CommandHandler {
@@ -346,7 +427,11 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
     const existing = await store.get(host, keyName);
     if (existing && !intent.flags.yes) {
       ctx.stderr.write(
-        `A stored credential for ${host} (key "${keyName}") already exists. Re-run with --yes to overwrite it, or "pagespace logout --host ${host} --key ${keyName}" first.\n`,
+        // Equals-joined and quoted for the same reason the post-mint hint is
+        // (see `guidance.ts`'s `shellQuote`): this suggests a command with a
+        // key name in it, and a name like `-prod` or `lead gen` made it
+        // unpasteable — `--key` would take the next word, or none at all.
+        `A stored credential for ${host} (key "${keyName}") already exists. Re-run with --yes to overwrite it, or "pagespace logout --host=${shellQuote(host)} --key=${shellQuote(keyName)}" first.\n`,
       );
       return EXIT_RUNTIME_ERROR;
     }
@@ -414,6 +499,12 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
     }
 
     info.write(`Created key "${keyName}" on ${host}, scoped to: ${scopeResult.driveScope}.\n`);
+    await writeEffectivePermissions({
+      info,
+      host,
+      token: mintedToken,
+      describeKeyPermissions: deps.describeKeyPermissions,
+    });
     if (parsedArgs.args.showToken) {
       if (mintedToken !== null) {
         // The ONLY stdout line in --show-token mode (see `info` above).
@@ -441,6 +532,7 @@ export const tokensCreateHandler: CommandHandler = createTokensCreateHandler({
   waitMs: unrefWaitMs,
   exchangeCode: createExchangeCode(),
   confirmIdentity,
+  describeKeyPermissions,
   requestDeviceAuthorization: createRequestDeviceAuthorization(),
   pollDeviceToken: createPollDeviceToken(),
   // Passed UNCALLED — `runConsent` installs the SIGINT listener only if a

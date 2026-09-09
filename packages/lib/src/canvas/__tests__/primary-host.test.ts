@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolvePrimaryPublishedHost, selectPrimaryActiveDomain } from '../primary-host';
+import { resolvePrimaryPublishedHost, selectPrimaryActiveDomain, isEligibleForPrimaryHost } from '../primary-host';
 
 describe('resolvePrimaryPublishedHost', () => {
   const PUBLISH_HOST = 'pagespace.site';
@@ -141,5 +141,42 @@ describe('selectPrimaryActiveDomain', () => {
       { id: 'early', hostname: 'www.acme.com', createdAt: new Date('2026-01-01T00:00:00.000Z') },
     ]);
     expect(chosen?.id).toBe('early');
+  });
+});
+
+describe('isEligibleForPrimaryHost', () => {
+  it('admits an ordinary customer domain', () => {
+    expect(isEligibleForPrimaryHost({ platformOwned: false, isPrimary: false })).toBe(true);
+  });
+
+  it('rejects an un-flagged platform alias', () => {
+    // Registering pagespace.ai to surface one page at a path must not retitle
+    // the drive's canonical URLs.
+    expect(isEligibleForPrimaryHost({ platformOwned: true, isPrimary: false })).toBe(false);
+  });
+
+  it('admits a platform domain an admin explicitly flagged primary', () => {
+    // How the platform docs/blog drives claim docs./blog.pagespace.ai.
+    expect(isEligibleForPrimaryHost({ platformOwned: true, isPrimary: true })).toBe(true);
+  });
+
+  it('treats null/undefined as absent, not as truthy', () => {
+    expect(isEligibleForPrimaryHost({})).toBe(true);
+    expect(isEligibleForPrimaryHost({ platformOwned: null, isPrimary: null })).toBe(true);
+    expect(isEligibleForPrimaryHost({ platformOwned: true, isPrimary: null })).toBe(false);
+    expect(isEligibleForPrimaryHost({ platformOwned: true })).toBe(false);
+  });
+
+  it('composes with selectPrimaryActiveDomain the way both callers use it', () => {
+    // A flagged platform domain must beat an earlier-created customer domain,
+    // and an un-flagged alias must never be selected at all.
+    const rows = [
+      { hostname: 'ordinary.example.com', createdAt: new Date('2020-01-01'), isPrimary: false, platformOwned: false },
+      { hostname: 'pagespace.ai', createdAt: new Date('2019-01-01'), isPrimary: false, platformOwned: true },
+      { hostname: 'docs.pagespace.ai', createdAt: new Date('2026-01-01'), isPrimary: true, platformOwned: true },
+    ];
+    const eligible = rows.filter(isEligibleForPrimaryHost);
+    expect(eligible.map((r) => r.hostname)).toEqual(['ordinary.example.com', 'docs.pagespace.ai']);
+    expect(selectPrimaryActiveDomain(eligible)?.hostname).toBe('docs.pagespace.ai');
   });
 });

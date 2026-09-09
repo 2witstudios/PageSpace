@@ -589,10 +589,13 @@ describe('GET /api/user/integrations/callback', () => {
       expect(url.pathname).toBe(DEFAULT_RETURN);
     });
 
-    it('rejects returnUrl containing encoded protocol like javascript:', async () => {
+    it('rejects returnUrl with a javascript: scheme smuggled into the path', async () => {
+      // A colon in a QUERY VALUE is data and now passes validation (the OAuth
+      // consent redirect_uri fix) — the scheme-smuggling shape that must stay
+      // rejected is a colon in the PATH portion.
       mockVerifySignedState.mockReturnValueOnce({
         ...mockStateData,
-        returnUrl: '/redirect?to=javascript:alert(1)',
+        returnUrl: '/javascript:alert(1)',
       });
       const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
       const response = await GET(request);

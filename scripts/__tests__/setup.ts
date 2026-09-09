@@ -49,12 +49,13 @@ export async function truncateAll(db: TestDb): Promise<void> {
       files,
       messages,
       conversations,
+      agent_workspace_nodes,
       agent_workspace_shells,
       agent_workspaces,
       channel_read_status,
       channel_message_reactions,
       channel_messages,
-      page_tags,
+      content_tags,
       tags,
       pages,
       drive_members,
@@ -146,22 +147,26 @@ export const FIXTURES = {
       type: 'page' as const,
       title: 'Grandchild page chat',
       /**
-       * Bound to a session, with a non-default `rev`, a closed-listing stamp
-       * and the shared flag set — the four columns the export used to drop on
-       * the floor. Every one of them has a non-default value here so the
-       * round-trip proves the value SURVIVED rather than that the tenant's
-       * column default happened to match.
+       * A non-default `rev` and the shared flag set — two of the four columns
+       * the export used to drop on the floor. Both have a non-default value
+       * here so the round-trip proves the value SURVIVED rather than that the
+       * tenant's column default happened to match.
+       *
+       * The other two were `workspaceId` and `closedInWorkspaceAt`, and they
+       * are gone from the schema: a thread's workspace is an
+       * `agent_workspace_nodes` row now. Whether a bundle carries that table is
+       * an OPEN decision — see `TENANT_EXPORT_EXCLUDED_TABLES`' note — so there
+       * is deliberately nothing seeded here to stand in for it.
        */
-      workspaceId: 'test_agent_session_001',
       rev: 7,
       isShared: true,
     },
   },
   /**
-   * The working context `conversations.pageChat` is bound to. Carried by the
-   * export because `workspaceId` is write-once — a migration that drops the
-   * binding cannot be repaired afterwards. Its Sprite-identity columns are
-   * seeded NON-NULL precisely so the round-trip can assert they DO NOT travel.
+   * A working context in the same drive. Carried by the export because a
+   * session holds a user's terminals and their filesystem identity. Its
+   * Sprite-identity columns are seeded NON-NULL precisely so the round-trip
+   * can assert they DO NOT travel.
    */
   agentWorkspaces: {
     workspace: {
@@ -225,7 +230,25 @@ export const FIXTURES = {
     tag1: {
       id: 'test_tag_001',
       name: 'important',
+      normalizedKey: 'important',
       color: '#ff0000',
+    },
+    /**
+     * A vocabulary entry with NO assignment. It exists so the bundle's tag
+     * query is forced to select by drive: deriving the tag list from the
+     * surviving `content_tags` rows silently drops this one, and the tenant
+     * comes up missing a name and colour with nothing to say so.
+     */
+    unusedTag: {
+      id: 'test_tag_002',
+      name: 'unused',
+      normalizedKey: 'unused',
+      color: '#00ff00',
+    },
+  },
+  contentTags: {
+    ct1: {
+      id: 'test_content_tag_001',
     },
   },
 } as const;
@@ -235,7 +258,7 @@ export const FIXTURES = {
  * Call after truncateAll() in beforeEach.
  */
 export async function seedFixtures(db: TestDb): Promise<void> {
-  const { users, drives, pages, conversations, agentWorkspaces, agentWorkspaceShells, messages, files, pagePermissions, tags } = FIXTURES;
+  const { users, drives, pages, conversations, agentWorkspaces, agentWorkspaceShells, messages, files, pagePermissions, tags, contentTags } = FIXTURES;
   const now = new Date();
 
   // Users. `emailBidx` is seeded because it is the LOOKUP KEY for an encrypted
@@ -308,8 +331,23 @@ export async function seedFixtures(db: TestDb): Promise<void> {
   // The page conversation the chat messages below belong to. Required since
   // 0249 gave chat_messages.conversationId a real FK — see FIXTURES.conversations.
   await db.execute(sql`
-    INSERT INTO conversations (id, "userId", title, type, "contextId", "workspaceId", "closedInWorkspaceAt", rev, "isShared", "lastMessageAt", "createdAt", "updatedAt")
-    VALUES (${conversations.pageChat.id}, ${users.owner.id}, ${conversations.pageChat.title}, ${conversations.pageChat.type}, ${pages.grandchild.id}, ${conversations.pageChat.workspaceId}, ${now}, ${conversations.pageChat.rev}, ${conversations.pageChat.isShared}, ${now}, ${now}, ${now})
+    INSERT INTO conversations (id, "userId", title, type, "contextId", rev, "isShared", "lastMessageAt", "createdAt", "updatedAt")
+    VALUES (${conversations.pageChat.id}, ${users.owner.id}, ${conversations.pageChat.title}, ${conversations.pageChat.type}, ${pages.grandchild.id}, ${conversations.pageChat.rev}, ${conversations.pageChat.isShared}, ${now}, ${now}, ${now})
+  `);
+
+  // MEMBERSHIP — the thread is in the workspace because a chat-bound node says
+  // so, which is the only place that fact lives since `conversations
+  // ."workspaceId"` was dropped. Seeded because the exporter's session
+  // selection reads it (`workspaceSelectionWhere`): without a node, the
+  // workspace above is not "referenced by an exported conversation" and the
+  // bundle carries no session at all.
+  await db.execute(sql`
+    INSERT INTO agent_workspace_nodes (id, "rootId", "parentId", position, "nodeType", axis, "createdAt", "updatedAt")
+    VALUES ('test_agent_node_root_001', ${agentWorkspaces.workspace.id}, NULL, 0, 'root', 'row', ${now}, ${now})
+  `);
+  await db.execute(sql`
+    INSERT INTO agent_workspace_nodes (id, "rootId", "parentId", position, "nodeType", "targetKind", "targetId", "createdAt", "updatedAt")
+    VALUES ('test_agent_node_pane_001', ${agentWorkspaces.workspace.id}, 'test_agent_node_root_001', 0, 'pane', 'chat', ${conversations.pageChat.id}, ${now}, ${now})
   `);
 
   // Chat messages, in the ONE message table. Their page is their
@@ -340,15 +378,17 @@ export async function seedFixtures(db: TestDb): Promise<void> {
     VALUES (${pagePermissions.pp1.id}, ${pages.child.id}, ${users.member.id}, ${pagePermissions.pp1.canView}, ${pagePermissions.pp1.canEdit}, ${pagePermissions.pp1.canShare}, ${pagePermissions.pp1.canDelete}, ${users.owner.id}, ${now})
   `);
 
-  // Tags + page tags
+  // Tag vocabulary + one page-level assignment
   await db.execute(sql`
-    INSERT INTO tags (id, name, color)
-    VALUES (${tags.tag1.id}, ${tags.tag1.name}, ${tags.tag1.color})
+    INSERT INTO tags (id, "driveId", name, "normalizedKey", color, "createdBy", "createdAt", "updatedAt")
+    VALUES
+      (${tags.tag1.id}, ${drives.shared.id}, ${tags.tag1.name}, ${tags.tag1.normalizedKey}, ${tags.tag1.color}, ${users.owner.id}, ${now}, ${now}),
+      (${tags.unusedTag.id}, ${drives.shared.id}, ${tags.unusedTag.name}, ${tags.unusedTag.normalizedKey}, ${tags.unusedTag.color}, ${users.owner.id}, ${now}, ${now})
   `);
 
   await db.execute(sql`
-    INSERT INTO page_tags ("pageId", "tagId")
-    VALUES (${pages.root.id}, ${tags.tag1.id})
+    INSERT INTO content_tags (id, "tagId", "pageId", "targetKind", source, "createdBy", "createdAt", "updatedAt")
+    VALUES (${contentTags.ct1.id}, ${tags.tag1.id}, ${pages.root.id}, 'page', 'user', ${users.owner.id}, ${now}, ${now})
   `);
 
   // Mentions (root page mentions child page)

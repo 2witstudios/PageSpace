@@ -16,7 +16,8 @@ import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
-import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
+import { desktopDeepLink } from '@/lib/auth/desktop-shell';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
@@ -70,7 +71,9 @@ export async function GET(req: Request) {
       });
 
       if (verifiedState?.platform === 'desktop') {
-        return NextResponse.redirect(`pagespace://auth-error?error=${errorType}`);
+        return NextResponse.redirect(
+          `${desktopDeepLink(verifiedState?.shell, 'auth-error')}?error=${errorType}`,
+        );
       }
       return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorType)}`, baseUrl));
     }
@@ -156,7 +159,9 @@ export async function GET(req: Request) {
         details: { reason: 'google_oauth_unverified_email_link_blocked' },
       });
       if (verifiedState.platform === 'desktop') {
-        return NextResponse.redirect('pagespace://auth-error?error=oauth_error');
+        return NextResponse.redirect(
+          `${desktopDeepLink(verifiedState.shell, 'auth-error')}?error=oauth_error`,
+        );
       }
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
@@ -353,7 +358,7 @@ export async function GET(req: Request) {
 
       // Build deep link URL with only the opaque exchange code
       // Desktop app intercepts this and exchanges code for tokens via POST
-      const deepLinkUrl = new URL('pagespace://auth-exchange');
+      const deepLinkUrl = new URL(desktopDeepLink(verifiedState.shell, 'auth-exchange'));
       deepLinkUrl.searchParams.set('code', exchangeCode);
       deepLinkUrl.searchParams.set('provider', 'google');
       if (isNewlyProvisioned) {
@@ -374,6 +379,34 @@ export async function GET(req: Request) {
     }
 
     // iOS PLATFORM: Same as desktop - use secure exchange code flow
+    // Deliberately iOS only, though the state schema now accepts 'android'.
+    //
+    // Android's web OAuth does NOT stay in the Capacitor WebView:
+    // `apps/android/capacitor.config.ts` allowlists only `pagespace.ai`, so a
+    // provider host is handed to `Bridge.launchIntent()` and opens externally —
+    // where a successful sign-in drops the session cookie in the wrong jar and
+    // the app stays logged out. This deep link is exactly the fix for that, and
+    // Phase C shipped the Android intent filter in anticipation of it.
+    //
+    // Two things must land before it may be emitted for Android, and the first is
+    // a security precondition, not a plumbing one:
+    //
+    //  1. The handoff must be bound to the app that started the flow. Custom
+    //     schemes are NOT exclusive on Android — any installed app may also
+    //     register `pagespace://` and be offered in the chooser or set as the
+    //     default handler — so an unbound one-time exchange code sent over this
+    //     scheme is a code another app can claim. `apps/android/README.md`
+    //     ("Deep links: what ships, and what is deliberately deferred") states
+    //     this as a precondition in as many words.
+    //  2. Something has to consume it. Nothing listens for the `@capacitor/app`
+    //     `appUrlOpen` event on EITHER platform, so a captured code is silently
+    //     dropped today (same file, "Prerequisite 2 — link routing in the web
+    //     app").
+    //
+    // Widening the state enum removes the blocker Phase C named. Emitting the
+    // link before (1) would trade a wrong-cookie-jar failure for a credential
+    // that can be intercepted — strictly worse — and before (2) it would not
+    // work at all.
     if (platform === 'ios') {
       // Generate deviceId if not provided
       const iosDeviceId = deviceId || createId();
@@ -417,6 +450,8 @@ export async function GET(req: Request) {
       });
 
       // Build deep link URL with only the opaque exchange code
+      // iOS is a separate Capacitor app that registers `pagespace://`
+      // itself; the desktop shell variant does not apply here.
       const deepLinkUrl = new URL('pagespace://auth-exchange');
       deepLinkUrl.searchParams.set('code', exchangeCode);
       deepLinkUrl.searchParams.set('provider', 'google');

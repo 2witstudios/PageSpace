@@ -17,7 +17,9 @@
  *
  * Pure presentational by design: no store, no hooks, no network — the caller
  * decides what identity and actions mean, so a terminal pane and a chat pane
- * wear the same bar without either knowing about the other.
+ * wear the same bar without either knowing about the other. That is also what
+ * lets the agent page's session-less chat wear it with no grid behind it at
+ * all: it supplies an identity and one action, and the bar asks no questions.
  *
  * The only thing dropped in the port is the checkout chip (`scopeLabel`), which
  * named a project/branch. That slot is now the agent label, so a grid holding
@@ -25,7 +27,7 @@
  */
 
 import type { MouseEvent, ReactNode } from 'react';
-import { SquareSplitHorizontal, SquareSplitVertical, X } from 'lucide-react';
+import { Plus, SquareSplitHorizontal, SquareSplitVertical, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 
@@ -144,17 +146,67 @@ export function PaneSplitCloseActions({
 }
 
 /**
- * A bound pane's identity: a live dot, the session name, and an optional label.
+ * "Start a new conversation" — the one action a chat surface offers from its
+ * bar whether or not it has a grid to split. Shared rather than inlined so the
+ * pane grid and the agent page's plain (session-less) chat cannot drift into
+ * two differently-worded, differently-shaped buttons for the same act.
+ */
+export function PaneNewConversationAction({
+  disabled,
+  onCreate,
+}: {
+  disabled: boolean;
+  onCreate(): void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label="Start a new conversation"
+      title="Start a new conversation"
+      disabled={disabled}
+      onClick={guarded(onCreate)}
+      className="flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+    >
+      <Plus className="size-3.5" aria-hidden="true" />
+    </button>
+  );
+}
+
+/**
+ * A pane's identity: a status dot, the session name, and an optional label.
  *
- * The dot means "a live session is bound here" — this surface only shows
- * sessions that exist server-side, so bound IS the running state it has. The
+ * The dot's FILL means "a live session is bound here" — in the pane grid that
+ * is always true, since it only shows sessions that exist server-side, which is
+ * why `bound` defaults to true. The agent page also wears this bar outside any
+ * grid, over a conversation that usually has NO session (binding is congenital
+ * and permanent, so history is full of them); it passes the conversation's own
+ * binding, and a hollow, muted dot is what says so. Same bar, honest state. The
  * label carries the agent name for a chat pane, which is what keeps a grid of
  * conversations with different agents readable.
  */
-export function PaneSessionIdentity({ name, label }: { name: string; label?: string }) {
+export function PaneSessionIdentity({
+  name,
+  label,
+  bound = true,
+}: {
+  name: string;
+  label?: string;
+  bound?: boolean;
+}) {
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
+      <span
+        aria-hidden
+        className={cn(
+          'size-1.5 shrink-0 rounded-full',
+          bound ? 'bg-emerald-500' : 'border border-muted-foreground/60',
+        )}
+      />
+      {/* The dot itself is decorative, but what it now ENCODES is not: it is
+          the only thing distinguishing a workspace-backed conversation from a
+          plain one. While it was always-green that cost a screen-reader user
+          nothing; now it would cost them the whole signal. */}
+      <span className="sr-only">{bound ? 'Workspace session: ' : 'No workspace session: '}</span>
       <span className="truncate font-mono text-[11px]">{name}</span>
       {label !== undefined && (
         <span className="shrink-0 rounded border border-border px-1 py-px text-[10px] font-normal text-muted-foreground">

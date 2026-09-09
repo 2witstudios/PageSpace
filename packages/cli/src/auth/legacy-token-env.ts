@@ -10,7 +10,8 @@
  * `pagespace login`. Pure: no I/O, never echoes the token value itself in
  * the deprecation notice.
  */
-const LEGACY_TOKEN_ENV_VAR = 'PAGESPACE_AUTH_TOKEN';
+/** Exported so a caller that needs to name WHICH var actually resolved (not just that a deprecated one did) can, without re-deriving the literal. */
+export const LEGACY_TOKEN_ENV_VAR = 'PAGESPACE_AUTH_TOKEN';
 const TOKEN_ENV_VAR = 'PAGESPACE_TOKEN';
 
 export interface ResolvedEnvToken {
@@ -50,7 +51,8 @@ export function resolveEnvToken(env: Readonly<Record<string, string | undefined>
  * stderr deprecation notice contract (emitted by `run.ts`, never here), same
  * "the value itself is never echoed" rule.
  */
-const LEGACY_KEY_ENV_VAR = 'PAGESPACE_PROFILE';
+/** Exported for the same reason as `LEGACY_TOKEN_ENV_VAR` above. */
+export const LEGACY_KEY_ENV_VAR = 'PAGESPACE_PROFILE';
 const KEY_ENV_VAR = 'PAGESPACE_KEY';
 
 export interface ResolvedEnvKeyName {

@@ -86,8 +86,6 @@ export interface ConversationEventBase {
    */
   rev: number;
   scope: ConversationEventScope;
-  /** The agent workspace (`agent_workspaces.id`) the conversation is bound into, or null. */
-  workspaceId: string | null;
   triggeredBy: ConversationEventTriggeredBy;
 }
 
@@ -127,8 +125,6 @@ export interface ConversationChangedFields {
   title?: string | null;
   lastMessageAt?: string | null;
   isShared?: boolean;
-  workspaceId?: string | null;
-  closedInWorkspaceAt?: string | null;
   /**
    * The bound plan page, or null when unbound. On the wire because `PlanChip`
    * renders it: without a field here (and the matching rev bump) a second pane
@@ -147,7 +143,6 @@ export interface ConversationDirectoryPayload extends ConversationEventBase {
     title: string | null;
     type: string;
     contextId: string | null;
-    workspaceId: string | null;
     isShared: boolean;
     createdAt: string;
     lastMessageAt: string | null;
@@ -162,7 +157,6 @@ export interface ConversationEmitContext {
   conversationId: string;
   rev: number;
   scope: ConversationEventScope;
-  workspaceId: string | null;
   /** The conversation's OWNER (`conversations.userId`) — the directory-room target. */
   ownerId: string;
   isShared: boolean;
@@ -213,7 +207,6 @@ const baseFromContext = (ctx: ConversationEmitContext): ConversationEventBase =>
   conversationId: ctx.conversationId,
   rev: ctx.rev,
   scope: ctx.scope,
-  workspaceId: ctx.workspaceId,
   triggeredBy: ctx.triggeredBy,
 });
 
@@ -391,7 +384,7 @@ export const conversationEvents = {
     );
   },
 
-  /** Directory: metadata changed (title, isShared, workspaceId claim, ...). */
+  /** Directory: metadata changed (title, isShared, plan binding, ...). */
   async updated(ctx: ConversationEmitContext, changes: ConversationChangedFields): Promise<void> {
     const payload: ConversationDirectoryPayload = { ...baseFromContext(ctx), changes };
     await Promise.all(

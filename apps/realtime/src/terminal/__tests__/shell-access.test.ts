@@ -1,7 +1,7 @@
 import { describe, it } from 'vitest';
 import { assert } from './riteway';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
-import type { ShellDTO } from '@pagespace/lib/agent-workspaces/contract';
+import type { ShellDTO } from '@pagespace/lib/agent-workspaces/shells-contract';
 import { buildShellCheckAuth, type ShellCheckAuthDeps } from '../shell-access';
 
 // A minimal, identity-carrying stand-in for a real Sprite instance — the access

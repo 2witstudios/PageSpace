@@ -228,6 +228,39 @@ describe('syncMentions — valid mentions still sync', () => {
   });
 });
 
+describe('syncMentions — a document whose only mentions are users', () => {
+  // The HTML branch selects on a[data-user-id], but the gate that decides
+  // whether to run it listed only the page, everyone and role markers. A
+  // document carrying nothing but user mentions therefore fell through to the
+  // markdown fallback, matched nothing, and the sync read that as "no mentions"
+  // — deleting the rows that were already there.
+  const userOnly = '<p>Hey <a class="mention" data-mention-type="user" data-user-id="user42">@Alice</a></p>';
+
+  it('takes the HTML branch and inserts the user mention', async () => {
+    const { tx, userMentionInserts } = makeTx({ existingUserIds: ['user42'] });
+
+    const result = await syncMentions('source-page', userOnly, tx as unknown as AnyTx, {
+      mentionedByUserId: 'author-1',
+    });
+
+    expect(userMentionInserts).toEqual([
+      { sourcePageId: 'source-page', targetUserId: 'user42', mentionedByUserId: 'author-1' },
+    ]);
+    expect(result.newlyMentionedUserIds).toEqual(['user42']);
+  });
+
+  it('does not delete an already-synced user mention that is still in the content', async () => {
+    const { tx, deletes } = makeTx({
+      existingUserIds: ['user42'],
+      existingUserMentions: ['user42'],
+    });
+
+    await syncMentions('source-page', userOnly, tx as unknown as AnyTx);
+
+    expect(deletes.filter(d => d.table === userMentions)).toHaveLength(0);
+  });
+});
+
 describe('syncMentions — nonexistent targets are dropped silently', () => {
   it('drops a mention of a nonexistent page ID without throwing', async () => {
     const { tx, mentionInserts } = makeTx({ existingPageIds: ['real-page'] });

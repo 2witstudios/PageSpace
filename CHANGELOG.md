@@ -5,8 +5,1109 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **AI agents can format spreadsheets** — two new workspace tools, **Format Sheet** and
+  **Conditional Formatting**, let an agent make a SHEET page presentable instead of leaving a grid
+  of bare numbers. An agent declares what a table *is* (its range, header rows, which columns are
+  money, percentages or dates, which rows are totals, an accent colour) and the sheet derives the
+  header band, number formats and total emphasis from that — so rows added later inherit the
+  formatting, and the agent never hand-picks colours. Conditional rules (highlight when a value
+  crosses a threshold, colour scales, data bars) follow the values as they change. Both tools are
+  write tools: a read-only agent does not get them. The chat shows a card for each call listing the
+  tables declared, ranges touched and rules added, with a swatch per colour, so you can see what
+  changed without opening the sheet. The spreadsheets skill now teaches all of this; the
+  workspace-tool count in the docs goes from 81 to 83.
+- **iPhone and iPad: sign-in no longer tells you Google is blocked when it isn't, and an emailed
+  sign-in link now signs you in inside the app** — two things were wrong on the app's sign-in
+  screen. It showed a warning saying "Google sign-in is blocked in this app" and pushed you toward
+  an email link instead; that warning is meant for in-app browsers like Instagram's or Facebook's,
+  and the app's own window was being mistaken for one. Google sign-in has always worked in the
+  app, so the warning is gone there and the app no longer forces the email-link form open. A real
+  in-app browser still gets the warning, because there the advice is true. The email link was the
+  worse problem: it was the fallback the warning recommended, and it could not work at all. Tapping
+  it opened Safari, and the session it created stayed in Safari — the app never saw it and stayed
+  signed out. Ask for a sign-in link from the app now and the link opens **the app**, signs you in
+  there, and takes you where you were headed. The same link opened somewhere else — a laptop, a
+  friend's phone if you forwarded the mail — still signs that browser in as before, and hands out
+  nothing that would let it act as your phone. Links you request from a browser are unchanged. On
+  Android the link still opens Chrome and signs Chrome in; the app cannot receive links yet, which
+  needs a signed release build.
+
+- **Local Environments: create one from the app, get your enrollment code, and get a new one if
+  you lose it (opt-in)** — a local Environment (your own computer, reached through the bridge) is
+  now a choice in the ordinary "New environment" step rather than something only an API call could
+  make. On a deployment with `LOCAL_ENVS_ENABLED`, a drive owner or admin picks **This computer**,
+  names the machine, and is shown the one-time enrollment code beside the exact two commands to run
+  on it — `pagespace env enroll …` then `pagespace env connect …`, with this deployment's address
+  filled in — plus when the code expires and, in plain words, what enrolling agrees to: everything
+  runs as you, with no sandbox, and in `ask` mode one approval covers every later command of that
+  kind for that session. Closing that step used to be a dead end: the code was shown once and
+  could never be recovered, so the Environment had to be deleted and made again. Now the row reads
+  **Awaiting enrollment** and its menu offers **Show a new code**, which replaces the previous one;
+  the server refuses, for good, once a machine has enrolled, so a lost code can never let a second
+  machine take over an enrolled Environment. Local Environments show a laptop and the machine's
+  name in the sidebar and in the "where should it run?" list, so a computer is never mistaken for a
+  cloud sandbox. Creating a cloud Environment is unchanged. Still off by default.
+
+- **Android app: it can now ask for notification permission and register for push (not yet
+  distributed)** — the server has been able to send an Android push since the FCM sender landed, but
+  no Android build could receive one: the app declared no notification permission and the shared
+  registration code was gated to iOS. Android now declares `POST_NOTIFICATIONS`, asks for it at
+  runtime, and registers its FCM token the same way iOS does. If you say no, that is remembered —
+  the prompt does not come back on every launch — and if you later turn notifications on in system
+  settings, the next time you open the app it picks up where it left off. The app icon can also carry an unread badge on Android now, where the
+  launcher supports one (many do not, and those simply show nothing). **Nobody can see any of this
+  yet:** there is still no Android release build and no distribution, and none of it has been run on
+  a real device — this is the client half of the loop being closed, not a shipped feature.
+
+- **Android app: a failed load now offers a Retry instead of a dead end (not yet distributed)** —
+  the Android shell had no bundled error screen, so launching without connectivity left the WebView
+  on Chrome's own error page with nothing to do. It now falls back to a PageSpace screen with a
+  working Retry button, matching iOS. Nobody can see this yet: the Android app has no release build
+  and is not distributed, so this lands as groundwork for the build that will be. Opening a
+  `pagespace.ai` web link from elsewhere still opens your browser, unchanged.
+
+- **Dev-server preview: see the app you're building, live, from inside its session (ships dark)** —
+  when a dev server (Vite, Next, anything that binds a port) starts inside an agent session or a
+  drive Environment, PageSpace notices and shows one quiet line in that session's header or beneath
+  the Environment in the sidebar: "Dev server detected on :5173 — Preview". Nothing opens on its
+  own. Clicking Preview opens the running app in a pane beside the console, served through
+  PageSpace's own authenticated preview origin (only people with access to the session or drive can
+  load it, checked on every request), with an open-in-new-tab option, a Reload, and status chrome
+  that says exactly what is true — live, starting, down (with the relay's error), switched off,
+  "sandbox rebuilt since", or "port 8080 is in use by another process" with the process and how to
+  release it. A drive owner or admin (or the session's owner, from inside the session) can switch a
+  preview off and back on, and switching it off is remembered even if the sandbox notices the dev
+  server again a moment later. Reading the status never wakes a sleeping sandbox. One thing to know
+  about your own dev server: the preview reaches it through PageSpace's hostname, so a server that
+  checks the `Host` header (Vite 6 and newer do) needs that hostname allowed — for Vite, add the
+  preview domain to `server.allowedHosts`. **Sharing an unusual port is your call:** a server on a
+  usual dev-server port (Vite, Next, Astro, Django and friends) is previewed as soon as it is
+  detected, but anything else — an admin panel on :9000, a debug listener — is only *named*
+  ("Dev server detected on :9000 — not shared yet") until you open the pane, read who would be able
+  to reach it, and press Share. The port you press Share on is the port that gets shared: if the
+  server has moved since the screen was drawn, PageSpace says so rather than sharing the new one.
+  Approval is per port and per sandbox, so a rebuilt sandbox asks again. **Signing out ends the
+  preview:** the preview page is tied to the session that opened it, so signing out or revoking a
+  device cuts it off on its very next request instead of letting it linger. Off by default: the
+  whole surface is absent until `DEV_PREVIEW_ENABLED` is set with a dedicated `DEV_PREVIEW_APEX`,
+  which needs the preview-origin ops work (wildcard DNS, certificate, and the Caddy block) to land
+  first.
+- **Local Environments: an agent can now reach your own computer (opt-in groundwork)** — the two
+  ends built so far are joined. An agent session bound to a local Environment whose machine is
+  connected now runs its commands and reads and writes its files on that machine, through the same
+  tools it uses everywhere else — nothing about the agent changes. Two refusals are kept apart
+  where you will see them, because they have different owners: "no connected machine — run
+  `pagespace env connect`" is yours to fix in seconds, while "the machine owner's policy does not
+  allow you to run code here" can only be changed by whoever enrolled it, and retrying will not
+  help. What a local Environment cannot do, it now says plainly instead of pretending: terminal
+  panes, dev-server previews and filesystem checkpoints are refused with a reason rather than
+  quietly appearing empty — and because a checkpoint is the safety net taken before a destructive
+  batch of commands, a batch that would need one is refused outright rather than run without it.
+  Closing a session bound to a local Environment never touches the computer: nothing is shut down,
+  nothing is billed, and the machine's own `env disconnect` and Ctrl-C still win. Still off by
+  default (`LOCAL_ENVS_ENABLED`), and still no local terminals.
+- **Local Environments: the bridge daemon — `pagespace env connect` (opt-in groundwork)** — an
+  enrolled computer can now actually serve its Environment. Running `pagespace env connect` on it
+  keeps a live, outbound-only connection to PageSpace and answers requests to run a command or
+  read/write a file, but only after each request's server-signed grant verifies on the machine
+  and the machine owner's own local policy file allows it: who may drive the machine, which
+  operations, inside which directories, with which environment variables, and with what output
+  and time caps. Without a policy file the machine connects but denies everything. A prompt mode
+  asks the owner in their terminal before an unlisted operation runs. Every decision is written to
+  a local audit log carrying the same grant id PageSpace records, so the two sides can be
+  compared. Deleting the Environment revokes the machine: its key is deleted on the spot and it
+  stops reconnecting. Terminal (PTY) sessions on local machines are not served yet. Still off by
+  default (`LOCAL_ENVS_ENABLED`).
+- **Local Environments: your enrolled computer can now hold a live connection, and you can
+  revoke it (opt-in, groundwork)** — an enrolled machine connects to PageSpace over a socket
+  addressed to its Environment, proves it is the machine you enrolled with a signed hello
+  before anything else is accepted, and stays "connected" in the Environments list while its
+  heartbeat is fresh. Two of your machines can be connected at once; reconnecting a machine
+  replaces its old connection cleanly. Every command PageSpace will later send that machine
+  is individually signed and bound to exactly what was requested, and every answer the
+  machine sends is verified against the key pinned at enrollment before an agent ever sees
+  it. Deleting a local Environment now revokes the machine completely: its connection tokens
+  are cancelled, the machine is told to forget its key, and it can no longer mint new tokens.
+  Server signing keys can be rotated without stranding already-enrolled machines. Nothing runs
+  on the machine yet (the daemon lands next). Still off by default (`LOCAL_ENVS_ENABLED`).
+- **Local Environments: the server now refuses what the machine cannot do (hardening,
+  opt-in groundwork)** — before the bridge connection ships, every server path that could
+  provision, bind a session to, or rebuild an Environment now recognises a local machine and
+  answers with a typed refusal instead of trying to mint a cloud sandbox for it: a disconnected
+  or revoked machine is `not_connected` / `revoked`, a bind the machine's owner has not allowed
+  is `bind_policy`, and "rebuild" answers that a local Environment has no machine to rebuild.
+  Requesting a fresh connection challenge while one is still live now answers 429 with a
+  `Retry-After` instead of silently invalidating the machine's outstanding handshake, a
+  connection token can no longer survive a revocation that lands during its issue, and a
+  malformed authorization window (expiry before issue) is refused outright. Cloud Environments
+  behave exactly as before. Still off by default (`LOCAL_ENVS_ENABLED`).
+- **You can enroll your own computer as a drive Environment (opt-in, groundwork)** — a drive
+  owner or admin can now create an Environment with `substrate: "local"` and a machine label,
+  and receives a one-time enrollment code (shown once, valid for ten minutes). A machine that
+  presents the code with its own freshly generated key is pinned to that Environment, and from
+  then on proves it still holds the key every time it connects — the server never stores a
+  secret it could replay, and a used or expired code is worthless. Nothing runs on the machine
+  yet: this release ships the identity and enrollment half of the local-environment bridge; the
+  connection, the daemon and the sandbox host follow. Off by default (`LOCAL_ENVS_ENABLED`),
+  and a deployment that leaves it off answers exactly as before. Your data export
+  (`local-environments.json`) lists the machines you enrolled.
+
+- **The marketing home page is now "The AI for working"** — a full landing redesign that leads with
+  the real app as the hero, proves breadth with an interactive "Everything is a page" carousel across
+  all nine page types, and adds honest capability, automation ("Ask, or automate"), skills, and
+  trust ("Full access, safely") sections. The same pass fixes the on-page AI-visibility issues from
+  the AEO audit: exactly one `<h1>` (demo/mock titles are no longer headings), Review and
+  Organization structured data with a single consistent product description, and a `FAQPage`
+  schema added to the existing FAQ page so its answers are machine-readable.
+
+- **You can find friends and collaborators by name when inviting them to a drive** — the invite
+  member search now surfaces people you already have a relationship with — anyone you share a drive
+  with, or an accepted connection — by their display name or username, even when their profile is
+  private. Previously a private profile could only be reached by typing their exact email address.
+  Strangers with private profiles stay hidden, and no email is ever revealed by a name match, so this
+  opens no new way to discover people you don't already know.
+
+- **You can publish a drive Environment to a live URL** — the Environments UI now has a Publish
+  action, and the resulting app pane lives on the environment itself rather than in a separate
+  dashboard. Publishing snapshots the environment's filesystem, creates its hosting row and Fly app
+  the first time. A Dockerfile at the environment's root always wins; otherwise PageSpace generates
+  one for you — a `package.json` with a `start` script or a `main` entry becomes a Node Dockerfile
+  (running the `build` script first if there is one), and plain static content (an `index.html` with
+  no `package.json`) becomes a small nginx image. An environment with none of those is told so up
+  front, before anything is built, with what to add. Publishing then streams the
+  build to a running subdomain; publishing again is just a fresh build of the same app, so nothing
+  about the URL or its history changes underneath a re-deploy. The pane shows live status, the app's
+  usage drain, and per-app logs, plus stop / resume / unpublish controls that all go through the
+  existing lifecycle functions — never a direct status write. Unpublishing tears down the hosting row
+  and its Fly app but leaves the environment itself untouched, and if the app was on the flat-rate
+  always-on tier its subscription is cancelled through a Stripe-side reclaim outbox in the same
+  transaction as the delete, so a deleted app can never keep billing a card nobody can see anymore. A
+  parked app (out of credits, or over its daily running-time cap) now serves visitors a plain "paused"
+  page that also links back into PageSpace, where its owner sees exactly how to bring it back — top up
+  credits, or switch to the always-on tier, purchasable and cancellable right from the app pane. A
+  drive's custom domains can now be pointed at a published app instead of the drive's static site
+  (nullable per-domain, so nothing changes for a domain nobody touches) from the same Domains settings
+  page used for the static site today. The whole surface ships dark behind `APP_HOSTING_ENABLED` until
+  it's turned on for a deployment.
+
+- **New accounts get a short first-run walkthrough instead of a blank screen** — signing up now
+  opens a five-step introduction that explains what PageSpace is and ends by asking what you
+  actually want to get done, then hands that request straight to the assistant so your first
+  action is the real thing rather than a setup form. It starts by asking who the workspace is for
+  — just you, a small team, several teams, or a whole company — and everything after that is
+  written for the answer you gave: the example it shows you, the six things it demonstrates it can
+  do, how many assistants turn up when a job is too big for one, and the suggested requests at the
+  end. It configures nothing; your Home drive is already set up before the walkthrough appears.
+  What you type is saved to your About You memory page, so every assistant you work with from then
+  on already knows it. Any step can be skipped, and skipping is remembered. Self-hosted
+  installations are not shown suggestions that depend on services they do not have.
+
+- **An agent can default its sessions into one of its drive's Environments** — the Sandbox card in
+  an AI_CHAT agent's Settings screen now has an Environment picker alongside the existing on/off
+  switch. Pick one of the drive's persistent Environments (the same ones the Agents screen's spawn
+  palette already offers) and every new session started for that agent pre-selects it — visibly, with
+  a "Default" badge — instead of the ordinary ephemeral sandbox. It is a default, not a lock: "New
+  sandbox" and every other environment stay one arrow-key away, and any caller (the palette, a
+  claimed conversation, a programmatic spawn) that names an environment explicitly is always honored
+  over the agent's own preference. The default only ever applies while the agent's Sandbox switch is
+  on — turning it off leaves a previously chosen environment stored but inert, so nothing gets
+  spawned into a persistent, shared environment behind a switch that reads as off. Moving the agent's
+  page to a different drive clears the default automatically, since an Environment belongs to the
+  drive it was created in.
+
+- **The server can send an Android notification** — it has always accepted and stored Android push
+  tokens, then dropped every message aimed at one: the send path had an iOS branch and a stub. It
+  now delivers through Firebase Cloud Messaging. Nothing changes for anyone yet, because the app
+  still only registers for push on iOS (`usePushNotifications`, "Only supported on iOS for now") —
+  when that lands, a mention or a share will reach an Android device the same way it reaches an
+  iPhone, with no further server work. A background sync is sent as a data-only message, which
+  is what stops Android from putting a notification in the tray for something the app was only meant
+  to quietly act on. A token Firebase reports as unregistered — the app was uninstalled, or the
+  token was replaced — is deactivated on the spot rather than retried forever, matching how expired
+  Apple tokens are already handled. That only happens when Firebase says something is wrong with
+  *that token* — the registration is gone, or the token itself is malformed. A rejection aimed at
+  the request as a whole is retried instead — and is never counted against the phone either, no
+  matter how many times it happens: a message the server built badly, or a credential pointing at
+  the wrong Firebase project, would otherwise unregister every Android phone at once and leave
+  them dark until each app was next opened. If the Firebase credential is missing or
+  malformed the Android send fails with a message that says exactly which field is wrong, every
+  other device on the account still receives the notification, and no phone is penalised for a
+  problem on the server's side.
+
+- **A key can tell you what it is allowed to do** — `pagespace keys describe` reports the credential
+  the machine is using: which drives it reaches, the role it holds in each, and what that role
+  actually resolves to — can it read, write, share, delete. That answer comes from the same
+  permission code that decides real requests, so it cannot quietly disagree with them. Drive-level
+  and page-level are separate answers and both are shown: any member can create a page at a drive's
+  top level while still being read-only on a document inside it, so `--page <pageId>` asks about the
+  exact place you are about to write. The same
+  summary is printed at the end of `pagespace keys create` and the `pagespace keys` wizard, so a new
+  key never leaves you to find out by attempting a write and reading the refusal. Agents get it as
+  an MCP tool too. A key describes only itself — it still cannot see, list or revoke the other keys
+  you hold. `pagespace keys list` now also shows the role granted on each drive rather than the
+  drive name alone.
+
+- **A spreadsheet is readable by an agent, not just writable** — reading a sheet used to hand an
+  assistant the whole spreadsheet as its raw internal file: a 500-row sheet arrived as roughly
+  24,000 lines of cell-by-cell markup, with no way to ask for a range of rows or find the row you
+  wanted. Assistants ended up keeping a copy of your data somewhere else just to be able to read it.
+  Now an assistant reads rows: a range, or the rows matching a value in a column ("the row where the
+  member ID is 28605"), returning only the columns it asked for, with formulas and cell errors
+  intact. Opening a sheet gives its size and first rows rather than a wall of markup, and so does a
+  folder listing that includes page contents, and so does a command whose instructions live on a
+  sheet — that used to spend the command's whole budget on markup every time it ran. Cell edits also
+  have a stated limit now — 500 cells per call — instead of a size an assistant had to discover by
+  failing. And a sheet whose stored file cannot be read is reported as unreadable rather than as
+  empty, so an assistant is never invited to overwrite data that is still there — as is a page that
+  is a sheet in name but holds ordinary text. Reading a sheet never changes it, including in
+  read-only mode: on an older sheet that has not been converted to the new row storage yet, an
+  assistant can still read rows in order, and is told to do that rather than having the read quietly
+  convert the sheet — or being told to change a cell just to make searching work.
+
+- **Spreadsheets from the terminal and the SDK** — `pagespace sheets describe` shows a sheet's tabs
+  and size without reading a row; `query` filters and sorts server-side, so asking a 100,000-row
+  sheet for the twelve rows you want no longer means pulling the whole thing down first. `rows`
+  walks it in order, `append` adds rows, `update-cells` writes by address (and, unlike the older
+  `edit-cells`, can reach a second tab), and `delete-rows` removes a range. Filters match the values
+  you see, so a formula column compares as its result. Agents get the same six as MCP tools, and
+  they are on the SDK as `sheets.*` for anything building on top.
+
+- **Spreadsheets hold real data now** — a sheet used to be stored as one document that was rewritten
+  from scratch on every cell edit, so a sheet with tens of thousands of rows took seconds to accept a
+  single change and eventually stopped saving at all. Sheets are stored row by row, and editing one
+  cell costs the same whether the sheet has a thousand rows or a hundred thousand. Formulas that
+  depend on the cell you changed are recalculated, and nothing else is.
+- **Agents can query a spreadsheet instead of reading all of it** — filter, sort, page, append rows,
+  update cells and delete rows, without pulling the whole sheet into the conversation. Filters run
+  against the values you see, so a formula column compares as its result.
+- **Spreadsheets are findable by what is in them again** — search now matches the contents of a
+  sheet's cells, and a result quotes the row that actually matched, wherever in the sheet it is.
+- **Environments: a place in a drive that stays** — a drive can now hold named environments, and a
+  session can run inside one instead of in a sandbox that disappears when you close it. Everything
+  in an environment — your files, what you installed, what you configured — is still there the next
+  time anyone in the drive opens a session in it, because it is one machine with one filesystem that
+  everybody in the drive shares. Name them for what they are for: “dev”, “staging”, “data-import”.
+  Ephemeral sessions have not changed and are still the default; an environment is something you
+  deliberately make.
+- **Environments live in the sidebar beside your sessions, not inside them** — each one shows its
+  name and a dot for whether its machine is up, and the sessions running in it are listed
+  underneath, so you can see at a glance who is working on which filesystem. An environment with
+  nothing running in it still appears: it is infrastructure your drive keeps, not something that
+  vanishes on an idle afternoon. Starting a new session in a drive that has environments asks where
+  it should run — a fresh sandbox, or in one of them. Each environment carries its own “+” for
+  starting a session straight into it, which skips that question because the row already answered
+  it.
+- **Making an environment is part of the “new session” palette** — press ⌥N on the Agents screens,
+  or use the “+”, and the same keyboard-first selector that starts a session also offers “New
+  environment”: from the first step in any drive, and from the “where should it run?” step, where
+  the one you just made becomes the answer. There is no separate icon to find in the sidebar.
+- **Renaming, rebuilding and deleting an environment** — all three are for drive owners and
+  admins, and the two destructive ones say what they destroy before they do it. Deleting refuses
+  while sessions are still running inside and then offers to end them, naming both halves of what
+  that means; rebuilding says plainly that the environment comes back BLANK, with its name intact
+  and nothing else. Anyone else in the drive sees the environments and can work in them, without the
+  controls they could not use anyway.
+- **Environments have their own line on your usage page** — what a drive's environments cost to keep
+  is listed per environment, by name, separately from your agent sessions. It was previously folded
+  into a single "Unattributed agent" line, which named the wrong thing and skewed the share each
+  agent appeared to account for; both are now right.
+
+- **The spreadsheet has been rebuilt** — the grid was a plain table with a heavy border drawn on
+  every side of every cell, which is why it read as a picture of a spreadsheet rather than part of
+  PageSpace. It now uses the same hairline seams, header treatment, focus ring and glass toolbar as
+  the rest of the product, numbers right-align in aligned figures the way a spreadsheet should, and
+  the whole surface is windowed so a sheet with tens of thousands of rows scrolls and types without
+  lag.
+- **A formatting toolbar, and the controls to build a dashboard** — bold, italic, underline and
+  strikethrough; text and fill colour from the same twelve colours the rest of PageSpace uses, plus
+  any hex you like; alignment and text wrapping; font size; currency, percent, date and plain-number
+  formats with buttons to add or remove decimal places; and freeze for the first row or column.
+  Ctrl/Cmd+B, I and U work in the grid — previously every keyboard shortcut with a modifier was
+  swallowed before it could do anything.
+- **Column widths, row heights and frozen panes** — drag a column or row edge to resize it, or
+  double-click a column edge to fit it to its contents. Freeze the top row or first column and it
+  stays put while the rest scrolls. Row density (compact, normal, relaxed) is in the status bar.
+- **A filled cell stays readable when you switch to dark mode** — a cell's fill is a fixed colour,
+  so that a published page and an exported workbook look like what you built; its text colour was
+  not, so a pale fill applied in daylight turned into white-on-pale and the value vanished at night.
+  Filled cells now pick a readable text colour automatically, unless you chose one yourself.
+- **Selecting a range with shift-click** — dragging was previously the only way, which made
+  formatting a wide block of a large sheet impractical.
+- **Editing a cell survives scrolling away from it** — starting to type in a cell and then scrolling
+  used to discard what you had typed.
+- **The right-click menu is a real menu** — reachable from the keyboard, with copy, copy values,
+  paste, paste values, clear formatting and clear contents.
+- **Multi-tab workbooks show their tabs** — the other tabs were already preserved when saving; now
+  you can see they are there. Opening them is still to come.
+- **Spreadsheet cells can carry formatting** — number formats (currency, percent, decimals, dates),
+  bold and italic, text and fill colour, alignment, borders, column widths, and frozen rows and
+  columns are now stored with the sheet and survive saving, publishing and export. Clearing a
+  cell's contents keeps its formatting, as it does in Excel and Google Sheets. The controls for
+  setting these arrive with the redesigned spreadsheet view; this release puts the foundation in
+  place and makes anything already formatted display correctly everywhere.
+- **Exported spreadsheets contain real numbers** — an .xlsx export previously wrote every cell as
+  text, so nothing in Excel could sum, sort or chart it. Exports now carry the underlying numbers
+  along with their number formats, so the file reads the same as the sheet and behaves like a
+  spreadsheet.
+- **Spreadsheets with more than one tab keep all of them** — opening a multi-tab workbook and
+  editing it used to discard every tab after the first. The other tabs are now preserved untouched;
+  the editor still shows only the first.
+- **CSV exports show what the sheet shows** — a formatted cell exports as it appears (for example
+  `$1,234.50`), matching Excel's and Google Sheets' behaviour and the .xlsx export. Cells with no
+  formatting are unchanged. If you need the raw numbers for another system, use the .xlsx export,
+  which carries the underlying values.
+- **Agents can hand work to each other from anywhere, not just from a browser tab** — asking an
+  assistant to spawn or message a worker used to fail with "the calling request carries no session
+  credentials to dispatch with" whenever the request had not come from a logged-in browser. That
+  covered a spoken conversation, a scheduled run, and anything driven from an API key — so the same
+  sentence worked when typed and failed when spoken. It now works the same way from every one of
+  them, including from the SDK, the CLI, and other tools you have connected to your account.
+- **Agents in a shared drive can work with each other's shared agents** — a worker a teammate
+  deliberately shared can now be messaged and read, not merely seen in a list. Their private threads
+  stay private: a worker still shown as "(private thread)" is not addressable, and asking for it
+  answers exactly as if it did not exist. A message you send runs with YOUR permissions, never the
+  other person's, so reaching someone's worker never gives you their access. Stopping someone else's
+  running worker still needs owner or admin rights on the drive.
+- **A microphone in the top bar, on every page, that talks to whichever assistant you are already
+  looking at** — there is no separate voice screen and nothing to set up first. Press it on a page
+  and the assistant sidebar opens in voice mode, talking to the agent you had selected there; press
+  it on the dashboard and it talks to the assistant already in the middle of your screen. Nothing
+  connects until you press it.
+- **A spoken conversation is the same conversation you can read and type in** — voice is a way into
+  a thread that already existed and still exists after you hang up. What is said appears in that
+  thread as ordinary messages while the call is running, marked with a small microphone so you can
+  tell later what was spoken and what was typed. There is no separate voice history to go looking
+  for, and nothing to replay.
+- **The call survives you walking around the app** — moving between pages does not end it or move it
+  to a different assistant; it just tells the assistant where you now are. Closing the sidebar
+  minimizes the call rather than hanging up, and the top-bar microphone stays lit so you can get
+  back to it. Deliberately choosing a different agent in the sidebar's switcher does move the call,
+  because that is a different conversation. Ending a call is the End button on the call itself, and
+  refreshing the page ends it too.
+- **The assistant on the call is the one you picked, with the instructions and the tools its owner
+  gave it** — an agent you built to answer a particular way answers that way out loud too, and one
+  whose tools you restricted cannot reach past them just because the conversation is spoken.
+- **You can now delegate out loud, not just talk** — the assistant on a call now knows how to
+  operate your workspace the same way it does when you type at it: how tasks, agents, automations
+  and search work, which skills it can load, and the tools it does not list up front. Ask it about
+  your calendar, to file a task, or to set something running, and it goes and does it instead of
+  saying it cannot. It also stops asking permission first: say what you want and it acts, then tells
+  you what it did. Work that would take minutes gets handed to an agent or a task rather than
+  leaving you listening to silence, and it will say where it went. "This page" and "here" mean what
+  you are looking at, so it never asks you to read out an id.
+- **The assistant on a call can see whole answers, and you can see it working** — it was being handed
+  only the first 700 characters of everything it looked up, which is why it lost track of documents,
+  misread pages and fumbled edits: it was reading through a keyhole. It now gets what you get when
+  you type. And the work is no longer invisible — the call bar names what it is doing while it does
+  it ("Read Page: Roadmap") instead of going silent, and each tool call appears in the conversation
+  as it happens, spinner and all, exactly the way it does when you type. It is still there when you
+  come back to the thread later.
+- **A call you cannot have does not start** — running out of credit, or already having as many calls
+  open as your plan allows, now says so and stops, instead of connecting anyway and leaving you
+  talking to something nobody was counting.
+- **When voice cannot start, it says which problem you have** — a microphone you declined is
+  different from a microphone you do not have, and the two now get different advice and only the
+  fixable one offers to try again. If the call connects but the transcript service does not, the
+  call says so rather than letting you talk for ten minutes into something that was never going to
+  be saved.
+- **Sub-tasks are real rows you can work in place** — expanding a task used to show its sub-tasks as
+  a list of links with a circle beside each one. The circle looked like a checkbox and was inside
+  the link, so clicking it opened the sub-task instead of completing it; there was no way to finish
+  a sub-task without leaving the screen. Sub-tasks are now full rows in the same table, indented
+  under their parent and lined up with its columns, with a working checkbox, status, priority,
+  assignees and due date. They expand further if they have children of their own, and each level has
+  a "+ Add a sub-task" line so you never have to open a task just to put something under it — down
+  to four levels in, after which you open the task itself to keep going. A task with no sub-tasks
+  yet gets "Add sub-task" in its row menu, which creates the first one, opens it out and puts the
+  cursor in its title. This is the wide layout; on a narrow pane the cards still show the progress
+  count, and opening a task is how you reach what is under it.
+- **You can complete the task you are looking at** — opening a task shows the work underneath it, so
+  the task itself had no row and no controls. Finishing it meant navigating back out to the list it
+  came from, where completing it is blocked until its sub-tasks are done — the sub-tasks you were
+  just looking at. There is now a checkbox and a status dropdown at the top of the task's own
+  screen.
+- **Sub-task progress wherever a task appears** — a task with sub-tasks now shows how many are done
+  in the table, on kanban cards and on the narrow-screen cards. Previously none of them said, and
+  the only hint was a count inside the expanded row.
+
+### Changed
+
+- **The header now says "Dashboard" instead of showing a house and a slash** — the way back out of
+  a drive used to be a small house icon followed by a `/`, and nothing on screen said where it
+  went. That made it easy to miss entirely, and easy to misread when you did notice it: drives have
+  their own home page, and the sidebar calls that "Drive Home", so a house in the header looked like
+  it meant the drive you were already in. It now reads **Dashboard** in words. Inside a drive it
+  becomes a bordered button with a back arrow, followed by the name of the drive you are in, so the
+  header tells you both where you can go and where you are standing; on the dashboard itself it
+  stops being a button, because you are already there. On narrower windows, where the header has
+  other things to fit, the button keeps its word wherever it is a way out — that being the whole
+  point — and the drive name and the you-are-here marker are the parts that give way.
+
+- **Android app: first internal-testing version identity, and the Android/iOS shell configs are now
+  checked in CI (still not distributed)** — the Android build now identifies itself as version 1.4
+  (build 2), matching the iOS version, instead of the 1.0 (build 1) left over from a debug build in
+  March. Nothing else about the app changes in this release, and **nothing is distributed**: there
+  is still no release signing key, no Play Console listing, and none of the Android work from the
+  last few releases has been run on a real device — the exact checklist for doing so is now in the
+  app's README, alongside what still blocks a public build. Behind the scenes, the two mobile shell
+  configuration files are type-checked on every pull request and a test now guards the rule that
+  the Android shell never hands its native bridge to a third-party site or a wildcard host.
+
+- **Free plan credits are now a one-time starter grant instead of a monthly allowance** — new
+  free accounts still get 5 credits to try AI with, granted once on their first AI call, but
+  that grant no longer refills or accumulates month over month. Credits you already have never
+  expire, and nothing is taken away: free accounts that had built up a balance keep it. To keep
+  going after the starter credits are spent, buy a top-up pack (top-ups never expire) or upgrade
+  to a paid plan, which includes a monthly allowance that rolls over. The credits card, the plan
+  comparison, the out-of-credits message, and the pricing, FAQ, terms, and docs pages now say
+  "5 credits to start" for Free rather than "5/month", and free accounts no longer show a
+  "Renews" date. Free accounts receive a one-time email explaining the change, quoting the
+  exact balance they keep and pointing to top-ups and the Pro plan; anyone who has turned
+  product-update email off is skipped, and the notice carries a one-click unsubscribe link.
+
+- **Dark mode is now a lighter charcoal instead of near-black** — every dark surface (page,
+  sidebar, cards, popovers, menus, borders, and the glass panels) moved up one step so text no
+  longer sits on a pure-black floor, which is easier to read and reduces halation. Hover
+  highlights in dark mode are now a quiet gray rather than saturated blue, and the *selected*
+  item (active channel, drive, sidebar entry, agent history row) gets a soft blue tint instead,
+  so "hovered" and "selected" no longer look the same. Sidebars, the AI panel and the header sit
+  one tone above the page, and the hairlines between regions are a touch stronger, so the lighter
+  surfaces read as layered rather than flat. Primary text is a touch whiter and secondary text
+  slightly brighter to
+  keep contrast comfortable on the lighter surfaces (the marketing site's secondary text is a hair
+  darker, matching the app). The admin app, the marketing site (including
+  the hero demo), the code editor and terminal fallbacks, and the iOS/Android status bar and
+  splash colors all use the same new floor so nothing looks darker than the page around it.
+
+- **The default AI model is now Z.ai's GLM-5.3 Flash** — cheaper per token and a larger context
+  window than the previous default (OpenAI's GPT-5.6 Luna), and still on the free-tier allowlist.
+  New accounts pick it up automatically; anyone with an explicit model already selected keeps that
+  choice. Also refreshed the whole OpenRouter model catalog: many new models and providers are now
+  selectable (a lot more vendor choice), pricing and context-window figures were corrected against
+  OpenRouter's live data, and a handful of models OpenRouter no longer serves were removed.
+
 ### Fixed
 
+- **The account menu no longer labels free accounts "Billing (Business)"** — the plan name in the
+  avatar dropdown fell through to "Business" whenever the subscription lookup had not answered yet
+  (every first paint, and permanently if the request failed), so a brand-new free user saw a paid
+  plan the moment they signed in. It also mislabelled Founder accounts as Business. The label now
+  comes from the canonical tier table, starts from the tier your session already knows, and treats
+  anything unrecognised as Free. The subscription status endpoint returns the same normalised tier.
+
+- **Every pane in an AI page's split grid now offers Chat/History/Settings from its own bar** — the
+  "host" pane (the one showing the same conversation the page's own header already tracks) used to
+  collapse to a bare name label with no way to reach History or Settings from that pane, unlike
+  every other pane in the grid. It now carries the same tab strip. Deleting the page's own hosted
+  conversation from that newly-reachable History tab now correctly hands the page a replacement
+  conversation instead of leaving it silently pointed at one that no longer exists — including when
+  a session end happens to land at the same moment.
+- **An agent locked down by `update_agent_config` can be unlocked again, and `pagespace keys` tells
+  you the real fix** — restricting an agent's tools to an empty list had no way back through the
+  tool itself: the field that means "no restrictions" is `null`, and the schema only accepted an
+  array or nothing at all, so the agent stayed locked down until someone reached the settings UI.
+  Passing `enabledTools: null` now explicitly clears the restriction. Separately, `pagespace keys
+  list`/`revoke`/`use` and the key wizard refuse when run with a scoped access key instead of your
+  personal login — that message used to always say to remove "the key's `--token`/env credential,"
+  even when the key had actually come from `--key <name>` or a stored credential with no `--token`
+  in sight, pointing you at a flag you never passed. It now names the credential that actually
+  resolved.
+- **Pasting a formula no longer corrupts quoted text inside it** — copying a formula like
+  `=IF(A2>0,"q1","")` down a row used to also rewrite the quoted string, turning `"q1"` into
+  `"Q2"`: the reference-shifting logic behind paste and conditional-format rules didn't know the
+  difference between a cell reference and a letters-and-digits run sitting inside a string literal.
+  It now leaves anything inside quotes untouched, both on paste and when a conditional-format
+  formula rule is evaluated per cell. Separately, a sheet with a very large or pathological set of
+  conditional-format rules could make typing, saving, or rendering the sheet hang — evaluation work
+  is now capped in total across every rule and range combined, on top of the existing per-range
+  limit, and rule count itself is capped where a sheet is written. Saving a sheet also no longer
+  evaluates conditional formats at all, since the save format never reads that result — cutting
+  needless work on every keystroke.
+
+- **A charge that fails to record is retried instead of silently dropped** — usage metering used to
+  report success whether or not it had actually written anything. If the database write for a usage
+  record failed, the failure was logged and then swallowed: the meter above it saw a normal result,
+  moved its billing marker past the window it had just tried to charge for, and that spend was gone
+  for good — with no record left behind for the nightly reconciliation to find. It affected every
+  running meter: sandbox storage, terminal sessions, and published-app runtime. Metering now reports
+  whether the record was actually written, and a meter that hears "no" leaves its window open so the
+  next cycle bills the whole span again — safe precisely because nothing was written the first time.
+  The reverse case is handled just as deliberately: when the record IS written but the ledger entry
+  is deferred to the reconciliation job, the window closes normally, because reopening it would
+  charge you twice for the same span.
+
+- **A custom domain stuck on SSL now tells you which DNS record to add** — when a certificate is
+  waiting on an ownership record, domain settings name it outright: the `_fly-ownership` TXT record,
+  where it goes, and every value that satisfies it — Fly accepts an app-scoped or an org-scoped
+  value, and whichever ones it offers are the ones you are shown. Previously that domain simply sat at "provisioning"
+  indefinitely with nothing to act on, because through the certificate's status alone "the
+  certificate has not issued yet" and "you were never told to add a DNS record" look identical — and
+  only one of them ever resolves on its own. The domain also stays healthy while it waits instead of
+  being marked failed, so a site already being served keeps serving. "Check SSL" now does more than
+  re-read a cached answer: once the record is visible in DNS it asks the certificate authority to
+  look again, rather than leaving you to wait out its own polling schedule. And removing a domain
+  now detaches its certificate, which previously kept billing after the domain was gone. Deleting an
+  entire drive does not yet do this, so remove its domains individually first if you want their
+  certificates released.
+- **An older AI conversation keeps its controls** — opening an AI page on a past conversation could
+  drop the whole bar above the chat: no agent name, and no "+" to start a new conversation, so the
+  only way to begin one was to go to the History tab and find the button there. Which of the two the
+  page gave you was invisible — it depended on whether that conversation happened to be tied to a
+  workspace, which is decided when the conversation is created and never changes, so every
+  conversation from before workspaces existed lost the bar for good. Both now wear the same bar with
+  the same "+" in the same place; a conversation with no workspace behind it simply shows a hollow
+  dot instead of a lit one, rather than hiding its controls. Starting one twice in quick succession
+  no longer leaves you with two, and when starting one genuinely fails you are told, instead of the
+  button appearing to do nothing.
+
+- **Drive commands work in an agent's own chat** — opening an AI page and typing `/` listed only the
+  built-in commands and your personal ones; the drive's own commands were missing, and since a
+  command runs from the chip you pick out of that list, they simply could not be used there. That
+  composer never said which drive it was in, so the list was built as though there were none. It now
+  scopes to the agent's drive — the same drive the command actually runs against — in the agent page,
+  in agent panes, and in the assistant. The right-sidebar assistant had a subtler version of the same
+  fault: with an agent selected it offered the commands of whatever page you were looking at, so an
+  agent borrowed from another drive showed commands that failed the moment you sent them. It now
+  offers the agent's.
+
+- **An agent you configure with tools actually gets them, or says why not** — an agent set up
+  entirely through chat (`update_agent_config`) could be given the sandbox tools — `bash`,
+  `readFile`, `spawn_shell`, the git commands — have all of them confirmed back on every save, and
+  then run without a single one of them. The switch that offers an agent the sandbox at all was
+  only reachable from the settings screen, so a tool-configured agent was silently stuck with it
+  off, and every worker spawned under that agent quietly came up unable to do the work. Three
+  things changed: the sandbox switch can be set from chat like every other setting — and when
+  creating an agent, so a new agent is no longer born unable to use the tools it was given;
+  saving or creating a configuration now reports which tools the agent will ACTUALLY be able to
+  call, which ones are blocked and by what; and spawning a worker under an agent whose tool list
+  contradicts its own sandbox switch fails immediately, naming the tools and the one-line fix,
+  instead of starting a worker that cannot do the job. A spawn also warns when the workspace the
+  worker lands in will not run code for you at all — the reason the same agent could produce three
+  different tool sets on three tries and look random. The SDK and `pagespace agents config` can set
+  the switch and read the same answers.
+
+- **An agent's sandbox switch now means the same thing everywhere** — an agent whose sandbox
+  access was turned off still received the sandbox tools when someone @-mentioned it in a channel,
+  when consulted through the API, and on a voice call, while the same agent in a page chat
+  correctly had none of them. The ones
+  that run code were still refused when called, by a separate check — but the session tools
+  (spawning and messaging other agents) need no compute and simply worked, so the switch was not
+  the switch on those surfaces. One switch, every surface.
+
+- **Turning an agent's tools off no longer turns them all on** — asking an agent to set its own
+  enabled-tools list to nothing (an empty list, through `update_agent_config`) was stored as "no
+  restriction", so an agent someone was trying to lock down came back holding every tool there is.
+  The settings screen always read an empty list as "none"; now both doors agree. To leave the list
+  alone, don't send it at all.
+- **A long agent job no longer wedges itself partway through** — an agent working through a big
+  batch (reading thirty files and writing each one into a spreadsheet, say) would get several
+  chunks in and then fail every remaining step with the same cryptic complaint that its tool call
+  was missing a `tool_name` — which it had in fact sent. Retrying never helped, and only starting a
+  fresh agent got the work moving again. The tool call was not malformed: everything the agent read
+  and everything it wrote stayed in its working memory at full size for the rest of the job, so it
+  eventually had no room left to compose its next call, and the empty call it managed to send was
+  reported as a missing field. Large reads and writes from earlier in a run are now summarised once
+  the agent has moved past them — the most recent stay whole, and a summarised read says how to
+  fetch it again — so a long job no longer crowds itself out, on every surface that runs one: chat,
+  the agent API, agent-to-agent calls, and workflow steps. If a call does still arrive incomplete,
+  the agent is now told what actually happened and given the fix, instead of a complaint about a
+  field it did not omit.
+- **Editing a document by line number no longer lies about what it did** — a line edit reported a
+  line count taken before the document was stored, so replacing 89 lines with 91 answered "9 lines".
+  An agent that trusted that number addressed its next edit against a document shorter than the one
+  on disk: most of the new content landed, the tail of the old content survived, and the page was
+  left holding invalid JSON — reported as success. Both editing surfaces (the in-app AI tools and
+  the `/api/mcp/documents` endpoint the CLI and SDK use) now share one line-accounting rule, and the
+  count a write reports is measured on the content actually saved — it is the count the next read
+  returns. `replace-lines` also takes an optional `--expect-lines N`: pass the total you read, and
+  an edit addressed against a document that has since changed is refused rather than half-applied.
+- **A document laid out with line breaks is no longer reported as one line** — line numbering only
+  understood block elements, so an eighteen-line document written with `<br>` separators (what
+  pasting text into the editor produces) came back as `totalLines: 1` and could not be edited by
+  line at all. `<br>` and `<hr>` now count as the line breaks they are, and a blank line between two
+  paragraphs is no longer silently swallowed.
+- **Documents an agent creates default to markdown** — machine-written documents used to be created
+  in rich-text mode, where line numbers are computed from the underlying markup rather than the text
+  that was written. Documents created through the AI tools or an API key now default to markdown;
+  documents created in the app are unchanged, and an explicit choice always wins. A page whose mode
+  disagrees with its content (raw JSON or markdown stored in a rich-text page) now says so on every
+  read and every edit instead of leaving it to be discovered by corrupting the document — and that
+  content is left exactly as written, including any HTML tags inside it. Previously a page holding
+  JSON with a tag in one of its strings could have a line break inserted inside that string, leaving
+  the page holding invalid JSON.
+
+- **A working key is no longer reported as dead** — running `pagespace keys list` (or `revoke`,
+  `use`, or the wizard) with an `mcp_` key answered "Static token was invalidated and has no refresh
+  path", which reads as "your key was revoked" — while the very same key kept reading and writing
+  drive content perfectly. Managing keys was never something a key could do; only your personal
+  login can, and the refusal simply lost the server's own words on the way back. Those commands now
+  say what is actually true: the key is fine, key management needs `pagespace login`, and
+  `pagespace keys describe` is what a key can ask about itself. Nothing gets re-minted for nothing.
+
+- **Asking about a built-in role no longer dead-ends** — looking up `member` or `admin` among a
+  drive's roles answered "not found in this drive", which reads as though the role does not exist.
+  Those are built-in roles held per person on their drive membership, not entries in a drive's own
+  role list, so a lookup there can only ever miss. The answer now says so and points at where they
+  actually live — and at `pagespace keys describe` for what a specific credential resolves to.
+
+- **A sandbox is a development machine again** — a session's sandbox inherited the mode of the
+  server that opened it, so a sandbox opened from pagespace.ai reported itself as a production
+  environment. Under that, `npm install` quietly leaves out everything a project needs to be
+  *worked on* — its TypeScript compiler, its test runner, its dev scripts — so an install that
+  reported success left the toolchain missing and every later command failed with an error naming
+  nothing to do with the cause. A sandbox now describes itself as what it is, and a plain
+  `npm install` installs the whole toolchain. The terminal and the agent's own shell also report
+  the same environment as each other now; they used to disagree. This covers every machine an agent
+  works on, named environments included — an environment called “prod” is a name, not a deployment.
+  One consequence worth knowing: a build run on one of these machines now produces a development
+  build, so say `NODE_ENV=production npm run build` when you actually want a production bundle.
+- **A long job in a terminal no longer looks frozen** — a job piped through a filter
+  (`… | grep …`, and especially `… | tail -200`, which by design prints nothing until the job ends)
+  held its output back until it exited, so a healthy multi-minute build or scrape showed an agent
+  watching the terminal exactly nothing. The holding happens inside the programs themselves, not in
+  PageSpace, so the shell tools now explain it and say what to type instead of guessing that the job
+  died; Python programs, the commonest offender, flush as they go in every shell opened from here on,
+  without anyone having to ask. A shell that was already running when this shipped keeps the
+  environment it started with — close it and open a new one to pick up the change.
+- **Closing a shell closes its pane** — killing a shell in an agent session terminated the process
+  and removed the shell, and left its pane sitting on screen bound to a terminal that no longer
+  existed. The pane now goes with the shell, in the same write, so every browser watching the
+  session loses the tab at once instead of accumulating dead rectangles until somebody closes them
+  by hand.
+- **Panes fill the screen as a grid instead of marching sideways** — every pane an agent opened
+  split the screen beside the last one, so a session that started three shells ended up with three
+  ever-thinner columns. A pane that opens for you now takes the roomiest space on screen and divides
+  it along its longer edge: beside when there is width to spare, below when there is not. Four
+  shells and the conversation that opened them share the screen as a grid, with the smallest pane an
+  eighth of it instead of a sixteenth, and repeated opening no longer makes the layout deeper and
+  harder to drag. Panes you have resized are left alone — an opening pane never redistributes a
+  layout you set by hand — and the split buttons still divide only the pane you pointed at. Agents
+  are told how many panes their session is showing when they open or close a shell, so they can tidy
+  up after themselves.
+- **No more "Shell not found" when closing a shell pane** — closing the tab of a shell that was
+  already gone, or one whose session had expired, raised an error toast for a close that had in fact
+  succeeded. Closing something already closed is success and says nothing; a close that genuinely
+  failed still tells you, because the process may still be running.
+- **Dedicated deployments can run code again** — on a dedicated (tenant) deployment, code execution,
+  agent sandboxes and environments were all refused, because the gate asked which subscription plan
+  the account was on and a dedicated deployment has no plan to be on: the deployment itself is what
+  was bought. It now asks the question that fits — a dedicated deployment is entitled — while
+  keeping the same safety ceilings everyone else has, on how many things run at once and how many
+  environments a drive can hold, each adjustable by whoever runs the deployment. Nothing changes for
+  accounts on pagespace.ai; self-hosted installs still don't get cloud machines, and will get a
+  local option instead.
+- **Mentions in a document survive being read back in** — a page mention was written as a link the
+  editor could not recognise on the way back, so anything that re-read a document's HTML turned its
+  mentions into ordinary links and the page quietly dropped out of the mention list on the pages it
+  referenced. Mentions of every kind now come back intact, and a mention of a person is finally its
+  own thing rather than being filed as a mention of a page with the person's id on it.
+- **Editing a page larger than 1MB no longer fails to save** — every edit records the page's
+  previous contents for version history, storing large ones outside the main record and keeping a
+  note of how big they were. That size was being held to the same 1MB limit as content stored
+  inline, so once a page grew past a megabyte its next edit was rejected and rolled back, and the
+  change never landed. Spreadsheets hit it first, since they reach that size on ordinary use;
+  writes to affected pages retried and failed in a loop. Large pages now save normally, and their
+  history is recorded in full.
+
+- **Turning an uploaded file into a document no longer risks losing what you wrote in it** — file
+  text extraction runs in the background, and a file converted to a document while that extraction
+  was still queued could have the document you had started writing replaced by the raw extracted
+  text when the job finally finished. Extraction now checks what the page is at the moment it
+  writes, so a converted page keeps everything you wrote and simply stops showing as processing.
+- **Signing up can no longer leave you with two copies of the starter content** — the Getting
+  Started pages were seeded by four near-identical routines, and two signup paths arriving at once
+  for the same account could each lay down a full set. There is now one seeder, it runs once per
+  drive, and running it again does nothing.
+- **Clicking a task checkbox is instant** — the tick did not appear until the server had answered
+  and the whole list had been re-fetched twice, which on a long list was a visible pause on every
+  click. Worse, if you had anything else open and being edited anywhere in the app, the refresh was
+  suppressed and the checkbox never moved at all, even though the task really had been completed.
+  Status, priority, title and due date changes are all immediate now, and undo themselves if the
+  server refuses. Assignee changes still wait for the server, because the row shows the assignee's
+  name and picture and the request only sends an id.
+- **Failures say what went wrong** — a refused change used to read "Failed to update status" no
+  matter the cause. If a task cannot be completed because sub-tasks are still open, it now says how
+  many; if a status is not one the list allows, it says which ones are.
+- **A task's sub-lists use the same statuses as the list they came from** — if you had renamed or
+  added statuses on a task list, everything nested under it quietly fell back to the four built-in
+  ones. Now anything created under a list inherits that list's statuses.
+- **The expanded document is no longer cut off** — a task's notes were clamped to about three lines
+  behind a fade. They render in full.
+- **Editing a document at the same time as someone else no longer throws away what you typed** —
+  when a colleague or an AI agent saved the same document while you had unsaved text, PageSpace
+  used to quietly replace everything in your editor with their version and tell you your copy "has
+  been updated". Whatever you had written was gone, with no way to get it back. Your text now stays
+  exactly where it is. A banner appears saying someone else saved the document, autosaving pauses
+  so nothing is sent behind your back, and you choose: **Keep mine**, which saves your text over
+  theirs, or **Use theirs**, which loads their version and drops your unsaved changes. You can
+  expand the banner to read their version first, so the choice is not blind. Use theirs simply
+  loads their version and saves nothing; and if someone saves again while you are still deciding,
+  Keep mine re-prompts you with that newer version instead of failing.
+
+- **Browsing a session's files now requires permission to run code, as starting a shell always
+  did** — the file browser, the diff view and the "show this file at that commit" reader were
+  reachable by anyone who could see the session, even though the Shell button beside them was
+  already greyed out for those same people. They read AND wrote through the session's machine, so
+  the browser was a way around a control the interface was already showing as locked. They now
+  answer exactly as they do for a session with no machine yet, which is also what they answer for a
+  session you cannot see — no response distinguishes "not allowed" from "not there".
+
+  If your role in a drive does not let you run code, you will notice the file, diff and history
+  panes of a session go quiet where they previously loaded. That is the intended state and matches
+  what the Shell and reattach buttons have always shown you; ask a drive admin for a role that
+  permits running code if you need those panes back.
+- **A line break in a spreadsheet cell no longer wipes the whole sheet** — a value containing a
+  newline (or a tab, or certain invisible control characters) was written in a form the sheet could
+  not read back, so the next time the page loaded it came back completely empty: every cell, not
+  just the one that caused it. Nothing warned you, and the blank sheet was then saved over the real
+  one. This was reachable without typing anything — a public form response containing a line break
+  destroyed the sheet it fed. Such values are now stored correctly and survive a round trip, and a
+  sheet that genuinely cannot be read is shown with editing disabled and an explanation rather than
+  being silently replaced with an empty grid.
+- **Undo works in spreadsheets** — the undo history was being cleared after every single edit, so
+  Ctrl+Z had nothing to go back to for anything but the change you were part-way through making.
+- **People with view-only access can select cells in a spreadsheet again** — selecting a range to
+  read it, copy it, or see its total was blocked along with editing, even though selecting changes
+  nothing.
+
+- **Stop and Retry now react the moment you press them** — both were doing their work at roughly
+  the speed they always had, and both spent that time showing you nothing at all, which reads as a
+  hang.
+
+  Pressing Stop changed no pixel until the server confirmed the abort and the result came back over
+  the realtime connection — a wait that is deliberately allowed to run to several seconds when the
+  generation is running on another machine. The button now says **Stopping…** from the moment you
+  press it. It does not say *stopped*: the reply keeps streaming underneath until the generation
+  actually ends, because a Stop that has been requested and a Stop that has taken effect are
+  different things, and claiming the second one while an agent is still running tools and still
+  costing you money is worse than saying nothing. Pressing Stop a moment after the reply had already
+  finished used to produce no response whatsoever; now it acknowledges the press and settles.
+
+  Retry had no feedback at all. It quietly deleted the old answer, waited on the server, and only
+  then started regenerating — so the one visible change in the whole window was the previous reply
+  vanishing, which looks like a failure rather than like work in progress. Retry now behaves exactly
+  like sending a message: the composer locks and offers Stop from the click onward. Retry is also
+  disabled while it is running, so a double-click can no longer start (and bill for) two
+  regenerations — and that holds across surfaces, so the dashboard and the sidebar can no longer
+  each start one for the same conversation.
+
+  Because Retry now offers you a Stop, that Stop does what it says. Pressing it while the retry is
+  still clearing the old answer cancels the retry: no new reply is generated and you are not billed
+  for one. And if clearing the old answer fails, the retry does not start at all and tells you so,
+  rather than going ahead and handing the model its own previous answer to rewrite.
+
+- **The Channels count in the sidebar now counts unread messages, not just the ones that mention
+  you** — it only ever moved when somebody @-mentioned you, so a channel could fill up with messages
+  you had not read and the number beside **Channels** stayed at zero, disagreeing with the per-channel
+  counts on the Channels page. It now counts every message you have not read across the channels you
+  can see, in every drive you belong to, and it moves the moment a message arrives rather than
+  waiting for a page reload. A channel you do not have access to never contributes to it.
+
+- **A channel you are sitting in stops counting messages you just watched arrive** — the channel was
+  only ever marked read at the moment you opened it, so messages that landed while you sat reading
+  them still counted as unread and inflated the sidebar count until you navigated away and came
+  back. They now clear as they arrive, and a channel left open in a background tab still counts
+  them, so nothing marks itself read behind your back.
+
+- **Deleted messages no longer count as unread** — a message someone posted and then deleted still
+  counted towards the unread count on the Channels page, leaving a number next to a channel that had
+  nothing new to show you. It only cleared by opening the channel.
+
+- **Talking to one of your agents from outside PageSpace works again** — the OpenAI-compatible
+  endpoint (`/v1/chat/completions`, what the PageSpace CLI and any OpenAI-style client use) answered
+  every valid request to a page agent with a generic "Failed to process chat request. Please try
+  again," and trying again never helped. A call without a `conversation_id` is documented as
+  stateless — you send the messages, the agent replies, nothing is kept — but the endpoint was
+  trying to file both halves of it away regardless, under a thread that had never been opened. That
+  save failed every time, before the agent said a word. Those calls now keep nothing, as promised,
+  and answer normally. Passing a `conversation_id` is still what makes a thread durable, and that
+  path was never affected — nor was asking the same agent through the app.
+- **Confirming a CLI login by email now actually finishes the login** — running `pagespace login`
+  without a passkey sends a confirmation email, and clicking its link used to land on a page saying
+  "Confirmed | You can return to the tab where you started this action" while the tab you started in
+  sat there doing nothing until the CLI gave up five minutes later. The confirmation link now sends
+  you back to the consent screen you came from, which completes the login on its own. (The address
+  the CLI listens on was being carried inside the consent page's own URL, and an over-cautious
+  safety check mistook it for a redirect to somewhere else and quietly threw the return address
+  away.) The same check also stripped the destination when you opened a CLI login link while signed
+  out, so signing in dumped you on a blank sign-in screen instead of the consent page — that is
+  fixed too.
+- **You can send a message, open another chat, send a second one, and trust the first finishes** —
+  every chat surface shared one connection to the AI, so a second message could not be sent while
+  the first was still answering. What you got instead was one of two things: the first reply was
+  quietly cut off so the second could go, or the send was refused outright with "The previous
+  response is still wrapping up — please try again in a moment." Both conversations now answer at
+  the same time, each with its own Stop button, and switching between them shows whatever has
+  arrived so far with no gap and no waiting.
+- **Leaving a chat no longer abandons the reply** — closing the pane, navigating away, or switching
+  between the assistant and an agent used to stop the reply arriving, even though the work carried
+  on running (and billing) on the server. You came back to whatever had landed before you looked
+  away, frozen. Replies now keep arriving wherever you are in the app, and are complete when you
+  return — including the reasoning and command details, not just the text. Only pressing Stop stops
+  anything.
+- **Answering one of several questions no longer locks the chat** — when an assistant asked you
+  more than one thing at once, answering the first left the conversation stuck: the composer
+  showed only Stop, the box was greyed out, and the remaining question could not be answered
+  either. The only way out was to open a different conversation. The same thing happened if two
+  places showing the same chat — the sidebar and the main view, say — both tried to submit your
+  answer at once. Answering now behaves the same whether the assistant asked one question or five.
+- **Your own reply is yours in every tab and on every device** — a chat you started on your laptop
+  showed up on your phone, or in a second tab, as though a stranger had sent it: no Stop button, and
+  attributed to nobody. It is now recognised as yours wherever you are signed in, and Stop works
+  from any of them. A colleague's reply on a shared page is still correctly not yours to stop.
+- **A long reply interrupted by a restart comes back whole, beginning included** — when the server
+  that was writing a reply went away mid-sentence (a deploy, a crash, a machine moving), what you
+  got back afterwards was rebuilt from a periodic snapshot rather than from the reply itself. For
+  short answers that was close enough. For a long one it was not: the snapshot was assembled from a
+  buffer that discards its oldest content once a reply runs past a certain length, and because the
+  discarded part included the marker that opens a paragraph, everything after it was dropped too.
+  The reply did not come back shortened — the text disappeared entirely, leaving a stub that looked
+  like the assistant had barely started.
+
+  The reply is now written down as it is produced, so recovering one is a matter of reading it back
+  rather than reconstructing it: the beginning survives however long the answer ran, and what
+  returns is at most a fraction of a second behind what was on your screen instead of a second or
+  more. Tool calls and reasoning steps come back in the same shape they were rendered in. Nothing
+  changes for a reply that finishes normally — the record is deleted the moment the finished message
+  is safely saved, and a reply that never had a chance to save is the one case it is kept for.
+- **A reply that is still being written is no longer mistaken for an abandoned one** — if the
+  database stalled for a couple of minutes while the assistant was mid-answer, the cleanup that
+  tidies away replies orphaned by a crash could not tell the two apart, and tidied away a live one.
+  You watched the reply freeze, get replaced by a shortened version of itself, and the composer
+  flip back to Send — while the assistant carried on working, and billing, out of sight. It could
+  not be stopped, because as far as the app was concerned it had already finished.
+
+  Whether a reply is genuinely abandoned is now decided by the database at the moment of tidying
+  up, rather than by a judgement made moments earlier somewhere else — so a reply that is still
+  being written wins, and a cleanup that arrives late does nothing instead of doing damage. If the
+  stall clears and the assistant starts writing again mid-cleanup, the reply stays put, stays
+  joinable and stays stoppable.
+
+- **A keyboard shortcut you set yourself now actually fires** — recording a shortcut wrote down the
+  character the key produced rather than the key you pressed, so on a Mac an Option combination was
+  stored as the symbol Option makes (⌥P became "π"). Nothing could ever match it, and because your
+  choice replaces the built-in one, the old shortcut stopped working too. Recording and matching now
+  agree on what a key is called. Shortcuts already saved in a form that can never fire are detected
+  on load, put back to their default and named in Settings → Keyboard Shortcuts so you can set them
+  again — that covers an Option combination stored as the character Option makes, one saved with no
+  modifier at all, and one bound to a key that is only a modifier (Caps Lock, AltGr). The notice
+  stays until you set the shortcut again or dismiss it, so it is still there the next time you open
+  the page. Everything else you have saved — punctuation, Pause, Print Screen, media keys — keeps
+  working exactly as it did, untouched.
+- **Find in Page obeys the shortcut you gave it** — it was listed in Settings → Keyboard Shortcuts
+  but wired to a fixed Cmd/Ctrl+F, so rebinding it changed nothing.
+- **The shortcut you see is the shortcut you pressed** — bindings are shown with the usual ⌘⌥⇧⌃
+  symbols on a Mac, and the built-in defaults now use Ctrl on Windows and Linux instead of a Command
+  key those keyboards do not have.
+- **A shortcut that could never work is refused when you set it** — a bare letter with no modifier
+  would have fired while you were reading, and combinations your browser keeps for itself (like
+  Cmd+N) now save with a warning that they may never reach PageSpace. A key the app cannot record
+  at all — an accent key that waits for a second keystroke, say — now says so instead of looking
+  like it ignored you.
+- **Cmd+Delete and friends can be recorded** — pressing Backspace, Delete or Escape while setting a
+  shortcut always meant "clear this" or "never mind", even when you were holding a modifier, so a
+  combination like ⌘⌫ could not be set at all and trying to set it switched the shortcut off
+  instead. Those still do what they always did on their own; held with a modifier, they are now
+  recorded like any other key.
+- **A time you write as "7pm" is 7pm to you, wherever it is written** — a plain wall-clock time
+  ("2026-02-19T19:00:00", with no `Z` and no offset) was being read inconsistently across the app.
+  Creating a calendar event through an app or script without naming a timezone read it as UTC, so
+  "dinner at 7pm" was stored as 1pm for a US Central user, with no error and nothing to notice
+  until the reminder came at the wrong hour. Task due dates had the same gap in a different place:
+  the reminder timezone was resolved correctly but the due date itself was read in the server's
+  timezone, so a task and its own reminder could disagree — and because that server timezone
+  happens to match some of ours, it looked right in testing and drifted only in production. Cron
+  workflows created without a named timezone had it worst: "every day at 9am" meant 9am UTC, which
+  is 3am in Chicago.
+
+  All of these now follow one rule: a plain wall-clock time means whatever timezone the request
+  names, else the timezone on your profile, else UTC. Times that already carry a `Z` or an offset
+  are unaffected, as are dates with no time at all. Events and workflows remember the timezone they
+  were created in, so editing them later keeps the hour you meant, and asking an assistant to make
+  something now lands at the same instant as typing it in yourself.
+
+  Date *ranges* — the from/to on calendar views, activity history and exports — are unchanged in
+  what they return, but they no longer depend on where the server is running, so a boundary that
+  behaves one way in production behaves the same way on a developer's machine. Scheduled drive
+  backups deliberately keep their own timezone, which belongs to the drive rather than to whoever
+  last edited the setting.
+- **Your assistant's Conversation History is back to being just your assistant's, in the right
+  order** — the sidebar's history had filled up with chats belonging to page agents, hundreds of
+  them on a busy account, pushing the assistant's own threads down out of reach. The dates made no
+  sense either: the top of the list ran 28 days, 12 days, 11 days, a month, in no order at all.
+  Those page-agent chats carry no "last used" time, and the list was sorting by exactly that, so
+  they all landed at the top in whatever order the database happened to hand them over. Worst of
+  all, scrolling for more could step straight over conversations and never show them at all — the
+  reason history looked lost rather than merely untidy. The list now shows the assistant's own
+  conversations only (page agents keep their history on their own tab, where it always was), sorts
+  by when each one was genuinely last used, and reaches every conversation as you scroll. Nothing
+  was deleted at any point; every conversation that seemed missing was still there.
+- **A second agent in a session stays put instead of flashing up and vanishing** — opening a chat
+  pane for a global assistant or a page agent worked once per session; every one after it appeared
+  for a moment and then disappeared, with nothing said about why. The session had started placing a
+  new conversation into your pane itself, and the browser was still expecting to do that job — so it
+  read the pane arriving correctly as evidence that something else had claimed it, and quietly
+  deleted the conversation it had just made. Opening a terminal could lose its shell the same way.
+  Pages were never affected. Second, third and fourth panes now open and stay open.
+- **Whatever you open lands in the pane you opened it from** — with more than one empty pane on
+  screen, the session had no way of knowing which one you meant, so it filled whichever came first
+  and left yours blank. It applied to everything you can put in a pane: picking an agent, opening a
+  terminal, and reopening a past conversation from a pane's History. The pane you clicked is now
+  part of the request in all three cases.
+- **A conversation you started in a colleague's session is fully usable** — anyone in a drive can
+  work in that drive's sessions, so a conversation of yours can live in a session someone else
+  started. Opening one of those from your conversation list gave you a pane you could read and type
+  in, but with the agent switcher and New Conversation greyed out and the pane's close button doing
+  nothing, and no explanation for any of it. Those sessions never appear in your sidebar, so that
+  list was the only way back to the conversation and it led somewhere half-broken. The pane now
+  reads what the session contains the same way it reads everything else about it, so its controls
+  work exactly as they do in a session of your own. Nothing changes about whose sandbox the
+  conversation uses, or about which sessions appear in your sidebar.
+
+### Changed
+
+- **The agent now defaults to checking what it can do before saying a request is out of scope** —
+  it always documented the code sandbox, delegating to other agents, and scheduling recurring or
+  future work, but only as mechanical "how to call this tool" text easy to skim past. A new
+  unconditional disposition section nudges it to check its actual capabilities this conversation —
+  "write code," "process data," "get a second opinion" — before defaulting to the narrowest reading
+  of a request. The sandbox is now described as a general-purpose environment for open-ended work
+  (scripts, scrapers, data processing, calling external APIs) rather than only a place to edit an
+  existing repo, agents are told they can configure a new specialist rather than only discover
+  existing ones, and triggers now cover one-off future work, not only recurring schedules. Every
+  capability claim follows the tools the agent actually holds this turn (a per-agent allowlist, a
+  read-only conversation) so nothing is ever suggested that the agent can't back up.
+
+- **A tool call that gets a parameter name wrong now gets the answer back, not a lookup** — an
+  agent that guessed `pageId` where a tool wanted `id`, or `repoUrl` where it wanted `repo_url`,
+  used to be told only that the call was invalid and that it should go look the schema up. That
+  cost a wasted call and a second round trip on every first-use mistake. The rejection now carries
+  the tool's own parameter schema, so the next call is the right one. Naming a tool that does not
+  exist now suggests the closest names that do — but only when the match is a real one, like
+  `read_file` for `readFile`; where nothing genuinely matches it still says so rather than offering
+  a guess. Errors say the same thing whether the agent is typing or talking, and an unusually large
+  schema is summarised to its parameter list rather than dumped whole.
+
+- **Expanding a task now lists its sub-tasks instead of just counting them** — the drop-down under
+  a task used to say "3 sub-tasks" as plain text and leave you to go find them: open the task, look
+  at its children, come back out, and do it again for every level of a nested tree. The sub-tasks
+  are now listed there, each one a link straight to it, with completed ones ticked and struck
+  through, and a "Load more" for a task with a long list. Tasks with nothing beneath them are
+  untouched — nothing is fetched for them at all.
+- **Voice mode is now audio-native, and the old hands-free mic in the chat box is gone** — talking
+  to an assistant used to mean recording a clip, having it transcribed into text, and having the
+  reply read back to you. Everything about how you said it — pace, hesitation, the moment you cut
+  in — was thrown away before the assistant ever saw your words, and you had to wait for a whole
+  reply to be written before hearing any of it. The assistant now hears you directly and answers in
+  the same breath, so you can interrupt it and it stops. The way in is the microphone in the top
+  bar, on every page; the hands-free button that used to sit in the chat box next to the model
+  picker has been removed, along with its separate panel of voice settings for reading speed,
+  spoken voice and tap-to-speak.
+- **What the AI has learned about you is now a set of pages you can read and edit** — your
+  personalization lived in three text boxes in Settings that a nightly process also wrote to, with
+  no indication of what it had added or why. It is now three pages in a Memory folder in your Home
+  drive: About You, Communication and Rules. You can open them and edit them like any other page,
+  and if you edit one while the nightly process is running, your edit wins. Clearing a page stops
+  that content being sent to the AI. Settings keeps the on/off switch and links you to the pages.
+  The pages themselves cannot be deleted — they are part of your Home drive's structure, like the
+  drive itself. Nothing is lost by that: the switch already stops the AI using any of it, and
+  emptying a page erases what it says, so deleting one would only leave the AI's memory with
+  nowhere to live. They also stay in the Memory folder rather than being moved elsewhere, since a
+  page moved out of it can be swept up by another page's deletion. What they say stays yours to
+  edit either way.
+- **The AI stops recording things about you that do not change how it answers** — the nightly
+  process collected whatever it could infer, so profiles filled up with beliefs, hobbies, sports
+  teams, family details and the names of colleagues, none of which affects a reply. It now records
+  something only if knowing it would genuinely change how the AI responds, and never records
+  personal history, beliefs, hobbies, other people's names, or numbers you have claimed about
+  yourself.
+- **Something you mention once no longer becomes a permanent fact about you** — a single remark
+  could end up in your profile and stay there. A new observation now has to show up on at least two
+  separate days, from things you actually wrote on those days, before it is added to your profile —
+  and three days for anything describing who you are. Until then it is held aside as a pending
+  observation, which your data export includes. Observations that stop recurring are dropped after
+  a month.
+- **Your profile can now correct itself instead of only growing** — it could only ever have text
+  added, so a wrong guess stayed forever and the profile grew until it was trimmed at around 14,000
+  characters. It is now rewritten in place, superseded lines are removed, and each page is kept to
+  a size that reflects what is actually useful. A rewrite that would delete most of a page is
+  refused rather than applied.
+- **Your data export now includes what the AI inferred about you** — a subject access request
+  covered your profile but not the observations behind it. The export now contains every inference
+  drawn about you, including ones that were rejected or are still pending, along with the quote
+  from your own messages each was based on. Those quotes are removed 90 days after an observation
+  is settled.
+
+## [1.7.1] — 2026-08-10
+
+### Fixed
+
+- **A reply no longer disappears when you look away** — a stream was carried on two separate
+  channels: the one your browser tab was reading, and the one everything else used. They did not
+  carry the same thing, so the moment you stopped being the tab holding the connection — you
+  switched to another chat, flipped between the assistant and an agent, reloaded, or opened the
+  conversation on another device — the reply you came back to was missing its reasoning, its
+  sources, any files it had produced, and the chips showing which commands it had run. Worse, the
+  act of switching told everyone watching that the reply had FINISHED while it was still being
+  written: the Stop button stopped working, the recovery snapshot was thrown away, and the agent
+  carried on running tools and spending credits with nothing showing it. There is now one channel.
+  Whatever your tab sees is exactly what a reload, a second device, or a colleague watching a
+  shared conversation sees, and stepping away does not end anything.
+
+- **Opening a past conversation keeps you in Agents** — every row in the Agents conversation list
+  sent you out to the dashboard when you clicked it, including conversations that were already open
+  in a session. The session was right there and you were simply not taken to it. A conversation you
+  pick from that list now opens as a pane in Agents, whichever kind it is: one already in a session
+  opens in place, and a global-assistant or page-agent conversation that has never had a session
+  gets one and opens there. The dashboard is still where you land when a conversation genuinely
+  cannot be opened in Agents — you have run out of sandboxes, or it is an API-created conversation
+  with no in-app view.
+- **Agents takes you to your conversations again** — clicking Agents in the sidebar reopened
+  whichever session you last had open, and once you were inside a session there was no way back to
+  the list except ending the session. Your history was unreachable without destroying the work you
+  were in the middle of. Agents now means "my conversations" and always lands on the list, and a
+  session has an "All conversations" control that leaves it running: the panes, terminals and any
+  reply still streaming are all untouched, and the session is one click away in the sidebar.
+  Bookmarks, shared links, refresh and Back still restore a full selection exactly as before.
+- **A pane appears in the sidebar the moment it exists** — the sidebar and the pane layout used to
+  be two separate records of what a session contained, kept in step by convention, so a pane you or
+  an agent opened could take up to two minutes to show up in the list. They are now two views of
+  one thing, so there is nothing to fall out of step.
+- **A thread can no longer go missing from its own session** — a session's membership and its
+  layout were stored separately, and a thread that had no pane was simply absent from the list.
+  Sessions existed with more threads than the sidebar would show. Membership is now the same record
+  as placement, so a thread that is in a session is always visible in it, open or not.
+- **Opening a conversation that is already open in another session says so, instead of leaving a
+  dead pane behind** — a conversation lives in exactly one pane, and trying to show one that
+  another session already holds used to fail as a server error. The pane you had just opened stayed
+  on screen, showing nothing, until something else happened to refresh the layout. The attempt is
+  now refused properly and the layout corrects itself straight away.
+- **Closing a chat pane no longer shows "Could not close this conversation"** — closing sent two
+  requests that removed the same thing, and the second one arrived to find the first had already
+  done it. The pane closed correctly either way, so the error was pure noise; there is one request
+  now.
+- **Closing the last pane asks whether to end the session again** — it had started leaving you in an
+  empty grid with nothing to do, which was not what anyone wanted. You get the same confirm the
+  sidebar's "End session" uses, and Cancel leaves everything exactly as it was. Closing the last
+  conversation row in the sidebar now asks the same question, instead of quietly emptying the
+  session.
+- **A conversation removed from a session leaves the sidebar however it was removed** — closing a
+  pane, closing a sidebar row, an agent closing one on your behalf, or ending the session. Only one
+  of those used to tell the sidebar, so a thread you had just closed could sit in the list for up to
+  two minutes.
+- **A thread whose history was deleted can no longer get stuck in a session** — if the cleanup that
+  removes it from your session failed, every later attempt to close it reported success and did
+  nothing, leaving a pane that could not be closed. The close is attempted properly now.
+- **The MCP config you copy out of Settings > MCP now actually starts** — the "No install (npx)"
+  tab handed you a command `npx` cannot run, so the server failed to launch and your AI tool
+  showed no PageSpace tools at all. Copy it again and it works.
+- **The MCP config the CLI prints after minting a key no longer assumes a global install** — it
+  offered only the form that needs `pagespace` on your PATH, which isn't there if you minted the
+  key through `npx`, and which desktop AI apps often can't find even when it is. It now prints the
+  zero-install form that works either way, and mentions the shorter global-install form as an
+  option.
 - **Panes and sidebars no longer sit blank while the messages are right there in the database** —
   every surface used to keep its own private copy of a conversation and its own theory of when to
   refresh, so a message written from one surface could stay invisible in another until you
@@ -92,8 +1193,24 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   one interval, and a payer who runs out of credits mid-session is disconnected instead of running
   free.
 
+### Changed
+
+- **Closing the last pane no longer ends your session** — it leaves the session open with an empty
+  layout. Ending a session is now only the explicit action on the session row, so there is one way
+  to end one instead of two.
+- **Closing a thread takes it out of the session** — it stops being one of that session's threads
+  and leaves the list. Its history is untouched: you find it again in the agent's own conversation
+  list, and reopening it puts it back. An interim build briefly kept a closed thread in the list,
+  dimmed and off-screen; that is gone, because a thread sitting in a session with nowhere to be was
+  indistinguishable from one that had gone missing through a fault — the exact failure the rest of
+  this work exists to make impossible. Closing is one action with one meaning now, whether you close
+  a pane, close a thread, or end the whole session.
+
 ### Added
 
+- **Agents can close a pane** — they could already open, move, resize and reorder them, but taking
+  one away was only possible as a side effect of moving it "nowhere". That is now its own action,
+  which means an agent tidying up its own layout does exactly what it says.
 - **Your agent workspaces now follow you between devices, and agents can arrange their own** —
   the pane grid in the Agents console used to live partly in your browser's local storage, so the
   same workspace looked different on your laptop and your phone, and a collaborator watching a

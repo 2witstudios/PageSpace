@@ -3,6 +3,7 @@ import type { SheetData } from '@pagespace/lib/sheets/sheet';
 import {
   applyCellWrite,
   applyCellDelete,
+  applyCellsDelete,
   initialEditValueForKey,
   isPrintableKey,
   addRow,
@@ -165,5 +166,45 @@ describe('addColumn', () => {
       actual: { columnCount: result.columnCount, version: result.version, prevCols: previous.columnCount },
       expected: { columnCount: 4, version: 2, prevCols: 3 },
     });
+  });
+});
+
+describe('applyCellsDelete', () => {
+  const sheetWith = (cells: Record<string, string>): SheetData => ({
+    version: 1,
+    rowCount: 10,
+    columnCount: 10,
+    cells: { ...cells },
+  });
+
+  it('clears every address in one pass', () => {
+    const next = applyCellsDelete(sheetWith({ A1: '1', B1: '2', C1: '3' }), ['A1', 'B1']);
+    expect(next.cells).toEqual({ C1: '3' });
+  });
+
+  it('leaves formatting alone, so a blank styled cell survives', () => {
+    const sheet = { ...sheetWith({ A1: '1' }), formats: { A1: { background: '#dbeafe' } } };
+    const next = applyCellsDelete(sheet, ['A1']);
+    expect(next.cells.A1).toBeUndefined();
+    expect(next.formats?.A1).toEqual({ background: '#dbeafe' });
+  });
+
+  it('returns the same sheet when nothing was cleared, so undo gets no empty entry', () => {
+    const sheet = sheetWith({ A1: '1' });
+    expect(applyCellsDelete(sheet, ['B2', 'C3'])).toBe(sheet);
+    expect(applyCellsDelete(sheet, [])).toBe(sheet);
+  });
+
+  it('copies the cells map once regardless of how many addresses are cleared', () => {
+    // The per-cell form cloned the whole record each time, so clearing a
+    // populated column of a large sheet was quadratic.
+    const cells: Record<string, string> = {};
+    for (let row = 1; row <= 500; row++) cells[`A${row}`] = String(row);
+
+    const sheet = sheetWith(cells);
+    const next = applyCellsDelete(sheet, Object.keys(cells));
+
+    expect(Object.keys(next.cells)).toHaveLength(0);
+    expect(next.version).toBe(sheet.version + 1);
   });
 });

@@ -10,12 +10,13 @@ import {
   isWriteTool,
   isAccountLevelOnlyTool,
   hasSandboxGitTools,
+  hasSandboxComputeTools,
   suppressGithubIntegrationTools,
   filterToolsForAgentAllowlist,
   filterToolsForSandboxEnablement,
   filterToolsForSandboxTier,
-  filterToolsForDispatchCredentials,
-  DISPATCH_DEPENDENT_SESSION_TOOL_NAMES,
+  filterToolsForEphemeralWorkspace,
+  WORKER_DISPATCH_TOOL_NAMES,
   SANDBOX_COMPUTE_TOOL_NAMES,
   SANDBOX_TOOL_NAMES,
   SESSION_FAMILY_TOOL_NAMES,
@@ -538,7 +539,7 @@ describe('filterToolsForSandboxEnablement', () => {
   });
 });
 
-describe('filterToolsForDispatchCredentials', () => {
+describe('filterToolsForEphemeralWorkspace', () => {
   const sample = {
     list_sessions: {},
     spawn_session: {},
@@ -549,17 +550,17 @@ describe('filterToolsForDispatchCredentials', () => {
     read_page: {},
   };
 
-  it('the set holds exactly the pair that dispatches through the chat pipeline with the caller cookie', () => {
-    expect([...DISPATCH_DEPENDENT_SESSION_TOOL_NAMES].sort()).toEqual(['send_session', 'spawn_session']);
+  it('the set holds exactly the pair that leaves a worker running after it returns', () => {
+    expect([...WORKER_DISPATCH_TOOL_NAMES].sort()).toEqual(['send_session', 'spawn_session']);
     // Drift guard: every member must be part of the session family — a
     // rename there must be mirrored here or the strip silently misses it.
-    for (const name of DISPATCH_DEPENDENT_SESSION_TOOL_NAMES) {
+    for (const name of WORKER_DISPATCH_TOOL_NAMES) {
       expect(SESSION_FAMILY_TOOL_NAMES).toContain(name);
     }
   });
 
-  it('without user dispatch credentials, strips exactly the dispatch pair — reads/kill and everything else stay', () => {
-    const filtered = filterToolsForDispatchCredentials(sample, false);
+  it('when the workspace does not outlive the run, strips exactly the worker-dispatch pair — reads/kill and everything else stay', () => {
+    const filtered = filterToolsForEphemeralWorkspace(sample, false);
     expect(Object.keys(filtered).sort()).toEqual([
       'bash',
       'kill_session',
@@ -569,8 +570,8 @@ describe('filterToolsForDispatchCredentials', () => {
     ]);
   });
 
-  it('with user dispatch credentials, passes everything through untouched', () => {
-    expect(filterToolsForDispatchCredentials(sample, true)).toBe(sample);
+  it('when the workspace outlives the run, passes everything through untouched', () => {
+    expect(filterToolsForEphemeralWorkspace(sample, true)).toBe(sample);
   });
 });
 
@@ -613,6 +614,22 @@ describe('SANDBOX_COMPUTE_TOOL_NAMES', () => {
     const chatOnly = ['list_sessions', 'spawn_session', 'send_session', 'read_session', 'kill_session'];
     const expected = [...SANDBOX_TOOL_NAMES].filter((name) => !chatOnly.includes(name)).sort();
     expect([...SANDBOX_COMPUTE_TOOL_NAMES].sort()).toEqual(expected);
+  });
+});
+
+describe('hasSandboxComputeTools', () => {
+  it('returns true when the list contains a core/git/shell compute tool', () => {
+    expect(hasSandboxComputeTools(['read_page', 'writeFile'])).toBe(true);
+    expect(hasSandboxComputeTools(['git_clone'])).toBe(true);
+    expect(hasSandboxComputeTools(['spawn_shell'])).toBe(true);
+  });
+
+  it('returns false for the chat-only session family alone', () => {
+    expect(hasSandboxComputeTools(['spawn_session', 'list_agents'])).toBe(false);
+  });
+
+  it('returns false for an empty list', () => {
+    expect(hasSandboxComputeTools([])).toBe(false);
   });
 });
 

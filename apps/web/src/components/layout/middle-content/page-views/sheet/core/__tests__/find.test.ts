@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import type { SheetData } from '@pagespace/lib/sheets/sheet';
 import { buildFindMatches } from '../find';
 
+/** Adapt a dense fixture grid to the `DisplayLookup` the cores now take. */
+const lookup = (grid: string[][]) => (row: number, column: number): string => grid[row]?.[column] ?? '';
+
 const assert = ({ given, should, actual, expected }: {
   given: string; should: string; actual: unknown; expected: unknown;
 }) => expect(actual, `Given ${given}, should ${should}`).toEqual(expected);
@@ -18,7 +21,7 @@ describe('buildFindMatches', () => {
     assert({
       given: 'an empty query',
       should: 'return an empty match list',
-      actual: buildFindMatches('', sheet({ A1: 'hello' }), [['hello', '']]),
+      actual: buildFindMatches('', sheet({ A1: 'hello' }), lookup([['hello', '']])),
       expected: [],
     });
   });
@@ -27,7 +30,7 @@ describe('buildFindMatches', () => {
     assert({
       given: 'a query matching the raw content in a different case',
       should: 'match the cell',
-      actual: buildFindMatches('HELLO', sheet({ A1: 'hello world' }), [['hello world', ''], ['', '']]),
+      actual: buildFindMatches('HELLO', sheet({ A1: 'hello world' }), lookup([['hello world', ''], ['', '']])),
       expected: ['A1'],
     });
   });
@@ -36,7 +39,7 @@ describe('buildFindMatches', () => {
     assert({
       given: 'a formula cell whose display equals the query but whose raw does not',
       should: 'still match via the display value',
-      actual: buildFindMatches('2', sheet({ A1: '=1+1' }), [['2', ''], ['', '']]),
+      actual: buildFindMatches('2', sheet({ A1: '=1+1' }), lookup([['2', ''], ['', '']])),
       expected: ['A1'],
     });
   });
@@ -45,16 +48,16 @@ describe('buildFindMatches', () => {
     assert({
       given: 'a query present in neither raw nor display',
       should: 'return no matches',
-      actual: buildFindMatches('zzz', sheet({ A1: 'abc' }), [['abc', ''], ['', '']]),
+      actual: buildFindMatches('zzz', sheet({ A1: 'abc' }), lookup([['abc', ''], ['', '']])),
       expected: [],
     });
   });
 
   it('treats a missing display row as an empty display value', () => {
     assert({
-      given: 'a sheet larger than the provided display grid',
+      given: 'a lookup that returns nothing outside the fixture grid',
       should: 'not throw and fall back to empty display strings',
-      actual: buildFindMatches('abc', sheet({ A1: 'abc' }, 2, 2), []),
+      actual: buildFindMatches('abc', sheet({ A1: 'abc' }, 2, 2), lookup([])),
       expected: ['A1'],
     });
   });

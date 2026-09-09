@@ -13,7 +13,7 @@ import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
 import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
 import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
-import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForMcpScope, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { sanitizeMessagesForModel, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
@@ -22,6 +22,7 @@ import { DEFAULT_PROVIDER, DEFAULT_MODEL, AI_PROVIDERS, getModelDisplayName } fr
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { createId } from '@paralleldrive/cuid2';
+import { buildSessionTools } from './session-tools-runtime';
 import { driveTools } from './drive-tools';
 import { pageReadTools } from './page-read-tools';
 import { guardReadPageToolForVision } from './read-page-vision-output';
@@ -32,6 +33,7 @@ import { taskManagementTools } from './task-management-tools';
 import { agentTools } from './agent-tools';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 
 // Nesting cap. Intent is 3+ for richer agent-to-agent composition, but held at 2
 // until inner stepCountIs budget is reworked — see PR #713. Raising this without
@@ -64,6 +66,22 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
 }
 
 /**
+ * The session family, built ONCE and reused.
+ *
+ * Every other entry in `availableTools` is a module-level constant; this one is
+ * a factory call, so without the cache each mention-triggered turn rebuilt the
+ * whole family just to look one name up. The tools hold no per-request state —
+ * they read the caller off `experimental_context` at execute time — so a single
+ * instance is the same instance a fresh call would have produced. Lazy rather
+ * than module-level to keep the import cycle this construction exists to avoid.
+ */
+let sessionToolsCache: ReturnType<typeof buildSessionTools> | null = null;
+function getSessionTools(): ReturnType<typeof buildSessionTools> {
+  sessionToolsCache ??= buildSessionTools();
+  return sessionToolsCache;
+}
+
+/**
  * Filter tools for agent configuration
  */
 function filterToolsForAgent(enabledTools: string[] | null): Record<string, unknown> {
@@ -79,6 +97,14 @@ function filterToolsForAgent(enabledTools: string[] | null): Record<string, unkn
     ...searchTools,
     ...taskManagementTools,
     ...agentTools,
+    // The session family, so an @-mentioned agent can delegate like any other.
+    // It was absent for a structural reason that is now gone: this engine runs
+    // detached from any request (a channel message triggers it), and dispatch
+    // used to require the calling user's live browser credential — so
+    // spawn_session/send_session could only ever have refused here. Dispatch
+    // signs its own hop now. Still gated per agent by `enabledTools` below, so
+    // adding it here widens nothing on its own.
+    ...getSessionTools(),
     // Note: Not including agentCommunicationTools to prevent infinite recursion
   };
   
@@ -680,9 +706,24 @@ export async function executeAskAgent(
         // drive scope via nestedContext below, so a scoped token must not be able to
         // reach create_drive (or other account-level-only tools) through a consulted
         // agent's enabledTools either — same listing gate as the top-level routes.
-        const agentTools = filterToolsForMcpScope(
-          filterToolsForAgent(targetAgent.enabledTools as string[] | null),
-          isMcpScoped(executionContext),
+        //
+        // The per-agent SANDBOX SWITCH applies here too (issue #2460). This path
+        // built its own tool set — allowlist + MCP scope — and never asked
+        // `pages.sandboxEnabled`, so an agent with the switch OFF was handed the
+        // shell family (`spawn_shell` and friends ride the session family this
+        // engine registers) the moment someone @-mentioned it, while the same
+        // agent in a page chat correctly saw none of them. `canRunCode` still
+        // refused the actual execution, so this was a contradiction in
+        // configuration rather than a way into the sandbox — but
+        // `tool-filtering.ts` says it plainly: the switch gates BOTH at listing
+        // time and at request time, and hiding a tool from a picker is not a
+        // gate. One surface may not answer differently from the others.
+        const agentTools = filterToolsForSandboxEnablement(
+          filterToolsForMcpScope(
+            filterToolsForAgent(targetAgent.enabledTools as string[] | null),
+            isMcpScoped(executionContext),
+          ),
+          Boolean(targetAgent.sandboxEnabled),
         );
 
         // try/catch: resolver failures degrade to built-in tools only rather than hard-failing the call
@@ -782,6 +823,10 @@ export async function executeAskAgent(
               tools: { ...allAgentTools, ...finishTool } as Parameters<typeof generateText>[0]['tools'],
               experimental_context: nestedContext,
               stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(20)],
+              // Per-step cap: history is prepared once, but this loop runs many model
+              // calls, so one run's oversized tool payloads would otherwise accumulate
+              // for its whole duration (#2461 — see cap-step-tool-payloads.ts).
+              prepareStep: ({ messages: stepMessages }) => ({ messages: capStepToolPayloads(stepMessages) }),
               maxRetries: 3,
               onStepFinish: ({ toolCalls }) => {
                 if (toolCalls?.length > 0) {

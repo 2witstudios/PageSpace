@@ -5,9 +5,11 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ArrowLeft, CheckCircle, AlertTriangle } from 'lucide-react';
+import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { CreditBalanceCard } from '@/components/billing/CreditBalanceCard';
 import { UsageBreakdownCard } from '@/components/billing/UsageBreakdownCard';
 import { AgentSessionUsageCard } from '@/components/billing/AgentSessionUsageCard';
+import { EnvironmentUsageCard } from '@/components/billing/EnvironmentUsageCard';
 import { ConcurrencyCard } from '@/components/billing/ConcurrencyCard';
 import { AutomationsCard } from '@/components/billing/AutomationsCard';
 import { StorageUsageCard } from '@/components/billing/StorageUsageCard';
@@ -15,6 +17,7 @@ import { StorageUsageCard } from '@/components/billing/StorageUsageCard';
 export default function UsagePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { showBilling } = useBillingVisibility();
   const creditsParam = searchParams.get('credits');
 
   useEffect(() => {
@@ -46,7 +49,7 @@ export default function UsagePage() {
         </div>
       </div>
 
-      {creditsParam === 'success' && (
+      {showBilling && creditsParam === 'success' && (
         <Alert className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/20">
           <CheckCircle className="h-4 w-4 text-green-600" />
           <AlertDescription className="text-green-800 dark:text-green-200">
@@ -54,7 +57,7 @@ export default function UsagePage() {
           </AlertDescription>
         </Alert>
       )}
-      {creditsParam === 'canceled' && (
+      {showBilling && creditsParam === 'canceled' && (
         <Alert>
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>
@@ -66,6 +69,7 @@ export default function UsagePage() {
       <CreditBalanceCard />
       <UsageBreakdownCard />
       <AgentSessionUsageCard />
+      <EnvironmentUsageCard />
       <ConcurrencyCard />
       <AutomationsCard />
       <StorageUsageCard />

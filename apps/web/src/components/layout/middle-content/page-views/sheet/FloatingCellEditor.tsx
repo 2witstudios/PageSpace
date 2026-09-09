@@ -6,12 +6,16 @@ import { useSuggestion } from '@/hooks/useSuggestion';
 import { useSuggestionContext } from '@/components/providers/SuggestionProvider';
 import { MentionPickerPortal } from '@/components/mentions/MentionPickerPortal';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
-import { computeEditorPosition, isMobileWidth } from './core/layout';
+import { computeEditorPosition, isMobileWidth, type EditorCellRect } from './core/layout';
 import { sheetTriggerPattern } from './core/constants';
 
 interface FloatingCellEditorProps {
   value: string;
-  cellRect: DOMRect | null;
+  /**
+   * Structural rather than a `DOMRect`: the grid computes this from its axes,
+   * so an off-screen cell still has a rectangle. A `DOMRect` remains assignable.
+   */
+  cellRect: EditorCellRect | null;
   isVisible: boolean;
   onCommit: (value: string) => void;
   onCancel: () => void;

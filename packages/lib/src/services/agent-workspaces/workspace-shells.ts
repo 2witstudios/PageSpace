@@ -20,10 +20,10 @@
  * module executes those verdicts.
  */
 
-import type { SandboxHost } from '../sandbox/sandbox-host';
+import { LocalEnvUnsupportedError, type SandboxHost } from '../sandbox/sandbox-host';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
 import { planSpawnShell, planKillTarget } from '../../agent-workspaces/plan-spawn-worker';
-import type { ShellAgentType, ShellDTO } from '../../agent-workspaces/contract';
+import type { ShellAgentType, ShellDTO } from '../../agent-workspaces/shells-contract';
 import { isShellAgentType, isValidShellCommand } from './shell-types';
 import {
   isUniqueViolation,
@@ -71,6 +71,7 @@ export type SpawnSessionShellResult =
  * than silently renamed — the caller asked for a specific tab label.
  */
 export async function spawnSessionShell({
+  shellId,
   workspaceId,
   ownerId,
   name,
@@ -78,6 +79,11 @@ export async function spawnSessionShell({
   command,
   deps,
 }: {
+  /**
+   * The row's id, when the caller has already minted one — see
+   * `NewSessionShellInput.id`. Omitted, the column mints its own.
+   */
+  shellId?: string;
   workspaceId: string;
   ownerId: string;
   name?: string;
@@ -95,6 +101,7 @@ export async function spawnSessionShell({
 
   try {
     const row = await deps.store.create({
+      ...(shellId === undefined ? {} : { id: shellId }),
       workspaceId,
       ownerId,
       name: plan.name,
@@ -162,7 +169,147 @@ export interface KillSessionShellDeps {
 export type KillSessionShellResult =
   /** `killed: false` means there was nothing left to kill — see the 404-as-success note below. */
   | { ok: true; killed: boolean }
-  | { ok: false; reason: 'error' };
+  | { ok: false; reason: 'error' }
+  /** The machine's substrate has no stream surface to kill through — see {@link KillShellProcessResult}. Kept distinct from `error` so a caller does not advise a retry that can never succeed. */
+  | { ok: false; reason: 'unsupported' };
+
+/**
+ * What {@link killShellProcess} learned. `ok: false` means we learned NOTHING —
+ * the process may or may not be running — and the row must therefore stay.
+ *
+ * Success carries nothing else, deliberately: "killed it", "no PTY was ever
+ * launched" and "its sandbox is gone" are the same fact to every caller, which
+ * is that no process of this shell's is left to worry about.
+ */
+export type KillShellProcessResult =
+  | { ok: true }
+  | { ok: false; reason: 'error' }
+  /**
+   * The machine's substrate has no interactive-stream surface on this seam, so
+   * there is no `killSession` to call — a LOCAL environment (invariant 12:
+   * `stream: false` is advertised, never faked). Deliberately NOT `ok: true`:
+   * success here means "the process is confirmed gone", and every caller acts
+   * on it by dropping the row that is the only thing pointing at it. Saying
+   * so about a process this seam cannot reach would orphan it.
+   */
+  | { ok: false; reason: 'unsupported' };
+
+/**
+ * THE PTY HALF, on its own — the only part of a kill that leaves the database.
+ *
+ * Separated from the row so a caller can put the two in the right places
+ * relative to a lock. `killShellById` (apps/web) does exactly that: this runs
+ * OUTSIDE the workspace's advisory lock and {@link dropSessionShellRow} runs
+ * inside it, beside the node write. That is not a stylistic split. The kill is
+ * `killSpriteSession`, which retries `MAX_EXEC_ATTEMPTS` times at 10s apiece
+ * with backoff, and whose own doc says the REST call "may itself be what wakes
+ * a hibernating Sprite" — so half a minute is a NORMAL slow path, not a fault,
+ * and half a minute of `pg_advisory_xact_lock` is every layout write in that
+ * workspace queued behind a sleepy VM.
+ *
+ * Takes the ROW rather than an id: the caller has already read it (that is how
+ * it knows which workspace to lock), and a second read here would be a second
+ * chance to disagree with itself.
+ */
+export async function killShellProcess({
+  row,
+  deps,
+}: {
+  row: Pick<SessionShellRecord, 'workspaceId' | 'spriteExecId'>;
+  deps: Pick<KillSessionShellDeps, 'host' | 'resolveSessionSandboxId'>;
+}): Promise<KillShellProcessResult> {
+  // No PTY was ever opened, so there is no process and nothing to reach for.
+  if (row.spriteExecId === null) return { ok: true };
+
+  const sandboxId = await deps.resolveSessionSandboxId(row.workspaceId);
+  if (sandboxId === null) return { ok: true };
+
+  let handle;
+  try {
+    handle = await deps.host.attach({ sandboxId });
+  } catch {
+    // The control plane itself is unreachable — we learned NOTHING about the
+    // process. The caller keeps the row so a retry can find it again; dropping
+    // it now would leave a possibly-running process with nothing pointing at it.
+    return { ok: false, reason: 'error' };
+  }
+  // A vanished sandbox has nothing left running; the row is still dropped.
+  if (!handle) return { ok: true };
+
+  // The substrate has no stream surface at all, so no id here was ever opened
+  // through it. Answered from the advertised capability rather than from the
+  // refusal below purely so the reason is named before anything is attempted.
+  //
+  // `=== false` rather than `!`: only a handle that DECLARES it cannot stream
+  // is refused here. An absent declaration is not a claim, and treating it as
+  // one would refuse every handle a caller built dynamically — the type makes
+  // the field required, so a real host that forgot it fails at compile time,
+  // which is where that mistake belongs. The typed error below is the net
+  // that catches a handle which refuses without having advertised it.
+  if (handle.capabilities?.stream === false) return { ok: false, reason: 'unsupported' };
+
+  try {
+    // The kill-by-id endpoint reaches this session whether or not we hold a
+    // live stream to it, and is idempotent against an already-dead id — so
+    // anything that throws here is a real unknown, not "already gone".
+    await handle.killSession(row.spriteExecId);
+  } catch (error) {
+    if (error instanceof LocalEnvUnsupportedError) return { ok: false, reason: 'unsupported' };
+    return { ok: false, reason: 'error' };
+  }
+  return { ok: true };
+}
+
+/**
+ * THE ROW HALF: drop it, idempotently — and only if the process decision still
+ * describes it.
+ *
+ * Re-reads rather than trusting the row the caller already holds, because the
+ * caller's read and this write are deliberately not in the same transaction —
+ * see {@link killShellProcess}. `killed: false` is a row that is already gone,
+ * which is success for the same reason it is below.
+ *
+ * **`expectedSpriteExecId` is what makes the gap between the two halves safe.**
+ * A shell's `spriteExecId` is written LAZILY, by the realtime bridge, when the
+ * PTY first starts — not at spawn. So a kill decided against a row that had
+ * none ("nothing to kill") can arrive here after a PTY has started, and
+ * dropping the row then leaves that exec running in the session's Sprite with
+ * nothing addressing it. Comparing the pointer the decision was made against to
+ * the one the row holds NOW catches exactly that, and answers `error` rather
+ * than orphaning a process: the caller unwinds, the retry reads the new
+ * pointer, and the kill lands on the process that actually exists.
+ *
+ * The comparison cannot fire spuriously, and that rests on an invariant the
+ * bridge states about itself: `updateSpriteExecId` "only ever writes a new id
+ * over an old one" and nothing ever clears the column
+ * (`shell-handler.ts`'s `sessionLiveness`). So the only transitions this can
+ * see are `null → id` and `id → other id`, and both are exactly the case where
+ * dropping the row would strand a process.
+ *
+ * It does not close the window entirely — a PTY that starts between this read
+ * and the commit still loses its pointer update to the delete — and it is not
+ * meant to. That remainder is one statement wide; the one this closes is as
+ * wide as a caller's wait for the workspace lock.
+ */
+export async function dropSessionShellRow({
+  shellId,
+  expectedSpriteExecId,
+  deps,
+}: {
+  shellId: string;
+  /** The row's `spriteExecId` as the process decision saw it — see above. */
+  expectedSpriteExecId: string | null;
+  deps: { store: Pick<SessionShellStore, 'findById' | 'remove'> };
+}): Promise<KillSessionShellResult> {
+  const row = await deps.store.findById(shellId);
+  const plan = planKillTarget({ knownIds: row ? [row.id] : [], targetId: shellId });
+  if (!plan.ok) return { ok: false, reason: 'error' };
+  if (plan.action === 'noop' || !row) return { ok: true, killed: false };
+  if (row.spriteExecId !== expectedSpriteExecId) return { ok: false, reason: 'error' };
+
+  await deps.store.remove(row.id);
+  return { ok: true, killed: true };
+}
 
 /**
  * Kill a shell: terminate its PTY process (if one was ever launched) and drop
@@ -174,6 +321,13 @@ export type KillSessionShellResult =
  * spawn all retry, and making "already gone" an error forces every one of them
  * to special-case it — which is exactly what the predecessor's in-flight-kill
  * bookkeeping (`killsInFlight`) existed to paper over.
+ *
+ * **The two halves in the ordinary order.** Production's only kill path
+ * (`killShellById`, apps/web) does NOT call this — it holds a workspace lock
+ * and therefore needs the halves apart (see {@link killShellProcess}). What
+ * this keeps is the ORDER itself, stated once and pinned by this module's own
+ * tests: process first, row second, and a process we could not reach stops the
+ * row from going. A caller with no lock to keep short gets that for free.
  */
 export async function killSessionShellById({
   shellId,
@@ -187,34 +341,10 @@ export async function killSessionShellById({
   if (!plan.ok) return { ok: false, reason: 'error' };
   if (plan.action === 'noop' || !row) return { ok: true, killed: false };
 
-  if (row.spriteExecId !== null) {
-    const sandboxId = await deps.resolveSessionSandboxId(row.workspaceId);
-    if (sandboxId !== null) {
-      let handle;
-      try {
-        handle = await deps.host.attach({ sandboxId });
-      } catch {
-        // The control plane itself is unreachable — we learned NOTHING about the
-        // process. Keep the row so a retry can find it again; dropping it now
-        // would leave a possibly-running process with nothing pointing at it.
-        return { ok: false, reason: 'error' };
-      }
-      if (handle) {
-        try {
-          // The kill-by-id endpoint reaches this session whether or not we hold a
-          // live stream to it, and is idempotent against an already-dead id — so
-          // anything that throws here is a real unknown, not "already gone".
-          await handle.killSession(row.spriteExecId);
-        } catch {
-          return { ok: false, reason: 'error' };
-        }
-      }
-      // A vanished sandbox has nothing left running; the row is still dropped.
-    }
-  }
+  const ptyKill = await killShellProcess({ row, deps });
+  if (!ptyKill.ok) return ptyKill;
 
-  await deps.store.remove(row.id);
-  return { ok: true, killed: true };
+  return dropSessionShellRow({ shellId, expectedSpriteExecId: row.spriteExecId, deps });
 }
 
 export interface ListSessionShellsDeps {

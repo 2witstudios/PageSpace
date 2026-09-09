@@ -21,7 +21,14 @@ vi.mock('@pagespace/db/db', () => ({
       taskItems: { findFirst: vi.fn(), findMany: vi.fn() },
       taskLists: { findFirst: vi.fn() },
       pages: { findFirst: vi.fn() },
-      taskStatusConfigs: { findMany: vi.fn().mockResolvedValue([]) },
+      taskStatusConfigs: {
+        // The seed reads the vocabulary a piece at a time rather than paging it
+        // — nothing caps how many statuses a list defines. Undefined here means
+        // "this list has none", so the resolver falls back to the built-ins,
+        // which is what these fixtures assume.
+        findFirst: vi.fn().mockResolvedValue(undefined),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
     },
   },
 }));
@@ -39,8 +46,17 @@ vi.mock('@pagespace/db/schema/core', () => ({
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { id: 'id', pageId: 'pageId', userId: 'userId' },
   taskItems: { id: 'id', position: 'position' },
-  taskStatusConfigs: { taskListId: 'taskListId', position: 'position' },
+  taskStatusConfigs: {
+    taskListId: 'taskListId', position: 'position', slug: 'slug', group: 'group',
+  },
   taskAssignees: { taskId: 'taskId' },
+  // create_task now resolves its default status from the LIST rather than the
+  // literal 'pending' — sub-lists inherit their ancestor's vocabulary, which
+  // need not define it — and that resolver falls back to these.
+  DEFAULT_TASK_STATUSES: [
+    { slug: 'pending', name: 'To Do', color: 'c', group: 'todo', position: 0 },
+    { slug: 'completed', name: 'Done', color: 'c', group: 'done', position: 3 },
+  ],
 }));
 
 const { deferredTriggerMock } = vi.hoisted(() => ({
@@ -200,6 +216,77 @@ describe('task verb tools', () => {
           task: expect.objectContaining({ id: 'new-task', title: 'New Task' }),
         }),
       );
+    });
+
+    /**
+     * The due date the model supplies is usually a wall-clock time, and the
+     * user's zone lives on the execution context. Parsing it with a bare
+     * `new Date()` read it in the server's zone, so create_task and the REST
+     * task route stored different instants for the same words (#2404).
+     *
+     * Asserted as the GAP between two callers rather than a fixed instant: a
+     * fixed expectation passes under the old parse on any machine whose zone
+     * matches the context's.
+     */
+    const createTaskWithDueDate = async (timezone: string, dueDate: string) => {
+      mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue({
+        id: 'list-1',
+        pageId: 'page-1',
+        userId: 'user-123',
+        title: 'My Tasks',
+        description: null,
+        status: 'pending',
+      });
+      mockDb.query.taskStatusConfigs.findMany = vi.fn().mockResolvedValue([]);
+      mockDb.query.taskItems.findMany = vi.fn().mockResolvedValue([]);
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      let capturedTaskInsert: Record<string, unknown> | null = null;
+      mockDb.transaction = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
+        let insertCallCount = 0;
+        const tx = {
+          insert: vi.fn(() => ({
+            values: vi.fn((vals: Record<string, unknown>) => {
+              insertCallCount++;
+              if (insertCallCount === 2) capturedTaskInsert = vals;
+              return {
+                returning: vi.fn().mockResolvedValue(
+                  insertCallCount === 1
+                    ? [{ id: 'new-page', title: 'New Task', type: 'TASK_LIST' }]
+                    : [{ id: 'new-task', pageId: 'new-page', status: 'pending', priority: 'medium', position: 0, dueDate: null, assigneeId: null, assigneeAgentId: null, metadata: {}, completedAt: null }]
+                ),
+              };
+            }),
+          })),
+        };
+        return cb(tx);
+      }) as unknown as typeof mockDb.transaction;
+
+      mockDb.query.pages.findFirst = vi.fn()
+        .mockResolvedValueOnce({ id: 'page-1', type: 'TASK_LIST', title: 'My Task List', driveId: 'drive-1' })
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ driveId: 'drive-1' });
+
+      await taskManagementTools.create_task.execute!(
+        { pageId: 'page-1', title: 'New Task', dueDate },
+        { ...context, experimental_context: { userId: 'user-123', timezone } as ToolExecutionContext },
+      );
+
+      return (capturedTaskInsert as Record<string, unknown> | null)?.dueDate as Date | null;
+    };
+
+    it('reads a naive due date in the caller timezone from the execution context', async () => {
+      const chicago = await createTaskWithDueDate('America/Chicago', '2026-02-19T19:00:00');
+      const tokyo = await createTaskWithDueDate('Asia/Tokyo', '2026-02-19T19:00:00');
+
+      // UTC-6 vs UTC+9 in February. Read in the server's zone, both would be equal.
+      expect(Number(chicago) - Number(tokyo)).toBe(15 * 60 * 60 * 1000);
+    });
+
+    it('leaves an absolute due date alone whatever the caller timezone', async () => {
+      const stored = await createTaskWithDueDate('America/Chicago', '2026-02-19T19:00:00Z');
+
+      expect(stored).toEqual(new Date('2026-02-19T19:00:00Z'));
     });
 
     it('rejects a blank/whitespace title', async () => {

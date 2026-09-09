@@ -28,6 +28,26 @@ function makeData(overrides: Partial<AllUserData> = {}): AllUserData {
       { id: 'p1', title: 'Page One', type: 'DOCUMENT', content: 'hello', driveId: 'd1', createdAt: D1, updatedAt: D2 },
       { id: 'p2', title: 'Page Two', type: 'CANVAS', content: '{}', driveId: 'd1', createdAt: D1, updatedAt: D2 },
     ],
+    sheets: [
+      {
+        pageId: 'p3',
+        pageTitle: 'Budget',
+        driveId: 'd1',
+        tabIndex: 0,
+        tabName: 'Sheet1',
+        rowCount: 2,
+        columnCount: 2,
+        frozenRows: 1,
+        frozenColumns: null,
+        columnFormats: null,
+        columnWidths: { A: 180 },
+        rowHeights: null,
+        ranges: null,
+        rows: [
+          { rowIndex: 0, cells: { A: { raw: '10', value: 10 }, B: { raw: '=A1*2', value: 20 } } },
+        ],
+      },
+    ],
     messages: [{ id: 'm1', source: 'channel', content: 'hi', createdAt: D1 }],
     files: [],
     activity: [],
@@ -41,8 +61,11 @@ function makeData(overrides: Partial<AllUserData> = {}): AllUserData {
     displayPreferences: [],
     settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [] },
     personalization: null,
+    personalizationCandidates: [],
     agentWorkspaces: [],
     streamState: [],
+    contentTags: [],
+    localEnvironments: [],
     ...overrides,
   };
 }
@@ -208,8 +231,9 @@ describe('toPortableExport', () => {
       notifications: [{ id: 'n1', type: 't', title: 'T', message: 'M', metadata: null, isRead: false, createdAt: D1, readAt: null }],
       displayPreferences: [{ preferenceType: 'theme', enabled: true, updatedAt: D2 }],
       personalization: { bio: 'b', writingStyle: null, rules: null, enabled: true, createdAt: D1, updatedAt: D2 },
-      agentWorkspaces: [{ id: 'w1', role: 'owner', driveId: 'd1', name: 'W', lastActiveAt: D2, endedAt: null, createdAt: D1, updatedAt: D2, shells: [] }],
-      streamState: [{ messageId: 'sm1', conversationId: 'c1', status: 'complete', parts: [{ type: 'text', text: 'hi' }], startedAt: D1, completedAt: D2 }],
+      agentWorkspaces: [{ id: 'w1', role: 'owner', driveId: 'd1', name: 'W', lastActiveAt: D2, endedAt: null, createdAt: D1, updatedAt: D2, shells: [], nodes: [] }],
+      streamState: [{ messageId: 'sm1', conversationId: 'c1', status: 'complete', parts: [{ type: 'text', text: 'hi' }], frames: [{ type: 'text-delta', id: 't1', delta: 'hi' }], startedAt: D1, completedAt: D2 }],
+      localEnvironments: [],
     });
     const portable = toPortableExport(full);
 

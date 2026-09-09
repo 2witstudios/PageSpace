@@ -147,6 +147,22 @@ export const serverEnvSchema = z
     // validation; isCodeExecutionEnabled() enables only on the exact value 'true'.
     CODE_EXECUTION_ENABLED: z.string().optional(),
 
+    // Local environments (the user's own machine via the zero-trust bridge):
+    // cloud opt-in, same contract as CODE_EXECUTION_ENABLED — only the exact
+    // string 'true' enables (isLocalEnvsEnabled()). The signing key is the
+    // base64 PKCS#8 Ed25519 key every grant is signed with; optional here so a
+    // Sprite-only deployment validates, and loaded fail-closed only on a
+    // local-env path (loadServerSigningKey()).
+    LOCAL_ENVS_ENABLED: z.string().optional(),
+    // `.or('')`: a declared-but-blank placeholder reads as unset, like the
+    // other optional secrets here; the superRefine below is what requires a
+    // real value once the feature is on.
+    ENV_BRIDGE_SIGNING_KEY: z.string().min(1).optional().or(z.literal('')),
+    // Rotation form (Codex C10): comma-separated keys, current first, previous
+    // after. EITHER variable satisfies the boot check below — the same rule the
+    // loader applies (`parseServerSigningKeyring`: KEYS wins when both are set).
+    ENV_BRIDGE_SIGNING_KEYS: z.string().min(1).optional().or(z.literal('')),
+
     // Server-held secret keying the sandbox session-key HMAC (see
     // services/sandbox/session-key.ts). A configured value must be >= 32 chars,
     // but a blank placeholder (SANDBOX_SESSION_SECRET=) is accepted — mirroring
@@ -160,6 +176,78 @@ export const serverEnvSchema = z
     // auth error surfaced as a provisioning failure) rather than failing app-wide
     // env validation. Read via resolveSpritesToken (services/sandbox/...).
     SPRITES_API_TOKEN: z.string().min(1).optional().or(z.literal('')),
+
+    // Published-app hosting global kill-switch (default OFF). Accept any string so
+    // a stray value (e.g. APP_HOSTING_ENABLED=0) never fails app-wide env
+    // validation; isAppHostingEnabled() enables only on the exact value 'true'.
+    APP_HOSTING_ENABLED: z.string().optional(),
+
+    // Dev-server preview (dark). Same contract as APP_HOSTING_ENABLED — only the
+    // exact string 'true' enables (isDevPreviewEnabled()). DEV_PREVIEW_APEX is
+    // the DEDICATED registrable domain preview hosts live under; no default,
+    // and the feature behaves as off until it is set (resolveDevPreviewApex()).
+    DEV_PREVIEW_ENABLED: z.string().optional(),
+    DEV_PREVIEW_APEX: z.string().optional(),
+
+    // Fly Machines org token (Bearer) for the published-app provisioner. Optional:
+    // a blank value disables provisioning (the flaps client fails closed with an
+    // auth error surfaced as a provisioning failure) rather than failing app-wide
+    // env validation. Read via resolveFlyMachinesToken (services/app-hosting/...).
+    FLY_MACHINES_ORG_TOKEN: z.string().min(1).optional().or(z.literal('')),
+
+    // The ONE Fly network every published app is created on. Optional: unset falls
+    // back to PUBLISHED_APPS_NETWORK_DEFAULT. This is an org-level override (e.g. a
+    // separate staging network), never a per-app value — fly-replay cannot cross
+    // networks, so all published apps must share one.
+    PUBLISHED_APPS_NETWORK: z.string().optional(),
+
+    // The published-app runtime knobs: how long an app may go unvisited before the
+    // idle reaper stops it, how often the router refreshes its recency stamp, and
+    // the per-app daily awake budget past which an app is parked. All optional and
+    // all string-typed for the same reason APP_HOSTING_ENABLED is: a malformed value
+    // must not fail app-wide env validation for a feature that is dark by default.
+    // The resolvers in services/app-hosting/app-hosting-env.ts parse them at CALL
+    // time and fall back to their documented defaults (900s / 60s / 43200s) for
+    // anything that is not a non-negative integer — a typo must not silently switch
+    // off the reaper (leaving the fleet awake) or the cap (leaving one app's daily
+    // spend unbounded). An explicit 0 disables each one.
+    PUBLISHED_APP_IDLE_STOP_SECONDS: z.string().optional(),
+    PUBLISHED_APP_HIT_STAMP_INTERVAL_SECONDS: z.string().optional(),
+    PUBLISHED_APP_DAILY_AWAKE_SECONDS_CAP: z.string().optional(),
+
+    // The apex published apps are served from (`<subdomain>.<apex>`). Optional in
+    // the schema, but REQUIRED by the superRefine below once APP_HOSTING_ENABLED
+    // is 'true' — unset only falls back to PUBLISHED_APPS_APEX_DEFAULT while
+    // hosting is dark. Deliberately a DIFFERENT
+    // apex from `*.pagespace.site`, which is not on the Public Suffix List — a
+    // published app runs customer server code on its own origin, so sharing a
+    // registrable domain with other published content would let one app set
+    // cookies every other one sends. Read via resolvePublishedAppsApex.
+    PUBLISHED_APPS_APEX: z.string().optional(),
+
+    // The Fly app that terminates the published-apps apex, emits fly-replay, and
+    // holds custom-domain certs. Optional: falls back to FLY_PROXY_APP_NAME and
+    // then to APP_ROUTER_FLY_APP_DEFAULT. It MUST have been created on
+    // PUBLISHED_APPS_NETWORK — fly-replay cannot cross Fly 6PN networks, and an
+    // app's network is fixed at create time. See routing-env.ts.
+    APP_ROUTER_FLY_APP_NAME: z.string().optional(),
+
+    // Server secret the per-app fly-replay `state` key is derived from (see
+    // services/app-hosting/app-replay-key.ts). A configured value must be >= 32
+    // chars, but a blank placeholder is accepted — mirroring
+    // SANDBOX_SESSION_SECRET — so an empty value makes the router refuse to
+    // emit replays (fail closed) rather than failing app-wide env validation.
+    APP_REPLAY_SECRET: z.string().min(32).optional().or(z.literal('')),
+
+    // Shared secret proving a router request came from the edge proxy. Optional
+    // and blank-tolerant for the same reason; the router treats an unset value
+    // as "refuse everything", never as "skip the check" — the endpoint would
+    // otherwise be a world-callable fly-replay emitter for the whole Fly org.
+    // A CONFIGURED value must clear the same >=32 floor as APP_REPLAY_SECRET: a
+    // guessable secret is not a weaker check, it is the absence of one, and this
+    // is the check that stops the endpoint being world-callable. Enforced again
+    // in resolveAppRouterProxySecret, which reads process.env directly.
+    APP_ROUTER_PROXY_SECRET: z.string().min(32).optional().or(z.literal('')),
 
     // Sentry server/edge DSN. Fail-loud in production for cloud/tenant (see
     // superRefine below) — a missing DSN previously meant Sentry.init({dsn:
@@ -186,6 +274,40 @@ export const serverEnvSchema = z
           path: ['ENCRYPTION_KEY'],
         });
       }
+    }
+
+    // App hosting serves customer-authored SERVER code on subdomains of one apex.
+    // Because that apex must be on the Public Suffix List before it carries
+    // untrusted origins — otherwise one published app sets a `domain=<apex>`
+    // cookie every other published app then sends — the apex is not something a
+    // deployment may arrive at by default. PUBLISHED_APPS_APEX_DEFAULT stays the
+    // documented value and keeps resolvePublishedAppsApex from ever returning ''
+    // (an empty apex would make parseAppHost claim EVERY hostname), but turning
+    // hosting on requires naming the apex explicitly, so the PSL prerequisite has
+    // an owner who chose it rather than inheriting it silently. See ROUTING.md.
+    if (data.APP_HOSTING_ENABLED === 'true' && !data.PUBLISHED_APPS_APEX?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'PUBLISHED_APPS_APEX must be set explicitly when APP_HOSTING_ENABLED=true — published apps run customer server code, so the apex they share has to be a deliberate, PSL-registered choice rather than a default',
+        path: ['PUBLISHED_APPS_APEX'],
+      });
+    }
+
+    // Local environments sign every bridge grant with the server signing key
+    // (ENV_BRIDGE_SIGNING_KEY, or the rotation list ENV_BRIDGE_SIGNING_KEYS),
+    // and loadServerSigningKeyring() fails closed without one — which, at
+    // request time, is a generic 500 on the first local-env create. Boot is
+    // where an operator should learn the key is missing, and only once the
+    // feature is actually on: a deployment that never enables local envs must
+    // not be asked for a signing key.
+    if (data.LOCAL_ENVS_ENABLED === 'true' && !data.ENV_BRIDGE_SIGNING_KEY?.trim() && !data.ENV_BRIDGE_SIGNING_KEYS?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'ENV_BRIDGE_SIGNING_KEY (or ENV_BRIDGE_SIGNING_KEYS for rotation) must be set when LOCAL_ENVS_ENABLED=true — it is the base64 PKCS#8 Ed25519 key every bridge grant is signed with and every enrolled machine pins; see .env.example for how to generate one',
+        path: ['ENV_BRIDGE_SIGNING_KEY'],
+      });
     }
 
     if (data.NODE_ENV === 'production' && !isOnPrem() && !data.SENTRY_DSN) {

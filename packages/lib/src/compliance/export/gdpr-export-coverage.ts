@@ -59,6 +59,8 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   drives: 'drives',
   drive_members: 'drives',
   pages: 'pages',
+  sheet_tabs: 'sheets',
+  sheet_rows: 'sheets',
   channel_messages: 'messages',
   conversations: 'messages',
   messages: 'messages',
@@ -77,6 +79,12 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   notifications: 'notifications',
   display_preferences: 'displayPreferences',
   user_personalization: 'personalization',
+  // Machine-authored inferences ABOUT the subject, plus verbatim quotes of
+  // their own messages kept as justification — derived personal data under
+  // Art 4(1). Exported including rejected and still-pending rows: "we inferred
+  // this about you and did not act on it" is exactly the processing a subject
+  // access request exists to disclose.
+  personalization_candidates: 'personalizationCandidates',
   // Art 15(3) is a right to a COPY, not to visibility. These were excluded on
   // the reasoning that the subject can read them in Settings — see the
   // `settings` collector for why that was not a basis (review finding).
@@ -87,7 +95,34 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   // Added with this guard — the omission that motivated it.
   agent_workspaces: 'agentWorkspaces',
   agent_workspace_shells: 'agentWorkspaces',
+  // The subject's workspace MEMBERSHIP and layout. It arrived unregistered
+  // with the node model, and it became load-bearing when membership moved into
+  // it: which threads a workspace holds, and where each one sits, is a fact
+  // about the subject's own working context. It used to live in
+  // `conversations.workspaceId` (exported under `collectUserMessages`'s
+  // boundary); nothing writes that column any more and this table is the only
+  // witness — migration 0256 dropped that column, so the table is not merely
+  // the better source, it is the only one.
+  agent_workspace_nodes: 'agentWorkspaces',
+  // A machine the subject enrolled as a local environment: THEIR device (label, public
+  // key, fingerprint, connection times), selected by ownerId. The env it backs stays
+  // excluded below as the drive's infrastructure; the device is the subject's.
+  drive_env_local: 'localEnvironments',
   ai_stream_sessions: 'streamState',
+  // The durable frame log — the same generated content `ai_stream_sessions.parts`
+  // holds, in the form that replaces it once the frame-log writer lands and that
+  // column is dropped. Registered WITH its collector at the moment the table was
+  // added rather than when its writer arrives, because a table that reaches
+  // `master` unexported is precisely the failure this registry exists to catch,
+  // and "nothing writes it yet" is a state that expires quietly. Read by
+  // `collectUserStreamState`, which owns the Art 15(4) boundary for both tables.
+  ai_stream_frames: 'streamState',
+  // The subject's own acts of classification: `createdBy` is the person who
+  // applied the tag, and for an anchored tag the row carries the passage they
+  // selected. The VOCABULARY (`tags`) stays organisation-owned below — the word
+  // belongs to the drive, the act of applying it belongs to the person — so the
+  // collector joins the name in rather than exporting an opaque id.
+  content_tags: 'contentTags',
 };
 
 /**
@@ -162,11 +197,59 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'google_calendar_connections',
     'integration_connections',
     'zoom_connections',
+    // The mint log for app-scoped Fly deploy tokens. It records that WE issued a
+    // credential to our own build pipeline for a drive's published app — no
+    // token value is stored, and nothing in the row is authored by or about the
+    // subject.
+    'app_deploy_token_mints',
   ),
 
   ...withReason(
     SERVICE_INFRASTRUCTURE,
     'machine_sprite_reclaims',
+    // The published-app teardown outbox — the same fleet-pointer shape as
+    // `machine_sprite_reclaims` above, holding a Fly app name awaiting a
+    // confirmed kill.
+    'app_hosting_reclaims',
+    // The published-app DEDICATED SUBSCRIPTION teardown outbox — same shape and
+    // same reasoning as `app_hosting_reclaims` immediately above, just pointed
+    // at a Stripe subscription id instead of a Fly app name. Nothing here is
+    // authored by or about the subject: it is provenance for a billing
+    // resource this app rescued from a cascade, not a record of anything the
+    // subject did or paid.
+    'app_hosting_stripe_reclaims',
+    // The local mirror of a published app's MACHINE lifecycle — start/stop
+    // boundaries kept because Fly retains only the last 20 events per machine.
+    // Every column is fleet telemetry: a Fly app name, a machine id, a
+    // normalized start/stop, Fly's own event id and a timestamp. Nothing is
+    // authored by or about the subject, and the row keys on a `published_apps`
+    // id, which is itself the DRIVE's infrastructure record. The money these
+    // boundaries produced is exported under the subject's billing categories
+    // (`ai_usage_logs`, the credit ledger), which is where a charge is actually
+    // evidenced — this table is how we priced the drive's machine, not a record
+    // of anything the subject did.
+    'published_app_machine_events',
+    // The dev-preview RELAY state of a sandbox Sprite: which port a dev server
+    // was detected on, the name of the in-sprite relay service bound to 8080,
+    // and the Sprite INSTANCE it all belongs to. Every column is fleet
+    // plumbing — a VM identity, a port number, a process name, a stop flag —
+    // and none of it is authored by or about the subject. The honest
+    // objection is that the row exists BECAUSE the subject ran a dev server
+    // and PageSpace noticed; but the fact of that activity is already carried
+    // under `agentWorkspaces` (the session it happened in, its shells and
+    // their scrollback), and this row adds only how OUR proxy reaches it. It
+    // keys on the session or env (`workspaceId` / `envId`) the way
+    // `published_app_machine_events` keys on an app: the holder is the
+    // subject's record; this is our infrastructure's note about the holder.
+    'dev_preview_services',
+    // The dev-preview single-use GRANT ledger: a random capability id, the
+    // holder it opens, the user it was minted for and three timestamps, alive
+    // for a one-minute redemption window and swept after. It is the handoff
+    // between two of OUR origins — a fact about our ingress, not a record of
+    // anything the subject did (the preview they viewed is the holder's
+    // session/env, already exported under `agentWorkspaces`). Same shape and
+    // reasoning as `dev_preview_services` above; cascades with the user.
+    'dev_preview_grants',
     'rate_limit_buckets',
     'siem_delivery_cursors',
     'siem_delivery_receipts',
@@ -188,10 +271,38 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'drive_backup_schedules',
     'drive_backups',
     'drive_roles',
+    // A persistent per-drive ENVIRONMENT. The row is the
+    // drive's infrastructure, not the subject's data: a name, a kind, and
+    // pointers at a VM. `createdBy` is audit-only and confers nothing — the env
+    // belongs to the drive, is paid for by the drive owner, and is shared by
+    // every member — so it is the drive's record in exactly the sense this
+    // rationale describes. What the subject actually authored INSIDE an env is
+    // their sessions, shells and messages, all of which the export carries
+    // under their own categories.
+    'drive_envs',
     'drive_share_links',
     'page_permissions',
     'page_share_links',
     'published_pages',
+    // The hosting deployment of a drive's published ENVIRONMENT — the drive's
+    // record, exactly as `published_pages` and `drive_envs` above it are. The
+    // row keys on `envId`: it is the Fly app an env is served from, and it
+    // carries no content of the subject's. What the subject authored lives in
+    // the env (exported under its own categories) and in `pages`; this row is
+    // infrastructure the drive owns and pays for.
+    'published_apps',
+    // The Stripe mirror for one published app's DEDICATED (flat monthly) tier —
+    // the same answer as `subscriptions` below, for the same reason. It records a
+    // recurring charge for a DRIVE's infrastructure: which app is always-on, at
+    // which guest size, on which Stripe price, and whether that subscription is
+    // paying. `userId` is the payer denormalized from the drive owner, so the row
+    // says who is billed for the drive's machine rather than anything the subject
+    // authored or that describes them. The subject's own billing relationship is
+    // already the account-plan `subscriptions` row and the credit ledger, all
+    // excluded on this same rationale; the Stripe-side record of the charge is the
+    // subject's to obtain from Stripe, and is not duplicated into a PageSpace
+    // export by a table whose subject is an app.
+    'published_app_subscriptions',
     'custom_domains',
     'global_assistant_config',
     'form_targets',
@@ -203,8 +314,11 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'workflow_runs',
     'workflow_run_steps',
     'task_status_configs',
+    // The drive's shared VOCABULARY. A tag name is minted once and used by
+    // every member; `createdBy` records who happened to type it first and
+    // confers nothing. The subject's own USE of the vocabulary is exported as
+    // `content_tags` above, with the name joined in.
     'tags',
-    'page_tags',
     'commands',
     'email_broadcasts',
     'broadcast_templates',
@@ -232,6 +346,10 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'file_pages',
     'file_conversations',
     'page_versions',
+    // The per-cell edit log for sheet content that is exported in full under
+    // `sheets`. (Sheet version history is `page_versions`, already excluded
+    // above for the same reason.)
+    'sheet_changes',
     'user_activities',
     'security_audit_log',
     'task_assignees',
@@ -239,10 +357,15 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
 
   ...withReason(
     DERIVED_OR_EPHEMERAL,
-    'agent_workspace_layout_ops',
-    'agent_workspace_layout_revs',
-    'agent_workspace_pane_columns',
-    'agent_workspace_panes',
+    // A monotonic per-workspace mutation counter and nothing else — one bigint
+    // whose only job is to let a client tell a stale snapshot from a fresh one.
+    // The rows it counts ARE exported (`agent_workspace_nodes`).
+    // Formula dependency edges — derived wholly from the formula text, which is
+    // exported verbatim as each cell's `raw` under `sheets`. They are a
+    // recompute index, not something the subject authored.
+    'sheet_cell_deps',
+    'sheet_range_deps',
+    'agent_workspace_node_revs',
     'ai_pending_abort_intents',
     'conversation_compactions',
     'pulse_summaries',

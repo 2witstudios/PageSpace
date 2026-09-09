@@ -1,6 +1,6 @@
 import { session, systemPreferences } from 'electron';
 import { isMediaPermission, shouldAllowMediaPermission } from './permissions';
-import { getAppUrl } from './app-url';
+import { getAppOrigin } from './app-url';
 import { logger } from './logger';
 
 function shouldRequestMicrophone(permission: string, details: Electron.PermissionRequest): boolean {
@@ -62,7 +62,7 @@ export function setupMediaPermissionHandlers(): void {
       return true;
     }
 
-    const allowed = shouldAllowMediaPermission(permission, requestingOrigin, getAppUrl());
+    const allowed = shouldAllowMediaPermission(permission, requestingOrigin, getAppOrigin());
     if (!allowed) {
       logger.warn('[Permissions] Blocked media permission check', { permission, requestingOrigin });
     }
@@ -76,7 +76,7 @@ export function setupMediaPermissionHandlers(): void {
     }
 
     const requestingUrl = details.requestingUrl || ('securityOrigin' in details ? details.securityOrigin || '' : '');
-    const allowedByOrigin = shouldAllowMediaPermission(permission, requestingUrl, getAppUrl());
+    const allowedByOrigin = shouldAllowMediaPermission(permission, requestingUrl, getAppOrigin());
 
     if (!allowedByOrigin) {
       logger.warn('[Permissions] Blocked media permission request (origin mismatch)', {

@@ -83,14 +83,30 @@ const { mockTable } = vi.hoisted(() => {
     resolved: `${name}.resolved`,
     method: `${name}.method`,
     endpoint: `${name}.endpoint`,
+    tagId: `${name}.tagId`,
+    targetKind: `${name}.targetKind`,
+    anchor: `${name}.anchor`,
+    anchorStatus: `${name}.anchorStatus`,
+    channelMessageId: `${name}.channelMessageId`,
+    aiMessageId: `${name}.aiMessageId`,
+    source: `${name}.source`,
+    confidence: `${name}.confidence`,
   });
   return { mockTable: fn };
 });
 
 vi.mock('@pagespace/db/schema/auth', () => ({ users: mockTable('users') }));
+// Local environments: the collector joins these two; mocked by path like every
+// other schema module so the real declarations never load under the mocked drizzle-orm.
+vi.mock('@pagespace/db/schema/drive-envs', () => ({ driveEnvs: mockTable('driveEnvs') }));
+vi.mock('@pagespace/db/schema/drive-env-local', () => ({ driveEnvLocal: mockTable('driveEnvLocal') }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: mockTable('drives'),
   pages: mockTable('pages'),
+  tags: mockTable('tags'),
+}));
+vi.mock('@pagespace/db/schema/content-tags', () => ({
+  contentTags: mockTable('contentTags'),
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: mockTable('activityLogs'),
@@ -129,7 +145,10 @@ vi.mock('@pagespace/db/schema/tasks', () => ({
 vi.mock('@pagespace/db/schema/sessions', () => ({ sessions: mockTable('sessions') }));
 vi.mock('@pagespace/db/schema/notifications', () => ({ notifications: mockTable('notifications') }));
 vi.mock('@pagespace/db/schema/display-preferences', () => ({ displayPreferences: mockTable('displayPreferences') }));
-vi.mock('@pagespace/db/schema/personalization', () => ({ userPersonalization: mockTable('userPersonalization') }));
+vi.mock('@pagespace/db/schema/personalization', () => ({
+  userPersonalization: mockTable('userPersonalization'),
+  personalizationCandidates: mockTable('personalizationCandidates'),
+}));
 
 vi.mock('drizzle-orm', () => ({
   eq: (col: unknown, val: unknown) => ({ _op: 'eq', col, val }),
@@ -784,6 +803,50 @@ describe('collectUserPersonalization', () => {
     expect(result!.rules).toBe('always use TypeScript');
   });
 
+  it('given_profileMigratedToPages_readsThePagesNotTheClearedColumns', async () => {
+    // After migration the columns are cleared — they are a fallback for users
+    // the backfill has not reached, not a second copy. Reading them alone would
+    // return three nulls and understate the profile of every migrated user.
+    const personalization = {
+      bio: null,
+      writingStyle: null,
+      rules: null,
+      enabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      bioPageId: 'page-bio',
+      writingStylePageId: 'page-style',
+      rulesPageId: 'page-rules',
+    };
+    const memoryPages = [
+      { id: 'page-bio', content: 'bio from the page', isTrashed: false },
+      { id: 'page-style', content: 'style from the page', isTrashed: false },
+      // Trashed: the subject deleted it, so it reports as absent rather than
+      // disclosing content they removed.
+      { id: 'page-rules', content: 'rules the user deleted', isTrashed: true },
+    ];
+
+    let call = 0;
+    const db = {
+      select: vi.fn().mockReturnThis(),
+      from: vi.fn().mockReturnThis(),
+      innerJoin: vi.fn().mockReturnThis(),
+      where: vi.fn(() => {
+        call += 1;
+        // First query ends in .limit(); the page lookup is awaited directly.
+        return call === 1
+          ? { limit: vi.fn().mockReturnValue([personalization]) }
+          : Promise.resolve(memoryPages);
+      }),
+    };
+
+    const result = await collectUserPersonalization(db as never, 'user-1');
+
+    expect(result!.bio).toBe('bio from the page');
+    expect(result!.writingStyle).toBe('style from the page');
+    expect(result!.rules).toBeNull();
+  });
+
   it('given_userHasNoPersonalization_returnsNull', async () => {
     const db = createLimitDb([]);
 
@@ -851,6 +914,9 @@ describe('collectAllUserData', () => {
     // reaches nobody's export.
     expect(Array.isArray(result!.agentWorkspaces)).toBe(true);
     expect(Array.isArray(result!.streamState)).toBe(true);
+    // Same rule again for the content-tags category: a collector that
+    // `collectAllUserData` never calls reaches nobody's export.
+    expect(Array.isArray(result!.contentTags)).toBe(true);
     expect(result!.personalization).toBeNull();
   });
 });

@@ -88,9 +88,14 @@ vi.mock('../panes/AgentPanes', () => ({
 }));
 
 const mockFetchWithAuth = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/auth/auth-fetch', () => ({
-  fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
-}));
+const mockFetchJSON = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
+  // Partial: the dev-preview pane mounted beside the console needs the REAL
+  // `ApiRequestError` class for its `instanceof` check, and reads its status
+  // through `fetchJSON`.
+  const actual = await importOriginal<typeof import('@/lib/auth/auth-fetch')>();
+  return { ...actual, fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args), fetchJSON: (...args: unknown[]) => mockFetchJSON(...args) };
+});
 
 const mockLoadConversation = vi.hoisted(() => vi.fn());
 vi.mock('@/contexts/GlobalChatContext', () => ({
@@ -106,9 +111,36 @@ import {
   useAgentWorkspaceStore,
   __resetWorkspaceQueuesForTests,
 } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import type { WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
+import type { WorkspaceNodeTarget } from '@pagespace/lib/agent-workspaces/workspace-node-wire';
+import type { PastConversationDTO } from '@/lib/agent-workspaces/past-conversation-dto';
 
 /** Empty by default — the "no history yet" case is the common one across these tests; individual tests override with `mockFetchWithAuth.mockImplementation`. */
 const EMPTY_CONVERSATIONS = { conversations: [], pagination: { hasMore: false, nextCursor: null, limit: 20 } };
+
+/**
+ * Every past-conversation fixture in this file goes through here, TYPED as
+ * the shared wire row — never an inline object literal, which is exactly how
+ * these tests came to describe a row the server has never sent (`sessionId`,
+ * renamed to `workspaceId` and never followed on the client). A literal in a
+ * `json: async () => ({...})` mock is checked by nothing at all; this is.
+ */
+function pastConversationRow(overrides: Partial<PastConversationDTO> = {}): PastConversationDTO {
+  return {
+    conversationId: 'conv-1',
+    title: null,
+    type: 'global',
+    agentPageId: null,
+    pageTitle: null,
+    lastMessageAt: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+    workspaceId: null,
+    sessionName: null,
+    sessionEndedAt: null,
+    driveId: null,
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
   // Two different endpoints share this mock — route by URL rather than one
@@ -134,6 +166,34 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+/**
+ * Seat a workspace's TREE the way the listing does. There is no client-side
+ * grid seed any more — a workspace's root is minted server-side by whatever
+ * write first needs one — so a fixture states the tree it wants directly.
+ */
+const rootOf = (workspaceId: string): WorkspaceNode => ({
+  nodeType: 'root',
+  id: workspaceId,
+  parentId: null,
+  position: 0,
+  axis: 'row',
+});
+const chatNode = (
+  id: string,
+  parentId: string,
+  position: number,
+  conversationId: string,
+): WorkspaceNode => ({
+  nodeType: 'pane',
+  id,
+  parentId,
+  position,
+  target: { kind: 'chat', id: conversationId },
+});
+const seatTree = (workspaceId: string, nodes: WorkspaceNode[], targets: WorkspaceNodeTarget[] = []) =>
+  useAgentWorkspaceStore.getState().hydrateFromServer(workspaceId, { rev: 1, nodes, targets });
+
 
 describe('AgentsSurface', () => {
   test('hydrates the selection from a deep link on mount', () => {
@@ -231,6 +291,45 @@ describe('AgentsSurface', () => {
   });
 });
 
+describe('the way out of a session', () => {
+  it('"All conversations" drops the selection and shows the list, without ending the session', async () => {
+    // The reported bug: the list renders only while nothing is selected, and
+    // every existing way to clear a selection destroyed the session first. A
+    // back control has to clear the selection and NOTHING else — no DELETE,
+    // no forgotten grid.
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.includes('/api/agent-workspaces/conversations')) {
+        return { ok: true, json: async () => EMPTY_CONVERSATIONS };
+      }
+      return { ok: true, json: async () => ({ session: { driveId: null, name: 'My Session' } }) };
+    });
+    seatTree('ses-back', [rootOf('ses-back'), chatNode('n1', 'ses-back', 0, 'conv-1')]);
+    window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-back&c=conv-1&agent=agent-1');
+
+    render(<AgentsSurface />);
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+    act(() => screen.getByRole('button', { name: /All conversations/ }).click());
+
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
+    expect(screen.queryByTestId('agent-panes')).toBeNull();
+    expect(screen.getByText('Select a session')).toBeDefined();
+    // The session is still there — this is a change of view, not of the world.
+    expect(useAgentWorkspaceStore.getState().workspaces['ses-back']).toBeDefined();
+    expect(
+      mockFetchWithAuth.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'DELETE'),
+    ).toBe(false);
+    // And the URL it mirrors to no longer names the session, so a refresh
+    // lands on the list too.
+    expect(window.location.search).toBe('');
+  });
+
+  it('is not rendered when nothing is selected — there is nowhere to go back to', () => {
+    render(<AgentsSurface />);
+    expect(screen.queryByRole('button', { name: /All conversations/ })).toBeNull();
+  });
+});
+
 describe('GC when the server says the session is gone (issue #2263, finding 6)', () => {
   beforeEach(() => {
     __resetWorkspaceQueuesForTests();
@@ -238,12 +337,7 @@ describe('GC when the server says the session is gone (issue #2263, finding 6)',
 
   it('forgets the persisted grid and backs out to the empty state', async () => {
     mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ session: null }) });
-    useAgentWorkspaceStore.getState().ensureWorkspace('ses-gone', {
-      kind: 'chat',
-      name: 'x',
-      targetId: 'conv-1',
-      agentPageId: 'agent-1',
-    });
+    seatTree('ses-gone', [rootOf('ses-gone'), chatNode('n1', 'ses-gone', 0, 'conv-1')]);
     window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-gone&c=conv-1&agent=agent-1');
 
     render(<AgentsSurface />);
@@ -255,12 +349,7 @@ describe('GC when the server says the session is gone (issue #2263, finding 6)',
 
   it('a session the server confirms exists is left untouched', async () => {
     mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ session: { driveId: null } }) });
-    useAgentWorkspaceStore.getState().ensureWorkspace('ses-live', {
-      kind: 'chat',
-      name: 'x',
-      targetId: 'conv-1',
-      agentPageId: 'agent-1',
-    });
+    seatTree('ses-live', [rootOf('ses-live'), chatNode('n1', 'ses-live', 0, 'conv-1')]);
     window.history.replaceState({}, '', '/dashboard/agents?workspace=ses-live&c=conv-1&agent=agent-1');
 
     render(<AgentsSurface />);
@@ -354,24 +443,11 @@ describe('onConversationClosed — following the grid\'s own close/rebind', () =
     // with no listing left — a refresh or deep link back to this URL would
     // reopen it, silently replacing whatever pane is actually live (caught
     // in review).
-    useAgentWorkspaceStore.getState().ensureWorkspace('ses-1', {
-      kind: 'chat',
-      name: 'Conversation',
-      targetId: 'conv-1',
-      agentPageId: 'agent-1',
-    });
-    const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
-    useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId);
-    const secondPaneId = useAgentWorkspaceStore
-      .getState()
-      .workspaces['ses-1'].columns.flatMap((c) => c.panes)
-      .find((p) => p.id !== firstPaneId)!.id;
-    useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
-      kind: 'chat',
-      name: 'Conversation',
-      targetId: 'conv-2',
-      agentPageId: 'agent-2',
-    });
+    seatTree(
+      'ses-1',
+      [rootOf('ses-1'), chatNode('n1', 'ses-1', 0, 'conv-1'), chatNode('n2', 'ses-1', 1, 'conv-2')],
+      [{ id: 'conv-2', kind: 'chat', title: 'Second', lastMessageAt: null, agentPageId: 'agent-2' }],
+    );
 
     const { getByTestId } = render(<AgentsSurface />);
     await waitFor(() => expect(getByTestId('agent-panes')).toBeInTheDocument());
@@ -426,19 +502,10 @@ describe('past conversations (default view, replacing the old static prompt)', (
           ok: true,
           json: async () => ({
             conversations: [
-              {
+              pastConversationRow({
                 conversationId: 'conv-hist-1',
                 title: 'A past chat',
-                type: 'global',
-                agentPageId: null,
-                pageTitle: null,
-                lastMessageAt: new Date().toISOString(),
-                createdAt: new Date().toISOString(),
-                sessionId: null,
-                sessionName: null,
-                sessionEndedAt: null,
-                driveId: null,
-              },
+              }),
             ],
             pagination: { hasMore: false, nextCursor: null, limit: 20 },
           }),
@@ -453,7 +520,7 @@ describe('past conversations (default view, replacing the old static prompt)', (
     expect(screen.queryByText('Select a session')).toBeNull();
   });
 
-  it('clicking a session-bound row opens it in the pane grid, same as picking it from the sidebar', async () => {
+  it('clicking a workspace-bound row opens it in the pane grid, same as picking it from the sidebar', async () => {
     // A drive scope no earlier test fetched — see the cache note above.
     mockFetchWithAuth.mockImplementation(async (url: string) => {
       if (url.includes('/api/agent-workspaces/conversations')) {
@@ -461,19 +528,16 @@ describe('past conversations (default view, replacing the old static prompt)', (
           ok: true,
           json: async () => ({
             conversations: [
-              {
+              pastConversationRow({
                 conversationId: 'conv-1',
                 title: 'Session chat',
                 type: 'page',
                 agentPageId: 'agent-1',
                 pageTitle: 'My Agent',
-                lastMessageAt: new Date().toISOString(),
-                createdAt: new Date().toISOString(),
-                sessionId: 'ses-1',
+                workspaceId: 'ses-1',
                 sessionName: 'My Session',
-                sessionEndedAt: null,
                 driveId: 'drive-1',
-              },
+              }),
             ],
             pagination: { hasMore: false, nextCursor: null, limit: 20 },
           }),
@@ -497,19 +561,10 @@ describe('past conversations (default view, replacing the old static prompt)', (
       ok: true,
       json: async () => ({
         conversations: [
-          {
+          pastConversationRow({
             conversationId: cursor ? `conv-${driveLabel}-page2` : `conv-${driveLabel}-page1`,
             title: cursor ? `${driveLabel} page 2` : `${driveLabel} page 1`,
-            type: 'global',
-            agentPageId: null,
-            pageTitle: null,
-            lastMessageAt: new Date().toISOString(),
-            createdAt: new Date().toISOString(),
-            sessionId: null,
-            sessionName: null,
-            sessionEndedAt: null,
-            driveId: null,
-          },
+          }),
         ],
         // Page 1 always advertises more, so the Next button is enabled —
         // page 2 (any `cursor` present) is the end of the list.
@@ -559,19 +614,10 @@ describe('past conversations (default view, replacing the old static prompt)', (
           ok: true,
           json: async () => ({
             conversations: [
-              {
+              pastConversationRow({
                 conversationId: cursor ? 'conv-page2' : 'conv-page1',
                 title: cursor ? 'Page 2 chat' : 'Page 1 chat',
-                type: 'global',
-                agentPageId: null,
-                pageTitle: null,
-                lastMessageAt: new Date().toISOString(),
-                createdAt: new Date().toISOString(),
-                sessionId: null,
-                sessionName: null,
-                sessionEndedAt: null,
-                driveId: null,
-              },
+              }),
             ],
             pagination: { hasMore: !cursor, nextCursor: cursor ? null : 'conv-page1', limit: 20 },
           }),
@@ -613,19 +659,10 @@ describe('past conversations (default view, replacing the old static prompt)', (
       ok: true as const,
       json: async () => ({
         conversations: [
-          {
+          pastConversationRow({
             conversationId: `conv-${label}`,
             title: label,
-            type: 'global',
-            agentPageId: null,
-            pageTitle: null,
-            lastMessageAt: new Date().toISOString(),
-            createdAt: new Date().toISOString(),
-            sessionId: null,
-            sessionName: null,
-            sessionEndedAt: null,
-            driveId: null,
-          },
+          }),
         ],
         pagination: { hasMore: nextCursor !== null, nextCursor, limit: 20 },
       }),
@@ -667,19 +704,12 @@ describe('past conversations (default view, replacing the old static prompt)', (
           ok: true,
           json: async () => ({
             conversations: [
-              {
+              pastConversationRow({
                 conversationId: 'conv-client-1',
                 title: 'My API thread',
                 type: 'client',
-                agentPageId: null,
-                pageTitle: null,
-                lastMessageAt: new Date().toISOString(),
-                createdAt: new Date().toISOString(),
-                sessionId: null,
-                sessionName: null,
-                sessionEndedAt: null,
                 driveId: 'drive-1',
-              },
+              }),
             ],
             pagination: { hasMore: false, nextCursor: null, limit: 20 },
           }),

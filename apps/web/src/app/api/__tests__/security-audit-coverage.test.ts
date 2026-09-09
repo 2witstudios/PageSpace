@@ -47,6 +47,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['internal/*', 'Internal service-to-service endpoints'],
   ['cron/scheduled-backups', 'HMAC-signed internal cron job — no user session, authenticated by shared secret, executes pre-authorized backup schedules'],
   ['memory/cron', 'Internal memory cron job'],
+  ['app-hosting/router', 'Published-app serving edge, called by pagespace-proxy on EVERY request to a published app (no fly-replay-cache on the metered tier, by design) — there is no user session to attribute, the caller is authenticated by the APP_ROUTER_PROXY_SECRET shared secret like the HMAC cron routes above, and one audit row per served asset would swamp the audit log with routing decisions. The security-relevant outcomes are counted at the edge instead: a refused caller answers 404 and a credit-exhausted app answers 402, both distinguishable in proxy logs.'],
   ['desktop-bridge/status', 'Desktop app connection status check'],
   ['provisioning-status/[slug]', 'Tenant provisioning status polling'],
 
@@ -114,6 +115,12 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['pages/[pageId]/share-links', 'Page share link CRUD — covered by page canShare check, follow-up'],
   ['pages/[pageId]/share-links/[linkId]', 'Page share link revoke — covered by parent page auth, follow-up'],
   ['share/[token]', 'Token info read — session-auth required; reads only publicly-shareable link metadata, no user data written, low-risk read'],
+
+  // --- App hosting (publish surface) read-only routes ---
+  ['dev-preview/capability', 'Public GET of a single boolean (DEV_PREVIEW_ENABLED + a configured apex) — no auth, no user data, constant response used only to hide the preview pane on a dark deployment; same shape as app-hosting/capability'],
+  ['app-hosting/capability', 'Public GET of a single boolean (APP_HOSTING_ENABLED) — no auth, no user data, constant response used only to hide the app pane on a dark deployment'],
+  ['drives/[driveId]/envs/[envId]/app/dunning', 'Read-only dedicated-tier subscription state (status/cancelAtPeriodEnd/purchasable) — no data written, covered by isPrincipalDriveMember check'],
+  ['drives/[driveId]/published-apps', 'Read-only listing of a drive\'s published apps for the domain-target picker — no data written, covered by isPrincipalDriveMember check'],
 
   // --- Drive backup sub-routes ---
   ['drives/[driveId]/backups/schedule', 'Backup schedule GET/PATCH — owner/admin-gated settings, tier enforcement audited via isDriveOwnerOrAdmin; no sensitive data written beyond schedule config'],

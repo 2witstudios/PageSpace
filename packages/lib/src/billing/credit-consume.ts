@@ -12,6 +12,10 @@
  *   - Safe: never throws into the AI request. A failed decrement leaves the
  *     ledger row 'pending' for the backfill cron (settlePendingLedgerRow); a
  *     failed claim leaves no row, and the cron's orphan sweep reconciles it.
+ *   - Honest: never-throwing is not the same as always-succeeding, so the outcome
+ *     is REPORTED instead of swallowed — see {@link CreditSettleStatus}. Callers
+ *     use it to log and to count; they must NOT use a `deferred` to re-bill the
+ *     window, because the backfill cron is about to settle exactly that charge.
  */
 
 import { db } from '@pagespace/db/db';
@@ -70,6 +74,10 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * If no balance row exists yet, the ledger row is left untouched ('pending') so the
  * reconcile cron settles it once a balance is created. Shared by consumeCredits and
  * settlePendingLedgerRow.
+ *
+ * Returns whether the decrement actually landed. `false` is the balance-less case
+ * above — a resolved transaction that settled NOTHING, which is exactly the shape
+ * `consumeCredits` must not report to its caller as a completed settle.
  */
 async function decrementAndSettle(
   tx: Tx,
@@ -78,7 +86,7 @@ async function decrementAndSettle(
   chargeMc: number,
   aiUsageLogId: string | null,
   holdId: string | null = null,
-): Promise<void> {
+): Promise<boolean> {
   const rows = await tx
     .select()
     .from(creditBalances)
@@ -97,7 +105,7 @@ async function decrementAndSettle(
   // Leave the ledger row 'pending' so the reconcile cron retries once a balance
   // exists — never mark a call 'applied' without decrementing it, which would
   // silently drop the charge and hide it from both backfill sweeps.
-  if (!bal) return;
+  if (!bal) return false;
 
   // Rollover: the carry balance is always spendable, even after the monthly period
   // ends. The gate no longer zeroes expired paid monthly, and settle must match:
@@ -165,10 +173,30 @@ async function decrementAndSettle(
   if (holdId) {
     await tx.delete(creditHolds).where(eq(creditHolds.id, holdId));
   }
+  return true;
 }
 
-export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> {
-  if (!isBillingEnabled()) return; // tenant/onprem are unlimited
+/**
+ * What one `consumeCredits` call did with the charge — the honest answer to
+ * "is this call's money accounted for?", which `Promise<void>` could not give.
+ *
+ *  - `settled`    the charge is accounted for: decremented, or deliberately not
+ *                 owed (a $0 call recorded as 'skipped', a duplicate claim that
+ *                 was already consumed, or a deployment where billing is off).
+ *  - `deferred`   a write did not land and the ledger row is left for
+ *                 `credit-backfill.ts` to recover — the pending sweep if a row was
+ *                 claimed, the orphan sweep if it was not. NOT a lost charge, and
+ *                 nothing upstream should re-bill the window on it: the sweep will
+ *                 settle it, and re-billing would charge the payer twice.
+ *  - `unbillable` the cost was not a finite non-negative number, so there is
+ *                 nothing to settle and nothing to recover. A programming/upstream
+ *                 error, reported rather than folded into `deferred` so it cannot
+ *                 be mistaken for work a cron will finish.
+ */
+export type CreditSettleStatus = 'settled' | 'deferred' | 'unbillable';
+
+export async function consumeCredits(input: ConsumeCreditsInput): Promise<CreditSettleStatus> {
+  if (!isBillingEnabled()) return 'settled'; // tenant/onprem are unlimited
 
   // Guard a malformed cost before it can produce a bogus ledger claim. A
   // non-finite or negative cost is a programming/upstream error, not a billable
@@ -179,7 +207,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
       costDollars: input.costDollars,
       aiUsageLogId: input.aiUsageLogId,
     });
-    return;
+    return 'unbillable';
   }
 
   // The precise charge in millicents (sub-cent accurate). The whole-cent `amountCents`
@@ -217,7 +245,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
         where: sql`${creditLedger.aiUsageLogId} IS NOT NULL AND ${creditLedger.entryType} = 'usage'`,
       })
       .returning({ id: creditLedger.id });
-    if (claimed.length === 0) return; // already consumed — idempotent no-op
+    if (claimed.length === 0) return 'settled'; // already consumed — idempotent no-op
     ledgerId = claimed[0].id;
   } catch (error) {
     // No ledger row persisted; the cron's orphan sweep will reconcile.
@@ -225,7 +253,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
       error: (error as Error).message,
       aiUsageLogId: input.aiUsageLogId,
     });
-    return;
+    return 'deferred';
   }
 
   // A zero-charge call (free/local model, or a tool-only analytics log carrying
@@ -236,6 +264,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
   // it. NOTE: a sub-cent call has chargeMc > 0 and is NOT skipped here — it goes
   // through the transaction so its fraction accrues into pendingMillicents.
   if (chargeMc === 0) {
+    let zeroChargeSettled = true;
     try {
       await db
         .update(creditLedger)
@@ -253,19 +282,38 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
         });
       }
     } catch (error) {
+      // The claim row exists but never reached a terminal status, so the backfill
+      // cron's pending sweep owns it from here.
+      zeroChargeSettled = false;
       loggers.ai.debug('credit zero-charge settle failed', {
         error: (error as Error).message,
         aiUsageLogId: input.aiUsageLogId,
       });
     }
-    return;
+    return zeroChargeSettled ? 'settled' : 'deferred';
   }
 
   // 2. Decrement the balance and settle the ledger row, atomically.
+  // Captured from INSIDE the callback rather than read off the transaction's return
+  // value: what we need to know is whether the decrement ran, and a driver/mock that
+  // does not pass the callback's result back through would silently turn every
+  // successful settle into a `deferred`.
+  let applied = false;
   try {
-    await db.transaction((tx) =>
-      decrementAndSettle(tx, ledgerId, input.userId, chargeMc, input.aiUsageLogId, input.holdId ?? null),
-    );
+    await db.transaction(async (tx) => {
+      applied = await decrementAndSettle(
+        tx,
+        ledgerId,
+        input.userId,
+        chargeMc,
+        input.aiUsageLogId,
+        input.holdId ?? null,
+      );
+    });
+    // A committed transaction that decremented NOTHING (no balance row yet) left
+    // the ledger row 'pending' on purpose — report it as deferred rather than as a
+    // settle, or the meters above would treat a charge the cron still owes as done.
+    if (!applied) return 'deferred';
     // The debit + hold release committed: push the user's fresh balance so the navbar
     // reflects this call's spend live (no refresh). Best-effort, never blocks the call.
     void emitCreditsUpdated(input.userId, {
@@ -278,7 +326,9 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
       error: (error as Error).message,
       aiUsageLogId: input.aiUsageLogId,
     });
+    return 'deferred';
   }
+  return 'settled';
 }
 
 /**

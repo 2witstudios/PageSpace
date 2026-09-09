@@ -1,20 +1,17 @@
 import { useCallback, useMemo } from 'react';
-import type { UIMessage } from 'ai';
-import { toast } from 'sonner';
 import { ASK_USER_TOOL_NAME, type AskUserOutput } from '@/lib/ai/tools/ask-user-tools';
 import { selectAnswerableAskUserToolCallIds } from '@/lib/ai/streams/selectAnswerableAskUserToolCallIds';
 import type { RenderedMessage } from '@/lib/ai/streams/selectRenderedMessages';
 import { useAskUserAnsweringStore } from '@/stores/useAskUserAnsweringStore';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
-import { hydrateTransportBeforeReinvoke } from './hydrateTransportBeforeReinvoke';
-import { HANDOFF_REFUSED_MESSAGE } from './useConversationSendHandoff';
 
 type AddToolResultFn = (args: {
   tool: string;
   toolCallId: string;
   output: unknown;
-  options?: { body?: object };
-}) => void | PromiseLike<void>;
+  conversationId: string;
+  options?: { body?: Record<string, unknown> };
+}) => PromiseLike<{ dispatched: boolean }>;
 
 export interface UseAnswerAskUserOptions {
   conversationId: string | null;
@@ -22,22 +19,32 @@ export interface UseAnswerAskUserOptions {
   renderedMessages: RenderedMessage[];
   /** Active stream or optimistic/pending send for THIS conversation — replaces status==='ready'. */
   isConversationBusy: boolean;
-  /** This surface's useChat setter (transport bookkeeping only — never renders). */
-  setMessages: (messages: UIMessage[]) => void;
   addToolResult: AddToolResultFn;
   wrapSend: <T>(sendFn: () => T) => T | undefined;
-  /** Builds the per-request body (chatId/conversationId/provider/etc) for this surface. */
-  buildBody: () => object | Promise<object>;
   /**
-   * The surface's cross-conversation send handoff (`useConversationSendHandoff.prepareSend`,
-   * mode-selected where applicable). Answering an ask_user question re-invokes the chat
-   * (addToolResult auto-resend), and with a shared chat instance the question's conversation
-   * can be ON SCREEN while the chat is still consuming ANOTHER conversation's stream —
-   * answering then would fire a second concurrent send on one Chat. The handoff runs before
-   * anything is patched, so a refusal leaves no state to revert.
+   * `useSendHandoff.releasePendingSend`. Called on every path that registers a pendingSend and
+   * then does NOT send — answering one of several questions on a turn, or losing the
+   * `claimAnswering` race. Without it the name is never cleared, and the conversation wedges:
+   * composer stuck on Stop, and the remaining question unanswerable because
+   * `isConversationBusy` stays true.
    */
-  prepareSend: (conversationId: string) => Promise<boolean>;
+  releasePendingSend: () => void;
+  /** Builds the per-request body (chatId/conversationId/provider/etc) for this surface. */
+  buildBody: () => Record<string, unknown> | Promise<Record<string, unknown>>;
 }
+
+/**
+ * NO PRE-SEND HANDOFF ANY MORE, and nothing replaced it.
+ *
+ * Answering a question re-invokes the chat, and under the shared-`Chat` design that was a
+ * second concurrent send on one instance — illegal, so `useConversationSendHandoff` had to
+ * stop the other conversation's read first and could refuse outright when its status would
+ * not settle. A refused answer meant the user's click did nothing but raise a toast.
+ *
+ * `useChatSession` has no shared instance and no single-body limit, so a resume for THIS
+ * conversation is simply a `fetch` alongside whatever else is in flight. There is nothing to
+ * hand off, nothing to wait for, and nothing to refuse.
+ */
 
 export interface UseAnswerAskUserResult {
   /** toolCallIds of ask_user parts currently answerable on THIS surface. */
@@ -64,11 +71,10 @@ export function useAnswerAskUser(options: UseAnswerAskUserOptions): UseAnswerAsk
     conversationId,
     renderedMessages,
     isConversationBusy,
-    setMessages,
     addToolResult,
     wrapSend,
+    releasePendingSend,
     buildBody,
-    prepareSend,
   } = options;
 
   const answeringToolCallIds = useAskUserAnsweringStore((s) => s.answeringToolCallIds);
@@ -95,14 +101,10 @@ export function useAnswerAskUser(options: UseAnswerAskUserOptions): UseAnswerAsk
       // indefinitely — nothing would ever reach the try/finally that clears them (PR 6 review,
       // CodeRabbit, Critical).
       wrapSend(async () => {
-        if (!useAskUserAnsweringStore.getState().claimAnswering(toolCallId)) return;
-
-        // The answer re-invokes the chat: hand off any OTHER conversation's stream this chat
-        // is consuming first (dual-stream fix). Before the optimistic patch, so a refusal has
-        // nothing to revert; the claim is cleared explicitly — this sits above the try/finally.
-        if (conversationId && !(await prepareSend(conversationId))) {
-          toast.error(HANDOFF_REFUSED_MESSAGE);
-          useAskUserAnsweringStore.getState().clearAnswering(toolCallId);
+        if (!useAskUserAnsweringStore.getState().claimAnswering(toolCallId)) {
+          // Lost the race to a co-mounted surface (or a double-click). `wrapSend` has already
+          // registered a pendingSend for a send that will not happen.
+          releasePendingSend();
           return;
         }
 
@@ -112,9 +114,23 @@ export function useAnswerAskUser(options: UseAnswerAskUserOptions): UseAnswerAsk
         }
 
         try {
-          hydrateTransportBeforeReinvoke(setMessages, stableMessages, isConversationBusy);
+          // No transport hydration step. `useChatSession` composes its outbound messages from
+          // the store's settled view at CALL time, so the persisted assistant message carrying
+          // this question IS the base — which is what makes answering work after a reload,
+          // where useChat's internal array was empty and `hydrateTransportBeforeReinvoke` had
+          // to copy the snapshot in before every re-invocation.
           const body = await buildBody();
-          await addToolResult({ tool: ASK_USER_TOOL_NAME, toolCallId, output, options: { body } });
+          const { dispatched } = await addToolResult({
+            tool: ASK_USER_TOOL_NAME,
+            toolCallId,
+            output,
+            conversationId: conversationId!,
+            options: { body },
+          });
+          // A turn with several questions resumes only once every one is answered, so this
+          // answer may have recorded a patch and sent nothing. The pendingSend must go either
+          // way, or the REMAINING question becomes unanswerable.
+          if (!dispatched) releasePendingSend();
         } catch (err) {
           if (conversationId && messageId) {
             conversationMessagesActions.revertAskUserAnswer(conversationId, { messageId, toolCallId });
@@ -130,11 +146,9 @@ export function useAnswerAskUser(options: UseAnswerAskUserOptions): UseAnswerAsk
       stableMessages,
       conversationId,
       wrapSend,
-      setMessages,
-      isConversationBusy,
+      releasePendingSend,
       buildBody,
       addToolResult,
-      prepareSend,
     ],
   );
 

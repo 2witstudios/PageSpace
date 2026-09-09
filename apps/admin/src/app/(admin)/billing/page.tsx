@@ -148,6 +148,8 @@ interface Enforcement {
   enabled: boolean;
   markupBps: number;
   tierAllowanceCents: Record<string, number>;
+  /** Whether the tier's allowance is re-granted each renewal; false = one-time starter grant. */
+  tierAllowanceRefills?: Record<string, boolean>;
 }
 
 interface BillingResponse {
@@ -739,18 +741,19 @@ function EnforcementTab({ data }: { data: BillingResponse }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Monthly credit allowance by tier</CardTitle>
-          <CardDescription>Credits granted on each subscription renewal.</CardDescription>
+          <CardTitle>Credit allowance by tier</CardTitle>
+          <CardDescription>Paid tiers are re-granted on each renewal; the free tier is a one-time starter grant.</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
-              <TableRow><TableHead>Tier</TableHead><TableHead className="text-right">Monthly allowance</TableHead></TableRow>
+              <TableRow><TableHead>Tier</TableHead><TableHead>Cadence</TableHead><TableHead className="text-right">Allowance</TableHead></TableRow>
             </TableHeader>
             <TableBody>
               {Object.entries(enforcement.tierAllowanceCents).map(([tier, cents]) => (
                 <TableRow key={tier}>
                   <TableCell className="capitalize">{tier}</TableCell>
+                  <TableCell>{enforcement.tierAllowanceRefills?.[tier] === false ? 'One-time' : 'Monthly'}</TableCell>
                   <TableCell className="text-right">{usd(cents)}</TableCell>
                 </TableRow>
               ))}

@@ -51,6 +51,10 @@ vi.mock('../../core/ai-tools', () => ({
     list_drives: { name: 'list_drives' },
     list_pages: { name: 'list_pages' },
     read_page: { name: 'read_page' },
+    // Registered like the real thing: a sandbox tool is a VALID name to store,
+    // which is exactly why storing it can silently grant nothing (issue #2460).
+    bash: { name: 'bash' },
+    spawn_shell: { name: 'spawn_shell' },
   },
 }));
 
@@ -72,6 +76,22 @@ describe('agent-tools', () => {
   });
 
   describe('update_agent_config', () => {
+    it('enabledTools schema accepts null (unrestricted) as well as an array and omission', () => {
+      // The bug this guards: `.optional()` alone rejects an explicit `null` before
+      // `execute` ever runs, so a model trying to restore an agent it had locked
+      // down to `[]` gets a validation error, not the fix. `.nullable()` is what
+      // makes `null` a legal argument at all.
+      const schema = agentTools.update_agent_config.inputSchema as unknown as {
+        safeParse: (input: unknown) => { success: boolean };
+      };
+      const base = { agentPath: '/d/a', agentId: 'agent-1' };
+
+      expect(schema.safeParse({ ...base, enabledTools: null }).success).toBe(true);
+      expect(schema.safeParse({ ...base, enabledTools: [] }).success).toBe(true);
+      expect(schema.safeParse({ ...base, enabledTools: ['read_page'] }).success).toBe(true);
+      expect(schema.safeParse(base).success).toBe(true);
+    });
+
     it('has correct tool definition', () => {
       expect(agentTools.update_agent_config).toBeDefined();
       expect(agentTools.update_agent_config.description).toContain('AI agent');
@@ -131,6 +151,8 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -173,6 +195,8 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -217,6 +241,8 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const,
         userScopedAccess: false,
         revision: 2,
       };
@@ -277,6 +303,76 @@ describe('agent-tools', () => {
       expect(mockBroadcastPageEvent).toHaveBeenCalled();
     });
 
+    it('locks an agent down to zero tools with an empty array', async () => {
+      const mockAgent = {
+        id: 'agent-1', title: 'My Agent', type: 'AI_CHAT', driveId: 'drive-1',
+        systemPrompt: null, enabledTools: ['read_page'], aiProvider: null, aiModel: null,
+        agentDefinition: null, visibleToGlobalAssistant: false, includeDrivePrompt: false,
+        includePageTree: false, pageTreeScope: null, sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const, userScopedAccess: false, revision: 2,
+      };
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(mockAgent)
+        .mockResolvedValueOnce({ ...mockAgent, enabledTools: [], revision: 3 });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      await agentTools.update_agent_config.execute!(
+        { agentPath: '/drive/agent', agentId: 'agent-1', enabledTools: [] },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext },
+      );
+
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ enabledTools: [] }) }),
+      );
+    });
+
+    it('restores an agent to unrestricted with an explicit null', async () => {
+      // A prior call locked this agent down to `[]`. Passing null is the only way
+      // back — `filterToolsForAgentAllowlist` reads `null` as unrestricted.
+      const mockAgent = {
+        id: 'agent-1', title: 'My Agent', type: 'AI_CHAT', driveId: 'drive-1',
+        systemPrompt: null, enabledTools: [] as string[], aiProvider: null, aiModel: null,
+        agentDefinition: null, visibleToGlobalAssistant: false, includeDrivePrompt: false,
+        includePageTree: false, pageTreeScope: null, sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const, userScopedAccess: false, revision: 2,
+      };
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(mockAgent)
+        .mockResolvedValueOnce({ ...mockAgent, enabledTools: null, revision: 3 });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      await agentTools.update_agent_config.execute!(
+        { agentPath: '/drive/agent', agentId: 'agent-1', enabledTools: null },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext },
+      );
+
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ enabledTools: null }) }),
+      );
+    });
+
+    it('omitting enabledTools leaves the current list unchanged', async () => {
+      const mockAgent = {
+        id: 'agent-1', title: 'My Agent', type: 'AI_CHAT', driveId: 'drive-1',
+        systemPrompt: 'Old prompt', enabledTools: ['read_page'], aiProvider: null, aiModel: null,
+        agentDefinition: null, visibleToGlobalAssistant: false, includeDrivePrompt: false,
+        includePageTree: false, pageTreeScope: null, sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const, userScopedAccess: false, revision: 2,
+      };
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(mockAgent)
+        .mockResolvedValueOnce({ ...mockAgent, systemPrompt: 'New prompt', revision: 3 });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      await agentTools.update_agent_config.execute!(
+        { agentPath: '/drive/agent', agentId: 'agent-1', systemPrompt: 'New prompt' },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext },
+      );
+
+      const call = vi.mocked(applyPageMutation).mock.calls.at(-1)?.[0] as { updates: Record<string, unknown> };
+      expect(call.updates).not.toHaveProperty('enabledTools');
+    });
+
     it('updates provider and model settings', async () => {
       // Arrange
       const mockAgent = {
@@ -293,6 +389,8 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const,
         userScopedAccess: false,
         revision: 3,
       };
@@ -361,6 +459,8 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -398,12 +498,14 @@ describe('agent-tools', () => {
         systemPrompt: null,
         enabledTools: null,
         aiProvider: 'openai',
-        aiModel: 'openai/gpt-5.3-chat',
+        aiModel: 'openai/gpt-5.4-nano',
         agentDefinition: null,
         visibleToGlobalAssistant: false,
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -440,6 +542,8 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -476,6 +580,8 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -526,6 +632,8 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const,
         userScopedAccess: false,
         revision: 4,
       };
@@ -591,6 +699,8 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -630,6 +740,8 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -660,6 +772,185 @@ describe('agent-tools', () => {
       );
     });
 
+
+    /**
+     * Issue #2460: the reporter's 24-tool sandbox config was "accepted and
+     * echoed back on every submission" while every worker ran with page tools
+     * only. Both halves of that are fixed here — the switch is settable through
+     * the tool, and the echo reports what the config BECOMES, not just what it
+     * stores.
+     */
+    describe('the sandbox switch and the effective tool surface', () => {
+      const agentFixture = (over: Record<string, unknown> = {}) => ({
+        id: 'agent-1',
+        title: 'Scraper Runner',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: null,
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+        sandboxEnabled: false,
+        toolExposureMode: 'upfront' as 'upfront' | 'search',
+        userScopedAccess: false,
+        revision: 1,
+        ...over,
+      });
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      it('writes sandboxEnabled — the one gate that was UI-only while 23 sibling fields were tool-writable', async () => {
+        mockAgentRepository.findById
+          .mockResolvedValueOnce(agentFixture())
+          .mockResolvedValueOnce(agentFixture({ sandboxEnabled: true, enabledTools: ['bash'] }));
+        mockCanUserEditPage.mockResolvedValue(true);
+
+        const result = await agentTools.update_agent_config.execute!(
+          {
+            agentPath: '/drive/agent',
+            agentId: 'agent-1',
+            enabledTools: ['bash'],
+            sandboxEnabled: true,
+          },
+          context
+        ) as Record<string, unknown>;
+
+        expect(applyPageMutation).toHaveBeenCalledWith(
+          expect.objectContaining({
+            updates: expect.objectContaining({ sandboxEnabled: true, enabledTools: ['bash'] }),
+            updatedFields: expect.arrayContaining(['sandboxEnabled']),
+          })
+        );
+        expect(result).toMatchObject({
+          agentConfig: { effectiveTools: ['bash'], blockedTools: [], sandboxEnabled: true },
+        });
+        // Granting the switch is not the same as promising the compute will
+        // run: the payer-tier gate is per conversation, so the echo says so
+        // rather than implying a guarantee it cannot check here.
+        expect((result.warnings as string[]).join(' ')).toContain('payer tier');
+      });
+
+      it('given sandbox tools stored while the switch is off, reports them as BLOCKED instead of confirming them', async () => {
+        mockAgentRepository.findById
+          .mockResolvedValueOnce(agentFixture())
+          .mockResolvedValueOnce(agentFixture({ enabledTools: ['read_page', 'bash', 'spawn_shell'] }));
+        mockCanUserEditPage.mockResolvedValue(true);
+
+        const result = await agentTools.update_agent_config.execute!(
+          {
+            agentPath: '/drive/agent',
+            agentId: 'agent-1',
+            enabledTools: ['read_page', 'bash', 'spawn_shell'],
+          },
+          context
+        ) as Record<string, unknown>;
+
+        expect(result).toMatchObject({
+          agentConfig: {
+            // STORED — unchanged, still the whole list…
+            enabledTools: ['read_page', 'bash', 'spawn_shell'],
+            enabledToolsCount: 3,
+            // …EFFECTIVE — what the agent will actually be able to call.
+            effectiveTools: ['read_page'],
+            blockedTools: [
+              { tool: 'bash', gate: 'sandbox_disabled' },
+              { tool: 'spawn_shell', gate: 'sandbox_disabled' },
+            ],
+            sandboxEnabled: false,
+          },
+        });
+        expect(String(result.message)).toContain('will NOT be granted');
+        expect((result.warnings as string[]).join(' ')).toContain('sandboxEnabled');
+      });
+
+      it('given search exposure, distinguishes tools reached through tool_search from tools not granted at all', async () => {
+        mockAgentRepository.findById
+          .mockResolvedValueOnce(agentFixture())
+          .mockResolvedValueOnce(
+            agentFixture({
+              enabledTools: ['read_page', 'list_drives'],
+              toolExposureMode: 'search',
+            })
+          );
+        mockCanUserEditPage.mockResolvedValue(true);
+
+        const result = await agentTools.update_agent_config.execute!(
+          {
+            agentPath: '/drive/agent',
+            agentId: 'agent-1',
+            enabledTools: ['read_page', 'list_drives'],
+          },
+          context
+        ) as Record<string, unknown>;
+
+        expect(result).toMatchObject({
+          agentConfig: {
+            effectiveTools: ['read_page', 'list_drives'],
+            blockedTools: [],
+            // Both are core, so search mode defers neither — the point is that
+            // deferral is reported as its own thing and never as a block.
+            toolsReachedBySearch: [],
+            toolExposureMode: 'search',
+          },
+        });
+      });
+    });
+
+    it('given an EMPTY enabledTools array, stores it as an empty allowlist — never as "unrestricted"', async () => {
+      // `filterToolsForAgentAllowlist` reads [] as "no tools" and null as "every
+      // tool". Folding [] into null turned an attempt to lock an agent down into
+      // a grant of the entire registry — the divergence of #2460 pointing the
+      // dangerous way.
+      const locked = {
+        id: 'agent-1',
+        title: 'My Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: null,
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+        sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const,
+        userScopedAccess: false,
+        revision: 1,
+      };
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(locked)
+        .mockResolvedValueOnce({ ...locked, enabledTools: [] });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const result = await agentTools.update_agent_config.execute!(
+        { agentPath: '/drive/agent', agentId: 'agent-1', enabledTools: [] },
+        {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        }
+      ) as Record<string, unknown>;
+
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ enabledTools: [] }) })
+      );
+      expect(result).toMatchObject({
+        agentConfig: { enabledToolsCount: 0, effectiveTools: [], blockedTools: [] },
+      });
+    });
+
     it('throws error when agent is deleted during mutation', async () => {
       // Arrange
       const mockAgent = {
@@ -676,6 +967,8 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const,
         userScopedAccess: false,
         revision: 1,
       };

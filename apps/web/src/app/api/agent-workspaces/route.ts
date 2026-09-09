@@ -25,7 +25,7 @@
 
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, canPrincipalViewPage } from '@/lib/auth';
-import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { conversationRepository, type AiAgent } from '@/lib/repositories/conversation-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createId } from '@paralleldrive/cuid2';
@@ -41,13 +41,25 @@ import {
   MAX_ACTIVE_SESSIONS_PER_OWNER,
   provisionSessionSandbox,
   spawnSession,
-  toAgentSessionDTO,
+  toSessionDTOWithEnv,
   type AgentSessionListFilter,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { listShellsBulk, spawnShell } from '@/lib/agent-workspaces/workspace-shells-runtime';
-import { readWorkspaceGridsBulk, workspaceListEntryFromGrid } from '@/lib/agent-workspaces/workspace-layout-runtime';
-import { annotateConversationsWithPanes } from '@/lib/agent-workspaces/annotate-conversation-panes';
+import { findWorkspaceOfConversation, checkSessionAccess } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { readWorkspaceNodesBulk } from '@/lib/agent-workspaces/workspace-node-runtime';
 import { sessionQuotaExceeded } from '@/lib/agent-workspaces/quota-response';
+import type { LocalEnvRefusal } from '@pagespace/lib/services/drive-envs/local-env-gate';
+
+/** C1: how a LOCAL env's typed bind refusal maps to a status. Policy ⇒ 403, machine state ⇒ 409. */
+const LOCAL_BIND_REFUSAL_STATUS = {
+  flag_disabled: 403,
+  code_exec_denied: 403,
+  bind_policy: 403,
+  not_local: 409,
+  revoked: 409,
+  not_connected: 409,
+  substrate_unsupported: 409,
+} as const satisfies Record<LocalEnvRefusal, number>;
 
 /** Bound on the stored display label — rendered everywhere the session appears. */
 const MAX_SESSION_NAME_LENGTH = 120;
@@ -113,40 +125,48 @@ export async function GET(request: Request) {
 
   try {
     const sessions = await listSessions(filter);
-    // Children in TWO bulk queries, however many sessions listed — this is
+    // Children in THREE bulk queries, however many sessions listed — this is
     // polled by every open sidebar, and the per-session shape was 1+2N
     // queries per poll (review M4).
     const workspaceIds = sessions.map((session) => session.workspaceId);
-    const [shellsBySession, conversationsBySession, gridBySession] = await Promise.all([
+    const [shellsBySession, conversationsBySession, nodesBySession] = await Promise.all([
       listShellsBulk(workspaceIds),
       listSessionConversationsBulk(workspaceIds),
-      readWorkspaceGridsBulk(workspaceIds, auth.userId),
+      // THE NODE TREE, one per listed session — the sidebar's own source now
+      // that it renders the live tree out of the store instead of a polled
+      // grid snapshot. One statement for one workspace and for fifty, and the
+      // titles are resolved once per viewer beside the nodes, never inside
+      // them.
+      readWorkspaceNodesBulk(workspaceIds, auth.userId),
     ]);
     const withChildren = sessions.map((session) => {
-      const grid = gridBySession.get(session.workspaceId) ?? null;
+      // Every workspace ASKED FOR has an entry; this fallback covers only a
+      // session that vanished between `listSessions` and the node read. An
+      // empty tree at rev 0 is the honest answer for it, and the same one a
+      // never-written workspace gets — the client seats both identically.
+      const tree = nodesBySession.get(session.workspaceId) ?? { rev: 0, nodes: [], targets: [] };
       return {
         ...session,
         shells: shellsBySession.get(session.workspaceId) ?? [],
-        // THE list of threads in this workspace — one collection, every thread,
-        // each annotated with where it sits in the grid if it is placed at all
-        // (issue #2373).
+        // THE list of threads in this workspace, and there is nothing left to
+        // annotate it with (issue #2373). Membership IS the node row, so each
+        // entry carries its `nodeId` — read off the same row that decided the
+        // thread is here at all.
         //
-        // This and `workspace` below used to be two lists the client chose
-        // between, and the choice was wrong in the common case: an open
-        // workspace always has a grid, so `AgentsSidebar` always rendered the
-        // pane branch, and a thread with no pane row was invisible. Placement
-        // is best-effort by design, and a thread created without `placeInGrid`
-        // is never placed at all, so "created but not placed" is a resting
-        // state this list must serve, not a transient to wait out.
-        conversations: annotateConversationsWithPanes(
-          conversationsBySession.get(session.workspaceId) ?? [],
-          grid,
-        ),
-        // The grid's GEOMETRY — column widths, pane heights, ordering — for the
-        // pane surface to render. Deliberately no longer the sidebar's source
-        // for "which threads exist": that question has exactly one answer now,
-        // and it is the list above.
-        workspace: workspaceListEntryFromGrid(session.workspaceId, grid),
+        // `annotateConversationsWithPanes` existed to reconcile this listing
+        // with a separate grid, and it is deleted rather than ported: a listing
+        // and a grid that come from one table cannot disagree, so there is no
+        // correspondence left to maintain. Every entry here is on screen, which
+        // is why the `attached` boolean that used to ride beside `nodeId` is
+        // gone too: a thread in this list is in the tree, and the tree is what
+        // the grid draws.
+        conversations: conversationsBySession.get(session.workspaceId) ?? [],
+        // THE TREE. `{rev, nodes, targets}` — the same shape `GET
+        // /[workspaceId]/nodes` answers, so the sidebar's seat and a pane
+        // surface's own read are one function on the client, not two.
+        rev: tree.rev,
+        nodes: tree.nodes,
+        targets: tree.targets,
       };
     });
     return NextResponse.json({ sessions: withChildren });
@@ -189,8 +209,10 @@ export async function GET(request: Request) {
  * `firstThing: 'claim', conversationId` swaps it again for claiming an
  * EXISTING, never-session-bound conversation the caller owns as the
  * session's first thing, instead of minting a brand-new one —
- * `claimConversationInSession` (`claim-conversation-in-workspace.ts`), the
- * ONE place `conversations.workspaceId` is ever written. `driveId`/`agentPageId`
+ * `claimConversationInSession` (`claim-conversation-in-workspace.ts`), which
+ * ADMITS the thread — one node in `agent_workspace_nodes`, which is what
+ * membership is. It used to write `conversations.workspaceId`, a column
+ * migration 0256 dropped. `driveId`/`agentPageId`
  * are derived from the claimed row itself (a `type: 'page'` row's own agent;
  * a `type: 'global'` row takes the caller's `driveId`, same three-shape
  * ambiguity as the ordinary mint path below) — a caller-supplied
@@ -215,12 +237,48 @@ export async function GET(request: Request) {
  * row-to-be — drive membership + code-execution for a drive session, owner +
  * code-execution for a global one.
  */
+
+/**
+ * Resolve the effective `envId` for a spawn/claim targeting a page agent —
+ * shared by the direct-mint branch and the `firstThing: 'claim'` branch below,
+ * which each independently look up the same kind of agent via
+ * `conversationRepository.getAiAgent`.
+ *
+ * Falls back to the agent's own `defaultEnvId` when the caller truly said
+ * nothing (the field is OMITTED, not sent as explicit `null` — see the
+ * comment on `envIdWasProvided` above) — "didn't specify" means "use my
+ * default," not "force ephemeral." An explicit `envId` in the request
+ * (including explicit `null`, the palette's own ephemeral override) always
+ * wins; this only fires when the caller sent nothing, so every caller that
+ * resolves an agent through this route (palette, claim, any future MCP/API
+ * tool) gets the agent's Settings-screen default without having to know it
+ * exists.
+ *
+ * Also gated on the agent's OWN `sandboxEnabled`, live — not just at the
+ * moment the default was assigned (review — chatgpt-codex-connector, PR
+ * #2513): a stored `defaultEnvId` is deliberately inert data while Sandbox is
+ * off (see the settings-route comment on the same field), and a spawn-time
+ * fallback that ignored the current switch would silently place a session in
+ * that persistent environment the instant the field exists, regardless of
+ * whether the owner ever re-enabled Sandbox.
+ */
+function applyAgentDefaultEnv(
+  envId: string | null,
+  envIdWasProvided: boolean,
+  agent: Pick<AiAgent, 'sandboxEnabled' | 'defaultEnvId'>,
+): string | null {
+  if (!envIdWasProvided && envId === null && agent.sandboxEnabled && agent.defaultEnvId) {
+    return agent.defaultEnvId;
+  }
+  return envId;
+}
 export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
   let body: {
     driveId?: unknown;
+    envId?: unknown;
     agentPageId?: unknown;
     name?: unknown;
     firstThing?: unknown;
@@ -234,6 +292,22 @@ export async function POST(request: Request) {
   let driveId = typeof body.driveId === 'string' && body.driveId.length > 0 ? body.driveId : null;
   const agentPageId =
     typeof body.agentPageId === 'string' && body.agentPageId.length > 0 ? body.agentPageId : null;
+  // The environment to run inside, when one is named. The spawn palette now
+  // offers it ("in <env name>", beside the ephemeral default), so this is a
+  // live field rather than the dark one #2441 landed.
+  // It is NOT validated in this route: whether the env exists and belongs to
+  // `driveId` is `spawnAgentSession`'s check, made there so every future caller
+  // inherits it rather than each one re-deriving it.
+  //
+  // OMITTED vs explicit `null` now mean different things (review — chatgpt-
+  // codex-connector, PR #2513): omitted is "caller has no opinion," which
+  // falls back below to the target agent's own `defaultEnvId` when it has
+  // one. Explicit `null` is "New sandbox," the palette's own override for an
+  // agent that already has a default — and must NOT be reinterpreted as "no
+  // opinion," or selecting the ephemeral option for such an agent would
+  // silently spawn into its persistent env instead.
+  const envIdWasProvided = Object.prototype.hasOwnProperty.call(body, 'envId');
+  let envId = typeof body.envId === 'string' && body.envId.length > 0 ? body.envId : null;
   const rawName = typeof body.name === 'string' ? body.name.trim() : '';
   const wantsShellFirst = body.firstThing === 'shell';
   const wantsClaim = body.firstThing === 'claim';
@@ -287,9 +361,35 @@ export async function POST(request: Request) {
       // else, or was history-deleted — an id-guessing caller learns nothing.
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
-    if (row.workspaceId !== null) {
+    // MEMBERSHIP, from the tree — one lookup on the node table's global
+    // chat-target index. An ADVISORY preflight: the claim's own decision asks
+    // the same question, and the unique index settles the racing case, so this
+    // exists to answer the ordinary one before a workspace row is minted.
+    const existingWorkspaceId = await findWorkspaceOfConversation(conversationId);
+    if (existingWorkspaceId !== null) {
+      // NAME the owning workspace — but only one the caller can actually open.
+      // This refusal carries its own remedy: the caller wanted this
+      // conversation opened in a workspace and one already exists, so the
+      // client selects straight into it rather than treating the conflict as a
+      // dead end and ejecting to /dashboard.
+      //
+      // Owning the CONVERSATION is not access to the WORKSPACE holding it.
+      // Any accepted drive member may create their own conversation inside
+      // another member's drive session (`decideAgentSessionAccess` grants by
+      // drive membership, not session ownership), and that membership can
+      // lapse while conversation ownership never does. The 404 above proves
+      // only "this conversation is yours" — so the id goes through the same
+      // centralized gate every other workspace route uses, and is simply
+      // omitted when it does not pass. The listing route already masks
+      // `workspaceId` in exactly this situation (see `maskOrDrop`); this keeps
+      // the two consistent instead of letting the 409 disclose what the
+      // listing deliberately hides. Reported by review on #2386.
+      const access = await checkSessionAccess(auth.userId, existingWorkspaceId);
       return NextResponse.json(
-        { error: 'That conversation already belongs to a session' },
+        {
+          error: 'That conversation already belongs to a session',
+          ...(access.allowed ? { workspaceId: existingWorkspaceId } : {}),
+        },
         { status: 409 },
       );
     }
@@ -316,6 +416,12 @@ export async function POST(request: Request) {
       const denied = await denyIfCannotViewAgent(request, auth, row.contextId);
       if (denied) return denied;
       agentTitle = agent.title;
+      // Same default-env resolution as the direct-mint branch below — a
+      // claimed page conversation's agent is exactly as entitled to its
+      // configured default as a freshly minted one (review — chatgpt-codex-
+      // connector, PR #2513: this branch resolves the same kind of agent but
+      // previously never applied the fallback at all).
+      envId = applyAgentDefaultEnv(envId, envIdWasProvided, agent);
     } else if (row.type === 'global') {
       claimIsGlobal = true;
       // driveId stays whatever the caller (the surface's own drive context)
@@ -348,6 +454,7 @@ export async function POST(request: Request) {
     const denied = await denyIfCannotViewAgent(request, auth, agentPageId);
     if (denied) return denied;
     agentTitle = agent.title;
+    envId = applyAgentDefaultEnv(envId, envIdWasProvided, agent);
   }
 
   // Advisory fast-path only (review #2261/2): count-then-branch here is
@@ -408,7 +515,7 @@ export async function POST(request: Request) {
     name = nextUniqueSessionName(baseLabel, existingNames).slice(0, MAX_SESSION_NAME_LENGTH);
   }
 
-  const spawned = await spawnSession({ userId: auth.userId, driveId, name });
+  const spawned = await spawnSession({ userId: auth.userId, driveId, envId, name });
   if (!spawned.ok) {
     if (spawned.reason === 'session_limit_reached') {
       // The atomic backstop caught what the pre-check above missed — a
@@ -416,6 +523,28 @@ export async function POST(request: Request) {
       return sessionQuotaExceeded(request, auth.userId, null, 'agent-sessions', {
         message: 'You have reached your active session limit — end some before starting more.',
       });
+    }
+    if (spawned.reason === 'env_not_found') {
+      // 404 covers both "no such env" and "an env in another drive" — the
+      // service collapses them deliberately, so that a caller who cannot see a
+      // drive cannot enumerate its environments through this endpoint either.
+      return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+    }
+    if (spawned.reason === 'env_bind_refused') {
+      // A LOCAL env refused the bind at the server (C1). Policy refusals are the
+      // actor's problem (403); state refusals are the machine's (409).
+      auditRequest(request, {
+        eventType: 'authz.access.denied',
+        userId: auth.userId,
+        resourceType: 'drive_env',
+        resourceId: envId ?? undefined,
+        details: { route: 'agent-sessions', operation: 'spawn', refusal: spawned.refusal, ...(spawned.cause ? { cause: spawned.cause } : {}) },
+        riskScore: 0.4,
+      });
+      return NextResponse.json(
+        { error: 'This environment refused the session', reason: spawned.reason, refusal: spawned.refusal },
+        { status: LOCAL_BIND_REFUSAL_STATUS[spawned.refusal] },
+      );
     }
     loggers.api.error('Agent session spawn failed', undefined, { driveId, detail: spawned.detail });
     return NextResponse.json({ error: 'Could not start a session', reason: spawned.reason }, { status: 502 });
@@ -501,7 +630,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(
       {
-        session: toAgentSessionDTO(provisionedSession),
+        session: await toSessionDTOWithEnv(provisionedSession),
         shellId: shellSpawned.shell.shellId,
         shellName: shellSpawned.shell.name,
       },
@@ -543,8 +672,26 @@ export async function POST(request: Request) {
         // this atomic claim (most likely: another request claimed it first).
         // Same conflict, same status the preflight gives it — not a server
         // fault, so not 502.
+        //
+        // If the cause WAS the likely one, the winning workspace exists now,
+        // so name it for the same reason the preflight does — the client opens
+        // it instead of dead-ending — behind the same access gate, since
+        // owning the conversation is not access to whatever workspace won the
+        // race. Best effort throughout: any other cause of `not_found` finds
+        // nothing here, and a workspace the caller cannot open is simply not
+        // named, degrading to the plain refusal this always was.
+        const raceWinnerWorkspaceId = await findWorkspaceOfConversation(conversationId).catch(() => null);
+        const raceWinnerOpenable =
+          raceWinnerWorkspaceId !== null &&
+          (await checkSessionAccess(auth.userId, raceWinnerWorkspaceId).then(
+            (a) => a.allowed,
+            () => false,
+          ));
         return NextResponse.json(
-          { error: 'That conversation is no longer available to claim' },
+          {
+            error: 'That conversation is no longer available to claim',
+            ...(raceWinnerOpenable ? { workspaceId: raceWinnerWorkspaceId } : {}),
+          },
           { status: 409 },
         );
       }
@@ -565,7 +712,7 @@ export async function POST(request: Request) {
     });
 
     return NextResponse.json(
-      { session: toAgentSessionDTO(spawned.session), conversationId },
+      { session: await toSessionDTOWithEnv(spawned.session), conversationId },
       { status: 201 },
     );
   }
@@ -601,7 +748,7 @@ export async function POST(request: Request) {
   });
 
   return NextResponse.json(
-    { session: toAgentSessionDTO(spawned.session), conversationId },
+    { session: await toSessionDTOWithEnv(spawned.session), conversationId },
     { status: 201 },
   );
 }

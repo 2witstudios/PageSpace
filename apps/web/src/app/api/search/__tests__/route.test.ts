@@ -22,6 +22,8 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 import { db } from '@pagespace/db/db';
 import { verifyAuth } from '@/lib/auth';
 import * as dbOperators from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { GET } from '../route';
 
 // ============================================================================
@@ -61,5 +63,32 @@ describe('GET /api/search', () => {
     const patterns = ilikeSpy.mock.calls.map(([, pattern]) => pattern);
     expect(patterns).toContain('%50\\%%');
     expect(patterns).toContain('%off%');
+  });
+
+  it('lets sheets reach the content condition, not only documents', async () => {
+    // The content gate was `eq(pages.type, 'DOCUMENT')`, so widening the
+    // predicate to search `sheet_rows` changed nothing here — a spreadsheet
+    // could never reach the content condition however well it matched, and
+    // stayed findable by title alone.
+    // The page-search block only runs when the user has at least one drive.
+    const rows = [{ id: 'drive_1', name: 'Drive', slug: 'drive', type: 'DOCUMENT', title: 'T' }];
+    const chain: Record<string, unknown> = {};
+    chain.from = vi.fn(() => chain);
+    chain.leftJoin = vi.fn(() => chain);
+    chain.where = vi.fn(() => chain);
+    chain.limit = vi.fn(() => Promise.resolve(rows));
+    chain.then = (resolve: (value: unknown[]) => unknown) => Promise.resolve(rows).then(resolve);
+    vi.mocked(db.select).mockReturnValue(chain as never);
+
+    const inArraySpy = vi.spyOn(dbOperators, 'inArray');
+
+    const request = new Request('https://example.com/api/search?q=needle');
+    const response = await GET(request);
+
+    expect(response.status).toBe(200);
+    const typeGate = inArraySpy.mock.calls.find(([column]) => column === pages.type);
+    expect(typeGate).toBeDefined();
+    expect(typeGate![1]).toContain(PageType.SHEET);
+    expect(typeGate![1]).toContain(PageType.DOCUMENT);
   });
 });

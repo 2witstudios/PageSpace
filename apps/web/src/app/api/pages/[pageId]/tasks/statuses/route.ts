@@ -3,7 +3,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, asc, desc, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskStatusConfigs, taskItems } from '@pagespace/db/schema/tasks';
-import { DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
+import { seedInheritedTaskStatusConfigs, resolveInheritedStatusSeed } from '@/services/api/task-sync-service';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canPrincipalEditPage, canPrincipalViewPage } from '@/lib/auth'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -48,11 +48,25 @@ export async function GET(
   });
 
   if (!taskList) {
-    // Return default statuses if no task list exists yet
+    // No list row yet, so preview what this page WOULD be seeded with rather
+    // than the four built-ins. Since sub-lists inherit their ancestor's
+    // vocabulary, the built-ins are the right answer only for a page with no
+    // task-list ancestor — everywhere else this screen was naming four statuses
+    // that were never going to exist, one function above the POST that seeds the
+    // inherited set. A read: resolveInheritedStatusSeed only walks and reads.
+    //
+    // It discloses an ancestor's status names to a principal who may not be able
+    // to view that ancestor — but only the same names this very route returns
+    // once anything has initialised the list, with no ancestor check either.
+    // The preview is earlier, not wider. (See the note on
+    // resolveInheritedStatusSeed for why the seed itself is not gated.) The walk
+    // is bounded at STATUS_INHERITANCE_MAX_DEPTH and runs only for a page that
+    // has no list row yet, which is once.
+    const seed = await resolveInheritedStatusSeed(db, pageId);
     auditRequest(req, { eventType: 'data.read', userId, resourceType: 'task_status_config', resourceId: pageId, details: { action: 'list_status_configs' } });
 
     return NextResponse.json({
-      statusConfigs: DEFAULT_TASK_STATUSES.map((s, i) => ({
+      statusConfigs: seed.map((s, i) => ({
         id: `default-${s.slug}`,
         taskListId: '',
         ...s,
@@ -126,13 +140,13 @@ export async function POST(
         status: 'pending',
       }).returning();
 
-      // Create default status configs
-      await tx.insert(taskStatusConfigs).values(
-        DEFAULT_TASK_STATUSES.map(s => ({
-          taskListId: created.id,
-          ...s,
-        }))
-      );
+      // Inherit, not defaults. This is a lazy-init like every other, and the
+      // vocabulary is decided permanently by whichever path touches the page
+      // first — so a sub-list whose statuses are opened here before anyone
+      // reads it would otherwise be stamped with the four built-ins while its
+      // ancestor defines its own, and every later PATCH against an inherited
+      // slug 400s.
+      await seedInheritedTaskStatusConfigs(tx, created.id, pageId);
 
       return created;
     });

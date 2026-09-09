@@ -1,0 +1,1 @@
+ALTER TABLE "pages" ADD COLUMN "siteMode" boolean DEFAULT false NOT NULL;

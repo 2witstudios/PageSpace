@@ -1,0 +1,38 @@
+{
+  "npmRebuild": false,
+  "directories": {
+    "buildResources": "assets"
+  },
+  "mac": {
+    "category": "public.app-category.productivity",
+    "target": [
+      { "target": "dmg", "arch": ["universal"] },
+      { "target": "zip", "arch": ["universal"] }
+    ],
+    "artifactName": "${productName}.${ext}",
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false,
+    "entitlements": "build/entitlements.mac.plist",
+    "entitlementsInherit": "build/entitlements.mac.inherit.plist"
+  },
+  "win": {
+    "target": [
+      { "target": "nsis", "arch": ["x64"] },
+      { "target": "portable", "arch": ["x64"] }
+    ],
+    "artifactName": "${productName}.${ext}"
+  },
+  "linux": {
+    "publish": null,
+    "target": ["AppImage", "deb", "rpm"],
+    "category": "Office",
+    "artifactName": "${productName}.${ext}",
+    "maintainer": "support@pagespace.ai"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true
+  }
+}

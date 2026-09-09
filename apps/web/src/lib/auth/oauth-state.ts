@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { z } from 'zod/v4';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
+import { DESKTOP_SHELLS } from './desktop-shell';
 
 // State expires after 10 minutes — prevents replay attacks
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
@@ -12,7 +13,22 @@ const INVITE_TOKEN_MAX_LENGTH = 128;
 
 const oauthStateDataSchema = z.object({
   returnUrl: z.string().max(2048).optional(),
-  platform: z.enum(['web', 'desktop', 'ios']).optional(),
+  // 'android' is accepted so a signed state can name the platform that started
+  // the flow. Without it the enum rejected the value outright, which is why no
+  // server path could emit the `pagespace://` handoff for Android and the
+  // custom-scheme intent filter Phase C shipped stayed inert.
+  //
+  // Accepting the value is the unblock, NOT permission to emit the handoff: the
+  // OAuth callbacks still deep-link for iOS only, and the two preconditions that
+  // gate widening them (binding the handoff to the app that started the flow, and
+  // having anything consume `appUrlOpen` at all) are set out at that branch in
+  // `api/auth/google/callback/route.ts`.
+  platform: z.enum(['web', 'desktop', 'ios', 'android']).optional(),
+  // Which desktop app started the flow. One Electron codebase ships two, each
+  // with its own protocol scheme, and the callback has to deep-link back into
+  // the one the user actually signed in from. Absent for web, iOS and older
+  // desktop builds, which all mean PageSpace.
+  shell: z.enum(DESKTOP_SHELLS).optional(),
   deviceId: z.string().min(1).max(128).optional(),
   deviceName: z.string().max(255).optional(),
   inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),

@@ -24,8 +24,7 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { SWRConfig } from 'swr';
-import { annotateConversationsWithPanes } from '@/lib/agent-workspaces/annotate-conversation-panes';
+import { SWRConfig, useSWRConfig } from 'swr';
 
 const mockPush = vi.fn();
 const mockUseAuth = vi.fn();
@@ -51,6 +50,8 @@ interface PageAgentsResult {
     driveName: string;
     agentCount: number;
     agents: { id: string; title: string | null; driveId: string }[];
+    /** The deployment's `LOCAL_ENVS_ENABLED`, ridden per drive the way `sandboxEligible` is. Absent = off. */
+    localEnvsEnabled?: boolean;
   }[];
   isLoading: boolean;
   isError: boolean;
@@ -84,6 +85,7 @@ vi.mock('@/hooks/page-agents/usePageAgents', () => ({
 const mockFetchWithAuth = vi.fn();
 const mockPost = vi.fn();
 const mockDel = vi.fn();
+const mockPatch = vi.fn();
 vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
   // `ApiRequestError` is re-exported from the REAL module (not hand-rolled)
   // so the component's `instanceof` check on a mocked-`del` rejection stays
@@ -94,6 +96,7 @@ vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
     fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
     post: (...args: unknown[]) => mockPost(...args),
     del: (...args: unknown[]) => mockDel(...args),
+    patch: (...args: unknown[]) => mockPatch(...args),
   };
 });
 
@@ -104,7 +107,13 @@ vi.mock('../DriveFooter', () => ({ default: () => <div /> }));
 vi.mock('../DashboardFooter', () => ({ default: () => <div /> }));
 
 const mockToastError = vi.hoisted(() => vi.fn());
-vi.mock('sonner', () => ({ toast: { error: (...args: unknown[]) => mockToastError(...args) } }));
+const mockToastSuccess = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({
+  toast: {
+    error: (...args: unknown[]) => mockToastError(...args),
+    success: (...args: unknown[]) => mockToastSuccess(...args),
+  },
+}));
 
 import { within } from '@testing-library/react';
 import { ApiRequestError } from '@/lib/auth/auth-fetch';
@@ -114,10 +123,12 @@ import {
   useAgentWorkspaceStore,
   __resetWorkspaceQueuesForTests,
 } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import type { WorkspaceState } from '@pagespace/lib/agent-workspaces/workspace-layout-verbs';
-import type { PersistedColumnState } from '@pagespace/lib/agent-workspaces/contract';
+import type { PaneTarget, WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
+import type { WorkspaceNodeTarget } from '@pagespace/lib/agent-workspaces/workspace-node-wire';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
+import { useEditingStore } from '@/stores/useEditingStore';
+import { LOCAL_ENV_ENROLLMENT_POLL_MS } from '@/hooks/drive-envs/useDriveEnvs';
 
 const driveFixture = (id: string, name: string, overrides: Partial<Drive> = {}): Drive => ({
   id,
@@ -137,24 +148,45 @@ interface SessionFixture {
   /** The rolling-deploy compat twin the DTO still carries; nothing reads it. */
   sessionId: string;
   driveId: string | null;
+  /** The persistent environment this session runs inside — absent means the ephemeral default. */
+  envId?: string | null;
   name: string;
   sandboxStatus: 'none' | 'starting' | 'running' | 'ended';
   conversations: { conversationId: string; title: string | null; agentPageId: string | null }[];
   shells: { shellId: string; name: string }[];
   /**
-   * The saved pane grid, omitted in most fixtures. Since issue #2373 the
-   * sidebar no longer picks a row shape from this — it annotates the list
-   * above with it, exactly as the route does. Left `unknown` because the
-   * fixtures are deliberately loose literals; `gridOf` narrows it once.
+   * THE TREE, exactly as the route serves it. The sidebar seats this into
+   * `useAgentWorkspaceStore` and then renders the STORE — so a fixture and the
+   * rows it produces cannot disagree the way a `workspace` grid and a
+   * `conversations` list once could.
    */
-  workspace?: unknown;
+  rev?: number;
+  nodes?: WorkspaceNode[];
+  targets?: WorkspaceNodeTarget[];
 }
+
+const WS = 'ses-1';
+/** The root a seeded workspace carries — its id is the workspace's own. */
+const treeRoot: WorkspaceNode = { nodeType: 'root', id: WS, parentId: null, position: 0, axis: 'row' };
+
+function paneNode(
+  id: string,
+  parentId: string,
+  position: number,
+  target: PaneTarget | null,
+): WorkspaceNode {
+  return { nodeType: 'pane', id, parentId, position, target };
+}
+const chatNode = (id: string, parentId: string, position: number, conversationId: string) =>
+  paneNode(id, parentId, position, { kind: 'chat', id: conversationId });
+const pageNode = (id: string, parentId: string, position: number, pageId: string) =>
+  paneNode(id, parentId, position, { kind: 'page', id: pageId });
 
 const SESSION: SessionFixture = {
   // The listing spreads AgentSessionDTO, which carries the canonical id AND
   // the rolling-deploy compat twin. The sidebar reads the canonical one.
-  workspaceId: 'ses-1',
-  sessionId: 'ses-1',
+  workspaceId: WS,
+  sessionId: WS,
   driveId: 'drive-1',
   name: 'api refactor',
   sandboxStatus: 'running',
@@ -165,27 +197,66 @@ const SESSION: SessionFixture = {
   shells: [],
 };
 
-/**
- * Serve a listing the way the ROUTE serves one (issue #2373): each thread
- * annotated with its pane placement, using the server's own
- * `annotateConversationsWithPanes`. Fixtures cannot drift from the shape the
- * sidebar actually receives — a `workspace` grid and a `conversations` list
- * that disagreed about placement is precisely the bug this suite now guards.
- */
-const gridOf = (workspace: unknown): PersistedColumnState[] | null =>
-  (workspace as { columns?: PersistedColumnState[] } | undefined)?.columns ?? null;
+interface EnvFixture {
+  id: string;
+  name: string;
+  status: 'none' | 'running' | 'stopped' | 'connecting' | 'connected' | 'disconnected';
+  substrate?: 'sprite' | 'local';
+  label?: string;
+  enrolled?: boolean;
+}
 
-const respondWithSessions = (sessions: SessionFixture[]) => {
-  const annotated = sessions.map((session) => ({
-    ...session,
-    conversations: annotateConversationsWithPanes(
-      session.conversations,
-      gridOf(session.workspace),
-    ),
-  }));
-  mockFetchWithAuth.mockResolvedValue({
-    ok: true,
-    json: async () => ({ sessions: annotated }),
+/**
+ * Serve a listing the way the ROUTE serves one: threads, shells, and the tree —
+ * plus the drive's ENVIRONMENTS, which the sidebar reads from a second endpoint.
+ * Default empty, so every pre-environments test in this file keeps describing a
+ * drive that has none and its flat session list is unchanged.
+ */
+const respondWithSessions = (
+  sessions: SessionFixture[],
+  envs: EnvFixture[] = [],
+  /**
+   * Fails the ENVIRONMENTS endpoint only, leaving the sessions listing healthy.
+   * A function so a test can flip it between renders (fail, then retry and
+   * succeed) without rebuilding the whole implementation.
+   */
+  envsFail: () => boolean = () => false,
+) => {
+  mockFetchWithAuth.mockImplementation(async (url: string, init?: { method?: string }) => {
+    if (typeof url === 'string' && url.includes('/envs')) {
+      if (envsFail()) return { ok: false, status: 500, json: async () => ({}) };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          envs: envs.map((env) => ({ driveId: 'drive-1', createdAt: '2026-08-01T00:00:00.000Z', ...env })),
+        }),
+      };
+    }
+    // A node WRITE that never settles, so what these assertions read is the
+    // optimistic apply — what the user sees the instant they click. The same
+    // discipline the store's own suite runs on.
+    if (typeof url === 'string' && url.includes('/nodes') && init?.method === 'POST') {
+      return new Promise<never>(() => {});
+    }
+    // The sidebar seats the tree from the LISTING; the per-workspace node read
+    // only fires from a surface that mounts `useWorkspaceLayoutSync`, which this
+    // suite never renders. Answering rev 0 keeps an accidental one honest —
+    // the store's own guard drops a snapshot older than what it holds.
+    if (typeof url === 'string' && url.includes('/nodes')) {
+      return { ok: true, status: 200, json: async () => ({ rev: 0, nodes: [], targets: [] }) };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        sessions: sessions.map((session) => ({
+          rev: 1,
+          nodes: [],
+          targets: [],
+          ...session,
+        })),
+      }),
+    };
   });
 };
 
@@ -196,6 +267,34 @@ const renderSidebar = () =>
       <AgentsSidebar />
     </SWRConfig>,
   );
+
+/**
+ * The sidebar plus a handle on the SWR cache it is actually using.
+ *
+ * `renderSidebar` gives each test its own isolated provider, which is what
+ * keeps them from leaking cache into each other — and also means the `mutate`
+ * exported from `swr` addresses a different cache entirely. A test that needs
+ * to force a revalidation (rather than wait for one the component never
+ * schedules) has to reach the provider from INSIDE it, which is what this
+ * one-line probe is for.
+ */
+const renderSidebarWithMutate = () => {
+  const captured: { revalidate: (key: string) => Promise<unknown> } = {
+    revalidate: async () => undefined,
+  };
+  const Probe = () => {
+    const { mutate } = useSWRConfig();
+    captured.revalidate = (key: string) => mutate(key);
+    return null;
+  };
+  render(
+    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <Probe />
+      <AgentsSidebar />
+    </SWRConfig>,
+  );
+  return captured;
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -214,10 +313,15 @@ beforeEach(() => {
   // test so one test's fixture never leaks into the next via the persisted
   // store.
   useDriveStore.setState({ drives: [] });
-  // Same leak risk for panes: two tests opening the same session id (every
-  // fixture here is 'ses-1' or 'ses-new') would otherwise see each other's
-  // panes[0], since nothing else clears this store between tests.
+  // Same leak risk for the tree: two tests opening the same workspace id would
+  // otherwise see each other's nodes, since nothing else clears this store.
   __resetWorkspaceQueuesForTests();
+  // Same reason, one store over: the environment dialogs register an editing
+  // session while open, and a test that unmounts mid-dialog leaves it
+  // registered. A leaked session is not inert — `isEditingActive()` gates the
+  // quick-create hotkey handler, so the next test's keypress would silently do
+  // nothing.
+  useEditingStore.getState().clearAllSessions();
   // Deliberately a PLAIN, non-admin user: sessions/chat/panes are open to
   // every authenticated user now, so every test in this file that relies on
   // this default doubles as proof a non-admin gets full access too.
@@ -236,6 +340,21 @@ describe('AgentsSidebar', () => {
     expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-workspaces?driveId=drive-1');
   });
 
+  test('tints the selected session row with the selected token, not the hover token', async () => {
+    useAgentSurfaceStore.setState({ selectedSessionId: WS });
+
+    renderSidebar();
+
+    await screen.findByText('api refactor');
+    // The RowMenu wrapper is the element that carries the row's fill. Split into
+    // class TOKENS so the inactive `hover:bg-accent` cannot satisfy a substring
+    // match — hover and selected are deliberately different tokens now.
+    const row = screen.getByTestId(`sidebar-session-${WS}`).firstElementChild as HTMLElement;
+    const tokens = row.className.split(/\s+/);
+    expect(tokens).toContain('bg-primary-soft');
+    expect(tokens).not.toContain('bg-accent');
+  });
+
   test('refuses when signed out, and makes no request on their behalf', () => {
     mockUseAuth.mockReturnValue({ user: null, isLoading: false });
 
@@ -246,9 +365,6 @@ describe('AgentsSidebar', () => {
     // The load-bearing half: neither fetch is ever made, rather than made and
     // discarded.
     expect(mockFetchWithAuth).not.toHaveBeenCalled();
-    // Unfiltered (no driveId arg) now in both modes — see AgentsSidebar.tsx's
-    // comment on the `usePageAgents` call — but the load-bearing half of
-    // this assertion is `enabled: false`, unchanged.
     expect(mockUsePageAgents).toHaveBeenCalledWith(undefined, { enabled: false });
   });
 
@@ -280,78 +396,35 @@ describe('AgentsSidebar', () => {
     expect(screen.getByLabelText('New session')).toBeDefined();
   });
 
-  // Named for the deleted fork ("falls back to a flat conversation list") until
-  // issue #2373. There is no fallback now — there is one list, and a session
-  // with no grid is just the case where every thread in it is unplaced. Keeping
-  // the old name would have implied the branch still exists.
-  test('lists a session\'s threads when it has no saved pane grid at all', async () => {
-    // SESSION carries no `workspace` — a session never opened in the grid (or
-    // opened only by a client old enough to predate the layout sync).
-    const user = userEvent.setup();
-    renderSidebar();
+  /**
+   * THE MEMBERSHIP RULE, and the one this suite guards hardest.
+   *
+   * Every member of a workspace has a row, whether or not it is on the screen.
+   * A thread with no node at all (#2373 — placement is best-effort, so "created
+   * but never placed" is a resting state), a thread whose node is PARKED
+   * (closing a pane no longer destroys it), and a page pane in either state.
+   */
+  describe('the workspace tree', () => {
+    const nodes = [treeRoot, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')];
 
-    await user.click(await screen.findByLabelText(/expand api refactor/i));
-
-    expect(screen.getByText('Researcher — First chat')).toBeDefined();
-    expect(screen.queryByText(/split/i)).toBeNull();
-  });
-
-  describe('a session with a saved pane grid', () => {
-    const workspaceFixture = {
-      id: 'ses-1',
-      columns: [
-        {
-          id: 'col-1',
-          panes: [
-            {
-              id: 'pane-1',
-              scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' },
-            },
-            {
-              id: 'pane-2',
-              scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-2', agentPageId: 'agent-1' },
-            },
-          ],
-        },
-      ],
-      activePaneId: 'pane-1',
-      pendingPickerPaneId: null,
-    };
-
-    test('groups conversations by PANE — one row per pane, each labeled by its own conversation', async () => {
-      respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
+    test("lists a session's threads when its tree holds no nodes at all", async () => {
+      // Every thread is unplaced — a workspace nothing has ever been placed into.
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
 
-      // Two panes, each showing its own conversation — two sibling rows.
       expect(screen.getByText('Researcher — First chat')).toBeDefined();
       expect(screen.getByText('Researcher — Second chat')).toBeDefined();
     });
 
-    /**
-     * THE BUG (issue #2373). The expansion used to be
-     * `chatPanes ? … : session.conversations`, and an open workspace always
-     * has a grid — so the pane branch always won and a thread with no pane row
-     * simply did not render. Placement is best-effort, so that is the ordinary
-     * state of a freshly spawned worker: production showed one workspace with
-     * 3 threads and 2 panes, another with 10 threads and 4 panes. Six threads
-     * were unreachable from the sidebar entirely.
-     *
-     * Fails on the pre-fix component: only the two placed rows appear.
-     */
-    test('renders a thread that has NO pane, alongside the placed ones', async () => {
+    test('renders a thread that has NO node, alongside the ones that do', async () => {
       respondWithSessions([
         {
           ...SESSION,
-          conversations: [
-            ...SESSION.conversations,
-            // Spawned, claimed, never placed — the "hi" conversation from the
-            // production repro.
-            { conversationId: 'conv-unplaced', title: 'hi', agentPageId: 'agent-1' },
-          ],
-          workspace: workspaceFixture,
+          conversations: [...SESSION.conversations, { conversationId: 'conv-3', title: 'Unplaced', agentPageId: 'agent-1' }],
+          rev: 1,
+          nodes,
         },
       ]);
       const user = userEvent.setup();
@@ -360,77 +433,46 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByLabelText(/expand api refactor/i));
 
       expect(screen.getByText('Researcher — First chat')).toBeDefined();
-      expect(screen.getByText('Researcher — Second chat')).toBeDefined();
-      expect(screen.getByText('Researcher — hi')).toBeDefined();
-      expect(screen.getAllByTestId('sidebar-conversation-row')).toHaveLength(3);
+      expect(screen.getByText('Researcher — Unplaced')).toBeDefined();
     });
 
-    test('an unplaced thread closes the THREAD — there is no pane to unbind', async () => {
+    test('renders every thread the tree holds, however deeply nested', async () => {
+      // This used to be about a PARKED thread — a member not on the screen,
+      // rendered dimmed and titled "(not open)". There is no such member, so
+      // what is left to hold down is that DEPTH does not hide a row either.
       respondWithSessions([
         {
           ...SESSION,
-          conversations: [{ conversationId: 'conv-unplaced', title: 'hi', agentPageId: 'agent-1' }],
-          workspace: workspaceFixture,
+          rev: 1,
+          nodes: [
+            treeRoot,
+            chatNode('n1', WS, 0, 'conv-1'),
+            { nodeType: 'split', id: 's1', parentId: WS, position: 1, axis: 'column' },
+            chatNode('n2', 's1', 0, 'conv-2'),
+            pageNode('n4', 's1', 1, 'page-9'),
+          ],
         },
       ]);
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Researcher — hi'));
-      await user.click(await screen.findByText('Close'));
 
-      // The conversation DELETE, not a layout verb: an unplaced thread has no
-      // pane binding to reset.
-      await waitFor(() => {
-        expect(mockDel).toHaveBeenCalledWith(
-          expect.stringContaining('/conversations/conv-unplaced'),
-        );
-      });
+      const rows = screen.getAllByTestId('sidebar-conversation-row');
+      expect(rows).toHaveLength(2);
+      expect(within(rows[0]).getByTitle('Researcher — First chat')).toBeDefined();
+      expect(within(rows[1]).getByTitle('Researcher — Second chat')).toBeDefined();
     });
 
-    test('clicking a pane row selects its conversation', async () => {
-      respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(await screen.findByText('Researcher — First chat'));
-
-      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
-      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
-      expect(mockPush).not.toHaveBeenCalled();
-    });
-
-    test('clicking the OTHER pane\'s row selects ITS conversation', async () => {
-      respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(await screen.findByText('Researcher — Second chat'));
-
-      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
-      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
-    });
-
-    test('lists a PAGE pane as its own row, labeled by the page title', async () => {
-      // A document/task page opened into the grid (picker or an agent's
-      // `open_page_pane`) is a persisted pane like any other — it must not
-      // be invisible in the sidebar while chat panes and shells are listed.
-      const withPagePane = {
-        ...workspaceFixture,
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              ...workspaceFixture.columns[0].panes,
-              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
-            ],
-          },
-        ],
-      };
-      respondWithSessions([{ ...SESSION, workspace: withPagePane }]);
+    test('lists a PAGE pane as its own row, titled from targets[]', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          rev: 1,
+          nodes: [...nodes, pageNode('n3', WS, 2, 'page-1')],
+          targets: [{ id: 'page-1', kind: 'page', title: 'Spec doc', lastMessageAt: null, agentPageId: null }],
+        },
+      ]);
       const user = userEvent.setup();
       renderSidebar();
 
@@ -439,431 +481,231 @@ describe('AgentsSidebar', () => {
       expect(screen.getByText('Spec doc')).toBeDefined();
     });
 
-    test('clicking a page pane row focuses the session and that pane, seating the grid from the row\'s own listing', async () => {
-      // Deliberately NO local grid: the session isn't the displayed one, so
-      // `AgentPanes` and its layout sync never hydrated it. The click
-      // must seat the row's own server-listing snapshot before focusing —
-      // `selectPane` no-ops on a session the store has never seen (review
-      // P1, chatgpt-codex-connector).
-      const withPagePane = {
-        ...workspaceFixture,
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              ...workspaceFixture.columns[0].panes,
-              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
-            ],
-          },
-        ],
-      };
-      respondWithSessions([{ ...SESSION, workspace: withPagePane }]);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(await screen.findByText('Spec doc'));
-
-      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].activePaneId).toBe('pane-3');
-    });
-
-    test('closing a page pane row persists the close to the server — the sync hook only covers the displayed session (review P1)', async () => {
-      const withPagePane = {
-        ...workspaceFixture,
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              ...workspaceFixture.columns[0].panes,
-              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
-            ],
-          },
-        ],
-      };
-      respondWithSessions([{ ...SESSION, workspace: withPagePane }]);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Spec doc'));
-      await user.click(await screen.findByText('Close'));
-
-      // The local grid dropped the pane…
-      await waitFor(() => {
-        const panes = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes);
-        expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeUndefined();
-      });
-      // …and the close crossed the wire as its own `close_pane` VERB. The
-      // hand-rolled PUT this test used to pin is gone: the store posts every
-      // mutation for every session, displayed or not, so the sidebar has no
-      // persistence of its own left to get wrong.
-      await waitFor(() => {
-        const verbCall = mockFetchWithAuth.mock.calls.find(
-          ([url, init]) =>
-            url === '/api/agent-workspaces/ses-1/workspace/verbs' &&
-            (init as RequestInit | undefined)?.method === 'POST',
-        );
-        expect(verbCall).toBeDefined();
-        const body = JSON.parse((verbCall![1] as RequestInit).body as string) as {
-          opId: string;
-          baseRev: number;
-          verb: { type: string; paneId: string };
-        };
-        expect(body.verb).toEqual({ type: 'close_pane', paneId: 'pane-3' });
-        expect(body.opId).toBeTruthy();
-      });
-      // Nothing was PUT — the legacy blob route survives one release for
-      // rolling deploys, but this client no longer calls it.
-      expect(
-        mockFetchWithAuth.mock.calls.find(
-          ([, init]) => (init as RequestInit | undefined)?.method === 'PUT',
-        ),
-      ).toBeUndefined();
-    });
-
-    test('closing a row the local store no longer knows refreshes the listing instead of clobbering the server', async () => {
-      // The store holds a DIFFERENT grid for ses-1 with no page pane —
-      // zustand persist rehydrates every session's grid from localStorage
-      // at page load, and another tab/device may have moved past this
-      // row's snapshot. A wholesale PUT of that grid would overwrite the
-      // server's newer layout AND leave the clicked pane alive (review P2).
-      act(() => {
-        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', {
-          id: 'ses-1',
-          columns: [
-            {
-              id: 'col-9',
-              panes: [{ id: 'pane-9', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-9', agentPageId: null } }],
-            },
+    test('lists a page pane nested inside a split, not only the root’s own children', async () => {
+      // The successor to a test about PARKED page panes. The trap it guarded —
+      // a renderer that shows only part of the membership — is now only
+      // reachable through depth, so that is what it walks.
+      respondWithSessions([
+        {
+          ...SESSION,
+          rev: 1,
+          nodes: [
+            treeRoot,
+            { nodeType: 'split', id: 's1', parentId: WS, position: 0, axis: 'column' },
+            chatNode('n1', 's1', 0, 'conv-1'),
+            pageNode('n3', 's1', 1, 'page-1'),
           ],
-          activePaneId: 'pane-9',
-          pendingPickerPaneId: null,
-        } as WorkspaceState);
-      });
-      const withPagePane = {
-        ...workspaceFixture,
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              ...workspaceFixture.columns[0].panes,
-              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
-            ],
-          },
-        ],
-      };
-      respondWithSessions([{ ...SESSION, workspace: withPagePane }]);
+          targets: [{ id: 'page-1', kind: 'page', title: 'Spec doc', lastMessageAt: null, agentPageId: null }],
+        },
+      ]);
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Spec doc'));
-      await user.click(await screen.findByText('Close'));
 
-      await waitFor(() => {
-        // The listing was asked to refresh… (the GET listing call count grows)
-        expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(1);
-      });
-      // …but nothing was PUT, and the local grid is untouched.
-      const putCall = mockFetchWithAuth.mock.calls.find(
-        ([, init]) => (init as RequestInit | undefined)?.method === 'PUT',
-      );
-      expect(putCall).toBeUndefined();
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].activePaneId).toBe('pane-9');
+      expect(screen.getByTitle('Spec doc')).toBeDefined();
     });
 
-    test('a close whose verb the server rejects converges on the server truth, not a guessed rollback', async () => {
-      // The old hand-rolled PUT rolled back to `session.workspace` and
-      // toasted. The queue's answer is better and needs no local guess: a
-      // 4xx abandons the op and re-reads the server's own snapshot, so what
-      // the user ends up looking at is what is actually durable.
-      const withPagePane = {
-        ...workspaceFixture,
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              ...workspaceFixture.columns[0].panes,
-              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
-            ],
-          },
-        ],
-      };
-      mockFetchWithAuth.mockImplementation(async (...args: unknown[]) => {
-        const url = args[0] as string;
-        const init = args[1] as RequestInit | undefined;
-        if (url.endsWith('/workspace/verbs')) return { ok: false, status: 404, json: async () => ({}) };
-        if (url.endsWith('/workspace') && init?.method === undefined) {
-          return { ok: true, status: 200, json: async () => ({ rev: 4, grid: withPagePane.columns }) };
-        }
-        return { ok: true, status: 200, json: async () => ({ sessions: [{ ...SESSION, workspace: withPagePane }] }) };
-      });
+    test('falls back to a generic title for a page whose target the viewer cannot resolve', async () => {
+      // No `targets[]` entry — gone, or not this viewer's to read. The node
+      // still renders and is still closable; it must not collapse to nothing.
+      respondWithSessions([{ ...SESSION, rev: 1, nodes: [...nodes, pageNode('n3', WS, 2, 'page-1')] }]);
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Spec doc'));
-      await user.click(await screen.findByText('Close'));
 
-      await waitFor(() => {
-        const panes = useAgentWorkspaceStore
-          .getState()
-          .workspaces['ses-1'].columns.flatMap((c) => c.panes);
-        expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeDefined();
-      });
-      expect(useAgentWorkspaceStore.getState().sync['ses-1'].rev).toBe(4);
+      expect(screen.getByText('Page')).toBeDefined();
     });
+  });
 
-    test('closing the LAST pane via a page row asks to end the session instead of silently tearing it down', async () => {
-      const pageOnlyWorkspace = {
-        id: 'ses-1',
-        columns: [
-          {
-            id: 'col-1',
-            panes: [{ id: 'pane-1', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } }],
-          },
-        ],
-        activePaneId: 'pane-1',
-        pendingPickerPaneId: null,
-      };
-      respondWithSessions([{ ...SESSION, conversations: [], workspace: pageOnlyWorkspace }]);
+  /**
+   * THE MENU AND THE ACTION READ ONE STATE.
+   *
+   * They used to read two — a server annotation up to 120 seconds old, and the
+   * store — so a row could offer "Close pane" for a node the store knew was
+   * already gone, and the click then meant something else entirely.
+   */
+  describe('the close decision', () => {
+    test('a thread ON THE GRID offers "Close pane", and closing DESTROYS its node without a DELETE', async () => {
+      respondWithSessions([
+        { ...SESSION, rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')] },
+      ]);
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Spec doc'));
-      await user.click(await screen.findByText('Close'));
+      const row = screen.getAllByTestId('sidebar-conversation-row')[0];
+      fireEvent.contextMenu(row);
+      await user.click(await screen.findByText('Close pane'));
 
-      // The end-session confirm opened; nothing was closed or PUT yet.
-      expect(await screen.findByText(/end session/i)).toBeDefined();
-      const putCall = mockFetchWithAuth.mock.calls.find(
-        ([url, init]) =>
-          url === '/api/agent-workspaces/ses-1/workspace' &&
-          (init as RequestInit | undefined)?.method === 'PUT',
-      );
-      expect(putCall).toBeUndefined();
+      // No DELETE: closing a PANE is a tree write, not a conversation act. The
+      // node is gone rather than left parked with a null parent.
+      expect(mockDel).not.toHaveBeenCalled();
+      const nodes = useAgentWorkspaceStore.getState().workspaces[WS]?.nodes ?? [];
+      expect(nodes.find((node) => node.id === 'n1')).toBeUndefined();
     });
 
-    test('selecting a session with a saved grid opens the ACTIVE pane\'s own conversation', async () => {
-      respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByText('api refactor'));
-
-      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
-    });
-
-    test('closing a pane row\'s "Close" menu item closes its conversation\'s listing and resets the pane to its picker', async () => {
-      act(() => {
-        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', workspaceFixture as WorkspaceState);
-      });
-      respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
-      mockDel.mockResolvedValue(undefined);
+    test('a thread with NO node offers "Close conversation", and closing DELETEs the listing', async () => {
+      mockDel.mockResolvedValue({});
+      // No nodes at all — every thread is unplaced.
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close'));
+      const row = screen.getAllByTestId('sidebar-conversation-row')[0];
+      fireEvent.contextMenu(row);
+      await user.click(await screen.findByText('Close conversation'));
 
       await waitFor(() =>
         expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
       );
-      await waitFor(() => {
-        const pane = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0];
-        expect(pane.scope).toBeNull();
-      });
     });
 
-    test("closing the grid's ONLY pane rebinds it to another open listing instead of leaving it on an empty picker", async () => {
-      // conv-2 is a real open listing elsewhere in the SESSION (per
-      // `SESSION.conversations`) with no pane of its own — the grid never
-      // empties (contract invariant 3), so closing this pane's own
-      // conversation should repoint it at that other listing rather than
-      // vanishing to a blank picker, the same grid-last rebind the pane
-      // grid's own close control already gets from `decideClosePane` (review
-      // finding — chatgpt-codex-connector on PR #2308).
-      const singlePaneWorkspace = {
-        id: 'ses-1',
-        columns: [
-          {
-            id: 'col-1',
-            panes: [{ id: 'pane-1', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } }],
-          },
-        ],
-        activePaneId: 'pane-1',
-        pendingPickerPaneId: null,
-      };
-      act(() => {
-        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', singlePaneWorkspace as WorkspaceState);
-      });
-      respondWithSessions([{ ...SESSION, workspace: singlePaneWorkspace }]);
-      mockDel.mockResolvedValue(undefined);
+    test('a thread this workspace does not hold offers "Close conversation"', async () => {
+      // The row comes from the conversation listing, and the tree has no node
+      // for it — so there is no pane to close and the click goes to the listing
+      // route. Under the previous model this case was a PARKED node, which is a
+      // state that no longer exists.
+      mockDel.mockResolvedValue({});
+      respondWithSessions([{ ...SESSION, rev: 1, nodes: [treeRoot] }]);
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close'));
+      const row = screen.getAllByTestId('sidebar-conversation-row')[0];
+      fireEvent.contextMenu(row);
+      await user.click(await screen.findByText('Close conversation'));
 
       await waitFor(() =>
         expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
       );
-      await waitFor(() => {
-        const pane = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0];
-        expect(pane.scope?.targetId).toBe('conv-2');
-      });
     });
 
     /**
-     * THE SAME CASE, FROM A SESSION THE STORE HAS NEVER SEEN (review finding —
-     * CodeRabbit).
-     *
-     * A sidebar row can act on a session that is not the displayed one, and for
-     * that session `AgentPanes` — and the layout sync that seats its grid — was
-     * never mounted. `closePaneConversation` read the store raw, got undefined,
-     * defaulted `shownElsewhere` to FALSE, and turned "close this pane" into
-     * "DELETE this conversation" for a thread still open in another pane.
-     *
-     * The test above pre-hydrates the store, which is exactly why it could not
-     * see this. Here the store is deliberately left empty: the fix seats the
-     * row's own `session.workspace` snapshot through `ensureLocalWorkspace`
-     * first, so the second pane is visible and only the clicked pane resets.
-     *
-     * Fails on the pre-fix component with a DELETE.
+     * The agreement itself. A broadcast DESTROYS the node between the render and
+     * the click; the menu must have already followed it, because both read the
+     * same live tree rather than the snapshot the row arrived on.
      */
-    test('closing a shared pane in an UNHYDRATED session still resets locally — never DELETEs', async () => {
-      const sharedWorkspace = {
-        id: 'ses-1',
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              { id: 'pane-1', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } },
-              { id: 'pane-2', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } },
-            ],
-          },
-        ],
-        activePaneId: 'pane-1',
-        pendingPickerPaneId: null,
-      };
-      // NO hydrateWorkspace — this session was never opened in the grid.
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
-      respondWithSessions([{ ...SESSION, workspace: sharedWorkspace }]);
+    test('follows a live broadcast: a thread whose node goes out from under the sidebar switches to closing the THREAD', async () => {
+      respondWithSessions([{ ...SESSION, rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1')] }]);
+      mockDel.mockResolvedValue({});
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
+      expect(await screen.findByTitle('Researcher — First chat')).toBeDefined();
+
+      // Somebody else closed the pane. No poll, no refetch — just the event.
+      // Closing DESTROYS the node, so the broadcast carries a tree without it
+      // and the row falls back to the listing's own "(not in this session)".
+      act(() => {
+        useAgentWorkspaceStore.getState().applyRemoteUpdate({
+          workspaceId: WS,
+          rev: 2,
+          nodes: [treeRoot],
+        });
+      });
+
+      expect(await screen.findByTitle('Researcher — First chat (not in this session)')).toBeDefined();
+      const row = screen.getAllByTestId('sidebar-conversation-row')[0];
+      fireEvent.contextMenu(row);
+      await user.click(await screen.findByText('Close conversation'));
+
+      await waitFor(() =>
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
+      );
+    });
+
+    test('closing a page pane row DESTROYS its node', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          rev: 1,
+          nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1'), pageNode('n3', WS, 1, 'page-1')],
+          targets: [{ id: 'page-1', kind: 'page', title: 'Spec doc', lastMessageAt: null, agentPageId: null }],
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(screen.getByText('Spec doc').closest('[data-slot="row-menu"]') ?? screen.getByText('Spec doc'));
       await user.click(await screen.findByText('Close'));
 
-      // Assert the RESET, not merely the absence of a DELETE (review finding —
-      // CodeRabbit): a bare early return on `shownElsewhere` would leave the
-      // clicked pane still bound and pass a no-DELETE-only assertion. The
-      // clicked pane must be emptied and its sibling left alone, which is also
-      // what proves the fix seated the grid — an unseated one cannot see
-      // pane-2, so it would have taken the DELETE branch instead.
-      await waitFor(() => {
-        const panes = useAgentWorkspaceStore.getState().workspaces['ses-1']?.columns[0].panes;
-        expect(panes?.find((p) => p.id === 'pane-1')?.scope).toBeNull();
-      });
-      const panes = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes;
-      expect(panes.find((p) => p.id === 'pane-2')?.scope?.targetId).toBe('conv-1');
+      // The node is gone rather than left with a null parent. The listing route
+      // is untouched: closing a PANE is a tree write, not a conversation act.
+      const destroyed = useAgentWorkspaceStore.getState().workspaces[WS]?.nodes.find((node) => node.id === 'n3');
+      expect(destroyed).toBeUndefined();
       expect(mockDel).not.toHaveBeenCalled();
     });
 
-    test('closing a pane whose conversation is also open in ANOTHER pane resets it locally only — never DELETEs the shared listing', async () => {
-      const sharedWorkspace = {
-        id: 'ses-1',
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              { id: 'pane-1', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } },
-              { id: 'pane-2', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } },
-            ],
-          },
-        ],
-        activePaneId: 'pane-1',
-        pendingPickerPaneId: null,
-      };
-      act(() => {
-        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', sharedWorkspace as WorkspaceState);
-      });
-      respondWithSessions([{ ...SESSION, workspace: sharedWorkspace }]);
+    test('clicking a page pane row focuses it and selects the session', async () => {
+      // It used to read "Show" and un-park the node; a row's only affordance
+      // when its node was off the screen. Every row's node is on screen, so the
+      // click is focus.
+      respondWithSessions([
+        {
+          ...SESSION,
+          rev: 1,
+          nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1'), pageNode('n3', WS, 1, 'page-1')],
+          targets: [{ id: 'page-1', kind: 'page', title: 'Spec doc', lastMessageAt: null, agentPageId: null }],
+        },
+      ]);
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      // ONE row, though the thread occupies two panes — `findByText` throws on
-      // a second match, so this also pins the property the pane-keyed rows
-      // could not give: the sidebar lists THREADS. The row acts on the thread's
-      // first placement (pane-1), which is what the annotator records.
-      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close'));
+      await user.click(screen.getByTitle('Spec doc'));
 
-      await waitFor(() => {
-        const panes = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes;
-        expect(panes.find((p) => p.id === 'pane-1')?.scope).toBeNull();
-        // The other pane is untouched, and the server listing was never
-        // asked to close — it's still shown there.
-        expect(panes.find((p) => p.id === 'pane-2')?.scope?.targetId).toBe('conv-1');
+      expect(useAgentWorkspaceStore.getState().workspaces[WS]?.activeNodeId).toBe('n3');
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe(WS);
+    });
+  });
+
+  describe('the live tree', () => {
+    test('a pane placed by an agent appears without a refetch', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          conversations: [],
+          rev: 1,
+          nodes: [treeRoot],
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      expect(screen.queryByText('Spec doc')).toBeNull();
+      const callsBefore = mockFetchWithAuth.mock.calls.length;
+
+      act(() => {
+        useAgentWorkspaceStore.getState().hydrateFromServer(WS, {
+          rev: 2,
+          nodes: [treeRoot, pageNode('n9', WS, 0, 'page-9')],
+          targets: [{ id: 'page-9', kind: 'page', title: 'Spec doc', lastMessageAt: null, agentPageId: null }],
+        });
       });
-      expect(mockDel).not.toHaveBeenCalled();
+
+      expect(await screen.findByText('Spec doc')).toBeDefined();
+      expect(mockFetchWithAuth.mock.calls.length).toBe(callsBefore);
     });
 
-    test('closing a pane reads the LIVE workspace store, not the stale SWR session.workspace snapshot', async () => {
-      // `session.workspace` is only as fresh as the last 20s poll or
-      // `onChanged()` — a second pane opened on this conversation moments
-      // ago can be invisible to it. Seed a STALE single-pane snapshot (as if
-      // the second pane had not yet been opened when this SWR response
-      // landed) while the live store already has it in TWO panes, and
-      // confirm the close decision follows the live store (review finding).
-      const staleSnapshot = {
-        id: 'ses-1',
-        columns: [
-          {
-            id: 'col-1',
-            panes: [{ id: 'pane-1', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } }],
-          },
-        ],
-        activePaneId: 'pane-1',
-        pendingPickerPaneId: null,
-      };
-      const liveWorkspace = {
-        ...staleSnapshot,
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              ...staleSnapshot.columns[0].panes,
-              { id: 'pane-2', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } },
-            ],
-          },
-        ],
-      };
-      act(() => {
-        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', liveWorkspace as WorkspaceState);
-      });
-      respondWithSessions([{ ...SESSION, workspace: staleSnapshot }]);
+    test('selecting a session opens the ACTIVE pane\'s own conversation', async () => {
+      respondWithSessions([
+        { ...SESSION, rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')] },
+      ]);
       const user = userEvent.setup();
       renderSidebar();
 
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close'));
-
-      // If the decision had read the stale snapshot, it would see conv-1 as
-      // shown in only ONE pane and issue a real DELETE. It must not.
-      await waitFor(() => {
-        const panes = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes;
-        expect(panes.find((p) => p.id === 'pane-1')?.scope).toBeNull();
+      await screen.findByText('api refactor');
+      act(() => {
+        useAgentWorkspaceStore.getState().selectNode(WS, 'n2');
       });
-      expect(mockDel).not.toHaveBeenCalled();
+      await user.click(screen.getByText('api refactor'));
+
+      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
     });
   });
 
@@ -894,11 +736,13 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByText('api refactor'));
 
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']?.columns[0]?.panes[0]?.scope).toEqual({
+      // The node holds an ID and nothing else — the shell's NAME is resolved
+      // per viewer beside the tree, so it is not carried into the placement.
+      const placed = useAgentWorkspaceStore.getState().workspaces['ses-1']?.nodes ?? [];
+      expect(placed.filter((node) => node.nodeType === 'pane')).toHaveLength(1);
+      expect(placed.find((node) => node.nodeType === 'pane')?.target).toEqual({
         kind: 'terminal',
-        name: 'Shell',
-        targetId: 'shell-fallback-1',
-        agentPageId: null,
+        id: 'shell-fallback-1',
       });
     });
 
@@ -1039,46 +883,31 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByText('shell-1'));
 
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']?.columns[0]?.panes[0]?.scope).toEqual({
+      const placed = useAgentWorkspaceStore.getState().workspaces['ses-1']?.nodes ?? [];
+      expect(placed.find((node) => node.nodeType === 'pane')?.target).toEqual({
         kind: 'terminal',
-        name: 'shell-1',
-        targetId: 'shell-a',
-        agentPageId: null,
+        id: 'shell-a',
       });
     });
 
-    // issue #2295 (adversarial review, PR #2307): `openShell` calls the
-    // store's `openConversation` directly — a second, independent path into
-    // the same eviction-prone `isReplaceable` heuristic the main fix
-    // protects, reachable without ever touching AgentPanes.tsx's seeding
-    // effect. A pane already showing a conversation absent from THIS
-    // session's own live listing (closed-in-session) must not be silently
-    // overwritten just because the user reattached an unrelated shell.
+    // issue #2295: `openShell` runs the SAME shared placement policy an
+    // agent's own open does, so it is a second, independent path into the
+    // eviction rules — reachable without ever mounting the pane grid. A node
+    // showing a conversation absent from THIS workspace's own live listing
+    // (closed-in-workspace) must not be displaced because the user reattached
+    // an unrelated shell.
     test('reattaching a shell does not evict a pane showing a conversation closed out of the session', async () => {
-      const existingGrid = {
-        id: 'ses-1',
-        columns: [
-          {
-            id: 'col-1',
-            panes: [
-              {
-                id: 'pane-1',
-                scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-closed', agentPageId: 'agent-1' },
-              },
-            ],
-          },
-        ],
-        activePaneId: 'pane-1',
-        pendingPickerPaneId: null,
-      };
-      act(() => {
-        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', existingGrid as WorkspaceState);
-      });
       // `conv-closed` is deliberately absent from `conversations` — this
-      // session's own live listing — simulating it having been closed out
-      // of the session while its pane is still bound to it.
+      // workspace's own live listing — simulating it having been closed out
+      // while its node is still bound to it.
       respondWithSessions([
-        { ...SESSION, conversations: [], shells: [{ shellId: 'shell-a', name: 'shell-1' }], workspace: existingGrid },
+        {
+          ...SESSION,
+          conversations: [],
+          shells: [{ shellId: 'shell-a', name: 'shell-1' }],
+          rev: 1,
+          nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-closed')],
+        },
       ]);
       const user = userEvent.setup();
       renderSidebar();
@@ -1086,15 +915,18 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByLabelText(/expand api refactor/i));
       await user.click(await screen.findByText('shell-1'));
 
-      const panes = useAgentWorkspaceStore.getState().workspaces['ses-1']!.columns.flatMap((c) => c.panes);
-      // Protected: the original pane still shows conv-closed, untouched.
-      expect(panes.find((p) => p.id === 'pane-1')?.scope?.targetId).toBe('conv-closed');
-      // The shell opened in a NEW pane instead of evicting it.
-      expect(panes.find((p) => p.scope?.kind === 'terminal')?.scope).toEqual({
+      const panes = (useAgentWorkspaceStore.getState().workspaces[WS]?.nodes ?? []).filter(
+        (node) => node.nodeType === 'pane',
+      );
+      // Protected: the original node still shows conv-closed, and is still on
+      // the grid rather than having been parked to make room.
+      const survivor = panes.find((node) => node.id === 'n1');
+      expect(survivor?.target).toEqual({ kind: 'chat', id: 'conv-closed' });
+      expect(survivor?.parentId).not.toBeNull();
+      // The shell opened in a NEW node instead of displacing it.
+      expect(panes.find((node) => node.target?.kind === 'terminal')?.target).toEqual({
         kind: 'terminal',
-        name: 'shell-1',
-        targetId: 'shell-a',
-        agentPageId: null,
+        id: 'shell-a',
       });
       expect(panes).toHaveLength(2);
     });
@@ -1118,6 +950,7 @@ describe('AgentsSidebar', () => {
       await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
       expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
         driveId: 'drive-1',
+        envId: null,
         agentPageId: 'agent-1',
         name: '',
       });
@@ -1146,6 +979,7 @@ describe('AgentsSidebar', () => {
       // Drive-scoped, not the global assistant group: driveId stays 'drive-1'.
       expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
         driveId: 'drive-1',
+        envId: null,
         agentPageId: null,
         name: '',
       });
@@ -1155,7 +989,7 @@ describe('AgentsSidebar', () => {
       expect(useAgentSurfaceStore.getState().selectedAgentId).toBeNull();
     });
 
-    test('spawning a shell-first session names its terminal pane from the SHELL\'s own auto-assigned name, not the session label', async () => {
+    test('spawning a shell-first session places its shell in the new workspace, addressed by id alone', async () => {
       mockPost.mockResolvedValue({ session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, shellId: 'shell-new', shellName: 'Shell 2' });
       const user = userEvent.setup();
       renderSidebar();
@@ -1168,14 +1002,15 @@ describe('AgentsSidebar', () => {
       await user.type(nameInput, 'My Custom Session{Enter}');
 
       await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
-      await waitFor(() =>
-        expect(useAgentWorkspaceStore.getState().workspaces['ses-new']?.columns[0]?.panes[0]?.scope).toEqual({
-          kind: 'terminal',
-          name: 'Shell 2',
-          targetId: 'shell-new',
-          agentPageId: null,
-        }),
-      );
+      // The shell's NAME is deliberately not carried: a node holds an id, and
+      // the title is resolved per viewer beside the tree, so the pane header
+      // and the sidebar row read one authorized answer rather than two copies.
+      await waitFor(() => {
+        const panes = (useAgentWorkspaceStore.getState().workspaces['ses-new']?.nodes ?? []).filter(
+          (node) => node.nodeType === 'pane',
+        );
+        expect(panes.map((node) => node.target)).toEqual([{ kind: 'terminal', id: 'shell-new' }]);
+      });
     });
 
     test('a drive with no agents still offers Shell — no empty chooser', async () => {
@@ -1197,8 +1032,13 @@ describe('AgentsSidebar', () => {
   });
 
   describe('end session', () => {
-    test('confirming ends it: DELETE, grid forgotten, selection cleared, list refetched', async () => {
-      mockDel.mockResolvedValue(undefined);
+    test('confirming ends it: DELETE, tree forgotten, selection cleared, list refetched', async () => {
+      // The DELETE takes the row out of the listing too, as the route does —
+      // otherwise the refetch it triggers would legitimately re-seat the very
+      // tree this assertion is about.
+      mockDel.mockImplementation(async () => {
+        respondWithSessions([]);
+      });
       // The session is open in the centre, with a persisted pane grid.
       useAgentSurfaceStore.setState({
         selectedSessionId: 'ses-1',
@@ -1207,7 +1047,7 @@ describe('AgentsSidebar', () => {
       });
       useAgentWorkspaceStore
         .getState()
-        .ensureWorkspace('ses-1', { kind: 'chat', name: 'x', targetId: 'conv-1', agentPageId: 'agent-1' });
+        .hydrateFromServer(WS, { rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1')], targets: [] });
       const user = userEvent.setup();
       renderSidebar();
 
@@ -1237,7 +1077,7 @@ describe('AgentsSidebar', () => {
       expect(mockDel).not.toHaveBeenCalled();
     });
 
-    test('the grid, selection, and sidebar row drop instantly — before the sandbox-kill DELETE resolves, not after', async () => {
+    test('the tree, selection, and sidebar row drop instantly — before the sandbox-kill DELETE resolves, not after', async () => {
       // The whole point: ending a session must not wait on the sandbox
       // teardown this DELETE triggers server-side, which can take real
       // seconds. Everything user-visible updates the moment the user
@@ -1251,7 +1091,7 @@ describe('AgentsSidebar', () => {
       });
       useAgentWorkspaceStore
         .getState()
-        .ensureWorkspace('ses-1', { kind: 'chat', name: 'x', targetId: 'conv-1', agentPageId: 'agent-1' });
+        .hydrateFromServer(WS, { rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1')], targets: [] });
       const user = userEvent.setup();
       renderSidebar();
 
@@ -1270,7 +1110,7 @@ describe('AgentsSidebar', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    test('a failed end-session restores the grid and selection, but does not yank the user back if they already navigated elsewhere', async () => {
+    test('a failed end-session re-reads the tree and restores the selection, but does not yank the user back if they already navigated elsewhere', async () => {
       // `selectSession` also pushes a URL — restoring a stale selection on a
       // rare rollback must not silently override wherever the user has since
       // navigated during this request's round trip.
@@ -1283,7 +1123,7 @@ describe('AgentsSidebar', () => {
       });
       useAgentWorkspaceStore
         .getState()
-        .ensureWorkspace('ses-1', { kind: 'chat', name: 'x', targetId: 'conv-1', agentPageId: 'agent-1' });
+        .hydrateFromServer(WS, { rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1')], targets: [] });
       const user = userEvent.setup();
       renderSidebar();
 
@@ -1300,8 +1140,12 @@ describe('AgentsSidebar', () => {
       rejectDel(new Error('boom'));
       await waitFor(() => expect(mockToastError).toHaveBeenCalled());
 
-      // The grid is restored (nothing else could have touched it)...
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
+      // The tree is re-READ rather than restored from a client snapshot: the
+      // store keeps no copy of its own any more, and the server's is the only
+      // honest one. The rollback's job is to ask for it.
+      await waitFor(() =>
+        expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/nodes'),
+      );
       // ...but the user's own, later navigation stands — not clobbered back
       // to the session whose end just failed.
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-2');
@@ -1358,7 +1202,7 @@ describe('AgentsSidebar', () => {
   });
 
   describe('conversation close', () => {
-    test('right-click "Close" DELETEs the session-scoped route and refetches on success', async () => {
+    test('right-click "Close conversation" DELETEs the session-scoped route and refetches on success', async () => {
       mockDel.mockResolvedValue(undefined);
       const user = userEvent.setup();
       renderSidebar();
@@ -1366,7 +1210,7 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByLabelText(/expand api refactor/i));
       const fetchesBefore = mockFetchWithAuth.mock.calls.length;
       fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close'));
+      await user.click(await screen.findByText('Close conversation'));
 
       await waitFor(() =>
         expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
@@ -1375,7 +1219,7 @@ describe('AgentsSidebar', () => {
       await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchesBefore));
     });
 
-    test('the 3-dots dropdown "Close" drives the same DELETE', async () => {
+    test('the 3-dots dropdown "Close conversation" drives the same DELETE', async () => {
       mockDel.mockResolvedValue(undefined);
       const user = userEvent.setup();
       renderSidebar();
@@ -1387,23 +1231,76 @@ describe('AgentsSidebar', () => {
         '[data-slot="context-menu-trigger"]',
       ) as HTMLElement;
       await user.click(within(firstChatRow).getByLabelText('Conversation actions'));
-      await user.click(await screen.findByText('Close'));
+      await user.click(await screen.findByText('Close conversation'));
 
       await waitFor(() =>
         expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-1/conversations/conv-1'),
       );
     });
 
-    test('a 409 (the session\'s last open listing) falls back to the end-session confirm dialog, mirroring the pane grid', async () => {
-      mockDel.mockRejectedValue(new ApiRequestError('last open listing', 409));
+    /**
+     * REPLACES the 409 fallback. The server stopped refusing the last close in
+     * the node-tree cutover, so the `last_conversation` branch this used to
+     * exercise was unreachable code — the DELETE simply succeeded and left the
+     * workspace holding nothing. The decision is `decideClosePane`'s now, taken
+     * BEFORE anything is sent, which is also what stops these two affordances
+     * disagreeing: the sidebar row used to call `closePane` directly and could
+     * empty a tree the pane's own close button refuses to.
+     */
+    test("closing the last PLACED row raises the end-session confirm, and sends nothing", async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          rev: 1,
+          nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1')],
+          conversations: [{ conversationId: 'conv-1', title: 'First chat', agentPageId: 'agent-1' }],
+        },
+      ]);
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
       fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close'));
+      // "Close pane", not "Close conversation": the row is PLACED, so its menu
+      // names the node it holds.
+      await user.click(await screen.findByText('Close pane'));
 
       expect(await screen.findByRole('alertdialog')).toBeDefined();
+      // Nothing written and nothing requested — the confirm is the whole act,
+      // and `mockDel` never rejected to produce it.
+      expect(mockDel).not.toHaveBeenCalled();
+      expect(
+        mockFetchWithAuth.mock.calls.some(
+          ([url, init]) => typeof url === 'string' && url.includes('/nodes') && init?.method === 'POST',
+        ),
+      ).toBe(false);
+    });
+
+    test('closing a NON-last placed row drops its node and raises no dialog', async () => {
+      respondWithSessions([
+        { ...SESSION, rev: 1, nodes: [treeRoot, chatNode('n1', WS, 0, 'conv-1'), chatNode('n2', WS, 1, 'conv-2')] },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
+      await user.click(await screen.findByText('Close pane'));
+
+      await waitFor(() =>
+        expect(
+          mockFetchWithAuth.mock.calls.some(
+            ([url, init]) =>
+              typeof url === 'string' &&
+              url.includes('/nodes') &&
+              init?.method === 'POST' &&
+              JSON.parse(init.body as string).drop.includes('n1'),
+          ),
+        ).toBe(true),
+      );
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      // And no second writer for the same removal — the DELETE is gone.
+      expect(mockDel).not.toHaveBeenCalled();
     });
 
     test('a non-409 failure shows an error toast, not the end-session dialog', async () => {
@@ -1413,7 +1310,7 @@ describe('AgentsSidebar', () => {
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
       fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close'));
+      await user.click(await screen.findByText('Close conversation'));
 
       await waitFor(() => expect(mockDel).toHaveBeenCalled());
       expect(screen.queryByRole('alertdialog')).toBeNull();
@@ -1526,6 +1423,7 @@ describe('AgentsSidebar', () => {
       await waitFor(() =>
         expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
           driveId: null,
+          envId: null,
           agentPageId: null,
           name: 'my assistant session',
         }),
@@ -1643,6 +1541,7 @@ describe('AgentsSidebar', () => {
       await waitFor(() =>
         expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
           driveId: 'drive-1',
+          envId: null,
           agentPageId: 'agent-1',
           name: 'my session',
         }),
@@ -1672,6 +1571,7 @@ describe('AgentsSidebar', () => {
       await waitFor(() =>
         expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
           driveId: null,
+          envId: null,
           agentPageId: null,
           name: '',
         }),
@@ -1860,6 +1760,1088 @@ describe('AgentsSidebar', () => {
         expect(screen.queryByText('Global Assistant')).toBeNull();
         expect(await screen.findByText('No sessions match your search')).toBeDefined();
       });
+    });
+  });
+  /**
+   * ENVIRONMENTS — a drive's persistent, named machines.
+   *
+   * The three invariants that make the surface honest:
+   *  - an environment renders EVEN WITH NO SESSIONS (it is infrastructure the
+   *    drive pays for, not a container that appears when used),
+   *  - a session carrying `envId` renders INSIDE its environment rather than
+   *    beside it, because that field says which filesystem it sees,
+   *  - management is drive OWNER/ADMIN, so a plain member gets no affordances
+   *    at all rather than affordances that refuse.
+   */
+  describe('environments', () => {
+    const envSession = (workspaceId: string, envId: string | null, name: string): SessionFixture => ({
+      workspaceId,
+      sessionId: workspaceId,
+      driveId: 'drive-1',
+      envId,
+      name,
+      sandboxStatus: 'running',
+      conversations: [],
+      shells: [],
+    });
+
+    beforeEach(() => {
+      useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha')] });
+    });
+
+    test('renders an environment with no sessions in it — infrastructure does not disappear when idle', async () => {
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'none' }]);
+      renderSidebar();
+
+      expect(await screen.findByText('staging')).toBeDefined();
+      expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/drives/drive-1/envs');
+      expect(screen.getByText('No sessions running in here')).toBeDefined();
+    });
+
+    test("nests an env-bound session under its environment and leaves a loose one at drive level", async () => {
+      respondWithSessions(
+        [envSession('ses-env', 'env-1', 'inside staging'), envSession('ses-loose', null, 'ephemeral one')],
+        [{ id: 'env-1', name: 'staging', status: 'running' }],
+      );
+      renderSidebar();
+
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      expect(within(envRow).getByText('inside staging')).toBeDefined();
+      expect(within(envRow).queryByText('ephemeral one')).toBeNull();
+      expect(screen.getByText('ephemeral one')).toBeDefined();
+    });
+
+    test("renders the environment's derived status as a dot, named for what the state is", async () => {
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'stopped' }]);
+      renderSidebar();
+
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      expect(within(envRow).getByLabelText('Environment stopped')).toBeDefined();
+    });
+
+    test('offers no environment management to a member who cannot administer the drive', async () => {
+      const user = userEvent.setup();
+      useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha', { isOwned: false, role: 'MEMBER' })] });
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'none' }]);
+      renderSidebar();
+
+      // The environment itself is still visible — a member may spawn sessions
+      // inside one, so hiding it would hide a capability they have.
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      expect(within(envRow).getByText('staging')).toBeDefined();
+      expect(within(envRow).queryByLabelText('Environment actions')).toBeNull();
+
+      // Creating one is not offered anywhere either — not as a sidebar button
+      // (there is no longer one for anybody) and not in the palette, which is
+      // where the act moved to.
+      await user.click(screen.getByLabelText('New session'));
+      expect(await screen.findByText('Researcher')).toBeDefined();
+      expect(screen.queryByText('New environment')).toBeNull();
+    });
+
+    /**
+     * ENVIRONMENT CREATION LIVES IN THE PALETTE, NOT IN AN ICON BUTTON.
+     *
+     * The sidebar used to carry a `Boxes` button beside each "+". It is gone:
+     * the selector that already offers environments as somewhere to run is
+     * where making one belongs, and it is reachable from BOTH steps that talk
+     * about them — the target step (which exists even in a drive with no
+     * environments, where the env step never renders) and the env step (where
+     * the environment just created is the answer to the question being asked).
+     */
+    test('no icon button creates an environment any more — the sidebar has none for an admin either', async () => {
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'none' }]);
+      renderSidebar();
+
+      await screen.findByTestId('sidebar-env-env-1');
+      expect(screen.queryByLabelText('New environment')).toBeNull();
+      expect(screen.queryByLabelText('New environment in Alpha')).toBeNull();
+    });
+
+    test('an admin creates one from the palette\'s target step, and lands back on that step with it offered', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', status: 'none' } });
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', { name: 'dev' }),
+      );
+      // Said out loud: the palette covers the sidebar, so the new row appearing
+      // there is no longer the confirmation it used to be.
+      expect(mockToastSuccess).toHaveBeenCalledWith('Created “dev”');
+      // Back on the target step — the session it came here to start is still
+      // unstarted, and the environment now exists for the step that asks where.
+      expect(await screen.findByText('Researcher')).toBeDefined();
+    });
+
+    test('creating from the environment step goes straight on to naming, with the new environment selected', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      mockPost.mockResolvedValueOnce({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', status: 'none' } });
+      mockPost.mockResolvedValueOnce({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      renderSidebar();
+
+      await screen.findByTestId('sidebar-env-env-1');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+      await user.click(await screen.findByText('New environment…'));
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      // No second trip through the environment step: what the user just made is
+      // the answer to it.
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      fireEvent.submit(nameInput.closest('form')!);
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenLastCalledWith('/api/agent-workspaces', {
+          driveId: 'drive-1',
+          envId: 'env-new',
+          agentPageId: 'agent-1',
+          name: '',
+        }),
+      );
+    });
+
+    /**
+     * THE WINDOW BETWEEN CREATING ONE AND THE LISTING SAYING SO.
+     *
+     * `mutate(key)` alone is a revalidation, and while it is in flight the
+     * cache still holds the listing from before — with `isLoading` false, since
+     * that flags a first load and not a refresh. The step machine reads exactly
+     * those two things, so for the width of that request it would answer "this
+     * drive has no environments" about a drive that just got one, and spawn
+     * ephemerally into it.
+     *
+     * The environments endpoint here never answers after the create, which is
+     * that window held open: what the palette offers next can only have come
+     * from the cache write.
+     */
+    test('the environment created from the target step is offered before the listing catches up', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], []);
+      let envsHang = false;
+      const listing = mockFetchWithAuth.getMockImplementation()!;
+      mockFetchWithAuth.mockImplementation(async (url: string, init?: { method?: string }) => {
+        if (typeof url === 'string' && url.includes('/envs') && envsHang) return new Promise<never>(() => {});
+        return listing(url, init);
+      });
+      mockPost.mockResolvedValue({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', status: 'none' } });
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      envsHang = true;
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      // Back on the target step. Picking an agent now must reach the question
+      // "where should it run?" — not skip it as though the drive had none.
+      await user.click(await screen.findByText('Researcher'));
+      expect(await screen.findByText('in dev')).toBeDefined();
+    });
+
+    test('making a new environment from a row-opened flow asks again rather than using the row\'s', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      // The listing never catches up after the create — the same held-open
+      // window the target-step test uses, so the new environment can only be
+      // here via the cache write rather than a revalidation that happened to
+      // win.
+      let envsHang = false;
+      const listing = mockFetchWithAuth.getMockImplementation()!;
+      mockFetchWithAuth.mockImplementation(async (url: string, init?: { method?: string }) => {
+        if (typeof url === 'string' && url.includes('/envs') && envsHang) return new Promise<never>(() => {});
+        return listing(url, init);
+      });
+      mockPost.mockResolvedValue({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', status: 'none' } });
+      renderSidebar();
+
+      // Opened from staging's "+", which pre-answers "where should it run?".
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('New session in staging'));
+      envsHang = true;
+      // Then the user makes a DIFFERENT environment — a newer intent than the
+      // row's, which must not be silently overruled by it.
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      await user.click(await screen.findByText('Researcher'));
+
+      // Asked once, with both to choose between — rather than spawning into
+      // staging as though the last minute had not happened.
+      expect(await screen.findByText('in dev')).toBeDefined();
+      expect(screen.getByText('in staging')).toBeDefined();
+    });
+
+    test('the create step registers with the editing store, as the dialog it replaced did', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], []);
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText('New session'));
+      expect(useEditingStore.getState().isAnyActive()).toBe(false);
+
+      await user.click(await screen.findByText('New environment'));
+
+      // Registered while the form is up: a background revalidation or an auth
+      // refresh landing mid-type must not tear down what is being named.
+      await screen.findByLabelText('Environment name');
+      expect(useEditingStore.getState().isAnyActive()).toBe(true);
+
+      // And released when it closes, rather than leaving the app thinking
+      // someone is forever typing.
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(useEditingStore.getState().isAnyActive()).toBe(false);
+    });
+
+    /**
+     * A CREATE THAT LANDS AFTER ITS FLOW IS GONE.
+     *
+     * The POST is a round trip, and Escape closes the palette while it is still
+     * out. Whatever the user opens next is a different flow with its own
+     * answers — so the late continuation must not write into it: not select the
+     * environment it made, not drop the row preset the new flow carries, not
+     * close a step being typed in.
+     */
+    test('a create that resolves after its flow closed does not touch the flow that replaced it', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      let resolveCreate: ((value: unknown) => void) | undefined;
+      mockPost.mockImplementationOnce(() => new Promise((resolve) => { resolveCreate = resolve; }));
+      renderSidebar();
+
+      // Flow A: start creating an environment from the target step…
+      await screen.findByTestId('sidebar-env-env-1');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      // …then abandon it while the POST is still out.
+      await user.keyboard('{Escape}');
+
+      // Flow B: opened from staging's "+", which pre-answers where it runs.
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('New session in staging'));
+
+      // Flow A's answer lands now.
+      mockPost.mockResolvedValue({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      await act(async () => {
+        resolveCreate?.({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', status: 'none' } });
+      });
+
+      // Flow B is untouched: still bound to staging, still going straight to
+      // naming rather than being asked again.
+      await user.click(await screen.findByText('Researcher'));
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      fireEvent.submit(nameInput.closest('form')!);
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenLastCalledWith('/api/agent-workspaces', {
+          driveId: 'drive-1',
+          envId: 'env-1',
+          agentPageId: 'agent-1',
+          name: '',
+        }),
+      );
+    });
+
+    /**
+     * TWO CREATES IN FLIGHT AT ONCE.
+     *
+     * `creatingEnv` is what holds this form closed while its POST is out, and
+     * the request that settles is not necessarily the one on screen: abandon a
+     * create, start another, and the FIRST landing would re-enable the form
+     * over a POST still in flight — a second, non-idempotent create one
+     * keystroke away.
+     */
+    test('an abandoned create landing later does not re-enable the form over a live request', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], []);
+      let resolveFirst: ((value: unknown) => void) | undefined;
+      mockPost.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }));
+      mockPost.mockImplementationOnce(() => new Promise(() => {}));
+      renderSidebar();
+
+      // Attempt A, abandoned while its POST is still out.
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'a');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await user.keyboard('{Escape}');
+
+      // Attempt B, still in flight.
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'b');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      expect(screen.getByRole('button', { name: 'Creating…' })).toBeDefined();
+
+      // A lands now.
+      await act(async () => {
+        resolveFirst?.({ env: { id: 'env-a', name: 'a', driveId: 'drive-1', status: 'none' } });
+      });
+
+      // B's request is still out, so B's form stays closed.
+      expect(screen.getByRole('button', { name: 'Creating…' })).toBeDefined();
+      expect(screen.queryByRole('button', { name: 'Create environment' })).toBeNull();
+    });
+
+    test('a name already taken keeps the create step open with what was typed', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], []);
+      mockPost.mockRejectedValueOnce(
+        new ApiRequestError('An environment with this name already exists', 409, {}),
+      );
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalled());
+      // Still the create step, still holding the name — the one refusal
+      // retyping can actually fix.
+      expect((await screen.findByLabelText('Environment name') as HTMLInputElement).value).toBe('dev');
+    });
+
+    /**
+     * THE QUICK-CREATE HOTKEY MEANS THIS SURFACE'S "NEW".
+     *
+     * Elsewhere `Alt+N` opens the page-type palette. On the Agents routes "new"
+     * is a session — or the environment to run one in, which the spawn palette
+     * now offers — so the sidebar answers the binding and
+     * `QuickCreatePalette` stands down (its own guard, tested at its own site).
+     */
+    test('the quick-create hotkey opens the spawn palette on a drive-scoped agents route', async () => {
+      respondWithSessions([], []);
+      renderSidebar();
+
+      await screen.findByLabelText('New session');
+      fireEvent.keyDown(document, { key: 'Dead', code: 'KeyN', altKey: true });
+
+      expect(await screen.findByText('Researcher')).toBeDefined();
+    });
+
+    test('on the global console the hotkey asks which drive, then goes on into the same palette', async () => {
+      const user = userEvent.setup();
+      mockUseParams.mockReturnValue({});
+      mockUsePathname.mockReturnValue('/dashboard/agents');
+      respondWithSessions([], []);
+      renderSidebar();
+
+      await screen.findByLabelText('Search sessions');
+      fireEvent.keyDown(document, { key: 'Dead', code: 'KeyN', altKey: true });
+
+      // Not the New Drive dialog: creating a drive is a different act, and it
+      // never reaches a session or an environment.
+      const picker = await screen.findByRole('dialog', { name: 'Choose a destination' });
+      expect(within(picker).getByText('Global Assistant')).toBeDefined();
+
+      await user.click(within(picker).getByText('Alpha'));
+      expect(await screen.findByText('Researcher')).toBeDefined();
+    });
+
+    test('a trashed drive is offered nothing new — not by the hotkey, and not by the header', async () => {
+      useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha', { isTrashed: true })] });
+      respondWithSessions([], []);
+      renderSidebar();
+
+      await screen.findByLabelText('Search sessions');
+      expect(screen.queryByLabelText('New session')).toBeNull();
+
+      fireEvent.keyDown(document, { key: 'Dead', code: 'KeyN', altKey: true });
+
+      // And it does not fall through to drive creation, which would answer a
+      // question nobody asked.
+      expect(screen.queryByText('Researcher')).toBeNull();
+      expect(screen.queryByText('Global Assistant')).toBeNull();
+    });
+
+    test('the environment row\'s "+" spawns INSIDE it — the row already answered where', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      mockPost.mockResolvedValue({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      renderSidebar();
+
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('New session in staging'));
+      await user.click(await screen.findByText('Researcher'));
+
+      // Straight to naming: the environment step is not asked a question the
+      // row already answered.
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      expect(screen.queryByText('New sandbox')).toBeNull();
+      fireEvent.submit(nameInput.closest('form')!);
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
+          driveId: 'drive-1',
+          envId: 'env-1',
+          agentPageId: 'agent-1',
+          name: '',
+        }),
+      );
+    });
+
+    test('deleting refuses first, then escalates to the forced delete only after the server says sessions are live', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      mockDel.mockRejectedValueOnce(
+        new ApiRequestError('Sessions are still running in this environment', 409, {
+          reason: 'live_sessions',
+          liveSessionCount: 2,
+        }),
+      );
+      mockDel.mockResolvedValueOnce({ deleted: true });
+      renderSidebar();
+
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('Environment actions'));
+      await user.click(await screen.findByText('Delete environment'));
+      // The first press never carries ?force= — that is the whole guard.
+      await user.click(await screen.findByRole('button', { name: 'Delete environment' }));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/drives/drive-1/envs/env-1'));
+
+      // The refusal escalates in place, naming both halves of what force does.
+      expect(await screen.findByText(/2 sessions are still running/)).toBeDefined();
+      expect(screen.getByText(/destroys the shared filesystem/)).toBeDefined();
+      await user.click(screen.getByRole('button', { name: 'End sessions and delete' }));
+      await waitFor(() =>
+        expect(mockDel).toHaveBeenCalledWith('/api/drives/drive-1/envs/env-1?force=true'),
+      );
+    });
+
+    test('the rebuild confirm says the environment comes back blank before it POSTs', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      mockPost.mockResolvedValue({ rebuilt: true });
+      renderSidebar();
+
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('Environment actions'));
+      await user.click(await screen.findByText('Rebuild to blank'));
+
+      expect(await screen.findByText(/comes back BLANK/)).toBeDefined();
+      expect(mockPost).not.toHaveBeenCalled();
+
+      await user.click(screen.getByRole('button', { name: 'Rebuild to blank' }));
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs/env-1/rebuild'),
+      );
+    });
+
+    test('renaming PATCHes the name and nothing else — there is no kind to change', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'none' }]);
+      mockPatch.mockResolvedValue({ env: { id: 'env-1', name: 'prod-mirror' } });
+      renderSidebar();
+
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('Environment actions'));
+      await user.click(await screen.findByText('Rename'));
+
+      const input = await screen.findByLabelText('Name');
+      await user.clear(input);
+      await user.type(input, 'prod-mirror');
+      await user.click(screen.getByRole('button', { name: 'Rename' }));
+
+      await waitFor(() =>
+        expect(mockPatch).toHaveBeenCalledWith('/api/drives/drive-1/envs/env-1', { name: 'prod-mirror' }),
+      );
+    });
+
+    test('rebuilding re-reads the SESSIONS listing too — an env-bound session\'s status is the environment\'s', async () => {
+      const user = userEvent.setup();
+      respondWithSessions(
+        [envSession('ses-env', 'env-1', 'inside staging')],
+        [{ id: 'env-1', name: 'staging', status: 'running' }],
+      );
+      mockPost.mockResolvedValue({ rebuilt: true });
+      renderSidebar();
+
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      const sessionReadsBefore = mockFetchWithAuth.mock.calls.filter(
+        ([url]) => url === '/api/agent-workspaces?driveId=drive-1',
+      ).length;
+
+      await user.click(within(envRow).getByLabelText('Environment actions'));
+      await user.click(await screen.findByText('Rebuild to blank'));
+      await user.click(screen.getByRole('button', { name: 'Rebuild to blank' }));
+      await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs/env-1/rebuild'));
+
+      // Rebuild replaces the environment's machine, and an env-bound session
+      // reads its `sandboxStatus` off the ENVIRONMENT's row — so leaving the
+      // sessions listing alone would leave every row inside claiming 'running'
+      // against a machine that no longer exists.
+      await waitFor(() =>
+        expect(
+          mockFetchWithAuth.mock.calls.filter(([url]) => url === '/api/agent-workspaces?driveId=drive-1').length,
+        ).toBeGreaterThan(sessionReadsBefore),
+      );
+    });
+
+    test('a revalidation while the rename dialog is open does not overwrite what the user typed', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'none' }]);
+      const swr = renderSidebarWithMutate();
+
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('Environment actions'));
+      await user.click(await screen.findByText('Rename'));
+
+      const input = (await screen.findByLabelText('Name')) as HTMLInputElement;
+      await user.clear(input);
+      await user.type(input, 'half-typed');
+
+      // The listing comes back with the environment renamed by someone else,
+      // which moves the dialog's `initialName` under it. The seed is bound to
+      // the OPEN transition, so the user's half-typed text survives.
+      respondWithSessions([], [{ id: 'env-1', name: 'renamed-elsewhere', status: 'none' }]);
+      await act(async () => {
+        await swr.revalidate('/api/drives/drive-1/envs');
+      });
+      await waitFor(() => expect(screen.getByText('renamed-elsewhere')).toBeDefined());
+
+      expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('half-typed');
+    });
+
+    /**
+     * THE SPAWN PALETTE'S ENVIRONMENT STEP.
+     *
+     * Every other spawn test in this file runs against a drive with NO
+     * environments, which is exactly why the loading race below survived
+     * review: `envs` is `[]` while the listing is in flight and `[]` when the
+     * drive genuinely has none, and only a fixture WITH environments can tell
+     * the two apart.
+     */
+    test('offers "in <env name>" targets with the ephemeral default leading, and carries the chosen envId into the POST', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [
+        { id: 'env-1', name: 'staging', status: 'running' },
+        { id: 'env-2', name: 'dev', status: 'none' },
+      ]);
+      mockPost.mockResolvedValue({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      renderSidebar();
+
+      await screen.findByTestId('sidebar-env-env-1');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+
+      // The environment step, not the name step: the drive has environments.
+      expect(await screen.findByText('in staging')).toBeDefined();
+      expect(screen.getByText('in dev')).toBeDefined();
+      // The ephemeral default leads — it is what every session was before
+      // environments existed and what most still should be.
+      const options = screen.getAllByRole('option').map((el) => el.textContent ?? '');
+      expect(options[0]).toContain('New sandbox');
+
+      await user.click(screen.getByText('in staging'));
+
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      await user.type(nameInput, 'work in staging');
+      fireEvent.submit(nameInput.closest('form')!);
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
+          driveId: 'drive-1',
+          envId: 'env-1',
+          agentPageId: 'agent-1',
+          name: 'work in staging',
+        }),
+      );
+    });
+
+    test('choosing the ephemeral default from the environment step posts envId null', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      mockPost.mockResolvedValue({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      renderSidebar();
+
+      await screen.findByTestId('sidebar-env-env-1');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+      await user.click(await screen.findByText('New sandbox'));
+
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      fireEvent.submit(nameInput.closest('form')!);
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
+          driveId: 'drive-1',
+          envId: null,
+          agentPageId: 'agent-1',
+          name: '',
+        }),
+      );
+    });
+
+    test('WAITS for the environments listing rather than treating an in-flight fetch as "this drive has none"', async () => {
+      const user = userEvent.setup();
+      // The listing never settles while the user picks. `envs` is `[]`
+      // throughout — indistinguishable from an environment-less drive to any
+      // step machine that reads only `.length`, which is the bug: the palette
+      // would jump to the name step and spawn `envId: null` into a drive that
+      // HAS environments.
+      let releaseEnvs: (() => void) | null = null;
+      const envsLanded = new Promise<void>((resolve) => {
+        releaseEnvs = resolve;
+      });
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (typeof url === 'string' && url.includes('/envs')) {
+          await envsLanded;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              envs: [{ id: 'env-1', name: 'staging', status: 'running', driveId: 'drive-1', createdAt: '2026-08-01T00:00:00.000Z' }],
+            }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ sessions: [] }) };
+      });
+      renderSidebar();
+
+      await screen.findByPlaceholderText('Search sessions…');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+
+      // Held, not advanced: no name form to type a name into and spawn from.
+      expect(await screen.findByText(/Looking for environments/i)).toBeDefined();
+      expect(screen.queryByPlaceholderText('Researcher')).toBeNull();
+
+      await act(async () => {
+        releaseEnvs!();
+        await envsLanded;
+      });
+
+      // Once the answer arrives the real question is asked.
+      expect(await screen.findByText('in staging')).toBeDefined();
+      expect(mockPost).not.toHaveBeenCalled();
+    });
+
+    test('a failed environments listing says so and offers a way back, instead of passing the drive off as having none', async () => {
+      const user = userEvent.setup();
+      // ONLY the envs endpoint fails. The sessions listing is fine, which is
+      // the case that matters: without a notice the drive is indistinguishable
+      // from one that simply has no environments, and the env-bound session
+      // below silently becomes an orphan for a reason nobody can see.
+      let envsShouldFail = true;
+      respondWithSessions(
+        [envSession('ses-env', 'env-1', 'inside staging')],
+        [{ id: 'env-1', name: 'staging', status: 'running' }],
+        () => envsShouldFail,
+      );
+      renderSidebar();
+
+      expect(await screen.findByText('Could not load environments')).toBeDefined();
+      // The session is still shown — a drive's sessions do not depend on this
+      // request — but under a group that admits it does not know the name.
+      expect(screen.getByText('Unavailable environment')).toBeDefined();
+      expect(screen.getByText('inside staging')).toBeDefined();
+
+      envsShouldFail = false;
+      await user.click(screen.getByLabelText('Try again loading environments'));
+
+      expect(await screen.findByText('staging')).toBeDefined();
+      expect(screen.queryByText('Could not load environments')).toBeNull();
+      expect(screen.queryByText('Unavailable environment')).toBeNull();
+    });
+
+    test('an orphan group never prints the raw env id — an id is not a name a user could recognise', async () => {
+      respondWithSessions([envSession('ses-env', 'env-missing-xyz', 'inside something')], []);
+      renderSidebar();
+
+      const envRow = await screen.findByTestId('sidebar-env-env-missing-xyz');
+      expect(within(envRow).getByText('Unavailable environment')).toBeDefined();
+      expect(screen.queryByText('env-missing-xyz')).toBeNull();
+    });
+
+    test('a FAILED env listing does not let the palette spawn ephemerally by default — it says so and offers a way out', async () => {
+      const user = userEvent.setup();
+      let envsShouldFail = true;
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }], () => envsShouldFail);
+      mockPost.mockResolvedValue({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      renderSidebar();
+
+      await screen.findByPlaceholderText('Search sessions…');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+
+      // A failed listing leaves `envs` at [] with loading finished — the exact
+      // shape of "this drive has none". Sailing past it would spawn ephemeral
+      // in a drive that HAS environments, silently.
+      expect(await screen.findByText(/could not check which environments/i)).toBeDefined();
+      expect(screen.queryByPlaceholderText('Researcher')).toBeNull();
+      expect(mockPost).not.toHaveBeenCalled();
+
+      envsShouldFail = false;
+      await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+      // Recovered: the real question gets asked after all.
+      expect(await screen.findByText('in staging')).toBeDefined();
+    });
+
+    test('the failed-listing escape hatch spawns ephemerally only as an explicit choice', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }], () => true);
+      mockPost.mockResolvedValue({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      renderSidebar();
+
+      await screen.findByPlaceholderText('Search sessions…');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+      await user.click(await screen.findByRole('button', { name: 'Use a new sandbox' }));
+
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      fireEvent.submit(nameInput.closest('form')!);
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
+          driveId: 'drive-1',
+          envId: null,
+          agentPageId: 'agent-1',
+          name: '',
+        }),
+      );
+    });
+
+    test('an active search flattens the list — a matching env-bound session shows, its environment steps aside', async () => {
+      const user = userEvent.setup();
+      respondWithSessions(
+        [envSession('ses-env', 'env-1', 'inside staging')],
+        [{ id: 'env-1', name: 'staging', status: 'running' }],
+      );
+      renderSidebar();
+
+      await screen.findByTestId('sidebar-env-env-1');
+      await user.type(screen.getByPlaceholderText('Search sessions…'), 'inside');
+
+      expect(screen.getByText('inside staging')).toBeDefined();
+      expect(screen.queryByTestId('sidebar-env-env-1')).toBeNull();
+    });
+  });
+
+  /**
+   * LOCAL ENVIRONMENTS (Local Environments epic, [D-3]): a machine is a
+   * SUBSTRATE of an environment, chosen in the ordinary create step — and that
+   * step is the one place the one-time enrollment code is shown. Losing the
+   * code is recoverable: an env whose machine has not enrolled offers "Show a
+   * new code" from its row, backed by a server re-issue.
+   */
+  describe('local environments', () => {
+    beforeEach(() => {
+      useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha')] });
+    });
+    const CODE = 'ABCDEFGHJKMNPQRSTVWX';
+    const expiresAt = () => new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    const localEnv = { id: 'env-mac', name: 'mac', driveId: 'drive-1', substrate: 'local' as const, status: 'disconnected' as const, label: 'jono-macstudio', enrolled: false };
+    const enableLocalEnvs = () =>
+      mockUsePageAgents.mockImplementation((driveId?: string, options?: { enabled?: boolean }) => {
+        const base = defaultPageAgents(driveId, options);
+        return { ...base, agentsByDrive: base.agentsByDrive.map((entry) => ({ ...entry, localEnvsEnabled: true })) };
+      });
+    const openCreateStep = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await screen.findByLabelText('Environment name');
+    };
+
+    test('with the deployment flag off (the default), the create step offers no substrate choice at all — absent, not present-and-refusing', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], []);
+      renderSidebar();
+      await openCreateStep(user);
+      expect(screen.queryByLabelText('This computer')).toBeNull();
+      expect(screen.queryByLabelText('Cloud sandbox')).toBeNull();
+      expect(screen.queryByLabelText('Machine label')).toBeNull();
+    });
+
+    test('with the flag on, leaving the default (cloud) selected posts the byte-identical body the cloud path always sent', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', substrate: 'sprite', status: 'none' } });
+      renderSidebar();
+      await openCreateStep(user);
+      expect((screen.getByLabelText('Cloud sandbox') as HTMLInputElement).checked).toBe(true);
+      expect(screen.queryByLabelText('Machine label')).toBeNull();
+      await user.type(screen.getByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', { name: 'dev' }));
+      // No code step for a cloud env: straight back to the target step.
+      expect(await screen.findByText('Researcher')).toBeDefined();
+      expect(screen.queryByText(/enrol/i)).toBeNull();
+    });
+
+    test('choosing "This computer" asks for a machine label and posts substrate local with it', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', { name: 'mac', substrate: 'local', label: 'jono-macstudio' }),
+      );
+    });
+
+    test('a local create shows the code ONCE with the exact commands for this origin, its expiry, and the boundary statement; Done returns to the flow and the code is gone', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      // The code, exactly once on screen, in its own element.
+      const code = await screen.findByTestId('enrollment-code');
+      expect(code.textContent).toBe(CODE);
+      // The commands, with the real values and the origin the app is served from.
+      const commands = screen.getByTestId('enrollment-commands').textContent ?? '';
+      expect(commands).toContain(`pagespace env enroll enr_1 ${CODE} --host ${window.location.origin}`);
+      expect(commands).toContain(`pagespace env connect enr_1 --host ${window.location.origin}`);
+      expect(commands.indexOf('env enroll')).toBeLessThan(commands.indexOf('env connect'));
+      // The expiry, and what the person is agreeing to (the README's words, not softer ones).
+      expect(screen.getByText(/expires/i)).toBeDefined();
+      expect(screen.getByText(/runs as you/i)).toBeDefined();
+      expect(screen.getByText(/every later command of that kind/i)).toBeDefined();
+      // Never refetched: the only request that ever carried the code is the create.
+      expect(mockPost).toHaveBeenCalledTimes(1);
+
+      await user.click(screen.getByRole('button', { name: 'Done' }));
+      // Back on the target step (where the create was asked from), and the code is gone.
+      expect(await screen.findByText('Researcher')).toBeDefined();
+      expect(screen.queryByTestId('enrollment-code')).toBeNull();
+      expect(screen.queryByText(CODE)).toBeNull();
+    });
+
+    test('copying puts the code on the clipboard', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await user.click(await screen.findByRole('button', { name: 'Copy code' }));
+      expect(await navigator.clipboard.readText()).toBe(CODE);
+      await user.click(screen.getByRole('button', { name: 'Copy commands' }));
+      expect(await navigator.clipboard.readText()).toContain(`pagespace env enroll enr_1 ${CODE}`);
+    });
+
+    test('a local env created from the ENV step is not auto-selected (its machine has not enrolled): the env step re-asks, now listing it as a local machine', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      // The listing the server would return AFTER the create: the palette
+      // revalidates behind its optimistic write, so the mock must answer with
+      // the new env or the revalidation would (in the test only) erase it.
+      const listed: EnvFixture[] = [{ id: 'env-1', name: 'staging', status: 'running' }];
+      respondWithSessions([], listed);
+      mockPost.mockImplementationOnce(async () => {
+        listed.push({ id: 'env-mac', name: 'mac', status: 'disconnected', substrate: 'local', label: 'jono-macstudio', enrolled: false });
+        return { env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } };
+      });
+      renderSidebar();
+      await screen.findByTestId('sidebar-env-env-1');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+      await user.click(await screen.findByText('New environment…'));
+      await user.click(await screen.findByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await user.click(await screen.findByRole('button', { name: 'Done' }));
+      // The env step again — NOT the name step with the new env preselected.
+      expect(await screen.findByText('New sandbox')).toBeDefined();
+      expect(screen.queryByPlaceholderText('Researcher')).toBeNull();
+      expect(screen.getByText('in mac')).toBeDefined();
+      expect(screen.getByText('on jono-macstudio')).toBeDefined();
+    });
+
+    test('a local create that lands after the palette was closed still shows the code — the credential is never silently dropped', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      let resolveCreate: ((value: unknown) => void) | undefined;
+      mockPost.mockImplementationOnce(() => new Promise((resolve) => { resolveCreate = resolve; }));
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await user.keyboard('{Escape}');
+      expect(screen.queryByLabelText('Environment name')).toBeNull();
+
+      await act(async () => {
+        resolveCreate?.({ env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      });
+      expect((await screen.findByTestId('enrollment-code')).textContent).toBe(CODE);
+      await user.click(screen.getByRole('button', { name: 'Done' }));
+      expect(screen.queryByTestId('enrollment-code')).toBeNull();
+    });
+
+    test('a local env row says it is a computer, names the machine, and reads as awaiting enrollment until a machine enrols', async () => {
+      respondWithSessions([], [{ id: 'env-mac', name: 'mac', status: 'disconnected', substrate: 'local', label: 'jono-macstudio', enrolled: false }]);
+      renderSidebar();
+      const row = await screen.findByTestId('sidebar-env-env-mac');
+      expect(within(row).getByText('mac')).toBeDefined();
+      expect(within(row).getByText('jono-macstudio')).toBeDefined();
+      expect(within(row).getByLabelText('Local environment')).toBeDefined();
+      expect(within(row).getByLabelText('Awaiting enrollment')).toBeDefined();
+    });
+
+    test('an enrolled local env whose machine is away reads as not connected — never as awaiting enrollment', async () => {
+      respondWithSessions([], [{ id: 'env-mac', name: 'mac', status: 'disconnected', substrate: 'local', label: 'jono-macstudio', enrolled: true }]);
+      renderSidebar();
+      const row = await screen.findByTestId('sidebar-env-env-mac');
+      expect(within(row).getByLabelText('Machine not connected')).toBeDefined();
+      expect(within(row).queryByLabelText('Awaiting enrollment')).toBeNull();
+    });
+
+    test('an admin gets "Show a new code" on an awaiting-enrollment row, which re-issues on the server and shows the fresh code once', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-mac', name: 'mac', status: 'disconnected', substrate: 'local', label: 'jono-macstudio', enrolled: false }]);
+      mockPost.mockResolvedValue({ enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      renderSidebar();
+      const row = await screen.findByTestId('sidebar-env-env-mac');
+      await user.click(within(row).getByLabelText('Environment actions'));
+      await user.click(await screen.findByText('Show a new code'));
+      await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs/env-mac/enrollment-code'));
+      expect((await screen.findByTestId('enrollment-code')).textContent).toBe(CODE);
+      expect(screen.getByTestId('enrollment-commands').textContent).toContain(`pagespace env enroll enr_1 ${CODE}`);
+      await user.click(screen.getByRole('button', { name: 'Done' }));
+      await waitFor(() => expect(screen.queryByTestId('enrollment-code')).toBeNull());
+    });
+
+    test('"Show a new code" is withheld once a machine has enrolled, and from a member', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-mac', name: 'mac', status: 'connected', substrate: 'local', label: 'jono-macstudio', enrolled: true }]);
+      renderSidebar();
+      const row = await screen.findByTestId('sidebar-env-env-mac');
+      await user.click(within(row).getByLabelText('Environment actions'));
+      expect(await screen.findByText('Rename')).toBeDefined();
+      expect(screen.queryByText('Show a new code')).toBeNull();
+    });
+
+    /**
+     * THE ROW MUST MOVE ON ITS OWN. `enrolledAt` changes from the CLI, outside
+     * every write path this app has, and the env listing neither polls nor
+     * revalidates on focus. Without this a person follows the dialog's two
+     * commands and watches a row that never stops saying "Awaiting
+     * enrollment" (Codex P1 on #2564).
+     */
+    test('a row awaiting enrollment picks up enrolled + connected without a reload — the listing polls while any local env awaits, and stops once none does', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const listed: EnvFixture[] = [{ id: 'env-mac', name: 'mac', status: 'disconnected', substrate: 'local', label: 'jono-macstudio', enrolled: false }];
+        respondWithSessions([], listed);
+        renderSidebar();
+        const row = await screen.findByTestId('sidebar-env-env-mac');
+        expect(within(row).getByLabelText('Awaiting enrollment')).toBeDefined();
+        const envCallsBefore = mockFetchWithAuth.mock.calls.filter(([url]) => String(url).includes('/envs')).length;
+
+        // The machine enrols and connects, on the CLI.
+        listed[0] = { ...listed[0]!, status: 'connected', enrolled: true };
+        await act(async () => { await vi.advanceTimersByTimeAsync(LOCAL_ENV_ENROLLMENT_POLL_MS + 50); });
+        await waitFor(() => expect(within(screen.getByTestId('sidebar-env-env-mac')).getByLabelText('Machine connected')).toBeDefined());
+        expect(mockFetchWithAuth.mock.calls.filter(([url]) => String(url).includes('/envs')).length).toBeGreaterThan(envCallsBefore);
+
+        // Nothing awaits any more: the poll stops.
+        const settled = mockFetchWithAuth.mock.calls.filter(([url]) => String(url).includes('/envs')).length;
+        await act(async () => { await vi.advanceTimersByTimeAsync(LOCAL_ENV_ENROLLMENT_POLL_MS * 3); });
+        expect(mockFetchWithAuth.mock.calls.filter(([url]) => String(url).includes('/envs')).length).toBe(settled);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    test('an already_enrolled refusal refreshes the listing so the row self-heals', async () => {
+      const user = userEvent.setup();
+      const listed: EnvFixture[] = [{ id: 'env-mac', name: 'mac', status: 'disconnected', substrate: 'local', label: 'jono-macstudio', enrolled: false }];
+      respondWithSessions([], listed);
+      mockPost.mockImplementation(async () => {
+        listed[0] = { ...listed[0]!, status: 'connected', enrolled: true };
+        throw new ApiRequestError('A machine has already enrolled in this environment', 409, { reason: 'already_enrolled' });
+      });
+      renderSidebar();
+      const row = await screen.findByTestId('sidebar-env-env-mac');
+      await user.click(within(row).getByLabelText('Environment actions'));
+      await user.click(await screen.findByText('Show a new code'));
+      await waitFor(() => expect(within(screen.getByTestId('sidebar-env-env-mac')).getByLabelText('Machine connected')).toBeDefined());
+      expect(within(screen.getByTestId('sidebar-env-env-mac')).queryByLabelText('Awaiting enrollment')).toBeNull();
+    });
+
+    test('the code step says, BEFORE the commands, that the daemon runs on macOS and Linux only — enrolling from Windows would pin a machine that can never connect', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      const panel = (await screen.findByTestId('enrollment-commands')).closest('[data-testid="enrollment-panel"]') as HTMLElement;
+      const text = panel.textContent ?? '';
+      expect(text).toMatch(/macOS and Linux only/);
+      expect(text).toMatch(/Windows/);
+      expect(text.indexOf('macOS and Linux only')).toBeLessThan(text.indexOf('pagespace env enroll'));
+    });
+
+    test('a refused re-issue (the machine enrolled meanwhile) is reported, not shown as a code', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-mac', name: 'mac', status: 'disconnected', substrate: 'local', label: 'jono-macstudio', enrolled: false }]);
+      mockPost.mockRejectedValue(new ApiRequestError('A machine has already enrolled in this environment', 409, { reason: 'already_enrolled' }));
+      renderSidebar();
+      const row = await screen.findByTestId('sidebar-env-env-mac');
+      await user.click(within(row).getByLabelText('Environment actions'));
+      await user.click(await screen.findByText('Show a new code'));
+      await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+      expect(screen.queryByTestId('enrollment-code')).toBeNull();
     });
   });
 });

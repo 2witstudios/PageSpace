@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { APP_IDENTITY } from '../shared/current-app-identity';
 import type {
   MCPConfig,
   MCPServerStatusInfo,
@@ -46,6 +47,11 @@ contextBridge.exposeInMainWorld('electron', {
 
   // App version
   version: process.env.npm_package_version || '1.0.0',
+
+  // Which app this shell is. The web app needs it to build a deep link back
+  // into THIS app rather than into its sibling — the two register different
+  // protocol schemes, and those links carry single-use auth exchange codes.
+  appVariant: APP_IDENTITY.variant,
 
   // Authentication
   auth: {

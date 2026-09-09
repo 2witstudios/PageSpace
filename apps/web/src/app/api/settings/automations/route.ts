@@ -79,9 +79,14 @@ export async function PATCH(request: Request) {
     }
 
     if (decision.memory !== undefined) {
+      // Only the toggle. Profile CONTENT lives as pages in the user's Home
+      // drive now (see @pagespace/lib/memory/memory-pages); the legacy
+      // bio/writingStyle/rules columns are a read-fallback for users the
+      // backfill has not reached and must not be seeded here, or this route
+      // would look like a writer of personalization content.
       await db
         .insert(userPersonalization)
-        .values({ userId, bio: '', writingStyle: '', rules: '', enabled: decision.memory })
+        .values({ userId, enabled: decision.memory })
         .onConflictDoUpdate({
           target: userPersonalization.userId,
           set: { enabled: decision.memory, updatedAt: new Date() },

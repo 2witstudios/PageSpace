@@ -81,6 +81,31 @@ vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
 vi.mock('@pagespace/lib/auth/constants', () => ({
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
+  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
+    deviceToken: 'ps_dev_round_trip',
+    deviceTokenRecordId: 'dt-1',
+    isNew: true,
+  }),
+}));
+vi.mock('@pagespace/lib/auth/exchange-codes', () => ({
+  createExchangeCode: vi.fn().mockResolvedValue('exchange-code-round-trip'),
+}));
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserById: vi.fn().mockResolvedValue({
+      id: 'user_test',
+      name: 'Test User',
+      email: 'user@example.com',
+      image: null,
+      emailVerified: null,
+      tokenVersion: 3,
+    }),
+  },
+}));
+vi.mock('@pagespace/lib/auth/account-lockout', () => ({
+  resetFailedLoginAttempts: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('@pagespace/lib/auth/verification-utils', () => ({
   markEmailVerified: vi.fn().mockResolvedValue(undefined),
 }));
@@ -102,8 +127,10 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
-vi.mock('@/lib/onboarding/home-drive', () => ({
-  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue(null),
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
+  // Shape matters: the route reads `.created`, so a bare null would make every
+  // test here take the provisioning catch instead of the real path.
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'home-drive', created: false }),
 }));
 vi.mock('@/lib/auth/native-invite-acceptance', () => ({
   consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({ kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null }),
@@ -117,7 +144,7 @@ vi.mock('cookie', () => ({
 }));
 
 import { POST as sendPost } from '../send/route';
-import { GET as verifyGet } from '../verify/route';
+import { GET as verifyGet, POST as verifyPost } from '../verify/route';
 
 const buildSendRequest = (body: Record<string, unknown>) =>
   new Request('http://localhost/api/auth/magic-link/send', {
@@ -312,5 +339,120 @@ describe('magic-link round-trip — inviteToken metadata binding end-to-end', ()
     expect(location).toContain('/dashboard/drive_invited_abc');
     expect(location).toContain('invited=1');
     expect(location).toContain('auth=success');
+  });
+});
+
+describe('magic-link round-trip — requested from the iOS app', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv('WEB_APP_URL', 'https://example.com');
+    vi.stubEnv('NODE_ENV', 'test');
+    sendEmailMock.mockResolvedValue(undefined);
+    generateTokenMock.mockReturnValue({
+      token: 'tok_round_trip',
+      hash: 'tok_hash',
+      tokenPrefix: 'tok_',
+    });
+    loadUserAccountByEmailMock.mockResolvedValue({ id: 'user_test', suspendedAt: null });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  /** The metadata the adapter actually persisted, fed back through verify. */
+  const persistedMetadata = (): string | undefined => {
+    const insert = dbInsertMock.mock.results[0]?.value as { values: ReturnType<typeof vi.fn> };
+    const row = insert.values.mock.calls[0]?.[0] as { metadata?: string };
+    return row.metadata;
+  };
+
+  it('mints a universal link, binds the device, and redeems into bearer tokens on that device', async () => {
+    const sendResp = await sendPost(
+      buildSendRequest({
+        email: 'user@example.com',
+        tosAccepted: true,
+        platform: 'ios',
+        deviceId: 'dev_iphone',
+        deviceName: 'iOS App',
+        next: '/dashboard/drive_abc',
+      }),
+    );
+    expect(sendResp.status).toBe(200);
+
+    // The email carries the claimed page, not the API endpoint.
+    const url = extractUrlFromEmailCall();
+    expect(url).toBe('https://example.com/auth/magic-link/tok_round_trip?next=%2Fdashboard%2Fdrive_abc');
+
+    // The row remembers which device asked.
+    const metadata = persistedMetadata();
+    expect(metadata).toBeDefined();
+    expect(JSON.parse(metadata!)).toEqual({ platform: 'ios', deviceId: 'dev_iphone', deviceName: 'iOS App' });
+
+    verifyMagicLinkTokenMock.mockResolvedValue({
+      ok: true,
+      data: { userId: 'user_test', isNewUser: false, metadata },
+    });
+
+    // What the in-app page does with that URL.
+    const parsed = new URL(url);
+    const token = parsed.pathname.split('/').pop()!;
+    const next = parsed.searchParams.get('next')!;
+    const redeemResp = await verifyPost(
+      new Request('https://example.com/api/auth/magic-link/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, next, deviceId: 'dev_iphone' }),
+      }),
+    );
+    expect(redeemResp.status).toBe(200);
+    const body = (await redeemResp.json()) as Record<string, unknown>;
+    expect(body).toEqual(
+      expect.objectContaining({
+        sessionToken: 'ps_sess_round_trip',
+        csrfToken: 'mock-csrf-token',
+        deviceToken: 'ps_dev_round_trip',
+        redirectTo: '/dashboard/drive_abc?auth=success',
+      }),
+    );
+  });
+
+  it('the same link opened in a browser signs that browser in by cookie, with no bearer tokens', async () => {
+    await sendPost(
+      buildSendRequest({
+        email: 'user@example.com',
+        tosAccepted: true,
+        platform: 'ios',
+        deviceId: 'dev_iphone',
+        deviceName: 'iOS App',
+      }),
+    );
+    const url = extractUrlFromEmailCall();
+    expect(url).toBe('https://example.com/auth/magic-link/tok_round_trip');
+    verifyMagicLinkTokenMock.mockResolvedValue({
+      ok: true,
+      data: { userId: 'user_test', isNewUser: false, metadata: persistedMetadata() },
+    });
+
+    const redeemResp = await verifyPost(
+      new Request('https://example.com/api/auth/magic-link/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: 'tok_round_trip' }),
+      }),
+    );
+    const body = (await redeemResp.json()) as Record<string, unknown>;
+    expect(body.redirectTo).toBe('/dashboard?auth=success');
+    expect(body).not.toHaveProperty('sessionToken');
+    expect(body).not.toHaveProperty('deviceToken');
+  });
+
+  it('a link requested from a browser keeps the plain verify URL, which the app does not claim', async () => {
+    await sendPost(buildSendRequest({ email: 'user@example.com', tosAccepted: true }));
+
+    expect(extractUrlFromEmailCall()).toBe(
+      'https://example.com/api/auth/magic-link/verify?token=tok_round_trip',
+    );
+    expect(persistedMetadata()).toBeUndefined();
   });
 });

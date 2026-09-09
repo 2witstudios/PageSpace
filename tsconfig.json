@@ -12,6 +12,7 @@
     "baseUrl": ".",
     "paths": {
       "@pagespace/db/*": ["packages/db/src/*"],
+      "@pagespace/editor/*": ["packages/editor/src/*"],
       "@pagespace/lib/*": ["packages/lib/src/*"],
       "@pagespace/*": ["packages/*/src"]
     },

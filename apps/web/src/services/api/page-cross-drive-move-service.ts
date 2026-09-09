@@ -25,6 +25,10 @@ import { db } from '@pagespace/db/db';
 import { and, eq, inArray, desc, isNull } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
+import {
+  findProtectedMemoryPages,
+  MEMORY_PAGE_MOVE_ERROR,
+} from '@pagespace/lib/memory/memory-pages';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { syncTaskItemOnMove, scrubDriveScopedTaskAssociations } from '@/services/api/task-sync-service';
@@ -88,6 +92,7 @@ export type CrossDriveMoveFailureCode =
   | 'SOURCE_DRIVE_OUT_OF_SCOPE'
   | 'SOURCE_PAGE_FORBIDDEN'
   | 'CIRCULAR_REFERENCE'
+  | 'MEMORY_PAGE_PROTECTED'
   | 'SUBTREE_TOO_DEEP';
 
 export interface MovedPageSummary {
@@ -172,7 +177,11 @@ async function cascadeDriveIdToDescendants(
     }
 
     next.forEach((id) => visited.add(id));
-    await tx.update(pages).set({ driveId: newDriveId }).where(inArray(pages.id, next));
+    // defaultEnvId is drive-scoped (FK'd to that drive's own drive_envs row) —
+    // carrying it across a drive move would point a descendant AI_CHAT agent
+    // at an environment it can no longer reach, silently 404ing every spawn
+    // that relies on the default until someone notices and resets it by hand.
+    await tx.update(pages).set({ driveId: newDriveId, defaultEnvId: null }).where(inArray(pages.id, next));
     moved.push(...next);
     frontier = next;
   }
@@ -253,6 +262,18 @@ export async function movePagesToDrive(
     }
   }
 
+  // Memory pages are addressed by pointer and assumed to live in the user's Home
+  // drive; moving one to another drive breaks that and puts the user's profile
+  // inside a drive they may later delete. Guarded HERE rather than at each
+  // caller because this service is the only cross-drive move path, shared by
+  // /api/pages/bulk-move and the AI move_page tool — pageService.updatePage's
+  // guard never sees either. After the permission loops above, so a caller who
+  // cannot move the page is not told what it is.
+  const protectedIds = await findProtectedMemoryPages(pageIds);
+  if (protectedIds.size > 0) {
+    return fail('MEMORY_PAGE_PROTECTED', 403, MEMORY_PAGE_MOVE_ERROR);
+  }
+
   if (targetParentId) {
     for (const pageId of pageIds) {
       const validation = await validatePageMove(pageId, targetParentId);
@@ -293,6 +314,10 @@ export async function movePagesToDrive(
             parentId: targetParentId,
             position: nextPosition,
             updatedAt: new Date(),
+            // Same reasoning as the descendant cascade below: an env is
+            // drive-scoped, so a moved root's default (if any) belonged to
+            // the drive it just left.
+            ...(page.driveId !== targetDriveId ? { defaultEnvId: null } : {}),
           })
           .where(eq(pages.id, page.id));
 

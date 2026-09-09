@@ -9,6 +9,7 @@
 
 import { createId } from '@paralleldrive/cuid2';
 import { createUIMessageStream, createUIMessageStreamResponse, type UIMessage } from 'ai';
+import { STREAM_MODE_HEADER, STREAM_MODE_INLINE } from '@/lib/ai/core/detached-stream-mode';
 import { COMMAND_EXECUTION_PART_TYPE } from '@/lib/ai/core/command-processor';
 import { buildAssistantPersistencePayload, type AssistantPersistencePayload } from '@/lib/ai/core/persistAssistantParts';
 import { loadHelpAnswerText } from '@/lib/commands/help-answer';
@@ -57,7 +58,14 @@ function buildHelpAnswerStream(
     },
   });
 
-  return createUIMessageStreamResponse({ stream });
+  // MARKED INLINE. This reply is complete and already persisted; there is no lifecycle, no
+  // channel and no `chat:stream_start` behind it. Unmarked, it is indistinguishable from an old
+  // server's streamed body, and a detached client would cancel it after the `start` frame and
+  // subscribe to a channel that does not exist. See `STREAM_MODE_INLINE`.
+  return createUIMessageStreamResponse({
+    stream,
+    headers: { [STREAM_MODE_HEADER]: STREAM_MODE_INLINE },
+  });
 }
 
 /** Page-chat entry point (apps/web/src/app/api/ai/chat/route.ts). */

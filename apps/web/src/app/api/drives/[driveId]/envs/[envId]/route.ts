@@ -1,0 +1,213 @@
+/**
+ * One drive environment — `/api/drives/[driveId]/envs/[envId]`.
+ *
+ * GET    → { env }                 — any accepted member of the drive
+ * PATCH  { name } → { env }        — drive OWNER or ADMIN
+ * DELETE ?force=true → { deleted }  — drive OWNER or ADMIN
+ *
+ * **`driveId` is checked against the row, not trusted from the path.** An env's
+ * id is globally unique, so a member of drive A could otherwise reach drive B's
+ * env by nesting its id under a drive they do belong to. The mismatch answers
+ * 404 rather than 403: telling a stranger that an id exists elsewhere is itself
+ * the leak.
+ *
+ * **DELETE on a LOCAL env revokes the machine first** (Local Environments epic,
+ * Codex C4): `revokedAt` stamped, every `env:bridge` session for the env
+ * revoked, the daemon sent a signed `revoke` frame and closed 1008 — then the
+ * row is deleted as for any env. Owner/admin only, through the same
+ * centralized check as every other DELETE here; the revoke's three legs are
+ * audited on the drive with `operation: 'revoke'`.
+ *
+ * **DELETE is the destructive verb.** It refuses while sessions are live inside
+ * the env (409) unless `?force=true`, because deleting the row CASCADES those
+ * sessions away — see `deleteDriveEnv`, which owns the ordering: guard → delete
+ * the row → kill the machine, in that order and for that reason. The kill comes
+ * LAST so that a refusal cannot leave a destroyed filesystem behind, and it is
+ * therefore best-effort: a kill that fails or stalls does NOT abort the delete
+ * and does not fail this request. The environment is gone; the reclaim outbox
+ * finishes stopping the machine. `spriteTornDown` in the response says whether
+ * this request also managed that, which is why it is reported rather than
+ * assumed — there is deliberately no 503 arm.
+ */
+
+import { NextResponse } from 'next/server';
+import {
+  authenticateRequestWithOptions,
+  isAuthError,
+  checkMCPDriveScope,
+  isPrincipalDriveMember,
+  isPrincipalDriveOwnerOrAdmin,
+} from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { renameDriveEnvRequestSchema } from '@pagespace/lib/drive-envs/env-contract';
+import {
+  deleteEnv,
+  renameEnv,
+  resolveEnvInDrive,
+  revokeEnv,
+  toDriveEnvDTO,
+} from '@/lib/drive-envs/drive-envs-runtime';
+
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+
+export async function GET(request: Request, context: { params: Promise<{ driveId: string; envId: string }> }) {
+  try {
+    const { driveId, envId } = await context.params;
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
+    if (isAuthError(auth)) return auth.error;
+
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
+    if (!(await isPrincipalDriveMember(auth, driveId))) {
+      auditRequest(request, {
+        eventType: 'authz.access.denied',
+        userId: auth.userId,
+        resourceType: 'drive',
+        resourceId: driveId,
+        details: { route: 'drive-envs', operation: 'read', envId },
+      });
+      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+    }
+
+    const env = await resolveEnvInDrive(envId, driveId);
+    if (!env) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+
+    return NextResponse.json({ env: toDriveEnvDTO(env) });
+  } catch (error) {
+    loggers.api.error('Failed to read drive environment', error instanceof Error ? error : new Error(String(error)));
+    return NextResponse.json({ error: 'Failed to read environment' }, { status: 500 });
+  }
+}
+
+export async function PATCH(request: Request, context: { params: Promise<{ driveId: string; envId: string }> }) {
+  try {
+    const { driveId, envId } = await context.params;
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
+    if (isAuthError(auth)) return auth.error;
+
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
+    if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
+      auditRequest(request, {
+        eventType: 'authz.access.denied',
+        userId: auth.userId,
+        resourceType: 'drive',
+        resourceId: driveId,
+        details: { route: 'drive-envs', operation: 'rename', envId },
+      });
+      return NextResponse.json({ error: 'Only drive owners and admins can rename environments' }, { status: 403 });
+    }
+
+    if (!(await resolveEnvInDrive(envId, driveId))) {
+      return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+    }
+
+    const body = await request.json().catch(() => null);
+    const parsed = renameDriveEnvRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'A non-empty environment name is required' }, { status: 400 });
+    }
+
+    const result = await renameEnv({ envId, name: parsed.data.name });
+    if (!result.ok) {
+      if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+      return NextResponse.json({ error: 'An environment with this name already exists' }, { status: 409 });
+    }
+
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId: auth.userId,
+      resourceType: 'drive',
+      resourceId: driveId,
+      details: { route: 'drive-envs', operation: 'rename', envId, name: result.env.name },
+    });
+
+    return NextResponse.json({ env: toDriveEnvDTO(result.env) });
+  } catch (error) {
+    loggers.api.error('Failed to rename drive environment', error instanceof Error ? error : new Error(String(error)));
+    return NextResponse.json({ error: 'Failed to rename environment' }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request, context: { params: Promise<{ driveId: string; envId: string }> }) {
+  try {
+    const { driveId, envId } = await context.params;
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
+    if (isAuthError(auth)) return auth.error;
+
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
+    if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
+      auditRequest(request, {
+        eventType: 'authz.access.denied',
+        userId: auth.userId,
+        resourceType: 'drive',
+        resourceId: driveId,
+        details: { route: 'drive-envs', operation: 'delete', envId },
+      });
+      return NextResponse.json({ error: 'Only drive owners and admins can delete environments' }, { status: 403 });
+    }
+
+    const env = await resolveEnvInDrive(envId, driveId);
+    if (!env) {
+      return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+    }
+
+    // A local env's machine is revoked BEFORE the row goes: the stamp, the
+    // sessions and the socket (C4). The row deletion below then cascades the
+    // sibling away; a later token mint finds nothing and fails either way.
+    let revoked: { sessionsRevoked: number; machine: string; alreadyRevoked: boolean } | null = null;
+    if (env.substrate === 'local') {
+      const revocation = await revokeEnv({ envId, reason: 'owner_revoked' });
+      if (revocation.ok) {
+        revoked = { sessionsRevoked: revocation.sessionsRevoked, machine: revocation.machine, alreadyRevoked: revocation.alreadyRevoked };
+        auditRequest(request, {
+          eventType: 'auth.token.revoked',
+          userId: auth.userId,
+          resourceType: 'drive_env',
+          resourceId: envId,
+          details: { route: 'drive-envs', operation: 'revoke', driveId, ...revoked },
+        });
+      }
+    }
+
+    // Opt-in by exact value: any other spelling reads as "not forced", so a
+    // stray `?force` or `?force=0` can never destroy a drive's shared work.
+    const force = new URL(request.url).searchParams.get('force') === 'true';
+    const result = await deleteEnv({ envId, force });
+
+    // Two refusals, both terminal. There is deliberately no `teardown_failed`
+    // arm any more: the delete now kills the Sprite only AFTER the row is gone,
+    // so a kill this request could not confirm is the reclaim outbox's problem
+    // rather than a failure to report — the environment IS deleted either way.
+    if (!result.ok) {
+      if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+      return NextResponse.json(
+        {
+          error: 'Sessions are still running in this environment',
+          reason: 'live_sessions',
+          liveSessionCount: result.liveSessionCount,
+        },
+        { status: 409 },
+      );
+    }
+
+    auditRequest(request, {
+      eventType: 'data.delete',
+      userId: auth.userId,
+      resourceType: 'drive',
+      resourceId: driveId,
+      details: { route: 'drive-envs', operation: 'delete', envId, force, spriteTornDown: result.spriteTornDown, revoked },
+    });
+
+    return NextResponse.json({ deleted: true, spriteTornDown: result.spriteTornDown, ...(revoked && { revoked }) });
+  } catch (error) {
+    loggers.api.error('Failed to delete drive environment', error instanceof Error ? error : new Error(String(error)));
+    return NextResponse.json({ error: 'Failed to delete environment' }, { status: 500 });
+  }
+}

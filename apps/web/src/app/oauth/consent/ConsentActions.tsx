@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { post } from '@/lib/auth/auth-fetch';
 import { attemptStepUp, readStepUpTokenFromHash, stripStepUpTokenFromHash } from '@/lib/auth/step-up-ceremony';
 import { buildConsentActionBinding } from './consent-step-up';
@@ -37,24 +37,38 @@ export function ConsentActions(props: ConsentActionsProps) {
   const [stepUpToken, setStepUpToken] = useState<string | null>(null);
 
   const actionBinding = buildConsentActionBinding(props);
+  const emailResumeStarted = useRef(false);
 
   // A step-up magic link redirects back to this same consent URL with the
   // grant attached in the fragment (never the query string, which would hit
-  // server logs) — pick it up on load and scrub it from the visible URL.
+  // server logs) — pick it up on load, scrub it from the visible URL, and
+  // resume the approval automatically. The grant can only exist because the
+  // user already clicked Allow here AND clicked the emailed confirmation
+  // link (and it is single-use and server-bound to these exact consent
+  // params), so asking for a second Allow click would be pure friction —
+  // for the CLI login flow it risked the user waiting out the CLI's timeout
+  // on a screen that looked like it still needed nothing from them.
   useEffect(() => {
     const tokenFromEmail = readStepUpTokenFromHash(window.location.hash);
     if (!tokenFromEmail) return;
+    // Effects can run twice (StrictMode); the grant is single-use, so the
+    // resume must fire exactly once.
+    if (emailResumeStarted.current) return;
+    emailResumeStarted.current = true;
     setStepUpToken(tokenFromEmail);
     setStepUpStatus('ready');
     const cleanedHash = stripStepUpTokenFromHash(window.location.hash);
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${cleanedHash}`);
+    void decide('approve', tokenFromEmail);
+    // decide is stable for the lifetime of this mount-only effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function decide(action: 'approve' | 'deny') {
+  async function decide(action: 'approve' | 'deny', emailGrantToken?: string) {
     setIsSubmitting(true);
     setError(null);
     try {
-      let token = stepUpToken;
+      let token = emailGrantToken ?? stepUpToken;
 
       if (action === 'approve' && !token) {
         setStepUpStatus('in_progress');
@@ -96,6 +110,11 @@ export function ConsentActions(props: ConsentActionsProps) {
       });
       window.location.href = redirectUri;
     } catch {
+      // The step-up grant is single-use: whether or not the authorize call
+      // consumed it before failing, it must not be retried. Drop back to a
+      // clean slate so the next Allow click runs a genuinely fresh ceremony.
+      setStepUpToken(null);
+      setStepUpStatus('idle');
       setError('Something went wrong. Please try again.');
       setIsSubmitting(false);
     }

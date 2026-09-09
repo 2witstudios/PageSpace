@@ -44,3 +44,110 @@ describe('MACHINE_MARKUP_BPS floor clamp', () => {
     expect(MACHINE_MARKUP_BPS).toBe(15000);
   });
 });
+
+describe('realtime session constants', () => {
+  const KEYS = [
+    'REALTIME_SESSION_HOLD_ESTIMATE_CENTS',
+    'REALTIME_MAX_SESSION_SECONDS',
+    'REALTIME_IDLE_TIMEOUT_SECONDS',
+    'REALTIME_MAX_INFLIGHT',
+    'REALTIME_MAX_GLOBAL_SESSIONS',
+    'CREDIT_HOLD_TTL_SECONDS',
+  ];
+
+  beforeEach(() => {
+    vi.resetModules();
+    for (const key of KEYS) delete process.env[key];
+  });
+
+  it('defaults: 10c hold, 600s max session, 120s idle, 2 per user, 8 global', async () => {
+    const c = await import('../credit-pricing');
+    expect(c.REALTIME_SESSION_HOLD_ESTIMATE_CENTS).toBe(10);
+    expect(c.REALTIME_MAX_SESSION_SECONDS).toBe(600);
+    expect(c.REALTIME_IDLE_TIMEOUT_SECONDS).toBe(120);
+    expect(c.REALTIME_MAX_INFLIGHT).toBe(2);
+    expect(c.REALTIME_MAX_GLOBAL_SESSIONS).toBe(8);
+  });
+
+  it('keeps a session shorter than the hold TTL, so the reconcile cron cannot sweep a live call', async () => {
+    // The load-bearing invariant behind REALTIME_MAX_SESSION_SECONDS' default: a
+    // session that outlived CREDIT_HOLD_TTL_SECONDS would have its own reservation
+    // reclaimed mid-call. Raising the cap requires raising the TTL in the same change.
+    const { REALTIME_MAX_SESSION_SECONDS, CREDIT_HOLD_TTL_SECONDS } = await import(
+      '../credit-pricing'
+    );
+    expect(REALTIME_MAX_SESSION_SECONDS).toBeLessThan(CREDIT_HOLD_TTL_SECONDS);
+    // ...with a real settle margin, not merely one second under.
+    expect(CREDIT_HOLD_TTL_SECONDS - REALTIME_MAX_SESSION_SECONDS).toBeGreaterThanOrEqual(300);
+  });
+
+  it('reaps an idle session well before the hard duration cap fires', async () => {
+    const { REALTIME_IDLE_TIMEOUT_SECONDS, REALTIME_MAX_SESSION_SECONDS } = await import(
+      '../credit-pricing'
+    );
+    expect(REALTIME_IDLE_TIMEOUT_SECONDS).toBeLessThan(REALTIME_MAX_SESSION_SECONDS);
+  });
+
+  it('caps global concurrency at or under what 40,000 tokens/min supports', async () => {
+    // PROVEN: the OpenAI account is limited to 40k tokens/min across ALL sessions on
+    // our key. A continuously-talking session burns roughly 4k tokens/min, so the
+    // global cap must stay at or below ~10 or we throttle calls already in progress.
+    const { REALTIME_MAX_GLOBAL_SESSIONS } = await import('../credit-pricing');
+    expect(REALTIME_MAX_GLOBAL_SESSIONS).toBeLessThanOrEqual(40_000 / 4_000);
+    expect(REALTIME_MAX_GLOBAL_SESSIONS).toBeGreaterThan(0);
+  });
+
+  it('allows more than one session per user so a zombie session is not a lockout', async () => {
+    const { REALTIME_MAX_INFLIGHT, REALTIME_MAX_GLOBAL_SESSIONS } = await import(
+      '../credit-pricing'
+    );
+    expect(REALTIME_MAX_INFLIGHT).toBeGreaterThanOrEqual(2);
+    expect(REALTIME_MAX_INFLIGHT).toBeLessThan(REALTIME_MAX_GLOBAL_SESSIONS);
+  });
+
+  it('takes env overrides, and ignores garbage in favour of the documented default', async () => {
+    process.env.REALTIME_MAX_SESSION_SECONDS = '300';
+    process.env.REALTIME_MAX_GLOBAL_SESSIONS = 'nope';
+    const { REALTIME_MAX_SESSION_SECONDS, REALTIME_MAX_GLOBAL_SESSIONS } = await import(
+      '../credit-pricing'
+    );
+    expect(REALTIME_MAX_SESSION_SECONDS).toBe(300);
+    expect(REALTIME_MAX_GLOBAL_SESSIONS).toBe(8);
+  });
+});
+
+describe('TIER_ALLOWANCE_REFILLS', () => {
+  it('names every tier, and only the free tier is a one-time (non-refilling) grant', async () => {
+    const { TIER_ALLOWANCE_REFILLS, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    expect(Object.keys(TIER_ALLOWANCE_REFILLS).sort()).toEqual(Object.keys(TIER_MONTHLY_ALLOWANCE_CENTS).sort());
+    expect(TIER_ALLOWANCE_REFILLS.free).toBe(false);
+    expect(TIER_ALLOWANCE_REFILLS.pro).toBe(true);
+    expect(TIER_ALLOWANCE_REFILLS.founder).toBe(true);
+    expect(TIER_ALLOWANCE_REFILLS.business).toBe(true);
+  });
+
+  it('free starter grant is $5 of credit value by default', async () => {
+    const { TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    expect(TIER_MONTHLY_ALLOWANCE_CENTS.free).toBe(500);
+  });
+});
+
+describe('allowanceRefills / isOneTimeAllowanceTier', () => {
+  it('free is a one-time tier and does not refill; paid tiers refill and are not one-time', async () => {
+    const { allowanceRefills, isOneTimeAllowanceTier } = await import('../credit-pricing');
+    expect(allowanceRefills('free')).toBe(false);
+    expect(isOneTimeAllowanceTier('free')).toBe(true);
+    for (const tier of ['pro', 'founder', 'business']) {
+      expect(allowanceRefills(tier)).toBe(true);
+      expect(isOneTimeAllowanceTier(tier)).toBe(false);
+    }
+  });
+
+  it('an unknown/legacy tier string is NEITHER refilling NOR one-time — nothing is granted or pre-credited for it', async () => {
+    // users.subscriptionTier reaches callers as an unchecked string; a legacy value
+    // like 'normal' must not be mistaken for the free tier's starter grant.
+    const { allowanceRefills, isOneTimeAllowanceTier } = await import('../credit-pricing');
+    expect(allowanceRefills('normal')).toBe(false);
+    expect(isOneTimeAllowanceTier('normal')).toBe(false);
+  });
+});

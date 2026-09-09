@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import { streamMulticastRegistry } from '@/lib/ai/core/stream-multicast-registry';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { canSubscribeToStream } from '@/lib/ai/core/stream-subscription-authz';
+import { resolveStreamJoinContext } from '@/lib/ai/core/stream-join-context';
+import { acquireRemoteChannel } from '@/lib/ai/core/remote-frame-follower';
 
 export const dynamic = 'force-dynamic';
 
@@ -46,10 +47,20 @@ export async function GET(
 
   const { messageId } = await context.params;
 
-  const meta = streamMulticastRegistry.getMeta(messageId);
-  if (!meta) {
+  // WHAT THIS INSTANCE CAN SAY ABOUT THE STREAM — the registry if it owns it, otherwise the
+  // one thing every instance shares, its `ai_stream_sessions` row.
+  //
+  // The registry lookup used to be right here, ahead of the authz block, and it had to be: the
+  // authz inputs lived in the same in-memory entry as the frames. At N>1 that made an ordinary
+  // cross-instance join indistinguishable from a nonexistent one — both 404. The context module
+  // maps the row to EXACTLY the `StreamMeta` shape the registry produces, so everything below
+  // this line is unchanged and there is no second authorization path to keep in step with the
+  // first. See stream-join-context.ts.
+  const joinContext = await resolveStreamJoinContext(messageId);
+  if (joinContext.kind === 'missing') {
     return NextResponse.json({ error: 'Stream not found' }, { status: 404 });
   }
+  const meta = joinContext.meta;
 
   const channelOwner = parseGlobalChannelId(meta.pageId);
   // Page access, then conversation access. A page channel carries every conversation on
@@ -115,20 +126,76 @@ export async function GET(
   let pingIntervalId: ReturnType<typeof setInterval> | undefined;
   const clearPingInterval = () => clearInterval(pingIntervalId);
 
-  const unsubscribe = streamMulticastRegistry.subscribe(
-    messageId,
-    (part) => {
-      const chunk = encoder.encode(`data: ${JSON.stringify({ part })}\n\n`);
+  // The channel this joiner watches. `fromSeq` is the client's cursor: it asks for everything
+  // it has not already applied, and gets exactly that. This replaces the skipReplayCount
+  // arithmetic, where the server replayed its whole buffer and the client was told how many
+  // frames to discard — under-skipping duplicated visible text, over-skipping left a silent
+  // permanent gap, and neither was detectable from either side.
+  //
+  // A REMOTE or TERMINAL context is served by a follower that tails the durable frame log and
+  // presents it as an ordinary `StreamChannel` — so everything below this line (the SSE framing,
+  // the ping, the recheck, the teardown, the overflow/resumeFromSeq semantics) is ONE code path
+  // for both sources. Forking the route body here is what this deliberately does not do: it
+  // would mean two copies of five behaviours, one of which nothing local exercises.
+  //
+  // `terminal` is followed too, not short-circuited. The frames are deleted on the terminal
+  // write, so a terminal row is exactly the case where the follower's honest-answer logic is
+  // needed: serve whatever the log still holds, then end — with `truncated` when the log was
+  // already released, which tells the client to reload rather than trust a short reply.
+  const remote = joinContext.kind === 'local' ? null : acquireRemoteChannel(messageId);
+  const channel = joinContext.kind === 'local' ? joinContext.channel : remote!.channel;
+  const joinSource = joinContext.kind === 'local' ? 'local' : joinContext.kind;
+  // Dropped in EVERY exit below, not only the happy one — a follower reference leaked by an
+  // early return keeps a poller alive for a reader that never arrived.
+  const releaseRemote = () => remote?.release();
+
+  const requestedFromSeq = Number(new URL(request.url).searchParams.get('fromSeq') ?? '0');
+  const fromSeq = Number.isFinite(requestedFromSeq) && requestedFromSeq >= 0
+    ? Math.floor(requestedFromSeq)
+    : 0;
+
+  // ONE teardown for both halves of this joiner's hold: the channel subscription, and — when
+  // the channel is a follower's — this reader's reference to it. Splitting them was the obvious
+  // shape and the wrong one: every path that unsubscribed would have had to remember the
+  // release too, and the one that forgot would keep a poller running against Postgres for a
+  // reader that had already gone.
+  let unsubscribeChannel: (() => void) | null = null;
+  let detached = false;
+  const detach = (): void => {
+    if (detached) return;
+    detached = true;
+    unsubscribeChannel?.();
+    releaseRemote();
+  };
+
+  const unsubscribe = channel.subscribe({
+    fromSeq,
+    onFrame: ({ seq, chunk }) => {
+      const frame = encoder.encode(`data: ${JSON.stringify({ seq, chunk })}\n\n`);
       if (streamController) {
-        streamController.enqueue(chunk);
+        streamController.enqueue(frame);
       } else {
-        preBuffer.push(chunk);
+        preBuffer.push(frame);
       }
     },
-    (aborted) => {
+    onEnd: (end) => {
       clearRecheckTimeout();
       clearPingInterval();
-      const done = encodeDoneFrame(aborted);
+      // An `overflow` end means the cursor names a frame the ring no longer holds. Say so with
+      // the seq that IS available rather than quietly serving a later prefix — the client can
+      // then reseed deliberately instead of rendering a gap it cannot see.
+      //
+      // A `truncated` end is the OTHER thing, and they must not be conflated: it says there is
+      // no resume point at all — the durable log was released or holds a hole — so the only
+      // correct answer is `reload`, which the client turns into a read of the durably-persisted
+      // message. Sending a bare `done` there would leave a short reply on screen looking whole.
+      const done = end.reason === 'overflow'
+        ? encoder.encode(`data: ${JSON.stringify({ done: true, resumeFromSeq: end.resumeFromSeq })}\n\n`)
+        : encoder.encode(`data: ${JSON.stringify(
+          end.truncated === true
+            ? { done: true, aborted: end.aborted, reload: true }
+            : { done: true, aborted: end.aborted },
+        )}\n\n`);
       if (streamController) {
         streamController.enqueue(done);
         streamController.close();
@@ -136,22 +203,35 @@ export async function GET(
         preBuffer.push(done);
       }
       streamClosed = true;
+      detach();
     },
-  );
+  });
+  unsubscribeChannel = unsubscribe;
 
   // finish() deletes entries before notifying subscribers, so subscribe() returns
   // null for both unknown and already-finished streams.
   if (unsubscribe === null) {
+    detach();
     return NextResponse.json({ error: 'Stream not found' }, { status: 404 });
   }
 
-  auditRequest(request, {
-    eventType: 'authz.access.granted',
-    resourceType: 'ai_stream',
-    resourceId: messageId,
-    details: { pageId: meta.pageId },
-    riskScore: 0,
-  });
+  // The success-path audit is synchronous up to its DB write (the async write is caught
+  // inside `audit` itself), and it is the last statement that can fail while BOTH holds are
+  // live — the subscription above and, for a followed stream, this reader's reference to
+  // the follower. An error propagating from here would strand both until the follower's
+  // eviction backstop, so release them first and let it fly.
+  try {
+    auditRequest(request, {
+      eventType: 'authz.access.granted',
+      resourceType: 'ai_stream',
+      resourceId: messageId,
+      details: { pageId: meta.pageId },
+      riskScore: 0,
+    });
+  } catch (error) {
+    detach();
+    throw error;
+  }
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -165,7 +245,7 @@ export async function GET(
       }
       if (request.signal.aborted) {
         streamClosed = true;
-        unsubscribe();
+        detach();
         controller.close();
         return;
       }
@@ -174,14 +254,14 @@ export async function GET(
         streamClosed = true;
         clearRecheckTimeout();
         clearPingInterval();
-        unsubscribe();
+        detach();
         controller.close();
       }, { once: true });
 
       const closeStreamAsDenied = (reason: string) => {
         streamClosed = true;
         clearPingInterval();
-        unsubscribe();
+        detach();
         auditRequest(request, {
           eventType: 'authz.access.denied',
           resourceType: 'ai_stream',
@@ -246,6 +326,11 @@ export async function GET(
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'X-Accel-Buffering': 'no',
+      // WHERE THE FRAMES CAME FROM. An N=2 smoke test has no other way to PROVE it exercised
+      // the follower rather than getting lucky with the load balancer, and in production the
+      // remote share should sit near (N-1)/N — a free check that traffic is actually spread and
+      // that cross-instance joins are being served rather than silently falling back to polling.
+      'X-Stream-Join-Source': joinSource,
     },
   });
 }

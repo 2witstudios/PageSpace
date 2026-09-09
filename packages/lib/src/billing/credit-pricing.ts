@@ -51,12 +51,18 @@ export const MARKUP_BPS = envInt('CREDIT_MARKUP_BPS', 15000);
 export const CACHE_READ_DISCOUNT_FACTOR_BPS = envInt('CACHE_READ_DISCOUNT_FACTOR_BPS', 1000);
 
 /**
- * Monthly credit allowance granted on each subscription renewal, per tier.
- * Accumulates across periods (rollover): each renewal ADDS this allowance to
- * the current balance rather than replacing it.
+ * Credit allowance per tier, in whole cents of customer-facing credit value.
+ *
+ * For tiers that REFILL (see {@link TIER_ALLOWANCE_REFILLS}) this is granted on each
+ * subscription renewal and accumulates across periods (rollover): each renewal ADDS
+ * the allowance to the current balance rather than replacing it.
+ *
+ * For the free tier it is a ONE-TIME starter grant: lazily granted on the user's
+ * first metered call (credit-gate's `free-init-` path) and never refilled. Bounded
+ * lifetime exposure per free user = allowance / markup (~$3.33 at $5 and 1.5×).
  */
 export const TIER_MONTHLY_ALLOWANCE_CENTS: Record<SubscriptionTier, number> = {
-  // Free: generous $5/mo of credit value, but the free-tier-only premium gate
+  // Free: $5 of starter credit, once. The free-tier-only premium gate
   // (requiresProSubscription) confines it to cheaper "standard" models, so the
   // real provider cost behind that $5 stays low.
   free: envInt('CREDIT_ALLOWANCE_FREE_CENTS', 500),
@@ -64,6 +70,43 @@ export const TIER_MONTHLY_ALLOWANCE_CENTS: Record<SubscriptionTier, number> = {
   founder: envInt('CREDIT_ALLOWANCE_FOUNDER_CENTS', 5000),
   business: envInt('CREDIT_ALLOWANCE_BUSINESS_CENTS', 10000),
 };
+
+/**
+ * Whether a tier's allowance is re-granted each billing period. `true` = the
+ * allowance is added again at every renewal (Stripe invoice.paid, or the gate's own
+ * period roll for comped/no-subscription paid accounts) and unspent credit carries
+ * forward. `false` = the allowance is a single starter grant that never refills —
+ * the free tier. The gate's reset path, and the balance display's "upcoming
+ * allowance" / "renews on" projections, all key off this rather than on `tier ===
+ * 'free'`, so a future non-refilling tier needs only a row here.
+ */
+export const TIER_ALLOWANCE_REFILLS: Record<SubscriptionTier, boolean> = {
+  free: false,
+  pro: true,
+  founder: true,
+  business: true,
+};
+
+/**
+ * Whether `tier` is re-granted its allowance every billing period. Accepts the raw
+ * `users.subscriptionTier` string: an unknown/legacy value is NOT a refilling tier
+ * (no renewal is ever coming for it), so callers show no renewal date for it. The
+ * gate never rolls such a tier either (it has no allowance).
+ */
+export function allowanceRefills(tier: string): boolean {
+  return TIER_ALLOWANCE_REFILLS[tier as SubscriptionTier] === true;
+}
+
+/**
+ * Whether `tier` gets a ONE-TIME starter grant: it has an allowance AND that
+ * allowance does not refill. An unknown/legacy tier is neither — it must not be
+ * pre-credited or granted anything. The single predicate the gate's starter-grant
+ * branch and the balance display's pending-grant pre-credit share, so they can never
+ * disagree about which rows are "waiting for the grant".
+ */
+export function isOneTimeAllowanceTier(tier: string): boolean {
+  return tier in TIER_MONTHLY_ALLOWANCE_CENTS && TIER_ALLOWANCE_REFILLS[tier as SubscriptionTier] === false;
+}
 
 /**
  * Block AI when spendable credits are at or below this floor. Bounds the single
@@ -90,34 +133,85 @@ export const RESERVE_FLOOR_CENTS = envInt('CREDIT_RESERVE_FLOOR_CENTS', 25);
 export const CREDIT_HOLD_ESTIMATE_CENTS = envInt('CREDIT_HOLD_ESTIMATE_CENTS', RESERVE_FLOOR_CENTS);
 
 /**
- * Flat per-call hold estimate for voice STT (Whisper), where the audio duration —
- * and therefore the real cost — isn't known until the provider responds, so the gate
- * has nothing exact to reserve against. A short voice-mode clip costs a fraction of a
- * cent ($0.006/min × 1.5), so 2¢ is a reasonable approximate reservation that keeps
- * the spendable-floor check meaningful without over-reserving. It is an ESTIMATE, not
- * a guaranteed cap (a very long upload could exceed it); the real cost always settles
- * exactly via consumeCredits and the 1.5× markup — not this hold — is the solvency
- * guarantee. Because a single STT call can settle above this estimate, concurrent
- * paid-voice overdraw is bounded by VOICE_MAX_INFLIGHT (a per-user concurrency cap),
- * not by this reservation. TTS does NOT use this: its character count is known up
- * front, so it reserves the exact charged amount via estimateVoiceHoldCents(). Tune
- * via env.
- */
-export const VOICE_HOLD_ESTIMATE_CENTS = envInt('VOICE_HOLD_ESTIMATE_CENTS', 2);
-
-/**
- * Max concurrent in-flight VOICE calls per user, applied to ALL tiers (paid voice
+ * Max concurrent in-flight TTS calls per user, applied to ALL tiers (paid voice
  * is otherwise uncapped). Bounds worst-case concurrent overdraw: a hold reserves an
  * ESTIMATE, but the real cost only lands at settle, so without a cap a paid user
  * could open many simultaneous calls that each reserve little yet collectively
- * settle past their balance. STT especially can't reserve exactly (audio duration
- * is unknown until Whisper responds, and file size isn't a usable cost bound), so
- * this concurrency cap — not the per-call hold — is what bounds that exposure to
- * `VOICE_MAX_INFLIGHT × worst-case single call`. TTS already reserves its exact
- * charged amount. Voice mode plays chunks sequentially (≤2 in flight), so 4 is
- * comfortable for legitimate use. Default 4.
+ * settle past their balance. TTS already reserves its exact charged amount via
+ * estimateVoiceHoldCents(), so this cap is the belt to that braces. Read Aloud
+ * plays chunks sequentially (≤2 in flight), so 4 is comfortable for legitimate
+ * use. Default 4.
  */
 export const VOICE_MAX_INFLIGHT = envInt('VOICE_MAX_INFLIGHT', 4);
+
+/**
+ * Per-SESSION hold estimate for an audio-native realtime call. Realtime differs from
+ * every other hold in this file in a way that lets it be small: usage arrives
+ * INCREMENTALLY, as a `usage` object on each `response.done`, so the session settles
+ * continuously as it talks rather than once at the end. The hold therefore only has to
+ * cover the window between settles plus the session's opening moments — not the whole
+ * call — and a long conversation is billed as it happens instead of arriving as one
+ * surprise at hangup.
+ *
+ * 10¢ is roughly 1.5–2 minutes of live conversation at the 1.5x markup (a chatty minute
+ * runs a few cents of real cost, dominated by audio output at $64/1M tokens). Like every
+ * hold here it is an ESTIMATE, not a cap: the real cost always settles exactly via
+ * consumeCredits, {@link REALTIME_MAX_SESSION_SECONDS} bounds the tail of a single
+ * session, and {@link REALTIME_MAX_INFLIGHT} bounds concurrent overdraw. Tune via env.
+ */
+export const REALTIME_SESSION_HOLD_ESTIMATE_CENTS = envInt('REALTIME_SESSION_HOLD_ESTIMATE_CENTS', 10);
+
+/**
+ * Hard ceiling on a single realtime session's wall-clock duration — the backstop for a
+ * call nobody ever hangs up (a pinned-open tab with a hot mic bills for room noise:
+ * server VAD happily fires on ambient sound).
+ *
+ * The 600s default is NOT arbitrary — it is bounded by {@link CREDIT_HOLD_TTL_SECONDS}
+ * (900s), the age at which the reconcile cron may sweep a hold. A session allowed to
+ * outlive that would have its own reservation reclaimed out from under it mid-call. 600s
+ * leaves a 5-minute settle margin inside that TTL. Raising this REQUIRES raising the hold
+ * TTL in the same change; ten minutes is also a generous ceiling for one voice session,
+ * and starting another call is free.
+ */
+export const REALTIME_MAX_SESSION_SECONDS = envInt('REALTIME_MAX_SESSION_SECONDS', 600);
+
+/**
+ * Reap a realtime session after this long with no conversational activity. Distinct from
+ * the hard duration cap: this catches the ABANDONED call — the user walked away or
+ * switched apps — which otherwise keeps a WebRTC session open, holds a concurrency slot,
+ * and streams ambient audio into a model that bills per input token. 120s is far longer
+ * than any natural pause in speech, so it cannot cut off someone who is merely thinking,
+ * while still freeing the slot promptly.
+ */
+export const REALTIME_IDLE_TIMEOUT_SECONDS = envInt('REALTIME_IDLE_TIMEOUT_SECONDS', 120);
+
+/**
+ * Max concurrent realtime sessions per user. Voice is physically exclusive — one mouth,
+ * one pair of ears — so the semantically "correct" cap is 1. The default is 2 on purpose:
+ * a call ends on hard refresh, but the server-side session record can linger until the
+ * idle reaper catches it, and a cap of 1 would lock the user out of reconnecting for up to
+ * {@link REALTIME_IDLE_TIMEOUT_SECONDS}. The spare slot makes a zombie session an
+ * annoyance instead of a lockout, while still refusing the many-simultaneous-calls
+ * overdraw that {@link VOICE_MAX_INFLIGHT} exists to prevent on the TTS path.
+ */
+export const REALTIME_MAX_INFLIGHT = envInt('REALTIME_MAX_INFLIGHT', 2);
+
+/**
+ * Max concurrent realtime sessions across the WHOLE deployment — a ceiling the per-user
+ * cap structurally cannot enforce, because the binding constraint is not per user: the
+ * OpenAI account is rate-limited to 40,000 tokens/MINUTE (measured live via
+ * `rate_limits.updated`), shared by every session on our key. Past that ceiling OpenAI
+ * throttles, and the failure lands on whichever calls happen to be in flight — including
+ * calls that were already going fine. A global cap converts that into a clean refusal at
+ * session start.
+ *
+ * Sizing: a continuously-talking session burns roughly 4,000 tokens/min once audio in,
+ * audio out and replayed conversation context are counted, which puts the account ceiling
+ * near 10 concurrent sessions. The default of 8 leaves headroom, since a long model
+ * response bursts well above the average. Raise it only alongside the account's rate
+ * limit — this number is a fact about the OpenAI account, not a product decision.
+ */
+export const REALTIME_MAX_GLOBAL_SESSIONS = envInt('REALTIME_MAX_GLOBAL_SESSIONS', 8);
 
 /**
  * Flat per-call hold estimate for AI image generation. The real cost isn't known
@@ -171,8 +265,8 @@ export function resolveImageCost(
 /**
  * Flat per-call hold estimate for a Machine run, where the active-window
  * duration — and therefore the real cost — isn't known until the run ends, so the
- * gate has nothing exact to reserve against (mirrors VOICE_HOLD_ESTIMATE_CENTS' STT
- * rationale). A short tool call or PTY burst costs a small fraction of a cent at the
+ * gate has nothing exact to reserve against (mirrors
+ * REALTIME_SESSION_HOLD_ESTIMATE_CENTS' rationale). A short tool call or PTY burst costs a small fraction of a cent at the
  * assumed default machine shape, so 2¢ is a reasonable approximate reservation. The
  * real cost always settles exactly via consumeCredits and the 1.5× markup; concurrent
  * overdraw is bounded by MACHINE_MAX_INFLIGHT instead. Tune via env.
@@ -255,6 +349,70 @@ export const MACHINE_ASSUMED_MEMORY_GB = envFloat('MACHINE_ASSUMED_MEMORY_GB', 0
  * Placeholder pending Sprites' published storage rate; tune via env once confirmed.
  */
 export const MACHINE_STORAGE_USD_PER_GB_MONTH = envFloat('MACHINE_STORAGE_USD_PER_GB_MONTH', 0.15);
+
+/**
+ * The guest shape a PUBLISHED APP's machine actually runs — and, unlike the
+ * sandbox shape above, it is a shape we KNOW rather than assume.
+ *
+ * `published_apps.guestPreset` is fixed at `shared-cpu-1x-512` by a CHECK
+ * constraint (the v1 unit-economics guardrail), so the memory figure here is the
+ * guest we asked Fly for, not a guess about somebody else's default. Pricing
+ * published apps at the sandbox shape's 0.25GB instead would under-bill every
+ * awake second by half the memory component for as long as the two happened to
+ * differ, silently and invisibly.
+ *
+ * Env-overridable in step with the preset: widening the allowed guest set is an
+ * additive migration on that CHECK, and this is the other half of the same change.
+ */
+export const PUBLISHED_APP_ASSUMED_CPUS = envFloat('PUBLISHED_APP_ASSUMED_CPUS', 1);
+export const PUBLISHED_APP_ASSUMED_MEMORY_GB = envFloat('PUBLISHED_APP_ASSUMED_MEMORY_GB', 0.5);
+
+/**
+ * Reservation placed when a published app is WOKEN, covering the span between
+ * heartbeat settles rather than the whole awake period.
+ *
+ * An awake window settles continuously — the metering cron bills the accrued
+ * seconds every tick — so, exactly like {@link REALTIME_SESSION_HOLD_ESTIMATE_CENTS},
+ * the hold only has to cover the window between settles plus the moments after the
+ * wake, not the app's entire uptime. At the fixed v1 guest that is well under a
+ * cent per ten-minute tick; 5¢ leaves generous headroom for a slower cadence
+ * without reserving a meaningful slice of a small balance.
+ *
+ * Like every hold in this file it is an ESTIMATE, not a cap: the real cost settles
+ * exactly through `consumeCredits` at the 1.5× substrate markup.
+ */
+export const PUBLISHED_APP_WAKE_HOLD_ESTIMATE_CENTS = envInt('PUBLISHED_APP_WAKE_HOLD_ESTIMATE_CENTS', 5);
+
+/**
+ * Max concurrently-awake published apps per payer that the wake gate will reserve
+ * for — the same bound `MACHINE_MAX_INFLIGHT` places on sandbox runs, applied to
+ * the one thing that can genuinely fan out here: a drive owner publishing many
+ * apps that all get woken at once by traffic.
+ *
+ * Unlike the sandbox gate there is no per-tier semaphore to reconcile this against
+ * (nothing limits how many apps a drive may publish), so this is the only bound on
+ * concurrent awake reservations and is applied flat across tiers.
+ */
+export const PUBLISHED_APP_MAX_INFLIGHT = envInt('PUBLISHED_APP_MAX_INFLIGHT', 50);
+
+/**
+ * The runaway ceiling the published-app wake gate always passes, in whole cents
+ * per payer per UTC day.
+ *
+ * Its whole reason for existing is the billing-DISABLED deployment. On tenant and
+ * onprem `isBillingEnabled()` is false and hosting is unlimited by design — there
+ * is no credit ledger and no balance to gate against — but "unlimited" must not
+ * mean "unbounded": a loop that wakes an app thousands of times, or a fleet left
+ * awake by a broken idle reaper, spends real substrate money on somebody's
+ * infrastructure. `canConsumeAI` honours `dailyCapCeilingCents` in EVERY
+ * deployment mode, metering the day from `ai_usage_logs` when there is no ledger,
+ * which is exactly the property this constant leans on.
+ *
+ * Set generously (default $20/payer/day) — it is a runaway backstop, not a
+ * product limit, and a legitimate always-awake app at the v1 guest costs a few
+ * cents a day. Set to 0 to disable it entirely.
+ */
+export const PUBLISHED_APP_DAILY_CAP_CEILING_CENTS = envInt('PUBLISHED_APP_DAILY_CAP_CEILING_CENTS', 2000);
 
 /**
  * How long a hold lives before the reconcile cron may sweep it. Must exceed the

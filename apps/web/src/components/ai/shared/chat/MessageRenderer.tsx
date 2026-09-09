@@ -14,6 +14,7 @@ import { useMessageRendererState } from './useMessageRendererState';
 import type { ConversationMessage, TextPart } from './message-types';
 import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart, isToolRunGroupPart } from './message-types';
 import { ImageMessageContent } from './ImageMessageContent';
+import { SpokenTurnGlyph, isSpokenTurn } from './SpokenTurnGlyph';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
 
 interface TextBlockProps {
@@ -25,12 +26,16 @@ interface TextBlockProps {
   onEdit?: () => void;
   onDelete?: () => void;
   onRetry?: () => void;
+  /** A retry is already in flight — see MessageActionButtons.retryDisabled. */
+  retryDisabled?: boolean;
   onUndoFromHere?: () => void;
   isEditing?: boolean;
   onSaveEdit?: (newContent: string) => Promise<void>;
   onCancelEdit?: () => void;
   /** Whether this message is currently being streamed (for progressive markdown rendering) */
   isStreaming?: boolean;
+  /** Turn was spoken into a live voice call, not typed. */
+  spoken?: boolean;
 }
 
 /**
@@ -45,11 +50,13 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
   onEdit,
   onDelete,
   onRetry,
+  retryDisabled = false,
   onUndoFromHere,
   isEditing,
   onSaveEdit,
   onCancelEdit,
-  isStreaming = false
+  isStreaming = false,
+  spoken = false
 }) => {
   const content = parts.map(part => part.text).join('');
 
@@ -58,7 +65,7 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
   return (
     <div
       className={`group relative mb-1 ${role === 'user'
-        ? 'p-3 rounded-lg bg-primary/10 dark:bg-accent/20 ml-2 sm:ml-8'
+        ? 'p-3 rounded-lg bg-primary-soft ml-2 sm:ml-8'
         : 'mr-2 sm:mr-8'
         }`}
     >
@@ -89,19 +96,21 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
           </div>
           {/* Always show footer with buttons; timestamp only when createdAt exists */}
           <div className="flex items-center justify-between mt-2">
-            <div className="text-xs text-gray-500">
+            <div className="flex items-center gap-1.5 text-xs text-gray-500">
               {createdAt && (
                 <>
                   {new Date(createdAt).toLocaleTimeString()}
                   {editedAt && <span className="ml-2">(edited)</span>}
                 </>
               )}
+              {spoken && <SpokenTurnGlyph />}
             </div>
             {onEdit && onDelete && !isEditing && (
               <MessageActionButtons
                 onEdit={onEdit}
                 onDelete={onDelete}
                 onRetry={onRetry}
+                retryDisabled={retryDisabled}
                 onUndoFromHere={onUndoFromHere}
               />
             )}
@@ -119,6 +128,11 @@ interface MessageRendererProps {
   onEdit?: (messageId: string, newContent: string) => Promise<void>;
   onDelete?: (messageId: string) => Promise<void>;
   onRetry?: (messageId: string) => void;
+  /**
+   * A retry is already in flight for this conversation. Passed down to the retry affordances
+   * only — a second retry regenerates a second time and bills for it.
+   */
+  retryDisabled?: boolean;
   onUndoFromHere?: (messageId: string) => void;
   onTaskUpdate?: (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => void;
   isLastAssistantMessage?: boolean;
@@ -144,6 +158,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   onEdit,
   onDelete,
   onRetry,
+  retryDisabled = false,
   onUndoFromHere,
   onTaskUpdate,
   isLastAssistantMessage = false,
@@ -262,11 +277,13 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 onEdit={onEdit ? () => setIsEditing(true) : undefined}
                 onDelete={onDelete ? () => setShowDeleteDialog(true) : undefined}
                 onRetry={canRetry ? handleRetry : undefined}
+                retryDisabled={retryDisabled}
                 onUndoFromHere={hasToolCalls && onUndoFromHere ? () => onUndoFromHere(message.id) : undefined}
                 isEditing={isEditing}
                 onSaveEdit={handleSaveEdit}
                 onCancelEdit={() => setIsEditing(false)}
                 isStreaming={isStreaming}
+                spoken={isSpokenTurn(message)}
               />
             );
           } else if (isFileGroupPart(group)) {
@@ -330,6 +347,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 variant="ghost"
                 size="sm"
                 onClick={handleRetry}
+                disabled={retryDisabled}
                 className="h-5 px-1"
                 title="Retry this message"
                 aria-label="Retry this message"

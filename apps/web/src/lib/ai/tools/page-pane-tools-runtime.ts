@@ -7,7 +7,7 @@
  * there, the Drizzle-backed implementation lives here, and only server code
  * (`ai-tools.ts`) ever imports this file.
  */
-import { placePagePaneForConversation } from '@/lib/agent-workspaces/workspace-placement';
+import { placePagePaneForConversation } from '@/lib/agent-workspaces/workspace-node-placement';
 import { createPagePaneTools } from './page-pane-tools';
 
 export const pagePaneTools = createPagePaneTools({

@@ -1,4 +1,4 @@
-import { isCapacitorApp } from '@/hooks/useCapacitor';
+import { isCapacitorApp } from '@/lib/capacitor-bridge';
 
 export type HapticStyle = 'light' | 'medium' | 'heavy';
 

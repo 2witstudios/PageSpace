@@ -214,6 +214,55 @@ describe('GET /api/drives/[driveId]/domains', () => {
     });
   }
 
+  // The instruction was computed on every list and then thrown away — the route
+  // destructured only `status`. That left a certificate stuck on an ownership TXT
+  // with no delivery to the customer except a transient toast behind a button
+  // they had no reason to press, for the one cert state that never resolves on
+  // its own. The list is where a customer actually looks, so it has to carry it.
+  it('returns the ownership instruction for a stuck cert instead of discarding it', async () => {
+    mockGetSelects([
+      { id: 'd1', driveId: DRIVE_ID, hostname: 'stuck.com', status: 'provisioning', createdAt: new Date() },
+    ]);
+    reconcileCustomDomainCert.mockResolvedValueOnce({
+      status: 'provisioning',
+      action: 'poll-again',
+      ownershipInstruction: 'Add a TXT record at _fly-ownership.stuck.com with the value org-XYZ789',
+    });
+
+    const body = await (await GET(makeReq(), ctx())).json();
+
+    expect(body.domains[0].ownershipInstruction).toContain('_fly-ownership.stuck.com');
+    expect(body.domains[0].ownershipInstruction).toContain('org-XYZ789');
+  });
+
+  // The case that would rot silently: a domain that FIXED its DNS must stop
+  // showing the instruction on the very next load. That only holds because the
+  // value is computed per request instead of persisted — a stored column would
+  // still be serving the old string. A terminal-status row bypasses reconcile
+  // altogether and so carries no instruction at all, which is correct: it is not
+  // blocked on ownership, and "we did not ask" must not render as an instruction.
+  it('carries no instruction for a terminal-status domain, which never reconciles', async () => {
+    mockGetSelects([
+      { id: 'd1', driveId: DRIVE_ID, hostname: 'active.com', status: 'active', createdAt: new Date() },
+    ]);
+
+    const body = await (await GET(makeReq(), ctx())).json();
+
+    expect(reconcileCustomDomainCert).not.toHaveBeenCalled();
+    expect(body.domains[0].ownershipInstruction).toBeUndefined();
+  });
+
+  it('reports no instruction as null rather than dropping the key', async () => {
+    mockGetSelects([
+      { id: 'd1', driveId: DRIVE_ID, hostname: 'fine.com', status: 'provisioning', createdAt: new Date() },
+    ]);
+    reconcileCustomDomainCert.mockResolvedValueOnce({ status: 'provisioning', action: 'poll-again' });
+
+    const body = await (await GET(makeReq(), ctx())).json();
+
+    expect(body.domains[0]).toHaveProperty('ownershipInstruction', null);
+  });
+
   it('reconciles verified and provisioning rows and returns the advanced status', async () => {
     mockGetSelects([
       { id: 'd1', driveId: DRIVE_ID, hostname: 'verified.com', status: 'verified', createdAt: new Date() },

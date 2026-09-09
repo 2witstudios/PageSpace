@@ -7,7 +7,40 @@ vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
 }));
 
-import { resolveSessionPayerId, lookupDriveOwnerId } from '../sandbox-payer';
+import { resolveSessionPayerId, resolveEnvPayerId, lookupDriveOwnerId } from '../sandbox-payer';
+
+/**
+ * The ENV payer, tested directly rather than only through the reconcile.
+ *
+ * The rule is one line of code and the whole of an env's billing correctness:
+ * the DRIVE OWNER, or nobody. `drive_envs.createdBy` is audit only, and a
+ * future `?? createdBy` — or any other fallback added in sympathy with the
+ * session resolver next door — must fail HERE, at the seam that states the
+ * rule, not only somewhere downstream that happens to exercise it.
+ */
+describe('resolveEnvPayerId', () => {
+  it('resolves the drive owner', async () => {
+    const payer = await resolveEnvPayerId({
+      driveId: 'drive-1',
+      lookupDriveOwnerId: async (driveId) => `owner-of-${driveId}`,
+    });
+
+    expect(payer).toBe('owner-of-drive-1');
+  });
+
+  it('returns NULL when the drive cannot be resolved — there is no fallback, by design', async () => {
+    // The deliberate divergence from `resolveSessionPayerId`, which falls back to
+    // the session's own owner. An env has no owner column to fall back to, and
+    // inventing one would bill a drive-owned machine to somebody who does not
+    // own it. Callers SKIP the cycle instead.
+    const payer = await resolveEnvPayerId({
+      driveId: 'drive-gone',
+      lookupDriveOwnerId: async () => null,
+    });
+
+    expect(payer).toBeNull();
+  });
+});
 
 describe('resolveSessionPayerId', () => {
   it('bills the session owner directly for a global-assistant session (driveId null), with no lookup', async () => {

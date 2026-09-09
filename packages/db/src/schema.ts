@@ -17,6 +17,8 @@ export * from './schema/contact';
 export * from './schema/feedback';
 export * from './schema/storage';
 export * from './schema/tasks';
+export * from './schema/sheets';
+export * from './schema/sheets-types';
 export * from './schema/security-audit';
 export * from './schema/page-views';
 export * from './schema/hotkeys';
@@ -44,6 +46,7 @@ export * from './schema/drafts';
 export * from './schema/published-pages';
 export * from './schema/credits';
 export * from './schema/commands';
+export * from './schema/content-tags';
 export * from './schema/ai-compaction';
 export * from './schema/custom-domains';
 export * from './schema/incidents';
@@ -51,10 +54,17 @@ export * from './schema/data-subject-requests';
 export * from './schema/oauth';
 export * from './schema/form-targets';
 export * from './schema/machine-sprite-reclaims';
+export * from './schema/published-apps';
+export * from './schema/published-app-subscriptions';
+export * from './schema/app-hosting-stripe-reclaims';
 export * from './schema/email-broadcasts';
 export * from './schema/page-webhooks';
 export * from './schema/agent-workspaces';
-export * from './schema/agent-workspace-layout';
+export * from './schema/agent-workspace-nodes';
+export * from './schema/drive-envs';
+export * from './schema/drive-env-local';
+export * from './schema/dev-preview-services';
+export * from './schema/dev-preview-grants';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -75,6 +85,7 @@ import * as contact from './schema/contact';
 import * as feedback from './schema/feedback';
 import * as storage from './schema/storage';
 import * as tasks from './schema/tasks';
+import * as sheets from './schema/sheets';
 import * as securityAudit from './schema/security-audit';
 import * as pageViews from './schema/page-views';
 import * as hotkeys from './schema/hotkeys';
@@ -102,6 +113,7 @@ import * as drafts from './schema/drafts';
 import * as publishedPages from './schema/published-pages';
 import * as credits from './schema/credits';
 import * as commands from './schema/commands';
+import * as contentTags from './schema/content-tags';
 import * as aiCompaction from './schema/ai-compaction';
 import * as customDomains from './schema/custom-domains';
 import * as incidents from './schema/incidents';
@@ -109,10 +121,17 @@ import * as dataSubjectRequests from './schema/data-subject-requests';
 import * as oauth from './schema/oauth';
 import * as formTargets from './schema/form-targets';
 import * as machineSpriteReclaims from './schema/machine-sprite-reclaims';
+import * as publishedApps from './schema/published-apps';
+import * as publishedAppSubscriptions from './schema/published-app-subscriptions';
+import * as appHostingStripeReclaims from './schema/app-hosting-stripe-reclaims';
 import * as emailBroadcasts from './schema/email-broadcasts';
 import * as pageWebhooks from './schema/page-webhooks';
 import * as agentWorkspaces from './schema/agent-workspaces';
-import * as agentWorkspaceLayout from './schema/agent-workspace-layout';
+import * as agentWorkspaceNodes from './schema/agent-workspace-nodes';
+import * as driveEnvs from './schema/drive-envs';
+import * as driveEnvLocal from './schema/drive-env-local';
+import * as devPreviewServices from './schema/dev-preview-services';
+import * as devPreviewGrants from './schema/dev-preview-grants';
 
 export const schema = {
   ...auth,
@@ -134,6 +153,7 @@ export const schema = {
   ...feedback,
   ...storage,
   ...tasks,
+  ...sheets,
   ...securityAudit,
   ...pageViews,
   ...hotkeys,
@@ -161,6 +181,7 @@ export const schema = {
   ...publishedPages,
   ...credits,
   ...commands,
+  ...contentTags,
   ...aiCompaction,
   ...customDomains,
   ...incidents,
@@ -168,8 +189,15 @@ export const schema = {
   ...oauth,
   ...formTargets,
   ...machineSpriteReclaims,
+  ...publishedApps,
+  ...publishedAppSubscriptions,
+  ...appHostingStripeReclaims,
   ...emailBroadcasts,
   ...pageWebhooks,
   ...agentWorkspaces,
-  ...agentWorkspaceLayout,
+  ...agentWorkspaceNodes,
+  ...driveEnvs,
+  ...driveEnvLocal,
+  ...devPreviewServices,
+  ...devPreviewGrants,
 };
