@@ -235,11 +235,17 @@ export function MobileCalendarView({
 
     const end = new Date(start);
     end.setHours(end.getHours() + 1);
-    // Keep the end inside the day too. An event ending at 00:00 satisfies
-    // spansDays(), so it would render as a banner chip with no times -- the same
+    // Keep the end inside the day too: an event ending at 00:00 satisfies
+    // spansDays() and would render as a banner chip with no times, the same
     // thing the midnight filter in MobileAgenda exists to prevent.
+    //
+    // 23:30, not 23:59, because this flows straight into EventModal, whose end
+    // time is a Select over 48 half-hour TIME_OPTIONS with no placeholder -- a
+    // value outside that set makes Radix render the field blank. Costs a
+    // half-hour event instead of the usual hour, which is visible and correct
+    // rather than invisible and broken.
     if (!isSameDay(end, start)) {
-      end.setTime(new Date(start).setHours(23, 59, 0, 0));
+      end.setTime(new Date(start).setHours(23, 30, 0, 0));
     }
     handlers.onEventCreate(start, end);
   }, [selectedDate, handlers]);

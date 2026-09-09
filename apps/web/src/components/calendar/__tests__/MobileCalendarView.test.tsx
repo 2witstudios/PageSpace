@@ -112,9 +112,9 @@ describe('MobileCalendarView event creation', () => {
 
     assert({
       given: 'a late-night event whose hour would end at midnight',
-      should: 'keep the end inside the day, so it is not treated as all-day',
+      should: 'end on a half-hour EventModal can actually display',
       actual: `${end.getDate()}@${end.getHours()}:${end.getMinutes()}`,
-      expected: '10@23:59',
+      expected: '10@23:30',
     });
   });
 
@@ -183,11 +183,13 @@ describe('MobileCalendarView external date sync', () => {
 
     assert({
       given: 'the agenda scrolled away from the initially selected day',
-      should: 'move the strip selection off it',
-      actual:
-        container.querySelector('[aria-current="date"]')?.getAttribute('aria-label') !==
-        'Wednesday, March 10',
-      expected: true,
+      should: 'move the strip selection to the day now at the top',
+      // Asserted by value, not by `!== 'Wednesday, March 10'`: with optional
+      // chaining a MISSING selection would satisfy the negative form too.
+      actual: container
+        .querySelector('[aria-current="date"]')
+        ?.getAttribute('aria-label'),
+      expected: 'Sunday, March 21',
     });
 
     await act(async () => {

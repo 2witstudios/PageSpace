@@ -399,5 +399,14 @@ describe('MobileAgenda day boundaries', () => {
       actual: screen.queryAllByText('Nothing scheduled').length,
       expected: 1,
     });
+
+    assert({
+      given: 'a picked empty day inside an empty window',
+      // Pins WHICH surface survived: a bare count of 1 would also pass if the
+      // footer disappeared and the per-day line stayed.
+      should: 'keep the window-level heading, not the per-day line',
+      actual: screen.getByRole('heading', { name: 'Nothing scheduled' }) !== null,
+      expected: true,
+    });
   });
 });
