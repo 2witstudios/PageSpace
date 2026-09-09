@@ -73,10 +73,20 @@
       "import": "./dist/projection-errors.js",
       "default": "./dist/projection-errors.js"
     },
+    "./seed-fidelity": {
+      "types": "./dist/seed-fidelity.d.ts",
+      "import": "./dist/seed-fidelity.js",
+      "default": "./dist/seed-fidelity.js"
+    },
     "./simple-data-attr": {
       "types": "./dist/simple-data-attr.d.ts",
       "import": "./dist/simple-data-attr.js",
       "default": "./dist/simple-data-attr.js"
+    },
+    "./user-color": {
+      "types": "./dist/user-color.d.ts",
+      "import": "./dist/user-color.js",
+      "default": "./dist/user-color.js"
     },
     "./y-doc-to-blocks": {
       "types": "./dist/y-doc-to-blocks.d.ts",
@@ -137,8 +147,14 @@
       "projection-errors": [
         "./dist/projection-errors.d.ts"
       ],
+      "seed-fidelity": [
+        "./dist/seed-fidelity.d.ts"
+      ],
       "simple-data-attr": [
         "./dist/simple-data-attr.d.ts"
+      ],
+      "user-color": [
+        "./dist/user-color.d.ts"
       ],
       "y-doc-to-blocks": [
         "./dist/y-doc-to-blocks.d.ts"

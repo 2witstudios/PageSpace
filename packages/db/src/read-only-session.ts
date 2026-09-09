@@ -1,6 +1,6 @@
 /**
- * `SET`, not a promise from the caller. The census is run by a human holding
- * the production credential, so "it only reads" is enforced by the server:
+ * `SET`, not a promise from the caller. A read-only script is run by a human
+ * holding the production credential, so "it only reads" is enforced by the server:
  * every connection this pool opens starts its transactions read-only, and any
  * write — a bug, a future edit, a library doing something unexpected — fails
  * with `cannot execute ... in a read-only transaction` instead of succeeding.
@@ -16,11 +16,11 @@ interface ReadOnlyCapablePool {
 }
 
 /**
- * Nothing in `packages/db` advertises that a caller can flip the shared
- * migration pool read-only, so this stays local to the census while it is the
- * only read-only consumer. A second one is the signal to promote it to a
- * `getReadOnlyDb()` beside `getMigrationDb()`, where import order cannot
- * bypass it — a move, not a rewrite.
+ * Promoted here from the collab content census (`apps/web`) when the seed
+ * fidelity audit (`scripts/collab-seed-audit.ts`) became the second read-only
+ * consumer of the migration pool — a move, not a rewrite. Both scripts are run
+ * by a human holding the production credential, and both prove the guard took
+ * with `assertReadOnlySession` before their first real query.
  *
  * Registers the guard on a `pg.Pool` BEFORE it opens its first connection.
  * node-postgres queues queries per client, so the `SET` issued from `connect`

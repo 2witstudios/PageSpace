@@ -1,0 +1,186 @@
+import { withDomWorkspace } from './dom-workspace.js';
+
+/**
+ * The seed-fidelity vocabulary: markup constructs as comparable keys, and the
+ * one allowlist of rewrites a pass through the frozen schema is permitted to
+ * make.
+ *
+ * Shared by `__tests__/seed-fidelity.test.ts` (the construct corpus) and
+ * `scripts/collab-seed-audit.ts` (real documents) on purpose. The bar is
+ * `render(parse(h1)) == h1` — a FIXPOINT — plus zero loss of any
+ * content-bearing construct; it is deliberately NOT byte-identical output.
+ * Measured over the corpus, one pass through the schema rewrites its input in
+ * ways that lose nothing: tables gain `<colgroup>` and `min-width`, a bare
+ * `<ul>` gains `class="tight" data-tight="true"`, bare `<li>` text is wrapped
+ * in `<p>`, `TaskItem` renders its own checkbox markup, `Link` stamps
+ * `target`/`rel`. A byte-equality assertion would fail on all of that and
+ * send its next reader off to "fix" normalisation that is not broken.
+ *
+ * The danger in relaxing an assertion is that the relaxation swallows a real
+ * loss. So the tolerance is NOT a loose comparison — it is this explicit,
+ * exhaustively-named allowlist, which the corpus test also asserts is not
+ * larger than it needs to be. Keeping one copy is what stops the audit and
+ * the test from tolerating different things.
+ */
+
+/**
+ * Every markup construct one pass through the schema is allowed to ADD.
+ *
+ * Each entry is a rewrite whose absence from the source is not information:
+ *
+ * - `a@target` / `a@rel` — `Link` stamps these on every anchor it renders.
+ * - `a@data-type`, `span@data-type` — TipTap's node-name marker on a mention.
+ * - `a@contenteditable`, `a@data-drive-id` — the AI mention dialect omits
+ *   them; the node's own `renderHTML` always writes them.
+ * - `ul@class`, `ul@data-tight`, `ol@class`, `ol@data-tight` (`=true`) —
+ *   `MarkdownTightLists` makes the tightness it INFERRED from the source
+ *   (`!element.querySelector('p')`) explicit, on both list kinds.
+ * - `a@data-drive-id=` — the AI mention dialect carries no drive, and the
+ *   node's `renderHTML` always writes the attribute, so it appears empty. The
+ *   EMPTY value is the allowlisted one; a mention gaining a real drive id would
+ *   produce a different key and fail.
+ * - `p` — a bare `<li>text</li>` becomes `<li><p>text</p></li>`, because the
+ *   schema's `listItem` content is `paragraph block*`.
+ * - `label`, `input`, `input@type`, `input@checked`, `span`, `div` —
+ *   `TaskItem`'s rendered checkbox. The state itself lives in
+ *   `li@data-checked`, which the source already carried.
+ * - `pre@class` — `CodeBlockNode` mirrors `language-x` onto the `<pre>`.
+ * - `table@style`, `colgroup`, `col`, `col@style` (and their `style:min-width`
+ *   forms) — TipTap's table column model, emitted as `min-width` from the
+ *   schema's own defaults.
+ * - `td@colspan`, `td@rowspan`, `th@colspan`, `th@rowspan` (`=1`) — every
+ *   cell is rendered with its span made explicit. The VALUE `1` is the
+ *   allowlisted one: a cell whose span actually changed produces a different
+ *   key and fails.
+ *
+ * The `=pageMention` entries are the VALUE-bearing form of the `data-type`
+ * marker above. They are listed separately, and deliberately: it is the value
+ * that carries the meaning, so `data-type` changing from `taskList` to
+ * `taskItem` must fail rather than be absorbed by a bare `attr@data-type`.
+ *
+ * Nothing here changes what the document SAYS. An addition outside this set is
+ * a change to the stored dialect and must be looked at, not tolerated.
+ */
+export const ALLOWED_COSMETIC_ADDITIONS: ReadonlySet<string> = new Set([
+  'attr:a@contenteditable',
+  'attr:a@data-drive-id',
+  'attr:a@data-drive-id=',
+  'attr:a@data-type',
+  'attr:a@data-type=pageMention',
+  'attr:a@rel',
+  'attr:a@target',
+  'attr:col@style',
+  'attr:col@style:min-width',
+  'attr:input@checked',
+  'attr:input@type',
+  'attr:ol@class',
+  'attr:ol@data-tight',
+  'attr:ol@data-tight=true',
+  'attr:pre@class',
+  'attr:span@data-type',
+  'attr:span@data-type=pageMention',
+  'attr:table@style',
+  'attr:table@style:min-width',
+  'attr:td@colspan',
+  'attr:td@colspan=1',
+  'attr:td@rowspan',
+  'attr:td@rowspan=1',
+  'attr:th@colspan',
+  'attr:th@colspan=1',
+  'attr:th@rowspan',
+  'attr:th@rowspan=1',
+  'attr:ul@class',
+  'attr:ul@data-tight',
+  'attr:ul@data-tight=true',
+  'el:col',
+  'el:colgroup',
+  'el:div',
+  'el:input',
+  'el:label',
+  'el:p',
+  'el:span',
+]);
+
+/**
+ * Attributes whose VALUE is the construct, not just their presence.
+ *
+ * `text-align:center` becoming `text-align:left`, `data-type="taskList"`
+ * becoming `taskItem`, a rewritten `href`, a `data-page-id` pointing at a
+ * different page, or `start="7"` becoming `start="1"` would all be invisible
+ * to a comparison whose entire job is naming the construct that moved.
+ */
+export const VALUE_BEARING_ATTRIBUTES: ReadonlySet<string> = new Set([
+  'data-type',
+  'href',
+  'data-page-id',
+  'data-user-id',
+  'data-role-id',
+  'data-drive-id',
+  'data-file-id',
+  'data-block-id',
+  'data-change-id',
+  'data-change-type',
+  'data-checked',
+  'data-tight',
+  'start',
+  'colspan',
+  'rowspan',
+  'alt',
+]);
+
+/**
+ * The markup under `root` as comparable keys: `el:<tag>`,
+ * `attr:<tag>@<name>`, `attr:<tag>@<name>=<value>` for the value-bearing
+ * attributes, and `attr:<tag>@style:<property>` per inline CSS property.
+ *
+ * Deliberately not the markup string: a set difference names WHICH construct
+ * moved, where a string diff only says "changed". Presence-only keys are kept
+ * alongside the value keys, so a DROPPED attribute and a CHANGED one are
+ * distinguishable in the diff. `style` is split per property because a bare
+ * `attr:p@style` merges the question with the answer.
+ *
+ * Structural, not lexical — but NOT content-free: the value-bearing keys carry
+ * `href`, `alt` and the id attributes verbatim, because a rewritten href or a
+ * changed alt is exactly what the corpus test has to see. `alt` is prose. A
+ * consumer that PRINTS keys from real documents (`scripts/collab-seed-audit.ts`)
+ * folds every value except the schema's own enumerations back to the presence
+ * form before tallying; see `contentFreeKey` there.
+ */
+export function constructKeysOf(root: Element): Set<string> {
+  const keys = new Set<string>();
+  const walk = (element: Element): void => {
+    const tag = element.tagName.toLowerCase();
+    keys.add(`el:${tag}`);
+    for (const name of element.getAttributeNames()) {
+      keys.add(`attr:${tag}@${name}`);
+      if (VALUE_BEARING_ATTRIBUTES.has(name)) {
+        keys.add(`attr:${tag}@${name}=${element.getAttribute(name) ?? ''}`);
+      }
+      if (name === 'style') {
+        for (const declaration of (element.getAttribute(name) ?? '').split(';')) {
+          const property = declaration.split(':')[0]?.trim().toLowerCase();
+          if (property) {
+            keys.add(`attr:${tag}@style:${property}`);
+          }
+        }
+      }
+    }
+    for (const child of Array.from(element.children)) {
+      walk(child);
+    }
+  };
+  for (const child of Array.from(root.children)) {
+    walk(child);
+  }
+  return keys;
+}
+
+/** `constructKeysOf` over a markup string, in a throwaway workspace. */
+export function constructsOf(html: string): Set<string> {
+  return withDomWorkspace((workspace) => constructKeysOf(workspace.parse(html)));
+}
+
+/** Keys in `a` that `b` lacks, sorted — the "what moved" half of every comparison here. */
+export function constructDifference(a: ReadonlySet<string>, b: ReadonlySet<string>): string[] {
+  return [...a].filter((key) => !b.has(key)).sort();
+}

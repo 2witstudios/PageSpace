@@ -91,7 +91,7 @@ function parseAndDiagnose(
     }
   }
 
-  const doc = parseIn(source);
+  const doc = parseHtmlElementUnchecked(source);
   const reasons: string[] = [];
 
   const sourceText = visibleCharacters(source.textContent ?? '');
@@ -119,6 +119,14 @@ function parseAndDiagnose(
 }
 
 /**
+ * The parse itself, with NO loss check — the one step `htmlToPmDoc` wraps.
+ *
+ * Exported for surveys only: `scripts/collab-seed-audit.ts` needs the
+ * document a lossy page parses TO, so it can name what was lost, and
+ * `htmlToPmDoc` throws on exactly those pages. Nothing that seeds may call
+ * this; the gate is `htmlToPmDoc`/`htmlToYDoc`, and bypassing it is how a
+ * lossy document becomes permanent.
+ *
  * `preserveWhitespace: 'full'` is deliberately NOT passed. The schema's own
  * `codeBlock` carries `whitespace: 'pre'`, so ProseMirror already preserves
  * whitespace exactly where it is significant; forcing it document-wide would
@@ -129,7 +137,7 @@ function parseAndDiagnose(
  * global `document`, which is what lets this run in a Node service with no DOM
  * installed process-wide.
  */
-function parseIn(source: HTMLElement): PmNode {
+export function parseHtmlElementUnchecked(source: HTMLElement): PmNode {
   return PmDOMParser.fromSchema(collabSchema()).parse(source);
 }
 

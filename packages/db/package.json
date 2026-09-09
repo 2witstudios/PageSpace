@@ -35,6 +35,10 @@
       "types": "./dist/operators.d.ts",
       "default": "./dist/operators.js"
     },
+    "./read-only-session": {
+      "types": "./dist/read-only-session.d.ts",
+      "default": "./dist/read-only-session.js"
+    },
     "./schema": {
       "types": "./dist/schema.d.ts",
       "default": "./dist/schema.js"

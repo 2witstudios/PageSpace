@@ -12,152 +12,25 @@
  *
  * The danger in relaxing an assertion is that the relaxation swallows a real
  * loss. So the tolerance is NOT a loose comparison — it is an explicit,
- * exhaustively-named allowlist (`ALLOWED_COSMETIC_ADDITIONS`) which the suite
- * also asserts is not larger than it needs to be. A rewrite that is not on the
+ * exhaustively-named allowlist (`ALLOWED_COSMETIC_ADDITIONS`, in
+ * `seed-fidelity.ts`, shared with `scripts/collab-seed-audit.ts` so the corpus
+ * and real documents are held to ONE list) which the suite also asserts is not
+ * larger than it needs to be. A rewrite that is not on the
  * list fails, whether it is new or newly noticed.
  */
 import { describe, it, expect } from 'vitest';
 import { htmlToPmDoc, describeHtmlLoss } from '../html-to-ydoc.js';
 import { pmDocToHtml } from '../y-doc-to-html.js';
-import { withDomWorkspace } from '../dom-workspace.js';
+import {
+  ALLOWED_COSMETIC_ADDITIONS,
+  constructsOf,
+  constructDifference as difference,
+} from '../seed-fidelity.js';
 import {
   CONSTRUCT_CORPUS,
   CORPUS_CASES,
   corpusDocumentHtml,
 } from './support/construct-corpus.js';
-
-/**
- * Every markup construct one pass through the schema is allowed to ADD.
- *
- * Each entry is a rewrite whose absence from the source is not information:
- *
- * - `a@target` / `a@rel` — `Link` stamps these on every anchor it renders.
- * - `a@data-type`, `span@data-type` — TipTap's node-name marker on a mention.
- * - `a@contenteditable`, `a@data-drive-id` — the AI mention dialect omits
- *   them; the node's own `renderHTML` always writes them.
- * - `ul@class`, `ul@data-tight` (`=true`) — `MarkdownTightLists` makes the
- *   tightness it INFERRED from the source (`!element.querySelector('p')`)
- *   explicit.
- * - `a@data-drive-id=` — the AI mention dialect carries no drive, and the
- *   node's `renderHTML` always writes the attribute, so it appears empty. The
- *   EMPTY value is the allowlisted one; a mention gaining a real drive id would
- *   produce a different key and fail.
- * - `p` — a bare `<li>text</li>` becomes `<li><p>text</p></li>`, because the
- *   schema's `listItem` content is `paragraph block*`.
- * - `label`, `input`, `input@type`, `input@checked`, `span`, `div` —
- *   `TaskItem`'s rendered checkbox. The state itself lives in
- *   `li@data-checked`, which the source already carried.
- * - `pre@class` — `CodeBlockNode` mirrors `language-x` onto the `<pre>`.
- * - `table@style`, `colgroup`, `col`, `col@style` (and their `style:min-width`
- *   forms) — TipTap's table column model, emitted as `min-width` from the
- *   schema's own defaults.
- *
- * The `=pageMention` entries are the VALUE-bearing form of the `data-type`
- * marker above. They are listed separately, and deliberately: it is the value
- * that carries the meaning, so `data-type` changing from `taskList` to
- * `taskItem` must fail rather than be absorbed by a bare `attr@data-type`.
- *
- * Nothing here changes what the document SAYS. An addition outside this set is
- * a change to the stored dialect and must be looked at, not tolerated.
- */
-const ALLOWED_COSMETIC_ADDITIONS: ReadonlySet<string> = new Set([
-  'attr:a@contenteditable',
-  'attr:a@data-drive-id',
-  'attr:a@data-drive-id=',
-  'attr:a@data-type',
-  'attr:a@data-type=pageMention',
-  'attr:a@rel',
-  'attr:a@target',
-  'attr:col@style',
-  'attr:col@style:min-width',
-  'attr:input@checked',
-  'attr:input@type',
-  'attr:pre@class',
-  'attr:span@data-type',
-  'attr:span@data-type=pageMention',
-  'attr:table@style',
-  'attr:table@style:min-width',
-  'attr:ul@class',
-  'attr:ul@data-tight',
-  'attr:ul@data-tight=true',
-  'el:col',
-  'el:colgroup',
-  'el:div',
-  'el:input',
-  'el:label',
-  'el:p',
-  'el:span',
-]);
-
-/**
- * Markup constructs as comparable keys: `el:<tag>`, `attr:<tag>@<name>`, and —
- * for the two attributes whose VALUE is the construct — `attr:<tag>@<name>=<value>`.
- * Deliberately not the markup string: a set difference names WHICH construct
- * moved, where a string diff only says "changed".
- *
- * `style` is split per CSS property, and the attributes in
- * `VALUE_BEARING_ATTRIBUTES` carry their value, because a bare `attr:p@style`
- * merges the question with the answer. `text-align:center` becoming
- * `text-align:left`, `data-type="taskList"` becoming `taskItem`, a rewritten
- * `href`, a `data-page-id` pointing at a different page, or `start="7"` becoming
- * `start="1"` would otherwise all be invisible to a gate whose entire job is
- * naming the construct that moved — and the corpus has fixtures for every one
- * of them.
- *
- * Presence-only keys are kept alongside the value keys, so a DROPPED attribute
- * and a CHANGED one are distinguishable in the diff.
- */
-const VALUE_BEARING_ATTRIBUTES: ReadonlySet<string> = new Set([
-  'data-type',
-  'href',
-  'data-page-id',
-  'data-user-id',
-  'data-role-id',
-  'data-drive-id',
-  'data-file-id',
-  'data-block-id',
-  'data-change-id',
-  'data-change-type',
-  'data-checked',
-  'data-tight',
-  'start',
-  'colspan',
-  'rowspan',
-  'alt',
-]);
-function constructsOf(html: string): Set<string> {
-  return withDomWorkspace((workspace) => {
-    const keys = new Set<string>();
-    const walk = (element: Element): void => {
-      const tag = element.tagName.toLowerCase();
-      keys.add(`el:${tag}`);
-      for (const name of element.getAttributeNames()) {
-        keys.add(`attr:${tag}@${name}`);
-        if (VALUE_BEARING_ATTRIBUTES.has(name)) {
-          keys.add(`attr:${tag}@${name}=${element.getAttribute(name) ?? ''}`);
-        }
-        if (name === 'style') {
-          for (const declaration of (element.getAttribute(name) ?? '').split(';')) {
-            const property = declaration.split(':')[0]?.trim().toLowerCase();
-            if (property) {
-              keys.add(`attr:${tag}@style:${property}`);
-            }
-          }
-        }
-      }
-      for (const child of Array.from(element.children)) {
-        walk(child);
-      }
-    };
-    for (const child of Array.from(workspace.parse(html).children)) {
-      walk(child);
-    }
-    return keys;
-  });
-}
-
-const difference = (a: Set<string>, b: Set<string>): string[] =>
-  [...a].filter((key) => !b.has(key)).sort();
 
 describe.each(CORPUS_CASES)(
   'seed fidelity: %s',
