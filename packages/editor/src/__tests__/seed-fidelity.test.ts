@@ -131,17 +131,31 @@ describe('contentFreeKey', () => {
     expect(contentFreeKey('el:img')).toBe('el:img');
   });
 
-  it('folds prose, urls and ids back to presence', () => {
-    expect(contentFreeKey('attr:img@alt=a photo of Ada')).toBe('attr:img@alt');
-    expect(contentFreeKey('attr:a@href=https://x.test/ada-lovelace')).toBe('attr:a@href');
-    expect(contentFreeKey('attr:a@data-page-id=pg_1')).toBe('attr:a@data-page-id');
+  it('withholds prose, urls and ids while keeping the key marked as a VALUE key', () => {
+    // `=(withheld)` rather than the bare presence key: `constructKeysOf` emits
+    // both forms so a dropped attribute and a changed one stay distinguishable,
+    // and collapsing to presence here would undo that at the last step.
+    expect(contentFreeKey('attr:img@alt=a photo of Ada')).toBe('attr:img@alt=(withheld)');
+    expect(contentFreeKey('attr:a@href=https://x.test/ada-lovelace')).toBe('attr:a@href=(withheld)');
+    expect(contentFreeKey('attr:a@data-page-id=pg_1')).toBe('attr:a@data-page-id=(withheld)');
+    // The presence key is untouched, so the two remain different rows.
+    expect(contentFreeKey('attr:img@alt')).toBe('attr:img@alt');
   });
 
-  it('folds a printable attribute whose value is not one the schema renders', () => {
-    expect(contentFreeKey('attr:span@data-type=customer-name')).toBe('attr:span@data-type');
-    expect(contentFreeKey('attr:li@data-checked=SECRET')).toBe('attr:li@data-checked');
-    expect(contentFreeKey('attr:ol@start=SECRET_START')).toBe('attr:ol@start');
-    expect(contentFreeKey('attr:td@colspan=1234567')).toBe('attr:td@colspan');
+  it('withholds a printable attribute whose value is not one the schema renders', () => {
+    expect(contentFreeKey('attr:span@data-type=customer-name')).toBe('attr:span@data-type=(withheld)');
+    expect(contentFreeKey('attr:li@data-checked=SECRET')).toBe('attr:li@data-checked=(withheld)');
+    expect(contentFreeKey('attr:ol@start=SECRET_START')).toBe('attr:ol@start=(withheld)');
+    expect(contentFreeKey('attr:td@colspan=1234567')).toBe('attr:td@colspan=(withheld)');
+  });
+
+  it('never withholds a value into a key that is itself on the cosmetic allowlist', () => {
+    // Without the `=(withheld)` marker an author-typed `data-type` would print
+    // as `attr:a@data-type`, which IS allowlisted — a finding wearing the key
+    // of a non-finding.
+    for (const key of ['attr:a@data-type=customer-name', 'attr:ul@data-tight=maybe', 'attr:td@colspan=x']) {
+      expect(ALLOWED_COSMETIC_ADDITIONS.has(contentFreeKey(key)), key).toBe(false);
+    }
   });
 
   it('folds names the author could have typed: unknown tags, odd attribute names, custom properties', () => {
@@ -149,14 +163,34 @@ describe('contentFreeKey', () => {
     expect(contentFreeKey('attr:secret-tag@class')).toBe('text:unescaped-angle-bracket');
     expect(contentFreeKey('attr:p@secret_attr_name')).toBe('attr:p@(unrecognised-attribute)');
     expect(contentFreeKey('attr:p@secretattr')).toBe('attr:p@(unrecognised-attribute)');
-    expect(contentFreeKey('attr:p@data-secret=x')).toBe('attr:p@(unrecognised-attribute)');
+    expect(contentFreeKey('attr:p@data-secret=x')).toBe('attr:p@(unrecognised-attribute)=(withheld)');
     expect(contentFreeKey('attr:p@style:--secret-name')).toBe('attr:p@style:(unrecognised-property)');
     expect(contentFreeKey('attr:p@style:secret_prop')).toBe('attr:p@style:(unrecognised-property)');
     expect(contentFreeKey('attr:p@style:margin-top')).toBe('attr:p@style:margin-top');
   });
 
-  it('passes keys in neither form through unchanged', () => {
+  it('FAILS CLOSED on a key it cannot decompose, rather than handing back its input', () => {
+    // happy-dom builds a real element for a tag name starting with `@`, so a
+    // pasted FreeMarker directive or Slack mention produces `attr:@list@items`
+    // — which the attribute pattern cannot split, because its tag group needs
+    // one non-`@` character. Returning the input there printed a Slack user id
+    // and a full href straight into the report.
+    expect(contentFreeKey('attr:@u08jane.doe@email=jane.doe@acme.com')).toBe('text:unescaped-angle-bracket');
+    expect(contentFreeKey('attr:@list@items=payroll-2026-Q1.csv')).toBe('text:unescaped-angle-bracket');
+    expect(contentFreeKey('attr:@p@href=https://secret.example/a')).toBe('text:unescaped-angle-bracket');
+    expect(contentFreeKey('attr:@x@style:color')).toBe('text:unescaped-angle-bracket');
+    expect(contentFreeKey('not a key at all')).toBe('text:unescaped-angle-bracket');
+    // The marker itself is the one thing that survives, or folding would not
+    // be idempotent.
     expect(contentFreeKey('text:unescaped-angle-bracket')).toBe('text:unescaped-angle-bracket');
+    expect(contentFreeKey(contentFreeKey('attr:@list@items=x'))).toBe('text:unescaped-angle-bracket');
+  });
+
+  it('bounds every key it returns, so one document cannot pad the whole report', () => {
+    const long = 'a'.repeat(5000);
+    for (const key of [`el:${long}`, `attr:p@${long}`, `attr:p@style:${long}`, `attr:p@alt=${long}`, `attr:@${long}@x=${long}`]) {
+      expect(contentFreeKey(key).length, key.slice(0, 30)).toBeLessThanOrEqual(64);
+    }
   });
 });
 

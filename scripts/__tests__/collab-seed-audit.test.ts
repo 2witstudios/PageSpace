@@ -18,7 +18,7 @@ import {
   countContent,
   counterDecreases,
   isTagless,
-  spaceCollapsedText,
+  interWordText,
   visibleText,
 } from '../lib/seed-audit/criteria';
 import { stripNonContentElements } from '@pagespace/editor/html-to-ydoc';
@@ -157,9 +157,18 @@ describe('text (criterion 3)', () => {
     expect(visibleText(parse('<p>a b</p><p>c</p>'))).toBe('abc');
   });
 
-  it('keeps single spaces in the diagnostic form, so a vanished space is at least visible', () => {
-    expect(spaceCollapsedText(parse('<p>a   b</p>\n'))).toBe('a b');
-    expect(spaceCollapsedText(parse('<p>ab</p>'))).toBe('ab');
+  it('keeps the spacing between words in the diagnostic form, so a vanished space is visible', () => {
+    expect(interWordText(parse('<p>a   b</p>\n'))).toBe('a b');
+    expect(interWordText(parse('<p>ab</p>'))).toBe('ab');
+    expect(interWordText(parse('<p>hello <em>world</em></p>'))).toBe('hello world');
+  });
+
+  it('drops the whitespace BETWEEN blocks, so pretty-printing is not reported as a lost space', () => {
+    // The newline-and-indent between two blocks is its own text node. Reading
+    // the document's textContent instead would make these two differ, and the
+    // diagnostic would fire on every pretty-printed page in the corpus.
+    expect(interWordText(parse('<p>a</p>\n  <p>b</p>'))).toBe(interWordText(parse('<p>a</p><p>b</p>')));
+    expect(interWordText(parse('<ul>\n  <li>x</li>\n  <li>y</li>\n</ul>'))).toBe('xy');
   });
 
   it('strips script, style, noscript and template before measuring — their text is not prose', () => {
@@ -280,6 +289,12 @@ describe('judgeChain and divergenceBetween (on DOMs, so the branches y-prosemirr
     expect(isLossy(verdict)).toBe(false);
   });
 
+  it('does not raise the whitespace diagnostic merely because the source was pretty-printed', () => {
+    const verdict = judgeChain(parse('<p>a</p>\n  <p>b</p>'), parse('<p>a</p><p>b</p>'), true);
+    expect(verdict.textPreserved).toBe(true);
+    expect(verdict.whitespaceOnlyTextChange).toBe(false);
+  });
+
   it('names additions outside the allowlist and not those on it', () => {
     const verdict = judgeChain(parse('<ul><li>a</li></ul>'), parse('<ul class="tight" data-tight="true"><li><p>a</p></li></ul><figure></figure>'), true);
     expect(verdict.unexpectedAdditions).toEqual(['el:figure']);
@@ -315,7 +330,9 @@ describe('censusKeyOf', () => {
     expect(censusKeyOf('attr:ul@data-type=taskList')).toBe('attr:data-type=taskList');
     expect(censusKeyOf('attr:a@href=https://x.test/')).toBe('attr:href');
     expect(censusKeyOf('attr:img@src')).toBe('attr:src');
-    expect(censusKeyOf('something-else')).toBe('something-else');
+    // Fail closed, like contentFreeKey: a key it cannot decompose is not one
+    // it can vouch for.
+    expect(censusKeyOf('something-else')).toBe('text:unescaped-angle-bracket');
   });
 });
 
@@ -366,6 +383,7 @@ describe('the accumulator and the report', () => {
 
     expect(snapshot.totals).toEqual({ documents: 2, audited: 2, markdownMode: 0, empty: 0, tagless: 0, failed: 0, divergent: 1 });
     expect(snapshot.seed.totals).toEqual({ unstable: 1, counterDecreased: 1, textLost: 1, lossy: 1, whitespaceOnlyTextChange: 0 });
+    expect(snapshot.seed.whitespaceOnlyExamples).toEqual([]);
     expect(snapshot.census.totals).toEqual({ unstable: 0, counterDecreased: 1, textLost: 0, lossy: 1, whitespaceOnlyTextChange: 0 });
     expect(snapshot.seed.criteriaFailures).toEqual([
       { key: 'counter decreased: img', pages: 1, examplePageIds: ['page_1'] },
@@ -483,6 +501,18 @@ describe('the accumulator and the report', () => {
     expect(report).toContain('page_blocked_1');
   });
 
+  it('names example pages for the whitespace diagnostic — a bare count is undiagnosable', () => {
+    const audit = createAuditAccumulator();
+    // `<iframe>` has no node in the frozen schema, so dropping it closes the
+    // gap around it: every visible character survives, the spacing does not.
+    const spacing = '<p>a <iframe src="https://e.test/"></iframe> b</p>';
+    for (const id of ['ws_1', 'ws_2']) audit.recordHtml(id, auditPage(spacing, workspace));
+    const snapshot = audit.snapshot();
+    expect(snapshot.seed.totals.whitespaceOnlyTextChange).toBe(2);
+    expect(snapshot.seed.whitespaceOnlyExamples).toEqual(['ws_1', 'ws_2']);
+    expect(formatAuditReport(snapshot, { partial: false })).toContain('e.g. ws_1 ws_2');
+  });
+
   it('carries the tagless count into the header so a PASS cannot hide it', () => {
     const audit = createAuditAccumulator();
     audit.recordHtml('t', { ...audited(cleanAudit()), tagless: true });
@@ -502,6 +532,36 @@ describe('the accumulator and the report', () => {
     expect(report).toContain('page_x');
     expect(report).not.toContain(sentinel);
     expect(JSON.stringify(audit.snapshot())).not.toContain(sentinel);
+  });
+
+  it('never prints an unescaped `<` in prose — a pasted FreeMarker directive or Slack mention', () => {
+    // happy-dom turns `<@list …>` into a real element, and the resulting keys
+    // do not match the attribute pattern. Folding used to hand those back
+    // unchanged, printing a Slack user id and a full href from prose.
+    const html =
+      '<p>From Slack: <@U08JANE.DOE email="jane.doe@acme.test"> please review</p>' +
+      '<@list items="payroll-2026-Q1.csv" as="row">x</@list>' +
+      '<@p href="https://secret.test/a" style="color:red">z</@p>';
+    const audit = createAuditAccumulator();
+    audit.recordHtml('page_prose', auditPage(html, workspace));
+    const printed = formatAuditReport(audit.snapshot(), { partial: false }) + JSON.stringify(audit.snapshot());
+    for (const token of ['jane.doe@acme.test', 'payroll-2026-Q1.csv', 'u08jane', 'secret.test', '@list']) {
+      expect(printed.toLowerCase(), token).not.toContain(token.toLowerCase());
+    }
+  });
+
+  it('bounds every key it tallies, so one document cannot pad the whole report', () => {
+    const html = `<@x ${'long-name-'.repeat(200)}end="1">q</@x><p ${'b'.repeat(2000)}="1">y</p>`;
+    const audit = createAuditAccumulator();
+    audit.recordHtml('page_long', auditPage(html, workspace));
+    const snapshot = audit.snapshot();
+    const keys = [
+      ...snapshot.seed.droppedConstructs,
+      ...snapshot.seed.droppedConstructsCensusKeyed,
+      ...snapshot.seed.unexpectedAdditions,
+      ...snapshot.divergence.rows,
+    ].map((row) => row.key);
+    for (const key of keys) expect(key.length, key.slice(0, 40)).toBeLessThanOrEqual(64);
   });
 
   it('never prints markup TOKENS the author controls either — tag names, attribute names, style properties, enumerated values', () => {

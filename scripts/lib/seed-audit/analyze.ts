@@ -15,7 +15,7 @@ import {
   countContent,
   counterDecreases,
   isTagless,
-  spaceCollapsedText,
+  interWordText,
   visibleText,
   type ContentCounts,
 } from './criteria';
@@ -48,9 +48,10 @@ export interface ChainResult {
   /** Criterion 3: whitespace-stripped visible text equal between `src` and `h1`. */
   textPreserved: boolean;
   /**
-   * Diagnostic, never a verdict: text equal with all whitespace stripped but
-   * NOT with runs collapsed to a single space — a space vanished or appeared
-   * between words. See `visibleText` for why this is not criterion 3.
+   * Diagnostic, never a verdict: every visible character survived, but the
+   * spacing BETWEEN words did not — a space vanished or appeared. See
+   * `interWordText` for why this is measured per text node, and `visibleText`
+   * for why it is not criterion 3.
    */
   whitespaceOnlyTextChange: boolean;
   /** Construct keys present in `src` and absent from `h1` — presence-based, the census's own measure. */
@@ -137,7 +138,7 @@ function throughYDoc(doc: PmNode): PmNode {
 interface Measured {
   counts: ContentCounts;
   text: string;
-  spacedText: string;
+  interWord: string;
   constructs: Set<string>;
 }
 
@@ -146,7 +147,7 @@ function measure(root: Element): Measured {
   return {
     counts: countContent(root),
     text: visibleText(root),
-    spacedText: spaceCollapsedText(root),
+    interWord: interWordText(root),
     constructs: constructKeysOf(root),
   };
 }
@@ -163,7 +164,7 @@ function judge(source: Measured, rendered: Measured, stable: boolean): ChainResu
     stable,
     counterDecreases: counterDecreases(source.counts, rendered.counts),
     textPreserved,
-    whitespaceOnlyTextChange: textPreserved && source.spacedText !== rendered.spacedText,
+    whitespaceOnlyTextChange: textPreserved && source.interWord !== rendered.interWord,
     droppedConstructs: constructDifference(source.constructs, rendered.constructs),
     unexpectedAdditions: constructDifference(rendered.constructs, source.constructs).filter(
       (key) => !ALLOWED_COSMETIC_ADDITIONS.has(key),

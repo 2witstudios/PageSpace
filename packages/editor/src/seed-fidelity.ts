@@ -177,6 +177,8 @@ export const KNOWN_STYLE_PROPERTIES: ReadonlySet<string> = new Set([
 
 const UNRECOGNISED_ATTRIBUTE = '(unrecognised-attribute)';
 const UNRECOGNISED_PROPERTY = '(unrecognised-property)';
+/** Stands in for an attribute value that is the author's text rather than the schema's. */
+const WITHHELD_VALUE = '(withheld)';
 
 /**
  * A construct key with everything the author could have typed removed:
@@ -196,7 +198,17 @@ export function contentFreeKey(key: string): string {
     return HTML_ELEMENT_NAMES.has(element[1]) ? key : UNESCAPED_ANGLE_BRACKET_KEY;
   }
   const attribute = /^attr:([^@]+)@([^=]+)(?:=(.*))?$/su.exec(key);
-  if (!attribute) return key;
+  // FAIL CLOSED. A key this cannot decompose is not a key this can vouch for,
+  // and handing back the input is how a sanitiser leaks. It is reachable, not
+  // theoretical: happy-dom builds a real element for a tag name starting with
+  // `@` — a pasted FreeMarker directive (`<@list items="payroll.csv">`) or a
+  // Slack mention (`<@U08JANE.DOE email="...">`) — and the tag group above
+  // needs one non-`@` character, so those keys fall straight through. They
+  // came from an unescaped `<` in prose, which is exactly what the marker is
+  // for. It also makes folding idempotent for free: the marker itself is not
+  // an `el:`/`attr:` key, so re-folding one returns it unchanged. A separate
+  // guard for that was measurably dead — removing it changed no test.
+  if (!attribute) return UNESCAPED_ANGLE_BRACKET_KEY;
   const [, tag, rawName, value] = attribute;
   if (!HTML_ELEMENT_NAMES.has(tag)) return UNESCAPED_ANGLE_BRACKET_KEY;
 
@@ -208,7 +220,13 @@ export function contentFreeKey(key: string): string {
   const name = KNOWN_ATTRIBUTE_NAMES.has(rawName) ? rawName : UNRECOGNISED_ATTRIBUTE;
   if (value === undefined) return `attr:${tag}@${name}`;
   const printable = PRINTABLE_ATTRIBUTE_VALUES.get(name);
-  return printable?.(value) ? `attr:${tag}@${name}=${value}` : `attr:${tag}@${name}`;
+  // A withheld value keeps the `=` marker. `constructKeysOf` emits the
+  // presence key and the value key side by side so that an attribute the
+  // schema DROPPED and one whose value it CHANGED stay distinguishable;
+  // folding a withheld value down to the bare presence key would collapse
+  // that distinction at the last step, and would also let a key outside
+  // `ALLOWED_COSMETIC_ADDITIONS` print as one that is on it.
+  return printable?.(value) ? `attr:${tag}@${name}=${value}` : `attr:${tag}@${name}=${WITHHELD_VALUE}`;
 }
 
 /**

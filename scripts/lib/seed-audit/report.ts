@@ -1,4 +1,5 @@
 import { contentFreeKey } from '@pagespace/editor/seed-fidelity';
+import { UNESCAPED_ANGLE_BRACKET_KEY } from '@pagespace/editor/html-element-names';
 import { isLossy, type ChainResult, type PageAudit } from './analyze';
 
 /**
@@ -38,6 +39,13 @@ export interface ChainTallies {
   totals: CriteriaTotals;
   /** Per-criterion example pages: `unstable`, `text-lost`, and one row per counter that decreased. */
   criteriaFailures: TallyRow[];
+  /**
+   * Example pages for the whitespace-only diagnostic. It is not a criterion,
+   * so it has no row in `criteriaFailures` — but a bare count is
+   * undiagnosable, and every other number in this report can be gone and
+   * looked at.
+   */
+  whitespaceOnlyExamples: string[];
   /** Presence-based construct drops, tag-qualified (`el:img`, `attr:p@style:text-align`). */
   droppedConstructs: TallyRow[];
   /** The same drops, keyed the way the content census keys them, for a direct comparison. */
@@ -133,7 +141,10 @@ export function censusKeyOf(key: string): string {
   const element = /^el:(.+)$/u.exec(key);
   if (element) return `<${element[1]}>`;
   const attribute = /^attr:[^@]+@(.+)$/u.exec(key);
-  if (!attribute) return key;
+  // Fail closed, for the same reason `contentFreeKey` does: a key this cannot
+  // decompose is one it cannot vouch for. Unreachable today — every key
+  // reaching here has already been folded — and kept so it stays unreachable.
+  if (!attribute) return UNESCAPED_ANGLE_BRACKET_KEY;
   const rest = attribute[1];
   if (rest.startsWith('style:')) return rest;
   if (rest.startsWith('data-type=')) return `attr:${rest}`;
@@ -143,6 +154,7 @@ export function censusKeyOf(key: string): string {
 /** The per-chain half of the accumulator: one of these for the seed chain, one for the census chain. */
 function createChainTallies() {
   const criteria: Tallies = new Map();
+  const whitespaceOnly: Tallies = new Map();
   const dropped: Tallies = new Map();
   const droppedCensus: Tallies = new Map();
   const additions: Tallies = new Map();
@@ -169,7 +181,10 @@ function createChainTallies() {
         tally(criteria, 'text-lost', pageId);
       }
       if (isLossy(verdict)) totals.lossy += 1;
-      if (verdict.whitespaceOnlyTextChange) totals.whitespaceOnlyTextChange += 1;
+      if (verdict.whitespaceOnlyTextChange) {
+        totals.whitespaceOnlyTextChange += 1;
+        tally(whitespaceOnly, 'spacing', pageId);
+      }
 
       // Folded to content-free form; two keys can fold into one, and a page
       // counts once per folded key, hence the Sets.
@@ -183,6 +198,7 @@ function createChainTallies() {
       return {
         totals: { ...totals },
         criteriaFailures: rows(criteria),
+        whitespaceOnlyExamples: whitespaceOnly.get('spacing')?.examplePageIds ?? [],
         droppedConstructs: rows(dropped),
         droppedConstructsCensusKeyed: rows(droppedCensus),
         unexpectedAdditions: rows(additions),
@@ -332,7 +348,8 @@ function criteriaBlock(title: string, chain: ChainTallies): string[] {
     `  2. content loss   any counter decreased        pages failing  ${totals.counterDecreased}`,
     `  3. text           visible characters changed   pages failing  ${totals.textLost}`,
     `  LOSSY (any of the three)                                      ${totals.lossy}`,
-    `  whitespace-only text differences (diagnostic, not a criterion) ${totals.whitespaceOnlyTextChange}`,
+    `  spacing between words changed (diagnostic, not a criterion)   ${totals.whitespaceOnlyTextChange}` +
+      (chain.whitespaceOnlyExamples.length > 0 ? `  e.g. ${chain.whitespaceOnlyExamples.join(' ')}` : ''),
     '',
   ];
 }

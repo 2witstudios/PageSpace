@@ -114,16 +114,45 @@ export function counterDecreases(before: ContentCounts, after: ContentCounts): s
  * `<style>` block's CSS is not reported as lost prose.
  *
  * The cost is that a space vanishing BETWEEN two words is invisible here.
- * `spaceCollapsedText` exists for that: the weaker (single-space) form, whose
- * mismatches are reported as a diagnostic count, never as a verdict.
+ * `interWordText` exists for that, as a diagnostic count and never a verdict.
  */
 export function visibleText(root: Element): string {
   return visibleCharacters(root.textContent ?? '');
 }
 
-/** Whitespace runs collapsed to one space and trimmed — diagnostic only; see `visibleText`. */
-export function spaceCollapsedText(root: Element): string {
-  return (root.textContent ?? '').replace(/\s+/gu, ' ').trim();
+/** A DOM text node, per the DOM's own `Node.TEXT_NODE`. */
+const TEXT_NODE = 3;
+
+/**
+ * Text with the spacing BETWEEN words kept and the spacing between BLOCKS
+ * discarded — the weaker comparison behind the `whitespaceOnlyTextChange`
+ * diagnostic.
+ *
+ * Collapsing the whole document's `textContent` to single spaces cannot do
+ * this: in pretty-printed HTML the newline-and-indent between two `<p>` is
+ * itself a text node, so `<p>a</p>\n  <p>b</p>` reads `a b` while the
+ * schema's own `<p>a</p><p>b</p>` reads `ab`, and the diagnostic fires on
+ * every pretty-printed page — saying "pretty-printed", not "a space was
+ * lost", which is worse than not measuring at all.
+ *
+ * So the walk is per text node: a node that is entirely whitespace is
+ * formatting between blocks and is dropped, and every other node keeps its
+ * internal spacing collapsed to single spaces. `hello <em>world</em>` still
+ * reads `hello world` and reports a real loss if that space disappears.
+ */
+export function interWordText(root: Element): string {
+  const parts: string[] = [];
+  const walk = (node: Node): void => {
+    if (node.nodeType === TEXT_NODE) {
+      const text = node.nodeValue ?? '';
+      // Entirely whitespace: the indentation between two blocks, not prose.
+      if (/\S/u.test(text)) parts.push(text.replace(/\s+/gu, ' '));
+      return;
+    }
+    for (const child of Array.from(node.childNodes)) walk(child);
+  };
+  walk(root);
+  return parts.join('').trim();
 }
 
 /**
