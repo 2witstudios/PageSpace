@@ -84,6 +84,7 @@ export PAGESPACE_GATE_PROXY_PORT=8788
 export PAGESPACE_GATE_CREDENTIAL_HOST=http://localhost:8788   # the host `env enroll` runs against
 export PAGESPACE_GATE_CLI=$PWD/packages/cli/dist/bin.js
 export PAGESPACE_GATE_APP_TZ=UTC PAGESPACE_GATE_DEPLOYMENT_MODE=cloud PAGESPACE_GATE_S3_ENDPOINT=http://127.0.0.1:9112
+export PAGESPACE_GATE_ASK_MODE=chat        # the GA path; =terminal for a TTY prompter (F05)
 node --no-warnings scripts/env-bridge-exit-gate/preflight.ts
 ```
 
@@ -137,15 +138,23 @@ DATABASE_URL=… TZ=UTC bun scripts/env-bridge-exit-gate/seed-gate.ts
 - a page **written by that other person** carrying an instruction to run a
   command — the injection case (`P16`).
 
-Two traps the run hit, both of which make a check pass for the wrong reason:
+Two fields that look like decoration and are not. Both were set BY HAND during
+the first run and were missing from the script, which made that run
+unreproducible from this runbook; `seed-gate.ts` sets both now, and the rows
+that depend on them were re-run from a database seeded only by the fixed
+script.
 
-- **Membership needs `acceptedAt`.** A `drive_members` row with a NULL
-  `acceptedAt` is refused `drive_access_denied` at the session-spawn door, long
-  before `decideBind`. `seed-gate.ts` stamps it.
-- **An agent reads with its own permissions.** A factory-created agent holds no
-  page permissions, so it cannot read the injected page and the injection case
-  proves nothing. Set `userScopedAccess` on the agent (which is also the
-  realistic shape: your agent, your access, someone else's content).
+- **Membership needs `acceptedAt`.** It is nullable with no default and
+  `permissions.ts` requires `isNotNull(acceptedAt)`, so a row without it is a
+  pending invite, not a member: the session-spawn door answers
+  `drive_access_denied`, earlier than `decideBind` and for a different reason,
+  and P07 would be recorded as "the admin was refused" while proving nothing
+  about owner-only binding. Set on the ADMIN **and** the OWNER row.
+- **An agent reads with its own permissions.** `userScopedAccess` defaults to
+  false and a factory-made agent holds no page permissions, so it cannot read
+  the injected page: P16 would report "nothing ran" because the agent never saw
+  the injection. Set on the agent, which is also the realistic shape — your
+  agent, your access, someone else's content.
 
 ### Environment limit
 
