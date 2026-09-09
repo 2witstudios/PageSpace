@@ -39,19 +39,19 @@ vi.mock('@/lib/env-bridge/bridge-client', async (importOriginal) => {
   return { ...actual, getEnvBridgeClient: vi.fn() };
 });
 
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign as nodeSign, verify as nodeVerify } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign as nodeSign } from 'node:crypto';
 import { GET, POST } from '../[challengeId]/route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
 import { getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { getPendingApprovalStore, resetPendingApprovalStoreForTesting, type PendingEnvApproval } from '@/lib/env-bridge/pending-approvals';
 import { signGrantFrame } from '@/lib/env-bridge/grant-signer';
-import { envBridgeHash, envBridgeSha256, ed25519Verify } from '@/lib/env-bridge/crypto';
+import { envBridgeHash, envBridgeSha256, ed25519Verify, webauthnVerify } from '@/lib/env-bridge/crypto';
 import { parseServerSigningKeyring, type SigningKeyPrimitives } from '@pagespace/lib/env-bridge/server-signing-key';
 import { createMemoryNonceStore, verifyGrant } from '@pagespace/lib/env-bridge/grant';
 import { decodeFrame, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
 import { grantRequestForFrame, type GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
-import { verifyOwnerApproval, type EcJwkPublic, type PinnedOwnerApproval } from '@pagespace/lib/env-bridge/owner-approval';
+import { verifyOwnerApproval, type PinnedOwnerApproval } from '@pagespace/lib/env-bridge/owner-approval';
 
 const OWNER = 'user_owner';
 const ENV = 'env_1';
@@ -91,14 +91,6 @@ function authenticatorSigns(challenge: string) {
     signature: b64url(nodeSign('sha256', signed, createPrivateKey(ownerPem))),
   };
 }
-
-const es256Verify = (message: Uint8Array, signature: Uint8Array, key: EcJwkPublic): boolean => {
-  try {
-    return nodeVerify('sha256', message, createPublicKey({ key: { ...key }, format: 'jwk' }), signature);
-  } catch {
-    return false;
-  }
-};
 
 // ---- a real server signing keyring ------------------------------------------
 
@@ -191,7 +183,8 @@ function daemonVerifies(frame: Frame) {
     // The scope from the RECEIVED intent: relaying a narrower proof as a wider scope must fail here.
     scope: intent.scope,
     sha256: envBridgeSha256,
-    verifyEs256: es256Verify,
+    // The REAL adapter the daemon injects — every algorithm a passkey can be registered with.
+    verifyWebauthn: webauthnVerify,
   });
   return { stage: 'proof' as const, proof, intent };
 }

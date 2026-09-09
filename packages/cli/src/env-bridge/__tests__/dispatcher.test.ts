@@ -12,7 +12,7 @@ import { createDaemonNonceStore } from '../nonce-store.js';
 import { createApprovalsStore, type ApprovalsStore } from '../approvals-store.js';
 import { createChallengeStore, type ChallengeStore } from '../challenge-store.js';
 import { generateMachineKeypair, signWithMachineKey } from '../keypair.js';
-import { ed25519Verify, envBridgeHash, envBridgeSha256, es256Verify } from '../crypto.js';
+import { ed25519Verify, envBridgeHash, envBridgeSha256, webauthnVerify } from '../crypto.js';
 import { deriveOwnerApprovalChallenge, pendingRequestForWire, type ApprovalIntentScope, type OwnerApprovalRequest, type PinnedOwnerApproval } from '../lib-core.js';
 import type { AuditEntry } from '../audit-log.js';
 import type { ExecRunner } from '../exec-runner.js';
@@ -63,7 +63,7 @@ function makeOwnerCredential(credentialId: string) {
 const OWNER_CREDENTIAL = makeOwnerCredential('owner-key');
 const IMPOSTOR_CREDENTIAL = makeOwnerCredential('impostor-key');
 const PINNED_OWNER: PinnedOwnerApproval = { rpId: RP_ID, origin: ORIGIN, credentials: [{ credentialId: OWNER_CREDENTIAL.credentialId, publicKeyCose: OWNER_CREDENTIAL.publicKeyCose }] };
-const OWNER_APPROVAL_GATE = { pinned: PINNED_OWNER, sha256: envBridgeSha256, verifyEs256: es256Verify };
+const OWNER_APPROVAL_GATE = { pinned: PINNED_OWNER, sha256: envBridgeSha256, verifyWebauthn: webauthnVerify };
 
 interface AssertionOverrides {
   readonly type?: string;

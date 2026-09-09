@@ -12,13 +12,14 @@
 import { describe, expect, it } from 'vitest';
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign as nodeSign, verify as nodeVerify } from 'node:crypto';
 import {
-  coseEc2ToJwk,
+  coseToJwk,
+  SUPPORTED_COSE_ALGORITHMS,
   deriveOwnerApprovalChallenge,
   OWNER_APPROVAL_DENY_ORDER,
   ownerApprovalRequestHash,
   pendingRequestForWire,
   verifyOwnerApproval,
-  type EcJwkPublic,
+  type WebauthnPublicKey,
   type OwnerApprovalRequest,
   type ApprovalIntentScope,
   type PinnedOwnerApproval,
@@ -30,13 +31,55 @@ import type { NormalizedRequest } from '../decide-execution';
 const sha256: Sha256Bytes = (bytes) => new Uint8Array(createHash('sha256').update(bytes).digest());
 const b64url = (bytes: Uint8Array | Buffer): string => Buffer.from(bytes).toString('base64url');
 
-const es256Verify = (message: Uint8Array, signature: Uint8Array, publicKey: EcJwkPublic): boolean => {
+/** The adapter under test's contract, mirrored: every algorithm a passkey can be registered with. */
+const webauthnVerify = (message: Uint8Array, signature: Uint8Array, publicKey: WebauthnPublicKey): boolean => {
   try {
-    return nodeVerify('sha256', message, createPublicKey({ key: { ...publicKey }, format: 'jwk' }), signature);
+    if (publicKey.alg === 'EdDSA') return nodeVerify(null, message, createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: publicKey.x }, format: 'jwk' }), signature);
+    if (publicKey.alg === 'RS256') return nodeVerify('sha256', message, createPublicKey({ key: { kty: 'RSA', n: publicKey.n, e: publicKey.e }, format: 'jwk' }), signature);
+    return nodeVerify('sha256', message, createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: publicKey.x, y: publicKey.y }, format: 'jwk' }), signature);
   } catch {
     return false;
   }
 };
+
+/** A CBOR byte-string header for `length` bytes (definite length, 1- or 2-byte argument). */
+const bstrHeader = (label: number[], length: number): Buffer =>
+  length < 24
+    ? Buffer.from([...label, 0x40 + length])
+    : length < 256
+      ? Buffer.from([...label, 0x58, length])
+      : Buffer.from([...label, 0x59, length >> 8, length & 0xff]);
+
+/** A real Ed25519 credential: COSE_Key {1:1, 3:-8, -1:6, -2:x}. */
+function makeEddsaCredential() {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const x = Buffer.from((publicKey.export({ format: 'jwk' }) as { x: string }).x, 'base64url');
+  const cose = Buffer.concat([
+    Buffer.from([0xa4, 0x01, 0x01, 0x03, 0x38, 0x07, 0x20, 0x06]),
+    bstrHeader([0x21], x.length),
+    x,
+  ]);
+  const pem = privateKey.export({ format: 'pem', type: 'pkcs8' }) as string;
+  return { credentialId: b64url(Buffer.from('eddsa-key')), publicKeyCose: b64url(cose), sign: (m: Uint8Array) => new Uint8Array(nodeSign(null, m, createPrivateKey(pem))) };
+}
+
+/** A real RSA credential: COSE_Key {1:3, 3:-257, -1:n, -2:e}. */
+function makeRsaCredential() {
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const jwk = publicKey.export({ format: 'jwk' }) as { n: string; e: string };
+  const n = Buffer.from(jwk.n, 'base64url');
+  const e = Buffer.from(jwk.e, 'base64url');
+  const cose = Buffer.concat([
+    // map(4): kty 3, alg -257 (0x39 0x01 0x00), then n and e.
+    Buffer.from([0xa4, 0x01, 0x03, 0x03, 0x39, 0x01, 0x00]),
+    bstrHeader([0x20], n.length),
+    n,
+    bstrHeader([0x21], e.length),
+    e,
+  ]);
+  const pem = privateKey.export({ format: 'pem', type: 'pkcs8' }) as string;
+  return { credentialId: b64url(Buffer.from('rsa-key')), publicKeyCose: b64url(cose), sign: (m: Uint8Array) => new Uint8Array(nodeSign('sha256', m, createPrivateKey(pem))) };
+}
 
 const REQUEST: OwnerApprovalRequest = {
   op: 'exec',
@@ -122,7 +165,7 @@ function makeAssertion(overrides: AssertionOverrides = {}) {
 }
 
 const verify = (assertion: unknown, pinned: PinnedOwnerApproval = PINNED, request: OwnerApprovalRequest = REQUEST, challengeId = CHALLENGE_ID, envId = ENV_ID, scope: ApprovalIntentScope = SCOPE) =>
-  verifyOwnerApproval({ assertion, pinned, envId, challengeId, request, scope, sha256, verifyEs256: es256Verify });
+  verifyOwnerApproval({ assertion, pinned, envId, challengeId, request, scope, sha256, verifyWebauthn: webauthnVerify });
 
 // ---------------------------------------------------------------------------
 
@@ -312,8 +355,8 @@ describe('B4 — the daemon verifies the assertion itself', () => {
     const explode = () => {
       throw new Error('boom');
     };
-    expect(verifyOwnerApproval({ assertion: makeAssertion(), pinned: PINNED, envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, scope: SCOPE, sha256, verifyEs256: explode })).toEqual({ ok: false, reason: 'bad_signature' });
-    expect(verifyOwnerApproval({ assertion: makeAssertion(), pinned: PINNED, envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, scope: SCOPE, sha256: explode as unknown as Sha256Bytes, verifyEs256: es256Verify })).toEqual({ ok: false, reason: 'malformed' });
+    expect(verifyOwnerApproval({ assertion: makeAssertion(), pinned: PINNED, envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, scope: SCOPE, sha256, verifyWebauthn: explode })).toEqual({ ok: false, reason: 'bad_signature' });
+    expect(verifyOwnerApproval({ assertion: makeAssertion(), pinned: PINNED, envId: ENV_ID, challengeId: CHALLENGE_ID, request: REQUEST, scope: SCOPE, sha256: explode as unknown as Sha256Bytes, verifyWebauthn: webauthnVerify })).toEqual({ ok: false, reason: 'malformed' });
   });
 
   it('the deny order is fixed: the earlier check wins when two are wrong at once', () => {
@@ -334,14 +377,79 @@ describe('B4 — the daemon verifies the assertion itself', () => {
   });
 });
 
-describe('COSE EC2 → JWK (the primitive nothing in the CLI had)', () => {
+describe('every algorithm a passkey can be REGISTERED with is verifiable (Codex P2 on #2599)', () => {
+  it('accepts exactly the algorithms SimpleWebAuthn registers by default — a credential the browser will use and the machine always rejects is the worst outcome', () => {
+    // `defaultSupportedAlgorithmIDs` in @simplewebauthn/server, which neither registration flow overrides.
+    expect([...SUPPORTED_COSE_ALGORITHMS].sort((a, b) => a - b)).toEqual([-257, -8, -7]);
+  });
+
+  it.each<[string, () => { credentialId: string; publicKeyCose: string; sign: (m: Uint8Array) => Uint8Array }, WebauthnPublicKey['alg']]>([
+    ['ES256 (EC2 / P-256)', makeCredential, 'ES256'],
+    ['EdDSA (OKP / Ed25519)', makeEddsaCredential, 'EdDSA'],
+    ['RS256 (RSA)', makeRsaCredential, 'RS256'],
+  ])('verifies a real %s assertion end to end', (_label, make, alg) => {
+    const credential = make();
+    expect(coseToJwk(Buffer.from(credential.publicKeyCose, 'base64url'))?.alg).toBe(alg);
+    const pinned: PinnedOwnerApproval = { rpId: RP_ID, origin: ORIGIN, credentials: [{ credentialId: credential.credentialId, publicKeyCose: credential.publicKeyCose }] };
+    expect(verify(makeAssertion({ credentialId: credential.credentialId, signWith: credential.sign }), pinned)).toEqual({ ok: true, credentialId: credential.credentialId });
+    // …and a signature from a DIFFERENT key of the same algorithm, under the same pinned id, still fails.
+    const impostor = make();
+    expect(verify(makeAssertion({ credentialId: credential.credentialId, signWith: impostor.sign }), pinned)).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+
+  it('refuses a kty/alg pair that does not match, rather than coercing it', () => {
+    const eddsa = Buffer.from(makeEddsaCredential().publicKeyCose, 'base64url');
+    // kty OKP(1) → EC2(2), leaving alg -8: no branch accepts it.
+    const mismatched = Buffer.from(eddsa);
+    mismatched[2] = 0x02;
+    expect(coseToJwk(mismatched)).toBeNull();
+  });
+
+  /**
+   * Each row below keeps the key structurally valid for its `kty` and breaks
+   * ONE thing, so exactly one guard refuses it — otherwise the parser would
+   * hand back a key of the wrong algorithm and the signature check would be
+   * asked the wrong question.
+   */
+  it('an OKP key claiming a NON-EdDSA algorithm is refused (the alg half of the branch)', () => {
+    const okp = Buffer.from(makeEddsaCredential().publicKeyCose, 'base64url');
+    // alg -8 (0x38 0x07) → -257 (0x39 0x01 0x00): same length is impossible, so rebuild the head.
+    const swapped = Buffer.concat([Buffer.from([0xa4, 0x01, 0x01, 0x03, 0x38, 0x06, 0x20, 0x06]), okp.subarray(8)]);
+    // alg -7 (0x38 0x06) on an OKP key: registrable nowhere, and refused here.
+    expect(coseToJwk(swapped)).toBeNull();
+  });
+
+  it('an RSA key claiming a NON-RS256 algorithm is refused (the alg half of the branch)', () => {
+    const rsa = Buffer.from(makeRsaCredential().publicKeyCose, 'base64url');
+    // alg -257 (0x39 0x01 0x00) → -7 (0x38 0x06): one byte shorter, so rebuild the head.
+    const swapped = Buffer.concat([Buffer.from([0xa4, 0x01, 0x03, 0x03, 0x38, 0x06]), rsa.subarray(7)]);
+    expect(coseToJwk(swapped)).toBeNull();
+  });
+
+  it('an Ed25519 key whose x is not 32 bytes is refused (the length guard)', () => {
+    const x = Buffer.alloc(31, 9);
+    const cose = Buffer.concat([Buffer.from([0xa4, 0x01, 0x01, 0x03, 0x38, 0x07, 0x20, 0x06]), bstrHeader([0x21], x.length), x]);
+    expect(coseToJwk(cose)).toBeNull();
+  });
+
+  it('refuses an RSA key whose modulus is too short to be a real credential', () => {
+    const n = Buffer.alloc(128, 1);
+    const e = Buffer.from([0x01, 0x00, 0x01]);
+    const cose = Buffer.concat([Buffer.from([0xa4, 0x01, 0x03, 0x03, 0x39, 0x01, 0x00]), bstrHeader([0x20], n.length), n, bstrHeader([0x21], e.length), e]);
+    expect(coseToJwk(cose)).toBeNull();
+  });
+});
+
+describe('COSE → JWK (the primitive nothing in the CLI had)', () => {
   it('parses a real ES256 credential public key', () => {
-    const jwk = coseEc2ToJwk(Buffer.from(CREDENTIAL.publicKeyCose, 'base64url'));
-    expect(jwk).not.toBeNull();
-    expect(jwk!.kty).toBe('EC');
-    expect(jwk!.crv).toBe('P-256');
-    expect(Buffer.from(jwk!.x, 'base64url')).toHaveLength(32);
-    expect(Buffer.from(jwk!.y, 'base64url')).toHaveLength(32);
+    const jwk = coseToJwk(Buffer.from(CREDENTIAL.publicKeyCose, 'base64url'));
+    expect(jwk?.alg).toBe('ES256');
+    // Narrowed on `alg`, which is the tag the verifier dispatches on too.
+    if (jwk?.alg !== 'ES256') throw new Error('expected an ES256 key');
+    expect(jwk.kty).toBe('EC');
+    expect(jwk.crv).toBe('P-256');
+    expect(Buffer.from(jwk.x, 'base64url')).toHaveLength(32);
+    expect(Buffer.from(jwk.y, 'base64url')).toHaveLength(32);
   });
 
   it.each<[string, number[]]>([
@@ -352,7 +460,7 @@ describe('COSE EC2 → JWK (the primitive nothing in the CLI had)', () => {
     ['trailing bytes after the map', [0xa1, 0x01, 0x02, 0x00]],
     ['a text-string key', [0xa1, 0x61, 0x61, 0x02]],
   ])('refuses hostile COSE bytes (%s) with null, never a throw', (_label, bytes) => {
-    expect(coseEc2ToJwk(new Uint8Array(bytes))).toBeNull();
+    expect(coseToJwk(new Uint8Array(bytes))).toBeNull();
   });
 
   it('refuses a key that is not EC2/ES256/P-256', () => {
@@ -363,11 +471,11 @@ describe('COSE EC2 → JWK (the primitive nothing in the CLI had)', () => {
     };
     const cose = Buffer.from(CREDENTIAL.publicKeyCose, 'base64url');
     // kty 2 → 1 (OKP)
-    expect(coseEc2ToJwk(swap(cose, 2, 0x01))).toBeNull();
+    expect(coseToJwk(swap(cose, 2, 0x01))).toBeNull();
     // alg -7 (0x26) → -8 (0x27)
-    expect(coseEc2ToJwk(swap(cose, 4, 0x27))).toBeNull();
+    expect(coseToJwk(swap(cose, 4, 0x27))).toBeNull();
     // crv 1 → 2 (P-384)
-    expect(coseEc2ToJwk(swap(cose, 6, 0x02))).toBeNull();
+    expect(coseToJwk(swap(cose, 6, 0x02))).toBeNull();
   });
 
   /**
@@ -384,16 +492,16 @@ describe('COSE EC2 → JWK (the primitive nothing in the CLI had)', () => {
 
     it('a CBOR ARRAY carrying the same five entries is refused (only the major-type guard sees it)', () => {
       // 0x85 = array(5): ten values follow, exactly as five label/value pairs would.
-      expect(coseEc2ToJwk(Buffer.concat([Buffer.from([0x85]), body]))).toBeNull();
+      expect(coseToJwk(Buffer.concat([Buffer.from([0x85]), body]))).toBeNull();
     });
 
     it('a trailing byte after a complete key is refused (only the trailing guard sees it)', () => {
-      expect(coseEc2ToJwk(Buffer.concat([Buffer.from([0xa5]), body, Buffer.from([0x00])]))).toBeNull();
+      expect(coseToJwk(Buffer.concat([Buffer.from([0xa5]), body, Buffer.from([0x00])]))).toBeNull();
     });
 
     it('a byte-string LABEL beside the five real entries is refused (only the label-type guard sees it)', () => {
       // map(6): one bstr-labelled entry the switch would ignore, then the real five.
-      expect(coseEc2ToJwk(Buffer.concat([Buffer.from([0xa6, 0x41, 0x09, 0x01]), body]))).toBeNull();
+      expect(coseToJwk(Buffer.concat([Buffer.from([0xa6, 0x41, 0x09, 0x01]), body]))).toBeNull();
     });
 
     it('a 31-byte x coordinate is refused (only the coordinate-length guard sees it)', () => {
@@ -402,7 +510,7 @@ describe('COSE EC2 → JWK (the primitive nothing in the CLI had)', () => {
         x.subarray(0, 31),
         body.subarray(41),
       ]);
-      expect(coseEc2ToJwk(short)).toBeNull();
+      expect(coseToJwk(short)).toBeNull();
     });
   });
 });

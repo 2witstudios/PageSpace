@@ -41,7 +41,7 @@ import { decideExecution as libDecideExecution, type DecideExecutionInput, type 
 import type { AdvertisedCapabilities, MachinePolicy, ServerPolicy } from './lib-core.js';
 import type { PathProbe } from './lib-core.js';
 import { verifyPause, verifyRevoke } from './lib-core.js';
-import { pendingRequestForWire, verifyOwnerApproval, type Es256Verify, type PinnedOwnerApproval, type Sha256Bytes } from './lib-core.js';
+import { pendingRequestForWire, verifyOwnerApproval, type PinnedOwnerApproval, type Sha256Bytes, type VerifyWebauthnSignature } from './lib-core.js';
 import { execOutputCeiling, fsReadContentCeiling, type Frame, type FrameLimits, type PendingApproval } from './lib-core.js';
 import type { SignWithMachineKey } from './keypair.js';
 import { grantPredatesDaemon, PREDATES_DAEMON_REASON, type DaemonNonceStore } from './nonce-store.js';
@@ -69,7 +69,7 @@ export interface OwnerApprovalGate {
   /** Credentials, rpId and origin as pinned at enrolment; never updated afterwards. */
   readonly pinned: PinnedOwnerApproval;
   readonly sha256: Sha256Bytes;
-  readonly verifyEs256: Es256Verify;
+  readonly verifyWebauthn: VerifyWebauthnSignature;
 }
 
 export interface DecisionGates {
@@ -186,7 +186,7 @@ const EMPTY_PINNED_OWNER_APPROVAL: PinnedOwnerApproval = { rpId: '', origin: '',
 const UNAVAILABLE_SHA256: Sha256Bytes = () => {
   throw new Error('no owner-approval gate: this machine cannot verify that a human clicked');
 };
-const UNAVAILABLE_ES256: Es256Verify = () => false;
+const UNAVAILABLE_WEBAUTHN_VERIFY: VerifyWebauthnSignature = () => false;
 
 export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const gates: DecisionGates = deps.gates ?? { verifyGrant: libVerifyGrant, decideExecution: libDecideExecution };
@@ -318,7 +318,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         // different challenge and is refused (Codex P1 on #2599).
         scope: intent.scope,
         sha256: deps.ownerApproval?.sha256 ?? UNAVAILABLE_SHA256,
-        verifyEs256: deps.ownerApproval?.verifyEs256 ?? UNAVAILABLE_ES256,
+        verifyWebauthn: deps.ownerApproval?.verifyWebauthn ?? UNAVAILABLE_WEBAUTHN_VERIFY,
       });
       if (!proof.ok) return denied(grant.grantId, 'approval_unproven', { grant, op: grant.op, verdict: `deny:approval_unproven:${proof.reason}:${intent.challengeId}` });
 

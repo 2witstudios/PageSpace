@@ -32,10 +32,12 @@
  * the machine SIGNED into the `grant_denied`, the daemon from the request it
  * actually froze — and it is the daemon's derivation that decides.
  *
- * THE VERIFIER (leaf B4). ES256 assertions are P-256 with ASN.1 DER
- * signatures, which `node:crypto` verifies natively, so nothing new is
- * depended on: COSE EC2 → JWK here (pure, total), `createPublicKey` and
- * `verify` in the adapters. Checks run in a FIXED order
+ * THE VERIFIER (leaf B4). Every algorithm the app can register is accepted —
+ * ES256, EdDSA and RS256, which is exactly SimpleWebAuthn's default
+ * `supportedAlgorithmIDs` — because a credential the browser will happily use
+ * and the machine will always reject is the worst possible outcome. All three
+ * are native to `node:crypto`, so nothing new is depended on: COSE → JWK here
+ * (pure, total), `createPublicKey` and `verify` in the adapters. Checks run in a FIXED order
  * (`OWNER_APPROVAL_DENY_ORDER`) exactly like `challenge.ts` and `grant.ts`,
  * and every one of them is total: a malformed COSE key, a truncated
  * assertion, hostile bytes, or an injected primitive that throws is a
@@ -52,18 +54,35 @@ import type { NormalizedRequest } from './decide-execution';
 /** SHA-256 as BYTES (not the hex `HashBytes` the grant/result hashes use): a WebAuthn challenge is compared as base64url of the digest. Injected. */
 export type Sha256Bytes = (bytes: Uint8Array) => Uint8Array;
 
-/** A P-256 public key in the JWK shape `crypto.createPublicKey({ format: 'jwk' })` accepts. */
-export interface EcJwkPublic {
-  readonly kty: 'EC';
-  readonly crv: 'P-256';
-  /** base64url, 32 bytes. */
-  readonly x: string;
-  /** base64url, 32 bytes. */
-  readonly y: string;
-}
+/**
+ * A registered passkey's public key, in the JWK shape
+ * `crypto.createPublicKey({ format: 'jwk' })` accepts, tagged with the COSE
+ * algorithm the signature must be verified under.
+ *
+ * ALL THREE, because all three are registrable. Both registration flows leave
+ * SimpleWebAuthn's default `supportedAlgorithmIDs` — `[-8, -7, -257]` — so an
+ * account can already hold an EdDSA or RSA passkey. A verifier that accepted
+ * only ES256 would give those owners a ceremony that SUCCEEDS and a machine
+ * that always refuses, with the pending question consumed: the worst possible
+ * shape (Codex P2 on #2599). `node:crypto` verifies all three natively, so
+ * this still costs no dependency.
+ */
+export type WebauthnPublicKey =
+  | { readonly alg: 'ES256'; readonly kty: 'EC'; readonly crv: 'P-256'; readonly x: string; readonly y: string }
+  | { readonly alg: 'EdDSA'; readonly kty: 'OKP'; readonly crv: 'Ed25519'; readonly x: string }
+  | { readonly alg: 'RS256'; readonly kty: 'RSA'; readonly n: string; readonly e: string };
 
-/** ECDSA-P256-SHA256 verification over an ASN.1 DER signature, injected so this module stays free of `node:crypto`. Must never throw; a throwing one is treated as a refusal anyway. */
-export type Es256Verify = (message: Uint8Array, signature: Uint8Array, publicKey: EcJwkPublic) => boolean;
+/** The COSE algorithms this verifier accepts. MUST stay equal to what registration offers — a test pins that against SimpleWebAuthn's own default. */
+export const SUPPORTED_COSE_ALGORITHMS: readonly number[] = [-8, -7, -257];
+
+/**
+ * Signature verification for any of the three, injected so this module stays
+ * free of `node:crypto`. ES256 is ECDSA/SHA-256 over an ASN.1 DER signature,
+ * EdDSA is Ed25519 over the raw message, RS256 is RSASSA-PKCS1-v1_5/SHA-256 —
+ * which is exactly what `crypto.verify` does by default for each key type.
+ * Must never throw; a throwing one is treated as a refusal anyway.
+ */
+export type VerifyWebauthnSignature = (message: Uint8Array, signature: Uint8Array, publicKey: WebauthnPublicKey) => boolean;
 
 /** The frozen request as the wire carries it — the same object the card renders and the machine signed into `grant_denied`. */
 export type OwnerApprovalRequest = PendingApproval['request'];
@@ -217,7 +236,7 @@ export interface VerifyOwnerApprovalInput {
    */
   readonly scope: ApprovalIntentScope;
   readonly sha256: Sha256Bytes;
-  readonly verifyEs256: Es256Verify;
+  readonly verifyWebauthn: VerifyWebauthnSignature;
 }
 
 /** WebAuthn authenticator data: 32-byte rpIdHash, 1 flags byte, 4-byte counter. */
@@ -302,8 +321,8 @@ export function verifyOwnerApproval(input: VerifyOwnerApprovalInput): OwnerAppro
   const credential = input.pinned.credentials.find((entry) => constantTimeEqual(entry.credentialId, parsed.data.credentialId));
   if (credential === undefined) return deny('unknown_credential');
   const coseBytes = decodeBase64Url(credential.publicKeyCose);
-  const jwk = coseBytes === null ? null : coseEc2ToJwk(coseBytes);
-  if (jwk === null) return deny('bad_credential');
+  const key = coseBytes === null ? null : coseToJwk(coseBytes);
+  if (key === null) return deny('bad_credential');
 
   // What WebAuthn defines as signed: authenticatorData || SHA256(clientDataJSON).
   const signedBytes = new Uint8Array(authenticatorData.length + clientDataHash.length);
@@ -311,7 +330,7 @@ export function verifyOwnerApproval(input: VerifyOwnerApprovalInput): OwnerAppro
   signedBytes.set(clientDataHash, authenticatorData.length);
   let valid = false;
   try {
-    valid = input.verifyEs256(signedBytes, signature, jwk);
+    valid = input.verifyWebauthn(signedBytes, signature, key);
   } catch {
     valid = false;
   }
@@ -332,7 +351,7 @@ export function verifyOwnerApproval(input: VerifyOwnerApprovalInput): OwnerAppro
  * MUTATION NOTE. Every guard below is mutation-checked except two, and they
  * are named here rather than claimed: the indefinite/8-byte length refusal in
  * `readHead` and the byte-string bounds check in `readValue` are provably
- * SUBSUMED by the trailing-byte check at the end of `coseEc2ToJwk` — an
+ * SUBSUMED by the trailing-byte check at the end of `coseToJwk` — an
  * indefinite header decodes as a zero-entry map and a clamped byte string
  * leaves the cursor past the end, so both land on `cursor.offset !==
  * cose.length` and no input exists that only they refuse. They stay as
@@ -340,13 +359,22 @@ export function verifyOwnerApproval(input: VerifyOwnerApprovalInput): OwnerAppro
  */
 const COSE_LABEL_KTY = 1;
 const COSE_LABEL_ALG = 3;
-const COSE_LABEL_CRV = -1;
-const COSE_LABEL_X = -2;
-const COSE_LABEL_Y = -3;
+/** -1 is `crv` for EC2/OKP and `n` for RSA; -2 is `x` for EC2/OKP and `e` for RSA. Interpreted by `kty`, never positionally. */
+const COSE_LABEL_MINUS_1 = -1;
+const COSE_LABEL_MINUS_2 = -2;
+const COSE_LABEL_MINUS_3 = -3;
+const COSE_KTY_OKP = 1;
 const COSE_KTY_EC2 = 2;
+const COSE_KTY_RSA = 3;
 const COSE_ALG_ES256 = -7;
+const COSE_ALG_EDDSA = -8;
+const COSE_ALG_RS256 = -257;
 const COSE_CRV_P256 = 1;
+const COSE_CRV_ED25519 = 6;
 const P256_COORDINATE_BYTES = 32;
+const ED25519_KEY_BYTES = 32;
+/** RSA moduli below 2048 bits are not registrable in practice and are refused rather than verified. */
+const RSA_MIN_MODULUS_BYTES = 256;
 
 interface CborCursor {
   readonly bytes: Uint8Array;
@@ -386,53 +414,71 @@ function readValue(cursor: CborCursor): CborValue | null {
   return null;
 }
 
-/** A COSE EC2 ES256 P-256 public key → the JWK `createPublicKey` takes; `null` for anything else, hostile bytes included. */
-export function coseEc2ToJwk(cose: Uint8Array): EcJwkPublic | null {
+/**
+ * A COSE_Key for any algorithm this app can register → the JWK
+ * `createPublicKey` takes; `null` for anything else, hostile bytes included.
+ */
+export function coseToJwk(cose: Uint8Array): WebauthnPublicKey | null {
   const cursor: CborCursor = { bytes: cose, offset: 0 };
   const head = readHead(cursor);
   if (head === null || head.major !== 5) return null;
 
   let kty: number | null = null;
   let alg: number | null = null;
-  let crv: number | null = null;
-  let x: Uint8Array | null = null;
-  let y: Uint8Array | null = null;
+  const values = new Map<number, CborValue>();
 
   for (let entry = 0; entry < head.arg; entry += 1) {
     const label = readValue(cursor);
     if (label === null || label.kind !== 'int') return null;
     const value = readValue(cursor);
     if (value === null) return null;
-    switch (label.value) {
-      case COSE_LABEL_KTY:
-        if (value.kind !== 'int') return null;
-        kty = value.value;
-        break;
-      case COSE_LABEL_ALG:
-        if (value.kind !== 'int') return null;
-        alg = value.value;
-        break;
-      case COSE_LABEL_CRV:
-        if (value.kind !== 'int') return null;
-        crv = value.value;
-        break;
-      case COSE_LABEL_X:
-        if (value.kind !== 'bytes') return null;
-        x = value.value;
-        break;
-      case COSE_LABEL_Y:
-        if (value.kind !== 'bytes') return null;
-        y = value.value;
-        break;
-      default:
-        // An unrecognised label is skipped, not fatal — the algorithm and
-        // curve are asserted below, so an extra field cannot widen anything.
-        break;
+    if (label.value === COSE_LABEL_KTY) {
+      if (value.kind !== 'int') return null;
+      kty = value.value;
+    } else if (label.value === COSE_LABEL_ALG) {
+      if (value.kind !== 'int') return null;
+      alg = value.value;
+    } else {
+      // Unrecognised labels are kept but never consulted below; the algorithm
+      // and curve are asserted, so an extra field cannot widen anything.
+      values.set(label.value, value);
     }
   }
   // Trailing bytes mean this was not a bare COSE key; refuse rather than guess.
   if (cursor.offset !== cose.length) return null;
-  if (kty !== COSE_KTY_EC2 || alg !== COSE_ALG_ES256 || crv !== COSE_CRV_P256) return null;
-  if (x === null || y === null || x.length !== P256_COORDINATE_BYTES || y.length !== P256_COORDINATE_BYTES) return null;
-  return { kty: 'EC', crv: 'P-256', x: encodeBase64Url(x), y: encodeBase64Url(y) };
+  if (alg === null || !SUPPORTED_COSE_ALGORITHMS.includes(alg)) return null;
+
+  const bytesAt = (label: number): Uint8Array | null => {
+    const value = values.get(label);
+    return value !== undefined && value.kind === 'bytes' ? value.value : null;
+  };
+  const intAt = (label: number): number | null => {
+    const value = values.get(label);
+    return value !== undefined && value.kind === 'int' ? value.value : null;
+  };
+
+  if (kty === COSE_KTY_EC2 && alg === COSE_ALG_ES256) {
+    const x = bytesAt(COSE_LABEL_MINUS_2);
+    const y = bytesAt(COSE_LABEL_MINUS_3);
+    if (intAt(COSE_LABEL_MINUS_1) !== COSE_CRV_P256) return null;
+    if (x === null || y === null || x.length !== P256_COORDINATE_BYTES || y.length !== P256_COORDINATE_BYTES) return null;
+    return { alg: 'ES256', kty: 'EC', crv: 'P-256', x: encodeBase64Url(x), y: encodeBase64Url(y) };
+  }
+
+  if (kty === COSE_KTY_OKP && alg === COSE_ALG_EDDSA) {
+    const x = bytesAt(COSE_LABEL_MINUS_2);
+    if (intAt(COSE_LABEL_MINUS_1) !== COSE_CRV_ED25519) return null;
+    if (x === null || x.length !== ED25519_KEY_BYTES) return null;
+    return { alg: 'EdDSA', kty: 'OKP', crv: 'Ed25519', x: encodeBase64Url(x) };
+  }
+
+  if (kty === COSE_KTY_RSA && alg === COSE_ALG_RS256) {
+    const n = bytesAt(COSE_LABEL_MINUS_1);
+    const e = bytesAt(COSE_LABEL_MINUS_2);
+    if (n === null || e === null || n.length < RSA_MIN_MODULUS_BYTES || e.length === 0) return null;
+    return { alg: 'RS256', kty: 'RSA', n: encodeBase64Url(n), e: encodeBase64Url(e) };
+  }
+
+  // A kty/alg pair that does not match is refused, never coerced.
+  return null;
 }

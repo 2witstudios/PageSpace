@@ -32,8 +32,8 @@ export type { PolicyWarning, PolicyWarningInput, PolicyWarningOptions } from '@p
 export type { AdvertisedCapabilities, MachinePolicy, ServerPolicy } from '@pagespace/lib/env-bridge/policy-types';
 export type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
 export { encodeApprovalRevokeForSigning, encodeHelloForSigning, encodeResultForSigning, machineResultBindingId, OWNER_APPROVAL_SIGNING_DOMAIN, resultHashForFrame, verifyPause, verifyRevoke } from '@pagespace/lib/env-bridge/machine-signatures';
-export { deriveOwnerApprovalChallenge, ownerApprovalRequestHash, pendingRequestForWire, verifyOwnerApproval } from '@pagespace/lib/env-bridge/owner-approval';
-export type { ApprovalIntentScope, EcJwkPublic, Es256Verify, OwnerApprovalDenyReason, OwnerApprovalRequest, OwnerApprovalVerdict, PinnedOwnerApproval, PinnedOwnerCredential, Sha256Bytes } from '@pagespace/lib/env-bridge/owner-approval';
+export { coseToJwk, deriveOwnerApprovalChallenge, ownerApprovalRequestHash, pendingRequestForWire, SUPPORTED_COSE_ALGORITHMS, verifyOwnerApproval } from '@pagespace/lib/env-bridge/owner-approval';
+export type { ApprovalIntentScope, OwnerApprovalDenyReason, OwnerApprovalRequest, OwnerApprovalVerdict, PinnedOwnerApproval, PinnedOwnerCredential, Sha256Bytes, VerifyWebauthnSignature, WebauthnPublicKey } from '@pagespace/lib/env-bridge/owner-approval';
 export type { MachineResultFrame, MachineResultFrameType } from '@pagespace/lib/env-bridge/machine-signatures';
 export { decodeFrame, encodeFrame, execOutputCeiling, fsReadContentCeiling } from '@pagespace/lib/env-bridge/frame-codec';
 export type { Frame, FrameLimits, PendingApproval } from '@pagespace/lib/env-bridge/frame-codec';
