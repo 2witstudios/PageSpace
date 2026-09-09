@@ -73,7 +73,8 @@ Each guarantee is followed by its exact limit.
   command once it is running.*
 
 - **Only you can drive your machine.** Only the person who enrolled it can start a session on
-  it, approve a command, or change what it may do. Drive admins can delete the environment and
+  it, approve a command, or change what it may do (today that change is an API call; the
+  settings page is in progress). Drive admins can delete the environment and
   revoke the machine; they can never bind to it. This is built into the data model, not a
   setting. *Limit: this controls who may ask. It does not control what your own agent read
   before it asked — see prompt injection below.*
@@ -120,8 +121,8 @@ line, every program it names — for the time you choose: once, until the daemon
 chat tomorrow with no prompt, and does not let \`rm\` run. Approving a shell or an interpreter as
 a program approves everything that shell or interpreter can do. A command line whose programs
 cannot be pinned down (\`$(…)\`, \`eval\`, a nested \`sh -c\`, \`find -exec\`, \`sudo\`) is never
-remembered and asks every time. Approvals live on your machine; PageSpace can revoke one, from
-the environment's settings, and can never add one.
+remembered and asks every time. Approvals live on your machine; PageSpace can revoke one and can never add one (the revoke
+API exists today; the settings page that lists approvals is in progress).
 
 **Content other people wrote can steer your agent onto your machine.** On a shared drive, every
 page, comment and message is written by other people, and your agent reads them. Text aimed at
