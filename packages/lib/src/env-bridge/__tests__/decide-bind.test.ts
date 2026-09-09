@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import { DRIVE_ENV_BIND_POLICIES } from '@pagespace/db/schema/drive-env-local';
 import { decideBind, BIND_DENY_ORDER, type DecideBindInput } from '../decide-bind';
 
 const base: DecideBindInput = {
   canRunCode: { ok: true },
-  bindPolicy: 'members',
-  actorRole: 'member',
-  actorId: 'user_member',
+  bindPolicy: 'owner',
+  actorId: 'user_owner',
   env: { ownerId: 'user_owner', substrate: 'local', revokedAt: null },
   serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false },
   connected: true,
@@ -13,7 +13,7 @@ const base: DecideBindInput = {
 };
 
 describe('decideBind — may this actor bind a session to this local env? (invariant 11; necessary, never sufficient — the daemon still decides)', () => {
-  it('given everything in order under bindPolicy members, should allow', () => {
+  it('given the env OWNER with everything in order, should allow', () => {
     expect(decideBind(base)).toEqual({ ok: true });
   });
 
@@ -38,26 +38,31 @@ describe('decideBind — may this actor bind a session to this local env? (invar
     expect(decideBind({ ...base, connected: false })).toEqual({ ok: false, reason: 'not_connected' });
   });
 
-  describe('bindPolicy', () => {
-    it("owner: the env OWNER may bind; a drive admin who is not the env owner may not", () => {
-      expect(decideBind({ ...base, bindPolicy: 'owner', actorId: 'user_owner', actorRole: 'member' })).toEqual({ ok: true });
-      expect(decideBind({ ...base, bindPolicy: 'owner', actorId: 'user_admin', actorRole: 'admin' })).toEqual({ ok: false, reason: 'bind_policy' });
-      expect(decideBind({ ...base, bindPolicy: 'owner', actorId: 'user_driveowner', actorRole: 'owner' })).toEqual({ ok: false, reason: 'bind_policy' });
+  describe('bindPolicy — a machine is driven by its OWNER only ([D-6], invariant 13): structural, not configurable', () => {
+    it('owner: the env OWNER may bind; anyone else may not — there is no role that changes this', () => {
+      expect(decideBind({ ...base, bindPolicy: 'owner', actorId: 'user_owner' })).toEqual({ ok: true });
+      expect(decideBind({ ...base, bindPolicy: 'owner', actorId: 'user_admin' })).toEqual({ ok: false, reason: 'bind_policy' });
+      expect(decideBind({ ...base, bindPolicy: 'owner', actorId: 'user_driveowner' })).toEqual({ ok: false, reason: 'bind_policy' });
     });
 
-    it('admins: a drive admin or drive owner may bind; a member may not; the env owner always may', () => {
-      expect(decideBind({ ...base, bindPolicy: 'admins', actorRole: 'admin', actorId: 'user_admin' })).toEqual({ ok: true });
-      expect(decideBind({ ...base, bindPolicy: 'admins', actorRole: 'owner', actorId: 'user_driveowner' })).toEqual({ ok: true });
-      expect(decideBind({ ...base, bindPolicy: 'admins', actorRole: 'member', actorId: 'user_member' })).toEqual({ ok: false, reason: 'bind_policy' });
-      expect(decideBind({ ...base, bindPolicy: 'admins', actorRole: 'member', actorId: 'user_owner' })).toEqual({ ok: true });
+    it('the input carries NO actor role: the decision cannot be widened by one', () => {
+      expect(Object.keys(base)).not.toContain('actorRole');
+      expect(decideBind({ ...base, actorId: 'user_admin', actorRole: 'admin' } as DecideBindInput)).toEqual({ ok: false, reason: 'bind_policy' });
     });
 
-    it('members: any actor who passed canRunCode may bind', () => {
-      expect(decideBind({ ...base, bindPolicy: 'members', actorRole: 'member' })).toEqual({ ok: true });
+    it.each(['admins', 'members'])("a row somehow still holding the REMOVED value %s (drift from before D-6) is denied for a non-owner — the default branch, never a grant", (removed) => {
+      expect(decideBind({ ...base, bindPolicy: removed as never, actorId: 'user_admin' })).toEqual({ ok: false, reason: 'bind_policy' });
+      expect(decideBind({ ...base, bindPolicy: removed as never, actorId: 'user_member' })).toEqual({ ok: false, reason: 'bind_policy' });
+      // The owner still passes on their own machine, whatever the column says.
+      expect(decideBind({ ...base, bindPolicy: removed as never, actorId: 'user_owner' })).toEqual({ ok: true });
     });
 
     it('an unknown bindPolicy value (a hostile or drifted row) should deny bind_policy, never allow', () => {
-      expect(decideBind({ ...base, bindPolicy: 'everyone' as never })).toEqual({ ok: false, reason: 'bind_policy' });
+      expect(decideBind({ ...base, bindPolicy: 'everyone' as never, actorId: 'user_member' })).toEqual({ ok: false, reason: 'bind_policy' });
+    });
+
+    it('DRIVE_ENV_BIND_POLICIES (the schema) and BindPolicy (the gate) agree: only owner', () => {
+      expect([...DRIVE_ENV_BIND_POLICIES]).toEqual(['owner']);
     });
   });
 
@@ -90,7 +95,7 @@ describe('decideBind — may this actor bind a session to this local env? (invar
       ['not_local', (i) => ({ ...i, env: { ...i.env, substrate: 'sprite' } })],
       ['revoked', (i) => ({ ...i, env: { ...i.env, revokedAt: 1 } })],
       ['not_connected', (i) => ({ ...i, connected: false })],
-      ['bind_policy', (i) => ({ ...i, bindPolicy: 'owner', actorId: 'user_stranger' })],
+      ['bind_policy', (i) => ({ ...i, actorId: 'user_stranger' })],
       ['no_server_ops', (i) => ({ ...i, serverPolicy: { ops: [], checkpoint: false } })],
     ];
     expect(breakers.map(([name]) => name)).toEqual([...BIND_DENY_ORDER]);

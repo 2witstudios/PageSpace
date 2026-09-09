@@ -44,8 +44,7 @@ import { LocalEnvNotConnectedError, type SandboxHost } from '../sandbox/sandbox-
 import type { SubscriptionTier } from '../subscription-utils';
 import type { DriveEnvRecord, DriveEnvStore } from './drive-envs-store';
 import { isLocalEnvsEnabled } from './local-envs-enabled';
-import { gateLocalEnv, noLiveConnections, resolveDriveActorRole, type LiveConnectionReader, type LocalEnvGateVerdict } from './local-env-gate';
-import type { ActorRole } from '../../env-bridge/decide-bind';
+import { gateLocalEnv, noLiveConnections, type LiveConnectionReader, type LocalEnvGateVerdict } from './local-env-gate';
 
 /**
  * The env's PAYER — the drive's OWNER — and their tier.
@@ -192,8 +191,6 @@ export interface EnsureDriveEnvSandboxDeps {
    * until the socket route (t07) exists, so status derives from the heartbeat.
    */
   liveConnection?: LiveConnectionReader;
-  /** LOCAL envs only. Test seam; production resolves the role with the centralized permission helper. */
-  resolveActorRole?: (input: { userId: string; driveId: string }) => Promise<ActorRole>;
   /** LOCAL envs only. `LOCAL_ENVS_ENABLED`; read from the environment when absent. */
   localEnvsEnabled?: boolean;
   /**
@@ -216,7 +213,7 @@ export interface EnsureDriveEnvSandboxDeps {
 /**
  * The server-side gate for a LOCAL env, fed the real inputs from the same deps
  * a provision uses: the payer (so `canRunCode` bills the right tenant), the
- * requester's drive role, the flag and the live-socket reading. Shared by the
+ * flag and the live-socket reading — never a drive role ([D-6]). Shared by the
  * provisioner below and by the session-spawn bind, so both ask ONE question.
  */
 export async function gateLocalEnvForRequester({
@@ -226,7 +223,7 @@ export async function gateLocalEnvForRequester({
 }: {
   row: Pick<DriveEnvRecord, 'id' | 'driveId' | 'substrate'>;
   requesterId: string;
-  deps: Pick<EnsureDriveEnvSandboxDeps, 'store' | 'resolvePayer' | 'liveConnection' | 'resolveActorRole' | 'localEnvsEnabled'>;
+  deps: Pick<EnsureDriveEnvSandboxDeps, 'store' | 'resolvePayer' | 'liveConnection' | 'localEnvsEnabled'>;
 }): Promise<LocalEnvGateVerdict> {
   const payer = await deps.resolvePayer(row.driveId);
   // A vanished drive has nobody to authorize against; the code-exec gate's own
@@ -240,7 +237,6 @@ export async function gateLocalEnvForRequester({
     deps: {
       store: deps.store,
       canRunCode: canRun,
-      resolveActorRole: () => (deps.resolveActorRole ?? resolveDriveActorRole)({ userId: requesterId, driveId: row.driveId }),
       liveConnection: deps.liveConnection ?? noLiveConnections,
       flagEnabled: deps.localEnvsEnabled ?? isLocalEnvsEnabled(),
       now: () => new Date(),
