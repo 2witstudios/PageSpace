@@ -117,3 +117,21 @@ export function classifyNavigation(
   if (protocol === 'http:' || protocol === 'https:') return 'open-external';
   return 'block';
 }
+
+/**
+ * PURE. Whether a `will-redirect` event is one the H5 guard should judge.
+ *
+ * `will-navigate` is main-frame only by Electron's definition, but
+ * `will-redirect` fires for EVERY frame and carries `isMainFrame`. The guard
+ * exists for the privileged main frame — the one holding the preload bridge
+ * (session token, MCP exec). Subframes never receive that bridge (no
+ * `nodeIntegrationInSubFrames`), and the one subframe this app renders — the
+ * dev-server preview — is sandboxed by the web app and MUST follow its own
+ * redirect: `/preview/open` on the app origin 302s to the preview host, and
+ * judging that as an off-origin navigation cancelled the frame and threw the
+ * URL into the system browser on every Refresh. An absent value is judged
+ * (fail closed): only an explicit `false` exempts.
+ */
+export function guardsRedirect(isMainFrame: boolean | undefined): boolean {
+  return isMainFrame !== false;
+}
