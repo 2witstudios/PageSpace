@@ -713,9 +713,10 @@ export interface DescribeServiceStateInput {
    */
   listenerSource?: ListenerSource;
   /**
-   * Whether the sprite's URL can exist in DNS (`isRoutableSpriteUrlString`).
-   * Defaults to true — "nothing to say" — because most readers hold no URL;
-   * only the status gather, which reads `urlInfo`, can answer false.
+   * Whether the sprite's URL can exist in DNS — its name plus the org suffix
+   * must fit one label (`SPRITE_NAME_MAX`). Defaults to true, "nothing to
+   * say"; the status gather answers from the name, the access gather from
+   * the URL itself.
    */
   urlRoutable?: boolean;
 }

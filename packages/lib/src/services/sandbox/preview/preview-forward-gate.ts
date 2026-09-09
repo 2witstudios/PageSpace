@@ -143,7 +143,9 @@ export function decidePreviewForward(input: PreviewForwardInput): PreviewForward
     case 'blocked':
       return { kind: 'refuse', reason: 'http-port-busy', status: 409, message: state.message };
     case 'down':
-      return { kind: 'refuse', reason: 'preview-down', status: 502, message: state.message };
+      // A URL DNS cannot answer is structural, not a relay that is down:
+      // named so a client never retries or wakes for it.
+      return { kind: 'refuse', reason: state.error === 'sprite-url-unresolvable' ? 'sprite-url-unresolvable' : 'preview-down', status: 502, message: state.message };
     case 'starting':
       return { kind: 'refuse', reason: 'preview-starting', status: 503, message: state.message };
     case 'live':

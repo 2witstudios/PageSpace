@@ -55,7 +55,7 @@ import type { DevPreviewStore } from './dev-preview-store';
 import { authorizePreviewHolder, type PreviewAccessDeps, type PreviewAuthorization } from './preview-access';
 import { buildPreviewOpenPath } from './preview-grant';
 import { PREVIEW_RELAY_SERVICE_NAME, SPRITE_HTTP_PORT } from './preview-relay';
-import { isRoutableSpriteUrlString } from './preview-proxy-policy';
+import { SPRITE_NAME_MAX } from '../sandbox-client/sprites';
 
 // -----------------------------------------------------------------------------
 // The read model
@@ -208,7 +208,7 @@ export interface BuildDevPreviewStatusInput {
    * say `'probe'` and let a missing target render as `down`.
    */
   listenerSource?: ListenerSource;
-  /** Whether the sprite's URL can exist in DNS — see `DescribeServiceStateInput.urlRoutable`. Defaults to true. */
+  /** See `DescribeServiceStateInput.urlRoutable`. */
   urlRoutable?: boolean;
   detection: DevPreviewDetection;
   openPath: string | null;
@@ -316,13 +316,13 @@ export async function gatherDevPreviewStatus({
   if (handle === null) {
     return { ok: true, status: buildDevPreviewStatus({ holder, sandbox: 'unreachable', liveInstanceId: null, row, relay: null, listeners: null, detection: read.detection, openPath }) };
   }
-  // `urlInfo` is a control-plane read (no wake). A holder with no URL
-  // surface at all (a local env) rejects it — that is "nothing to say", not
-  // "unroutable", so the answer stays `true`.
-  const [relay, urlRoutable] = await Promise.all([
-    handle.services.get(PREVIEW_RELAY_SERVICE_NAME),
-    handle.urlInfo().then((info) => isRoutableSpriteUrlString(info.url), () => true),
-  ]);
+  const relay = await handle.services.get(PREVIEW_RELAY_SERVICE_NAME);
+  // A sprite's URL label is its NAME plus the org suffix, so whether it can
+  // resolve is a fact about the name already in hand — no control-plane read
+  // per poll. A name over the budget is a legacy sprite (created under the
+  // API's own 63-char limit); a local env's id is short and never trips it.
+  // The proxy judges the real URL before forwarding (`preview-access`).
+  const urlRoutable = handle.sandboxId.length <= SPRITE_NAME_MAX;
   return {
     ok: true,
     status: buildDevPreviewStatus({ holder, sandbox: 'attached', liveInstanceId: handle.spriteInstanceId, row, relay, listeners: read.listeners, detection: read.detection, openPath, urlRoutable }),

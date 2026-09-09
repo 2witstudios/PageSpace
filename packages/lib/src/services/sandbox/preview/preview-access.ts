@@ -32,11 +32,11 @@ import {
 import type { CanRunCodeResult } from '../can-run-code';
 import type { SandboxHandle } from '../sandbox-host';
 import { resolveLiveSandboxId } from '../../agent-workspaces/workspace-status';
-import { describeServiceState, type DevPreviewHolderRef, SPRITE_URL_UNRESOLVABLE_MESSAGE } from './dev-preview-core';
+import { describeServiceState, type DevPreviewHolderRef } from './dev-preview-core';
 import type { DevPreviewStore } from './dev-preview-store';
 import { decidePreviewForward, type PreviewAuthz, type PreviewForwardDecision } from './preview-forward-gate';
 import { PREVIEW_RELAY_SERVICE_NAME } from './preview-relay';
-import { isRoutableSpriteUrlString } from './preview-proxy-policy';
+import { isRoutableSpriteUrl } from './preview-proxy-policy';
 
 /** The session row slice the access gather reads. */
 export interface PreviewSessionRow {
@@ -245,7 +245,11 @@ export async function resolvePreviewTarget({
     handle.powerState(),
     handle.urlInfo(),
   ]);
-  const state = describeServiceState({ liveInstanceId: handle.spriteInstanceId, row, relay, listeners: null });
+  // The URL the control plane hands back decides routability here (the
+  // status gather judges it from the name); an unroutable one reads as
+  // `down`/`sprite-url-unresolvable`, which the gate refuses BEFORE the wake
+  // gate is consulted — nothing about it is transient or wakeable.
+  const state = describeServiceState({ liveInstanceId: handle.spriteInstanceId, row, relay, listeners: null, urlRoutable: isRoutableSpriteUrl(urlInfo.url) });
 
   let decision = decidePreviewForward({ featureEnabled, authz, state, power, wakeAuthorization: 'not-consulted' });
   if (decision.kind === 'needs-wake-gate') {
@@ -263,11 +267,6 @@ export async function resolvePreviewTarget({
   // is safer than proxying to a URL whose auth posture we cannot vouch for.
   if (urlInfo.auth !== 'sprite') {
     return { decision: { kind: 'refuse', reason: 'preview-down', status: 502, message: 'The sandbox URL is not in the expected private mode.' }, authorization };
-  }
-  // A URL DNS cannot answer is refused HERE, by name, rather than surfacing
-  // downstream as an opaque `fetch failed`: nothing about it is transient.
-  if (!isRoutableSpriteUrlString(urlInfo.url)) {
-    return { decision: { kind: 'refuse', reason: 'sprite-url-unresolvable', status: 502, message: SPRITE_URL_UNRESOLVABLE_MESSAGE }, authorization };
   }
   return { decision, authorization, spriteUrl: urlInfo.url, handle };
 }

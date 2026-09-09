@@ -3,7 +3,6 @@ import { assert } from '../../__tests__/riteway';
 import {
   assertTrustedPreviewUpstream,
   isRoutableSpriteUrl,
-  isRoutableSpriteUrlString,
   buildPreviewUpstreamUrl,
   buildPreviewAccessLog,
   buildPreviewResponseHeaders,
@@ -182,17 +181,17 @@ describe('a sprite URL must be a hostname DNS can answer', () => {
   const OK = `https://pgs-env-${'a'.repeat(40)}-bskrl.sprites.app`;   // 54
 
   it('refuses a first label longer than 63 chars, in the assertion and in the pure check', () => {
-    expect(new URL(LONG).hostname.split('.')[0]).toHaveLength(69);
-    expect(isRoutableSpriteUrl(new URL(LONG))).toBe(false);
+    assert({ given: 'the production shape', should: 'have a 69-char first label', actual: new URL(LONG).hostname.split('.')[0].length, expected: 69 });
+    assert({ given: 'a 69-char label', should: 'not be routable', actual: isRoutableSpriteUrl(new URL(LONG)), expected: false });
     expect(() => assertTrustedPreviewUpstream(new URL(LONG))).toThrow(/label longer/);
-    expect(isRoutableSpriteUrl(new URL(OK))).toBe(true);
+    assert({ given: 'a 54-char label', should: 'be routable', actual: isRoutableSpriteUrl(new URL(OK)), expected: true });
     expect(() => assertTrustedPreviewUpstream(new URL(OK))).not.toThrow();
   });
 
-  it('the string form has nothing to say about null or garbage — only a parsable URL can be unroutable', () => {
-    expect(isRoutableSpriteUrlString(null)).toBe(true);
-    expect(isRoutableSpriteUrlString('not a url')).toBe(true);
-    expect(isRoutableSpriteUrlString(LONG)).toBe(false);
-    expect(isRoutableSpriteUrlString(OK)).toBe(true);
+  it('a string is judged the same way; null and garbage have nothing to say', () => {
+    assert({ given: 'null (no URL yet)', should: 'be treated as routable', actual: isRoutableSpriteUrl(null), expected: true });
+    assert({ given: 'an unparsable string', should: 'be treated as routable', actual: isRoutableSpriteUrl('not a url'), expected: true });
+    assert({ given: 'the long string', should: 'not be routable', actual: isRoutableSpriteUrl(LONG), expected: false });
+    assert({ given: 'the ok string', should: 'be routable', actual: isRoutableSpriteUrl(OK), expected: true });
   });
 });

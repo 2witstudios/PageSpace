@@ -46,6 +46,8 @@
  * Public exposure is a separate task with its own containment ruling.
  */
 
+import { MAX_LABEL_LENGTH } from '../../../validators/custom-domain';
+
 export interface PreviewProxyLimits {
   maxRequestBodyBytes: number;
   maxResponseBodyBytes: number;
@@ -88,29 +90,27 @@ export function assertTrustedPreviewUpstream(url: URL): void {
   }
 }
 
-/** RFC 1035 §2.3.4: one hostname label is at most 63 octets. */
-const MAX_HOSTNAME_LABEL = 63;
-
 /**
  * Pure: can this sprite URL exist in DNS at all? The platform builds a
  * sprite's URL as `<name>-<org>.sprites.app` without checking that the first
  * label fits; a sprite named to the API's own 63-char limit gets a 69-char
  * label that no resolver will answer (`dig`: "label too long"). A request
  * to such a URL fails as `fetch failed` — the one failure that must be named
- * before the fetch, because nothing downstream can recover it.
+ * before the fetch, because nothing downstream can recover it. `null` (no
+ * URL yet) and an unparsable string are "nothing to say", not unroutable.
  */
-export function isRoutableSpriteUrl(url: URL): boolean {
-  return url.hostname.split('.').every((label) => label.length >= 1 && label.length <= MAX_HOSTNAME_LABEL);
-}
-
-/** {@link isRoutableSpriteUrl} over the string the control plane hands back; `null`/unparsable ⇒ nothing to say (true). */
-export function isRoutableSpriteUrlString(url: string | null): boolean {
-  if (url === null) return true;
-  try {
-    return isRoutableSpriteUrl(new URL(url));
-  } catch {
-    return true;
+export function isRoutableSpriteUrl(url: URL | string | null): boolean {
+  let parsed: URL | null = null;
+  if (url instanceof URL) parsed = url;
+  else if (url !== null) {
+    try {
+      parsed = new URL(url);
+    } catch {
+      parsed = null;
+    }
   }
+  if (parsed === null) return true;
+  return parsed.hostname.split('.').every((label) => label.length >= 1 && label.length <= MAX_LABEL_LENGTH);
 }
 
 /**

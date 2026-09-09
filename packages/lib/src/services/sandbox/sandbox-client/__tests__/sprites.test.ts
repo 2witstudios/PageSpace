@@ -5,8 +5,9 @@ import {
   isSpriteGoneStatus,
   isSpriteNotFoundError,
   spriteNameFor,
-  legacySpriteNameFor,
   SPRITE_NAME_MAX,
+  LEGACY_SPRITE_NAME_MAX,
+  checkSpriteUrlLabelFits,
   classifyProvisionError,
   planProvisionFailure,
   readSessionInfoId,
@@ -413,10 +414,10 @@ describe('sprite names fit the URL label', () => {
     expect(SPRITE_NAME_MAX).toBe(48);
     expect(spriteNameFor(KEY)).toHaveLength(48);
     expect(spriteNameFor(KEY)).toBe(spriteNameFor(KEY));
-    expect(legacySpriteNameFor(KEY)).toHaveLength(63);
+    expect(spriteNameFor(KEY, LEGACY_SPRITE_NAME_MAX)).toHaveLength(63);
     // Room for a `-` plus an org suffix of up to 14 chars inside 63.
     expect(`${spriteNameFor(KEY)}-bskrl`.length).toBeLessThanOrEqual(63);
-    expect(`${legacySpriteNameFor(KEY)}-bskrl`.length).toBeGreaterThan(63);
+    expect(`${spriteNameFor(KEY, LEGACY_SPRITE_NAME_MAX)}-bskrl`.length).toBeGreaterThan(63);
   });
 
   function sdkWith(existing: string[]) {
@@ -437,9 +438,9 @@ describe('sprite names fit the URL label', () => {
   });
 
   it('resumes a sprite created under the LEGACY 63-char name — its disk and sessions, not a fresh VM — and creates nothing', async () => {
-    const { sdk, calls } = sdkWith([legacySpriteNameFor(KEY)]);
+    const { sdk, calls } = sdkWith([spriteNameFor(KEY, LEGACY_SPRITE_NAME_MAX)]);
     const handle = await createSpritesSandboxClient({ sdk }).getOrCreate({ name: KEY, options });
-    expect(handle.sandboxId).toBe(legacySpriteNameFor(KEY));
+    expect(handle.sandboxId).toBe(spriteNameFor(KEY, LEGACY_SPRITE_NAME_MAX));
     expect(calls.created).toEqual([]);
   });
 
@@ -448,6 +449,15 @@ describe('sprite names fit the URL label', () => {
     const handle = await createSpritesSandboxClient({ sdk }).getOrCreate({ name: KEY, options });
     expect(calls.created).toEqual([spriteNameFor(KEY)]);
     expect(handle.sandboxId).toBe('session-key'); // makeSdk's fake returns its fixed sprite on create
+  });
+
+  it('checks the URL the platform returns for a FRESH sprite: a label over 63 is reported (the reserve is too small), a fitting one is not', () => {
+    const long = { name: 'x', url: `https://${'a'.repeat(64)}.sprites.app` };
+    const ok = { name: 'x', url: `https://${'a'.repeat(48)}-bskrl.sprites.app` };
+    expect(checkSpriteUrlLabelFits(long)).toBe(false);
+    expect(checkSpriteUrlLabelFits(ok)).toBe(true);
+    expect(checkSpriteUrlLabelFits({ name: 'x', url: null })).toBe(true);
+    expect(checkSpriteUrlLabelFits({ name: 'x', url: 'not a url' })).toBe(true);
   });
 
   it('a non-not-found error from the legacy lookup surfaces instead of creating a duplicate', async () => {

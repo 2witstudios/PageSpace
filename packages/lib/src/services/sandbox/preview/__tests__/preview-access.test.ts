@@ -134,10 +134,15 @@ describe('resolvePreviewTarget — the gather, in order', () => {
 
   it('a sprite whose URL cannot exist in DNS is refused BY NAME before any fetch — not surfaced later as "fetch failed"', async () => {
     // Production: 63-char names + the org suffix made a 69-char label; every forward died at the fetch.
-    const d = deps({ attach: async () => fakeHandle({ relay: runningRelay(), url: `https://pgs-env-${'a'.repeat(55)}-bskrl.sprites.app` }) });
+    const LONG_URL = `https://pgs-env-${'a'.repeat(55)}-bskrl.sprites.app`;
+    const d = deps({ attach: async () => fakeHandle({ relay: runningRelay(), url: LONG_URL }) });
     const target = await resolvePreviewTarget({ holder, userId: USER, sessionId: SESSION, deps: d });
     assert({ given: 'live + running, 69-char URL label', should: 'refuse as sprite-url-unresolvable, 502', actual: [target.decision.kind, 'reason' in target.decision ? target.decision.reason : null, 'status' in target.decision ? target.decision.status : null], expected: ['refuse', 'sprite-url-unresolvable', 502] });
     assert({ given: 'the refusal', should: 'carry no sprite URL to forward', actual: 'spriteUrl' in target, expected: false });
+    // Structural: refused by the state machine, so a PAUSED legacy sprite never reaches the wake gate either.
+    const paused = deps({ attach: async () => fakeHandle({ relay: runningRelay(), url: LONG_URL, power: 'paused' }) });
+    const t2 = await resolvePreviewTarget({ holder, userId: USER, sessionId: SESSION, deps: paused });
+    assert({ given: 'paused + unroutable', should: 'refuse without consulting canRunCode', actual: [t2.decision.kind, paused.calls.includes('canRunCode')], expected: ['refuse', false] });
   });
 
   it('a paused sprite consults the wake gate on the PAYER and forwards as a wake when allowed', async () => {

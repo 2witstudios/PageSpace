@@ -76,6 +76,7 @@ import type {
 } from './types';
 import { SandboxProvisionError, type SandboxCreateOptions } from '../sandbox-options';
 import { loggers } from '../../../logging/logger-config';
+import { MAX_LABEL_LENGTH } from '../../../validators/custom-domain';
 
 /** Thrown when a command exceeds the policy's per-run wall-clock cap. */
 export class SandboxCommandTimeoutError extends Error {
@@ -465,6 +466,8 @@ export function drainServiceLogStream(
 /** The Sprite instance subset the driver consumes. */
 export interface SpriteInstanceLike {
   readonly name: string;
+  /** The sprite's URL as the platform reports it (`<name>-<org>.sprites.app`); absent on a fake. */
+  readonly url?: string | null;
   /**
    * The platform's id for this Sprite INSTANCE, hydrated from the API response by
    * both `getSprite` and `createSprite` (the SDK `Object.assign`s the parsed body
@@ -1208,27 +1211,50 @@ export function withKillSession<T extends { name: string; client: { baseURL: str
 /**
  * The longest Sprite NAME that still yields a URL DNS can resolve.
  *
- * The API accepts names up to 63 chars (a DNS label), but the sprite's URL is
+ * The API accepts names up to a full DNS label (63), but the sprite's URL is
  * `<name>-<org>.sprites.app` — the platform appends the org suffix to the
  * SAME label and never checks the sum. Our keys are 72-char HMAC hex; sliced
  * to 63 they produced 69-char labels (`pgs-env-…-bskrl`) that `dig` refuses
- * outright ("label too long"), so no preview ever reached a sprite. 48 =
- * 63 − 15: the observed org suffix is `-` + 5 chars, and 15 is headroom for
- * a longer one, not a guess about its format. 48 chars is the 8-char prefix
- * plus 40 hex — 160 bits of the digest, still collision-free for our keys.
+ * outright ("label too long"), so no preview ever reached a sprite. 15 is
+ * reserved for `-<org>`: the observed suffix is `-` + 5 chars, and the rest
+ * is headroom for a longer one, not a guess about its format. 48 chars is
+ * the 8-char prefix plus 40 hex — 160 bits of the digest, still
+ * collision-free for our keys.
  */
-export const SPRITE_NAME_MAX = 48;
-/** The budget before {@link SPRITE_NAME_MAX} — kept ONLY to resume sprites created under it. */
-const LEGACY_SPRITE_NAME_MAX = 63;
+export const SPRITE_NAME_MAX = MAX_LABEL_LENGTH - 15;
+/** The budget before {@link SPRITE_NAME_MAX} — the API's own limit; kept ONLY to resume sprites created under it. */
+export const LEGACY_SPRITE_NAME_MAX = MAX_LABEL_LENGTH;
 
-/** Pure: the Sprite name for a session/env key. Deterministic, so the same key always resumes the same sprite. */
-export function spriteNameFor(key: string): string {
-  return key.slice(0, SPRITE_NAME_MAX);
+/**
+ * Pure: the Sprite name for a session/env key — deterministic, so the same
+ * key always resumes the same sprite. `max` is the legacy budget only where
+ * `getOrCreate` looks for a sprite created before the current one.
+ */
+export function spriteNameFor(key: string, max: number = SPRITE_NAME_MAX): string {
+  return key.slice(0, max);
 }
 
-/** Pure: the name a sprite created before the 48-char budget was given — resumed by `getOrCreate`, never created. */
-export function legacySpriteNameFor(key: string): string {
-  return key.slice(0, LEGACY_SPRITE_NAME_MAX);
+/** Legacy names already reported this process — one line per sprite, not per attach. */
+const legacyResumesLogged = new Set<string>();
+
+/**
+ * The budget above is an assumption about the org suffix; this is where it
+ * is CHECKED, on the one path that sees the platform's answer — the URL it
+ * hands back for a sprite just created. An overflow is logged as an error
+ * for the operator (raise the reserve), never thrown at the user: the
+ * sandbox itself works, and the proxy refuses its URL by name anyway.
+ */
+export function checkSpriteUrlLabelFits(sprite: Pick<SpriteInstanceLike, 'name' | 'url'>): boolean {
+  if (!sprite.url) return true;
+  let label: string;
+  try {
+    label = new URL(sprite.url).hostname.split('.')[0] ?? '';
+  } catch {
+    return true;
+  }
+  if (label.length <= MAX_LABEL_LENGTH) return true;
+  loggers.ai.error('sprite URL label exceeds a DNS label — SPRITE_NAME_MAX reserves too little for the org suffix', undefined, { spriteName: sprite.name, labelLength: label.length });
+  return false;
 }
 
 function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): ExecutableSandbox {
@@ -1743,38 +1769,31 @@ export function createSpritesSandboxClient({
       // genuine not-found. Auth/rate-limit/outage errors from getSprite surface
       // rather than spawning a duplicate Sprite under a name that may still be live.
       //
-      // Our session keys are 72-char HMAC hex strings; the Sprite NAME is the
-      // key cut to `SPRITE_NAME_MAX` so the sprite's URL stays a legal DNS
-      // label (see the constant). The full key stays as the DB session key.
-      //
-      // The name is not persisted anywhere — every attach re-derives it — so
-      // a sprite created under the old 63-char budget must still be found by
-      // THAT name, or every existing env and session would silently land on
-      // a fresh, empty VM. Hence the second lookup: short name, then legacy
-      // name, and only when neither exists a create — under the short name.
+      // The Sprite NAME is the key cut to `SPRITE_NAME_MAX` (see the constant);
+      // the full key stays as the DB session key. The name is not persisted
+      // anywhere — every attach re-derives it — so a sprite created under the
+      // old, longer budget must still be found by THAT name, or every existing
+      // env and session would silently land on a fresh, empty VM. Hence two
+      // lookups, and a create only when neither exists — under the short name.
       const spriteName = spriteNameFor(name);
-      const legacyName = legacySpriteNameFor(name);
+      const legacyName = spriteNameFor(name, LEGACY_SPRITE_NAME_MAX);
       try {
-        let sprite: SpriteInstanceLike;
-        let fresh = false;
-        try {
-          sprite = await sdk.getSprite(spriteName);
-        } catch (error) {
-          if (!isSpriteNotFoundError(error)) throw error;
-          const legacy = legacyName === spriteName ? null : await getSpriteIfExists(sdk, legacyName);
-          if (legacy !== null) {
-            // Resumed on a name whose URL cannot resolve: the sandbox works
-            // (shell, files, services) but cannot be previewed until it is
-            // recreated. Logged so the legacy population can be watched.
-            loggers.ai.info('sprite resumed by legacy name — its URL is not resolvable', { spriteName, legacyName });
-            sprite = legacy;
-          } else {
-            // Caps (RAM / vCPUs / storage / region) come from the resolved policy and
-            // are set explicitly per Sprite rather than relying on the quota defaults.
-            sprite = await sdk.createSprite(spriteName, options.caps);
-            fresh = true;
-          }
+        const existing =
+          (await getSpriteIfExists(sdk, spriteName))
+          ?? (name.length > SPRITE_NAME_MAX ? await getSpriteIfExists(sdk, legacyName) : null);
+        if (existing !== null && existing.name === legacyName && legacyName !== spriteName && !legacyResumesLogged.has(legacyName)) {
+          // Resumed on a name whose URL cannot resolve: the sandbox works
+          // (shell, files, services) but cannot be previewed until it is
+          // recreated. Logged once per name per process, so the legacy
+          // population can be watched without a line per attach.
+          legacyResumesLogged.add(legacyName);
+          loggers.ai.info('sprite resumed by legacy name — its URL is not resolvable', { spriteName, legacyName });
         }
+        const fresh = existing === null;
+        // Caps (RAM / vCPUs / storage / region) come from the resolved policy and
+        // are set explicitly per Sprite rather than relying on the quota defaults.
+        const sprite: SpriteInstanceLike = existing ?? (await sdk.createSprite(spriteName, options.caps));
+        if (fresh) checkSpriteUrlLabelFits(sprite);
         // Lock down egress only when THIS VM is not already proven to be running
         // THIS policy — see the file header and `../egress-lockdown.ts`. The proof
         // is a token over (Sprite instance id, policy hash): a warm resume of the
@@ -1822,12 +1841,8 @@ export function createSpritesSandboxClient({
       // We do NOT reapply egress here: the policy persists across hibernation
       // (the platform's configure-once model), and a dropped first wake is
       // recovered by runCommand's cold-start retry.
-      try {
-        return wrap(await sdk.getSprite(sandboxId));
-      } catch (error) {
-        if (isSpriteNotFoundError(error)) return null;
-        throw error;
-      }
+      const sprite = await getSpriteIfExists(sdk, sandboxId);
+      return sprite === null ? null : wrap(sprite);
     },
 
     async stop({ sandboxId }) {
