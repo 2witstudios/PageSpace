@@ -9,8 +9,8 @@ import type { MachinePolicy } from '@pagespace/lib/env-bridge/policy-types';
 import type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
 import { createDispatcher, DAEMON_CAPABILITIES, type DispatcherDeps } from '../dispatcher.js';
 import { createDaemonNonceStore } from '../nonce-store.js';
-import { createApprovalsStore } from '../approvals-store.js';
-import { createChallengeStore } from '../challenge-store.js';
+import { createApprovalsStore, type ApprovalsStore } from '../approvals-store.js';
+import { createChallengeStore, type ChallengeStore } from '../challenge-store.js';
 import { generateMachineKeypair, signWithMachineKey } from '../keypair.js';
 import { ed25519Verify, envBridgeHash } from '../crypto.js';
 import type { AuditEntry } from '../audit-log.js';
@@ -655,15 +655,19 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
       expect(verified({ ...ack, killed: 0 } as Frame)).toEqual({ ok: false, reason: 'bad_signature' });
     });
 
-    it('after a pause, a click naming a challenge frozen BEFORE it is approval_mismatch and runs nothing; a fresh request after Resume is framed anew (no frame needed to resume)', async () => {
+    it('after a pause, a click naming a challenge frozen BEFORE it runs nothing — refused paused if its grant predates the pause, approval_mismatch if it is newer (the store was cleared); a fresh request after Resume is framed anew (no frame needed to resume)', async () => {
       const h = pauseHarness();
       await h.dispatcher.handle(execFrame());
       await h.dispatcher.handle(pauseFrame());
-      const staleClick = signedGrant({ type: 'grant_exec', cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' } }, { approvalIntent: { challengeId: 'ch_1', scope: '30d', expiresAt: NOW + 30_000 }, principal: { ...PRINCIPAL, sessionId: 'later', conversationId: 'later' } });
-      expect(await h.dispatcher.handle(staleClick)).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'approval_mismatch' } });
+      const intent = { challengeId: 'ch_1', scope: '30d' as const, expiresAt: NOW + 30_000 };
+      const principal = { ...PRINCIPAL, sessionId: 'later', conversationId: 'later' };
+      const staleClick = signedGrant({ type: 'grant_exec', cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' } }, { approvalIntent: intent, principal });
+      expect(await h.dispatcher.handle(staleClick)).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'paused' } });
+      const newerClick = signedGrant({ type: 'grant_exec', cmd: 'tool', args: ['a'], cwd: ROOT, env: { CI: '1' } }, { approvalIntent: intent, principal, iat: PAUSED_AT + 1, exp: PAUSED_AT + 30_000, nonce: 'n_click2', grantId: 'grant_click2' });
+      expect(await h.dispatcher.handle(newerClick)).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'approval_mismatch' } });
       expect(h.spawnRun).not.toHaveBeenCalled();
-      // Resume is the server signing again: the next request is a NEW question, under a new id.
-      expect(await h.dispatcher.handle(execFrame({ args: ['zzz'] }))).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_2' } });
+      // Resume is the server signing again: a request newer than the pause is a NEW question, under a new id.
+      expect(await h.dispatcher.handle(execFrame({ args: ['zzz'] }) && signedGrant({ type: 'grant_exec', cmd: 'tool', args: ['zzz'], cwd: ROOT, env: { CI: '1' } }, { iat: PAUSED_AT + 2, exp: PAUSED_AT + 30_000, nonce: 'n_fresh', grantId: 'grant_fresh' }))).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_2' } });
     });
 
     describe('Codex P1 #3 (review round 1) — the daemon LATCHES paused: a handler that resumes after an await never spawns, and only a newer verified grant clears it', () => {
