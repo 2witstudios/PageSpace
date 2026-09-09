@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { startAuthentication } from '@simplewebauthn/browser';
 import { ShieldAlert, ShieldCheck, ShieldX } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -23,6 +24,15 @@ import {
  * never the model's paraphrase and never the tool input. Allow / Deny call
  * `POST` on the same route; the server re-issues the identical request with
  * the owner's signed intent and the machine byte-compares before it runs.
+ *
+ * ALLOW REQUIRES THE OWNER'S PASSKEY (hardening B). Before the POST, the
+ * browser asks the authenticator to sign a challenge DERIVED from the frozen
+ * request, and the assertion rides inside the intent to the machine, which
+ * verifies it against the credentials it pinned at enrolment. So the machine
+ * no longer takes this server's word that a human was here — which is the
+ * whole point, because a server that could sign grants could otherwise answer
+ * this card by itself. Deny needs no assertion: refusing to run is never the
+ * dangerous direction.
  * The route's answer is submitted as the tool result so the turn resumes.
  *
  * This card never reuses `ask_user`: the click is an authenticated request
@@ -65,6 +75,19 @@ interface PendingWriteFile {
   reason: SensitiveWriteReason | null;
 }
 
+/**
+ * What the card needs to prove the click to the MACHINE (hardening B). The
+ * challenge is derived server-side from the frozen request; the machine
+ * recomputes it from the request IT froze and compares, so a wrong challenge
+ * here can only fail a click, never cause one.
+ */
+interface WebauthnOptions {
+  available: boolean;
+  rpId: string | null;
+  challenge: string;
+  allowCredentials: Array<{ id: string; type: 'public-key' }>;
+}
+
 interface PendingApprovalView {
   challengeId: string;
   envId: string;
@@ -72,6 +95,37 @@ interface PendingApprovalView {
   expiresAt: number;
   request: FrozenRequest;
   files?: PendingWriteFile[];
+  webauthn?: WebauthnOptions;
+}
+
+interface OwnerAssertion {
+  credentialId: string;
+  authenticatorData: string;
+  clientDataJSON: string;
+  signature: string;
+}
+
+/**
+ * The owner's authenticator signs the derived challenge. Returns the four
+ * fields the grant carries; a cancelled or failed ceremony throws, and the
+ * caller surfaces it rather than sending an unproven click — the machine
+ * would refuse it anyway, and saying so here is the honest answer.
+ */
+async function proveOwnerClick(options: WebauthnOptions): Promise<OwnerAssertion> {
+  const assertion = await startAuthentication({
+    optionsJSON: {
+      challenge: options.challenge,
+      ...(options.rpId !== null && { rpId: options.rpId }),
+      allowCredentials: options.allowCredentials,
+      userVerification: 'preferred',
+    } as never,
+  });
+  return {
+    credentialId: assertion.id,
+    authenticatorData: assertion.response.authenticatorData,
+    clientDataJSON: assertion.response.clientDataJSON,
+    signature: assertion.response.signature,
+  };
 }
 
 type LoadState =
@@ -187,10 +241,26 @@ export function EnvApprovalCard({ part }: EnvApprovalCardProps) {
     setBusy(decision);
     setFailure(null);
     try {
+      // Allow must be PROVEN to the machine, not merely reported to it: the
+      // owner's authenticator signs the derived challenge before anything is
+      // sent. Deny needs no proof — refusing to run is never the dangerous
+      // direction.
+      let assertion: OwnerAssertion | undefined;
+      if (decision === 'allow') {
+        const options = load.kind === 'loaded' ? load.pending.webauthn : undefined;
+        if (options === undefined || !options.available) {
+          setFailure(
+            'This machine has no passkey pinned, so it cannot verify that a human clicked and will refuse an approval from here. Approve in the terminal running "pagespace env connect", or register a passkey and re-enrol the machine.',
+          );
+          setBusy(null);
+          return;
+        }
+        assertion = await proveOwnerClick(options);
+      }
       const response = await fetchWithAuth(`/api/env-bridge/approvals/${encodeURIComponent(challengeId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(decision === 'allow' ? { decision, scope } : { decision }),
+        body: JSON.stringify(decision === 'allow' ? { decision, scope, ...(assertion !== undefined && { assertion }) } : { decision }),
       });
       const body = (await response.json().catch(() => null)) as RequestEnvApprovalOutput | { error?: string; outcome?: string } | null;
       const outcome = body && typeof body === 'object' && typeof (body as { outcome?: unknown }).outcome === 'string' ? (body as RequestEnvApprovalOutput).outcome : 'failed';
@@ -239,6 +309,12 @@ export function EnvApprovalCard({ part }: EnvApprovalCardProps) {
       <p className="mt-1 text-xs text-muted-foreground">
         The machine froze this exact request. Allowing runs it as you, on your computer, with whatever it does once started; nothing else runs.
       </p>
+      {load.kind === 'loaded' && load.pending.webauthn?.available === false ? (
+        <p className="mt-1 text-xs text-destructive" data-testid="env-approval-no-passkey">
+          This machine pinned no passkey when you enrolled it, so it cannot verify that a human clicked and will refuse an approval from here. Approve in the terminal running{' '}
+          <code>pagespace env connect</code>, or register a passkey and re-enrol the machine.
+        </p>
+      ) : null}
 
       {load.kind === 'loading' ? <div className="mt-2 text-xs text-muted-foreground">Loading the frozen request…</div> : null}
       {load.kind === 'gone' ? (
@@ -282,7 +358,7 @@ export function EnvApprovalCard({ part }: EnvApprovalCardProps) {
                 ))}
               </select>
               <Button size="sm" onClick={() => void decide('allow')} disabled={busy !== null} data-testid="env-approval-allow">
-                {busy === 'allow' ? 'Sending…' : 'Allow'}
+                {busy === 'allow' ? 'Waiting for your passkey…' : 'Allow'}
               </Button>
               <Button size="sm" variant="outline" onClick={() => void decide('deny')} disabled={busy !== null} data-testid="env-approval-deny">
                 {busy === 'deny' ? 'Sending…' : 'Deny'}

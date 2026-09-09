@@ -12,10 +12,20 @@
 import { createHash, createPublicKey, verify as nodeVerify } from 'crypto';
 import type { Ed25519Verify, HashBytes } from '@pagespace/lib/env-bridge/grant';
 import { decodeBase64 } from '@pagespace/lib/env-bridge/grant';
+import type { Sha256Bytes } from '@pagespace/lib/env-bridge/owner-approval';
 
 export const ENV_BRIDGE_HASH_ALGORITHM = 'sha256';
 
 export const envBridgeHash: HashBytes = (bytes) => createHash(ENV_BRIDGE_HASH_ALGORITHM).update(bytes).digest('hex');
+
+/**
+ * SHA-256 as BYTES. Distinct from `envBridgeHash` (hex) on purpose: a WebAuthn
+ * challenge is compared as base64url of the raw digest, so the owner-approval
+ * derivation takes this one. The daemon's `packages/cli/src/env-bridge/crypto.ts`
+ * has the byte-identical twin — the two derivations must agree or every click
+ * is `challenge_mismatch`.
+ */
+export const envBridgeSha256: Sha256Bytes = (bytes) => new Uint8Array(createHash('sha256').update(bytes).digest());
 
 export const ed25519Verify: Ed25519Verify = (message, signature, publicKey) => {
   try {

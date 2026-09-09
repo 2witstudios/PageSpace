@@ -66,7 +66,30 @@ export interface ApprovalIntent {
   readonly scope: 'once' | 'session' | '30d' | 'until_revoked';
   /** ms since epoch; the click is refused after this (the challenge's own TTL is the grant that froze it). */
   readonly expiresAt: number;
+  /**
+   * THE PROOF A HUMAN CLICKED (hardening B, leaf B3). A WebAuthn assertion
+   * from one of the passkeys the machine pinned at enrolment, over a
+   * challenge derived from the exact request the machine froze
+   * (`owner-approval.ts`). The server RELAYS it — it does not verify and
+   * discard it, as the step-up flow does — because the party that has to be
+   * convinced is the machine, and the machine will not be convinced by the
+   * server.
+   *
+   * Optional on the WIRE so that its absence is answered with the precise
+   * `approval_unproven` rather than a blanket `malformed` on the whole grant.
+   * It is NOT optional in effect: the daemon refuses a click without one
+   * (leaf B5).
+   */
+  readonly assertion?: ApprovalAssertion;
 }
+
+/**
+ * The four fields of a WebAuthn assertion, all base64url exactly as
+ * `@simplewebauthn/browser` returns them. Declared HERE rather than in
+ * `owner-approval.ts` because it is part of the grant's wire format and the
+ * canonical bytes `encodeGrant` produces; the verifier imports it back.
+ */
+export type ApprovalAssertion = z.infer<typeof approvalAssertionSchema>;
 
 export interface Grant {
   readonly grantId: string;
@@ -151,11 +174,28 @@ const principalSchema = z
 
 // `.strict()` everywhere: an extra field is not "ignored", it is a malformed
 // grant. A privileged-looking `isAdmin: true` riding along must fail closed.
+/**
+ * Bounds are generous ceilings on real WebAuthn values, present so hostile
+ * bytes cost nothing to refuse; `.strict()` for the same reason every schema
+ * here is.
+ */
+export const approvalAssertionSchema = z
+  .object({
+    credentialId: z.string().min(1).max(1024),
+    /** base64url; at least 37 bytes decoded (32-byte rpIdHash + flags + counter). */
+    authenticatorData: z.string().min(1).max(4096),
+    clientDataJSON: z.string().min(1).max(8192),
+    /** base64url ASN.1 DER ECDSA signature. */
+    signature: z.string().min(1).max(1024),
+  })
+  .strict();
+
 const approvalIntentSchema = z
   .object({
     challengeId: z.string().min(1),
     scope: z.enum(['once', 'session', '30d', 'until_revoked']),
     expiresAt: z.number().int().nonnegative(),
+    assertion: approvalAssertionSchema.optional(),
   })
   .strict();
 
@@ -195,7 +235,24 @@ export function encodeGrant(grant: Grant): Uint8Array {
     // Appended ONLY when present, so every grant without a click keeps the
     // exact bytes it always had; a click cannot be added or altered in flight.
     ...(grant.approvalIntent !== undefined && {
-      approvalIntent: { challengeId: grant.approvalIntent.challengeId, scope: grant.approvalIntent.scope, expiresAt: grant.approvalIntent.expiresAt },
+      approvalIntent: {
+        challengeId: grant.approvalIntent.challengeId,
+        scope: grant.approvalIntent.scope,
+        expiresAt: grant.approvalIntent.expiresAt,
+        // Appended only when present, for the same reason the intent itself
+        // is: a grant that carried no assertion keeps the exact bytes it had.
+        // Under the server's signature like every other field, so the
+        // assertion cannot be swapped or stripped in flight — though the
+        // machine's own check is what actually decides (leaf B4).
+        ...(grant.approvalIntent.assertion !== undefined && {
+          assertion: {
+            credentialId: grant.approvalIntent.assertion.credentialId,
+            authenticatorData: grant.approvalIntent.assertion.authenticatorData,
+            clientDataJSON: grant.approvalIntent.assertion.clientDataJSON,
+            signature: grant.approvalIntent.assertion.signature,
+          },
+        }),
+      },
     }),
   };
   return new TextEncoder().encode(JSON.stringify(canonical));

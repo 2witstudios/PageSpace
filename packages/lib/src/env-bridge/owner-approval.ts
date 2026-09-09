@@ -43,8 +43,7 @@
  * Pure by construction: SHA-256 and the ES256 verification primitive are
  * injected, there is no clock, and nothing here performs I/O.
  */
-import { z } from 'zod';
-import { canonicalizeArgs, constantTimeEqual, decodeBase64Url, encodeBase64Url } from './grant';
+import { approvalAssertionSchema, canonicalizeArgs, constantTimeEqual, decodeBase64Url, encodeBase64Url, type ApprovalAssertion } from './grant';
 import { OWNER_APPROVAL_SIGNING_DOMAIN } from './machine-signatures';
 import type { PendingApproval } from './frame-codec';
 import type { NormalizedRequest } from './decide-execution';
@@ -147,21 +146,15 @@ export interface PinnedOwnerApproval {
 
 // ---- the assertion the click carries ---------------------------------------
 
-// `.strict()`, like every other gate here: an extra field is not "ignored",
-// it is a malformed assertion. The bounds are generous ceilings on real
-// WebAuthn values, present so hostile bytes cost nothing to refuse.
-const assertionSchema = z
-  .object({
-    credentialId: z.string().min(1).max(1024),
-    /** base64url; ≥ 37 bytes (32-byte rpIdHash + flags + 4-byte counter). */
-    authenticatorData: z.string().min(1).max(4096),
-    clientDataJSON: z.string().min(1).max(8192),
-    /** base64url ASN.1 DER ECDSA signature. */
-    signature: z.string().min(1).max(1024),
-  })
-  .strict();
+/**
+ * The assertion's shape is the GRANT's wire format (`grant.ts`), parsed here
+ * from the same schema rather than a second copy of it — a verifier and a
+ * codec that disagree about what a field may hold is exactly the drift this
+ * folder avoids everywhere else.
+ */
+const assertionSchema = approvalAssertionSchema;
 
-export type OwnerApprovalAssertion = z.infer<typeof assertionSchema>;
+export type OwnerApprovalAssertion = ApprovalAssertion;
 
 export type OwnerApprovalDenyReason =
   /** Nothing was pinned at enrolment (or the pinning is unusable): this machine cannot prove a human, so it refuses rather than accept the server's word (leaf B5). */

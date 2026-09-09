@@ -19,6 +19,11 @@ vi.mock('@/lib/env-bridge/bridge-client', async (importOriginal) => {
 });
 
 import { GET, POST, DELETE } from '../[challengeId]/route';
+import { deriveOwnerApprovalChallenge } from '@pagespace/lib/env-bridge/owner-approval';
+import { envBridgeSha256 } from '@/lib/env-bridge/crypto';
+
+/** What the machine pinned at enrolment (hardening B, leaf B1) — the card may only offer these. */
+const PINNED = { rpId: 'pagespace.test', origin: 'https://pagespace.test', credentials: [{ credentialId: 'cred-a', publicKeyCose: 'cose-a' }] };
 import { revokeLocalEnvApproval } from '@/lib/env-bridge/revoke';
 import { getApprovalMirrorStore, markEnvApprovalAcknowledged, markEnvApprovalRevoked, rememberEnvApproval } from '@/lib/drive-envs/drive-envs-runtime';
 import { ENV_APPROVAL_STDERR_MAX_CHARS, ENV_APPROVAL_STDOUT_MAX_CHARS, requestEnvApprovalOutputSchema } from '@/lib/ai/tools/env-approval-tools';
@@ -48,7 +53,8 @@ const get = (challengeId = 'ch_1') => GET(new Request(`http://localhost/api/env-
 const json = async (r: Response) => (await r.json()) as Record<string, unknown>;
 
 let sendGrant: ReturnType<typeof vi.fn>;
-let sibling: { envId: string; ownerId: string; revokedAt: Date | null } | null;
+type Sibling = { envId: string; ownerId: string; revokedAt: Date | null; ownerCredentials: { rpId: string; origin: string; credentials: { credentialId: string; publicKeyCose: string }[] } | null };
+let sibling: Sibling | null;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -56,7 +62,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   resetPendingApprovalStoreForTesting();
-  sibling = { envId: ENV, ownerId: OWNER, revokedAt: null };
+  sibling = { envId: ENV, ownerId: OWNER, revokedAt: null, ownerCredentials: PINNED };
   vi.mocked(getDriveEnvStore).mockResolvedValue({ findLocalByEnvId: vi.fn(async () => sibling) } as never);
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: OWNER } as never);
   sendGrant = vi.fn(async () => ({ type: 'exec_result', grantId: 'g_click', exitCode: 0, stdoutB64: Buffer.from('On branch main').toString('base64'), stderrB64: '', truncated: false, sig: 'c2ln' }));
@@ -68,7 +74,35 @@ describe('GET — the owner sees the frozen request verbatim', () => {
   it('given the owner, should answer the frozen request, principal and expiry exactly as the machine signed them', async () => {
     const r = await get();
     expect(r.status).toBe(200);
-    expect(await json(r)).toEqual({ challengeId: 'ch_1', envId: ENV, principal: PRINCIPAL, expiresAt: NOW + 30_000, request: REQUEST, scopes: ['once', 'session', '30d', 'until_revoked'] });
+    expect(await json(r)).toEqual({
+      challengeId: 'ch_1',
+      envId: ENV,
+      principal: PRINCIPAL,
+      expiresAt: NOW + 30_000,
+      request: REQUEST,
+      scopes: ['once', 'session', '30d', 'until_revoked'],
+      webauthn: {
+        available: true,
+        rpId: 'pagespace.test',
+        // DERIVED from the frozen request, never random (hardening B, leaf B2) — the daemon recomputes the same value from the request IT froze.
+        challenge: deriveOwnerApprovalChallenge({ envId: ENV, challengeId: 'ch_1', request: REQUEST }, envBridgeSha256),
+        allowCredentials: [{ id: 'cred-a', type: 'public-key' }],
+      },
+    });
+  });
+
+  it('the challenge is bound to THIS question and THIS request — a different challenge id or a byte of the request changes it', async () => {
+    const body = await json(await get());
+    const webauthn = body.webauthn as { challenge: string };
+    expect(webauthn.challenge).not.toBe(deriveOwnerApprovalChallenge({ envId: ENV, challengeId: 'ch_other', request: REQUEST }, envBridgeSha256));
+    expect(webauthn.challenge).not.toBe(deriveOwnerApprovalChallenge({ envId: ENV, challengeId: 'ch_1', request: { ...REQUEST, cwd: '/elsewhere' }, }, envBridgeSha256));
+  });
+
+  it('given the machine pinned NO passkey, should say the ceremony is unavailable rather than offer credentials the daemon would refuse', async () => {
+    sibling = { ...sibling!, ownerCredentials: { ...PINNED, credentials: [] } };
+    expect((await json(await get())).webauthn).toMatchObject({ available: false, allowCredentials: [] });
+    sibling = { ...sibling!, ownerCredentials: null };
+    expect((await json(await get())).webauthn).toMatchObject({ available: false, rpId: null, allowCredentials: [] });
   });
 
   it('given a pending WRITE, should pass the machine\'s per-file findings through verbatim so the card can say which file and why (A7)', async () => {
@@ -113,6 +147,8 @@ describe('POST allow — the click re-issues a grant over IDENTICAL args carryin
     expect(r.status).toBe(200);
     expect(sendGrant).toHaveBeenCalledTimes(1);
     expect(sendGrant).toHaveBeenCalledWith({ envId: ENV, frame: FRAME, principal: PRINCIPAL, approvalIntent: { challengeId: 'ch_1', scope: 'until_revoked', expiresAt: NOW + 30_000 } });
+    // No assertion sent ⇒ none relayed: the ROUTE never invents one, and the machine is what refuses the unproven click.
+    expect(JSON.stringify(sendGrant.mock.calls[0])).not.toContain('assertion');
     expect(await json(r)).toEqual({ challengeId: 'ch_1', outcome: 'allowed', scope: 'until_revoked', exitCode: 0, stdout: 'On branch main', stderr: '', truncated: false });
     // Spent: a second click on the same id is gone.
     expect((await post({ decision: 'allow' })).status).toBe(410);
@@ -180,7 +216,7 @@ describe('POST allow — the click re-issues a grant over IDENTICAL args carryin
   });
 
   it('given a revoked env, should 404 and drop the pending question', async () => {
-    sibling = { envId: ENV, ownerId: OWNER, revokedAt: new Date(NOW) };
+    sibling = { envId: ENV, ownerId: OWNER, revokedAt: new Date(NOW), ownerCredentials: PINNED };
     expect((await post({ decision: 'allow' })).status).toBe(404);
     expect(getPendingApprovalStore().size()).toBe(0);
   });
@@ -276,5 +312,43 @@ describe('Codex P1 #5 (review round 1) — DELETE /api/env-bridge/approvals/[app
     expect((await del('ch_nope')).status).toBe(404);
     vi.mocked(isLocalEnvsEnabled).mockReturnValue(false);
     expect((await del()).status).toBe(404);
+  });
+});
+
+/**
+ * B3 — the owner's WebAuthn assertion is RELAYED to the machine inside the
+ * approval intent. The server does not verify it and must not: the party that
+ * has to be convinced a human clicked is the machine.
+ */
+describe('POST allow — the assertion rides to the machine, unexamined', () => {
+  const ASSERTION = { credentialId: 'cred-a', authenticatorData: 'YXV0aA', clientDataJSON: 'Y2xpZW50', signature: 'c2ln' };
+
+  it('should pass the assertion through INTACT, inside approvalIntent, where the grant signature covers it', async () => {
+    await post({ decision: 'allow', scope: 'once', assertion: ASSERTION });
+    expect(sendGrant).toHaveBeenCalledWith({ envId: ENV, frame: FRAME, principal: PRINCIPAL, approvalIntent: { challengeId: 'ch_1', scope: 'once', expiresAt: NOW + 30_000, assertion: ASSERTION } });
+  });
+
+  it('should NOT verify-and-discard it as the step-up flow does — a byte the machine needs must reach the machine', async () => {
+    // An assertion that could not possibly verify anywhere still travels: judging it here would be the server attestation this change removes.
+    const junk = { ...ASSERTION, signature: 'AAAA' };
+    await post({ decision: 'allow', assertion: junk });
+    expect(sendGrant).toHaveBeenCalledWith(expect.objectContaining({ approvalIntent: expect.objectContaining({ assertion: junk }) }));
+  });
+
+  it.each<[string, unknown]>([
+    ['a non-object', 'nope'],
+    ['a missing signature', { credentialId: 'a', authenticatorData: 'b', clientDataJSON: 'c' }],
+    ['an extra field', { credentialId: 'a', authenticatorData: 'b', clientDataJSON: 'c', signature: 'd', isAdmin: true }],
+  ])('given a MALFORMED assertion (%s), should 400 and send nothing — the strict body schema was opened on purpose, not loosened', async (_label, assertion) => {
+    const r = await post({ decision: 'allow', assertion });
+    expect(r.status).toBe(400);
+    expect(sendGrant).not.toHaveBeenCalled();
+  });
+
+  it('Deny needs no assertion — refusing to run is never the dangerous direction', async () => {
+    const r = await post({ decision: 'deny' });
+    expect(r.status).toBe(200);
+    expect(await json(r)).toMatchObject({ outcome: 'denied' });
+    expect(sendGrant).not.toHaveBeenCalled();
   });
 });
