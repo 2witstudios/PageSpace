@@ -384,10 +384,12 @@ describe('collectUserMessages', () => {
 
     await collectUserMessages(db as never, 'user-1');
 
-    const boundIdCounts = db.where.mock.calls
-      .map(([predicate]) => predicate as { _op?: string; vals?: unknown[] })
+    // `where` is a bare vi.fn(), so its recorded args are an empty tuple type.
+    const calls = db.where.mock.calls as unknown as unknown[][];
+    const boundIdCounts = calls
+      .map((call) => call[0] as { _op?: string; vals?: unknown[] } | undefined)
       .filter((predicate) => predicate?._op === 'inArray')
-      .map((predicate) => predicate.vals?.length ?? 0);
+      .map((predicate) => predicate?.vals?.length ?? 0);
 
     expect(boundIdCounts.length).toBeGreaterThan(1);
     expect(Math.max(...boundIdCounts)).toBeLessThanOrEqual(500);
