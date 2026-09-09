@@ -967,7 +967,7 @@ describe('POST /api/agent-workspaces — spawn ceiling (review M6/F4)', () => {
     expect(mockCreateConversationInSession).not.toHaveBeenCalled();
   });
 
-  it('given no_server_ops (GA wave 1), should answer 409 with a message that names the settings page where the OWNER turns operations on', async () => {
+  it('given no_server_ops (GA wave 1), should answer 409 with a message that states the fact — the owner has not allowed anything — and names the API field', async () => {
     mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
     mockCountActiveSessionsForOwner.mockResolvedValue(0);
     mockSpawnSession.mockResolvedValue({ ok: false, reason: 'env_bind_refused', refusal: 'no_server_ops' });
@@ -975,8 +975,11 @@ describe('POST /api/agent-workspaces — spawn ceiling (review M6/F4)', () => {
     expect(response.status).toBe(409);
     const body = (await response.json()) as { error: string; refusal: string };
     expect(body.refusal).toBe('no_server_ops');
-    expect(body.error).toMatch(/Drive settings/);
+    // The FACT, not a pointer to a page that does not exist yet (Codex P1): the owner has not allowed anything; the API field for a technical reader.
+    expect(body.error).not.toMatch(/Drive settings/);
     expect(body.error).toMatch(/owner/i);
+    expect(body.error).toMatch(/not allowed it to run anything/);
+    expect(body.error).toContain('serverPolicy');
   });
 
   it('429s on the ATOMIC backstop when a concurrent spawn wins the race the pre-check missed (review #2261/2)', async () => {

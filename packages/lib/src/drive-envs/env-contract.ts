@@ -121,6 +121,18 @@ export const DRIVE_ENV_STATUSES = [...DRIVE_ENV_SPRITE_STATUSES, ...DRIVE_ENV_LO
 export const driveEnvStatusSchema = z.enum(DRIVE_ENV_STATUSES);
 export type DriveEnvStatus = z.infer<typeof driveEnvStatusSchema>;
 
+/**
+ * The policy as SERVED on a local DTO: what the row holds, projected through
+ * the strict parser (a stored value the parser refuses reads as deny-all).
+ * Wider than the request schema on purpose — the row may hold any grant op
+ * and `checkpoint` is a stored boolean — so a client reads the row's truth.
+ */
+export const driveEnvServerPolicyDtoSchema = z.object({
+  ops: z.array(z.enum(GRANT_OPS)),
+  checkpoint: z.boolean(),
+});
+export type DriveEnvServerPolicyDTO = z.infer<typeof driveEnvServerPolicyDtoSchema>;
+
 /** Wire timestamps are ISO-8601 strings; `Date` never crosses the boundary. */
 const isoTimestamp = z.string().datetime();
 
@@ -165,6 +177,8 @@ export const driveEnvDtoSchema = z.discriminatedUnion('substrate', [
      * distinguishes them.
      */
     enrolled: z.boolean(),
+    /** What PageSpace may ask this machine to do (`drive_env_local.serverPolicy`), as enforced at signing. The settings page reads it here. */
+    serverPolicy: driveEnvServerPolicyDtoSchema,
   }),
 ]);
 
@@ -181,12 +195,23 @@ export type DriveEnvDTO = z.infer<typeof driveEnvDtoSchema>;
  * default (`{ops:[],checkpoint:false}`) is a fail-closed backstop, not a path
  * a request may quietly fall to.
  */
+/**
+ * The ops a server policy may NAME today — the IMPLEMENTED subset of
+ * `GRANT_OPS`. `GRANT_OPS` is the wire vocabulary (what a grant can carry;
+ * `pty_open` is reserved for M2); this is what a policy may allow. Kept apart
+ * so that a `pty_open`-only policy is refused at the boundary rather than
+ * minting a bindable env the daemon then refuses everything on (Codex P2 on
+ * #2582). When M2 lands PTY, this constant grows.
+ */
+export const SERVER_POLICY_OPS = ['exec', 'fs_read', 'fs_write'] as const satisfies readonly (typeof GRANT_OPS)[number][];
+
 export const driveEnvServerPolicySchema = z
   .object({
-    ops: z.array(z.enum(GRANT_OPS)).transform((ops) => [...new Set(ops)]),
+    ops: z.array(z.enum(SERVER_POLICY_OPS)).transform((ops) => [...new Set(ops)]),
     checkpoint: z.literal(false),
   })
   .strict();
+
 
 export type DriveEnvServerPolicy = z.infer<typeof driveEnvServerPolicySchema>;
 

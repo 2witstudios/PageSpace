@@ -9,11 +9,30 @@ import {
   driveEnvSubstrateSchema,
   localEnvEnrollmentIssueSchema,
   patchDriveEnvRequestSchema,
+  SERVER_POLICY_OPS,
 } from '../env-contract';
+import { GRANT_OPS } from '../../env-bridge/grant';
 
 const BASE_DTO = { id: 'env_1', driveId: 'drive_1', name: 'dev', substrate: 'sprite', status: 'none', createdAt: '2026-09-04T00:00:00.000Z' };
 
 describe('drive-env contract — the substrate axis (Local Environments epic)', () => {
+  describe('driveEnvDtoSchema — the local variant exposes the server policy (what PageSpace may ask the machine to do)', () => {
+    const localDto = { ...BASE_DTO, substrate: 'local', status: 'disconnected', label: 'mac', enrolled: false };
+
+    it('given a local DTO with a serverPolicy, should accept', () => {
+      expect(driveEnvDtoSchema.safeParse({ ...localDto, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } }).success).toBe(true);
+    });
+
+    it('given a local DTO WITHOUT a serverPolicy, should reject — a settings page cannot render a policy it was not given', () => {
+      expect(driveEnvDtoSchema.safeParse(localDto).success).toBe(false);
+    });
+
+    it('given a Sprite DTO with a stray serverPolicy, should drop it (a Sprite has none; unknown keys are stripped, not refused)', () => {
+      const parsed = driveEnvDtoSchema.parse({ ...BASE_DTO, serverPolicy: { ops: [], checkpoint: false } });
+      expect('serverPolicy' in parsed).toBe(false);
+    });
+  });
+
   it('exposes the closed substrate set and a schema for it', () => {
     expect([...DRIVE_ENV_SUBSTRATES]).toEqual(['sprite', 'local']);
     expect(driveEnvSubstrateSchema.safeParse('sprite').success).toBe(true);
@@ -58,6 +77,21 @@ describe('drive-env contract — the substrate axis (Local Environments epic)', 
 
       it('given checkpoint true, should reject — a local machine never advertises checkpoints (invariant 12)', () => {
         expect(createDriveEnvRequestSchema.safeParse({ ...local, serverPolicy: { ops: ['fs_read'], checkpoint: true } }).success).toBe(false);
+      });
+
+      it('SERVER_POLICY_OPS is the IMPLEMENTED subset of GRANT_OPS (the wire vocabulary) — pty_open is not in it until M2 lands PTY', () => {
+        expect([...SERVER_POLICY_OPS]).toEqual(['exec', 'fs_read', 'fs_write']);
+        for (const op of SERVER_POLICY_OPS) expect(GRANT_OPS).toContain(op);
+        expect([...SERVER_POLICY_OPS]).not.toContain('pty_open');
+      });
+
+      it('given a pty_open-only policy, should reject — a bindable env that can do nothing is refused at the boundary (Codex P2)', () => {
+        expect(createDriveEnvRequestSchema.safeParse({ ...local, serverPolicy: { ops: ['pty_open'], checkpoint: false } }).success).toBe(false);
+      });
+
+      it('given pty_open mixed into an otherwise valid policy, should reject too', () => {
+        expect(createDriveEnvRequestSchema.safeParse({ ...local, serverPolicy: { ops: ['fs_read', 'pty_open'], checkpoint: false } }).success).toBe(false);
+        expect(patchDriveEnvRequestSchema.safeParse({ serverPolicy: { ops: ['exec', 'pty_open'], checkpoint: false } }).success).toBe(false);
       });
 
       it('given a stray field in serverPolicy, should reject (closed shape)', () => {
@@ -113,11 +147,11 @@ describe('drive-env contract — the substrate axis (Local Environments epic)', 
     it('given a local env, should reject a Sprite-only status, and vice versa (the vocabularies do not mix)', () => {
       expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'running' }).success).toBe(false);
       expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'sprite', status: 'connected' }).success).toBe(false);
-      expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'connected', label: 'm', enrolled: true }).success).toBe(true);
+      expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'connected', label: 'm', enrolled: true, serverPolicy: { ops: [], checkpoint: false } }).success).toBe(true);
     });
 
     it('given a local env DTO, should carry the label AND whether a machine has enrolled — the fact the UI needs to offer a new code only while none has', () => {
-      const dto = driveEnvDtoSchema.parse({ ...BASE_DTO, substrate: 'local', status: 'disconnected', label: 'jono-macstudio', enrolled: false });
+      const dto = driveEnvDtoSchema.parse({ ...BASE_DTO, substrate: 'local', status: 'disconnected', label: 'jono-macstudio', enrolled: false, serverPolicy: { ops: [], checkpoint: false } });
       expect(dto.substrate).toBe('local');
       if (dto.substrate === 'local') {
         expect(dto.label).toBe('jono-macstudio');

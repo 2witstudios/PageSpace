@@ -34,7 +34,8 @@ import {
   type SpriteHolderLifecycleRow,
 } from '../../agent-workspaces/plan-workspace-lifecycle';
 import { planEnvDelete } from '../../drive-envs/plan-env-delete';
-import type { DriveEnvDTO, DriveEnvSpriteStatus, DriveEnvLocalStatus, DriveEnvServerPolicy } from '../../drive-envs/env-contract';
+import type { DriveEnvDTO, DriveEnvSpriteStatus, DriveEnvLocalStatus, DriveEnvServerPolicy, DriveEnvServerPolicyDTO } from '../../drive-envs/env-contract';
+import { parseServerPolicy } from '../../env-bridge/policy-types';
 import {
   checkDriveEnvAllowance,
   getDriveEnvLimit,
@@ -96,6 +97,15 @@ export interface LocalEnvFacts {
   status: DriveEnvLocalStatus;
   /** `drive_env_local.enrolledAt IS NOT NULL` — a machine has pinned its key. */
   enrolled: boolean;
+  /** The row's server policy through the strict parser; deny-all when the row's value is refused or the row is gone. */
+  serverPolicy: DriveEnvServerPolicyDTO;
+}
+
+/** What a missing or unparseable stored policy projects as: the column's own backstop. */
+export const DENY_ALL_SERVER_POLICY: DriveEnvServerPolicyDTO = { ops: [], checkpoint: false };
+
+function toServerPolicyDto(parsed: ReturnType<typeof parseServerPolicy>): DriveEnvServerPolicyDTO {
+  return parsed === null ? DENY_ALL_SERVER_POLICY : { ops: [...parsed.ops], checkpoint: parsed.checkpoint };
 }
 
 export function toDriveEnvDTO(row: DriveEnvRecord, local?: LocalEnvFacts): DriveEnvDTO {
@@ -112,7 +122,7 @@ export function toDriveEnvDTO(row: DriveEnvRecord, local?: LocalEnvFacts): Drive
     if (local === undefined) {
       throw new Error(`drive env ${row.id} is local but no drive_env_local facts were supplied to toDriveEnvDTO`);
     }
-    return { ...base, substrate: 'local', status: local.status, label: local.label, enrolled: local.enrolled };
+    return { ...base, substrate: 'local', status: local.status, label: local.label, enrolled: local.enrolled, serverPolicy: local.serverPolicy };
   }
   return { ...base, substrate: 'sprite', status: deriveDriveEnvStatus(row) };
 }
@@ -577,11 +587,13 @@ export function localFactsFor(row: DriveEnvRecord, sibling: DriveEnvLocalRecord 
   // `enrolled: true` for the dead row, deliberately: with no sibling there is
   // no code to re-issue, and `false` would offer the owner a "new code" that
   // the store must refuse as `not_found`.
-  if (!sibling) return { label: row.name, status: 'disconnected', enrolled: true };
+  if (!sibling) return { label: row.name, status: 'disconnected', enrolled: true, serverPolicy: DENY_ALL_SERVER_POLICY };
   return {
     label: sibling.label,
     status: deriveLocalEnvStatus({ enrolledAt: sibling.enrolledAt, revokedAt: sibling.revokedAt, lastSeenAt: sibling.lastSeenAt, liveConnection, now }),
     enrolled: sibling.enrolledAt !== null,
+    // The same parser the signing gate uses, so the DTO never shows an op the server would refuse to sign.
+    serverPolicy: toServerPolicyDto(parseServerPolicy(sibling.serverPolicy)),
   };
 }
 

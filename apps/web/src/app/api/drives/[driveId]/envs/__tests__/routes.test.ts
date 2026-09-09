@@ -58,6 +58,7 @@ import {
   resolveEnvInDrive,
   revokeEnv,
   setEnvServerPolicy,
+  toDriveEnvDTO,
 } from '@/lib/drive-envs/drive-envs-runtime';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -152,6 +153,8 @@ describe('POST /envs — who may CREATE one', () => {
     });
     const body = (await response.json()) as { env: unknown; enrollment: { enrollmentId: string; code: string; expiresAt: string } };
     expect(body.enrollment).toEqual({ enrollmentId: 'enr_1', code: 'ABCDEFGHJKMNPQRSTVWX', expiresAt: expiresAt.toISOString() });
+    // The DTO carries the policy that was just written, so the client never has to guess it.
+    expect(toDriveEnvDTO).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } }));
   });
 
   it('given substrate local WITHOUT a serverPolicy, should answer 400 naming the policy and mint NOTHING — never fall to the column default', async () => {
