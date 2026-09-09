@@ -238,11 +238,60 @@ does. It also carries example page ids now — it was the one number in the repo
 and look at. And a guard mutation testing proved dead was removed: the fail-closed default already
 makes folding idempotent.
 
+**`51b3c44d` the spacing diagnostic could not see the loss it exists to catch.** Reviewing the
+previous commit found the whitespace measure wrong in both directions, and the second is the bad
+one. Dropping every whitespace-only text node is not "ignore pretty-printing": in
+`a<span> </span>b` — the shape HTML pasted from Word and Docs is full of — that node **is** the
+space between the words. Measured: source and render both read `ab`, identical to a page where the
+space was genuinely lost, so the one class of loss the function exists to see was the one it could
+not see. The same input also reported a change when the schema had *preserved* the space.
+Separately, whitespace inside `<pre>` was collapsed, so a code block that lost every indent read as
+affirmatively clean — and `visibleText` strips all whitespace, so criterion 3 cannot see that
+either.
+
+`interWordText` now decides positionally: a whitespace-only run is formatting when a block edge is
+on either side and content when inline text is on both, with `<pre>` kept verbatim. Verified:
+`a<span> </span>b` reads `a b` and differs from a lost space; indented and unindented code blocks
+now differ; pretty-printed paragraphs, lists, tables and sections still read identically to their
+tight equivalents. Two mutations survived and both were real test gaps — nothing covered table
+block boundaries, nothing pushed the example list past its cap — now closed.
+
+The same review corrected four docblocks that were inaccurate (a "one walk" that is 23 traversals,
+a "three criteria" that also computes the diagnostic, and a claim about example ids the file did
+not satisfy), removed a `pageId` parameter that was declared and never used, replaced a one-key map
+with a capped array, globbed the tsconfig include, and pinned both sides of a test that had
+compared the function under test to itself.
+
+**The new CI steps are confirmed working in CI**, not just locally: run 34365494496 reports
+`Run ESLint (scripts): success` and `Run TypeScript check (scripts): success`.
+
+### A pre-existing flake this PR did not cause, worth someone's attention
+
+`@pagespace/lib#test:coverage` failed once on this branch, in
+`src/permissions/__tests__/page-viewers.integration.test.ts` →
+`evaluates every candidate across the chunk boundary`, with
+`Error: Test timed out in 5000ms` at 5002 ms. 12,385 other tests passed, the
+same job passed on two earlier commits of this branch, and **this PR does not
+touch `packages/lib` at all**.
+
+The cause is structural rather than random: the test creates 205 users and 205
+drive memberships one await at a time — **410 sequential database round-trips**
+— and `packages/lib/vitest.config.ts` sets no `testTimeout`, so it runs under
+vitest's 5 s default. At roughly 12 ms per round-trip it sits on the limit and
+tips over whenever the runner is loaded. It will keep doing this.
+
+Deliberately NOT fixed here. Widening another package's test timeout from a
+seed-fidelity PR is the scope creep a reviewer should object to, and a bare
+timeout bump could also mask a real regression in `getUsersWhoCanViewPage`. The
+proper fix belongs to that file's owner: batch the factory inserts (one
+multi-row insert instead of 410 round-trips) or give the test an explicit
+timeout that reflects what it actually does.
+
 Still open, deliberately: `judgeChain`/`divergenceBetween` are test-only seams. They exist to cover
 branches real data cannot reach — no fixture available makes `y-prosemirror` alter a projection —
 so they are kept and documented rather than removed.
 
-### Mutation sweep — 33 + 12 + 13 + 11 = 69 mutations, 0 survivors after fixes
+### Mutation sweep — 33 + 12 + 13 + 11 + 1 + 11 = 81 mutations, 0 survivors after fixes
 
 Each mutation was applied by exact-needle replacement with the runner asserting the needle occurred
 once, the file content changed on disk, the test went red, and the file was byte-identical to the
@@ -307,6 +356,12 @@ import `@pagespace/editor` from `dist`.
 | F4 | marker-passthrough guard removed | **survived → proved dead → removed** |
 | W1–W3 | `interWordText` keeps whitespace-only nodes / strips all whitespace / never recurses | ✔ |
 | D1–D3 | whitespace examples not recorded / read from the wrong tally / never printed | ✔ |
+| X1 | `censusKeyOf` marker passthrough broken | ✔ |
+| B1 | `BLOCK_ELEMENTS` emptied of table/list tags | **survived → no table test → added → ✔** |
+| B2 | `<pre>` no longer verbatim | ✔ |
+| B3 / B4 | every whitespace-only node dropped again / none dropped | ✔ 6 and 2 tests |
+| B5 | comments treated as text | ✔ |
+| B6 | example cap removed | **survived → cap never exceeded in a test → fixed → ✔** |
 
 Honest gap: "divergence always `null`" (as opposed to flipped) would survive, because no fixture
 I could construct makes `y-prosemirror` alter a projection — every construct in the corpus and the
