@@ -110,8 +110,14 @@ export function TaskDetailSheet({
   // permission check of its own — and it PATCHes the TASK's page while the
   // permission here is the parent LIST's, so an early save is not even guarded
   // by the same resource. TaskAgentTriggersDialog likewise PUTs and DELETEs
-  // unguarded, and flipping it off mid-edit would unmount the dialog under the
-  // user. Both wait for a definite yes.
+  // unguarded, and gating its mount on an optimistic answer would have let the
+  // dialog be unmounted under the user when the answer arrived. Both wait for a
+  // definite yes.
+  //
+  // The resource mismatch cuts the other way too, and is left standing: someone
+  // with edit on the task page but view-only on the list cannot edit the
+  // description here at all. That is the safe direction, but the real fix is a
+  // second permission read against task.pageId for the editor.
   const { permissions, isLoading: permissionsLoading } = usePermissions(
     task?.taskListPageId ?? null,
   );
@@ -135,6 +141,7 @@ export function TaskDetailSheet({
   const hasLinkedPage = Boolean(task.pageId && task.driveId);
   const { label: statusLabel, color: statusColor } = statusDisplay;
   const triggerCount = task.activeTriggerCount ?? 0;
+  // canEditKnown, not canEdit: this mounts a dialog that writes.
   const canConfigureTriggers = canEditKnown && Boolean(task.taskListPageId && task.driveId);
   const showTriggerBadge = canConfigureTriggers && triggerCount > 0;
 
@@ -356,6 +363,7 @@ export function TaskDetailSheet({
                   <RichEditor
                     value={descriptionContent ?? ''}
                     onChange={saveDescription}
+                    // canEditKnown, not canEdit: this autosaves.
                     readOnly={!canEditKnown}
                     contentMode="html"
                   />
