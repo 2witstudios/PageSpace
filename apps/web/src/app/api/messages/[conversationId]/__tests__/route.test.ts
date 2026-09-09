@@ -1087,6 +1087,32 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
     );
   });
 
+  it('does not name one file as the denied resource when a batch is rejected', async () => {
+    // The repository reports which check failed, not which file failed it.
+    // Pinning resourceId to the first attachment would put an innocent file's
+    // id in an authz.access.denied record.
+    mockInsertDmThreadReply.mockResolvedValueOnce({ kind: 'wrong_owner' });
+    const meta = { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) };
+
+    const res = await callRoute({
+      content: 'x',
+      parentId: PARENT_ID,
+      attachments: [
+        { fileId: 'file-1', attachmentMeta: meta },
+        { fileId: 'file-2', attachmentMeta: meta },
+        { fileId: 'file-3', attachmentMeta: meta },
+      ],
+    });
+
+    expect(res.status).toBe(403);
+    const audited = mockAuditRequest.mock.calls.at(-1)?.[1] as {
+      resourceId?: string;
+      details?: { fileIds?: string[] };
+    };
+    expect(audited.resourceId).toBeUndefined();
+    expect(audited.details?.fileIds).toEqual(['file-1', 'file-2', 'file-3']);
+  });
+
   it('returns 403 + authz.access.denied audit when the reply fileId is not linked to this conversation', async () => {
     mockInsertDmThreadReply.mockResolvedValueOnce({ kind: 'not_linked' });
 
