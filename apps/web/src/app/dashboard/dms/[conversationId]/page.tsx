@@ -18,6 +18,7 @@ import type { FileAttachment } from '@/hooks/useAttachmentUpload';
 import { MessageAttachments } from '@/components/shared/MessageAttachments';
 import type { MessageAttachmentLike } from '@/lib/attachment-utils';
 import { createId } from '@paralleldrive/cuid2';
+import { reconcileOptimistic } from '@/lib/messages/reconcile-optimistic';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { RichText, addHardLineBreaks } from '@/components/messages/RichText';
@@ -92,34 +93,6 @@ interface DmConversation {
     avatarUrl: string | null;
   };
 }
-
-/**
- * Match a server-confirmed message to the optimistic row that produced it.
- *
- * Keyed on the client nonce the sender minted and the server echoed back.
- * This used to compare (conversationId, senderId, content, fileId), which is
- * only sound while the server never normalizes content — and cannot tell two
- * attachment-only messages apart at all, since both have empty content.
- */
-const isMatchingOptimisticMessage = (optimistic: Message, message: Message) =>
-  optimistic.id.startsWith('temp-') &&
-  optimistic.clientNonce !== undefined &&
-  optimistic.clientNonce === message.clientNonce;
-
-const reconcileMessage = (prev: Message[], message: Message) => {
-  const optimisticIndex = prev.findIndex((m) => isMatchingOptimisticMessage(m, message));
-
-  if (optimisticIndex !== -1) {
-    return prev.reduce<Message[]>((next, current, index) => {
-      if (current.id === message.id) return next;
-      next.push(index === optimisticIndex ? message : current);
-      return next;
-    }, []);
-  }
-
-  if (prev.find((m) => m.id === message.id)) return prev;
-  return [...prev, message];
-};
 
 export default function InboxDMPage() {
   const params = useParams();
@@ -209,7 +182,7 @@ export default function InboxDMPage() {
       // pollute the live DM view of older clients.
       if (message.parentId) return;
       if (message.conversationId === conversationId) {
-        setMessages((prev) => reconcileMessage(prev, message));
+        setMessages((prev) => reconcileOptimistic(prev, message));
 
         if (message.senderId !== user.id) {
           patch<{ success: boolean; notificationsMarkedRead: number }>(`/api/messages/${conversationId}`)
@@ -493,7 +466,7 @@ export default function InboxDMPage() {
       const response = await post<{ message?: Message }>(`/api/messages/${conversationId}`, body);
       const persistedMessage = response.message;
       if (persistedMessage) {
-        setMessages((prev) => reconcileMessage(prev, persistedMessage));
+        setMessages((prev) => reconcileOptimistic(prev, persistedMessage));
       }
     } catch (error) {
       toast.error('Failed to send message');

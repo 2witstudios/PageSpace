@@ -27,6 +27,7 @@ vi.mock('@pagespace/db/schema/storage', async () => {
 });
 
 import { channelMessageRepository } from '../channel-message-repository';
+import type { MessageAttachmentInput } from '../attachment-upload-core';
 // Real encryption helpers (NOT mocked) — prove ciphertext seeded at rest is
 // decrypted at the read edge. Legacy plaintext must still pass through.
 import { encryptField, looksEncrypted } from '../../encryption/field-crypto';
@@ -240,7 +241,7 @@ describe('channelMessageRepository.insertChannelMessageWithAttachment', () => {
     pageId: 'page-1',
     userId: 'user-1',
     content: 'hello',
-    attachments: [] as Array<{ fileId: string; attachmentMeta: unknown }>,
+    attachments: [] as MessageAttachmentInput[],
   };
 
   it('writes pageId, userId, content, fileId, and attachmentMeta verbatim', async () => {

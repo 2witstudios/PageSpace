@@ -24,6 +24,7 @@ import { PageWebhooksDialog } from '@/components/shared/PageWebhooksDialog';
 import { MessageAttachments } from '@/components/shared/MessageAttachments';
 import type { MessageAttachmentLike } from '@/lib/attachment-utils';
 import { createId } from '@paralleldrive/cuid2';
+import { reconcileOptimistic } from '@/lib/messages/reconcile-optimistic';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
@@ -103,37 +104,6 @@ interface MessageWithReactions extends MessageWithUser {
    * by the server on the POST response and the socket broadcast; never stored.
    */
   clientNonce?: string;
-}
-
-/**
- * Merge a server-confirmed message into the list.
- *
- * The optimistic row is matched by `clientNonce`, so one echo retires exactly
- * one pending row. This used to drop EVERY `temp-` row on the first
- * confirmation, which made a multi-file send flicker as rows vanished and came
- * back; and the sender's own rows were keyed on `Date.now()`, so a batch sent
- * in one tick shared an id and React stranded the duplicates on screen.
- */
-function reconcileChannelMessage(
-  prev: MessageWithReactions[],
-  message: MessageWithReactions,
-): MessageWithReactions[] {
-  const pendingIndex = message.clientNonce
-    ? prev.findIndex((m) => m.id.startsWith('temp-') && m.clientNonce === message.clientNonce)
-    : -1;
-
-  if (pendingIndex !== -1) {
-    // Replace in place so the message keeps its position in the stream, and
-    // drop any copy that already arrived by another route (e.g. a refetch).
-    return prev.reduce<MessageWithReactions[]>((next, current, index) => {
-      if (index !== pendingIndex && current.id === message.id) return next;
-      next.push(index === pendingIndex ? message : current);
-      return next;
-    }, []);
-  }
-
-  if (prev.some((m) => m.id === message.id)) return prev;
-  return [...prev, message];
 }
 
 function ChannelView({ page }: ChannelViewProps) {
@@ -301,7 +271,7 @@ function ChannelView({ page }: ChannelViewProps) {
       // the ThreadPanel; until then, drop them here so the thread API does
       // not pollute the live channel view of older clients.
       if (message.parentId) return;
-      setMessages((prev) => reconcileChannelMessage(prev, message));
+      setMessages((prev) => reconcileOptimistic(prev, message));
       // It is on screen now, so it is not unread.
       scheduleMarkChannelRead();
     };

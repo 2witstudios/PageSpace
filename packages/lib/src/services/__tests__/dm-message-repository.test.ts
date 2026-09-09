@@ -25,6 +25,7 @@ vi.mock('@pagespace/db/schema/storage', async () => {
 });
 
 import { dmMessageRepository } from '../dm-message-repository';
+import type { MessageAttachmentInput } from '../attachment-upload-core';
 // Real encryption helpers (NOT mocked) — prove ciphertext seeded at rest is
 // decrypted at the read edge. Legacy plaintext must still pass through.
 import { encryptField, looksEncrypted } from '../../encryption/field-crypto';
@@ -1216,7 +1217,7 @@ describe('dmMessageRepository.insertDmMessageWithAttachment', () => {
     conversationId: 'conv-1',
     senderId: 'user-1',
     content: 'hello',
-    attachments: [] as Array<{ fileId: string; attachmentMeta: unknown }>,
+    attachments: [] as MessageAttachmentInput[],
   };
 
   it('persists an explicit quotedMessageId on the row when provided', async () => {
