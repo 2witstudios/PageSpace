@@ -193,7 +193,56 @@ Not done (follow-ups, recorded on the leaf page): a `scripts/tsconfig.json` so C
 on every pretty-printed page as written — read that number as "pretty-printed or a lost space");
 the two test-only wrapper exports.
 
-### Mutation sweep — 33 mutations, 0 survivors (first pass) + 12 after the refactor + 13 after the review, 0 survivors after fixes
+### Convergence loop (after the review round)
+
+Four more commits, each driven by a signal rather than a guess.
+
+**`d498e052` docstring coverage.** CodeRabbit's pre-merge check read 51.22% against an 80%
+threshold over the 41 functions this diff touches: the audit documented its *types* heavily and
+left the functions bare, exported ones included. One minimal line each, comments only.
+
+**`6db4204` CI now lints and typechecks `scripts/`.** It never had: `scripts/` is not a workspace
+package, so `turbo lint` and `turbo typecheck` both skip it, and the only coverage that directory
+had was its vitest run — this PR had added ~900 lines of TypeScript into that blind spot, checked
+by nothing but my own habit of running `tsc` by hand. Adds `scripts/tsconfig.json`,
+`typecheck:scripts` and two CI steps. Scoped to the audit's own files on purpose: 13 other files
+there do not typecheck (mostly bun-only globals `import.meta.main`/`Bun`), and `exclude` cannot
+drop them because the `__tests__` suites import them back in — a directory-wide gate would have to
+exclude those tests, a bigger hole than it closes. The step builds `@pagespace/db` and
+`@pagespace/editor` first: **verified that without `packages/editor/dist` the bare `tsc` reports 16
+module-resolution errors**, which would have broken the job the first time turbo restored typecheck
+from cache without building. Also verified the gate fails on a planted type error.
+
+**`98ce9e5` a real content leak, found by adversarial probing.** `contentFreeKey` returned its
+input when the attribute pattern could not decompose a key. happy-dom builds a **real element for a
+tag name starting with `@`**, and the pattern's tag group needs one non-`@` character — so an
+ordinary pasted FreeMarker directive (`<@list items="payroll-2026-Q1.csv">`) or Slack mention
+(`<@U08JANE.DOE email="…">`) produced `attr:@list@items=…`, fell straight through, and printed the
+filename, the address and a full `href` into a report that runs against production. Not a crafted
+attack — pasted content. Verified end to end against a real database: **five planted tokens leaked
+before, none after.** Both folders now fail closed to the marker the census already uses for an
+unescaped `<` in prose.
+
+Two consequences closed with it. Keys are now **bounded** — a 264-column key from one document had
+been padding every row of a table, now 28 chars, asserted by tests on both sides. And a withheld
+value keeps an `=(withheld)` marker: collapsing it to the bare presence key erased the
+dropped-vs-changed distinction `constructKeysOf` exists to preserve, and let a key *outside*
+`ALLOWED_COSMETIC_ADDITIONS` print as one that is on it.
+
+Same commit, from the review's remaining minor: the `whitespaceOnlyTextChange` diagnostic measured
+the document's whole `textContent`, so the newline-and-indent between two blocks made it fire on
+**every pretty-printed page** — reporting "pretty-printed", not "a space was lost".
+`interWordText` now walks per text node, dropping whitespace-only nodes and collapsing within the
+rest; the pretty-printed fixture no longer trips it, a closed gap around a dropped `<iframe>` still
+does. It also carries example page ids now — it was the one number in the report nobody could go
+and look at. And a guard mutation testing proved dead was removed: the fail-closed default already
+makes folding idempotent.
+
+Still open, deliberately: `judgeChain`/`divergenceBetween` are test-only seams. They exist to cover
+branches real data cannot reach — no fixture available makes `y-prosemirror` alter a projection —
+so they are kept and documented rather than removed.
+
+### Mutation sweep — 33 + 12 + 13 + 11 = 69 mutations, 0 survivors after fixes
 
 Each mutation was applied by exact-needle replacement with the runner asserting the needle occurred
 once, the file content changed on disk, the test went red, and the file was byte-identical to the
@@ -252,6 +301,12 @@ import `@pagespace/editor` from `dist`.
 | C7 | `div` exclusion widened back to `closest` | ✔ |
 | O2 / O3 | unknown arguments accepted / `--flag=` ignored | ✔ |
 | T4 | `SET default_transaction_read_only = off` in a lib module | ✔ |
+| F1 | `contentFreeKey` fails open again (both suites) | ✔ |
+| F2 | withheld marker collapses to the presence key | ✔ 4 tests |
+| F3 | `censusKeyOf` fails open again | ✔ |
+| F4 | marker-passthrough guard removed | **survived → proved dead → removed** |
+| W1–W3 | `interWordText` keeps whitespace-only nodes / strips all whitespace / never recurses | ✔ |
+| D1–D3 | whitespace examples not recorded / read from the wrong tally / never printed | ✔ |
 
 Honest gap: "divergence always `null`" (as opposed to flipped) would survive, because no fixture
 I could construct makes `y-prosemirror` alter a projection — every construct in the corpus and the
