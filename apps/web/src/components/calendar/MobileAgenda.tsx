@@ -58,7 +58,9 @@ interface MobileAgendaProps {
 interface AgendaDay {
   date: Date;
   key: string;
-  allDay: CalendarEvent[];
+  /** All-day events, plus timed events that span more than one day. */
+  banner: CalendarEvent[];
+  /** Events that start and end on this day, in start order. */
   timed: CalendarEvent[];
   tasks: TaskWithDueDate[];
 }
@@ -67,6 +69,15 @@ const dayKey = (date: Date) => format(date, 'yyyy-MM-dd');
 
 const byStart = (a: CalendarEvent, b: CalendarEvent) =>
   new Date(a.startAt).getTime() - new Date(b.startAt).getTime();
+
+/**
+ * A timed event running across a day boundary has no meaningful start or end
+ * *on* the days it merely passes through -- printing its absolute times in each
+ * day's gutter reads as a different event repeated. It goes in the banner band
+ * with the all-day events instead, which is where every other calendar puts it.
+ */
+const spansDays = (event: CalendarEvent) =>
+  event.allDay || !isSameDay(new Date(event.startAt), new Date(event.endAt));
 
 function relativeLabel(date: Date): string | null {
   if (isToday(date)) return 'Today';
@@ -103,10 +114,14 @@ export const MobileAgenda = forwardRef<MobileAgendaHandle, MobileAgendaProps>(
 
     // Only used to place the current-time marker; a minute's resolution is plenty.
     const [now, setNow] = useState(() => new Date());
+    const windowHasToday = useMemo(() => days.some(isToday), [days]);
     useEffect(() => {
+      // No marker to move when the window is another month -- don't re-render
+      // the whole agenda every minute for nothing.
+      if (!windowHasToday) return;
       const id = setInterval(() => setNow(new Date()), 60_000);
       return () => clearInterval(id);
-    }, []);
+    }, [windowHasToday]);
 
     const groups = useMemo<AgendaDay[]>(() => {
       return days
@@ -115,14 +130,14 @@ export const MobileAgenda = forwardRef<MobileAgendaHandle, MobileAgendaProps>(
           return {
             date,
             key: dayKey(date),
-            allDay: dayEvents.filter((event) => event.allDay),
-            timed: dayEvents.filter((event) => !event.allDay).sort(byStart),
+            banner: dayEvents.filter(spansDays),
+            timed: dayEvents.filter((event) => !spansDays(event)).sort(byStart),
             tasks: showTasks ? getTasksForDay(tasks, date) : [],
           };
         })
         .filter(
           (group) =>
-            group.allDay.length > 0 ||
+            group.banner.length > 0 ||
             group.timed.length > 0 ||
             group.tasks.length > 0 ||
             // Keep a picked day even when empty, so the pick visibly lands.
@@ -131,7 +146,7 @@ export const MobileAgenda = forwardRef<MobileAgendaHandle, MobileAgendaProps>(
     }, [days, events, tasks, showTasks, pinnedDate]);
 
     const hasAnything = groups.some(
-      (group) => group.allDay.length > 0 || group.timed.length > 0 || group.tasks.length > 0
+      (group) => group.banner.length > 0 || group.timed.length > 0 || group.tasks.length > 0
     );
 
     const registerDay = useCallback((key: string, node: HTMLElement | null) => {
@@ -253,7 +268,7 @@ function AgendaDaySection({
   const dayIsToday = isToday(group.date);
   const relative = relativeLabel(group.date);
   const isEmpty =
-    group.allDay.length === 0 && group.timed.length === 0 && group.tasks.length === 0;
+    group.banner.length === 0 && group.timed.length === 0 && group.tasks.length === 0;
 
   // The marker goes before the first event that has not started yet.
   const nowIndex = dayIsToday
@@ -262,6 +277,7 @@ function AgendaDaySection({
 
   return (
     <section
+      aria-label={format(group.date, 'EEEE, MMMM d')}
       ref={(node) => {
         registerDay(group.key, node);
       }}
@@ -280,9 +296,9 @@ function AgendaDaySection({
         )}
       </h2>
 
-      {group.allDay.length > 0 && (
+      {group.banner.length > 0 && (
         <div className="flex flex-wrap gap-1 px-3.5 pt-1.5 pb-0.5">
-          {group.allDay.map((event) => {
+          {group.banner.map((event) => {
             const colors = resolveEventColor(event, context, driveColorMap ?? null);
             return (
               <button

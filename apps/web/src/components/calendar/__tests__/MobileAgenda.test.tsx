@@ -120,6 +120,31 @@ describe('MobileAgenda row density', () => {
     });
   });
 
+  test('a timed event spanning days is a banner, not a repeated timed row', () => {
+    // Runs 10 Mar 22:00 -> 11 Mar 08:00, so it lands in both days of the window.
+    renderAgenda([
+      event({
+        title: 'Overnight migration',
+        startAt: new Date(2027, 2, 10, 22, 0).toISOString(),
+        endAt: new Date(2027, 2, 11, 8, 0).toISOString(),
+      }),
+    ]);
+
+    assert({
+      given: 'a timed event crossing a day boundary',
+      should: 'appear on both days it covers',
+      actual: screen.getAllByText('Overnight migration').length,
+      expected: 2,
+    });
+
+    assert({
+      given: 'a timed event crossing a day boundary',
+      should: 'not print its absolute start time into either day gutter',
+      actual: screen.queryByText('22:00') === null,
+      expected: true,
+    });
+  });
+
   test('an all-day event is a chip, not a timed row', () => {
     renderAgenda([event({ allDay: true, title: 'Q3 close' })]);
 

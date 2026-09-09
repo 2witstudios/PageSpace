@@ -122,9 +122,12 @@ export function MobileCalendarView({
   );
 
   const goToDate = useCallback(
-    (date: Date, { scroll }: { scroll: boolean }) => {
+    (date: Date, { scroll, propagate = true }: { scroll: boolean; propagate?: boolean }) => {
       setSelectedDate(date);
-      handlers.onDateChange(date);
+      // The parent owns the fetch window, which is month-derived, so telling it
+      // about every day boundary a scroll crosses only buys a re-render of the
+      // whole tree mid-gesture.
+      if (propagate) handlers.onDateChange(date);
       if (scroll) {
         setPinnedDate(date);
         setPendingScroll(date);
@@ -144,8 +147,12 @@ export function MobileCalendarView({
   // Scrolling the agenda past a day boundary moves the strip, but must not
   // scroll the agenda back -- that would fight the user's own gesture.
   const handleVisibleDateChange = useCallback(
-    (date: Date) => goToDate(date, { scroll: false }),
-    [goToDate]
+    (date: Date) =>
+      goToDate(date, {
+        scroll: false,
+        propagate: format(date, 'yyyy-MM') !== monthKey,
+      }),
+    [goToDate, monthKey]
   );
 
   const handleMonthSelect = useCallback(
