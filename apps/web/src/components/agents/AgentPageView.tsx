@@ -85,7 +85,18 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // `user`: a stale hydrated row would otherwise enable the pane grid and its
   // session actions before /api/auth/me has confirmed (or rejected) the
   // session — wait out the resolution window instead (review #2326).
-  const canUseSessions = Boolean(user) && !authLoading;
+  //
+  // But that window closes ONCE, and it must not reopen: `loadSession()` sets
+  // `isLoading: true` again on its routine recheck (every AUTH_CHECK_INTERVAL,
+  // 15 minutes — useAuthStore.ts). Recomputing `!authLoading` each time would
+  // drop `canUseSessions`, unmount `AgentPanes` mid-session, and destroy any
+  // unsaved Settings draft living in a pane — which is new damage now that the
+  // page has no Settings tab of its own to survive the flip. So the
+  // confirmation LATCHES, and only a signed-out `user` clears it.
+  const authConfirmedRef = useRef(false);
+  if (!user) authConfirmedRef.current = false;
+  else if (!authLoading) authConfirmedRef.current = true;
+  const canUseSessions = Boolean(user) && authConfirmedRef.current;
 
   // A deep link from the Agents surface's past-conversations list
   // (`?conversationId=&sessionId=`) — one-time intent, not durable state like
@@ -362,9 +373,13 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   } = useConversations({
     agentId: page.id,
     currentConversationId: current?.conversationId ?? null,
-    // History needs the list; chat needs it too so a history-selected thread
-    // can be looked up for its session.
-    enabled: activeTab === 'history' || activeTab === 'chat',
+    // Only while History is actually showing. `activeTab` is the SESSION-LESS
+    // branch's state, and that branch's History is the one place this list is
+    // read (`handleSelectConversation` looks a pick up for its session, and it
+    // is only callable from there). The grid branch keeps `activeTab` on
+    // 'chat' forever, so the old `|| activeTab === 'chat'` fetched an agent's
+    // whole conversation list on every session-bound page load for nobody.
+    enabled: activeTab === 'history',
     // `onConversationDelete` only fires for the CURRENT conversation, so
     // `current` here is exactly the deleted thread.
     onConversationDelete: mintReplacementForCurrent,

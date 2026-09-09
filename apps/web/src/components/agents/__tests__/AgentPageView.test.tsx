@@ -701,9 +701,22 @@ describe('AgentPageView', () => {
     expect(screen.queryByTestId('sandbox-status-chip')).not.toBeInTheDocument();
     expect(screen.queryByText(/add shell/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Conversation history')).not.toBeInTheDocument();
-    // ...and none of the header that used to sit above the grid.
+    // Deliberately NOT asserting the absence of 'Open in Agents' here: it is
+    // mocked away with `AgentPanes`, so the assertion would be vacuous — and
+    // it would state the OPPOSITE of what ships, since every page-hosted pane
+    // renders that link from its own bar. See AgentPanes' suite for the real
+    // assertion.
+  });
+
+  it('the webhooks entry point is no longer page chrome — it moved into Settings', async () => {
+    // Asserted on the SESSION-LESS branch, where the page's own bar really is
+    // the whole surface, so the absence means something. In the grid branch it
+    // would be vacuous (AgentPanes is mocked).
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await screen.findByTestId('pane-bar');
     expect(screen.queryByLabelText('Incoming Webhooks')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Open in Agents')).not.toBeInTheDocument();
   });
 
   describe('deleting the current conversation (issue #2263, finding 4)', () => {

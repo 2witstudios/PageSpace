@@ -150,13 +150,13 @@ export interface AgentPanesProps {
    */
   chatContext?: 'page' | 'console';
   /**
-   * The conversation the HOSTING AI_CHAT page's own header is currently showing,
-   * when this is that page's own embedded grid — the one pane bound to exactly
-   * this conversation is displaying the same thing the page's own
-   * selector/Chat/History/Settings chrome already identifies, so its pane bar
-   * drops to a plain label instead. Deliberately keyed by CONVERSATION, not
+   * The conversation the HOSTING AI_CHAT page resolved, when this is that
+   * page's own embedded grid. The one pane bound to exactly this conversation
+   * is the page's own agent, which it cannot be switched away from — so that
+   * pane's bar drops the agent selector for a plain label rather than offering
+   * a switch that does not exist. Deliberately keyed by CONVERSATION, not
    * agent: a split pane the user pointed at the same agent but a DIFFERENT
-   * conversation is still a distinct thing the page's header isn't showing.
+   * conversation is an ordinary pane and keeps its selector.
    */
   hostConversationId?: string | null;
   /** Read-only viewers get history but no send/edit/delete/retry in any chat pane. */
@@ -1860,12 +1860,14 @@ function ChatPane({
         identity={
           <div className="flex min-w-0 flex-1 items-center gap-0.5">
             {isHostIdentity ? (
-              // This pane shows the SAME conversation the hosting AI_CHAT
-              // page's own header already identifies — a second agent
-              // selector would be duplicate chrome for switching an agent
-              // this pane can't actually leave. The tab strip is NOT
-              // dropped though: Chat/History/Settings still has to be
-              // reachable from every pane's own bar, host included.
+              // The host pane cannot leave its agent — the page IS that agent —
+              // so a selector here would offer a switch that does not exist.
+              // (It used to be justified by the page header naming the agent
+              // instead; that header is gone, and this pane's own label is now
+              // the only identity. The reason survives the header: an
+              // unusable control is worse than a plain label.) The tab strip
+              // is NOT dropped: Chat/History/Settings has to be reachable from
+              // every pane's own bar, host included.
               <PaneSessionIdentity name={agent?.title ?? title} />
             ) : (
               <AISelector

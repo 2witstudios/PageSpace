@@ -1472,7 +1472,11 @@ describe('AgentPanes — the pane bar', () => {
     // different links, which one page-level link could never do.
     mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
     seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
-    renderPanes({ chatContext: 'page' });
+    // `hostConversationId` is what the AI_CHAT page always passes, so this is
+    // the HOST pane — the one configuration that actually ships. Without it the
+    // pane renders an AISelector instead of the host label, and the shipping
+    // shape would go untested.
+    renderPanes({ chatContext: 'page', hostConversationId: 'conv-1' });
 
     await screen.findByTestId('pane-chat');
     expect(await screen.findByLabelText('Open in Agents')).toHaveAttribute(
