@@ -99,6 +99,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     "/docs/security/authentication",
     "/docs/security/permissions",
     "/docs/security/zero-trust",
+    "/docs/security/local-environments",
   ];
 
   const docsRoutes: MetadataRoute.Sitemap = docPaths.map((path) => ({

@@ -51,6 +51,7 @@ const referenceSections = [
       { title: "Authentication", href: "/docs/security/authentication" },
       { title: "Permissions", href: "/docs/security/permissions" },
       { title: "Zero-Trust", href: "/docs/security/zero-trust" },
+      { title: "Local Environments", href: "/docs/security/local-environments" },
     ],
   },
 ];
