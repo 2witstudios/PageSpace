@@ -7,6 +7,9 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+const fetchWithAuthMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/auth/auth-fetch', () => ({ fetchWithAuth: (...args: unknown[]) => fetchWithAuthMock(...args) }));
+
 import { AskUserAnswerProvider } from '../ask-user/AskUserAnswerContext';
 import { EnvApprovalCard, frozenRequestRows } from '../env-approval/EnvApprovalCard';
 
@@ -25,13 +28,18 @@ function jsonResponse(body: unknown, status = 200): Response {
 const part = (over: Record<string, unknown> = {}) => ({ type: 'tool-request_env_approval', toolCallId: 'call_1', state: 'input-available' as const, input: { challengeId: 'ch_1' }, ...over });
 
 describe('EnvApprovalCard', () => {
+  /** Every request goes through the auth fetch helper (session + CSRF); a raw window.fetch would be a regression. */
   let fetchMock: ReturnType<typeof vi.fn>;
+  let rawFetch: ReturnType<typeof vi.fn>;
   beforeEach(() => {
-    fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
+    fetchMock = fetchWithAuthMock;
+    fetchMock.mockReset();
+    rawFetch = vi.fn(async () => { throw new Error('raw fetch must not be used — it carries no CSRF token'); });
+    vi.stubGlobal('fetch', rawFetch);
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+    expect(rawFetch).not.toHaveBeenCalled();
   });
 
   it('frozenRequestRows prints the same fields the daemon prompt does: principal, op, command, cwd, paths, env, limits', () => {
@@ -45,7 +53,7 @@ describe('EnvApprovalCard', () => {
 
   it('fetches the frozen request from the approvals route and renders it verbatim; Allow posts the chosen scope and submits the route\'s answer under request_env_approval', async () => {
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (!init || init.method === undefined) return jsonResponse(PENDING);
+      if (!init || init.method !== 'POST') return jsonResponse(PENDING);
       expect(url).toBe('/api/env-bridge/approvals/ch_1');
       expect(JSON.parse(String(init.body))).toEqual({ decision: 'allow', scope: 'until_revoked' });
       return jsonResponse({ challengeId: 'ch_1', outcome: 'allowed', scope: 'until_revoked', exitCode: 0, stdout: 'On branch main', stderr: '', truncated: false });
@@ -64,11 +72,15 @@ describe('EnvApprovalCard', () => {
     fireEvent.click(screen.getByTestId('env-approval-allow'));
     await waitFor(() => expect(submitAnswers).toHaveBeenCalledTimes(1));
     expect(submitAnswers).toHaveBeenCalledWith('call_1', expect.objectContaining({ challengeId: 'ch_1', outcome: 'allowed', exitCode: 0 }), 'request_env_approval');
+    // Codex P1 on #2583: BOTH the GET and the POST go through fetchWithAuth (the helper that attaches the CSRF token the requireCSRF route demands).
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]![1]).toMatchObject({ method: 'GET' });
+    expect(fetchMock.mock.calls[1]![1]).toMatchObject({ method: 'POST' });
   });
 
   it('Deny posts a deny and submits denied', async () => {
     fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
-      if (!init || init.method === undefined) return jsonResponse(PENDING);
+      if (!init || init.method !== 'POST') return jsonResponse(PENDING);
       expect(JSON.parse(String(init.body))).toEqual({ decision: 'deny' });
       return jsonResponse({ challengeId: 'ch_1', outcome: 'denied' });
     });

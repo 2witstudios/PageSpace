@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { useAskUserAnswerContext } from '../ask-user/AskUserAnswerContext';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import {
   ENV_APPROVAL_SCOPES,
   REQUEST_ENV_APPROVAL_TOOL_NAME,
@@ -109,7 +110,8 @@ export function frozenRequestRows(pending: PendingApprovalView): Array<[string, 
 }
 
 async function fetchPending(challengeId: string): Promise<LoadState> {
-  const response = await fetch(`/api/env-bridge/approvals/${encodeURIComponent(challengeId)}`, { credentials: 'include' });
+  // Through the auth fetch helper (Codex P1 on #2583): it carries the session and the CSRF token the POST route requires; a raw fetch answered 403 CSRF_TOKEN_MISSING.
+  const response = await fetchWithAuth(`/api/env-bridge/approvals/${encodeURIComponent(challengeId)}`, { method: 'GET' });
   if (response.ok) {
     const pending = (await response.json()) as PendingApprovalView;
     return { kind: 'loaded', pending };
@@ -155,9 +157,8 @@ export function EnvApprovalCard({ part }: EnvApprovalCardProps) {
     setBusy(decision);
     setFailure(null);
     try {
-      const response = await fetch(`/api/env-bridge/approvals/${encodeURIComponent(challengeId)}`, {
+      const response = await fetchWithAuth(`/api/env-bridge/approvals/${encodeURIComponent(challengeId)}`, {
         method: 'POST',
-        credentials: 'include',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(decision === 'allow' ? { decision, scope } : { decision }),
       });
