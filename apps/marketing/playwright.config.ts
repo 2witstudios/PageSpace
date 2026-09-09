@@ -13,7 +13,9 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   webServer: {
-    command: "bun run dev",
+    // CAPTURE=1 turns off Next's dev indicator, which otherwise renders into
+    // the exported screenshots. See next.config.ts.
+    command: "CAPTURE=1 bun run dev",
     url: "http://localhost:3004",
     reuseExistingServer: !process.env.CI,
     timeout: 120 * 1000,

@@ -86,5 +86,46 @@ export const CANVAS: Record<
   ipad: { width: 2752, height: 2064, label: 'iPad 13"', orientation: "landscape" },
 };
 
+/**
+ * Apple's official product bezels, from developer.apple.com/design/resources
+ * ("Product Bezels", PNG). iPhone 17 Pro Max — Deep Blue, and iPad Pro (M5)
+ * 13" — Space Black, both chosen to sit against the dark space backdrop.
+ *
+ * Using Apple hardware art in marketing carries conditions — see
+ * developer.apple.com/app-store/marketing/guidelines/#section-products. In
+ * short: do not alter the hardware imagery, and do not imply endorsement.
+ *
+ * The aperture rect is the fully-transparent screen cut-out, measured off each
+ * PNG's alpha channel rather than eyeballed — a few pixels out shows as a seam
+ * where the capture meets the bezel. Both happen to be exact 1:1 matches for
+ * their capture, so the screenshot drops in without resampling.
+ */
+export const FRAME: Record<
+  ShotDevice,
+  {
+    src: string;
+    width: number;
+    height: number;
+    /** Screen cut-out. `radius` matters: Apple leaves the rounded corner
+     *  transparent and expects the screenshot to be masked to it, so a square
+     *  capture otherwise pokes out past the bezel. Measured from each PNG's
+     *  alpha and curve-fitted — 62pt at 3x, and 30pt at 2x. */
+    screen: { x: number; y: number; w: number; h: number; radius: number };
+  }
+> = {
+  iphone: {
+    src: "/device-frames/iphone.png",
+    width: 1470,
+    height: 3000,
+    screen: { x: 75, y: 66, w: 1320, h: 2868, radius: 186 },
+  },
+  ipad: {
+    src: "/device-frames/ipad.png",
+    width: 3000,
+    height: 2300,
+    screen: { x: 124, y: 118, w: 2752, h: 2064, radius: 60 },
+  },
+};
+
 export const capturePath = (device: ShotDevice, slug: string) =>
   `/screenshots/ios/${device}/${slug}.png`;

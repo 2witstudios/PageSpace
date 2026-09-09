@@ -1,6 +1,6 @@
 import Image from "next/image";
 import { ScreenshotCanvas, Headline, Subline, Tag } from "@/components/ScreenshotCanvas";
-import { DeviceOutline } from "@/components/DeviceFrame";
+import { DeviceWithReflection } from "@/components/DeviceFrame";
 import { CANVAS, capturePath, type Shot, type ShotDevice } from "@/lib/app-store-shots";
 
 /**
@@ -19,8 +19,12 @@ import { CANVAS, capturePath, type Shot, type ShotDevice } from "@/lib/app-store
    device at 0.65 — and an iPad capture is dense UI that a store listing already
    renders a few hundred pixels wide. Copy now runs full width across the top,
    which lets the device grow and stops the headlines breaking mid-phrase. */
-const PORTRAIT = { copyTop: 140, copyPad: 90, deviceTop: 800, scale: 0.66 };
-const LANDSCAPE = { copyLeft: 150, copyTop: 130, copyWidth: 1900, deviceTop: 500, scale: 0.72 };
+/* Scale now applies to the whole bezel, not the bare screen — the iPhone frame
+   is 1470x3000 around a 1320x2868 screen, the iPad 3000x2300 around 2752x2064.
+   Both devices sit slightly higher than before to leave the reflection somewhere
+   to fade; it is allowed to run off the bottom, where the canvas clips it. */
+const PORTRAIT = { copyTop: 130, copyPad: 90, deviceTop: 740, scale: 0.645 };
+const LANDSCAPE = { copyLeft: 150, copyTop: 100, copyWidth: 1900, deviceTop: 430, scale: 0.66 };
 
 export function StoreScreenshot({ shot, device }: { shot: Shot; device: ShotDevice }) {
   const canvas = CANVAS[device];
@@ -60,7 +64,7 @@ export function StoreScreenshot({ shot, device }: { shot: Shot; device: ShotDevi
             transformOrigin: "top center",
           }}
         >
-          <DeviceOutline device={device}>{capture}</DeviceOutline>
+          <DeviceWithReflection device={device}>{capture}</DeviceWithReflection>
         </div>
       </ScreenshotCanvas>
     );
@@ -93,7 +97,7 @@ export function StoreScreenshot({ shot, device }: { shot: Shot; device: ShotDevi
           transformOrigin: "top center",
         }}
       >
-        <DeviceOutline device={device}>{capture}</DeviceOutline>
+        <DeviceWithReflection device={device}>{capture}</DeviceWithReflection>
       </div>
     </ScreenshotCanvas>
   );
