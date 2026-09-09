@@ -1348,6 +1348,16 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
   };
 }
 
+/** `getSprite`, with a genuine not-found folded to `null`; every other error (auth, rate limit, outage) surfaces. */
+async function getSpriteIfExists(sdk: SpritesSdk, name: string): Promise<SpriteInstanceLike | null> {
+  try {
+    return await sdk.getSprite(name);
+  } catch (error) {
+    if (isSpriteNotFoundError(error)) return null;
+    throw error;
+  }
+}
+
 /**
  * Whether an error from `sdk.getSprite` means the named Sprite does not exist —
  * a cache miss that should create-fresh (`getOrCreate`) or reconnect-null
@@ -1359,16 +1369,6 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
  * and fall back to a conservative message match; a KNOWN non-404 status is never
  * a cache miss.
  */
-/** `getSprite`, with a genuine not-found folded to `null`; every other error (auth, rate limit, outage) surfaces. */
-async function getSpriteIfExists(sdk: SpritesSdk, name: string): Promise<SpriteInstanceLike | null> {
-  try {
-    return await sdk.getSprite(name);
-  } catch (error) {
-    if (isSpriteNotFoundError(error)) return null;
-    throw error;
-  }
-}
-
 export function isSpriteNotFoundError(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
   const e = error as {
