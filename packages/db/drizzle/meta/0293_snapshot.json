@@ -1,6 +1,6 @@
 {
-  "id": "0c45cd7b-ff16-4b37-99a2-297be2becd0c",
-  "prevId": "79b58011-85eb-4c9a-b251-bd643c5a0924",
+  "id": "3df44be3-b5df-4ab9-86b1-73158f70723d",
+  "prevId": "095d8c33-2071-48ec-8779-6fcb623b22f5",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -11779,6 +11779,12 @@
         },
         "conditionalFormats": {
           "name": "conditionalFormats",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "regions": {
+          "name": "regions",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
