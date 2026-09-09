@@ -81,4 +81,28 @@ describe('daemon structural invariants', () => {
     expect(source).toMatch(/run\(request: NormalizedRequest\)/);
     expect(source).not.toMatch(/GrantFrame|ExecutionRequest\b/);
   });
+
+  describe('GA wave 1 — the two docblocks that used to lie', () => {
+    const dispatcher = read(join(HERE, 'dispatcher.ts'));
+    const auditLog = read(join(HERE, 'audit-log.ts'));
+
+    it('dispatcher.ts no longer carries a "permissive stand-in" for the server policy: the constant is named for what it is — the server\'s say is the signature over `op`', () => {
+      expect(dispatcher).not.toContain('DAEMON_SERVER_POLICY');
+      expect(dispatcher).not.toMatch(/permissive stand-in/);
+      expect(dispatcher).toMatch(/^const SERVER_POLICY_CARRIED_BY_SIGNATURE: ServerPolicy = \{ ops: \[\.\.\.GRANT_OPS\], checkpoint: false \};$/m);
+      // The docblock says WHY every op may pass this input: the server already refused, at signing, every op it does not allow (decideSign), and a grant's `op` is under the signature the daemon verifies first.
+      const docblock = dispatcher.slice(0, dispatcher.indexOf('export const SERVER_POLICY_CARRIED_BY_SIGNATURE'));
+      expect(docblock).toMatch(/decideSign/);
+      expect(docblock).toMatch(/signature over `op`/);
+      expect(dispatcher).toMatch(/serverPolicy: SERVER_POLICY_CARRIED_BY_SIGNATURE,/);
+    });
+
+    it('audit-log.ts no longer claims the server audits by grantId on its side: the join has one side until the visibility phase writes the other', () => {
+      const docblock = auditLog.slice(0, auditLog.indexOf('import type'));
+      expect(docblock).not.toMatch(/server audits on its side/);
+      expect(docblock).not.toMatch(/so the two logs can be joined/);
+      expect(docblock).toMatch(/no server-side (audit )?row/i);
+      expect(docblock).toMatch(/grantId/);
+    });
+  });
 });
