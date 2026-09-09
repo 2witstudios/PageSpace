@@ -567,6 +567,11 @@ export async function POST(
     // re-loads through the shared `with` clause — the attachment rows have to
     // be put back on by hand here. Without this the recipient's socket payload
     // would carry an empty bubble until they refreshed.
+    //
+    // These rows carry no joined `file`, and deliberately so: every field the
+    // renderer needs (mime type, size, name) is in attachmentMeta, and
+    // re-reading each file to populate a relation nothing reads would add a
+    // round trip after the commit for no gain.
     const baseMessage = { ...insertResult.message, attachments: insertResult.attachments };
     // Enrich with the quote snapshot so the realtime payload and the JSON
     // response carry the same denormalized shape the GET list returns.
