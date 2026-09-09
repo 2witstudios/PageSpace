@@ -8,6 +8,7 @@ import {
   parseRegionRange,
   parseRegions,
   resolveRegionRows,
+  shiftRegionsForRowDelete,
   type SheetRegion,
 } from '../sheets/regions';
 
@@ -300,5 +301,110 @@ describe('parseRegions', () => {
     const hostile: Record<string, unknown> = {};
     for (let i = 0; i < 5_000; i++) hostile[String(i)] = region({ id: `r${i}` });
     expect(parseRegions(hostile)).toHaveLength(MAX_REGIONS);
+  });
+});
+
+describe('shiftRegionsForRowDelete', () => {
+  const r = (over: Partial<SheetRegion> = {}): SheetRegion => ({
+    id: 'r1',
+    range: 'A5:C20',
+    headerRows: 1,
+    totalRows: [20],
+    ...over,
+  });
+
+  it('leaves a region entirely above the deleted band alone', () => {
+    const out = shiftRegionsForRowDelete([r({ range: 'A1:C4', totalRows: [4] })], 9, 2);
+    expect(out?.[0].range).toBe('A1:C4');
+    expect(out?.[0].totalRows).toEqual([4]);
+  });
+
+  it('moves a region below the band up by the count', () => {
+    // Rows 1-2 deleted (0-based 0..1): A5:C20 becomes A3:C18.
+    const out = shiftRegionsForRowDelete([r()], 0, 2);
+    expect(out?.[0].range).toBe('A3:C18');
+    expect(out?.[0].totalRows).toEqual([18]);
+  });
+
+  it('keeps an open region open rather than inventing an end', () => {
+    const out = shiftRegionsForRowDelete([r({ range: 'A5:C', totalRows: undefined })], 0, 2);
+    expect(out?.[0].range).toBe('A3:C');
+  });
+
+  it('collapses a start that sat inside the band onto the first surviving row', () => {
+    // Delete 0-based rows 3..9; the region started at row 4 (0-based 4).
+    const out = shiftRegionsForRowDelete([r({ range: 'A5:C20' })], 3, 7);
+    expect(out?.[0].range).toBe('A4:C13');
+  });
+
+  it('drops a region whose every row was deleted', () => {
+    expect(shiftRegionsForRowDelete([r({ range: 'A5:C8' })], 4, 4)).toBeUndefined();
+  });
+
+  it('drops a total whose own row was deleted rather than moving it to a neighbour', () => {
+    // Nothing in the surviving rows is a total any more.
+    const out = shiftRegionsForRowDelete([r({ range: 'A1:C20', totalRows: [10, 20] })], 9, 1);
+    expect(out?.[0].totalRows).toEqual([19]);
+  });
+
+  it('removes totalRows entirely when every total was deleted', () => {
+    const out = shiftRegionsForRowDelete(
+      [r({ range: 'A1:C20', totalRows: [10, 11] })],
+      9,
+      2
+    );
+    expect(out?.[0].totalRows).toBeUndefined();
+    expect(out?.[0].range).toBe('A1:C18');
+  });
+
+  it('drops a region whose range cannot be parsed rather than inventing coordinates', () => {
+    const out = shiftRegionsForRowDelete(
+      [{ id: 'bad', range: 'nonsense' } as SheetRegion, r({ range: 'A1:C9', totalRows: undefined })],
+      0,
+      1
+    );
+    expect(out).toHaveLength(1);
+    expect(out?.[0].id).toBe('r1');
+  });
+
+  it('shrinks a header band that was partly deleted', () => {
+    const out = shiftRegionsForRowDelete(
+      [r({ range: 'A1:C20', headerRows: 3, totalRows: undefined })],
+      1,
+      1
+    );
+    expect(out?.[0].headerRows).toBe(2);
+  });
+
+  it('leaves headerRows alone when the header band survives intact', () => {
+    const out = shiftRegionsForRowDelete(
+      [r({ range: 'A1:C20', headerRows: 2, totalRows: undefined })],
+      10,
+      2
+    );
+    expect(out?.[0].headerRows).toBe(2);
+  });
+
+  it('carries unknown fields through the shift', () => {
+    const out = shiftRegionsForRowDelete(
+      [{ ...r(), sparkline: { column: 'D' } } as SheetRegion],
+      0,
+      1
+    );
+    expect(out?.[0]).toMatchObject({ sparkline: { column: 'D' } });
+  });
+
+  it('is a no-op for an empty band or no regions', () => {
+    expect(shiftRegionsForRowDelete([r()], 0, 0)?.[0].range).toBe('A5:C20');
+    expect(shiftRegionsForRowDelete(undefined, 0, 2)).toBeUndefined();
+    expect(shiftRegionsForRowDelete([], 0, 2)).toEqual([]);
+  });
+
+  it('produces ranges the parser accepts, so a shift cannot corrupt storage', () => {
+    for (const range of ['A5:C20', 'A5:C', 'B2:D9']) {
+      const out = shiftRegionsForRowDelete([r({ range, totalRows: undefined })], 1, 1);
+      if (!out) continue;
+      expect(parseRegion(out[0])).not.toBeNull();
+    }
   });
 });

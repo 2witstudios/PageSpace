@@ -21,7 +21,13 @@
  * an engine or a database.
  */
 
-import { MAX_ADDRESSABLE_COLUMN, MAX_ADDRESSABLE_ROW, decodeCellAddress, decodeColumnLabel } from './address';
+import {
+  MAX_ADDRESSABLE_COLUMN,
+  MAX_ADDRESSABLE_ROW,
+  decodeCellAddress,
+  decodeColumnLabel,
+  encodeColumnLabel,
+} from './address';
 
 /**
  * What a column holds. A role is a *meaning*, not a format — `currency` is
@@ -364,4 +370,95 @@ export function parseRegions(value: unknown): SheetRegion[] | undefined {
   }
 
   return regions.length > 0 ? regions : undefined;
+}
+
+/**
+ * Re-anchor regions after a band of rows is deleted.
+ *
+ * A region's range and `totalRows` are ABSOLUTE coordinates, while deleting
+ * rows renumbers everything below the band. Without this, deleting a row above
+ * a bounded region leaves its formatting one row below its data, and deleting
+ * above a declared total gives the total treatment to whatever row slid into
+ * that number — formatting that silently describes the wrong cells, which is
+ * worse than formatting that is obviously missing.
+ *
+ * `fromRow` and `count` are the 0-based band the caller actually removed
+ * (already clamped to what exists), so this never has to re-derive them.
+ *
+ * Scope note: `conditionalFormats` ranges and `rowHeights` keys are absolute in
+ * the same way and are NOT shifted here. That gap predates regions — it is the
+ * structural-editing work that also owes reference rewriting to formulas — and
+ * fixing it properly means rewriting rule ranges and relative formula anchors
+ * together, not bolting a second shifter on here.
+ */
+export function shiftRegionsForRowDelete(
+  regions: readonly SheetRegion[] | undefined,
+  fromRow: number,
+  count: number
+): SheetRegion[] | undefined {
+  if (!regions || regions.length === 0 || count <= 0) return regions as SheetRegion[] | undefined;
+
+  const bandEnd = fromRow + count - 1;
+  /** Where a row number lands afterwards, or null if it was deleted. */
+  const moveRow = (row: number): number | null => {
+    if (row > bandEnd) return row - count;
+    if (row >= fromRow) return null;
+    return row;
+  };
+
+  const shifted: SheetRegion[] = [];
+
+  for (const region of regions) {
+    const bounds = parseRegionRange(region.range);
+    // Unparseable ranges are dropped on load anyway; leaving one untouched here
+    // keeps this from being the place that silently invents coordinates.
+    if (!bounds) continue;
+
+    // A start inside the band collapses onto the first surviving row, which is
+    // the band's start once the band is gone.
+    const nextStart = bounds.rowStart > bandEnd ? bounds.rowStart - count
+      : bounds.rowStart >= fromRow ? fromRow
+      : bounds.rowStart;
+
+    // An open region has no end to move: it always reaches the sheet's extent.
+    let nextEnd: number | null = null;
+    if (bounds.rowEnd !== null) {
+      nextEnd = bounds.rowEnd > bandEnd ? bounds.rowEnd - count
+        : bounds.rowEnd >= fromRow ? fromRow - 1
+        : bounds.rowEnd;
+      // Every row it covered is gone.
+      if (nextEnd < nextStart) continue;
+    }
+
+    const startLabel = encodeColumnLabel(bounds.colStart);
+    const endLabel = encodeColumnLabel(bounds.colEnd);
+    const next: SheetRegion = {
+      ...region,
+      range: `${startLabel}${nextStart + 1}:${endLabel}${nextEnd === null ? '' : nextEnd + 1}`,
+    };
+
+    if (region.headerRows !== undefined) {
+      // Only the header rows that survived still form the band.
+      let surviving = 0;
+      for (let row = bounds.rowStart; row < bounds.rowStart + region.headerRows; row++) {
+        if (moveRow(row) !== null) surviving++;
+      }
+      next.headerRows = surviving;
+    }
+
+    if (region.totalRows !== undefined) {
+      // Stored 1-based; a total whose own row was deleted is not relocated to a
+      // neighbour, it is dropped — nothing there is a total any more.
+      const totals = region.totalRows
+        .map((row) => moveRow(row - 1))
+        .filter((row): row is number => row !== null)
+        .map((row) => row + 1);
+      if (totals.length > 0) next.totalRows = totals;
+      else delete next.totalRows;
+    }
+
+    shifted.push(next);
+  }
+
+  return shifted.length > 0 ? shifted : undefined;
 }

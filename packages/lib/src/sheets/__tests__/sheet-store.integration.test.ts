@@ -637,6 +637,63 @@ describe('sheet store (integration)', () => {
       expect(cellAt(rows, 2, 'A')?.value).toBe(5);
       expect(new Set(rows.map((row) => row.rowIndex)).size).toBe(rows.length);
     });
+
+    it('re-anchors regions so their formatting follows the rows that moved', async () => {
+      // Regions are absolute coordinates. Without a shift, deleting rows above a
+      // bounded region leaves its formatting a row below its data, and the total
+      // treatment lands on whatever row slid into that number — formatting that
+      // describes the wrong cells.
+      const { pageId, ownerId } = await makeSheet();
+      await appendRows(
+        { pageId },
+        Array.from({ length: 20 }, (_, index) => ({ A: String(index) })),
+        { userId: ownerId }
+      );
+      await applyFormatOps(
+        { pageId },
+        [
+          {
+            type: 'setRegions',
+            regions: [
+              { id: 'table', range: 'A5:C20', headerRows: 1, totalRows: [20] },
+              { id: 'open', range: 'A5:C' },
+            ],
+          },
+        ],
+        { userId: ownerId }
+      );
+
+      // Remove the two rows above the region (0-based 0..1).
+      await deleteRows({ pageId }, 0, 2, { userId: ownerId });
+
+      const after = await readTabFormatting({ pageId });
+      const bounded = after?.regions.find((region) => region.id === 'table');
+      const open = after?.regions.find((region) => region.id === 'open');
+
+      expect(bounded?.range).toBe('A3:C18');
+      expect(bounded?.totalRows).toEqual([18]);
+      // An open region has no end to move; it still reaches the extent.
+      expect(open?.range).toBe('A3:C');
+    });
+
+    it('drops a region the delete consumed entirely', async () => {
+      const { pageId, ownerId } = await makeSheet();
+      await appendRows(
+        { pageId },
+        Array.from({ length: 12 }, (_, index) => ({ A: String(index) })),
+        { userId: ownerId }
+      );
+      await applyFormatOps(
+        { pageId },
+        [{ type: 'setRegions', regions: [{ id: 'doomed', range: 'A5:C8' }] }],
+        { userId: ownerId }
+      );
+
+      await deleteRows({ pageId }, 4, 4, { userId: ownerId });
+
+      const after = await readTabFormatting({ pageId });
+      expect(after?.regions).toEqual([]);
+    });
   });
 
   describe('queryRows', () => {

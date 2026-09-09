@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createEmptySheet } from '../sheets/io';
 import { evaluateSheet, evaluateSheetSparse } from '../sheets/evaluation';
 import { regionTheme, columnRoleFormat } from '../sheets/region-format';
+import { numberFormatToExcelCode } from '../sheets/format';
 import type { SheetData } from '../sheets/types';
 
 /** A small budget: header row, a money column, a total row. */
@@ -122,6 +123,21 @@ describe('regions through the evaluator', () => {
     // ...while a field only the column sets still survives.
     expect(at('B2')?.background).toBe('#f1f5f9');
     expect(at('B2')?.number?.kind).toBe('percent');
+  });
+
+  it('carries a region-derived number format into the XLSX export path', () => {
+    // The export route reads `byAddress[addr].format.number` and passes it
+    // through `numberFormatToExcelCode`, so a region's currency column must
+    // export as REAL Excel currency — a workbook that cannot sum its own money
+    // column is a decorative export.
+    //
+    // Only this half survives: the themed header fill and bold do not, because
+    // xlsx@0.18.5 (community) does not write cell styles. See the note in
+    // packages/lib/src/content/export-utils.ts.
+    const result = evaluateSheet(budget());
+    expect(numberFormatToExcelCode(result.byAddress.B2.format?.number)).toBe('"$"#,##0.00');
+    // The header is text, so it carries no number format to export.
+    expect(numberFormatToExcelCode(result.byAddress.B1.format?.number)).toBeUndefined();
   });
 
   it('costs nothing on a sheet with no regions', () => {

@@ -59,7 +59,7 @@ import {
   type RangeSpan,
 } from './format-request';
 import { parseConditionalRules, type ConditionalRule } from './conditional';
-import { parseRegions, type SheetRegion } from './regions';
+import { parseRegions, shiftRegionsForRowDelete, type SheetRegion } from './regions';
 import { setColumnFormat, setColumnWidth, setRowHeight, setFrozen } from './format-ops';
 import { isEmptyFormat } from './format';
 import {
@@ -2048,6 +2048,22 @@ export async function deleteRows(
       { rowCount, columnCount: locked?.columnCount ?? tab.columnCount },
       tx
     );
+
+    // Regions are absolute coordinates, so the shift above moved the DATA out
+    // from under them: without this, deleting a row above a bounded region
+    // leaves its formatting a row below its data, and deleting above a declared
+    // total gives the total treatment to whatever row slid into that number.
+    // Formatting that describes the wrong cells is worse than formatting that
+    // is obviously missing, so this travels in the same transaction.
+    const storedRegions = parseRegions((locked?.regions ?? tab.regions) ?? undefined);
+    if (storedRegions) {
+      const shifted = shiftRegionsForRowDelete(storedRegions, fromRow, effectiveCount);
+      await tx
+        .update(sheetTabs)
+        .set({ regions: shifted ?? null, updatedAt: new Date() })
+        .where(eq(sheetTabs.id, tab.id));
+    }
+
     await touchPage(ref.pageId, tx);
 
     // Rebuild, and do not leave it to the caller.
