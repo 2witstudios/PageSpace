@@ -93,6 +93,22 @@ Each guarantee is followed by its exact limit.
   removes the click just the same. And you are judging a command line, and approving it is
   remembered — see the next section.*
 
+- **Approving in the chat needs your passkey, and your machine checks it itself.** When you
+  answer an approval card, your browser asks your authenticator — Touch ID, Windows Hello, a
+  security key — to sign, and your machine verifies that signature before it runs anything. The
+  signature covers the exact request your machine froze, so it cannot be moved to a different
+  command, a different question, or a different computer, and **PageSpace cannot produce one**.
+  That is the point: without it, anyone who could sign requests *and* stand where our servers
+  stand could answer your card for you, and your machine would have no way to tell. The
+  passkeys your machine trusts are pinned when you enrol it, from your account, while you are
+  at the keyboard — \`pagespace env owner-keys\` prints them. *Two consequences, both
+  deliberate: nothing can add a key to a machine afterwards (not us, not the CLI, not any
+  message on the bridge) — register a new passkey and **re-enrol** the machine to use it; and
+  if you had no passkey when you enrolled, chat approvals are refused and requests prompt in
+  the terminal running \`pagespace env connect\` instead. The terminal prompt was never exposed
+  to this, which is why it is the fallback. Limit: the signature proves that you pressed a key
+  for this request — it cannot prove you read it.*
+
 - **File access is confined to the folders you declared.** Every file an agent reads or writes,
   and every working directory, must resolve inside a folder in your policy file; symlinks are
   resolved and \`..\` is refused. *Limit: this confines the paths an agent can name. It does not

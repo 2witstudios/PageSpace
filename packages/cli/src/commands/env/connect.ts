@@ -39,6 +39,7 @@ import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../exit-c
 import type { CommandHandler } from '../../router/router.js';
 import { signWithMachineKey, type SignWithMachineKey } from '../../env-bridge/keypair.js';
 import { ed25519Verify, envBridgeHash, envBridgeSha256, es256Verify } from '../../env-bridge/crypto.js';
+import type { PinnedOwnerApproval } from '../../env-bridge/lib-core.js';
 import { createAuditLog, defaultAuditPath } from '../../env-bridge/audit-log.js';
 import { createAskPrompter, describeScope, describeSubject } from '../../env-bridge/ask.js';
 import { createApprovalsStore, defaultApprovalsPath, writeApprovalsFile } from '../../env-bridge/approvals-store.js';
@@ -121,6 +122,23 @@ function askInChat(ctx: Parameters<CommandHandler>[0]): boolean {
   return !ctx.isTTY || ctx.env[ASK_MODE_ENV_VAR]?.trim().toLowerCase() === 'chat';
 }
 
+/**
+ * What this daemon will accept as proof of the owner's click, said plainly at
+ * start (hardening B, leaf B5). Three honest states, and the one that matters
+ * — nothing pinned — says both what will happen and how to fix it.
+ */
+export function describeOwnerApprovalForConnect(pinned: PinnedOwnerApproval | undefined, chatAsks: boolean): string {
+  const count = pinned?.credentials.length ?? 0;
+  if (count > 0) {
+    return `Owner credentials: ${count} passkey${count === 1 ? '' : 's'} pinned (${pinned!.origin}). An approval in the PageSpace chat must be signed by one of them, over the exact request this machine froze; PageSpace cannot produce one, and cannot add a key to this list. "pagespace env owner-keys" shows them.`;
+  }
+  const reason = pinned === undefined ? 'this machine pinned none when it enrolled' : 'you had no passkey registered when this machine enrolled';
+  const consequence = chatAsks
+    ? 'so approvals in the PageSpace chat will be REFUSED and nothing will run through them'
+    : 'so approvals in the PageSpace chat will be REFUSED; requests that are not pre-approved will prompt in this terminal instead';
+  return `Owner credentials: NONE pinned — ${reason}, ${consequence}. Register a passkey in PageSpace and RE-ENROL this machine to use chat approvals; a key can never be added to a machine afterwards, by PageSpace or by anyone else, which is what makes the check worth anything.`;
+}
+
 export function pidFilePath(homedir: string, enrollmentId: string): string {
   return `${homedir}/.pagespace/env-connect.${enrollmentId}.pid`;
 }
@@ -172,6 +190,12 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
         );
       }
     }
+
+    // ONE clear line about what this machine will accept as proof that a human
+    // clicked (hardening B, leaf B5) — printed before anything can be asked,
+    // because "chat approvals will be refused" is not a thing to discover
+    // mid-session from a denial code.
+    ctx.stderr.write(`${describeOwnerApprovalForConnect(credential.ownerApproval, askInChat(ctx))}\n`);
 
     const log = (line: string) => ctx.stderr.write(`[env connect] ${line}\n`);
     const auditPath = defaultAuditPath(ctx.env, deps.homedir);

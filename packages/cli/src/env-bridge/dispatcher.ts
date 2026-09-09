@@ -356,7 +356,17 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
             return { path, mode: file.mode ?? null, bytes: Buffer.from(file.contentB64, 'base64').length, reason: sensitive.find((found) => found.path === path)?.reason ?? null };
           })
         : undefined;
-      if (deps.ask === null || deps.preferChat === true) {
+      /**
+       * FAIL CLOSED (hardening B, leaf B5). A chat approval is only worth
+       * ASKING for if this machine can verify the answer. With nothing pinned
+       * it cannot, so the chat path is refused outright rather than answered
+       * on the server's word — and the terminal prompt is used instead
+       * wherever there is one, even when the chat is preferred. The terminal
+       * was never exposed to this forgery: a TTY daemon mints no challenge, so
+       * a fabricated challenge id dies as `unknown_challenge`.
+       */
+      const canProveOwnerClick = (deps.ownerApproval?.pinned.credentials.length ?? 0) > 0;
+      if ((deps.ask === null || deps.preferChat === true) && canProveOwnerClick) {
         // Tier B: no terminal (or the chat is preferred) — freeze the request
         // under a challenge and let the owner's click in the chat answer it.
         if (deps.challenges === undefined) return refuse(grant.grantId, 'ask_unavailable', { grant, op: grant.op });
@@ -365,6 +375,11 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: `ask:pending:${pending.id}`, argsHash: grant.argsHash, exitCode: null, paths: auditPaths });
         return reply({ type: 'grant_denied', grantId: grant.grantId, reason: `ask_pending:${pending.id}`, pending: { challengeId: pending.id, expiresAt: pending.exp, request: pendingRequestForWire(pending.request), ...(files !== undefined && { files }) } });
       }
+      if (deps.ask === null) {
+        // Nowhere to ask that this machine can trust the answer from.
+        return refuse(grant.grantId, 'ask_unavailable', { grant, op: grant.op, ...(canProveOwnerClick ? {} : { verdict: 'deny:ask_unavailable:no_owner_credential' }) });
+      }
+      // Hardening A's `sensitive` list rides the terminal prompt too.
       const answer = await deps.ask.ask({ grantId: grant.grantId, principal: grant.principal, op: grant.op, request: shown, subjects, sensitive });
       // Re-checked after the await: the owner may have pressed Stop while the prompt sat open.
       if (predatesPause(grant)) return refuse(grant.grantId, 'paused', { grant, op: grant.op });

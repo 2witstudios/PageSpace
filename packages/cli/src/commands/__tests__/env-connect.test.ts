@@ -27,7 +27,9 @@ const serverPublicKeyB64 = serverPair.publicKey.export({ type: 'spki', format: '
 const serverKeyId = createHash('sha256').update(decodeBase64(serverPublicKeyB64)!).digest('hex').slice(0, 16);
 const machine = generateMachineKeypair();
 
-const CREDENTIAL: MachineHostCredential = { kind: 'machine', privateKey: machine.privateKey, enrollmentId: 'enr_1', envId: 'env_1', serverPublicKey: serverPublicKeyB64, serverKeyId, scopes: [], createdAt: '2026-09-05T09:00:00.000Z' };
+/** The owner's passkeys as pinned at enrolment (hardening B) — without these the daemon refuses every chat approval. */
+const OWNER_APPROVAL = { rpId: 'pagespace.test', origin: 'https://pagespace.test', credentials: [{ credentialId: 'cred-a', publicKeyCose: 'cose-a' }] };
+const CREDENTIAL: MachineHostCredential = { kind: 'machine', privateKey: machine.privateKey, enrollmentId: 'enr_1', envId: 'env_1', serverPublicKey: serverPublicKeyB64, serverKeyId, ownerApproval: OWNER_APPROVAL, scopes: [], createdAt: '2026-09-05T09:00:00.000Z' };
 const POLICY = JSON.stringify({ mode: 'allowlist', principals: ['u1'], ops: ['exec'], roots: ['/home/me/proj'], envAllowlist: [] });
 
 class FakeSocket extends EventEmitter implements BridgeSocket {
@@ -232,6 +234,65 @@ describe('pagespace env connect <enrollmentId>', () => {
       grantId: 'g_write',
       reason: 'ask_pending:ch_test',
       pending: { files: [{ path: target, mode: null, reason: 'executable_bit' }] },
+  /**
+   * HARDENING B, LEAF B5 — end to end on the daemon: with nothing pinned the
+   * machine says so at start and refuses the chat path entirely, rather than
+   * accepting the server's word that a human clicked.
+   */
+  describe('hardening B — what this machine will accept as proof of your click', () => {
+    const ASK = JSON.stringify({ mode: 'ask', principals: ['u1'], ops: [], roots: ['/home/me/proj'], envAllowlist: [] });
+    const chatGrant = (socket: ReturnType<ReturnType<typeof harness>['socket']>) => {
+      const unsigned = { type: 'grant_exec' as const, cmd: '/usr/bin/true', args: [], cwd: '/home/me/proj', env: {} };
+      const request = grantRequestForFrame({ ...unsigned, grant: {}, sig: '' } as GrantFrame);
+      const grant: Grant = { grantId: 'g_b5', envId: 'env_1', principal: { userId: 'u1', sessionId: 's', conversationId: 'c' }, op: 'exec', argsHash: envBridgeHash(canonicalizeArgs(request.args)), iat: NOW - 1000, exp: NOW + 30_000, nonce: 'n_b5' };
+      socket.receive({ ...unsigned, grant: { ...grant, principal: { ...grant.principal } }, sig: Buffer.from(nodeSign(null, encodeGrant(grant), serverPair.privateKey)).toString('base64') } as unknown as Frame);
+    };
+    const denials = (h: ReturnType<typeof harness>) =>
+      h.socket().sent.map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).flatMap((d) => (d.ok && d.frame.type === 'grant_denied' ? [d.frame] : []));
+
+    it('with passkeys pinned, names how many and says PageSpace cannot produce or add one', async () => {
+      const h = harness({ policy: ASK });
+      const c = ctx(false);
+      await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']));
+      expect(c.err.text()).toMatch(/Owner credentials: 1 passkey pinned \(https:\/\/pagespace\.test\)/);
+      expect(c.err.text()).toMatch(/PageSpace cannot produce one, and cannot add a key to this list/);
+    });
+
+    it('with NOTHING pinned and no terminal, says so in one line at start and REFUSES the chat path — nothing is even frozen', async () => {
+      const { ownerApproval: _dropped, ...withoutPasskeys } = CREDENTIAL;
+      const h = harness({ policy: ASK, createCredentialStore: () => fakeStore(withoutPasskeys) });
+      const c = ctx(false);
+      expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+      expect(c.err.text()).toMatch(/Owner credentials: NONE pinned/);
+      expect(c.err.text()).toMatch(/approvals in the PageSpace chat will be REFUSED/i);
+      expect(c.err.text()).toMatch(/RE-ENROL this machine/);
+      await flush();
+      h.socket().open();
+      await flush();
+      h.socket().receive({ type: 'ping', ts: 1 });
+      await flush();
+      chatGrant(h.socket());
+      await flush();
+      // Refused outright — never `ask_pending`, so no question the server could answer for the owner.
+      expect(denials(h).map((frame) => frame.reason)).toEqual(['ask_unavailable']);
+    });
+
+    it('with nothing pinned but a TERMINAL attached, the ask goes to the terminal instead — the prompt was never exposed to this forgery', async () => {
+      const { ownerApproval: _dropped, ...withoutPasskeys } = CREDENTIAL;
+      const confirm = vi.fn(async () => false);
+      const h = harness({ policy: ASK, confirm, createCredentialStore: () => fakeStore(withoutPasskeys) });
+      const c = ctx(true);
+      await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']));
+      expect(c.err.text()).toMatch(/prompt in this terminal instead/);
+      await flush();
+      h.socket().open();
+      await flush();
+      h.socket().receive({ type: 'ping', ts: 1 });
+      await flush();
+      chatGrant(h.socket());
+      await flush();
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(denials(h).map((frame) => frame.reason)).toEqual(['declined']);
     });
   });
 

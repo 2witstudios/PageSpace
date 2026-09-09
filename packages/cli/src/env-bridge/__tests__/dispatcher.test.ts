@@ -805,14 +805,43 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
         await refusal(h, assertion as ApprovalIntent['assertion'], 'malformed');
       });
 
-      it('B5: a daemon with NO pinned credential refuses every chat approval rather than accepting the server-attested one', async () => {
-        const h = clickHarness({ ownerApproval: undefined });
+      it('B5: with a pinned set, the machine USES it and never falls back to an unproven intent — a click on a challenge frozen earlier is still refused if the credentials are gone', async () => {
+        // Frozen while the gate was in place…
+        const h = clickHarness();
         await pend(h);
-        await refusal(h, h.proof(), 'no_pinned_credential');
-        // Same answer for a pinned-but-empty set: an owner with no passkey is not an owner who has been vouched for.
+        const proof = h.proof();
+        // …and answered by a daemon that can no longer verify anybody: refused, not waved through.
+        const blind = { ...h, dispatcher: createDispatcher({ ...h.deps, ownerApproval: undefined }) };
+        expect(await blind.dispatcher.handle(click({}, {}, PRINCIPAL, {}, proof))).toMatchObject({ kind: 'reply', frame: { reason: 'approval_unproven' } });
+        expect(blind.audits.at(-1)?.verdict).toBe('deny:approval_unproven:no_pinned_credential:ch_1');
+        expect(h.spawnRun).not.toHaveBeenCalled();
+        // An EMPTY pinned set is the same answer: an owner with no passkey has not been vouched for.
+        const empty = { ...h, dispatcher: createDispatcher({ ...h.deps, ownerApproval: { ...OWNER_APPROVAL_GATE, pinned: { ...PINNED_OWNER, credentials: [] } } }) };
+        expect(await empty.dispatcher.handle(click({}, {}, PRINCIPAL, {}, proof, ))).toMatchObject({ kind: 'reply', frame: { reason: 'approval_unproven' } });
+      });
+
+      it('B5: with NO pinned credential and no terminal, the chat path is refused BEFORE anything is frozen — the machine does not even ask a question it could not verify the answer to', async () => {
+        const h = clickHarness({ ownerApproval: undefined });
+        expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'ask_unavailable' } });
+        expect(h.audits.at(-1)?.verdict).toBe('deny:ask_unavailable:no_owner_credential');
+        expect(h.challenges.size()).toBe(0);
+        expect(h.spawnRun).not.toHaveBeenCalled();
+        // Same for a pinned-but-empty set.
         const empty = clickHarness({ ownerApproval: { ...OWNER_APPROVAL_GATE, pinned: { ...PINNED_OWNER, credentials: [] } } });
-        await pend(empty);
-        await refusal(empty, empty.proof(), 'no_pinned_credential');
+        expect(await empty.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { reason: 'ask_unavailable' } });
+        expect(empty.challenges.size()).toBe(0);
+      });
+
+      it('B5: with NO pinned credential but a TERMINAL attached, the ask goes to the TERMINAL even when the chat is preferred — the prompt was never exposed to this forgery', async () => {
+        const asked: AskInput[] = [];
+        const ask: AskPrompter = { ask: async (input) => { asked.push(input); return { approved: true, scope: 'once' as const }; } };
+        const h = clickHarness({ ownerApproval: undefined, ask, preferChat: true });
+        expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { type: 'exec_result', exitCode: 0 } });
+        expect(asked).toHaveLength(1);
+        expect(h.challenges.size()).toBe(0);
+        // With credentials pinned, the same daemon prefers the chat again.
+        const proven = clickHarness({ ask, preferChat: true });
+        expect(await proven.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { reason: 'ask_pending:ch_1' } });
       });
 
       it('the proof is checked BEFORE the byte-compare, so an unproven click reads as unproven rather than as a mismatch', async () => {
