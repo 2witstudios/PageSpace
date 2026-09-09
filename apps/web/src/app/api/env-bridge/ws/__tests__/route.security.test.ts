@@ -22,6 +22,7 @@ vi.mock('@/lib/websocket/ws-security', () => ({
   isSecureConnection: vi.fn(() => true),
 }));
 vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn(), getGrantAuditStore: vi.fn() }));
+vi.mock('@/lib/websocket/env-activity-events', () => ({ broadcastEnvActivity: vi.fn() }));
 vi.mock('@pagespace/lib/auth/env-bridge-signing-key', () => ({ loadServerSigningKeyring: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) },
@@ -33,6 +34,7 @@ import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-env
 import { getConnectionFingerprint, isSecureConnection, validateMessageSize } from '@/lib/websocket/ws-security';
 import { getDriveEnvStore, getGrantAuditStore } from '@/lib/drive-envs/drive-envs-runtime';
 import { createGrantAuditFake } from '@/test/grant-audit-fake';
+import { broadcastEnvActivity } from '@/lib/websocket/env-activity-events';
 import { loadServerSigningKeyring } from '@pagespace/lib/auth/env-bridge-signing-key';
 import { LOCAL_ENV_HEARTBEAT_WINDOW_MS } from '@pagespace/lib/services/drive-envs/drive-envs';
 import { decodeFrame, encodeFrame, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
@@ -536,6 +538,24 @@ describe('env-bridge ws route', () => {
       const grantId = (grantFrame.grant as { grantId: string }).grantId;
       ws.emit('message', Buffer.from(signedResult({ type: 'exec_result', grantId, exitCode: 0, stdoutB64: 'b2s=', stderrB64: '', truncated: false })));
       await expect(pending).resolves.toMatchObject({ type: 'exec_result', grantId, exitCode: 0 });
+    });
+
+    it('GA wave 3 — given a grant signed through the production client, the audit row reaches the machine OWNER\'s room at sign time and again with the verdict at result time', async () => {
+      const ws = await connectAuthorized();
+      const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'sh', args: ['-c', 'git status'] }, principal: { ...principal, userId: 'user-agent-runner' } });
+      await settleGate();
+      const grantFrame = lastSent(ws);
+      if (grantFrame.type !== 'grant_exec') throw new Error('grant not sent');
+      const grantId = (grantFrame.grant as { grantId: string }).grantId;
+      expect(vi.mocked(broadcastEnvActivity)).toHaveBeenCalledTimes(1);
+      // The OWNER of the row (USER), not the principal who asked: the room is the machine owner's.
+      expect(vi.mocked(broadcastEnvActivity).mock.calls[0]![0]).toMatchObject({ ownerId: USER, activity: { envId: ENV, grantId, op: 'exec', verdict: 'signed', resultAt: null, summary: "exec: sh -c 'git status'" } });
+      ws.emit('message', Buffer.from(signedResult({ type: 'exec_result', grantId, exitCode: 2, stdoutB64: '', stderrB64: '', truncated: false })));
+      await expect(pending).resolves.toMatchObject({ type: 'exec_result' });
+      await settleGate();
+      expect(vi.mocked(broadcastEnvActivity)).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(broadcastEnvActivity).mock.calls[1]![0]).toMatchObject({ ownerId: USER, activity: { grantId, verdict: 'completed', exitCode: 2 } });
+      expect(vi.mocked(broadcastEnvActivity).mock.calls[1]![0].activity.resultAt).not.toBeNull();
     });
 
     it('GA wave 1 — given a sibling whose serverPolicy EXCLUDES exec, sendGrant should reject server_denied and NO frame should reach the socket', async () => {

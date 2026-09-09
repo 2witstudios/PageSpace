@@ -14,6 +14,7 @@
  * sentence for the same request. It is bounded and it never carries output.
  */
 import type { GrantRequest } from '../../env-bridge/grant-args';
+import type { DriveEnvActivityDTO } from '../../drive-envs/env-contract';
 
 /** Longest `summary` stored — mirrors `DRIVE_ENV_GRANT_AUDIT_SUMMARY_MAX_CHARS` on the schema (the contract test pins them equal). */
 export const GRANT_AUDIT_SUMMARY_MAX_CHARS = 512;
@@ -87,6 +88,26 @@ export interface GrantAuditStore {
 
 /** The activity panel's page size and the routes' ceiling. */
 export const GRANT_AUDIT_LIST_LIMIT = 50;
+
+/** The row as served to the owner and as broadcast to them: ISO timestamps, `argsHash` withheld (a join key, not a fact for a person). */
+export function toDriveEnvActivityDTO(row: DriveEnvGrantAuditRecord): DriveEnvActivityDTO {
+  return {
+    id: row.id,
+    envId: row.envId,
+    grantId: row.grantId,
+    userId: row.userId,
+    sessionId: row.sessionId,
+    conversationId: row.conversationId,
+    op: row.op,
+    summary: row.summary,
+    verdict: row.verdict,
+    exitCode: row.exitCode,
+    challengeId: row.challengeId,
+    approvalScope: row.approvalScope,
+    ts: row.ts.toISOString(),
+    resultAt: row.resultAt === null ? null : row.resultAt.toISOString(),
+  };
+}
 
 function clip(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;

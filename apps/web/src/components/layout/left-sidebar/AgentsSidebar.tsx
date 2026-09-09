@@ -22,6 +22,7 @@ import { toast } from 'sonner';
 import useSWR, { useSWRConfig } from 'swr';
 
 import EndSessionDialog from '@/components/agents/EndSessionDialog';
+import { EnvActivityPanel } from '@/components/agents/EnvActivityPanel';
 import { useSpawnSession } from '@/components/agents/useSpawnSession';
 import DrivePickerDialog from '@/components/agents/DrivePickerDialog';
 import { Input } from '@/components/ui/input';
@@ -737,6 +738,9 @@ function DriveGroupRows({
   onNewSessionInEnv: (envId: string) => void;
 }) {
   const { envs, error: envsError, mutate: refreshEnvs } = useDriveEnvs(driveId, { enabled: showEnvironments });
+  // Who is looking: a LOCAL env's row compares this to the machine's owner.
+  const { user: viewer } = useAuth();
+  const viewerId = typeof viewer?.id === 'string' ? viewer.id : null;
 
   // With environments off (the Assistant bucket, a trashed drive, an active
   // search) this hands back every session as loose, which is exactly the flat
@@ -778,6 +782,7 @@ function DriveGroupRows({
           group={group}
           canManage={canManage}
           isOwner={isOwner}
+          viewerId={viewerId}
           agentNamesById={agentNamesById}
           onEnvsChanged={refreshEnvs}
           onNewSession={() => onNewSessionInEnv(group.envId)}
@@ -847,6 +852,7 @@ function DriveEnvRow({
   group,
   canManage,
   isOwner,
+  viewerId,
   agentNamesById,
   onEnvsChanged,
   onNewSession,
@@ -855,6 +861,8 @@ function DriveEnvRow({
   group: EnvGroup<SessionListEntry>;
   canManage: boolean;
   isOwner: boolean;
+  /** The signed-in user — compared to a LOCAL env's `ownerId` to decide who sees the activity panel. */
+  viewerId: string | null;
   agentNamesById: Map<string, string>;
   onEnvsChanged: () => void;
   onNewSession: () => void;
@@ -969,6 +977,11 @@ function DriveEnvRow({
   // Only an AWAITING-ENROLLMENT local env offers a new code: once a machine
   // has enrolled the server would refuse, and offering a refusal is noise.
   const awaitingEnrollment = isLocal && group.enrolled === false;
+  // THE MACHINE'S OWNER, not the drive's ([D-6]): the live activity panel —
+  // what the agent is running on this computer right now — is shown to the
+  // user who enrolled it and to nobody else. Not `canManage`: a drive admin
+  // who did not enrol the machine can delete it but must not watch it.
+  const isMachineOwner = isLocal && group.enrolled === true && viewerId !== null && group.ownerId === viewerId;
 
   const menuItems: RowMenuItem[] = useMemo(
     () => [
@@ -1050,6 +1063,8 @@ function DriveEnvRow({
       ) : (
         <div className={cn('group flex w-full items-center', rowClassName)}>{rowInner}</div>
       )}
+
+      {isMachineOwner && expanded && <EnvActivityPanel driveId={driveId} envId={group.envId} enabled compact />}
 
       <DriveEnvNameDialog
         open={renaming}

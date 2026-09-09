@@ -179,13 +179,13 @@ describe('listDriveEnvs / the DTO', () => {
     });
 
     it('given a local row WITH its drive_env_local facts, should project substrate local, the machine label, and the CONNECTION status — never a Sprite status', () => {
-      const dto = toDriveEnvDTO(makeEnvRecord({ substrate: 'local' }), { label: 'jono-macstudio', status: 'connected', enrolled: true, serverPolicy: { ops: ['fs_read'], checkpoint: false } });
-      expect(dto).toEqual({ id: ENV_ID, driveId: DRIVE_ID, name: 'staging', substrate: 'local', status: 'connected', label: 'jono-macstudio', enrolled: true, serverPolicy: { ops: ['fs_read'], checkpoint: false }, createdAt: NOW.toISOString() });
+      const dto = toDriveEnvDTO(makeEnvRecord({ substrate: 'local' }), { label: 'jono-macstudio', status: 'connected', enrolled: true, serverPolicy: { ops: ['fs_read'], checkpoint: false }, ownerId: 'user-1', capabilities: { shell: true, pty: false, fs: true, checkpoint: false } });
+      expect(dto).toEqual({ id: ENV_ID, driveId: DRIVE_ID, name: 'staging', substrate: 'local', status: 'connected', label: 'jono-macstudio', enrolled: true, serverPolicy: { ops: ['fs_read'], checkpoint: false }, ownerId: 'user-1', capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, createdAt: NOW.toISOString() });
       expect(driveEnvDtoSchema.safeParse(dto).success).toBe(true);
     });
 
     it('given a local row, should ignore the Sprite pointer columns for status (they are CHECK-forbidden anyway)', () => {
-      const dto = toDriveEnvDTO(makeEnvRecord({ substrate: 'local' }), { label: 'm', status: 'disconnected', enrolled: false, serverPolicy: { ops: [], checkpoint: false } });
+      const dto = toDriveEnvDTO(makeEnvRecord({ substrate: 'local' }), { label: 'm', status: 'disconnected', enrolled: false, serverPolicy: { ops: [], checkpoint: false }, ownerId: 'user-1', capabilities: null });
       expect(dto.status).toBe('disconnected');
     });
 
@@ -194,7 +194,7 @@ describe('listDriveEnvs / the DTO', () => {
     });
 
     it('given a Sprite row WITH stray local facts, should ignore them (facts do not change the substrate)', () => {
-      const dto = toDriveEnvDTO(makeEnvRecord({ sandboxId: SANDBOX_ID }), { label: 'x', status: 'connected', enrolled: true, serverPolicy: { ops: [], checkpoint: false } });
+      const dto = toDriveEnvDTO(makeEnvRecord({ sandboxId: SANDBOX_ID }), { label: 'x', status: 'connected', enrolled: true, serverPolicy: { ops: [], checkpoint: false }, ownerId: 'user-1', capabilities: null });
       expect(dto.substrate).toBe('sprite');
       expect(dto.status).toBe('running');
       expect('label' in dto).toBe(false);

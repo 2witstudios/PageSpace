@@ -34,7 +34,8 @@ import {
   type DriveEnvRecord,
   type DriveEnvStore,
 } from '@pagespace/lib/services/drive-envs/drive-envs-store';
-import { createDbGrantAuditStore, type GrantAuditStore } from '@pagespace/lib/services/drive-envs/grant-audit-store';
+import { createDbGrantAuditStore, toDriveEnvActivityDTO, GRANT_AUDIT_LIST_LIMIT, type GrantAuditStore } from '@pagespace/lib/services/drive-envs/grant-audit-store';
+import type { DriveEnvActivityDTO } from '@pagespace/lib/drive-envs/env-contract';
 import {
   createDriveEnv,
   listDriveEnvs,
@@ -97,6 +98,18 @@ export function getDriveEnvStore(): Promise<DriveEnvStore> {
 }
 
 let grantAuditStorePromise: Promise<GrantAuditStore> | null = null;
+
+/** ONE env's activity, newest first — the panel's read. Access is the ROUTE's (owner-only); this only projects. */
+export async function listEnvActivity(input: { envId: string; limit?: number }): Promise<DriveEnvActivityDTO[]> {
+  const rows = await (await getGrantAuditStore()).listForEnv({ envId: input.envId, limit: input.limit ?? GRANT_AUDIT_LIST_LIMIT });
+  return rows.map(toDriveEnvActivityDTO);
+}
+
+/** Activity across every machine a user OWNS, newest first — the account page's read. */
+export async function listOwnerActivity(input: { ownerId: string; limit?: number }): Promise<DriveEnvActivityDTO[]> {
+  const rows = await (await getGrantAuditStore()).listForOwner({ ownerId: input.ownerId, limit: input.limit ?? GRANT_AUDIT_LIST_LIMIT });
+  return rows.map(toDriveEnvActivityDTO);
+}
 
 /** The server-side grant audit (GA wave 3) — one store, built on first use, the seam route tests mock. */
 export function getGrantAuditStore(): Promise<GrantAuditStore> {

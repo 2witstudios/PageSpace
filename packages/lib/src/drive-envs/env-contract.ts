@@ -179,8 +179,58 @@ export const driveEnvDtoSchema = z.discriminatedUnion('substrate', [
     enrolled: z.boolean(),
     /** What PageSpace may ask this machine to do (`drive_env_local.serverPolicy`), as enforced at signing. The settings page reads it here. */
     serverPolicy: driveEnvServerPolicyDtoSchema,
+    /**
+     * The user who enrolled the machine (`drive_env_local.ownerId`) — the ONLY
+     * person who may drive, approve, stop or edit it ([D-6], invariant 13).
+     * Carried so a client can tell "this is my machine" from "this is a
+     * colleague's" without a second read: the sidebar shows the activity
+     * panel to the owner only, and the settings page renders read-only for
+     * everyone else, naming the owner. `null` for a dead local env whose
+     * owner was erased (Art 17 cascades the sibling away).
+     */
+    ownerId: z.string().min(1).nullable(),
+    /**
+     * What the machine ADVERTISED in its last `hello` (`drive_env_local.capabilities`);
+     * `null` until the first handshake. One of the three inputs to the
+     * effective capability (`intersectCapabilities`), which the settings page
+     * renders. Never a permission on its own.
+     */
+    capabilities: z.object({ shell: z.boolean(), pty: z.boolean(), fs: z.boolean(), checkpoint: z.boolean() }).nullable(),
   }),
 ]);
+
+/**
+ * One row of a local environment's ACTIVITY — the server side of the grant
+ * audit (`drive_env_grant_audit`, GA wave 3), as served to the machine's
+ * owner. `summary` is the request as the server sent it, never output;
+ * `verdict` is the table's closed vocabulary (`signed` = running now,
+ * `completed`, `denied:<reason>`, `ask_pending:<challengeId>`,
+ * `failed:<kind>`, `refused:<reason>`); `resultAt === null` with `signed` is
+ * "running on the machine right now". The same shape rides the live
+ * `env:activity` event, so a subscriber upserts by `id`.
+ */
+export const driveEnvActivityDtoSchema = z.object({
+  id: z.string().min(1),
+  envId: z.string().min(1),
+  /** NULL on a refused row — the server never minted one. */
+  grantId: z.string().min(1).nullable(),
+  /** The acting user; NULL once erased. */
+  userId: z.string().min(1).nullable(),
+  sessionId: z.string().min(1),
+  conversationId: z.string().min(1),
+  op: z.enum(GRANT_OPS),
+  summary: z.string(),
+  verdict: z.string().min(1),
+  exitCode: z.number().int().nullable(),
+  challengeId: z.string().min(1).nullable(),
+  approvalScope: z.string().min(1).nullable(),
+  ts: isoTimestamp,
+  resultAt: isoTimestamp.nullable(),
+});
+export type DriveEnvActivityDTO = z.infer<typeof driveEnvActivityDtoSchema>;
+
+/** The live event a machine's OWNER receives for every audit row written or updated (their own sessions room). */
+export const DRIVE_ENV_ACTIVITY_EVENT = 'env:activity';
 
 export type DriveEnvDTO = z.infer<typeof driveEnvDtoSchema>;
 

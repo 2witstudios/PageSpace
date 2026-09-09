@@ -24,7 +24,8 @@ import { logger } from '@pagespace/lib/logging/logger-config';
 import { loadServerSigningKeyring } from '@pagespace/lib/auth/env-bridge-signing-key';
 import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { audit } from '@pagespace/lib/audit/audit-log';
-import { summarizeGrantRequest, type DriveEnvGrantAuditRecord, type GrantAuditStore } from '@pagespace/lib/services/drive-envs/grant-audit-store';
+import { summarizeGrantRequest, toDriveEnvActivityDTO, type DriveEnvGrantAuditRecord, type GrantAuditStore } from '@pagespace/lib/services/drive-envs/grant-audit-store';
+import { broadcastEnvActivity } from '@/lib/websocket/env-activity-events';
 import { getAuthorizedEnvConnection, getEnvConnectionMetadata, onEnvConnectionLost } from '@/lib/websocket/ws-env-connections';
 import { RequestCorrelator, CorrelationError, grantCorrelatorTimeoutMs, type CorrelationFailureKind } from './correlator';
 import { signGrantFrame, type GrantIdSource } from './grant-signer';
@@ -418,6 +419,8 @@ export function getEnvBridgeClient(): EnvBridgeClient {
       recordRefusal: async (input) => (await loadGrantAuditStore()).recordRefusal(input),
       recordResult: async (input) => (await loadGrantAuditStore()).recordResult(input),
     },
+    // Live activity (leaf 2): every row, to the machine OWNER's own room only.
+    onActivity: (row, ownerId) => broadcastEnvActivity({ ownerId, activity: toDriveEnvActivityDTO(row) }),
   });
   onEnvConnectionLost((envId) => {
     client.cancelEnv(envId);
