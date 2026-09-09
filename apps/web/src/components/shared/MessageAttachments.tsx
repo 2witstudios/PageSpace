@@ -20,7 +20,6 @@ import { cn } from '@/lib/utils';
 import { MessageAttachment, ZoomableImage } from './MessageAttachment';
 import {
   type MessageWithAttachment,
-  type MessageAttachmentLike,
   getAttachments,
   isImageAttachment,
   getFileId,
@@ -73,7 +72,7 @@ export function MessageAttachments({ message }: MessageAttachmentsProps) {
   const isSingle = images.length === 1;
 
   return (
-    <div className="mt-2 flex flex-col gap-2">
+    <div className="mt-2 flex flex-col">
       {images.length > 0 && (
         <div className={cn('flex flex-wrap gap-1.5', isSingle && 'max-w-sm')}>
           {images.map((attachment, index) => {
@@ -121,10 +120,12 @@ export function MessageAttachments({ message }: MessageAttachmentsProps) {
         </div>
       )}
 
+      {/* Video and generic-file tiles keep their existing single-file cards,
+          each of which brings its own top margin. */}
       {others.map((attachment, index) => (
         <MessageAttachment
           key={attachment.id ?? `${getFileId(attachment)}-${index}`}
-          message={attachment as MessageAttachmentLike}
+          message={attachment}
         />
       ))}
 
