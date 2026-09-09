@@ -254,6 +254,16 @@ export interface DriveEnvStore {
   /** Heartbeat from the live socket (throttled by the route to once per heartbeat window). Same CAS as `recordHello`. */
   recordHeartbeat(input: { envId: string; now: Date }): Promise<boolean>;
   /**
+   * Replace the server policy IFF the caller is the row's OWNER and the env is
+   * not revoked: ONE `UPDATE … WHERE envId = ? AND ownerId = ? AND revokedAt IS
+   * NULL` returning the row count — a compare-and-set, never a read-then-write
+   * ([D-6]: a machine's policy is the enrolling human's alone; GA wave 1). A
+   * drive admin who did not enrol the machine loses the predicate exactly as a
+   * stranger does, and the row is left byte-identical. False = not written;
+   * the service reads the row afterwards only to choose the honest answer.
+   */
+  setServerPolicy(input: { envId: string; ownerId: string; serverPolicy: { ops: string[]; checkpoint: boolean }; now: Date }): Promise<boolean>;
+  /**
    * Revoke: stamp `revokedAt` IFF `revokedAt IS NULL` (Codex C4). False means
    * it was already revoked — the caller still completes the other two legs
    * (sessions, socket), because a half-finished earlier revoke is the case
@@ -736,6 +746,15 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
         .update(driveEnvLocal)
         .set({ revokedAt: at, updatedAt: at })
         .where(and(eq(driveEnvLocal.envId, envId), isNull(driveEnvLocal.revokedAt)))
+        .returning({ envId: driveEnvLocal.envId });
+      return updated.length === 1;
+    },
+
+    async setServerPolicy({ envId, ownerId, serverPolicy, now: at }) {
+      const updated = await db
+        .update(driveEnvLocal)
+        .set({ serverPolicy, updatedAt: at })
+        .where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.ownerId, ownerId), isNull(driveEnvLocal.revokedAt)))
         .returning({ envId: driveEnvLocal.envId });
       return updated.length === 1;
     },

@@ -223,7 +223,19 @@ export const localEnvEnrollmentIssueSchema = z.object({
   expiresAt: isoTimestamp,
 });
 
-/** PATCH body for renaming an environment. */
-export const renameDriveEnvRequestSchema = z.object({
-  name: driveEnvNameSchema,
-});
+/**
+ * PATCH body — exactly ONE of two fields, because they answer to two rules:
+ * `name` is the rename (drive owner or admin), `serverPolicy` is the OWNER-ONLY
+ * write of what PageSpace may ask the machine to do ([D-6]; GA wave 1). A body
+ * carrying both could not be answered with one status code without a partial
+ * write, so it is refused at the boundary.
+ */
+export const patchDriveEnvRequestSchema = z
+  .object({
+    name: driveEnvNameSchema.optional(),
+    serverPolicy: driveEnvServerPolicySchema.optional(),
+  })
+  .strict()
+  .refine((body) => (body.name === undefined) !== (body.serverPolicy === undefined), { message: 'Exactly one of name or serverPolicy is required' });
+
+export type PatchDriveEnvRequest = z.infer<typeof patchDriveEnvRequestSchema>;

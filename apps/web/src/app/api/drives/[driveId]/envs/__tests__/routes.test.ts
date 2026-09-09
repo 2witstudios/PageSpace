@@ -25,6 +25,8 @@ vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
   createEnvInDrive: vi.fn(),
   listEnvsInDrive: vi.fn(),
   renameEnv: vi.fn(),
+  readEnvDTO: vi.fn(async (row: { id: string; driveId: string; name: string; substrate?: string }) => ({ id: row.id, driveId: row.driveId, name: row.name, substrate: row.substrate ?? 'sprite', status: row.substrate === 'local' ? 'disconnected' : 'none', createdAt: '2026-08-17T12:00:00.000Z' })),
+  setEnvServerPolicy: vi.fn(),
   deleteEnv: vi.fn(),
   revokeEnv: vi.fn(),
   rebuildEnv: vi.fn(),
@@ -51,9 +53,11 @@ import {
   listEnvsInDrive,
   rebuildEnv,
   reissueEnvEnrollmentCode,
+  readEnvDTO,
   renameEnv,
   resolveEnvInDrive,
   revokeEnv,
+  setEnvServerPolicy,
 } from '@/lib/drive-envs/drive-envs-runtime';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -226,6 +230,16 @@ describe('POST /envs — who may CREATE one', () => {
   });
 });
 
+describe('GET /envs/[envId] on a LOCAL env — through the facts join, never the bare DTO (which throws for a local row)', () => {
+  it('given a local env, should answer 200 with the joined DTO', async () => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue({ ...envRow, substrate: 'local' } as never);
+    const response = await readEnv(req(), envParams);
+    expect(response.status).toBe(200);
+    expect(readEnvDTO).toHaveBeenCalledWith(expect.objectContaining({ id: ENV_ID, substrate: 'local' }));
+    expect(await response.json()).toMatchObject({ env: { id: ENV_ID, substrate: 'local', status: 'disconnected' } });
+  });
+});
+
 describe('the env-belongs-to-this-drive guard', () => {
   it('given an env id from ANOTHER drive, should answer 404 on read — never 403, which would confirm it exists', async () => {
     vi.mocked(resolveEnvInDrive).mockResolvedValue(null);
@@ -241,6 +255,77 @@ describe('the env-belongs-to-this-drive guard', () => {
     );
     expect(response.status).toBe(404);
     expect(deleteEnv).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /envs/[envId] — serverPolicy is OWNER-ONLY (D-6: the enrolling human, never a drive role)', () => {
+  const localRow = { ...envRow, substrate: 'local' as const };
+  const POLICY = { ops: ['fs_read', 'exec'], checkpoint: false };
+
+  it('given the env OWNER (a plain drive MEMBER — no admin right needed), should set the policy, audit the write, and answer it back', async () => {
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(false);
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+    vi.mocked(setEnvServerPolicy).mockResolvedValue({ ok: true, serverPolicy: POLICY } as never);
+    const response = await patchEnv(jsonReq({ serverPolicy: POLICY }), envParams);
+    expect(response.status).toBe(200);
+    expect(setEnvServerPolicy).toHaveBeenCalledWith({ envId: ENV_ID, requesterId: USER_ID, serverPolicy: POLICY });
+    expect(await response.json()).toMatchObject({ env: { id: ENV_ID, substrate: 'local' }, serverPolicy: POLICY });
+    expect(renameEnv).not.toHaveBeenCalled();
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', details: expect.objectContaining({ operation: 'set_server_policy', envId: ENV_ID }) }));
+  });
+
+  it('given a drive ADMIN who did not enrol the machine, should refuse 403 naming the owner, audit it, and write nothing', async () => {
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+    vi.mocked(setEnvServerPolicy).mockResolvedValue({ ok: false, reason: 'not_owner', ownerId: 'user-owner' } as never);
+    const response = await patchEnv(jsonReq({ serverPolicy: POLICY }), envParams);
+    expect(response.status).toBe(403);
+    const body = (await response.json()) as { error: string; reason: string; ownerId: string };
+    expect(body).toMatchObject({ reason: 'not_owner', ownerId: 'user-owner' });
+    expect(body.error).toMatch(/owner/i);
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ operation: 'set_server_policy', ownerId: 'user-owner' }) }));
+  });
+
+  it('given a revoked env, should answer 409', async () => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+    vi.mocked(setEnvServerPolicy).mockResolvedValue({ ok: false, reason: 'revoked' } as never);
+    const response = await patchEnv(jsonReq({ serverPolicy: POLICY }), envParams);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ reason: 'revoked' });
+  });
+
+  it('given a SPRITE env, should answer 409 not_local without calling the service — a Sprite has no server policy', async () => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(envRow as never);
+    const response = await patchEnv(jsonReq({ serverPolicy: POLICY }), envParams);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ reason: 'not_local' });
+    expect(setEnvServerPolicy).not.toHaveBeenCalled();
+  });
+
+  it('given a body with BOTH name and serverPolicy, or neither, or a malformed policy, should answer 400 and call nothing', async () => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+    for (const body of [{ name: 'prod', serverPolicy: POLICY }, {}, { serverPolicy: { ops: ['exec'], checkpoint: true } }]) {
+      const response = await patchEnv(jsonReq(body), envParams);
+      expect(response.status).toBe(400);
+    }
+    expect(setEnvServerPolicy).not.toHaveBeenCalled();
+    expect(renameEnv).not.toHaveBeenCalled();
+  });
+
+  it('given an env in another drive, should answer 404 without calling the service', async () => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(null);
+    const response = await patchEnv(jsonReq({ serverPolicy: POLICY }), envParams);
+    expect(response.status).toBe(404);
+    expect(setEnvServerPolicy).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /envs/[envId] — rename keeps its owner-OR-admin rule (two fields, two rules)', () => {
+  it('given a rename by an admin, should never touch the server policy', async () => {
+    vi.mocked(renameEnv).mockResolvedValue({ ok: true, env: { ...envRow, name: 'prod' } } as never);
+    const response = await patchEnv(jsonReq({ name: 'prod' }), envParams);
+    expect(response.status).toBe(200);
+    expect(setEnvServerPolicy).not.toHaveBeenCalled();
   });
 });
 

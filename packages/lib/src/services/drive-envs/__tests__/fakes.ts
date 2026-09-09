@@ -219,6 +219,14 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       return true;
     },
 
+    async setServerPolicy({ envId, ownerId, serverPolicy, now: at }) {
+      const sibling = local.get(envId);
+      // The real store's CAS predicate, verbatim: owner AND not revoked.
+      if (!sibling || sibling.ownerId !== ownerId || sibling.revokedAt !== null) return false;
+      local.set(envId, { ...sibling, serverPolicy: { ops: [...serverPolicy.ops], checkpoint: serverPolicy.checkpoint }, updatedAt: at });
+      return true;
+    },
+
     async rename({ envId, name, now: at }) {
       const row = rows.get(envId);
       if (!row) return { ok: false, reason: 'not_found' };

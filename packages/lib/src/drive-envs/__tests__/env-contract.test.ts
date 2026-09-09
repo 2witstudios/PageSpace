@@ -8,6 +8,7 @@ import {
   DRIVE_ENV_SUBSTRATES,
   driveEnvSubstrateSchema,
   localEnvEnrollmentIssueSchema,
+  patchDriveEnvRequestSchema,
 } from '../env-contract';
 
 const BASE_DTO = { id: 'env_1', driveId: 'drive_1', name: 'dev', substrate: 'sprite', status: 'none', createdAt: '2026-09-04T00:00:00.000Z' };
@@ -124,6 +125,29 @@ describe('drive-env contract — the substrate axis (Local Environments epic)', 
       }
       expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'disconnected', enrolled: false }).success).toBe(false);
       expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'disconnected', label: 'm' }).success).toBe(false);
+    });
+  });
+
+  describe('patchDriveEnvRequestSchema — two fields, two rules, ONE per request (GA wave 1)', () => {
+    it('given just a name, should accept (the rename, owner-or-admin at the route)', () => {
+      expect(patchDriveEnvRequestSchema.parse({ name: ' prod ' })).toEqual({ name: 'prod' });
+    });
+
+    it('given just a serverPolicy, should accept (owner-only at the route)', () => {
+      expect(patchDriveEnvRequestSchema.parse({ serverPolicy: { ops: ['exec', 'exec'], checkpoint: false } })).toEqual({ serverPolicy: { ops: ['exec'], checkpoint: false } });
+    });
+
+    it('given BOTH fields, should reject — two rules cannot be answered by one status code', () => {
+      expect(patchDriveEnvRequestSchema.safeParse({ name: 'prod', serverPolicy: { ops: [], checkpoint: false } }).success).toBe(false);
+    });
+
+    it('given NEITHER field, should reject', () => {
+      expect(patchDriveEnvRequestSchema.safeParse({}).success).toBe(false);
+    });
+
+    it('given an invalid serverPolicy (checkpoint true, or an op outside the set), should reject', () => {
+      expect(patchDriveEnvRequestSchema.safeParse({ serverPolicy: { ops: ['exec'], checkpoint: true } }).success).toBe(false);
+      expect(patchDriveEnvRequestSchema.safeParse({ serverPolicy: { ops: ['shell'], checkpoint: false } }).success).toBe(false);
     });
   });
 });

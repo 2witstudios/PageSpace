@@ -881,6 +881,38 @@ describe('the local-env connection slice (t07) — recordHello / recordHeartbeat
     expect(row?.capabilities).toEqual(CAPS);
   });
 
+  describe('setServerPolicy (GA wave 1, D-6): ONE UPDATE … WHERE envId AND ownerId AND revokedAt IS NULL', () => {
+    const POLICY = { ops: ['fs_read', 'exec'], checkpoint: false };
+
+    it('given the OWNER, should write the policy and updatedAt (UTC wall-clock on a non-UTC session) and answer true', async () => {
+      const envId = await createLocal(true);
+      const at = new Date(NOW.getTime() + 5_000);
+      expect(await store.setServerPolicy({ envId, ownerId: payerId, serverPolicy: POLICY, now: at })).toBe(true);
+      const row = await rowOf(envId);
+      expect(row?.serverPolicy).toEqual(POLICY);
+      expect(row?.updatedAt.getTime()).toBe(at.getTime());
+    });
+
+    it('given a user who is NOT the owner (a drive admin with every other right), should answer false and leave the row BYTE-IDENTICAL', async () => {
+      const envId = await createLocal(true);
+      const before = JSON.stringify(await rowOf(envId));
+      expect(await store.setServerPolicy({ envId, ownerId: otherPayerId, serverPolicy: POLICY, now: new Date(NOW.getTime() + 5_000) })).toBe(false);
+      expect(JSON.stringify(await rowOf(envId))).toBe(before);
+    });
+
+    it('given a REVOKED env, should answer false for the owner too and leave the row byte-identical', async () => {
+      const envId = await createLocal(true);
+      expect(await store.revokeLocal({ envId, now: NOW })).toBe(true);
+      const before = JSON.stringify(await rowOf(envId));
+      expect(await store.setServerPolicy({ envId, ownerId: payerId, serverPolicy: POLICY, now: new Date(NOW.getTime() + 5_000) })).toBe(false);
+      expect(JSON.stringify(await rowOf(envId))).toBe(before);
+    });
+
+    it('given an env that does not exist, should answer false', async () => {
+      expect(await store.setServerPolicy({ envId: `env_${createId()}`, ownerId: payerId, serverPolicy: POLICY, now: NOW })).toBe(false);
+    });
+  });
+
   it('revokeLocal: should stamp revokedAt exactly once (CAS on revokedAt IS NULL) and keep the FIRST stamp on a repeat', async () => {
     const envId = await createLocal(true);
     expect(await store.revokeLocal({ envId, now: NOW })).toBe(true);

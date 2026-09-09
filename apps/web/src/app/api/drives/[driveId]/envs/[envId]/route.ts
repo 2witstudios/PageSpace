@@ -1,9 +1,18 @@
 /**
  * One drive environment — `/api/drives/[driveId]/envs/[envId]`.
  *
- * GET    → { env }                 — any accepted member of the drive
- * PATCH  { name } → { env }        — drive OWNER or ADMIN
- * DELETE ?force=true → { deleted }  — drive OWNER or ADMIN
+ * GET    → { env }                          — any accepted member of the drive
+ * PATCH  { name } → { env }                 — drive OWNER or ADMIN
+ * PATCH  { serverPolicy } → { env, serverPolicy } — the ENV OWNER only (D-6)
+ * DELETE ?force=true → { deleted }          — drive OWNER or ADMIN
+ *
+ * **Two PATCH fields, two rules, one per request.** A rename is drive
+ * administration, so it keeps the owner-or-admin gate. `serverPolicy` — what
+ * PageSpace may ask a LOCAL machine to do, enforced at signing (GA wave 1) —
+ * belongs to the human who enrolled the machine and to nobody else: the check
+ * is against `drive_env_local.ownerId`, never a drive role, and a drive admin
+ * who did not enrol it is refused 403 naming the owner ([D-6]). The store
+ * write is a compare-and-set on `(envId, ownerId, revokedAt IS NULL)`.
  *
  * **`driveId` is checked against the row, not trusted from the path.** An env's
  * id is globally unique, so a member of drive A could otherwise reach drive B's
@@ -40,12 +49,14 @@ import {
 } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { renameDriveEnvRequestSchema } from '@pagespace/lib/drive-envs/env-contract';
+import { patchDriveEnvRequestSchema } from '@pagespace/lib/drive-envs/env-contract';
 import {
   deleteEnv,
   renameEnv,
+  readEnvDTO,
   resolveEnvInDrive,
   revokeEnv,
+  setEnvServerPolicy,
   toDriveEnvDTO,
 } from '@/lib/drive-envs/drive-envs-runtime';
 
@@ -75,7 +86,9 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
     const env = await resolveEnvInDrive(envId, driveId);
     if (!env) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
 
-    return NextResponse.json({ env: toDriveEnvDTO(env) });
+    // Through the facts join: a LOCAL row handed bare to `toDriveEnvDTO` throws
+    // (by design), which used to make this GET a 500 for every local env.
+    return NextResponse.json({ env: await readEnvDTO(env) });
   } catch (error) {
     loggers.api.error('Failed to read drive environment', error instanceof Error ? error : new Error(String(error)));
     return NextResponse.json({ error: 'Failed to read environment' }, { status: 500 });
@@ -91,6 +104,50 @@ export async function PATCH(request: Request, context: { params: Promise<{ drive
     const scopeError = checkMCPDriveScope(auth, driveId);
     if (scopeError) return scopeError;
 
+    const body = await request.json().catch(() => null);
+    const parsed = patchDriveEnvRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Exactly one of a non-empty environment name or a server policy ({ ops: [exec | fs_read | fs_write], checkpoint: false }) is required' }, { status: 400 });
+    }
+
+    // ---- serverPolicy: the env OWNER only (D-6). No drive role is consulted:
+    // a plain member who enrolled the machine may; an admin who did not may not.
+    if (parsed.data.serverPolicy !== undefined) {
+      const env = await resolveEnvInDrive(envId, driveId);
+      if (!env) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+      if (env.substrate !== 'local') {
+        return NextResponse.json({ error: 'Only a local environment has a server policy', reason: 'not_local' }, { status: 409 });
+      }
+      const result = await setEnvServerPolicy({ envId, requesterId: auth.userId, serverPolicy: parsed.data.serverPolicy });
+      if (!result.ok) {
+        if (result.reason === 'not_owner') {
+          auditRequest(request, {
+            eventType: 'authz.access.denied',
+            userId: auth.userId,
+            resourceType: 'drive_env',
+            resourceId: envId,
+            details: { route: 'drive-envs', operation: 'set_server_policy', driveId, ownerId: result.ownerId },
+            riskScore: 0.4,
+          });
+          return NextResponse.json(
+            { error: `Only this machine's owner (the user who enrolled it, ${result.ownerId}) can change what it may run — drive admins can delete or revoke it, but not drive it`, reason: 'not_owner', ownerId: result.ownerId },
+            { status: 403 },
+          );
+        }
+        if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+        return NextResponse.json({ error: 'This environment has been revoked', reason: 'revoked' }, { status: 409 });
+      }
+      auditRequest(request, {
+        eventType: 'data.write',
+        userId: auth.userId,
+        resourceType: 'drive_env',
+        resourceId: envId,
+        details: { route: 'drive-envs', operation: 'set_server_policy', driveId, envId, ops: result.serverPolicy.ops },
+      });
+      return NextResponse.json({ env: await readEnvDTO(env), serverPolicy: result.serverPolicy });
+    }
+
+    // ---- name: drive administration (owner or admin), unchanged.
     if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
       auditRequest(request, {
         eventType: 'authz.access.denied',
@@ -106,13 +163,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ drive
       return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
     }
 
-    const body = await request.json().catch(() => null);
-    const parsed = renameDriveEnvRequestSchema.safeParse(body);
-    if (!parsed.success) {
-      return NextResponse.json({ error: 'A non-empty environment name is required' }, { status: 400 });
-    }
-
-    const result = await renameEnv({ envId, name: parsed.data.name });
+    const result = await renameEnv({ envId, name: parsed.data.name ?? '' });
     if (!result.ok) {
       if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
       return NextResponse.json({ error: 'An environment with this name already exists' }, { status: 409 });
@@ -128,8 +179,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ drive
 
     return NextResponse.json({ env: toDriveEnvDTO(result.env) });
   } catch (error) {
-    loggers.api.error('Failed to rename drive environment', error instanceof Error ? error : new Error(String(error)));
-    return NextResponse.json({ error: 'Failed to rename environment' }, { status: 500 });
+    loggers.api.error('Failed to update drive environment', error instanceof Error ? error : new Error(String(error)));
+    return NextResponse.json({ error: 'Failed to update environment' }, { status: 500 });
   }
 }
 

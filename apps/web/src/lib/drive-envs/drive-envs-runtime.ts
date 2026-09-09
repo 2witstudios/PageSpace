@@ -37,12 +37,15 @@ import {
 import {
   createDriveEnv,
   listDriveEnvs,
+  localFactsFor,
   renameDriveEnv,
+  setLocalEnvServerPolicy,
   deleteDriveEnv,
   rebuildDriveEnv,
   toDriveEnvDTO,
   type CreateDriveEnvResult,
   type RenameDriveEnvResult,
+  type SetLocalEnvServerPolicyResult,
   type DeleteDriveEnvResult,
   type RebuildDriveEnvResult,
 } from '@pagespace/lib/services/drive-envs/drive-envs';
@@ -256,9 +259,28 @@ export async function listEnvsInDrive(driveId: string): Promise<DriveEnvDTO[]> {
   return listDriveEnvs({ driveId, deps: { store, now: () => new Date(), liveConnection } });
 }
 
+/**
+ * ONE env as a DTO, with a local env's facts joined the way the listing joins
+ * them (sibling row + this replica's socket registry). `toDriveEnvDTO` throws
+ * for a local row without its facts, deliberately, so every single-row answer
+ * goes through here rather than calling it bare.
+ */
+export async function readEnvDTO(env: DriveEnvRecord): Promise<DriveEnvDTO> {
+  if (env.substrate !== 'local') return toDriveEnvDTO(env);
+  const [store, liveConnection] = await Promise.all([getDriveEnvStore(), liveConnectionReader()]);
+  const sibling = await store.findLocalByEnvId(env.id);
+  return toDriveEnvDTO(env, localFactsFor(env, sibling ?? undefined, liveConnection(env.id), Date.now()));
+}
+
 export async function renameEnv(input: { envId: string; name: string }): Promise<RenameDriveEnvResult> {
   const store = await getDriveEnvStore();
   return renameDriveEnv({ envId: input.envId, name: input.name, deps: { store, now: () => new Date() } });
+}
+
+/** Owner-only ([D-6]): the service compares `requesterId` against the ROW's owner; no drive role is consulted. */
+export async function setEnvServerPolicy(input: { envId: string; requesterId: string; serverPolicy: DriveEnvServerPolicy }): Promise<SetLocalEnvServerPolicyResult> {
+  const store = await getDriveEnvStore();
+  return setLocalEnvServerPolicy({ envId: input.envId, requesterId: input.requesterId, serverPolicy: input.serverPolicy, deps: { store, now: () => new Date() } });
 }
 
 /**
