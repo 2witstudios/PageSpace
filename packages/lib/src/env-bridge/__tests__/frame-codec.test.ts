@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { decodeFrame, encodeFrame, FRAME_TYPES, isMachineToServerFrame, FS_READ_ENVELOPE_OVERHEAD_BYTES, fsReadContentCeiling, execOutputCeiling, type Frame } from '../frame-codec';
+import { decodeFrame, encodeFrame, FRAME_TYPES, isMachineToServerFrame, FS_READ_ENVELOPE_OVERHEAD_BYTES, fsReadContentCeiling, execOutputCeiling, MAX_FS_WRITE_FILES, type Frame } from '../frame-codec';
 
 const LIMITS = { maxFrameBytes: 64 * 1024 };
 const B64 = Buffer.from('hello').toString('base64');
@@ -277,5 +277,98 @@ describe('GA wave 3 — STOP on the wire: `pause` (server→machine) and `pause_
     expect(decodeFrame({ type: 'pause_result', envId: 'e1', pausedAt: 5, sig: B64 }, limits)).toEqual({ ok: false, reason: 'malformed' });
     expect(decodeFrame({ type: 'pause_result', pausedAt: 5, killed: 0, sig: B64 }, limits)).toEqual({ ok: false, reason: 'malformed' });
     expect(isMachineToServerFrame({ type: 'pause_result', envId: 'e1', pausedAt: 5, killed: 0, sig: '' })).toBe(true);
+  });
+});
+
+describe('grant_fs_write: what no owner should have to adjudicate is refused at the envelope (hardening A4)', () => {
+  const LARGE = { maxFrameBytes: 4 * 1024 * 1024 };
+  const write = (files: Array<Record<string, unknown>>) => decodeFrame(JSON.stringify({ type: 'grant_fs_write', grant: GRANT, sig: B64, files }), LARGE);
+  const file = (mode?: number) => ({ path: '/home/u/proj/a', contentB64: B64, ...(mode !== undefined && { mode }) });
+
+  it.each([0o644, 0o600, 0o755, 0o777, 0])('given the legal mode %s, should decode unchanged — 0o755 is legal HERE and is escalated later by the classifier, not refused by the codec', (mode) => {
+    const decoded = write([file(mode)]);
+    expect(decoded.ok, `mode ${mode.toString(8)} must decode`).toBe(true);
+    if (!decoded.ok) return;
+    expect((decoded.frame as { files: Array<{ mode?: number }> }).files[0]?.mode).toBe(mode);
+  });
+
+  it.each<[string, number]>([
+    ['setuid', 0o4755],
+    ['setgid', 0o2755],
+    ['sticky', 0o1755],
+    ['setuid+setgid+sticky', 0o7644],
+  ])('given a mode with %s set, should REFUSE at decode — these are never escalated to a click', (_label, mode) => {
+    expect(write([file(mode)])).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it.each([0o1000, 0o10000, 1_000_000])('given the out-of-range mode %s, should refuse', (mode) => {
+    expect(write([file(mode)]).ok).toBe(false);
+  });
+
+  it('given a negative or non-integer mode, should refuse (unchanged from the non-negative integer rule)', () => {
+    expect(write([file(-1)]).ok).toBe(false);
+    expect(write([file(0.5)]).ok).toBe(false);
+  });
+
+  it(`given exactly ${MAX_FS_WRITE_FILES} files, should decode; given one more, should FAIL — not truncate, not partially write`, () => {
+    const at = Array.from({ length: MAX_FS_WRITE_FILES }, () => file());
+    expect(write(at).ok).toBe(true);
+    const over = [...at, file()];
+    expect(write(over)).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('exports the cap so the daemon, the docs and this test cannot drift', () => {
+    expect(MAX_FS_WRITE_FILES).toBeGreaterThan(0);
+    expect(Number.isInteger(MAX_FS_WRITE_FILES)).toBe(true);
+  });
+});
+
+describe('the frozen request on the wire carries what a WRITE card must say (hardening A7)', () => {
+  const base = { type: 'grant_denied' as const, grantId: 'g1', sig: B64 };
+  const request = { op: 'fs_write' as const, cwd: '/home/u/proj', paths: ['/home/u/proj/.git/hooks/pre-commit'], env: {}, timeoutMs: 1, maxBytes: 1, clamped: false };
+  const decode = (pending: unknown) => decodeFrame(JSON.stringify({ ...base, reason: 'ask_pending:ch_1', pending }), LIMITS);
+
+  it('given a pending write with its modes and the machine\'s own classification, should decode all of it', () => {
+    const decoded = decode({
+      challengeId: 'ch_1',
+      expiresAt: 5,
+      request: { ...request, writeModes: [0o755] },
+      files: [{ path: '/home/u/proj/.git/hooks/pre-commit', mode: 0o755, bytes: 42, reason: 'vcs_metadata' }],
+    });
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok || decoded.frame.type !== 'grant_denied') throw new Error('expected a grant_denied');
+    expect(decoded.frame.pending?.request.writeModes).toEqual([0o755]);
+    expect(decoded.frame.pending?.files).toEqual([{ path: '/home/u/proj/.git/hooks/pre-commit', mode: 0o755, bytes: 42, reason: 'vcs_metadata' }]);
+  });
+
+  it('given an exec pending (no modes, no files), should still decode — both are optional', () => {
+    expect(decode({ challengeId: 'ch_1', expiresAt: 5, request }).ok).toBe(true);
+  });
+
+  it('given a file whose reason is not one of the classifier\'s, should REFUSE — the card must never render a word the machine did not mint', () => {
+    expect(decode({ challengeId: 'ch_1', expiresAt: 5, request, files: [{ path: '/x', mode: null, bytes: 1, reason: 'looks_fine_to_me' }] }).ok).toBe(false);
+  });
+
+  it('given an unmodelled field beside them, should refuse (every level of the pending payload is strict)', () => {
+    expect(decode({ challengeId: 'ch_1', expiresAt: 5, request, note: 'trust me' }).ok).toBe(false);
+    expect(decode({ challengeId: 'ch_1', expiresAt: 5, request: { ...request, note: 'trust me' } }).ok).toBe(false);
+    // Including inside a per-file finding: the card renders these, so nothing
+    // may ride along beside the four fields it knows.
+    expect(decode({ challengeId: 'ch_1', expiresAt: 5, request, files: [{ path: '/x', mode: null, bytes: 1, reason: null, note: 'trust me' }] }).ok).toBe(false);
+  });
+
+  it('given an ordinary file in a mixed write, should carry a null reason rather than being dropped — the card shows every path', () => {
+    const decoded = decode({
+      challengeId: 'ch_1',
+      expiresAt: 5,
+      request: { ...request, paths: ['/home/u/proj/src/a.ts', '/home/u/proj/Makefile'], writeModes: [null, null] },
+      files: [
+        { path: '/home/u/proj/src/a.ts', mode: null, bytes: 3, reason: null },
+        { path: '/home/u/proj/Makefile', mode: null, bytes: 9, reason: 'build_or_task' },
+      ],
+    });
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok || decoded.frame.type !== 'grant_denied') throw new Error('expected a grant_denied');
+    expect(decoded.frame.pending?.files?.map((file) => file.reason)).toEqual([null, 'build_or_task']);
   });
 });

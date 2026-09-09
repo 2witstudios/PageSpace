@@ -69,6 +69,7 @@ import { capabilityForOp } from './intersect-capabilities';
 import { confinePath, type PathResolver } from './confine-path';
 import { scrubEnv } from './scrub-env';
 import { findApprovalCoverage, type ApprovalMatchDeps, type DurableApproval } from './decide-approval';
+import { sensitiveWrites, type SensitiveWrite } from './classify-write';
 
 export interface ExecutionRequest {
   readonly op: GrantOp;
@@ -79,6 +80,13 @@ export interface ExecutionRequest {
   readonly cwd?: string;
   /** File paths named by fs operations; required (non-empty) for `fs_read` / `fs_write`. Each must confine. */
   readonly paths?: readonly string[];
+  /**
+   * The POSIX mode each written file asks for, index-aligned with `paths` and
+   * present for `fs_write` ONLY (hardening A1). `null` where the request named
+   * no mode. A length that does not match `paths`, or an entry that is not a
+   * non-negative integer or `null`, is `malformed`.
+   */
+  readonly writeModes?: readonly (number | null)[];
   readonly env?: Readonly<Record<string, string>>;
   readonly timeoutMs?: number;
   readonly maxBytes?: number;
@@ -90,6 +98,8 @@ export interface NormalizedRequest {
   readonly args?: readonly string[];
   readonly cwd: string;
   readonly paths: readonly string[];
+  /** The requested modes, index-aligned with `paths`; present for `fs_write` only. Inside `canonicalizeArgs`, so an approval cannot be replayed at another mode. */
+  readonly writeModes?: readonly (number | null)[];
   readonly env: Readonly<Record<string, string>>;
   /** Always a positive integer ≤ the owner's cap. */
   readonly timeoutMs: number;
@@ -128,6 +138,15 @@ export type ExecutionVerdict =
       /** What a durable approval of this request would be keyed on (`null`: nothing durable can be written; ask every time). */
       readonly subjects: readonly string[] | null;
     }
+  | {
+      readonly kind: 'ask';
+      /** A write that can become a command (hardening A3): escalated, never refused. */
+      readonly reason: 'sensitive_write';
+      readonly request: NormalizedRequest;
+      readonly subjects: readonly string[] | null;
+      /** Which files, and why — what the card and the terminal prompt say out loud. Never empty. */
+      readonly sensitive: readonly SensitiveWrite[];
+    }
   | { readonly kind: 'deny'; readonly reason: ExecDenyReason };
 
 /**
@@ -153,6 +172,16 @@ export interface DecideExecutionInput {
   readonly serverPolicy: ServerPolicy;
   readonly capabilities: AdvertisedCapabilities;
   readonly probe: PathResolver;
+  /**
+   * The mode a file ALREADY has, for the sensitive-write classifier (Codex P1
+   * on hardening A). Injected like `probe`, and called ONLY for `fs_write`,
+   * ONLY after confinement, and only for a path whose write names no mode —
+   * so it always runs on a resolved real path inside a root, never on one the
+   * request named. `null` (or a throw) means "no existing file". Omitted: the
+   * classifier sees requested modes only, which is strictly less knowledge and
+   * never more permission.
+   */
+  readonly statMode?: (path: string) => number | null;
   readonly localApproval?: LocalApproval;
   /**
    * The durable approvals in force on this machine (GA wave 2). Consulted
@@ -167,6 +196,19 @@ export interface ApprovalConsultation extends Omit<ApprovalMatchDeps, 'roots'> {
   readonly entries: readonly DurableApproval[];
   /** ms since epoch, from the adapter's clock. */
   readonly now: number;
+}
+
+/** One answer per path per decision; `undefined` in stays `undefined` out, so no probe means no stat. */
+function memoizeStatMode(statMode: ((path: string) => number | null) | undefined): ((path: string) => number | null) | undefined {
+  if (statMode === undefined) return undefined;
+  const seen = new Map<string, number | null>();
+  return (path) => {
+    const cached = seen.get(path);
+    if (cached !== undefined || seen.has(path)) return cached ?? null;
+    const mode = statMode(path);
+    seen.set(path, mode);
+    return mode;
+  };
 }
 
 function deny(reason: ExecDenyReason): ExecutionVerdict {
@@ -196,6 +238,15 @@ function isWellFormed(request: ExecutionRequest): boolean {
   if (r.cmd !== undefined && typeof r.cmd !== 'string') return false;
   if (r.args !== undefined && !(Array.isArray(r.args) && r.args.every((a) => typeof a === 'string'))) return false;
   if (r.paths !== undefined && !(Array.isArray(r.paths) && r.paths.every(isNonEmptyString))) return false;
+  if (r.writeModes !== undefined) {
+    // Off the wire, so shape first: only `fs_write` has modes at all, every
+    // entry is an integer mode or `null`, and the array is index-aligned with
+    // `paths` — a shorter one would silently make the LAST files modeless.
+    if (request.op !== 'fs_write') return false;
+    if (!Array.isArray(r.writeModes)) return false;
+    if (!r.writeModes.every((mode) => mode === null || (typeof mode === 'number' && Number.isInteger(mode) && mode >= 0))) return false;
+    if (!Array.isArray(r.paths) || r.writeModes.length !== r.paths.length) return false;
+  }
   if (r.env !== undefined && (r.env === null || typeof r.env !== 'object' || Array.isArray(r.env))) return false;
   if (r.timeoutMs !== undefined && typeof r.timeoutMs !== 'number') return false;
   if (r.maxBytes !== undefined && typeof r.maxBytes !== 'number') return false;
@@ -267,13 +318,36 @@ export function decideExecution(input: DecideExecutionInput): ExecutionVerdict {
     ...(request.args !== undefined && { args: request.args }),
     cwd: cwd.path,
     paths,
+    ...(request.writeModes !== undefined && { writeModes: [...request.writeModes] }),
     env,
     timeoutMs: timeout.value,
     maxBytes: bytes.value,
     clamped: timeout.clamped || bytes.clamped,
   };
 
-  if (preapproved) return { kind: 'allow', request: normalized, basis: { kind: 'preapproved_op' } };
+  /**
+   * THE WRITE ESCALATION (hardening A3). Confinement answers WHERE a write
+   * lands, never WHAT it says: a `.git/hooks/pre-commit` written mode 0o755
+   * inside a declared root runs as the owner at their next `git commit`,
+   * with no click anywhere. So a sensitive write does NOT take the
+   * pre-approved short-circuit below — it falls through to the approval path
+   * and, absent an approval, becomes an `ask`. It is an ask and not a deny:
+   * the owner is asked about a write that would otherwise have run, so a
+   * generous classifier costs one click, and `sensitive_write` never enters
+   * the deny order. Computed on the CONFINED paths — the file that would
+   * actually be written, not the one that was named.
+   */
+  // Memoised so the classifier and the approval SUBJECT (`approvalSubjects`,
+  // which asks the same question) see one answer per path per decision: one
+  // stat, and no window in which the two could disagree about a file.
+  const statMode = memoizeStatMode(input.statMode);
+  const sensitive = op === 'fs_write' ? sensitiveWrites(paths, normalized.writeModes, statMode) : [];
+  const ask = (subjects: readonly string[] | null): ExecutionVerdict =>
+    sensitive.length > 0
+      ? { kind: 'ask', reason: 'sensitive_write', request: normalized, subjects, sensitive }
+      : { kind: 'ask', reason: 'op_not_preapproved', request: normalized, subjects };
+
+  if (preapproved && sensitive.length === 0) return { kind: 'allow', request: normalized, basis: { kind: 'preapproved_op' } };
   if (localApproval !== undefined && localApproval.grantId === grant.grantId) {
     // The grant bounds the whole authorization, prompt included.
     if (!Number.isFinite(localApproval.approvedAt) || localApproval.approvedAt > grant.exp) return deny('approval_expired');
@@ -288,10 +362,10 @@ export function decideExecution(input: DecideExecutionInput): ExecutionVerdict {
   // what would run now, not what was asked for. Every subject the request
   // names must be covered; `expired` and `ask` both fall through to asking.
   if (approvals !== undefined) {
-    const approvalDeps: ApprovalMatchDeps = { resolveArgv0: approvals.resolveArgv0, roots };
+    const approvalDeps: ApprovalMatchDeps = { resolveArgv0: approvals.resolveArgv0, roots, statMode };
     const coverage = findApprovalCoverage(approvals.entries, grant, normalized, approvals.now, approvalDeps);
     if (coverage.match === 'covered') return { kind: 'allow', request: normalized, basis: { kind: 'durable_approval', approvalIds: coverage.approvalIds } };
-    return { kind: 'ask', reason: 'op_not_preapproved', request: normalized, subjects: coverage.subjects };
+    return ask(coverage.subjects);
   }
-  return { kind: 'ask', reason: 'op_not_preapproved', request: normalized, subjects: null };
+  return ask(null);
 }

@@ -133,6 +133,7 @@ function harness(overrides: Partial<EnvConnectHandlerDeps> & { policy?: string |
     appendAuditLine: async (_path, line) => void auditLines.push(line),
     pidFile: { write: async (path, record) => void pidWrites.push({ path, record }), remove: async (path) => void pidRemoves.push(path) },
     probe: { realpath: (path) => (path === '/home/me/proj' ? path : null), isSymlink: () => false },
+    statMode: () => null,
     createExecRunner: () => execRunner,
     createFsRunner: () => ({ read: async () => ({ kind: 'read', found: false }), write: async () => ({ kind: 'write', ok: true }) }),
     createSocket: (url, headers) => { const s = new FakeSocket(url, headers); sockets.push(s); return s; },
@@ -203,6 +204,35 @@ describe('pagespace env connect <enrollmentId>', () => {
     const replies = h.socket().sent.map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).filter((d) => d.ok && d.frame.type === 'grant_denied');
     expect(replies).toHaveLength(1);
     expect((replies[0] as { frame: Extract<Frame, { type: 'grant_denied' }> }).frame).toMatchObject({ grantId: 'g_chat', reason: 'ask_pending:ch_test', pending: { challengeId: 'ch_test', expiresAt: NOW + 30_000, request: { cmd: '/usr/bin/true', cwd: '/home/me/proj' } } });
+  });
+
+  it('Codex P1 wiring: a mode-less fs_write over an ALREADY executable file reaches the chat as an ask — the existing-mode probe is actually threaded from connect to the decision', async () => {
+    const target = '/home/me/proj/bin/tool';
+    const h = harness({
+      policy: JSON.stringify({ mode: 'allowlist', principals: ['u1'], ops: ['fs_read', 'fs_write'], roots: ['/home/me/proj'], envAllowlist: [] }),
+      probe: { realpath: (path: string) => (path === '/home/me/proj' || path === '/home/me/proj/bin' || path === target ? path : null), isSymlink: () => false },
+      statMode: (path: string) => (path === target ? 0o755 : null),
+    });
+    const c = ctx(false);
+    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+    await flush();
+    h.socket().open();
+    await flush();
+    h.socket().receive({ type: 'ping', ts: 1 });
+    await flush();
+    const unsigned = { type: 'grant_fs_write' as const, files: [{ path: target, contentB64: Buffer.from('#!/bin/sh\nid').toString('base64') }] };
+    const request = grantRequestForFrame({ ...unsigned, grant: {}, sig: '' } as GrantFrame);
+    const grant: Grant = { grantId: 'g_write', envId: 'env_1', principal: { userId: 'u1', sessionId: 's', conversationId: 'c' }, op: 'fs_write', argsHash: envBridgeHash(canonicalizeArgs(request.args)), iat: NOW - 1000, exp: NOW + 30_000, nonce: 'n_write' };
+    h.socket().receive({ ...unsigned, grant: { ...grant, principal: { ...grant.principal } }, sig: Buffer.from(nodeSign(null, encodeGrant(grant), serverPair.privateKey)).toString('base64') } as unknown as Frame);
+    await flush();
+    const sent = h.socket().sent.map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 }));
+    const denied = sent.filter((d) => d.ok && d.frame.type === 'grant_denied');
+    expect(denied, JSON.stringify(sent)).toHaveLength(1);
+    expect((denied[0] as { frame: Extract<Frame, { type: 'grant_denied' }> }).frame).toMatchObject({
+      grantId: 'g_write',
+      reason: 'ask_pending:ch_test',
+      pending: { files: [{ path: target, mode: null, reason: 'executable_bit' }] },
+    });
   });
 
   it('GA wave 2 · leaf 1: at start the daemon names the approvals file and how many approvals are in force (none ⇒ 0)', async () => {
@@ -417,6 +447,17 @@ describe('pagespace env connect <enrollmentId>', () => {
     await flush();
     expect(q.err.text()).not.toMatch(/exec is allowlisted/);
     expect(quiet.auditLines.some((line) => line.includes('policy_warning'))).toBe(false);
+  });
+
+  it('A6: given a policy rooted at the home directory, connect prints the root_is_home line AND audits policy_warning:root_is_home — the audit loops over CODES, it does not special-case one', async () => {
+    const h = harness({ policy: JSON.stringify({ mode: 'allowlist', principals: ['u1'], ops: ['fs_read', 'exec'], roots: [HOME], envAllowlist: [] }), probe: { realpath: (path: string) => (path === HOME ? path : null), isSymlink: () => false } });
+    const c = ctx(false);
+    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+    await flush();
+    expect(c.err.text()).toMatch(/covers your whole home directory/);
+    expect(h.auditLines.filter((line) => line.includes('"verdict":"policy_warning:root_is_home"'))).toHaveLength(1);
+    // The pre-existing code is still printed and still audited exactly once.
+    expect(h.auditLines.filter((line) => line.includes('"verdict":"policy_warning:exec_allowlisted"'))).toHaveLength(1);
   });
 
   it('R7: a server-signed revoke deletes the machine key from the credential store, stops reconnecting, and exits non-zero with a message', async () => {

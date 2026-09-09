@@ -51,6 +51,52 @@ describe('EnvApprovalCard', () => {
     expect(frozenRequestRows({ ...PENDING, request: { ...PENDING.request, paths: ['/a', '/b'], env: {} } })).toContainEqual(['paths', '/a, /b']);
   });
 
+  describe('A7: an fs_write request', () => {
+    const FILES = [
+      { path: '/home/o/proj/src/a.ts', mode: null, bytes: 3, reason: null },
+      { path: '/home/o/proj/.git/hooks/pre-commit', mode: 0o755, bytes: 12, reason: 'vcs_metadata' as const },
+    ];
+    const WRITE = {
+      ...PENDING,
+      request: { op: 'fs_write', cwd: '/home/o/proj', paths: FILES.map((file) => file.path), writeModes: [null, 0o755], env: {}, timeoutMs: 120_000, maxBytes: 1_048_576, clamped: false },
+      files: FILES,
+    };
+
+    it('renders every file with its mode, its size and WHY it was escalated — and marks which ones are sensitive', () => {
+      const rows = frozenRequestRows(WRITE);
+      const text = rows.map(([label, value]) => `${label} ${value}`).join('\n');
+      expect(rows.map(([label]) => label)).toContain('files');
+      expect(text).toContain('/home/o/proj/.git/hooks/pre-commit');
+      expect(text).toContain('0755');
+      expect(text).toContain('12 bytes');
+      // The machine's own reason, not a paraphrase composed here.
+      expect(text).toContain('version-control metadata');
+      // The ordinary file is shown, and is not accused of anything.
+      expect(text).toContain('/home/o/proj/src/a.ts');
+      expect(text).toMatch(/3 bytes/);
+      expect((text.match(/version-control metadata/g) ?? []).length).toBe(1);
+    });
+
+    it('renders an exec exactly as it does today (no regression)', () => {
+      expect(frozenRequestRows(PENDING).map(([label]) => label)).toEqual(['principal', 'op', 'command', 'cwd', 'env', 'limits']);
+    });
+
+    it('shows the byte count rather than the content — the frozen request never carries the bytes at all', async () => {
+      fetchMock.mockImplementation(async () => jsonResponse(WRITE));
+      render(
+        <AskUserAnswerProvider value={{ answerableToolCallIds: new Set(['call_1']), submitAnswers: vi.fn() }}>
+          <EnvApprovalCard part={part()} />
+        </AskUserAnswerProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('env-approval-request')).toBeTruthy());
+      const shown = screen.getByTestId('env-approval-request').textContent ?? '';
+      expect(shown).toContain('.git/hooks/pre-commit');
+      expect(shown).toContain('12 bytes');
+      expect(shown).toContain('version-control metadata');
+      expect(shown).not.toContain('would be made executable');
+    });
+  });
+
   it('fetches the frozen request from the approvals route and renders it verbatim; Allow posts the chosen scope and submits the route\'s answer under request_env_approval', async () => {
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (!init || init.method !== 'POST') return jsonResponse(PENDING);

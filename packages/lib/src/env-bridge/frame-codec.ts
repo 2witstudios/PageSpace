@@ -19,6 +19,7 @@
  * (a structurally valid frame whose only defect is a `*B64`/`sig` field).
  */
 import { z } from 'zod';
+import { SENSITIVE_WRITE_REASONS } from './classify-write';
 
 /** Strict base64 (standard alphabet, correct padding); the empty string is allowed. */
 const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
@@ -28,6 +29,14 @@ const b64 = z.string().refine((value) => BASE64_RE.test(value), { message: BAD_B
 const nonEmpty = z.string().min(1);
 const nonNegInt = z.number().int().nonnegative();
 const posInt = z.number().int().positive();
+/**
+ * How many files one write grant may carry (hardening A4). A write is a single
+ * agent tool call, so a handful is the real shape; the cap exists so that a
+ * request the owner may be asked to approve is always one a person can read,
+ * and so that no single grant can rewrite a tree. Over the cap the frame is
+ * refused whole — never truncated, never partially written.
+ */
+export const MAX_FS_WRITE_FILES = 32;
 /** The grant travels opaque; `verifyGrant` is the strict parser. */
 const opaqueGrant = z.record(z.string(), z.unknown());
 
@@ -59,13 +68,26 @@ const pendingRequest = z
     args: z.array(z.string()).optional(),
     cwd: nonEmpty,
     paths: z.array(z.string()),
+    /** Index-aligned with `paths`, for `fs_write` only (hardening A1) — part of the normalised request, so the card shows the mode that was actually signed for. */
+    writeModes: z.array(nonNegInt.nullable()).optional(),
     env: z.record(z.string(), z.string()),
     timeoutMs: posInt,
     maxBytes: posInt,
     clamped: z.boolean(),
   })
   .strict();
-const pendingApproval = z.object({ challengeId: nonEmpty, expiresAt: nonNegInt, request: pendingRequest }).strict();
+/**
+ * What the machine determined about each file of a pending WRITE (hardening
+ * A7): its size, the mode it would be given, and — in the machine's OWN
+ * vocabulary, from the closed set `classify-write.ts` mints — why it was
+ * escalated, or `null` for an ordinary file in a mixed request. The card
+ * renders these rather than any paraphrase, and the CONTENT never travels:
+ * a byte count says what will be written without making the bytes themselves
+ * something a browser has to render. Covered by the result signature like
+ * every other payload field.
+ */
+const pendingWriteFile = z.object({ path: nonEmpty, mode: nonNegInt.nullable(), bytes: nonNegInt, reason: z.enum(SENSITIVE_WRITE_REASONS).nullable() }).strict();
+const pendingApproval = z.object({ challengeId: nonEmpty, expiresAt: nonNegInt, request: pendingRequest, files: z.array(pendingWriteFile).max(MAX_FS_WRITE_FILES).optional() }).strict();
 const grantDenied = z.object({ type: z.literal('grant_denied'), grantId: nonEmpty, reason: nonEmpty, pending: pendingApproval.optional(), sig: b64 });
 const ptyOpened = z.object({ type: z.literal('pty_opened'), grantId: nonEmpty, sessionId: nonEmpty });
 const ptyData = z.object({ type: z.literal('pty_data'), sessionId: nonEmpty, seq: nonNegInt, dataB64: b64 });
@@ -96,11 +118,20 @@ const grantExec = z.object({
   maxBytes: z.number().optional(),
 });
 const grantFsRead = z.object({ type: z.literal('grant_fs_read'), grant: opaqueGrant, sig: b64, paths: z.array(z.string()) });
+/**
+ * A POSIX permission mode, and no more (hardening A4). `mode` is chosen by
+ * whoever composed the frame and is applied to EXISTING files, so setuid,
+ * setgid and the sticky bit (`0o7000`) are refused outright here rather than
+ * escalated: they are not a thing an owner should be asked to adjudicate in a
+ * chat card. `0o755` stays legal at this layer — the executable bit is a
+ * question for the owner (`classify-write.ts`), not an envelope error.
+ */
+const fileMode = nonNegInt.refine((mode) => (mode & ~0o777) === 0, { message: 'mode must be within 0o777; setuid, setgid and sticky are refused' });
 const grantFsWrite = z.object({
   type: z.literal('grant_fs_write'),
   grant: opaqueGrant,
   sig: b64,
-  files: z.array(z.object({ path: z.string(), contentB64: b64, mode: nonNegInt.optional() })),
+  files: z.array(z.object({ path: z.string(), contentB64: b64, mode: fileMode.optional() })).max(MAX_FS_WRITE_FILES),
 });
 const grantPtyOpen = z.object({
   type: z.literal('grant_pty_open'),

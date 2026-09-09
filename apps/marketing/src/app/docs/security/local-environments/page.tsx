@@ -96,7 +96,28 @@ Each guarantee is followed by its exact limit.
 - **File access is confined to the folders you declared.** Every file an agent reads or writes,
   and every working directory, must resolve inside a folder in your policy file; symlinks are
   resolved and \`..\` is refused. *Limit: this confines the paths an agent can name. It does not
-  confine what a program does once it has started.*
+  confine what a program does once it has started.* And a folder is only as narrow as you make
+  it: if you enrol from your **home directory**, that one root covers \`~/.ssh\`, your shell
+  startup files and every project at once. \`pagespace env enroll\`, \`env connect\` and
+  \`env policy\` all say so out loud, and honour it anyway — it is your machine.
+
+- **A write that could become a command asks you first.** Writing files inside your folders
+  normally runs without a prompt. But a file's *contents* can be a command something else runs
+  later: a \`.git/hooks/pre-commit\` file, made executable, runs at your next \`git commit\`, as
+  you, with no approval anywhere. So a write your machine can recognise as one of those — inside
+  \`.git/\`, \`.hg/\` or \`.svn/\`; a shell startup file; a \`Makefile\`, \`justfile\` or
+  \`.vscode/tasks.json\`; a package manifest such as \`package.json\` or \`Cargo.toml\`; a CI
+  config; \`.pre-commit-config.yaml\`, \`.gitattributes\` or \`conftest.py\`; or *any* file that will
+  be executable once the write lands — stops and asks you, on the same card, naming the file and
+  why. That last one counts files that are executable **already**: a write that names no
+  permissions leaves the existing ones alone, so overwriting \`bin/tool\` or
+  \`scripts/deploy.sh\` asks too, because the replacement would run as you the next time anything
+  invokes it.
+  Approving one covers that **file**, not the whole folder. *Limit, and it is a real one: this
+  list can never be complete. A write to ordinary source code that you later build or run is
+  still a command, and no list of filenames catches that. It raises the cost of the obvious
+  attack and puts you in front of it; it is not a boundary. Only sandboxing the command itself
+  would be, and PageSpace does not do that — see below.*
 
 - **Results are signed by your machine.** PageSpace verifies every result under the key it
   pinned at enrolment; a result that does not verify is never delivered to the agent.
@@ -124,7 +145,8 @@ Each guarantee is followed by its exact limit.
   you are told it was not acknowledged rather than that it stopped.*
 
 - **Every decision is logged on your machine.** One line per request, allowed or refused, keyed
-  by the request id, in \`~/.pagespace/env-audit.jsonl\`. *Limit: if that write fails, the daemon
+  by the request id — and naming the files a read or write touched — in
+  \`~/.pagespace/env-audit.jsonl\`. *Limit: if that write fails, the daemon
   reports it once to its own terminal and keeps running — commands keep running with no local
   record.*
 
@@ -163,6 +185,16 @@ approval in force across your machines and revokes any of them; a revoke your ma
 receive is delivered the next time it connects, **before it runs anything**, and until the
 machine confirms, PageSpace signs nothing at all for that environment. There is still no
 \`pagespace env\` subcommand for approvals.
+
+**A file write can be a command, and the list of writes we recognise can never be complete.**
+Your machine now stops and asks about a write to the places a file most obviously becomes a
+command — version-control hooks, shell startup files, build files, package manifests, CI
+configs, and anything that will be executable afterwards — including a file that already is. That closes the plainest version of this: before it, an
+instruction on a shared page could have your own agent write a git hook inside a declared folder
+with no click at all, and your next commit would run it. It does not close the general case. A
+write to ordinary source code in a project you later build or run is still a command, and no
+list of filenames catches it. Treat the escalation as raising the cost of the obvious attack,
+not as a boundary.
 
 **Content other people wrote can steer your agent onto your machine.** On a shared drive, every
 page, comment and message is written by other people, and your agent reads them. Text aimed at

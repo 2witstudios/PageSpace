@@ -255,3 +255,42 @@ describe('pagespace env policy — exec in an allowlist policy is honoured, and 
     }
   });
 });
+
+describe('A6: a policy root that covers the whole home directory is honoured, and the daemon is LOUD about it', () => {
+  const policyHandler = (roots: string[]) =>
+    createEnvPolicyHandler({ homedir: HOME, uid: 501, openPolicy: () => ({ uid: 501, mode: 0o100600, content: JSON.stringify({ mode: 'ask', principals: [OWNER], ops: [], roots, envAllowlist: [] }) }) });
+
+  it('given roots that include the home directory exactly, `env policy` should exit 0 and print ONE line naming ~/.ssh and the way to narrow it', async () => {
+    const c = ctx();
+    expect(await policyHandler([HOME])(c.ctx, intent(['env', 'policy']))).toBe(EXIT_SUCCESS);
+    const lines = c.err.text().trim().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/covers your whole home directory/);
+    expect(lines[0]).toMatch(/\.ssh/);
+    expect(lines[0]).toMatch(/Narrow "roots"/);
+  });
+
+  it('given a root that is an ANCESTOR of home, should warn the same way; given an ordinary project root, should print nothing', async () => {
+    const wide = ctx();
+    await policyHandler(['/home'])(wide.ctx, intent(['env', 'policy']));
+    expect(wide.err.text()).toMatch(/covers your whole home directory/);
+    const quiet = ctx();
+    await policyHandler([`${HOME}/code/project`])(quiet.ctx, intent(['env', 'policy']));
+    expect(quiet.err.text()).toBe('');
+  });
+
+  it('given enroll scaffolding a policy rooted at HOME, should print the warning THERE — while the owner is at the keyboard and can still choose differently', async () => {
+    const d = deps({ cwd: () => HOME });
+    const c = ctx();
+    expect(await enroll(d, c)).toBe(EXIT_SUCCESS);
+    expect(d.writes[0]?.content).toContain(`"${HOME}"`);
+    expect(c.err.text()).toMatch(/covers your whole home directory/);
+  });
+
+  it('given enroll scaffolding an ordinary project root, should print no such warning', async () => {
+    const d = deps();
+    const c = ctx();
+    expect(await enroll(d, c)).toBe(EXIT_SUCCESS);
+    expect(c.err.text()).not.toMatch(/covers your whole home directory/);
+  });
+});

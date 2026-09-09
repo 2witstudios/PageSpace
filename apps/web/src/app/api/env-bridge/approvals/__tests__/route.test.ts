@@ -71,6 +71,23 @@ describe('GET — the owner sees the frozen request verbatim', () => {
     expect(await json(r)).toEqual({ challengeId: 'ch_1', envId: ENV, principal: PRINCIPAL, expiresAt: NOW + 30_000, request: REQUEST, scopes: ['once', 'session', '30d', 'until_revoked'] });
   });
 
+  it('given a pending WRITE, should pass the machine\'s per-file findings through verbatim so the card can say which file and why (A7)', async () => {
+    const files = [
+      { path: '/home/o/proj/src/a.ts', mode: null, bytes: 3, reason: null },
+      { path: '/home/o/proj/.git/hooks/pre-commit', mode: 0o755, bytes: 12, reason: 'vcs_metadata' as const },
+    ];
+    const writeRequest = { op: 'fs_write' as const, cwd: '/home/o/proj', paths: files.map((file) => file.path), writeModes: [null, 0o755], env: {}, timeoutMs: 120_000, maxBytes: 1_048_576, clamped: false };
+    resetPendingApprovalStoreForTesting();
+    getPendingApprovalStore().remember(pendingEntry({ pending: { challengeId: 'ch_1', expiresAt: NOW + 30_000, request: writeRequest, files } }), NOW);
+    const body = await json(await get());
+    expect(body.request).toEqual(writeRequest);
+    expect(body.files).toEqual(files);
+  });
+
+  it('given a pending EXEC, should not invent a files key', async () => {
+    expect(await json(await get())).not.toHaveProperty('files');
+  });
+
   it('given a drive ADMIN who is not the env owner, should refuse 403 not_owner and audit (D-6)', async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: ADMIN } as never);
     const r = await get();

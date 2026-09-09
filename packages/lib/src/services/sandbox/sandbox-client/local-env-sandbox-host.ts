@@ -47,6 +47,7 @@ import {
 } from '../sandbox-host';
 import type { MachineResultFrame } from '../../../env-bridge/machine-signatures';
 import type { UnsignedGrantFrame } from '../../../env-bridge/grant-args';
+import { MAX_FS_WRITE_FILES } from '../../../env-bridge/frame-codec';
 import type { RunCommandArgs, SandboxRunResult, WriteFileEntry } from './types';
 
 /**
@@ -213,6 +214,11 @@ function buildHandle({ transport, envId }: { transport: BridgeTransport; envId: 
     },
 
     async writeFiles(files: WriteFileEntry[]): Promise<void> {
+      // The wire caps a write grant at `MAX_FS_WRITE_FILES` (hardening A4) and
+      // the daemon DROPS an over-cap frame rather than answering it, so refuse
+      // here where the caller can see why, instead of waiting for a reply that
+      // will never come.
+      if (files.length > MAX_FS_WRITE_FILES) throw new LocalEnvGrantDeniedError(envId, `too_many_files:${files.length}>${MAX_FS_WRITE_FILES}`);
       // Content is part of the SIGNED projection (`grant-args.ts`), so a grant
       // to write one thing cannot be replayed to write another to the path.
       const frame: UnsignedGrantFrame = {

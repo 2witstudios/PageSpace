@@ -198,6 +198,11 @@
       "import": "./dist/env-bridge/confine-path.js",
       "require": "./dist/env-bridge/confine-path.js"
     },
+    "./env-bridge/classify-write": {
+      "types": "./dist/env-bridge/classify-write.d.ts",
+      "import": "./dist/env-bridge/classify-write.js",
+      "require": "./dist/env-bridge/classify-write.js"
+    },
     "./env-bridge/decide-execution": {
       "types": "./dist/env-bridge/decide-execution.d.ts",
       "import": "./dist/env-bridge/decide-execution.js",

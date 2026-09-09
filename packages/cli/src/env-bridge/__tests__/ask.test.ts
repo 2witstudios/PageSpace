@@ -54,10 +54,33 @@ describe('ask prompter (invariant 5) — shows the exact normalized request, rem
     expect(await createAskPrompter({ confirm: async () => true, chooseScope: async () => { throw new Error('closed'); }, write: () => undefined }).ask(input)).toEqual({ approved: false });
   });
 
+  it('A7: given a sensitive write, the prompt names WHICH file and WHY, in the classifier\'s own words — one line per file', () => {
+    const request = { op: 'fs_write' as const, cwd: '/home/u/proj', paths: ['/home/u/proj/.git/hooks/pre-commit', '/home/u/proj/src/a.ts'], writeModes: [0o755, null], env: {}, timeoutMs: 1000, maxBytes: 1000, clamped: false };
+    const prompt = renderAskPrompt({
+      grantId: 'g1',
+      principal: { userId: 'u1', sessionId: 's1', conversationId: 'c1' },
+      op: 'fs_write',
+      request,
+      subjects: ['file:/home/u/proj/.git/hooks/pre-commit'],
+      sensitive: [{ path: '/home/u/proj/.git/hooks/pre-commit', reason: 'vcs_metadata' }],
+    });
+    expect(prompt).toContain('/home/u/proj/.git/hooks/pre-commit — writes inside version-control metadata');
+    expect(prompt).toContain('the file /home/u/proj/.git/hooks/pre-commit');
+    // The ordinary file in the same request is not accused of anything.
+    expect(prompt.split('\n').filter((line) => line.trim().startsWith('⚠'))).toHaveLength(1);
+  });
+
+  it('A7: given an ordinary ask, should print no ⚠ line at all', () => {
+    const prompt = renderAskPrompt(input);
+    expect(prompt).not.toContain('⚠');
+  });
+
   it('describeSubject / describeScope read as English', () => {
     expect(describeSubject('exec:/usr/bin/git')).toBe('/usr/bin/git');
     expect(describeSubject('builtin:cd')).toBe('cd (shell builtin)');
     expect(describeSubject('root:/home/u/proj')).toBe('files under /home/u/proj');
+    // A sensitive write is keyed on the FILE, so the prompt names the file (A3).
+    expect(describeSubject('file:/home/u/proj/.git/hooks/pre-commit')).toBe('the file /home/u/proj/.git/hooks/pre-commit');
     expect(describeScope('once')).toMatch(/only/);
     expect(describeScope('session')).toMatch(/daemon stops/);
     expect(describeScope('30d')).toMatch(/30 days/);

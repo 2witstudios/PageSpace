@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import { generateKeyPairSync, sign as nodeSign, verify as nodeVerify, createPublicKey, createHash } from 'node:crypto';
 import type { Ed25519Verify, HashBytes } from '../grant';
-import type { Frame } from '../frame-codec';
+import type { Frame, PendingApproval } from '../frame-codec';
 import { FRAME_TYPES, MACHINE_TO_SERVER_FRAME_TYPES, SERVER_TO_MACHINE_FRAME_TYPES, isMachineToServerFrame } from '../frame-codec';
 import {
   encodeHelloForSigning,
@@ -113,6 +113,15 @@ function signResult(body: Omit<MachineResultFrame, 'sig'>, key = machine): Machi
 
 const PENDING = { challengeId: 'ch_1', expiresAt: 1_800_000_060_000, request: { op: 'exec' as const, cmd: 'git', args: ['status'], cwd: '/home/u/proj', paths: [], env: {}, timeoutMs: 1000, maxBytes: 1024, clamped: false } };
 
+/** A pending WRITE and the machine's own per-file findings (hardening A7). */
+const WRITE_FILES = [{ path: '/home/u/proj/.git/hooks/pre-commit', mode: 0o644, bytes: 12, reason: 'vcs_metadata' as const }];
+const WRITE_PENDING: PendingApproval = {
+  challengeId: 'ch_1',
+  expiresAt: 1_800_000_060_000,
+  request: { op: 'fs_write' as const, cwd: '/home/u/proj', paths: [WRITE_FILES[0]!.path], writeModes: [0o644], env: {}, timeoutMs: 1000, maxBytes: 1024, clamped: false },
+  files: WRITE_FILES,
+};
+
 describe('GA wave 2 — a grant_denied carrying a PENDING frozen request is signed over that request too', () => {
   const denied = { type: 'grant_denied' as const, grantId: 'g5', reason: 'ask_pending:ch_1', pending: PENDING };
 
@@ -130,12 +139,33 @@ describe('GA wave 2 — a grant_denied carrying a PENDING frozen request is sign
     ['cwd', { ...PENDING, request: { ...PENDING.request, cwd: '/etc' } }],
     ['env', { ...PENDING, request: { ...PENDING.request, env: { LD_PRELOAD: '/evil.so' } } }],
     ['challengeId', { ...PENDING, challengeId: 'ch_other' }],
+    // Hardening A7: the per-file findings the card renders are inside the
+    // signature too, so nothing between the machine and the owner can add a
+    // file, drop one, change its mode or soften the reason it was escalated.
+    ['files (added)', { ...WRITE_PENDING, files: [...WRITE_FILES, { path: '/home/u/proj/extra', mode: null, bytes: 1, reason: null }] }],
+    ['files (a reason softened)', { ...WRITE_PENDING, files: [{ ...WRITE_FILES[0]!, reason: null }] }],
+    ['files (a mode raised)', { ...WRITE_PENDING, files: [{ ...WRITE_FILES[0]!, mode: 0o755 }] }],
+    ['files (dropped entirely)', { ...WRITE_PENDING, files: undefined }],
+    ['request.writeModes', { ...WRITE_PENDING, request: { ...WRITE_PENDING.request, writeModes: [0o755] } }],
     ['expiresAt', { ...PENDING, expiresAt: PENDING.expiresAt + 1 }],
     ['removed', undefined],
   ])('given pending.%s altered after signing, should deny bad_signature — the card can only show what the machine froze', (_label, pending) => {
-    const signed = signResult(denied);
-    const frame = { ...denied, ...(pending === undefined ? { pending: undefined } : { pending }), sig: signed.sig } as MachineResultFrame;
+    // A write row is compared against the write baseline, an exec row against the exec one.
+    const isWrite = typeof _label === 'string' && (_label.startsWith('files') || _label.startsWith('request.writeModes'));
+    const base = isWrite ? { ...denied, pending: WRITE_PENDING } : denied;
+    const signed = signResult(base);
+    const frame = { ...base, ...(pending === undefined ? { pending: undefined } : { pending }), sig: signed.sig } as MachineResultFrame;
     expect(verifyMachineResult({ frame, machinePublicKey: spki(machine), verify, hash })).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+
+  it('given a pending WRITE signed as sent, should verify and carry every per-file finding into the signed payload', () => {
+    // Not an inline literal: `Omit<MachineResultFrame, 'sig'>` collapses a
+    // union to its COMMON keys, so a fresh literal carrying `pending` trips
+    // the excess-property check even though `grant_denied` has that field.
+    const deniedWrite = { ...denied, pending: WRITE_PENDING };
+    const frame = signResult(deniedWrite);
+    expect(verifyMachineResult({ frame, machinePublicKey: spki(machine), verify, hash })).toMatchObject({ ok: true });
+    expect(resultPayloadForFrame(frame)).toMatchObject({ pending: WRITE_PENDING });
   });
 });
 

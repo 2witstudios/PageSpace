@@ -49,7 +49,7 @@ import { createDispatcher, DAEMON_CAPABILITIES } from '../../env-bridge/dispatch
 import { createNodeExecRunner, type ExecRunner } from '../../env-bridge/exec-runner.js';
 import { createFsRunner, type FsRunner } from '../../env-bridge/fs-runner.js';
 import { createDaemonNonceStore } from '../../env-bridge/nonce-store.js';
-import { createPathProbe } from '../../env-bridge/path-probe.js';
+import { createPathProbe, createStatMode } from '../../env-bridge/path-probe.js';
 import { defaultPolicyPath, describePolicyRefusal, loadMachinePolicy, openPolicyFile, type OpenedPolicyFile, describePolicyWarnings } from '../../env-bridge/policy.js';
 import { signHello } from '../../env-bridge/result-signer.js';
 import { mintBridgeToken } from '../../env-bridge/token.js';
@@ -91,6 +91,8 @@ export interface EnvConnectHandlerDeps {
   readonly appendAuditLine: (path: string, line: string) => Promise<void>;
   readonly pidFile: PidFileStore;
   readonly probe: PathProbe;
+  /** The mode an existing file already has — the sensitive-write classifier's "will this still be executable?" (Codex P1 on hardening A). */
+  readonly statMode: (path: string) => number | null;
   readonly createExecRunner: (resolver: CommandResolverDeps) => ExecRunner;
   readonly createFsRunner: () => FsRunner;
   readonly createSocket: SocketFactory;
@@ -161,7 +163,7 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
       ctx.stderr.write(`${describePolicyRefusal(loaded.reason ?? 'missing', policyPath)}\n`);
     } else {
       ctx.stderr.write(`Policy ${policyPath}: mode ${loaded.policy.mode}, principals ${loaded.policy.principals.join(', ') || '(none)'}, ops ${loaded.policy.ops.join(', ') || '(none)'}, roots ${loaded.policy.roots.join(', ')}\n`);
-      for (const warning of describePolicyWarnings(loaded.policy)) ctx.stderr.write(`${warning.message}\n`);
+      for (const warning of describePolicyWarnings(loaded.policy, { homedir: deps.homedir })) ctx.stderr.write(`${warning.message}\n`);
       if (loaded.policy.mode === 'ask') {
         ctx.stderr.write(
           askInChat(ctx)
@@ -174,11 +176,15 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
     const log = (line: string) => ctx.stderr.write(`[env connect] ${line}\n`);
     const auditPath = defaultAuditPath(ctx.env, deps.homedir);
     const audit = createAuditLog({ appendLine: (line) => deps.appendAuditLine(auditPath, line), now: deps.now, onError: log });
-    // GA wave 3, leaf 7: an allowlisted exec is honoured (the owner's own
-    // file) and audited ONCE at connect, so the trail says this daemon started
-    // with exec running click-free.
-    if (loaded.policy !== null && describePolicyWarnings(loaded.policy).some((warning) => warning.code === 'exec_allowlisted')) {
-      await audit.record({ grantId: null, principal: null, op: 'policy', verdict: 'policy_warning:exec_allowlisted', argsHash: null, exitCode: null });
+    // GA wave 3, leaf 7 (generalised in hardening A6): every widening the
+    // owner's policy carries is honoured — it is their own file — and audited
+    // ONCE at connect, so the trail says what this daemon started with. The
+    // loop is over CODES: a new warning is audited by existing, not by adding
+    // another special case here.
+    if (loaded.policy !== null) {
+      for (const warning of describePolicyWarnings(loaded.policy, { homedir: deps.homedir })) {
+        await audit.record({ grantId: null, principal: null, op: 'policy', verdict: `policy_warning:${warning.code}`, argsHash: null, exitCode: null });
+      }
     }
     const resolver: CommandResolverDeps = {
       platform: deps.platform,
@@ -220,6 +226,7 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
       nonces: createDaemonNonceStore(),
       policy: () => loaded.policy,
       probe: deps.probe,
+      statMode: deps.statMode,
       execRunner,
       fsRunner,
       audit,
@@ -371,6 +378,7 @@ export const envConnectHandler: CommandHandler = createEnvConnectHandler({
   appendAuditLine,
   pidFile: nodePidFile,
   probe: createPathProbe(),
+  statMode: createStatMode(),
   createExecRunner: createNodeExecRunner,
   createFsRunner: () => createFsRunner(),
   createSocket: (url, headers) => new WebSocket(url, { headers }),

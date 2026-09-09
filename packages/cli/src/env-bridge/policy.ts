@@ -22,7 +22,7 @@ import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync 
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { parseMachinePolicy, type MachinePolicy } from './lib-core.js';
-import { policyWarnings, type PolicyWarning } from './lib-core.js';
+import { policyWarnings, type PolicyWarning, type PolicyWarningInput, type PolicyWarningOptions } from './lib-core.js';
 
 export const POLICY_FILE_NAME = 'env-policy.json';
 export const POLICY_PATH_ENV_VAR = 'PAGESPACE_ENV_POLICY';
@@ -157,10 +157,12 @@ export async function writePolicyFile(path: string, content: string): Promise<vo
 /**
  * What this policy quietly widens, said out loud — the pure decision is
  * `policyWarnings` in the env-bridge core (one text for every surface): more
- * than one principal (D-6, wave 1) and `exec` allowlisted (GA wave 3: every
- * exec grant runs WITHOUT the owner's click). Both are the owner's call and
- * are honoured; every surface that prints the policy prints these lines.
+ * than one principal (D-6, wave 1), `exec` allowlisted (GA wave 3: every exec
+ * grant runs WITHOUT the owner's click), and a root that covers the whole home
+ * directory (hardening A6 — pass `homedir`, or that one is not decided at
+ * all). All three are the owner's call and are honoured; every surface that
+ * prints the policy prints these lines.
  */
-export function describePolicyWarnings(policy: Pick<MachinePolicy, 'mode' | 'ops' | 'principals'>): PolicyWarning[] {
-  return policyWarnings(policy);
+export function describePolicyWarnings(policy: PolicyWarningInput, options: PolicyWarningOptions = {}): PolicyWarning[] {
+  return policyWarnings(policy, options);
 }
