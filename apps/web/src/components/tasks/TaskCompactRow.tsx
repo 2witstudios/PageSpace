@@ -1,6 +1,6 @@
 'use client';
 
-import { memo } from 'react';
+import { memo, type ReactNode } from 'react';
 import { format, isPast, isToday, differenceInDays } from 'date-fns';
 import { ChevronRight, AlertCircle } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -13,6 +13,19 @@ export interface TaskCompactRowProps {
   task: Task;
   onToggleComplete: (task: Task) => void;
   onTap: (task: Task) => void;
+  /**
+   * Whether the viewer may change this task. Required rather than defaulting to
+   * true: a permission that fails open when a call site forgets it is the wrong
+   * kind of default. The dashboard spans many lists and has no single answer,
+   * so it passes `true` deliberately.
+   */
+  canEdit: boolean;
+  /**
+   * Row-level indicators, rendered between the metadata and the chevron. The
+   * task-list page view passes sub-task progress and the agent-trigger bell,
+   * neither of which the dashboard has a notion of.
+   */
+  rowMeta?: ReactNode;
 }
 
 const PRIORITY_DOT: Record<string, string> = {
@@ -25,6 +38,8 @@ export const TaskCompactRow = memo(function TaskCompactRow({
   task,
   onToggleComplete,
   onTap,
+  rowMeta,
+  canEdit,
 }: TaskCompactRowProps) {
   const isCompleted = getStatusDisplay(task).group === 'done';
   const dueDate = task.dueDate ? new Date(task.dueDate) : null;
@@ -49,6 +64,11 @@ export const TaskCompactRow = memo(function TaskCompactRow({
           checked={isCompleted}
           onCheckedChange={() => onToggleComplete(task)}
           className="h-5 w-5"
+          disabled={!canEdit}
+          // Names the row it belongs to, matching the table's checkbox
+          // (TaskRowCells). Without it the control announces as a bare
+          // "checkbox" and a screen reader cannot tell one row's from another's.
+          aria-label={`${isCompleted ? 'Reopen' : 'Complete'} ${task.title}`}
         />
       </div>
 
@@ -106,6 +126,8 @@ export const TaskCompactRow = memo(function TaskCompactRow({
           )}
         </div>
       </button>
+
+      {rowMeta}
 
       {/* Chevron indicator */}
       <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0" />

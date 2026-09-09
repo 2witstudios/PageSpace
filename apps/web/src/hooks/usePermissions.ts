@@ -83,14 +83,6 @@ export function usePermissions(pageId?: string | null, driveOwnerId?: string): U
 }
 
 /**
- * Hook to check a single permission
- */
-export function useCanEdit(pageId?: string | null, driveOwnerId?: string): boolean {
-  const { permissions } = usePermissions(pageId, driveOwnerId);
-  return permissions?.canEdit || false;
-}
-
-/**
  * Get permission error message
  */
 export function getPermissionErrorMessage(action: string, resource: string = 'page'): string {

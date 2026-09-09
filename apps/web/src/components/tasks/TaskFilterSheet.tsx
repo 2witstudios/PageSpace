@@ -167,6 +167,11 @@ export function TaskFilterButton({
       size="icon"
       className="h-10 w-10 shrink-0 relative"
       onClick={onClick}
+      // Icon-only: without a name this announces as just "button", and the
+      // count badge beside it is decorative markup a screen reader skips.
+      aria-label={
+        activeFilterCount > 0 ? `Filters (${activeFilterCount} active)` : 'Filters'
+      }
     >
       <Filter className="h-4 w-4" />
       {activeFilterCount > 0 && (
