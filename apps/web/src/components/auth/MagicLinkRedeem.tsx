@@ -94,8 +94,9 @@ export function MagicLinkRedeem({ token, next }: { token: string; next?: string 
     if (!response.ok) {
       const data = (await response.json().catch(() => ({}))) as { error?: string };
       const code = data.error ?? 'invalid_token';
-      // Our fault, so the link is still good and trying again can work. A
-      // rejected token is spent, and only a fresh link will do.
+      // Our fault, so the link itself is still good and trying again can
+      // work. Every other code means the link will never work again —
+      // spent, expired, or never ours — and only a fresh one will do.
       const retryable = code === 'server_error' || code === 'session_error';
       setStatus({ kind: 'error', message: ERROR_MESSAGES[code] ?? FALLBACK_MESSAGE, retryable });
       if (retryable) return;
@@ -138,11 +139,12 @@ export function MagicLinkRedeem({ token, next }: { token: string; next?: string 
         }
       } catch (error) {
         // Never leave the old entry behind. The server has already revoked
-        // this device's previous sessions and rotated its device token, so a
-        // stale bearer is not merely useless: `auth-fetch` prefers a stored
-        // bearer over the cookie, and the server rejects an invalid bearer
-        // outright rather than falling back — which would turn the valid
-        // cookie session we just received into 401s.
+        // this device's previous sessions (and, where it minted, rotated its
+        // device token), so a stale bearer is not merely useless:
+        // `auth-fetch` prefers a stored bearer over the cookie, and the
+        // server rejects an invalid bearer outright rather than falling back
+        // — which would turn the valid cookie session we just received into
+        // 401s.
         console.error('[MagicLinkRedeem] could not store the session; clearing the stale one', error);
         await getPlatformStorage()
           .clearSession()
@@ -179,11 +181,13 @@ export function MagicLinkRedeem({ token, next }: { token: string; next?: string 
   const run = useCallback(() => {
     setStatus({ kind: 'redeeming' });
     redeem().catch((error: unknown) => {
-      // Only pre-response failures reach here — everything after the response
-      // is handled inside `redeem`, because by then the user is signed in. So
-      // the token was never spent and a retry is honest. The reason stays in
-      // the console: `TypeError: Failed to fetch` tells the person who just
-      // tapped a link nothing they can act on.
+      // Everything after the response is handled inside `redeem`, because by
+      // then the user is signed in — so what reaches here is a request that
+      // never completed, the token was never spent, and offering a retry is
+      // honest. (The one exception is `router.replace` itself throwing, which
+      // would mean navigation is broken and no message helps.) The reason
+      // stays in the console: `TypeError: Failed to fetch` tells the person
+      // who just tapped a link nothing they can act on.
       console.error('[MagicLinkRedeem] redemption failed', error);
       setStatus({ kind: 'error', message: NETWORK_MESSAGE, retryable: true });
     });
