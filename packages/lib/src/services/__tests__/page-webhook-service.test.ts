@@ -103,8 +103,7 @@ describe('publishWebhookMessage', () => {
       pageId: 'page-1',
       userId: 'system-webhooks',
       content: 'deploy done',
-      fileId: null,
-      attachmentMeta: null,
+      attachments: [],
       aiMeta: { senderType: 'webhook', senderName: 'Deploys' },
     });
     // Broadcasts the fully-loaded message over the signed realtime path.
