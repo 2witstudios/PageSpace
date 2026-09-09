@@ -969,6 +969,15 @@ function DriveEnvRow({
   // Only an AWAITING-ENROLLMENT local env offers a new code: once a machine
   // has enrolled the server would refuse, and offering a refusal is noise.
   const awaitingEnrollment = isLocal && group.enrolled === false;
+  const selectedSessionId = useAgentSurfaceStore((state) => state.selectedSessionId);
+  // WHERE this environment's preview pane would open: the session the user is
+  // looking at when it belongs to this env, else its first. `null` (no
+  // sessions running in here) leaves the affordance stating the state without
+  // an action it has nowhere to perform.
+  const previewSessionId =
+    group.sessions.find((session) => session.workspaceId === selectedSessionId)?.workspaceId
+    ?? group.sessions[0]?.workspaceId
+    ?? null;
 
   const menuItems: RowMenuItem[] = useMemo(
     () => [
@@ -1104,8 +1113,12 @@ function DriveEnvRow({
       {!isOrphan && !isLocal && (
         <DevPreviewAffordance
           statusPath={envDevPreviewPath(driveId, group.envId)}
-          driveId={driveId}
-          title={displayName}
+          // An env's preview is framed inside one of ITS sessions — an
+          // env-bound session reads the env's own holder, so the pane there
+          // IS this preview. The one the user is looking at if that is one of
+          // them, else the first; with none running there is no grid to open
+          // into and the line says so instead of offering the click.
+          sessionId={previewSessionId}
           active={expanded}
           className="ml-4 border-l border-border py-1 pl-3"
         />
