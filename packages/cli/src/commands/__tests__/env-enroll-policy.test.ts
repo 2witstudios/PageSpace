@@ -234,3 +234,24 @@ describe('pagespace env policy — a policy naming OTHER users is honoured, and 
     expect(c.err.text()).toMatch(/as you/);
   });
 });
+
+describe('pagespace env policy — exec in an allowlist policy is honoured, and the daemon is LOUD about it (GA wave 3, leaf 7; Codex P1 on #2584)', () => {
+  const handler = (mode: string, ops: string[]) => createEnvPolicyHandler({ homedir: HOME, uid: 501, openPolicy: () => ({ uid: 501, mode: 0o100600, content: JSON.stringify({ mode, principals: [OWNER], ops, roots: ['/srv'], envAllowlist: [] }) }) });
+
+  it('given mode allowlist with exec in ops, should exit 0 but print ONE line naming the consequence (commands run without a click) and the way back (remove exec from ops)', async () => {
+    const c = ctx();
+    expect(await handler('allowlist', ['fs_read', 'exec'])(c.ctx, intent(['env', 'policy']))).toBe(EXIT_SUCCESS);
+    const lines = c.err.text().trim().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/exec is allowlisted: commands run on this machine without a click/);
+    expect(lines[0]).toMatch(/remove exec from ops to restore the approval prompt/);
+  });
+
+  it('given ask mode with exec, or allowlist without exec, should print nothing', async () => {
+    for (const [mode, ops] of [['ask', ['exec']], ['allowlist', ['fs_read', 'fs_write']]] as const) {
+      const c = ctx();
+      expect(await handler(mode, [...ops])(c.ctx, intent(['env', 'policy']))).toBe(EXIT_SUCCESS);
+      expect(c.err.text()).toBe('');
+    }
+  });
+});

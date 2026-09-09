@@ -22,6 +22,7 @@ import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync 
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { parseMachinePolicy, type MachinePolicy } from './lib-core.js';
+import { policyWarnings, type PolicyWarning } from './lib-core.js';
 
 export const POLICY_FILE_NAME = 'env-policy.json';
 export const POLICY_PATH_ENV_VAR = 'PAGESPACE_ENV_POLICY';
@@ -154,14 +155,12 @@ export async function writePolicyFile(path: string, content: string): Promise<vo
 }
 
 /**
- * A policy naming more than one principal is the owner's call and is honoured
- * — but it is also the one thing on this machine that widens D-6, so every
- * surface that prints the policy says so. `null` when there is nothing to say.
+ * What this policy quietly widens, said out loud — the pure decision is
+ * `policyWarnings` in the env-bridge core (one text for every surface): more
+ * than one principal (D-6, wave 1) and `exec` allowlisted (GA wave 3: every
+ * exec grant runs WITHOUT the owner's click). Both are the owner's call and
+ * are honoured; every surface that prints the policy prints these lines.
  */
-export function describePrincipalsWarning(policy: Pick<MachinePolicy, 'principals'>): string | null {
-  if (policy.principals.length <= 1) return null;
-  return (
-    `[D-6] A machine is driven by its owner only, but this policy names ${policy.principals.length} principals (${policy.principals.join(', ')}): ` +
-    'every one of them can run commands as you on this machine, subject to mode and ops. PageSpace itself only ever binds the environment owner\'s sessions, so extra principals here widen nothing on the server side; remove the ones you did not mean.'
-  );
+export function describePolicyWarnings(policy: Pick<MachinePolicy, 'mode' | 'ops' | 'principals'>): PolicyWarning[] {
+  return policyWarnings(policy);
 }

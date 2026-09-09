@@ -385,6 +385,21 @@ describe('pagespace env connect <enrollmentId>', () => {
     }
   }, 20_000);
 
+  it('GA wave 3 · leaf 7: given mode allowlist with exec in ops (the harness default), the daemon prints the exec-allowlisted line at start and audits policy_warning:exec_allowlisted once; with exec absent it prints and audits nothing of the kind', async () => {
+    const h = harness();
+    const c = ctx(false);
+    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+    await flush();
+    expect(c.err.text()).toMatch(/exec is allowlisted: commands run on this machine without a click — remove exec from ops to restore the approval prompt/);
+    expect(h.auditLines.filter((line) => line.includes('"verdict":"policy_warning:exec_allowlisted"'))).toHaveLength(1);
+    const quiet = harness({ policy: JSON.stringify({ mode: 'allowlist', principals: ['u1'], ops: ['fs_read'], roots: ['/home/me/proj'], envAllowlist: [] }) });
+    const q = ctx(false);
+    expect(await quiet.handler(q.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+    await flush();
+    expect(q.err.text()).not.toMatch(/exec is allowlisted/);
+    expect(quiet.auditLines.some((line) => line.includes('policy_warning'))).toBe(false);
+  });
+
   it('R7: a server-signed revoke deletes the machine key from the credential store, stops reconnecting, and exits non-zero with a message', async () => {
     const h = harness();
     const c = ctx(false);

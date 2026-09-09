@@ -233,6 +233,11 @@
       "import": "./dist/env-bridge/decide-sign.js",
       "require": "./dist/env-bridge/decide-sign.js"
     },
+    "./env-bridge/policy-warnings": {
+      "types": "./dist/env-bridge/policy-warnings.d.ts",
+      "import": "./dist/env-bridge/policy-warnings.js",
+      "require": "./dist/env-bridge/policy-warnings.js"
+    },
     "./env-bridge/plan-local-provision": {
       "types": "./dist/env-bridge/plan-local-provision.d.ts",
       "import": "./dist/env-bridge/plan-local-provision.js",
