@@ -271,7 +271,7 @@ function ChannelView({ page }: ChannelViewProps) {
       // the ThreadPanel; until then, drop them here so the thread API does
       // not pollute the live channel view of older clients.
       if (message.parentId) return;
-      setMessages((prev) => reconcileOptimistic(prev, message));
+      setMessages((prev) => reconcileOptimistic(prev, message, (m) => m.userId));
       // It is on screen now, so it is not unread.
       scheduleMarkChannelRead();
     };
@@ -387,15 +387,25 @@ function ChannelView({ page }: ChannelViewProps) {
     setMessages((prev) => [...prev, optimisticMessage]);
 
     try {
-      await post(`/api/channels/${page.id}/messages`, {
-        content: messageContent,
-        attachments: attachmentPayload,
-        quotedMessageId: activeQuoteId ?? undefined,
-        clientNonce,
-      });
+      const persistedMessage = await post<MessageWithReactions | null>(
+        `/api/channels/${page.id}/messages`,
+        {
+          content: messageContent,
+          attachments: attachmentPayload,
+          quotedMessageId: activeQuoteId ?? undefined,
+          clientNonce,
+        },
+      );
 
-      // The new message will be received via the socket connection,
-      // which will replace the optimistic one.
+      // Normally the socket echo retires the optimistic row. But the send does
+      // not require a live socket — it only checks `canEdit` — so on a dropped
+      // connection no echo ever arrives and the pending row would sit there
+      // looking unsent until a refetch. The POST response is the same enriched
+      // message the broadcast carries, nonce included, so reconcile with it
+      // too; whichever lands second is deduped by id.
+      if (persistedMessage?.id) {
+        setMessages((prev) => reconcileOptimistic(prev, persistedMessage, (m) => m.userId));
+      }
     } catch (error) {
       // If the API call fails, remove the optimistic message
       setMessages((prev) => prev.filter((m) => m.id !== tempId));

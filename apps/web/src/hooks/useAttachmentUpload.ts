@@ -123,10 +123,14 @@ export function useAttachmentUpload({
    * chips, and re-attaching means re-uploading all of them.
    *
    * Skips the restore if the user has already started attaching something new,
-   * so a late failure cannot overwrite a fresh selection.
+   * so a late failure cannot overwrite a fresh selection. An upload in flight
+   * counts as "something new" even though `attachments` is still empty: it is
+   * only appended when the whole batch finishes, so without the ref check a
+   * failure landing mid-upload would restore the old files and the completing
+   * upload would then append the new ones on top of them.
    */
   const restoreAttachments = useCallback((restored: FileAttachment[]) => {
-    if (restored.length === 0) return;
+    if (restored.length === 0 || isUploadingRef.current) return;
     setAttachments((prev) => (prev.length > 0 ? prev : restored));
   }, []);
 

@@ -182,7 +182,7 @@ export default function InboxDMPage() {
       // pollute the live DM view of older clients.
       if (message.parentId) return;
       if (message.conversationId === conversationId) {
-        setMessages((prev) => reconcileOptimistic(prev, message));
+        setMessages((prev) => reconcileOptimistic(prev, message, (m) => m.senderId));
 
         if (message.senderId !== user.id) {
           patch<{ success: boolean; notificationsMarkedRead: number }>(`/api/messages/${conversationId}`)
@@ -466,7 +466,7 @@ export default function InboxDMPage() {
       const response = await post<{ message?: Message }>(`/api/messages/${conversationId}`, body);
       const persistedMessage = response.message;
       if (persistedMessage) {
-        setMessages((prev) => reconcileOptimistic(prev, persistedMessage));
+        setMessages((prev) => reconcileOptimistic(prev, persistedMessage, (m) => m.senderId));
       }
     } catch (error) {
       toast.error('Failed to send message');

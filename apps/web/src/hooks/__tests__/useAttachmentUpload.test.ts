@@ -261,4 +261,46 @@ describe('useAttachmentUpload', () => {
 
     expect(result.current.attachments.map((a) => a.id)).toEqual(['file-1']);
   });
+
+  it('does not restore stale files while a new upload is still in flight', async () => {
+    // `attachments` only gains the new files when the whole batch finishes, so
+    // mid-upload the composer looks empty even though the user has clearly
+    // moved on. Restoring there puts the old batch back and the completing
+    // upload then appends the new files on top of it — one send carrying both.
+    let finishUpload: (value: ReturnType<typeof ok>) => void = () => {};
+    mockUploadAttachment.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishUpload = resolve;
+      }),
+    );
+
+    const { result } = renderHook(() =>
+      useAttachmentUpload({ uploadUrl: '/api/channels/x/upload' })
+    );
+
+    let uploading!: Promise<void>;
+    act(() => {
+      uploading = result.current.uploadFiles([makeFile('new.png')]);
+    });
+
+    act(() => {
+      result.current.restoreAttachments([
+        {
+          instanceId: 'stale',
+          id: 'stale-file',
+          originalName: 'stale.png',
+          size: 1,
+          mimeType: 'image/png',
+          contentHash: 'b'.repeat(64),
+        },
+      ]);
+    });
+
+    await act(async () => {
+      finishUpload(ok({ ...attachment, id: 'new-file', originalName: 'new.png' }));
+      await uploading;
+    });
+
+    expect(result.current.attachments.map((a) => a.id)).toEqual(['new-file']);
+  });
 });

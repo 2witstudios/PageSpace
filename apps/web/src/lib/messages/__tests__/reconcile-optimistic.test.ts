@@ -95,6 +95,44 @@ describe('reconcileOptimistic', () => {
     });
   });
 
+  it('never lets another sender claim a pending row by reusing its nonce', () => {
+    // The nonce rides the broadcast to every subscriber, and the API takes
+    // whatever nonce a caller sends. Without the author check, this message
+    // would replace the sender's own pending row and their message would
+    // vanish from their view until a refetch.
+    const prev = [{ id: 'temp-a', clientNonce: 'a', userId: 'me' }];
+
+    const next = reconcileOptimistic(
+      prev,
+      { id: 'server-imposter', clientNonce: 'a', userId: 'someone-else' },
+      (m) => m.userId,
+    );
+
+    assert({
+      given: 'a message from another user echoing a nonce this client minted',
+      should: 'append it and leave the pending row in flight',
+      actual: next.map((m) => m.id),
+      expected: ['temp-a', 'server-imposter'],
+    });
+  });
+
+  it('still retires the pending row for the sender\'s own echo', () => {
+    const prev = [{ id: 'temp-a', clientNonce: 'a', userId: 'me' }];
+
+    const next = reconcileOptimistic(
+      prev,
+      { id: 'server-a', clientNonce: 'a', userId: 'me' },
+      (m) => m.userId,
+    );
+
+    assert({
+      given: 'the confirmation of this client\'s own send',
+      should: 'replace the pending row — the author check must not block the normal path',
+      actual: next.map((m) => m.id),
+      expected: ['server-a'],
+    });
+  });
+
   it('never matches an already-confirmed row, even on a nonce it still carries', () => {
     // The replaced row keeps the echoed nonce, so matching must also require
     // the row to still be pending.

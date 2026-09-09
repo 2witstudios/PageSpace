@@ -66,10 +66,7 @@ describe('getAttachments', () => {
     });
   });
 
-  it('falls back when the attachments array is present but empty', () => {
-    // A text-only message read through the new relation has `attachments: []`.
-    // Treating empty as "use the array" rather than "fall back" is what keeps a
-    // text-only message from resurrecting a stale legacy column.
+  it('renders nothing for a text-only message read through the relation', () => {
     const message: MessageWithAttachment = {
       fileId: null,
       attachmentMeta: null,
@@ -80,6 +77,26 @@ describe('getAttachments', () => {
       should: 'return nothing to render',
       actual: getAttachments(message),
       expected: [],
+    });
+  });
+
+  it('still falls back to the legacy columns when the relation comes back empty', () => {
+    // This is the case the previous test cannot see: with both legacy columns
+    // null, the fallback and the array branch agree on `[]`, so the test would
+    // pass even if `attachments: []` short-circuited to nothing. A message
+    // written before the attachment rows existed and read by a pod that has
+    // not yet applied the backfill looks exactly like this — an empty relation
+    // over a populated legacy pair — and it must still render its file.
+    const message: MessageWithAttachment = {
+      fileId: 'f-9',
+      attachmentMeta: meta('old.png'),
+      attachments: [],
+    };
+    assert({
+      given: 'an un-backfilled legacy message read through the new relation',
+      should: 'fall back to the legacy columns rather than render nothing',
+      actual: getAttachments(message).map((a) => a.fileId),
+      expected: ['f-9'],
     });
   });
 

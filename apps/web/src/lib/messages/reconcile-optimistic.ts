@@ -30,10 +30,35 @@ const isPending = (row: OptimisticallySent) => row.id.startsWith('temp-');
  * A message with no nonce, or whose nonce matches nothing, is appended unless
  * it is already present — so a re-delivered socket event is a no-op rather
  * than a duplicate.
+ *
+ * `authorOf` is how a nonce match is confirmed to be the sender's OWN echo.
+ * The nonce travels to every subscriber in the broadcast and the API accepts
+ * whatever nonce a caller sends, so another member of the channel can post a
+ * message carrying a nonce they watched go by. Matching on the nonce alone
+ * would let that message take over the pending row — the sender's own message
+ * would disappear from their view until a refetch, replaced by someone else's.
+ * The surfaces name the author differently (`userId` on a channel message,
+ * `senderId` on a DM), hence an accessor rather than a field on the interface.
  */
-export function reconcileOptimistic<T extends OptimisticallySent>(prev: T[], message: T): T[] {
+export function reconcileOptimistic<T extends OptimisticallySent>(
+  prev: T[],
+  message: T,
+  authorOf?: (row: T) => string | null | undefined,
+): T[] {
+  const sameAuthor = (row: T) => {
+    if (!authorOf) return true;
+    const pendingAuthor = authorOf(row);
+    const confirmedAuthor = authorOf(message);
+    // An optimistic row always knows its author (the signed-in user built it),
+    // so an unknown author on either side means "not a match" rather than
+    // "close enough".
+    return pendingAuthor != null && pendingAuthor === confirmedAuthor;
+  };
+
   const pendingIndex = message.clientNonce
-    ? prev.findIndex((row) => isPending(row) && row.clientNonce === message.clientNonce)
+    ? prev.findIndex(
+        (row) => isPending(row) && row.clientNonce === message.clientNonce && sameAuthor(row),
+      )
     : -1;
 
   if (pendingIndex !== -1) {
