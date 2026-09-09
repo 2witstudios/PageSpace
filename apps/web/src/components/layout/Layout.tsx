@@ -573,7 +573,11 @@ function Layout({ children }: LayoutProps) {
               }
             }}
           >
-            <SheetContent side="left" className="w-full max-w-[22rem] border-r p-0 sm:max-w-sm">
+            <SheetContent
+              side="left"
+              className="w-full max-w-[22rem] border-r p-0 sm:max-w-sm"
+              onOpenAutoFocus={(event) => event.preventDefault()}
+            >
               <SheetHeader className="sr-only">
                 <SheetTitle>Navigation menu</SheetTitle>
                 <SheetDescription>Browse spaces and files</SheetDescription>
@@ -591,7 +595,11 @@ function Layout({ children }: LayoutProps) {
               }
             }}
           >
-            <SheetContent side="right" className="w-full max-w-[22rem] border-l p-0 sm:max-w-sm">
+            <SheetContent
+              side="right"
+              className="w-full max-w-[22rem] border-l p-0 sm:max-w-sm"
+              onOpenAutoFocus={(event) => event.preventDefault()}
+            >
               <SheetHeader className="sr-only">
                 <SheetTitle>Global Assistant panel</SheetTitle>
                 <SheetDescription>Chat with the global assistant</SheetDescription>
