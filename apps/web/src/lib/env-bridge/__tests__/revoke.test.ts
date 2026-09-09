@@ -11,6 +11,7 @@ import { generateKeyPairSync, createPrivateKey, createPublicKey, createHash, sig
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) } }));
 vi.mock('@pagespace/lib/auth/session-service', () => ({ sessionService: { revokeResourceSessions: vi.fn(async () => 2), validateSession: vi.fn() } }));
 vi.mock('@pagespace/lib/auth/env-bridge-signing-key', () => ({ loadServerSigningKeyring: vi.fn() }));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
 vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn() }));
 
 import { sessionService } from '@pagespace/lib/auth/session-service';
@@ -48,7 +49,7 @@ function socket(): FakeSocket {
 }
 
 describe('revokeLocalEnv — all three legs through the production seams', () => {
-  let row: { envId: string; enrollmentId: string; serverKeyId: string | null; revokedAt: Date | null } | null;
+  let row: { envId: string; enrollmentId: string; serverKeyId: string | null; revokedAt: Date | null; serverPolicy: { ops: string[]; checkpoint: boolean } } | null;
   let store: { findLocalByEnvId: ReturnType<typeof vi.fn>; revokeLocal: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
@@ -56,7 +57,8 @@ describe('revokeLocalEnv — all three legs through the production seams', () =>
     vi.setSystemTime(NOW);
     vi.clearAllMocks();
     clearAllEnvConnectionsForTesting();
-    row = { envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, revokedAt: null };
+    // The sibling `sendGrant` consults before signing (decideSign): live, and allowing the op under test.
+    row = { envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, revokedAt: null, serverPolicy: { ops: ['exec', 'fs_read', 'fs_write'], checkpoint: false } };
     store = {
       findLocalByEnvId: vi.fn(async () => row),
       revokeLocal: vi.fn(async ({ now }: { now: Date }) => {
@@ -101,6 +103,9 @@ describe('revokeLocalEnv — all three legs through the production seams', () =>
   it('should fail the env\'s in-flight requests immediately with typed disconnected (the unregister runs through the lost listener)', async () => {
     liveSocket();
     const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal: { userId: 'u', sessionId: 's', conversationId: 'c' } });
+    // The gate reads the sibling before the frame goes out; let that settle so the request is really pending.
+    await vi.dynamicImportSettled();
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
     await revokeLocalEnv({ envId: ENV, reason: 'owner_revoked' });
     await expect(pending).rejects.toMatchObject({ kind: 'disconnected' });
   });

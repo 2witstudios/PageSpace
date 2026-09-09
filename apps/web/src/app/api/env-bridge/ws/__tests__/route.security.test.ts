@@ -14,7 +14,7 @@ import type { NextRequest } from 'next/server';
 import { generateKeyPairSync, createPrivateKey, createPublicKey, createHash, sign as nodeSign } from 'node:crypto';
 
 vi.mock('@pagespace/lib/auth/session-service', () => ({ sessionService: { validateSession: vi.fn() } }));
-vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn(), audit: vi.fn() }));
 vi.mock('@pagespace/lib/services/drive-envs/local-envs-enabled', () => ({ isLocalEnvsEnabled: vi.fn(() => true) }));
 vi.mock('@/lib/websocket/ws-security', () => ({
   getConnectionFingerprint: vi.fn(() => 'fp-1'),
@@ -70,9 +70,10 @@ function claimsFor(over: Record<string, unknown> = {}) {
   return { sessionId: 'sess-1', userId: USER, userRole: 'user', tokenVersion: 1, adminRoleVersion: 0, type: 'mcp', scopes: ['env:bridge'], expiresAt: new Date(NOW.getTime() + 3600_000), resourceType: 'drive_env', resourceId: ENV, ...over };
 }
 
-type LocalRow = { envId: string; ownerId: string; enrollmentId: string; machinePublicKey: string | null; serverKeyId: string | null; enrolledAt: Date | null; revokedAt: Date | null };
+type LocalRow = { envId: string; ownerId: string; enrollmentId: string; machinePublicKey: string | null; serverKeyId: string | null; enrolledAt: Date | null; revokedAt: Date | null; serverPolicy: { ops: string[]; checkpoint: boolean } };
 function rowFor(over: Partial<LocalRow> = {}): LocalRow {
-  return { envId: ENV, ownerId: USER, enrollmentId: 'enr_a', machinePublicKey: spkiB64(machine), serverKeyId: ring.current.keyId, enrolledAt: NOW, revokedAt: null, ...over };
+  // `serverPolicy` is what `sendGrant` consults (decideSign) before a frame goes out: allow every implemented op unless a row says otherwise.
+  return { envId: ENV, ownerId: USER, enrollmentId: 'enr_a', machinePublicKey: spkiB64(machine), serverKeyId: ring.current.keyId, enrolledAt: NOW, revokedAt: null, serverPolicy: { ops: ['exec', 'fs_read', 'fs_write'], checkpoint: false }, ...over };
 }
 
 type FakeSocket = WebSocket & { readyState: number; sent: string[]; handlers: Record<string, (...args: unknown[]) => void>; emit: (event: string, ...args: unknown[]) => void };
@@ -116,6 +117,13 @@ function signedResult(body: UnsignedResult, key = machine): string {
 }
 
 const events = () => vi.mocked(auditRequest).mock.calls.map((call) => (call[1] as { details?: { originalEvent?: string } }).details?.originalEvent);
+/** `sendGrant` awaits the sibling read (decideSign) before it sends; under fake timers only microtasks are needed to settle it. */
+const settleGate = async () => {
+  // The production client reaches the store through a dynamic import, which the module loader resolves outside the microtask queue.
+  await vi.dynamicImportSettled();
+  for (let i = 0; i < 8; i += 1) await Promise.resolve();
+};
+
 const lastSent = (ws: FakeSocket): Frame => {
   const decoded = decodeFrame(ws.sent[ws.sent.length - 1]!, { maxFrameBytes: 1024 * 1024 });
   if (!decoded.ok) throw new Error(decoded.reason);
@@ -520,6 +528,7 @@ describe('env-bridge ws route', () => {
     it('given a pending grant and an exec_result signed by the pinned machine key, should deliver it', async () => {
       const ws = await connectAuthorized();
       const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+      await settleGate();
       const grantFrame = lastSent(ws);
       if (grantFrame.type !== 'grant_exec') throw new Error('grant not sent');
       const grantId = (grantFrame.grant as { grantId: string }).grantId;
@@ -527,9 +536,18 @@ describe('env-bridge ws route', () => {
       await expect(pending).resolves.toMatchObject({ type: 'exec_result', grantId, exitCode: 0 });
     });
 
+    it('GA wave 1 — given a sibling whose serverPolicy EXCLUDES exec, sendGrant should reject server_denied and NO frame should reach the socket', async () => {
+      const ws = await connectAuthorized();
+      rows.set(ENV, rowFor({ serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } }));
+      const before = ws.sent.length;
+      await expect(getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal })).rejects.toMatchObject({ kind: 'server_denied', detail: { reason: 'server_denied', op: 'exec' } });
+      expect(ws.sent.length).toBe(before);
+    });
+
     it('given an exec_result whose machine signature does not verify, should NOT deliver it: typed unverified_result to the caller and a high-risk audit', async () => {
       const ws = await connectAuthorized();
       const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+      await settleGate();
       const grantFrame = lastSent(ws);
       if (grantFrame.type !== 'grant_exec') throw new Error('grant not sent');
       const grantId = (grantFrame.grant as { grantId: string }).grantId;
@@ -543,6 +561,7 @@ describe('env-bridge ws route', () => {
       vi.mocked(sessionService.validateSession).mockResolvedValue(claimsFor({ resourceId: ENV_B, sessionId: 'sess-2' }) as never);
       const wsB = await connectAuthorized(ENV_B, machineB);
       const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+      await settleGate();
       let state = 'pending';
       pending.then(() => (state = 'resolved'), () => (state = 'rejected'));
       const grantFrame = lastSent(wsA);
@@ -579,6 +598,7 @@ describe('env-bridge ws route', () => {
     it('given a second socket for the same env, the newer wins, the older closes env_superseded, and its late close cancels nothing', async () => {
       const older = await connectAuthorized();
       const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+      await settleGate();
       let state = 'pending';
       pending.then(() => (state = 'resolved'), () => (state = 'rejected'));
       const newer = await connectAuthorized();
@@ -593,6 +613,7 @@ describe('env-bridge ws route', () => {
     it('given the LIVE socket closes, its in-flight requests fail with typed disconnected and the env reads disconnected', async () => {
       const ws = await connectAuthorized();
       const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+      await settleGate();
       ws.emit('close', 1006, Buffer.from(''));
       await expect(pending).rejects.toMatchObject({ kind: 'disconnected' });
       expect(readEnvLiveConnection(ENV)).toBeNull();
