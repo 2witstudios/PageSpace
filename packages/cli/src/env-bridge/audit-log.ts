@@ -11,6 +11,11 @@
  * the machine's half, under the owner's own account. Append-only by
  * construction: the sink only ever appends, nothing here reads or rewrites.
  *
+ * The line names the PATHS an fs op touched (hardening A5). Before that it
+ * carried `argsHash` and nothing else about the request, so the machine's own
+ * forensic record could not answer the one question that matters after a
+ * sensitive write: what did it write?
+ *
  * Audit I/O must never take the daemon down — a full disk is not a reason to
  * stop enforcing policy — so a failing sink is reported once and swallowed.
  */
@@ -29,6 +34,15 @@ export interface AuditEntry {
   readonly argsHash: string | null;
   /** Exit code of the child for an executed `exec`; `null` otherwise. */
   readonly exitCode: number | null;
+  /**
+   * The file paths this decision was ABOUT (hardening A5): the confined real
+   * paths for an allowed fs op, and for a refusal the paths as REQUESTED —
+   * a request refused before or during confinement has no resolved path, and
+   * naming what was asked for is the only honest answer. `null` (or empty) for
+   * anything that names no file, so an `exec` line keeps the exact shape it
+   * has always had.
+   */
+  readonly paths?: readonly string[] | null;
 }
 
 export interface AuditLog {
@@ -42,6 +56,12 @@ export interface AuditLogDeps {
 }
 
 export function formatAuditLine(entry: AuditEntry, ts: number): string {
+  // Field ORDER and field NAMES are a consumer contract: the server joins its
+  // own `drive_env_grant_audit` rows to this file on `grantId`, and a
+  // real-Postgres test asserts that join. `paths` is therefore APPENDED, and
+  // only when there is one, so every line that existed before this change
+  // still serialises byte-identically.
+  const paths = entry.paths !== undefined && entry.paths !== null && entry.paths.length > 0 ? [...entry.paths] : null;
   return `${JSON.stringify({
     ts: new Date(ts).toISOString(),
     grantId: entry.grantId,
@@ -50,6 +70,7 @@ export function formatAuditLine(entry: AuditEntry, ts: number): string {
     verdict: entry.verdict,
     argsHash: entry.argsHash,
     exitCode: entry.exitCode,
+    ...(paths !== null && { paths }),
   })}\n`;
 }
 

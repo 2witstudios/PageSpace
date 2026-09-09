@@ -205,6 +205,39 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
     expect(result).toMatchObject({ kind: 'reply', frame: { type: 'fs_write_result', ok: true } });
   });
 
+  describe('A5: the machine\'s audit line names the resolved paths', () => {
+    it('given an allowed fs_write, should audit the CONFINED path it wrote', async () => {
+      const h = harness();
+      await h.dispatcher.handle(signedGrant({ type: 'grant_fs_write', files: [{ path: `${ROOT}/file`, contentB64: 'aGk=', mode: 0o600 }] }));
+      expect(h.audits.at(-1)).toMatchObject({ op: 'fs_write', verdict: 'allow', paths: [`${ROOT}/file`] });
+    });
+
+    it('given an allowed fs_read, should audit the resolved path it read', async () => {
+      const h = harness();
+      await h.dispatcher.handle(signedGrant({ type: 'grant_fs_read', paths: [`${ROOT}/file`] }));
+      expect(h.audits.at(-1)).toMatchObject({ op: 'fs_read', verdict: 'allow', paths: [`${ROOT}/file`] });
+    });
+
+    it('given a path that RESOLVES elsewhere (a symlink inside the root), should audit the CONFINED path, not the one the server named', async () => {
+      const probe = fakeProbe({ [ROOT]: ROOT, [`${ROOT}/link`]: `${ROOT}/real.txt` });
+      const h = harness({ probe });
+      await h.dispatcher.handle(signedGrant({ type: 'grant_fs_read', paths: [`${ROOT}/link`] }));
+      expect(h.audits.at(-1)).toMatchObject({ verdict: 'allow', paths: [`${ROOT}/real.txt`] });
+    });
+
+    it('given a REFUSED fs op, should still name the path — a refusal that says nothing about WHAT was refused is not a record', async () => {
+      const h = harness();
+      await h.dispatcher.handle(signedGrant({ type: 'grant_fs_read', paths: ['/etc/passwd'] }));
+      expect(h.audits.at(-1)).toMatchObject({ verdict: 'deny:path_denied', paths: ['/etc/passwd'] });
+    });
+
+    it('given an exec, should not gain a paths field it has no use for', async () => {
+      const h = harness();
+      await h.dispatcher.handle(execFrame());
+      expect(h.audits.at(-1)?.paths ?? null).toBeNull();
+    });
+  });
+
   it('fs_read: given the runner reports unsupported (multi path), should deny `unsupported_multi_path_read`', async () => {
     const h = harness();
     (h.fsRunner.read as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: 'unsupported', reason: 'multi_path_read' });
