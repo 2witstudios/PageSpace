@@ -20,7 +20,7 @@ import { ApiRequestError } from '@/lib/auth/auth-fetch';
 import { EnvApprovalsList, describeRevokeAnswer } from '../EnvApprovalsList';
 import type { DriveEnvApprovalDTO } from '@pagespace/lib/drive-envs/env-contract';
 
-const row = (over: Partial<DriveEnvApprovalDTO> = {}): DriveEnvApprovalDTO => ({ id: 'ch_1', envId: 'env-1', driveId: 'drive-1', envName: 'mac', envLabel: 'jono-macstudio', userId: 'u', op: 'exec', summary: "exec: sh -c 'git status'", scope: '30d', createdAt: '2026-09-09T12:00:00.000Z', expiresAt: '2026-10-09T12:00:00.000Z', revokedAt: null, revokeAcknowledgedAt: null, ...over });
+const row = (over: Partial<DriveEnvApprovalDTO> = {}): DriveEnvApprovalDTO => ({ id: 'ch_1', envId: 'env-1', driveId: 'drive-1', envName: 'mac', envLabel: 'jono-macstudio', userId: 'u', op: 'exec', summary: "exec: sh -c 'git status'", scope: '30d', createdAt: '2026-09-09T12:00:00.000Z', expiresAt: '2026-10-09T12:00:00.000Z', revokedAt: null, revokeAcknowledgedAt: null, revokePending: false, ...over });
 const refetch = vi.fn();
 
 beforeEach(() => {
@@ -50,7 +50,7 @@ describe('EnvApprovalsList', () => {
   });
 
   it('flags a revoke the machine has not confirmed yet', () => {
-    render(<EnvApprovalsList approvals={[row({ revokedAt: '2026-09-09T12:01:00.000Z' })]} isLoading={false} isError={false} refetch={refetch} />);
+    render(<EnvApprovalsList approvals={[row({ revokedAt: '2026-09-09T12:01:00.000Z', revokePending: true })]} isLoading={false} isError={false} refetch={refetch} />);
     expect(screen.getByTestId('env-approval-ch_1')).toHaveTextContent('revoke pending');
   });
 

@@ -136,7 +136,7 @@ export function EnvApprovalsList({ approvals, isLoading, isError, refetch, drive
                     )}
                   </>
                 )}
-                {approval.revokedAt !== null && approval.revokeAcknowledgedAt === null && ' · revoke pending: the machine has not confirmed yet'}
+                {approval.revokePending && ' · revoke pending: the machine has not confirmed yet'}
               </p>
             </div>
             <Button variant="outline" size="sm" onClick={() => setConfirming(approval)} disabled={revokingId === approval.id}>

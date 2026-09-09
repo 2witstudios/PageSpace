@@ -6,7 +6,7 @@
  * reading the source of every approval-shaped module, not by mocking.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
@@ -71,8 +71,13 @@ describe('no code path sends an approval TO the machine (GA wave 2 invariant, se
 
   it('every approval-shaped module exists and none builds or sends a grant, carries an approvalIntent, or names a frame other than revoke', () => {
     for (const file of files) {
-      expect(statSync(file).isFile(), file).toBe(true);
-      const source = readFileSync(file, 'utf8');
+      // ONE fs call per path (CodeQL js/file-system-race): a missing module throws ENOENT here, naming the file.
+      let source: string;
+      try {
+        source = readFileSync(file, 'utf8');
+      } catch (error) {
+        throw new Error(`${file}: ${String(error)}`);
+      }
       const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
       expect(code, file).not.toMatch(/sendGrant\(|signGrantFrame\(|approvalIntent|grant_exec|grant_fs_read|grant_fs_write|grant_pty_open|encodeFrame\(/);
       const frameTypes = [...code.matchAll(/type: '([a-z_]+)'/g)].map((m) => m[1]).filter((t) => t !== undefined);
