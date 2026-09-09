@@ -591,37 +591,32 @@ async function restoreDmMessage(messageId: string): Promise<number> {
 
 async function purgeInactiveMessages(olderThan: Date): Promise<number> {
   return db.transaction(async (tx) => {
-    // Identify and lock the doomed rows BEFORE deleting them. A message's
-    // attachment rows cascade away with it, so `DELETE ... RETURNING` can no
-    // longer see which files the purge released — they have to be read while
-    // they still exist. Ordering by id keeps this lock consistent with the
-    // rest of the module's lock order.
-    const doomedMessages = await tx
-      .select({
-        id: directMessages.id,
-        conversationId: directMessages.conversationId,
-      })
+    // Everything below is expressed against this predicate rather than a list
+    // of ids. A retention sweep can cover a very large number of tombstones,
+    // and Postgres caps a statement at 65535 bind parameters — passing the ids
+    // around would turn a big sweep into an opaque 08P01 protocol error.
+    const isDoomed = and(
+      eq(directMessages.isActive, false),
+      isNotNull(directMessages.deletedAt),
+      lt(directMessages.deletedAt, olderThan)
+    );
+
+    // Lock the doomed rows before reading what they reference, so a concurrent
+    // restore cannot resurrect one between the capture and the delete. Ordered
+    // by id, consistent with the rest of this module's lock order.
+    await tx
+      .select({ id: directMessages.id })
       .from(directMessages)
-      .where(
-        and(
-          eq(directMessages.isActive, false),
-          isNotNull(directMessages.deletedAt),
-          lt(directMessages.deletedAt, olderThan)
-        )
-      )
+      .where(isDoomed)
       .orderBy(asc(directMessages.id))
       .for('update');
 
-    if (doomedMessages.length === 0) {
-      return 0;
-    }
-
-    const doomedIds = doomedMessages.map((message) => message.id);
-
-    // Collect the released (fileId, conversationId) pairs from BOTH sources:
-    // the attachment rows, and the legacy column that a pod on the previous
-    // build may still be writing. Missing either one would leave a
-    // file_conversations link behind that nothing references.
+    // Capture the released (fileId, conversationId) pairs BEFORE the delete:
+    // attachment rows cascade away with their message, so `DELETE ...
+    // RETURNING` can no longer see them. Both sources matter — the attachment
+    // rows, and the legacy column a pod on the previous build may still be
+    // writing. Missing either leaves a file_conversations link behind that
+    // nothing references.
     const releasedPairs = await tx
       .select({
         fileId: directMessageAttachments.fileId,
@@ -629,12 +624,7 @@ async function purgeInactiveMessages(olderThan: Date): Promise<number> {
       })
       .from(directMessageAttachments)
       .innerJoin(directMessages, eq(directMessages.id, directMessageAttachments.messageId))
-      .where(
-        and(
-          inArray(directMessageAttachments.messageId, doomedIds),
-          isNotNull(directMessageAttachments.fileId)
-        )
-      );
+      .where(and(isDoomed, isNotNull(directMessageAttachments.fileId)));
 
     const legacyPairs = await tx
       .select({
@@ -642,9 +632,7 @@ async function purgeInactiveMessages(olderThan: Date): Promise<number> {
         conversationId: directMessages.conversationId,
       })
       .from(directMessages)
-      .where(and(inArray(directMessages.id, doomedIds), isNotNull(directMessages.fileId)));
-
-    const purgedMessages = doomedMessages;
+      .where(and(isDoomed, isNotNull(directMessages.fileId)));
 
     const seenPairs = new Set<string>();
     const purgedAttachmentPairs: Array<{ fileId: string; conversationId: string }> = [];
@@ -656,7 +644,13 @@ async function purgeInactiveMessages(olderThan: Date): Promise<number> {
       purgedAttachmentPairs.push({ fileId: pair.fileId, conversationId: pair.conversationId });
     }
 
-    await tx.delete(directMessages).where(inArray(directMessages.id, doomedIds));
+    const purgedMessages = await tx
+      .delete(directMessages)
+      .where(isDoomed)
+      .returning({
+        id: directMessages.id,
+        conversationId: directMessages.conversationId,
+      });
 
     if (purgedAttachmentPairs.length > 0) {
       const pairValues = () =>

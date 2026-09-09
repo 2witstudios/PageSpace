@@ -322,6 +322,38 @@ describe('dmMessageRepository.purgeInactiveMessages', () => {
     });
   });
 
+  it('purges without ever passing message ids as bind parameters', async () => {
+    // Postgres caps a statement at 65535 bind parameters, and a retention
+    // sweep can cover far more tombstones than that. An earlier revision of
+    // this function collected the doomed ids and threaded them through
+    // inArray(), which would have turned a large sweep into an opaque 08P01
+    // protocol error. Every statement here is predicate-based instead.
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+
+    testDbState.seed(
+      'directMessages',
+      Array.from({ length: 40 }, (_, i) => ({
+        id: `stale-${i}`,
+        conversationId: 'conv-1',
+        senderId: 'u-1',
+        isActive: false,
+        deletedAt: old,
+        parentId: null,
+        fileId: null,
+      })),
+    );
+
+    const count = await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    assert({
+      given: 'many tombstones in one sweep',
+      should: 'purge them all in one predicate-based pass',
+      actual: { count, remaining: testDbState.count('directMessages') },
+      expected: { count: 40, remaining: 0 },
+    });
+  });
+
   it('keeps a file_conversations link that a live message still references through an attachment row, not the legacy column', async () => {
     // The data-loss case this change had to close. A message can now carry
     // several files, and only the FIRST is mirrored into the legacy
