@@ -96,11 +96,28 @@ const grantExec = z.object({
   maxBytes: z.number().optional(),
 });
 const grantFsRead = z.object({ type: z.literal('grant_fs_read'), grant: opaqueGrant, sig: b64, paths: z.array(z.string()) });
+/**
+ * How many files one write grant may carry (hardening A4). A write is a single
+ * agent tool call, so a handful is the real shape; the cap exists so that a
+ * request the owner may be asked to approve is always one a person can read,
+ * and so that no single grant can rewrite a tree. Over the cap the frame is
+ * refused whole — never truncated, never partially written.
+ */
+export const MAX_FS_WRITE_FILES = 32;
+/**
+ * A POSIX permission mode, and no more (hardening A4). `mode` is chosen by
+ * whoever composed the frame and is applied to EXISTING files, so setuid,
+ * setgid and the sticky bit (`0o7000`) are refused outright here rather than
+ * escalated: they are not a thing an owner should be asked to adjudicate in a
+ * chat card. `0o755` stays legal at this layer — the executable bit is a
+ * question for the owner (`classify-write.ts`), not an envelope error.
+ */
+const fileMode = nonNegInt.refine((mode) => (mode & ~0o777) === 0, { message: 'mode must be within 0o777; setuid, setgid and sticky are refused' });
 const grantFsWrite = z.object({
   type: z.literal('grant_fs_write'),
   grant: opaqueGrant,
   sig: b64,
-  files: z.array(z.object({ path: z.string(), contentB64: b64, mode: nonNegInt.optional() })),
+  files: z.array(z.object({ path: z.string(), contentB64: b64, mode: fileMode.optional() })).max(MAX_FS_WRITE_FILES),
 });
 const grantPtyOpen = z.object({
   type: z.literal('grant_pty_open'),
