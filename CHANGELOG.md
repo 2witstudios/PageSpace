@@ -490,6 +490,21 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Sending several photos at once now makes one message with one gallery, and stops them appearing
+  twice** — attaching a batch of photos used to send them as separate messages, one per file: the
+  channel or DM filled with a column of single-photo bubbles, the typed text sat on the first one,
+  and until you refreshed the page each photo also appeared a second time. The doubling and the
+  splitting were the same bug. A batch is now a single message carrying every file, stacked into a
+  grid you can click into: the viewer opens on the photo you picked and pages through the rest with
+  the arrow keys or the on-screen arrows. Text and photos sent together stay in one bubble. Mixed
+  batches put the images in the grid and any videos or documents beneath it, a single photo looks
+  exactly as it did before, and a message sent before this change still renders the way it always
+  has. Channels and DMs both work this way, and the other person sees the batch arrive as one
+  message rather than as several. Thread replies display a batch as one gallery too, though
+  attaching a file while writing a thread reply is still not possible — that part has never worked
+  and is unchanged here. A message can carry up to ten files; the composer says so rather than
+  silently dropping the extras.
+
 - **The account menu no longer labels free accounts "Billing (Business)"** — the plan name in the
   avatar dropdown fell through to "Business" whenever the subscription lookup had not answered yet
   (every first paint, and permanently if the request failed), so a brand-new free user saw a paid
