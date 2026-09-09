@@ -441,14 +441,15 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
     // landed elsewhere, but the grants in flight AND the machine's socket are
     // here. On EVERY pong (one row read per ping interval) a paused row fails
     // the in-flight requests typed `paused` and delivers the signed `pause`
-    // to the machine — once per pause; `markEnvPauseSent` is the guard — so a
+    // to the machine — until it ACKS; `markEnvPauseAcked` is the guard — so a
     // Stop made anywhere reaches the process within ENV_BRIDGE_PING_INTERVAL_MS.
     // The socket stays: Stop pauses grants and kills processes, not the machine.
     const sibling = await store.findLocalByEnvId(envId);
     if (sibling?.pausedAt != null) {
       const ended = getEnvBridgeClient().pauseEnv(envId);
       if (ended > 0) dropFrame('env_bridge_paused_in_flight', { ended }, 0.1);
-      if (metadata?.pauseSentForMs !== sibling.pausedAt.getTime()) {
+      // Keyed on the ACK (Codex P1, review round 1): an unacknowledged delivery is retried on every pong until the machine signs for it.
+      if (metadata?.pauseAckedForMs !== sibling.pausedAt.getTime()) {
         const { pauseLocalEnvMachine } = await import('@/lib/env-bridge/pause');
         const delivered = await pauseLocalEnvMachine({ envId });
         auditRequest(request, {

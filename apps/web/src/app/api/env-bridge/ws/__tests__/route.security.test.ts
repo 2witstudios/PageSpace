@@ -45,6 +45,7 @@ import { getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { envBridgeHash } from '@/lib/env-bridge/crypto';
 import { ENV_BRIDGE_HELLO_TIMEOUT_MS, ENV_BRIDGE_PING_INTERVAL_MS } from '@/lib/env-bridge/ws-route-config';
 import { APPROVAL_REVOKE_ACK_TIMEOUT_MS } from '@/lib/env-bridge/revoke';
+import { PAUSE_ACK_TIMEOUT_MS } from '@/lib/env-bridge/pause';
 import { UPGRADE, GET } from '../route';
 
 // ---- keys -------------------------------------------------------------------
@@ -647,6 +648,31 @@ describe('env-bridge ws route', () => {
       await settleGate();
       expect(ws.sent.slice(after).map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).filter((d) => d.ok && (d as { frame: Frame }).frame.type === 'pause')).toHaveLength(0);
       expect(ws.close).not.toHaveBeenCalled();
+    });
+
+    it('Codex P1 (review round 1) — an UNACKNOWLEDGED pause is resent on the next pong; once the machine\'s signed ack lands, a later pong sends nothing', async () => {
+      const ws = await connectAuthorized();
+      const pausedAt = new Date(NOW.getTime() + 1000);
+      rows.set(ENV, rowFor({ pausedAt }));
+      const pauses = () => ws.sent.map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).filter((d) => d.ok && (d as { frame: Frame }).frame.type === 'pause').length;
+      ws.emit('message', Buffer.from(encodeFrame({ type: 'pong', ts: Date.now() })));
+      await flush();
+      await settleGate();
+      expect(pauses()).toBe(1);
+      // No ack before the deadline.
+      await vi.advanceTimersByTimeAsync(PAUSE_ACK_TIMEOUT_MS + 1);
+      await settleGate();
+      ws.emit('message', Buffer.from(encodeFrame({ type: 'pong', ts: Date.now() })));
+      await flush();
+      await settleGate();
+      expect(pauses()).toBe(2);
+      ws.emit('message', Buffer.from(signedResult({ type: 'pause_result', envId: ENV, pausedAt: pausedAt.getTime(), killed: 0 })));
+      await flush();
+      await settleGate();
+      ws.emit('message', Buffer.from(encodeFrame({ type: 'pong', ts: Date.now() })));
+      await flush();
+      await settleGate();
+      expect(pauses()).toBe(2);
     });
 
     it('given the row is NOT paused, the heartbeat leaves in-flight grants alone', async () => {

@@ -20,16 +20,19 @@
  * (within one ping interval, `ENV_BRIDGE_PING_INTERVAL_MS`). Nothing here is
  * ever reported as "stopped" without the machine's signature saying so.
  *
- * **Sent once per pause.** Each socket remembers the `pausedAt` it delivered
- * (`markEnvPauseSent`), so the owner's PATCH and the heartbeat path cannot
- * double-send, and a later Stop (a new `pausedAt`) is a new delivery.
+ * **Acknowledged once per pause — retried until then.** Each socket remembers
+ * the `pausedAt` the machine has ACKED (set only from the verified
+ * `pause_result`, never from the send — Codex P1, review round 1) and the
+ * one a delivery is currently awaiting. An unacknowledged attempt clears the
+ * in-flight marker on failure, so the next heartbeat resends; a delivery in
+ * flight is not doubled; a later Stop (a new `pausedAt`) is a new delivery.
  */
 import type { WebSocket } from 'ws';
 import { encodePauseForSigning, type PauseFrame } from '@pagespace/lib/env-bridge/machine-signatures';
 import type { ServerSigningKeyring } from '@pagespace/lib/env-bridge/server-signing-key';
 import { loadServerSigningKeyring } from '@pagespace/lib/auth/env-bridge-signing-key';
 import { logger } from '@pagespace/lib/logging/logger-config';
-import { getEnvConnection, getEnvConnectionMetadata, isEnvAuthorized, markEnvPauseSent } from '@/lib/websocket/ws-env-connections';
+import { getEnvConnection, getEnvConnectionMetadata, isEnvAuthorized, markEnvPauseAcked, markEnvPauseInFlight } from '@/lib/websocket/ws-env-connections';
 import { EnvBridgeError, getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
 
@@ -69,15 +72,21 @@ export type PauseNotifyOutcome =
   | { kind: 'no_live_socket' }
   | { kind: 'unauthorized_socket' }
   | { kind: 'signing_key_unavailable' }
-  /** This socket already delivered this exact pause (same `pausedAt`). */
-  | { kind: 'already_sent' };
+  /** A delivery of this exact pause is already awaiting its ack on this socket. */
+  | { kind: 'already_sent' }
+  /** The machine already acknowledged this exact pause on this socket: nothing to do. */
+  | { kind: 'already_acknowledged' };
 
 export interface PauseNotifyDeps {
   getConnection: (envId: string) => WebSocket | undefined;
   isAuthorized: (ws: WebSocket) => boolean;
-  /** The `pausedAt` this socket last delivered, if any — the once-per-pause guard. */
-  sentFor: (ws: WebSocket) => number | undefined;
-  markSent: (ws: WebSocket, pausedAt: number) => void;
+  /** The `pausedAt` the machine has ACKED on this socket, if any — the once-per-pause guard. */
+  ackedFor: (ws: WebSocket) => number | undefined;
+  /** The `pausedAt` a delivery is awaiting an ack for on this socket, if any. */
+  inFlightFor: (ws: WebSocket) => number | undefined;
+  markInFlight: (ws: WebSocket, pausedAt: number | undefined) => void;
+  /** Set ONLY from the machine's verified ack. */
+  markAcked: (ws: WebSocket, pausedAt: number) => void;
   keyring: () => Pick<ServerSigningKeyring, 'get'>;
   /** Send the frame and await the machine's verified ack (production: `EnvBridgeClient.awaitPauseAck`). */
   awaitAck: (input: { envId: string; pausedAt: number; ws: WebSocket; frame: PauseFrame; timeoutMs: number }) => Promise<{ killed: number }>;
@@ -89,21 +98,25 @@ export async function notifyMachineOfPause(input: PauseFrameInput, deps: PauseNo
   const ws = deps.getConnection(input.envId);
   if (!ws || (ws.readyState !== 0 && ws.readyState !== 1)) return { kind: 'no_live_socket' };
   if (!deps.isAuthorized(ws)) return { kind: 'unauthorized_socket' };
-  if (deps.sentFor(ws) === input.pausedAt) return { kind: 'already_sent' };
+  if (deps.ackedFor(ws) === input.pausedAt) return { kind: 'already_acknowledged' };
+  if (deps.inFlightFor(ws) === input.pausedAt) return { kind: 'already_sent' };
   const built = buildPauseFrame(input, deps.keyring());
   if (!built.ok) {
     log().error('Enrollment pinned a signing key that is no longer loaded; pause not sent', { envId: input.envId, serverKeyId: input.serverKeyId, action: 'pause_key_unavailable' });
     return { kind: 'signing_key_unavailable' };
   }
-  // Marked BEFORE the send: a second caller racing this one must not double-deliver.
-  deps.markSent(ws, input.pausedAt);
+  // In flight BEFORE the send, so a caller racing this one does not double-deliver; the ACK marker is set only by the machine's signed answer.
+  deps.markInFlight(ws, input.pausedAt);
   try {
     const ack = await deps.awaitAck({ envId: input.envId, pausedAt: input.pausedAt, ws, frame: built.frame, timeoutMs: deps.timeoutMs ?? PAUSE_ACK_TIMEOUT_MS });
+    deps.markAcked(ws, input.pausedAt);
     log().info('Machine acknowledged the pause', { envId: input.envId, pausedAt: input.pausedAt, killed: ack.killed, action: 'pause_acknowledged' });
     return { kind: 'acknowledged', killed: ack.killed };
   } catch (error) {
+    // Not acked: forget the attempt so the next heartbeat (or PATCH) sends again.
+    deps.markInFlight(ws, undefined);
     const reason = error instanceof EnvBridgeError ? error.kind : error instanceof Error ? error.message : String(error);
-    log().warn('Pause not acknowledged by the machine', { envId: input.envId, pausedAt: input.pausedAt, reason, action: 'pause_unacknowledged' });
+    log().warn('Pause not acknowledged by the machine; will resend on the next heartbeat', { envId: input.envId, pausedAt: input.pausedAt, reason, action: 'pause_unacknowledged' });
     return { kind: 'unacknowledged', reason };
   }
 }
@@ -113,8 +126,10 @@ export function productionPauseDeps(): PauseNotifyDeps {
   return {
     getConnection: getEnvConnection,
     isAuthorized: isEnvAuthorized,
-    sentFor: (ws) => getEnvConnectionMetadata(ws)?.pauseSentForMs,
-    markSent: markEnvPauseSent,
+    ackedFor: (ws) => getEnvConnectionMetadata(ws)?.pauseAckedForMs,
+    inFlightFor: (ws) => getEnvConnectionMetadata(ws)?.pauseInFlightForMs,
+    markInFlight: markEnvPauseInFlight,
+    markAcked: markEnvPauseAcked,
     awaitAck: (ack) => getEnvBridgeClient().awaitPauseAck(ack),
     keyring: () => {
       try {

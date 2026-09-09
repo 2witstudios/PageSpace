@@ -132,15 +132,35 @@ describe('pauseLocalEnvMachine — the signed pause over the live socket, acked 
     expect(await pending).toEqual({ ok: true, machine: { kind: 'unacknowledged', reason: 'timeout' } });
   });
 
-  it('sends ONCE per pause: a second delivery of the same pausedAt is already_sent; a NEW pause (new pausedAt) is delivered again', async () => {
+  it('Codex P1 (review round 1) — the once-per-pause marker is the machine\'s ACK, not the send: an unacknowledged attempt is retried by the next delivery, the ack stops it, and a third attempt sends nothing', async () => {
+    const ws = liveSocket();
+    // Attempt 1: no ack.
+    const first = pauseLocalEnvMachine({ envId: ENV });
+    await settle();
+    expect(ws.sent).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(PAUSE_ACK_TIMEOUT_MS + 1);
+    expect(await first).toEqual({ ok: true, machine: { kind: 'unacknowledged', reason: 'timeout' } });
+    expect(getEnvConnectionMetadata(ws)?.pauseAckedForMs).toBeUndefined();
+    // Attempt 2: resent, and this time acked.
+    const second = pauseLocalEnvMachine({ envId: ENV });
+    await settle();
+    expect(ws.sent).toHaveLength(2);
+    getEnvBridgeClient().handleMachineResult(ws, ack(1));
+    expect(await second).toEqual({ ok: true, machine: { kind: 'acknowledged', killed: 1 } });
+    expect(getEnvConnectionMetadata(ws)?.pauseAckedForMs).toBe(PAUSED_AT.getTime());
+    // Attempt 3: nothing more.
+    expect(await pauseLocalEnvMachine({ envId: ENV })).toEqual({ ok: true, machine: { kind: 'already_acknowledged' } });
+    expect(ws.sent).toHaveLength(2);
+  });
+
+  it('a delivery already IN FLIGHT for the same pause is not doubled; a NEW pause (new pausedAt) is delivered again', async () => {
     const ws = liveSocket();
     const first = pauseLocalEnvMachine({ envId: ENV });
     await settle();
-    getEnvBridgeClient().handleMachineResult(ws, ack(1));
-    expect(await first).toEqual({ ok: true, machine: { kind: 'acknowledged', killed: 1 } });
-    expect(getEnvConnectionMetadata(ws)?.pauseSentForMs).toBe(PAUSED_AT.getTime());
     expect(await pauseLocalEnvMachine({ envId: ENV })).toEqual({ ok: true, machine: { kind: 'already_sent' } });
     expect(ws.sent).toHaveLength(1);
+    getEnvBridgeClient().handleMachineResult(ws, ack(1));
+    expect(await first).toEqual({ ok: true, machine: { kind: 'acknowledged', killed: 1 } });
     row = { ...row!, pausedAt: new Date(NOW.getTime() + 60_000) };
     const again = pauseLocalEnvMachine({ envId: ENV });
     await settle();

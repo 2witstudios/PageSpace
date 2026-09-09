@@ -52,8 +52,10 @@ export interface EnvConnectionMetadata {
   lastRevalidated?: Date;
   /** When `lastSeenAt` was last persisted for this socket — pings persist at most once per heartbeat window. */
   lastSeenPersistedAt?: Date;
-  /** STOP (GA wave 3): the `pausedAt` (ms) this socket already delivered a signed `pause` for — sent once per pause. */
-  pauseSentForMs?: number;
+  /** STOP (GA wave 3): the `pausedAt` (ms) the machine has ACKNOWLEDGED with a signed `pause_result` on this socket — the once-per-pause marker (Codex P1, review round 1: the ack, never the send). */
+  pauseAckedForMs?: number;
+  /** The `pausedAt` a delivery is currently awaiting an ack for; cleared on ack or failure so the next heartbeat retries. */
+  pauseInFlightForMs?: number;
 }
 
 export interface RegisterEnvConnectionInput {
@@ -206,10 +208,19 @@ export function updateEnvLastPing(ws: WebSocket): void {
   if (metadata) metadata.lastPing = new Date();
 }
 
-/** STOP (GA wave 3): this socket delivered the pause stamped at `pausedAtMs`; the PATCH and heartbeat paths both check it so a pause is sent exactly once per socket. */
-export function markEnvPauseSent(ws: WebSocket, pausedAtMs: number): void {
+/** STOP (GA wave 3): the machine ACKNOWLEDGED the pause stamped at `pausedAtMs` on this socket — only the signed ack sets this, so an unacknowledged delivery is retried. */
+export function markEnvPauseAcked(ws: WebSocket, pausedAtMs: number): void {
   const metadata = connectionMetadata.get(ws);
-  if (metadata) metadata.pauseSentForMs = pausedAtMs;
+  if (metadata) {
+    metadata.pauseAckedForMs = pausedAtMs;
+    metadata.pauseInFlightForMs = undefined;
+  }
+}
+
+/** A delivery of the pause stamped at `pausedAtMs` is awaiting its ack (`undefined` = none; set on failure so the next heartbeat retries). */
+export function markEnvPauseInFlight(ws: WebSocket, pausedAtMs: number | undefined): void {
+  const metadata = connectionMetadata.get(ws);
+  if (metadata) metadata.pauseInFlightForMs = pausedAtMs;
 }
 
 /** Record that `lastSeenAt` was persisted now (heartbeat-window throttle lives in the route). */
