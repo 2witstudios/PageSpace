@@ -11,7 +11,11 @@ import { getPlatformStorage } from '@/lib/auth/platform-storage';
 type Status =
   | { kind: 'redeeming' }
   | { kind: 'redirecting' }
-  /** `retryable` is false once the token is spent — retrying would only fail. */
+  /**
+   * Only reachable before the server has seen the token, so every error here
+   * is one a retry can clear. Once the response arrives the token is spent and
+   * the user is signed in; from that point nothing may show this screen.
+   */
   | { kind: 'error'; message: string; retryable: boolean };
 
 /** What `POST /api/auth/magic-link/verify` answers on success. */
@@ -101,16 +105,23 @@ export function MagicLinkRedeem({ token, next }: { token: string; next?: string 
       return;
     }
 
-    const data = (await response.json()) as RedeemResponse;
+    // THE USER IS SIGNED IN FROM HERE ON. The response set the session cookie
+    // and the token is spent, so nothing below may fail the sign-in: every
+    // step is best-effort, and the function ends in a navigation either way.
+    // Letting a failure here reach the caller's catch would show "sign-in
+    // failed" with a retry, to someone who is signed in, for a token that no
+    // retry can spend again.
+    let data: RedeemResponse | null = null;
+    try {
+      data = (await response.json()) as RedeemResponse;
+    } catch (error) {
+      console.error('[MagicLinkRedeem] could not read the success response', error);
+    }
 
-    // The session is already granted at this point — the response set the
-    // cookie, and the token is spent. Everything below is about making that
-    // session durable in the shell, so a failure degrades the session rather
-    // than discarding it.
-    if (native && deviceId) {
+    if (native) {
       const storage = getPlatformStorage();
       try {
-        if (data.sessionToken) {
+        if (deviceId && data?.sessionToken) {
           await storage.storeSession({
             sessionToken: data.sessionToken,
             csrfToken: data.csrfToken ?? null,
@@ -118,9 +129,10 @@ export function MagicLinkRedeem({ token, next }: { token: string; next?: string 
             deviceToken: data.deviceToken ?? null,
           });
         } else {
-          // This device asked for the link and redeemed it, so the server
-          // should have recognised it. Reaching here means the device handoff
-          // failed server-side, and whatever is stored is already stale.
+          // No tokens for this device: either it could not name itself (the
+          // device id was unreadable), the link was never bound to it, or the
+          // server's handoff failed. In all three the server has just revoked
+          // this device's sessions, so anything still stored is stale.
           console.warn('[MagicLinkRedeem] no tokens for this device; falling back to the cookie');
           await storage.clearSession();
         }
@@ -140,29 +152,38 @@ export function MagicLinkRedeem({ token, next }: { token: string; next?: string 
       }
     }
 
-    const { useAuthStore } = await import('@/stores/useAuthStore');
-    useAuthStore.getState().setAuthFailedPermanently(false);
-    if (data.user) {
-      useAuthStore.getState().setUser({
-        id: data.user.id,
-        name: data.user.name,
-        email: data.user.email,
-        image: data.user.image,
-        emailVerified: data.user.emailVerified ? new Date(data.user.emailVerified) : null,
-      });
+    // Priming the store is a convenience — the dashboard reloads it anyway —
+    // so a chunk that will not load must not strand a signed-in user here.
+    try {
+      const { useAuthStore } = await import('@/stores/useAuthStore');
+      useAuthStore.getState().setAuthFailedPermanently(false);
+      if (data?.user) {
+        useAuthStore.getState().setUser({
+          id: data.user.id,
+          name: data.user.name,
+          email: data.user.email,
+          image: data.user.image,
+          emailVerified: data.user.emailVerified ? new Date(data.user.emailVerified) : null,
+        });
+      }
+    } catch (error) {
+      console.error('[MagicLinkRedeem] could not prime the auth store', error);
     }
 
     setStatus({ kind: 'redirecting' });
-    router.replace(data.redirectTo);
+    // Without a readable body we cannot know where they were headed, but they
+    // are signed in, so the dashboard is the right place to land.
+    router.replace(data?.redirectTo ?? '/dashboard');
   }, [router, token, next]);
 
   const run = useCallback(() => {
     setStatus({ kind: 'redeeming' });
     redeem().catch((error: unknown) => {
-      // Keep the reason in the console, not in the copy: this text is read by
-      // someone who just tapped a link, and `TypeError: Failed to fetch` tells
-      // them nothing they can act on. The request never reached the server, so
-      // the token was not spent and this one is retryable.
+      // Only pre-response failures reach here — everything after the response
+      // is handled inside `redeem`, because by then the user is signed in. So
+      // the token was never spent and a retry is honest. The reason stays in
+      // the console: `TypeError: Failed to fetch` tells the person who just
+      // tapped a link nothing they can act on.
       console.error('[MagicLinkRedeem] redemption failed', error);
       setStatus({ kind: 'error', message: NETWORK_MESSAGE, retryable: true });
     });
@@ -190,9 +211,10 @@ export function MagicLinkRedeem({ token, next }: { token: string; next?: string 
               <p className="text-sm font-medium text-foreground">Sign-in failed</p>
               <p className="mt-1 text-xs text-muted-foreground">{status.message}</p>
             </div>
-            {/* Reopening the link cannot retry: the shell hands a URL to the
-                deep-link handler once per app run and it ignores repeats, so
-                the retry has to live here. */}
+            {/* The retry has to live here: `DeepLinkHandler` drops a repeat of
+                the URL it just handled, so re-tapping the same link does
+                nothing, and the user would otherwise have to restart the app
+                or ask for another link for a token that was never spent. */}
             {status.retryable && (
               <Button type="button" variant="outline" size="sm" onClick={run}>
                 Try again

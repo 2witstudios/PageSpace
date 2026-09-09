@@ -185,7 +185,10 @@ describe('MagicLinkRedeem', () => {
     expect(mockClearSession).toHaveBeenCalled();
   });
 
-  it('when the device id cannot be read, falls back to the cookie-only path instead of failing', async () => {
+  it('when the device id cannot be read, falls back to the cookie-only path and still clears the stale entry', async () => {
+    // Presenting no device makes the server revoke every web session for this
+    // user — this phone's included — so anything left in the store is stale,
+    // and auth-fetch would prefer it over the cookie we just received.
     mockIsCapacitorApp.mockReturnValue(true);
     mockGetDeviceId.mockRejectedValue(new Error('preferences unavailable'));
     fetchSpy.mockResolvedValue(okResponse({ redirectTo: '/dashboard?auth=success', isNewUser: false, user: null }));
@@ -195,6 +198,7 @@ describe('MagicLinkRedeem', () => {
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/dashboard?auth=success'));
     expect(sentBody().body).toEqual({ token: 'ps_magic_abc' });
     expect(mockStoreSession).not.toHaveBeenCalled();
+    expect(mockClearSession).toHaveBeenCalled();
   });
 
   it('redeems exactly once across React strict-mode double effects', async () => {
@@ -258,5 +262,42 @@ describe('MagicLinkRedeem', () => {
 
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/auth/signin?error=magic_link_used'));
     expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
+  });
+
+  it('a failure after the response still lands the user, because they are already signed in', async () => {
+    // The cookie is set and the token is spent by then. Showing "sign-in
+    // failed" with a retry would lie to a signed-in user and burn the retry on
+    // a token no retry can spend again.
+    mockIsCapacitorApp.mockReturnValue(true);
+    mockStoreSession.mockRejectedValue(new Error('keychain locked'));
+    mockSetUser.mockImplementation(() => {
+      throw new Error('store blew up');
+    });
+    fetchSpy.mockResolvedValue(
+      okResponse({
+        redirectTo: '/dashboard/d1?auth=success',
+        isNewUser: false,
+        user,
+        sessionToken: 'ps_sess_1',
+        csrfToken: 'csrf_1',
+        deviceToken: 'ps_dev_1',
+      }),
+    );
+
+    render(<MagicLinkRedeem token="ps_magic_abc" />);
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/dashboard/d1?auth=success'));
+    expect(screen.queryByText('Sign-in failed')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
+  });
+
+  it('given a success with an unreadable body, lands the user on the dashboard rather than failing', async () => {
+    mockIsCapacitorApp.mockReturnValue(false);
+    fetchSpy.mockResolvedValue(new Response('not json', { status: 200 }));
+
+    render(<MagicLinkRedeem token="ps_magic_abc" />);
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/dashboard'));
+    expect(screen.queryByText('Sign-in failed')).not.toBeInTheDocument();
   });
 });

@@ -351,7 +351,7 @@ async function redeemMagicLink({
   const deviceMeta = normalizeDeviceMeta(parsedMeta);
   const handoffDevice = handoffDeviceFor(deviceMeta, door);
   if (deviceMeta && !handoffDevice) {
-    loggers.auth.info('Magic link redeemed away from the device it was minted for', {
+    loggers.auth.info('Magic link redeemed with no device handoff', {
       userId,
       platform: deviceMeta.platform,
       door: door.kind,

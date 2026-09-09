@@ -236,7 +236,7 @@ describe('POST /api/auth/magic-link/verify — native-bound link', () => {
     expect(body.redirectTo).toBe('/dashboard?auth=success');
     expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Headers), 'ps_sess_mock');
     expect(loggers.auth.info).toHaveBeenCalledWith(
-      'Magic link redeemed away from the device it was minted for',
+      'Magic link redeemed with no device handoff',
       expect.objectContaining({ platform: 'ios' }),
     );
   });
