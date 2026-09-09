@@ -98,22 +98,3 @@ export function Subline({ children, className, style }: HeadlineProps) {
     </p>
   );
 }
-
-interface TagProps {
-  children: React.ReactNode;
-  className?: string;
-}
-
-export function Tag({ children, className }: TagProps) {
-  return (
-    <span
-      className={cn(
-        "inline-block px-8 py-4 rounded-full text-[26px] font-medium",
-        "border border-white/15 bg-white/10 text-white/75 backdrop-blur-sm",
-        className,
-      )}
-    >
-      {children}
-    </span>
-  );
-}
