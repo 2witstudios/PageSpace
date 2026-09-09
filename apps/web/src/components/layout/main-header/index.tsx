@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
-import { Home, PanelLeft, PanelRight, Search } from "lucide-react";
+import { PanelLeft, PanelRight, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import NotificationBell from "@/components/notifications/NotificationBell";
@@ -15,6 +14,7 @@ import { AiBalanceWidget } from "@/components/billing/AiBalanceWidget";
 import { VoiceNavTrigger } from "@/components/ai/voice/realtime";
 import type { VoiceSurface } from "@/lib/ai/realtime/voice-binding";
 import NavButtons from "./NavButtons";
+import DashboardCrumb from "./DashboardCrumb";
 
 interface TopBarProps {
   onToggleLeftPanel: () => void;
@@ -58,14 +58,7 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel, onReveal
             <NavButtons />
           </div>
 
-          <Link
-            href="/dashboard"
-            className="flex items-center text-sm text-gray-900 dark:text-gray-100"
-            aria-label="Back to dashboard"
-          >
-            <Home className="mr-2 h-4 w-4" />
-            <span>/</span>
-          </Link>
+          <DashboardCrumb />
 
           <div className="hidden min-w-[200px] flex-1 md:flex">
             <InlineSearch />
