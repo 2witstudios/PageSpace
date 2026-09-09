@@ -57,6 +57,24 @@ if (typeof window !== 'undefined' && !window.HTMLElement.prototype.scrollIntoVie
   window.HTMLElement.prototype.scrollIntoView = () => {};
 }
 
+// jsdom does not implement Element.scrollTo (only the window-level no-op that
+// warns). Any component that scrolls a container imperatively -- the mobile
+// calendar agenda scrolls to the selected day -- throws on the bare call.
+// Move scrollTop so the element still reports a plausible position afterwards.
+if (typeof window !== 'undefined' && !window.Element.prototype.scrollTo) {
+  const scrollToStub = function (
+    this: Element,
+    optionsOrX?: ScrollToOptions | number,
+    y?: number
+  ) {
+    const top =
+      typeof optionsOrX === 'object' && optionsOrX !== null ? optionsOrX.top : y;
+    if (typeof top === 'number') this.scrollTop = top;
+  };
+  window.Element.prototype.scrollTo =
+    scrollToStub as unknown as typeof window.Element.prototype.scrollTo;
+}
+
 // jsdom does not implement the Pointer Events capture methods. Radix Select's
 // pointer-interaction internals call hasPointerCapture/releasePointerCapture
 // on open/close — without these, clicking a SelectTrigger throws.
