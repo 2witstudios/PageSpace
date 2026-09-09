@@ -94,6 +94,17 @@ const PRECEDING_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'while', 'unti
 const BARE_KEYWORDS = new Set(['fi', 'done', 'esac', 'then', 'else', 'do', '}', ')']);
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
+/**
+ * Trim every trailing character that is in `chars`, by a backwards walk —
+ * never a `[…]+$` regex, which is polynomial on a long run of the character
+ * (CodeQL js/polynomial-redos on #2583; the script is agent-supplied).
+ */
+export function trimTrailing(value: string, chars: string): string {
+  let end = value.length;
+  while (end > 0 && chars.includes(value[end - 1] as string)) end -= 1;
+  return end === value.length ? value : value.slice(0, end);
+}
+
 function basename(path: string): string {
   const index = path.lastIndexOf('/');
   return index === -1 ? path : path.slice(index + 1);
@@ -205,7 +216,7 @@ export function shellCommandWords(script: string): string[] | null {
       break;
     }
     // Trailing `)` / `}` on the last word, or as its own word.
-    tokens = tokens.filter((token) => !BARE_KEYWORDS.has(token)).map((token) => token.replace(/[)}]+$/, '')).filter((token) => token.length > 0);
+    tokens = tokens.filter((token) => !BARE_KEYWORDS.has(token)).map((token) => trimTrailing(token, ')}')).filter((token) => token.length > 0);
     if (tokens.length === 0) continue;
     // `for x in …` names no program on its own segment; `case` is opaque (handled below).
     if (tokens[0] === 'for' || tokens[0] === 'select' || tokens[0] === 'function') continue;
@@ -241,7 +252,7 @@ export function shellCommandWords(script: string): string[] | null {
 // ---- subjects ---------------------------------------------------------------
 
 function isInsideRoot(path: string, root: string): boolean {
-  const base = root.replace(/\/+$/, '');
+  const base = trimTrailing(root, '/');
   return path === base || path.startsWith(`${base}/`);
 }
 

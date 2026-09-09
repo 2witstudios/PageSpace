@@ -17,6 +17,7 @@ import {
   matchApproval,
   parseApprovalsFile,
   shellCommandWords,
+  trimTrailing,
   type ApprovalMatchDeps,
   type DurableApproval,
 } from '../decide-approval';
@@ -207,6 +208,27 @@ describe('parseApprovalsFile — strict; ANY defect ⇒ null (empty), never a pa
     ['one bad entry among good ones', { version: 1, approvals: [approval(), { approvalId: 'x' }] }],
   ])('given %s, should return null — the WHOLE file is ignored', (_label, input) => {
     expect(parseApprovalsFile(input)).toBeNull();
+  });
+});
+
+describe('trimTrailing — the loop that replaced two `[…]+$` regexes (CodeQL js/polynomial-redos on #2583)', () => {
+  it('trims only trailing characters in the set, and a 100k-char run resolves in bounded time with the same result', () => {
+    expect(trimTrailing('ls)', ')}')).toBe('ls');
+    expect(trimTrailing('ls)}))', ')}')).toBe('ls');
+    expect(trimTrailing(')ls', ')}')).toBe(')ls');
+    expect(trimTrailing('/home/u/proj///', '/')).toBe('/home/u/proj');
+    expect(trimTrailing('', ')')).toBe('');
+    const run = `ls${')'.repeat(100_000)}`;
+    const started = performance.now();
+    expect(trimTrailing(run, ')}')).toBe('ls');
+    expect(shellCommandWords(`(${run}`)).toEqual(['ls']);
+    expect(performance.now() - started).toBeLessThan(200);
+    expect(approvalSubjects(fsRead(`${ROOT}/a`), { ...deps, roots: [`${ROOT}${'/'.repeat(100_000)}`] })).toEqual([`root:${ROOT}${'/'.repeat(100_000)}`]);
+  });
+
+  it('the module has no trailing-anchored `X+$` regex left', () => {
+    const source = readFileSync(join(import.meta.dirname, '..', 'decide-approval.ts'), 'utf8');
+    expect(source).not.toMatch(/\][+*]\$\//);
   });
 });
 
