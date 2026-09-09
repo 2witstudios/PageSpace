@@ -19,6 +19,14 @@ export type Orientation = "portrait" | "landscape";
 
 export interface Shot {
   slug: string;
+  /**
+   * Which devices ship this frame. Defaults to both.
+   *
+   * The sets are allowed to diverge — App Store Connect takes a different
+   * count per device, and a frame whose copy does not match its capture is
+   * worse than one fewer frame.
+   */
+  devices?: ShotDevice[];
   tag?: string;
   /** Rendered as separate lines, so the break is deliberate rather than reflowed. */
   headline: string[];
@@ -56,12 +64,16 @@ export const SHOTS: Shot[] = [
   },
   {
     slug: "triggers",
+    // iPad only: no iPhone capture of the Agent triggers panel exists yet.
+    devices: ["ipad"],
     tag: "Automate",
     headline: ["Tasks that", "start themselves."],
     subline: "Hand a task to an agent when it comes due, or the moment it's done.",
   },
   {
     slug: "workflows",
+    // iPad only: no iPhone capture of the Create Workflow dialog exists yet.
+    devices: ["ipad"],
     tag: "Schedule",
     headline: ["Work that", "keeps running."],
     subline: "Put the recurring work on a schedule and leave it to the agent.",
@@ -129,3 +141,7 @@ export const FRAME: Record<
 
 export const capturePath = (device: ShotDevice, slug: string) =>
   `/screenshots/ios/${device}/${slug}.png`;
+
+/** The shots that ship for a given device, in order. */
+export const shotsFor = (device: ShotDevice): Shot[] =>
+  SHOTS.filter((s) => (s.devices ?? DEVICES).includes(device));

@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import path from "path";
 import fs from "fs";
-import { CANVAS, DEVICES, SHOTS, capturePath } from "../src/lib/app-store-shots";
+import { CANVAS, DEVICES, shotsFor, capturePath } from "../src/lib/app-store-shots";
 
 const BASE_URL = "http://localhost:3004";
 const OUTPUT_DIR = path.join(__dirname, "..", "output");
@@ -20,7 +20,7 @@ test.describe("App Store screenshots", () => {
   for (const device of DEVICES) {
     const canvas = CANVAS[device];
 
-    for (const shot of SHOTS) {
+    for (const shot of shotsFor(device)) {
       test(`${device}/${shot.slug}`, async ({ browser }) => {
         const source = path.join(PUBLIC_DIR, capturePath(device, shot.slug));
         expect(
