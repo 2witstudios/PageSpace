@@ -14,6 +14,7 @@ export * from './policy-types';
 export * from './intersect-capabilities';
 export * from './scrub-env';
 export * from './confine-path';
+export * from './classify-write';
 export * from './decide-execution';
 export * from './decide-approval';
 export * from './frame-codec';
