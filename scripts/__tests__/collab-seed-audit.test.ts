@@ -19,21 +19,21 @@ import {
   counterDecreases,
   isTagless,
   spaceCollapsedText,
-  stripNonContentElements,
   visibleText,
 } from '../lib/seed-audit/criteria';
+import { stripNonContentElements } from '@pagespace/editor/html-to-ydoc';
 import {
   auditPage,
   divergenceBetween,
   gateReasonShape,
   isLossy,
   judgeChain,
+  type ChainResult,
   type PageAudit,
 } from '../lib/seed-audit/analyze';
 import {
   auditPassed,
   censusKeyOf,
-  contentFreeKey,
   createAuditAccumulator,
   formatAuditReport,
 } from '../lib/seed-audit/report';
@@ -51,7 +51,7 @@ afterAll(() => {
   workspace.close();
 });
 
-const parse = (html: string): Element => workspace.parse(html);
+const parse = (html: string): HTMLElement => workspace.parse(html);
 
 /** A clean audit, as a fixture other tests narrow. */
 const CLEAN_HTML =
@@ -192,10 +192,11 @@ describe('auditPage — the two chains', () => {
     expect(isLossy(audit.seed)).toBe(true);
   });
 
-  it('does not report a <style> block as lost text', () => {
+  it('does not report a <style> block as lost text — and neither does the gate, because it judges the same stripped source', () => {
     const audit = audited(auditPage('<style>p{margin:0}</style><p>prose</p>', workspace));
     expect(audit.seed.textPreserved).toBe(true);
     expect(isLossy(audit.seed)).toBe(false);
+    expect(audit.gateReasons).toEqual([]);
   });
 
   it('accepts the cosmetic rewrites the allowlist names and reports nothing outside it', () => {
@@ -305,44 +306,29 @@ describe('censusKeyOf', () => {
   });
 });
 
-describe('contentFreeKey', () => {
-  it('keeps the values the schema itself enumerates', () => {
-    expect(contentFreeKey('attr:ul@data-type=taskList')).toBe('attr:ul@data-type=taskList');
-    expect(contentFreeKey('attr:li@data-checked=true')).toBe('attr:li@data-checked=true');
-    expect(contentFreeKey('attr:td@colspan=2')).toBe('attr:td@colspan=2');
-    expect(contentFreeKey('attr:ol@start=7')).toBe('attr:ol@start=7');
-  });
-
-  it('folds prose, urls and ids back to presence', () => {
-    expect(contentFreeKey('attr:img@alt=a photo of Ada')).toBe('attr:img@alt');
-    expect(contentFreeKey('attr:a@href=https://x.test/ada-lovelace')).toBe('attr:a@href');
-    expect(contentFreeKey('attr:a@data-page-id=pg_1')).toBe('attr:a@data-page-id');
-    expect(contentFreeKey('el:img')).toBe('el:img');
-    expect(contentFreeKey('attr:p@style:text-align')).toBe('attr:p@style:text-align');
-  });
-});
-
 describe('the accumulator and the report', () => {
+  const chainResult = (overrides: Partial<ChainResult> = {}): ChainResult => ({
+    stable: true,
+    counterDecreases: [],
+    textPreserved: true,
+    whitespaceOnlyTextChange: false,
+    droppedConstructs: [],
+    unexpectedAdditions: [],
+    ...overrides,
+  });
+
   function lossyAudit(overrides: Partial<PageAudit & { status: 'audited' }> = {}): PageAudit {
     return {
       status: 'audited',
       tagless: false,
-      census: {
-        stable: true,
-        counterDecreases: ['img'],
-        textPreserved: true,
-        whitespaceOnlyTextChange: false,
-        droppedConstructs: ['attr:img@src', 'el:img'],
-        unexpectedAdditions: [],
-      },
-      seed: {
+      census: chainResult({ counterDecreases: ['img'], droppedConstructs: ['attr:img@src', 'el:img'] }),
+      seed: chainResult({
         stable: false,
         counterDecreases: ['img'],
         textPreserved: false,
-        whitespaceOnlyTextChange: false,
         droppedConstructs: ['attr:img@src', 'el:img'],
         unexpectedAdditions: ['el:figure'],
-      },
+      }),
       divergence: {
         counterChanges: ['img'],
         textChanged: true,
@@ -393,14 +379,7 @@ describe('the accumulator and the report', () => {
     audit.recordHtml(
       'page_1',
       lossyAudit({
-        seed: {
-          stable: true,
-          counterDecreases: [],
-          textPreserved: true,
-          whitespaceOnlyTextChange: false,
-          droppedConstructs: ['attr:h2@style:text-align', 'attr:p@style:text-align'],
-          unexpectedAdditions: [],
-        },
+        seed: chainResult({ droppedConstructs: ['attr:h2@style:text-align', 'attr:p@style:text-align'] }),
       }),
     );
     expect(audit.snapshot().seed.droppedConstructsCensusKeyed).toEqual([
@@ -423,21 +402,27 @@ describe('the accumulator and the report', () => {
 
   it('classifies every page into one of the four gate-agreement cells', () => {
     const audit = createAuditAccumulator();
-    const cleanSeed = { stable: true, counterDecreases: [], textPreserved: true, whitespaceOnlyTextChange: false, droppedConstructs: [], unexpectedAdditions: [] };
-    audit.recordHtml('both_lossy', lossyAudit());
+    const cleanSeed = chainResult();
+    // Distinct counts per cell, so a count derived from the wrong cell fails.
+    audit.recordHtml('both_lossy_1', lossyAudit());
+    audit.recordHtml('both_lossy_2', lossyAudit());
     audit.recordHtml('blind_spot', lossyAudit({ gateReasons: [] }));
-    audit.recordHtml('stricter', lossyAudit({ seed: cleanSeed, gateReasons: ['visible text changed'] }));
-    audit.recordHtml('both_clean', lossyAudit({ seed: cleanSeed, gateReasons: [] }));
+    audit.recordHtml('stricter_1', lossyAudit({ seed: cleanSeed, gateReasons: ['visible text changed'] }));
+    audit.recordHtml('stricter_2', lossyAudit({ seed: cleanSeed, gateReasons: ['visible text changed'] }));
+    audit.recordHtml('stricter_3', lossyAudit({ seed: cleanSeed, gateReasons: ['visible text changed'] }));
+    for (const id of ['clean_1', 'clean_2', 'clean_3', 'clean_4']) {
+      audit.recordHtml(id, lossyAudit({ seed: cleanSeed, gateReasons: [] }));
+    }
     const { gate } = audit.snapshot();
-    expect(gate.agreement).toEqual({ bothLossy: 1, gateBlindSpot: 1, gateStricter: 1, bothClean: 1 });
+    expect(gate.agreement).toEqual({ bothLossy: 2, gateBlindSpot: 1, gateStricter: 3, bothClean: 4 });
     expect(gate.agreementRows).toEqual([
-      { key: 'bothLossy', pages: 1, examplePageIds: ['both_lossy'] },
+      { key: 'gateStricter', pages: 3, examplePageIds: ['stricter_1', 'stricter_2', 'stricter_3'] },
+      { key: 'bothLossy', pages: 2, examplePageIds: ['both_lossy_1', 'both_lossy_2'] },
       { key: 'gateBlindSpot', pages: 1, examplePageIds: ['blind_spot'] },
-      { key: 'gateStricter', pages: 1, examplePageIds: ['stricter'] },
     ]);
     expect(gate.reasons).toEqual([
-      { key: 'dropped <img>', pages: 1, examplePageIds: ['both_lossy'] },
-      { key: 'visible text changed', pages: 1, examplePageIds: ['stricter'] },
+      { key: 'visible text changed', pages: 3, examplePageIds: ['stricter_1', 'stricter_2', 'stricter_3'] },
+      { key: 'dropped <img>', pages: 2, examplePageIds: ['both_lossy_1', 'both_lossy_2'] },
     ]);
   });
 

@@ -369,12 +369,21 @@ export function projectSchema(schema: Schema): { nodes: ProjectedSpec[]; marks: 
  * server, future seed scripts).
  */
 export function hashProjection(projection: unknown): string {
-  const json = JSON.stringify(projection);
+  return djb2(JSON.stringify(projection)).toString(16);
+}
+
+/**
+ * djb2 over UTF-16 code units, as an unsigned 32-bit integer. Shared with
+ * `userColor` (`user-color.ts`) for the same reasons it is used here: no
+ * `node:crypto`, identical in the browser and in Node, and nothing but the
+ * string as input.
+ */
+export function djb2(input: string): number {
   let hash = 5381;
-  for (let i = 0; i < json.length; i += 1) {
-    hash = (hash * 33 + json.charCodeAt(i)) | 0;
+  for (let i = 0; i < input.length; i += 1) {
+    hash = (hash * 33 + input.charCodeAt(i)) | 0;
   }
-  return (hash >>> 0).toString(16);
+  return hash >>> 0;
 }
 
 /**

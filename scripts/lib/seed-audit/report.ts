@@ -1,4 +1,5 @@
-import { isLossy, type PageAudit } from './analyze';
+import { contentFreeKey } from '@pagespace/editor/seed-fidelity';
+import { isLossy, type ChainResult, type PageAudit } from './analyze';
 
 /**
  * Tallies and the printed report.
@@ -136,31 +137,6 @@ export function censusKeyOf(key: string): string {
   return `attr:${rest.split('=')[0]}`;
 }
 
-/**
- * Attribute values that are safe to print: enumerations and small integers
- * the schema itself defines. Every OTHER value-bearing key (`href`, `alt`,
- * the `data-*-id` family) is folded to its presence form before it is
- * tallied — `alt` is prose, an `href` can carry a person's name, and this
- * report goes to a terminal. `constructKeysOf` keeps those values so the
- * corpus test can see a rewritten href; the AUDIT must not repeat them.
- * The "never prints document content" test feeds a sentinel through `alt`
- * to hold this.
- */
-const PRINTABLE_ATTRIBUTE_VALUES: ReadonlySet<string> = new Set([
-  'data-type',
-  'data-checked',
-  'data-tight',
-  'start',
-  'colspan',
-  'rowspan',
-]);
-
-export function contentFreeKey(key: string): string {
-  const valued = /^(attr:[^@]+@)([^=]+)=/u.exec(key);
-  if (!valued) return key;
-  return PRINTABLE_ATTRIBUTE_VALUES.has(valued[2]) ? key : `${valued[1]}${valued[2]}`;
-}
-
 function createChainTallies() {
   const criteria: Tallies = new Map();
   const dropped: Tallies = new Map();
@@ -175,8 +151,7 @@ function createChainTallies() {
   };
 
   return {
-    record(pageId: string, result: PageAudit & { status: 'audited' }, chain: 'seed' | 'census') {
-      const verdict = result[chain];
+    record(pageId: string, verdict: ChainResult) {
       if (!verdict.stable) {
         totals.unstable += 1;
         tally(criteria, 'unstable', pageId);
@@ -217,10 +192,11 @@ export function createAuditAccumulator(): AuditAccumulator {
   const census = createChainTallies();
   const divergence: Tallies = new Map();
   const gateReasons: Tallies = new Map();
+  // One tally per cell; the `agreement` counts are derived from it in
+  // `snapshot()` rather than kept as a second counter that could disagree.
   const agreementRows: Tallies = new Map();
   const failures: Tallies = new Map();
   const tagless: Tallies = new Map();
-  const agreement: GateAgreement = { bothLossy: 0, gateBlindSpot: 0, gateStricter: 0, bothClean: 0 };
   const totals: AuditTotals = {
     documents: 0,
     audited: 0,
@@ -247,8 +223,8 @@ export function createAuditAccumulator(): AuditAccumulator {
         tally(tagless, 'no HTML element', pageId);
       }
 
-      seed.record(pageId, audit, 'seed');
-      census.record(pageId, audit, 'census');
+      seed.record(pageId, audit.seed);
+      census.record(pageId, audit.census);
 
       if (audit.divergence) {
         totals.divergent += 1;
@@ -275,15 +251,14 @@ export function createAuditAccumulator(): AuditAccumulator {
 
       const gateRefuses = audit.gateReasons.length > 0;
       const seedLossy = isLossy(audit.seed);
-      const cell = gateRefuses
+      const cell: keyof GateAgreement = gateRefuses
         ? seedLossy
           ? 'bothLossy'
           : 'gateStricter'
         : seedLossy
           ? 'gateBlindSpot'
           : 'bothClean';
-      agreement[cell] += 1;
-      if (cell !== 'bothClean') tally(agreementRows, cell, pageId);
+      tally(agreementRows, cell, pageId);
       for (const reason of new Set(audit.gateReasons)) tally(gateReasons, reason, pageId);
     },
 
@@ -303,7 +278,18 @@ export function createAuditAccumulator(): AuditAccumulator {
         seed: seed.snapshot(),
         census: census.snapshot(),
         divergence: { rows: rows(divergence) },
-        gate: { agreement: { ...agreement }, agreementRows: rows(agreementRows), reasons: rows(gateReasons) },
+        gate: {
+          agreement: {
+            bothLossy: agreementRows.get('bothLossy')?.pages ?? 0,
+            gateBlindSpot: agreementRows.get('gateBlindSpot')?.pages ?? 0,
+            gateStricter: agreementRows.get('gateStricter')?.pages ?? 0,
+            bothClean: agreementRows.get('bothClean')?.pages ?? 0,
+          },
+          // Example ids for the three cells worth reading; `bothClean` is the
+          // corpus and its ids say nothing.
+          agreementRows: rows(agreementRows).filter((row) => row.key !== 'bothClean'),
+          reasons: rows(gateReasons),
+        },
         failures: rows(failures),
         taglessPages: rows(tagless),
       };

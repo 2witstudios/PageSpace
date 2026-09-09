@@ -5,10 +5,7 @@
   "engines": {
     "node": ">=22"
   },
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ],
+  "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "dev": "turbo dev --filter=!control-plane",
     "dev:atlas": "bun run --filter 'atlas' dev",

@@ -1,7 +1,11 @@
 import { pmDocToYDoc, yDocToPmDoc } from '@pagespace/editor/collab-document';
 import type { DomWorkspace } from '@pagespace/editor/dom-workspace';
-import { describeHtmlLoss, parseHtmlElementUnchecked } from '@pagespace/editor/html-to-ydoc';
-import { pmDocToHtml } from '@pagespace/editor/y-doc-to-html';
+import {
+  describeParseLoss,
+  parseHtmlElementUnchecked,
+  stripNonContentElements,
+} from '@pagespace/editor/html-to-ydoc';
+import { pmDocToHtmlIn } from '@pagespace/editor/y-doc-to-html';
 import {
   ALLOWED_COSMETIC_ADDITIONS,
   constructDifference,
@@ -12,7 +16,6 @@ import {
   counterDecreases,
   isTagless,
   spaceCollapsedText,
-  stripNonContentElements,
   visibleText,
   type ContentCounts,
 } from './criteria';
@@ -82,7 +85,7 @@ export type PageAudit =
       /** `null` when both chains rendered byte-identical `h1`. */
       divergence: ChainDivergence | null;
       /**
-       * What the package's own seed gate (`describeHtmlLoss`, the check
+       * What the package's own seed gate (`describeParseLoss`, the check
        * `htmlToYDoc` throws on) says about this page, as content-free reason
        * SHAPES — `dropped <img>`, `visible text changed` — with the counts the
        * reasons carry stripped off so they tally.
@@ -96,9 +99,11 @@ export type PageAudit =
        * markup in its messages, and this runs against production user data.
        */
       status: 'failed';
-      stage: 'parse' | 'render' | 'ydoc' | 'gate';
+      stage: FailureStage;
       errorName: string;
     };
+
+export type FailureStage = 'parse' | 'render' | 'ydoc' | 'gate';
 
 type PmNode = ReturnType<typeof parseHtmlElementUnchecked>;
 
@@ -106,8 +111,8 @@ type PmNode = ReturnType<typeof parseHtmlElementUnchecked>;
  * `htmlToPmDoc` is deliberately NOT used to parse: it throws on the very
  * pages this audit exists to describe. `parseHtmlElementUnchecked` is the
  * same `DOMParser` call over the same frozen schema, minus the throw — and
- * `describeHtmlLoss` is run alongside so the gate's own verdict is still on
- * the record for every page.
+ * `describeParseLoss` is run over the same parse so the gate's own verdict is
+ * on the record for every page without parsing it twice.
  */
 function parse(root: Element): PmNode {
   return parseHtmlElementUnchecked(root as HTMLElement);
@@ -174,7 +179,7 @@ function diverge(census: Measured, seed: Measured): ChainDivergence {
 }
 
 /**
- * `describeHtmlLoss` reasons carry counts ("dropped 2 <img> element(s)",
+ * Gate reasons carry counts ("dropped 2 <img> element(s)",
  * "visible text changed (140 characters in, 120 out)"). The count is per
  * page; the SHAPE is what tallies across pages.
  */
@@ -186,13 +191,13 @@ export function gateReasonShape(reason: string): string {
 }
 
 /**
- * Runs the page. `workspace` is the run's single happy-dom window — a parse
- * per measurement, never a window per page. Errors are caught per stage so a
- * page that ProseMirror cannot parse is a row in the failure table, not the
- * end of the run.
+ * Runs the page. `workspace` is the run's single happy-dom window — every
+ * parse and every render goes through it, so a run creates one window, not
+ * five per page. Errors are caught per stage so a page that ProseMirror
+ * cannot parse is a row in the failure table, not the end of the run.
  */
 export function auditPage(html: string, workspace: DomWorkspace): PageAudit {
-  let stage: 'parse' | 'render' | 'ydoc' | 'gate' = 'parse';
+  let stage: FailureStage = 'parse';
   try {
     const sourceRoot = workspace.parse(html);
     stripNonContentElements(sourceRoot);
@@ -202,20 +207,20 @@ export function auditPage(html: string, workspace: DomWorkspace): PageAudit {
 
     // Census chain: HTML → PM → HTML, then once more for stability.
     stage = 'render';
-    const h1 = pmDocToHtml(sourceDoc);
+    const h1 = pmDocToHtmlIn(sourceDoc, workspace);
     const h1Root = workspace.parse(h1);
-    const h2 = pmDocToHtml(parse(h1Root));
+    const h2 = pmDocToHtmlIn(parse(h1Root), workspace);
     const censusRendered = measure(h1Root);
 
     // Seed chain: the same parse, through a Y.Doc and back, then once more.
     stage = 'ydoc';
-    const h1y = pmDocToHtml(throughYDoc(sourceDoc));
+    const h1y = pmDocToHtmlIn(throughYDoc(sourceDoc), workspace);
     const h1yRoot = workspace.parse(h1y);
-    const h2y = pmDocToHtml(throughYDoc(parse(h1yRoot)));
+    const h2y = pmDocToHtmlIn(throughYDoc(parse(h1yRoot)), workspace);
     const seedRendered = measure(h1yRoot);
 
     stage = 'gate';
-    const gateReasons = describeHtmlLoss(html).map(gateReasonShape);
+    const gateReasons = describeParseLoss(sourceRoot, sourceDoc).map(gateReasonShape);
 
     return {
       status: 'audited',

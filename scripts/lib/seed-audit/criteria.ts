@@ -1,3 +1,5 @@
+import { visibleCharacters } from '@pagespace/editor/html-to-ydoc';
+
 /**
  * The three seed-fidelity criteria, as pure functions over a parsed DOM.
  *
@@ -91,24 +93,6 @@ export function counterDecreases(before: ContentCounts, after: ContentCounts): s
 }
 
 /**
- * Elements the parse is *supposed* to discard: they carry no document
- * content and their text is not prose. Mirrors `NON_CONTENT_ELEMENTS` in
- * `@pagespace/editor/html-to-ydoc`, which strips the same four before the
- * seed parse — so this audit measures the text the seed path actually sees,
- * and a `<style>` block's CSS is not reported as lost prose.
- */
-export const NON_CONTENT_ELEMENTS: readonly string[] = ['script', 'style', 'noscript', 'template'];
-
-/** Removes `NON_CONTENT_ELEMENTS` from `root` in place, so every later measurement of it agrees with the seed parse. */
-export function stripNonContentElements(root: Element): void {
-  for (const tag of NON_CONTENT_ELEMENTS) {
-    for (const element of Array.from(root.querySelectorAll(tag))) {
-      element.remove();
-    }
-  }
-}
-
-/**
  * The leaf's "whitespace-collapsed `textContent`", with the collapse taken
  * all the way to zero whitespace.
  *
@@ -118,15 +102,17 @@ export function stripNonContentElements(root: Element): void {
  * `<p>a</p>\n  <p>b</p>` would read `a b` in and `ab` out, and every
  * pretty-printed document in the corpus would fail criterion 3 for a reason
  * that is not loss. Stripping all whitespace compares the sequence of visible
- * characters, which is what must not change — and is the same rule the seed
- * gate itself applies (`visibleCharacters` in `html-to-ydoc.ts`).
+ * characters, which is what must not change — and it IS the seed gate's own
+ * rule: `visibleCharacters` from `html-to-ydoc.ts`, not a copy of it. The
+ * source is measured after `stripNonContentElements` (same module) so a
+ * `<style>` block's CSS is not reported as lost prose.
  *
  * The cost is that a space vanishing BETWEEN two words is invisible here.
  * `spaceCollapsedText` exists for that: the weaker (single-space) form, whose
  * mismatches are reported as a diagnostic count, never as a verdict.
  */
 export function visibleText(root: Element): string {
-  return (root.textContent ?? '').replace(/\s+/gu, '');
+  return visibleCharacters(root.textContent ?? '');
 }
 
 /** Whitespace runs collapsed to one space and trimmed — diagnostic only; see `visibleText`. */

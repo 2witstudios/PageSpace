@@ -36,7 +36,16 @@ const TEXTLESS_CONTENT_ELEMENTS: Readonly<Record<string, string | null>> = {
  * content, and their text is not prose. Removed from the source before the
  * text comparison, or a `<style>` block's CSS reads as lost text.
  */
-const NON_CONTENT_ELEMENTS = ['script', 'style', 'noscript', 'template'];
+export const NON_CONTENT_ELEMENTS: readonly string[] = ['script', 'style', 'noscript', 'template'];
+
+/** Removes `NON_CONTENT_ELEMENTS` from `root` in place — what the seed parse sees is `root` after this. */
+export function stripNonContentElements(root: HTMLElement): void {
+  for (const tag of NON_CONTENT_ELEMENTS) {
+    for (const element of Array.from(root.querySelectorAll(tag))) {
+      element.remove();
+    }
+  }
+}
 
 /**
  * Whitespace is stripped, not normalised, before comparing text.
@@ -46,7 +55,7 @@ const NON_CONTENT_ELEMENTS = ['script', 'style', 'noscript', 'template'];
  * invariant explicitly tolerates. What must not change is the sequence of
  * visible characters.
  */
-function visibleCharacters(text: string): string {
+export function visibleCharacters(text: string): string {
   return text.replace(/\s+/gu, '');
 }
 
@@ -85,13 +94,19 @@ function parseAndDiagnose(
   workspace: DomWorkspace,
 ): { doc: PmNode; reasons: string[] } {
   const source = workspace.parse(html);
-  for (const tag of NON_CONTENT_ELEMENTS) {
-    for (const element of Array.from(source.querySelectorAll(tag))) {
-      element.remove();
-    }
-  }
-
+  stripNonContentElements(source);
   const doc = parseHtmlElementUnchecked(source);
+  return { doc, reasons: describeParseLoss(source, doc) };
+}
+
+/**
+ * The gate's verdict on an already-parsed page: what `doc` lost relative to
+ * `source` (which must already have had `stripNonContentElements` applied).
+ * Exported so a survey that has done the parse itself — the seed fidelity
+ * audit — gets the gate's OWN reasons without re-parsing the page, and can
+ * never drift from what `htmlToPmDoc` would decide.
+ */
+export function describeParseLoss(source: HTMLElement, doc: PmNode): string[] {
   const reasons: string[] = [];
 
   const sourceText = visibleCharacters(source.textContent ?? '');
@@ -115,7 +130,7 @@ function parseAndDiagnose(
     }
   }
 
-  return { doc, reasons };
+  return reasons;
 }
 
 /**

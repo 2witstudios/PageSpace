@@ -35,7 +35,9 @@ Headlines:
 | `scripts/__tests__/collab-seed-audit.test.ts` | 48 tests, incl. read-only-by-construction and no-`Promise.all` scans of every audit source |
 | `packages/editor/src/seed-fidelity.ts` | **new subpath** — `ALLOWED_COSMETIC_ADDITIONS`, `VALUE_BEARING_ATTRIBUTES`, `constructKeysOf`; extracted from the corpus test so the corpus and real documents are held to ONE allowlist |
 | `packages/editor/src/user-color.ts` | **new subpath** — `userColor(userId)` and `USER_COLOR_PALETTE` (second leaf) |
-| `packages/editor/src/html-to-ydoc.ts` | exports `parseHtmlElementUnchecked` (the parse without the gate) so the audit can see what a lossy page parses TO; `htmlToPmDoc` still throws |
+| `packages/editor/src/html-to-ydoc.ts` | exports `parseHtmlElementUnchecked` (the parse without the gate), `describeParseLoss` (the gate's verdict over an already-parsed page), `stripNonContentElements` and `visibleCharacters` — so the audit measures exactly what the gate measures instead of mirroring it; `htmlToPmDoc` still throws |
+| `packages/editor/src/y-doc-to-html.ts` | `pmDocToHtmlIn(doc, workspace)` — `pmDocToHtml` into a caller-owned window, for the audit's four renders per page |
+| `packages/editor/src/collab-schema.ts` | `djb2` extracted from `hashProjection` and shared with `userColor` (hash value unchanged) |
 | `packages/db/src/read-only-session.ts` | **moved** from `apps/web/src/lib/editor/census/` — its own docstring said "a second read-only consumer is the signal to promote it"; the census now imports `@pagespace/db/read-only-session` |
 | root `package.json` | `@pagespace/editor` as a workspace devDependency (root scripts could not resolve it), and `bun run collab:seed-audit` |
 
@@ -92,8 +94,8 @@ could not process, makes the run BLOCKED and the exit code 1. No thresholds anyw
   divergence, 0 failures, correct skip of the FOLDER and the markdown page. `--limit 3` → 3 pages,
   exit 1. `--limit x` → refused. Database dropped afterwards.
 - **Scale**: the local `pagespace_test` database (1,501 DOCUMENT pages, all tagless test
-  fixtures) — 6.0 s wall, PASS with the tagless NOTE in the header, exit 0. Extrapolated, the
-  production corpus is well under a minute.
+  fixtures) — 1.2 s wall (6.0 s before the `/simplify` pass below), PASS with the tagless NOTE in
+  the header, exit 0. Extrapolated, the production corpus is well under a minute.
 - **Read-only**: `SET default_transaction_read_only = on` on every connection, read back with
   `SHOW` before the first `select`; a test asserts that ordering in the source, and another scans
   every audit module for `insert`/`update`/`delete`/`transaction`/DDL keywords and the script for
@@ -113,7 +115,47 @@ touch, and the known knip-in-a-pu-worktree phantom.** If CI's knip is red on tho
 are pre-existing on master; if it is red on anything under `scripts/` or `packages/editor`, that is
 mine.
 
-### Mutation sweep — 33 mutations, 0 survivors
+### `/simplify` pass (after the first push)
+
+Four review agents (reuse, simplification, efficiency, altitude). Applied:
+
+- **One DOM window per run, not five per page.** `pmDocToHtml` and `describeHtmlLoss` each opened
+  a fresh happy-dom `Window` (~2 ms, ~0.26 MB, not collectable until the event loop turns — ~260 MB
+  of transient heap per 200-page batch). The package now exports `pmDocToHtmlIn(doc, workspace)`
+  and `describeParseLoss(source, doc)`; the audit renders and judges through its single workspace,
+  and the gate stage no longer re-parses the page. Scale run: 6.0 s → 1.2 s over 1,501 pages; the
+  seeded-fixture report is byte-identical before and after.
+- **No mirrored constants.** `criteria.ts` imported `visibleCharacters`/`stripNonContentElements`
+  from `html-to-ydoc.ts` instead of carrying copies "that mirror" them — the audit now cannot drift
+  from what the gate sees.
+- **Printability lives beside the value-bearing list.** `PRINTABLE_ATTRIBUTE_VALUES` and
+  `contentFreeKey` moved into `packages/editor/seed-fidelity.ts`, next to `VALUE_BEARING_ATTRIBUTES`,
+  with a package test that the printable set is a subset and that the non-printable complement is
+  exactly the prose/url/id attributes. Adding a value-bearing attribute now forces the decision in
+  the same file.
+- One `djb2` (was copied into `user-color.ts`); gate-agreement counts derived from the one tally
+  rather than kept as a second counter; `record(pageId, verdict)` instead of passing the whole
+  audit plus a chain selector; `FailureStage` named once; a `chainResult()` test helper; the
+  test-only `constructsOf` export pulled back into the test; the accidental `workspaces` reflow in
+  the root `package.json` reverted.
+
+Skipped, deliberately: sharing `main()`/the option parser/the read-only scanner with the census
+(cross-app — apps/web cannot import root `scripts/` and vice versa, and the census is documented as
+temporary); a `getReadOnlyDb()` pool with `default_transaction_read_only` as a connection option
+(right idea, but new shared pool infrastructure in `packages/db` is outside this leaf — noted as a
+follow-up); filtering markdown/empty rows in SQL (changes what `--limit` counts); moving the
+census's `HTML_ELEMENT_NAMES`-aware tagless rule and key scheme into `packages/editor` (the right
+home, but it drags the whole census module with it — `isTagless` here is the weaker
+"no element at all" rule, which counts an unescaped `<T>` in prose as HTML; flagged so the
+production tagless count is read with that in mind); the task-item `div` exclusion staying in the
+audit rather than as schema-chrome metadata in the package.
+
+Two mutations SURVIVED the first re-check after the refactor and were fixed by strengthening tests:
+deriving `bothLossy` from the wrong cell (the agreement test had one page per cell, so every count
+was 1 — now 2/1/3/4), and judging the gate over the unstripped source (no test asserted the gate's
+verdict on a `<style>` page — now it does).
+
+### Mutation sweep — 33 mutations, 0 survivors (first pass) + 12 after the refactor, 0 survivors after fixes
 
 Each mutation was applied by exact-needle replacement with the runner asserting the needle occurred
 once, the file content changed on disk, the test went red, and the file was byte-identical to the
@@ -155,6 +197,16 @@ import `@pagespace/editor` from `dist`.
 | T1 | an `INSERT` string appears in a lib module | ✔ |
 | T2 | `Promise.all` appears in the script | ✔ |
 | T3 | `assert` moved before `enforce` | ✔ |
+| U1′ | shared `djb2` loses order | ✔ |
+| E1 | `<style>` no longer stripped in the package (via scripts tests, dist rebuilt) | ✔ |
+| E2 | `visibleCharacters` collapses to a space (package, via scripts) | ✔ |
+| E3 | `describeParseLoss` never reports dropped elements (package, via scripts) | ✔ |
+| E4 | `alt` made printable in the package (via scripts) | ✔ sentinel |
+| E5 | `pmDocToHtmlIn` skips `assertProjectable` | ✔ 4 tests |
+| P6′ | blind spot counted as "gate stricter" | ✔ |
+| P9 | `bothLossy` derived from the `bothClean` tally | survived → test fixed → ✔ |
+| P10 | `bothClean` rows leak into the example table | ✔ |
+| A7 | gate judged over the unstripped source | survived → test fixed → ✔ |
 
 Honest gap: "divergence always `null`" (as opposed to flipped) would survive, because no fixture
 I could construct makes `y-prosemirror` alter a projection — every construct in the corpus and the

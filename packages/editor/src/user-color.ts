@@ -1,3 +1,5 @@
+import { djb2 } from './collab-schema.js';
+
 /**
  * One deterministic colour per user, for the avatar ring in the presence
  * roster and the `CollaborationCaret` label.
@@ -39,21 +41,7 @@ export const USER_COLOR_PALETTE: readonly string[] = [
   '#d3458c', // pink
 ];
 
-/**
- * djb2 over UTF-16 code units — the same hash `SCHEMA_HASH` uses, for the
- * same reasons: no `node:crypto` (this runs in the browser), and no
- * dependence on anything but the string. A sum of char codes would map
- * anagram ids to one colour; djb2's multiply-by-33 makes order matter.
- */
-function hashUserId(userId: string): number {
-  let hash = 5381;
-  for (let i = 0; i < userId.length; i += 1) {
-    hash = (hash * 33 + userId.charCodeAt(i)) | 0;
-  }
-  return hash >>> 0;
-}
-
 /** A palette colour, `#rrggbb`, chosen by `userId` alone. */
 export function userColor(userId: string): string {
-  return USER_COLOR_PALETTE[hashUserId(userId) % USER_COLOR_PALETTE.length];
+  return USER_COLOR_PALETTE[djb2(userId) % USER_COLOR_PALETTE.length];
 }

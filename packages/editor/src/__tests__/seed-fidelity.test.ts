@@ -21,9 +21,13 @@
 import { describe, it, expect } from 'vitest';
 import { htmlToPmDoc, describeHtmlLoss } from '../html-to-ydoc.js';
 import { pmDocToHtml } from '../y-doc-to-html.js';
+import { withDomWorkspace } from '../dom-workspace.js';
 import {
   ALLOWED_COSMETIC_ADDITIONS,
-  constructsOf,
+  PRINTABLE_ATTRIBUTE_VALUES,
+  VALUE_BEARING_ATTRIBUTES,
+  constructKeysOf,
+  contentFreeKey,
   constructDifference as difference,
 } from '../seed-fidelity.js';
 import {
@@ -31,6 +35,11 @@ import {
   CORPUS_CASES,
   corpusDocumentHtml,
 } from './support/construct-corpus.js';
+
+/** `constructKeysOf` over a markup string, in a throwaway workspace. */
+function constructsOf(html: string): Set<string> {
+  return withDomWorkspace((workspace) => constructKeysOf(workspace.parse(html)));
+}
 
 describe.each(CORPUS_CASES)(
   'seed fidelity: %s',
@@ -95,5 +104,28 @@ describe('the allowlist itself', () => {
     expect([...ALLOWED_COSMETIC_ADDITIONS].sort().filter((key) => !produced.includes(key))).toEqual(
       [],
     );
+  });
+});
+
+describe('printable attribute values', () => {
+  it('are a subset of the value-bearing attributes — a value that is never in a key needs no printability rule', () => {
+    expect([...PRINTABLE_ATTRIBUTE_VALUES].filter((name) => !VALUE_BEARING_ATTRIBUTES.has(name))).toEqual([]);
+  });
+
+  it('keep enumerations and fold prose, urls and ids back to presence', () => {
+    expect(contentFreeKey('attr:ul@data-type=taskList')).toBe('attr:ul@data-type=taskList');
+    expect(contentFreeKey('attr:td@colspan=2')).toBe('attr:td@colspan=2');
+    expect(contentFreeKey('attr:img@alt=a photo of Ada')).toBe('attr:img@alt');
+    expect(contentFreeKey('attr:a@href=https://x.test/ada-lovelace')).toBe('attr:a@href');
+    expect(contentFreeKey('attr:a@data-page-id=pg_1')).toBe('attr:a@data-page-id');
+    expect(contentFreeKey('el:img')).toBe('el:img');
+  });
+
+  it('every value-bearing attribute that is not printable is one whose value could be content or an identifier', () => {
+    // The complement is the list a reader should check when adding to either set.
+    expect([...VALUE_BEARING_ATTRIBUTES].filter((name) => !PRINTABLE_ATTRIBUTE_VALUES.has(name)).sort()).toEqual([
+      'alt', 'data-block-id', 'data-change-id', 'data-change-type', 'data-drive-id', 'data-file-id',
+      'data-page-id', 'data-role-id', 'data-user-id', 'href',
+    ]);
   });
 });

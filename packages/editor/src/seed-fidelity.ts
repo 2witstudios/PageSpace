@@ -1,5 +1,3 @@
-import { withDomWorkspace } from './dom-workspace.js';
-
 /**
  * The seed-fidelity vocabulary: markup constructs as comparable keys, and the
  * one allowlist of rewrites a pass through the frozen schema is permitted to
@@ -129,6 +127,35 @@ export const VALUE_BEARING_ATTRIBUTES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The subset of `VALUE_BEARING_ATTRIBUTES` whose values are safe to PRINT:
+ * enumerations and small integers the schema itself defines. Everything else
+ * on that list — `href`, `alt`, the `data-*-id` family — is user content or
+ * an identifier, and `contentFreeKey` folds it back to presence before a key
+ * reaches a terminal. Declared beside the list it partitions so adding a
+ * value-bearing attribute forces the printability decision in the same diff.
+ */
+export const PRINTABLE_ATTRIBUTE_VALUES: ReadonlySet<string> = new Set([
+  'data-type',
+  'data-checked',
+  'data-tight',
+  'start',
+  'colspan',
+  'rowspan',
+]);
+
+/**
+ * A construct key with any non-printable value removed. The COMPARISON must
+ * run on the valued form (`ALLOWED_COSMETIC_ADDITIONS` names
+ * `attr:a@data-drive-id=` and the `=1`/`=true` forms); only what is REPORTED
+ * from real documents goes through here.
+ */
+export function contentFreeKey(key: string): string {
+  const valued = /^(attr:[^@]+@)([^=]+)=/u.exec(key);
+  if (!valued) return key;
+  return PRINTABLE_ATTRIBUTE_VALUES.has(valued[2]) ? key : `${valued[1]}${valued[2]}`;
+}
+
+/**
  * The markup under `root` as comparable keys: `el:<tag>`,
  * `attr:<tag>@<name>`, `attr:<tag>@<name>=<value>` for the value-bearing
  * attributes, and `attr:<tag>@style:<property>` per inline CSS property.
@@ -144,7 +171,7 @@ export const VALUE_BEARING_ATTRIBUTES: ReadonlySet<string> = new Set([
  * changed alt is exactly what the corpus test has to see. `alt` is prose. A
  * consumer that PRINTS keys from real documents (`scripts/collab-seed-audit.ts`)
  * folds every value except the schema's own enumerations back to the presence
- * form before tallying; see `contentFreeKey` there.
+ * form before tallying; see `contentFreeKey` below.
  */
 export function constructKeysOf(root: Element): Set<string> {
   const keys = new Set<string>();
@@ -173,11 +200,6 @@ export function constructKeysOf(root: Element): Set<string> {
     walk(child);
   }
   return keys;
-}
-
-/** `constructKeysOf` over a markup string, in a throwaway workspace. */
-export function constructsOf(html: string): Set<string> {
-  return withDomWorkspace((workspace) => constructKeysOf(workspace.parse(html)));
 }
 
 /** Keys in `a` that `b` lacks, sorted — the "what moved" half of every comparison here. */
