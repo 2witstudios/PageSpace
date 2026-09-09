@@ -411,7 +411,7 @@ function Layout({ children }: LayoutProps) {
         */}
         <VoiceSessionBridge />
         <div
-          className="flex flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10"
+          className="app-shell-enter flex flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10"
           style={{ height: 'var(--app-height, 100dvh)' }}
           onClick={handleLayoutClick}
         >

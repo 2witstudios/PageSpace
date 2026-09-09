@@ -24,6 +24,9 @@ export default function Home() {
   return (
     <div className="lp min-h-screen bg-background">
       <JsonLd data={[webApplicationSchema, ...reviewSchemas]} />
+      {/* Entrance curtain — see landing.css. Purely decorative and inert:
+          aria-hidden, pointer-events: none, and gone after ~420ms. */}
+      <div className="lp-curtain" aria-hidden="true" />
       <SiteNavbar />
       <HeroSection />
       <TestimonialSection />
