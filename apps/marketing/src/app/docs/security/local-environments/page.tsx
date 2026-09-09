@@ -79,11 +79,16 @@ Each guarantee is followed by its exact limit.
   setting. *Limit: this controls who may ask. It does not control what your own agent read
   before it asked — see prompt injection below.*
 
-- **Running a command always needs your click.** A command is never run silently the first time.
-  The daemon freezes the exact command, working directory, environment and limits; a card in
-  the chat shows you precisely that; your machine compares your click against what it froze
-  before anything runs. A click can never run something other than what you saw. *Limit: you
-  are judging a command line, and approving it is remembered — see the next section.*
+- **By default, every command needs your click.** The starter policy the enroller writes never
+  pre-approves commands, so the first time an agent wants to run a program the daemon freezes
+  the exact command, working directory, environment and limits; a card in the chat shows you
+  precisely that; your machine compares your click against what it froze before anything
+  runs. A click can never run something other than what you saw. *Limit: this is the default
+  your enroller establishes, not a rule the daemon enforces against you. The enroller never
+  writes \`exec\` into your machine allowlist; if you edit it in yourself — \`exec\` in \`ops\`,
+  or \`allowlist\` mode with \`exec\` — commands run with no click at all. A warning at
+  \`env connect\` and \`env policy\` when that is the case is in progress and not yet shipped.
+  And you are judging a command line, and approving it is remembered — see the next section.*
 
 - **File access is confined to the folders you declared.** Every file an agent reads or writes,
   and every working directory, must resolve inside a folder in your policy file; symlinks are
@@ -93,11 +98,19 @@ Each guarantee is followed by its exact limit.
 - **Results are signed by your machine.** PageSpace verifies every result under the key it
   pinned at enrolment; a result that does not verify is never delivered to the agent.
 
-- **Revocation is immediate, both ways.** Revoking the environment in PageSpace stamps it
-  revoked, kills its connection tokens, and sends a signed revoke that makes the daemon delete
-  its key and stop. Ctrl-C or \`pagespace env disconnect\` stops it locally and kills anything it
-  started. *Limit: a "pause" that keeps the environment but stops its grants is not shipped
-  yet; today the choices are revoke, or stop the daemon.*
+- **Revocation on the server is immediate; on the machine it is best-effort.** Revoking the
+  environment in PageSpace stamps the row revoked, revokes every connection token, closes the
+  live socket, and refuses to sign any further request — all at once, whether or not the
+  machine is reachable. If the daemon is connected to that server at that moment it also
+  receives a signed revoke, verifies it, deletes its key and stops. *Limit: if the daemon is
+  offline, or connected to a different server replica, that frame is never delivered. The
+  machine then keeps its key, and a running daemon keeps trying to reconnect and is refused
+  every time, forever, because the server treats the enrollment as revoked. The key on the
+  machine is inert — it can no longer obtain a connection — but it is still on the machine
+  until you run \`pagespace env disconnect\` and remove the credential yourself.* Ctrl-C or
+  \`pagespace env disconnect\` stops the daemon locally and kills anything it started. A
+  "pause" that keeps the environment but stops its grants is not shipped yet; today the choices
+  are revoke, or stop the daemon.
 
 - **Every decision is logged on your machine.** One line per request, allowed or refused, keyed
   by the request id, in \`~/.pagespace/env-audit.jsonl\`. *Limit: if that write fails, the
@@ -121,8 +134,13 @@ line, every program it names — for the time you choose: once, until the daemon
 chat tomorrow with no prompt, and does not let \`rm\` run. Approving a shell or an interpreter as
 a program approves everything that shell or interpreter can do. A command line whose programs
 cannot be pinned down (\`$(…)\`, \`eval\`, a nested \`sh -c\`, \`find -exec\`, \`sudo\`) is never
-remembered and asks every time. Approvals live on your machine; PageSpace can revoke one and can never add one (the revoke
-API exists today; the settings page that lists approvals is in progress).
+remembered and asks every time. Approvals live on your machine, in \`~/.pagespace/env-approvals.json\`, and PageSpace can
+never add one. To withdraw one today: delete its entry from that file (the daemon re-reads the
+file at every decision, so the change takes effect on the next request; keep the file owned by
+you and readable by you alone, or the daemon ignores it entirely), or restart the daemon to
+drop the ones scoped "until the daemon stops". There is no \`pagespace env\` subcommand for this
+yet and no settings page that lists approvals; a DELETE API exists for an approval whose id you
+already know (the id shown on the chat card).
 
 **Content other people wrote can steer your agent onto your machine.** On a shared drive, every
 page, comment and message is written by other people, and your agent reads them. Text aimed at
@@ -161,8 +179,9 @@ what stand in for the sandbox until one exists. They are real. They are not a sa
 - Leave "Run commands" off unless you need it. File work runs without it.
 - Keep your policy's \`principals\` to yourself, and keep \`ops\` and \`roots\` narrow.
 - Approve programs, not shells or interpreters, and pick the shortest scope that does the job.
-- Stop the daemon when you are not using it, revoke approvals you no longer need, and read
-  \`~/.pagespace/env-audit.jsonl\` when you want to know what actually ran.
+- Stop the daemon when you are not using it, remove approvals you no longer need from
+  \`~/.pagespace/env-approvals.json\`, and read \`~/.pagespace/env-audit.jsonl\` when you want
+  to know what actually ran.
 - If anything looks wrong, revoke the environment: the machine's key is deleted and the daemon
   stops.
 
