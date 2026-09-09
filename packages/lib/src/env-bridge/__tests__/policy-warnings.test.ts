@@ -21,12 +21,13 @@ describe('policyWarnings', () => {
     expect(warnings[0]!.message).toMatch(/remove exec from ops/);
   });
 
-  it.each([
-    ['ask mode with exec (every exec still asks)', { ...base, mode: 'ask' as const, ops: ['exec'] }],
-    ['deny mode with exec (nothing runs)', { ...base, mode: 'deny' as const, ops: ['exec'] }],
+  const quiet: Array<[string, Pick<MachinePolicy, 'mode' | 'ops' | 'principals'>]> = [
+    ['ask mode with exec (every exec still asks)', { ...base, mode: 'ask', ops: ['exec'] }],
+    ['deny mode with exec (nothing runs)', { ...base, mode: 'deny', ops: ['exec'] }],
     ['allowlist without exec (the scaffold)', { ...base, ops: ['fs_read', 'fs_write'] }],
     ['allowlist with no ops', { ...base, ops: [] }],
-  ])('given %s, should say nothing', (_label, policy) => {
+  ];
+  it.each(quiet)('given %s, should say nothing', (_label, policy) => {
     expect(policyWarnings(policy)).toEqual([]);
   });
 
