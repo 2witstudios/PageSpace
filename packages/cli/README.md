@@ -244,6 +244,22 @@ second surprises people:
   PageSpace can revoke one (from the environment's settings, over a signed frame the daemon checks
   against its pinned key) but never add one.
 
+**A file write can become a command.** `fs_write` inside your roots runs without a prompt, because
+writing a file looks like the harmless half of this. It is not: a file's *contents* can be a
+command that something else runs later. Writing `.git/hooks/pre-commit` and making it executable
+means your next ordinary `git commit` runs it, as you, with no approval anywhere. So a write the
+daemon can recognise as one of those — anything inside `.git/`, `.hg/` or `.svn/`; a shell startup
+file; a `Makefile`, `justfile` or `.vscode/tasks.json`; a package manifest like `package.json` or
+`Cargo.toml`; a CI config; `.pre-commit-config.yaml`, `.gitattributes` or `conftest.py`; or *any*
+file being given an executable bit — stops and asks you, in this terminal or on the chat card,
+naming the file and why. Approving one covers **that file**, never the whole root. Ordinary writes
+are unaffected and still run without a prompt.
+
+Know the limit of that, because it is a real one: **the list can never be complete.** A write to
+ordinary source code that you later build or run is still a command, and no list of filenames
+catches it. This raises the cost of the obvious attack and puts you in front of it; it is not a
+boundary. Only operating-system sandboxing would be, and this daemon does not do that.
+
 The `roots` in your policy file confine the paths an agent can **name** — the working directory it
 asks for, and the files it asks to read or write. They do **not** confine what a program does once
 it has started. A command approved with a working directory inside a root can still read
@@ -424,7 +440,10 @@ run commands as you.
 - `roots` — absolute directories every working directory and every file path must resolve inside
   (symlinks are resolved; `..` is refused). Roots confine the paths an agent can *name*. They do
   not confine a command once it is running: an approved `exec` with its cwd inside a root still
-  runs as you and can read anything you can read. See "What you are agreeing to" above.
+  runs as you and can read anything you can read. See "What you are agreeing to" above. A root
+  that is your **home directory** — or any directory above it — covers `~/.ssh`, your shell
+  startup files and every project at once; `enroll`, `connect` and `pagespace env policy` all say
+  so out loud, and honour it anyway: it is your machine. Name the project directories you meant.
 - `envAllowlist` — environment variable names the server may set for a command. Loader and
   interpreter hooks (`LD_*`, `DYLD_*`, `PATH`, `NODE_OPTIONS`, …) are refused even if listed.
 - `maxBytes` / `maxTimeoutMs` — caps on captured output and wall-clock per command; a request that

@@ -7,6 +7,30 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Local Environments: a file write that could become a command now asks you first (opt-in).**
+  Writing files inside the folders you declared runs without a prompt, because that is the point
+  of declaring them. But a file's contents can be a command something else runs later: a
+  `.git/hooks/pre-commit` file, made executable, runs at your next `git commit`, as you, with no
+  approval anywhere. So a write your machine recognises as one of those — inside `.git/`, `.hg/`
+  or `.svn/`; a shell startup file; a `Makefile`, `justfile` or `.vscode/tasks.json`; a package
+  manifest like `package.json` or `Cargo.toml`; a CI config; `.pre-commit-config.yaml`,
+  `.gitattributes` or `conftest.py`; or *any* file being given an executable bit — now stops and
+  asks you on the same approval card commands use, naming the file and why. Nothing is written
+  until you click, approving one covers that **file** rather than the whole folder, and ordinary
+  writes are unaffected. Setuid, setgid and sticky modes are refused outright rather than put in
+  front of you, and one write can no longer carry an unbounded number of files. Be clear about
+  the limit: this list can never be complete — a write to ordinary source code you later build or
+  run is still a command — so it raises the cost of the obvious attack and puts you in front of
+  it, and it is not a sandbox.
+- **Local Environments: your machine's audit log now says which files were touched**, on both
+  allowed and refused file operations, so `~/.pagespace/env-audit.jsonl` can answer "what did it
+  write" and not only "what was allowed".
+- **Local Environments: enrolling from your home directory now says so, loudly.** The starter
+  policy uses the directory you ran `pagespace env enroll` in, so enrolling from `$HOME` scopes an
+  agent to `~/.ssh`, your shell startup files and every project at once. `enroll`, `pagespace env
+  connect` and `pagespace env policy` all warn, naming the consequence and how to narrow it — and
+  honour it anyway: it is your machine.
+
 - **Local Environments: you can see what your computer is doing, and you can stop it (opt-in).**
   Every request PageSpace signs for a local Environment — and every one it refuses — is now
   recorded on the server under the same id the machine writes to its own audit log, so the two
