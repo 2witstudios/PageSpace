@@ -122,7 +122,6 @@ export const directMessageAttachments = pgTable('direct_message_attachments', {
   messagePositionIdx: uniqueIndex('direct_message_attachments_message_position_idx').on(table.messageId, table.position),
   fileIdx: index('direct_message_attachments_file_id_idx').on(table.fileId),
   positionRange: check('direct_message_attachments_position_range', sql`${table.position} >= 0 AND ${table.position} < 10`),
-  notEmpty: check('direct_message_attachments_not_empty', sql`${table.fileId} IS NOT NULL OR ${table.attachmentMeta} IS NOT NULL`),
 }));
 
 export const directMessageAttachmentsRelations = relations(directMessageAttachments, ({ one }) => ({

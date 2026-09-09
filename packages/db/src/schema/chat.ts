@@ -103,6 +103,15 @@ export const channelMessagesRelations = relations(channelMessages, ({ one, many 
  * `fileId` is SET NULL rather than CASCADE so a hard file delete leaves the row
  * (and its `attachmentMeta`) behind: the message keeps rendering, one tile
  * short, exactly as the legacy single-attachment columns behave today.
+ *
+ * There is deliberately NO `CHECK (fileId IS NOT NULL OR attachmentMeta IS NOT
+ * NULL)`. A legacy row can carry a fileId with a null `attachmentMeta` (the
+ * channel route never validated the pair), and the backfill copies it as-is —
+ * so such a check would be satisfied only by the fileId. Deleting that file
+ * then performs the SET NULL as an UPDATE, which re-evaluates the CHECK, fails
+ * it, and aborts the DELETE on `files`. Guarding against a degenerate empty row
+ * is not worth making file deletion fail; `getAttachments` already ignores an
+ * attachment with no fileId to render.
  */
 export const channelMessageAttachments = pgTable('channel_message_attachments', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -122,7 +131,6 @@ export const channelMessageAttachments = pgTable('channel_message_attachments', 
   messagePositionIdx: uniqueIndex('channel_message_attachments_message_position_idx').on(table.messageId, table.position),
   fileIdx: index('channel_message_attachments_file_id_idx').on(table.fileId),
   positionRange: check('channel_message_attachments_position_range', sql`${table.position} >= 0 AND ${table.position} < 10`),
-  notEmpty: check('channel_message_attachments_not_empty', sql`${table.fileId} IS NOT NULL OR ${table.attachmentMeta} IS NOT NULL`),
 }));
 
 export const channelMessageAttachmentsRelations = relations(channelMessageAttachments, ({ one }) => ({

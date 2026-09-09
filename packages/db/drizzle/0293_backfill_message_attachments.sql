@@ -24,9 +24,13 @@
 -- A replay also self-heals, picking up any row an old pod wrote to the legacy
 -- columns after this first ran.
 --
--- attachmentMeta is copied as-is, including NULL: the not_empty CHECK only
--- requires one of (fileId, attachmentMeta), and attachment-utils already falls
--- back to the joined files row for mimeType/size.
+-- attachmentMeta is copied as-is, including NULL. The backfill must not invent
+-- metadata it does not have, and attachment-utils already falls back to the
+-- joined files row for mimeType/size. This is also why the attachment tables
+-- carry no `fileId IS NOT NULL OR attachmentMeta IS NOT NULL` CHECK: a row
+-- backfilled from a fileId with no meta would satisfy such a check only by the
+-- fileId, and the ON DELETE SET NULL that follows a hard file delete would then
+-- fail it and abort the delete.
 INSERT INTO "channel_message_attachments" ("id", "messageId", "fileId", "attachmentMeta", "position", "createdAt")
 SELECT 'legacy_' || cm."id", cm."id", cm."fileId", cm."attachmentMeta", 0, cm."createdAt"
 FROM "channel_messages" cm

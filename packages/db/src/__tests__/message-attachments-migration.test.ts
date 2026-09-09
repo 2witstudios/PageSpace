@@ -25,39 +25,53 @@ const stripComments = (sql: string) =>
     .filter((line) => !line.trimStart().startsWith('--'))
     .join('\n');
 
-const ddl = stripComments(read('0292_absurd_living_mummy.sql'));
+const ddl = stripComments(read('0292_cold_the_phantom.sql'));
 const backfill = read('0293_backfill_message_attachments.sql');
 const backfillCode = stripComments(backfill);
 
 const TABLES = ['channel_message_attachments', 'direct_message_attachments'] as const;
+
+/**
+ * Just the statements that mention one table, so a per-table assertion cannot
+ * be satisfied by the OTHER table's DDL. The two CREATE TABLEs are separate
+ * statements, and searching all of `ddl` for `"position"` or `< 10` would pass
+ * on a migration that dropped the column or the CHECK from one of them.
+ */
+const ddlFor = (table: string) =>
+  ddl
+    .split('--> statement-breakpoint')
+    .filter((statement) => statement.includes(`"${table}"`))
+    .join('\n');
 
 describe('0292 multi-attachment DDL', () => {
   it('should be registered in the journal', () => {
     const journal = JSON.parse(
       readFileSync(path.join(DRIZZLE_DIR, 'meta/_journal.json'), 'utf8'),
     ) as { entries: Array<{ idx: number; tag: string }> };
-    expect(journal.entries.find((e) => e.idx === 292)?.tag).toBe('0292_absurd_living_mummy');
+    expect(journal.entries.find((e) => e.idx === 292)?.tag).toBe('0292_cold_the_phantom');
     expect(journal.entries.find((e) => e.idx === 293)?.tag).toBe(
       '0293_backfill_message_attachments',
     );
   });
 
   for (const table of TABLES) {
+    const tableDdl = ddlFor(table);
+
     it(`should create ${table} with the columns the repositories read`, () => {
-      expect(ddl).toContain(`CREATE TABLE "${table}"`);
+      expect(tableDdl).toContain(`CREATE TABLE "${table}"`);
       for (const column of ['id', 'messageId', 'fileId', 'attachmentMeta', 'position', 'createdAt']) {
-        expect(ddl).toContain(`"${column}"`);
+        expect(tableDdl).toContain(`"${column}"`);
       }
     });
 
     it(`should cascade ${table} from its message and SET NULL from its file`, () => {
       // Cascade: deleting a message takes its attachments with it.
-      expect(ddl).toMatch(
+      expect(tableDdl).toMatch(
         new RegExp(`ALTER TABLE "${table}"[\\s\\S]*?FOREIGN KEY \\("messageId"\\)[\\s\\S]*?ON DELETE cascade`),
       );
       // SET NULL, not cascade: a hard file delete must leave the row (and its
       // meta) behind so the message keeps rendering, one tile short.
-      expect(ddl).toMatch(
+      expect(tableDdl).toMatch(
         new RegExp(`ALTER TABLE "${table}"[\\s\\S]*?FOREIGN KEY \\("fileId"\\)[\\s\\S]*?ON DELETE set null`),
       );
     });
@@ -66,19 +80,25 @@ describe('0292 multi-attachment DDL', () => {
       // The CHECK and the unique index together are the cap — no trigger, no
       // counter column. MAX_MESSAGE_ATTACHMENTS in @pagespace/lib must agree;
       // attachment-cap.test.ts pins that side.
-      expect(ddl).toContain(`CONSTRAINT "${table}_position_range" CHECK`);
-      expect(ddl).toContain('< 10');
-      expect(ddl).toContain(
+      expect(tableDdl).toContain(`CONSTRAINT "${table}_position_range" CHECK`);
+      expect(tableDdl).toContain('< 10');
+      expect(tableDdl).toContain(
         `CREATE UNIQUE INDEX "${table}_message_position_idx" ON "${table}" USING btree ("messageId","position")`,
       );
     });
 
     it(`should index ${table} by fileId for the orphan and purge checks`, () => {
-      expect(ddl).toContain(`CREATE INDEX "${table}_file_id_idx"`);
+      expect(tableDdl).toContain(`CREATE INDEX "${table}_file_id_idx"`);
     });
 
-    it(`should reject a ${table} row carrying neither a file nor its metadata`, () => {
-      expect(ddl).toContain(`CONSTRAINT "${table}_not_empty" CHECK`);
+    it(`should NOT constrain ${table} to carry a file or metadata`, () => {
+      // A CHECK (fileId IS NOT NULL OR attachmentMeta IS NOT NULL) reads like
+      // an obvious guard and is a trap: a row backfilled from a legacy fileId
+      // with no meta satisfies it only by the fileId, so the ON DELETE SET NULL
+      // that follows a hard file delete re-evaluates the CHECK, fails it, and
+      // aborts the DELETE on `files`. Deleting a file must not depend on
+      // whether some old message recorded metadata beside it.
+      expect(tableDdl).not.toContain(`CONSTRAINT "${table}_not_empty"`);
     });
   }
 
@@ -135,10 +155,10 @@ describe('0293 attachment backfill', () => {
   });
 
   it('should copy rows carrying either a fileId or metadata, not only both', () => {
-    // The not_empty CHECK admits a row with one of the two, and a legacy row
-    // can hold a fileId with a null attachmentMeta. An AND here would silently
-    // skip those, leaving live attachments invisible to the purge's orphan
-    // check — which is what deletes the blob from S3.
+    // A legacy row can hold a fileId with a null attachmentMeta, or metadata
+    // with no surviving file. An AND here would silently skip those, leaving
+    // live attachments invisible to the purge's orphan check — which is what
+    // deletes the blob from S3.
     expect(backfillCode).toContain('cm."fileId" IS NOT NULL OR cm."attachmentMeta" IS NOT NULL');
     expect(backfillCode).toContain('dm."fileId" IS NOT NULL OR dm."attachmentMeta" IS NOT NULL');
   });

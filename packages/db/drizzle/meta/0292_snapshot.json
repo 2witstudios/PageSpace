@@ -1,5 +1,5 @@
 {
-  "id": "386f92ab-a910-4b64-be23-dcdd2b1f1c45",
+  "id": "bacd1577-68d6-471d-8c5e-21eecd837d36",
   "prevId": "f58398cf-f397-4947-9e9f-1a2e605a08c1",
   "version": "7",
   "dialect": "postgresql",
@@ -3703,10 +3703,6 @@
         "channel_message_attachments_position_range": {
           "name": "channel_message_attachments_position_range",
           "value": "\"channel_message_attachments\".\"position\" >= 0 AND \"channel_message_attachments\".\"position\" < 10"
-        },
-        "channel_message_attachments_not_empty": {
-          "name": "channel_message_attachments_not_empty",
-          "value": "\"channel_message_attachments\".\"fileId\" IS NOT NULL OR \"channel_message_attachments\".\"attachmentMeta\" IS NOT NULL"
         }
       },
       "isRLSEnabled": false
@@ -9026,10 +9022,6 @@
         "direct_message_attachments_position_range": {
           "name": "direct_message_attachments_position_range",
           "value": "\"direct_message_attachments\".\"position\" >= 0 AND \"direct_message_attachments\".\"position\" < 10"
-        },
-        "direct_message_attachments_not_empty": {
-          "name": "direct_message_attachments_not_empty",
-          "value": "\"direct_message_attachments\".\"fileId\" IS NOT NULL OR \"direct_message_attachments\".\"attachmentMeta\" IS NOT NULL"
         }
       },
       "isRLSEnabled": false

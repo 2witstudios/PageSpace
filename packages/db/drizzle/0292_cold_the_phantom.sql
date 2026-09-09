@@ -5,8 +5,7 @@ CREATE TABLE "channel_message_attachments" (
 	"attachmentMeta" jsonb,
 	"position" integer NOT NULL,
 	"createdAt" timestamp DEFAULT now() NOT NULL,
-	CONSTRAINT "channel_message_attachments_position_range" CHECK ("channel_message_attachments"."position" >= 0 AND "channel_message_attachments"."position" < 10),
-	CONSTRAINT "channel_message_attachments_not_empty" CHECK ("channel_message_attachments"."fileId" IS NOT NULL OR "channel_message_attachments"."attachmentMeta" IS NOT NULL)
+	CONSTRAINT "channel_message_attachments_position_range" CHECK ("channel_message_attachments"."position" >= 0 AND "channel_message_attachments"."position" < 10)
 );
 --> statement-breakpoint
 CREATE TABLE "direct_message_attachments" (
@@ -16,8 +15,7 @@ CREATE TABLE "direct_message_attachments" (
 	"attachmentMeta" jsonb,
 	"position" integer NOT NULL,
 	"createdAt" timestamp DEFAULT now() NOT NULL,
-	CONSTRAINT "direct_message_attachments_position_range" CHECK ("direct_message_attachments"."position" >= 0 AND "direct_message_attachments"."position" < 10),
-	CONSTRAINT "direct_message_attachments_not_empty" CHECK ("direct_message_attachments"."fileId" IS NOT NULL OR "direct_message_attachments"."attachmentMeta" IS NOT NULL)
+	CONSTRAINT "direct_message_attachments_position_range" CHECK ("direct_message_attachments"."position" >= 0 AND "direct_message_attachments"."position" < 10)
 );
 --> statement-breakpoint
 ALTER TABLE "channel_message_attachments" ADD CONSTRAINT "channel_message_attachments_messageId_channel_messages_id_fk" FOREIGN KEY ("messageId") REFERENCES "public"."channel_messages"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
