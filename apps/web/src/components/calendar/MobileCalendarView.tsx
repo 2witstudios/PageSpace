@@ -44,6 +44,7 @@ import {
   getEventsForDay,
   getTasksForDay,
   resolveEventColor,
+  resolveSwipeDirection,
   TASK_OVERLAY_STYLE,
   isToday,
 } from './calendar-types';
@@ -118,9 +119,14 @@ export function MobileCalendarView({
   const [mobileView, setMobileView] = useState<MobileViewMode>('day');
   const [isMonthPickerOpen, setIsMonthPickerOpen] = useState(false);
 
-  // Touch handling for swipe navigation
-  const touchStartX = useRef<number | null>(null);
-  const touchEndX = useRef<number | null>(null);
+  // Touch handling for swipe navigation. One ref, not two, so a reset can never
+  // be partial -- a stale end-X used to replay the previous gesture on a tap.
+  const touchRef = useRef<{
+    startX: number;
+    startY: number;
+    lastX: number;
+    lastY: number;
+  } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Handle date selection from week strip
@@ -148,43 +154,40 @@ export function MobileCalendarView({
 
   // Swipe to change day
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    touchStartX.current = e.touches[0].clientX;
+    const touch = e.touches[0];
+    touchRef.current = {
+      startX: touch.clientX,
+      startY: touch.clientY,
+      lastX: touch.clientX,
+      lastY: touch.clientY,
+    };
   }, []);
 
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    touchEndX.current = e.touches[0].clientX;
+    if (!touchRef.current) return;
+    const touch = e.touches[0];
+    touchRef.current.lastX = touch.clientX;
+    touchRef.current.lastY = touch.clientY;
   }, []);
 
   const handleTouchEnd = useCallback(() => {
-    if (touchStartX.current === null || touchEndX.current === null) return;
+    const gesture = touchRef.current;
+    touchRef.current = null;
+    if (!gesture) return;
 
-    const diff = touchStartX.current - touchEndX.current;
-    const minSwipeDistance = 50;
+    const direction = resolveSwipeDirection({
+      dx: gesture.startX - gesture.lastX,
+      dy: gesture.startY - gesture.lastY,
+    });
+    if (!direction) return;
 
-    if (Math.abs(diff) > minSwipeDistance) {
-      if (diff > 0) {
-        // Swipe left - next day
-        const nextDate = addDays(selectedDate, 1);
-        setSelectedDate(nextDate);
-        // Update week if needed
-        if (!isSameDay(startOfWeek(nextDate), currentWeekStart)) {
-          setCurrentWeekStart(startOfWeek(nextDate));
-        }
-        handlers.onDateChange(nextDate);
-      } else {
-        // Swipe right - previous day
-        const prevDate = subDays(selectedDate, 1);
-        setSelectedDate(prevDate);
-        // Update week if needed
-        if (!isSameDay(startOfWeek(prevDate), currentWeekStart)) {
-          setCurrentWeekStart(startOfWeek(prevDate));
-        }
-        handlers.onDateChange(prevDate);
-      }
+    const nextDate =
+      direction === 'next' ? addDays(selectedDate, 1) : subDays(selectedDate, 1);
+    setSelectedDate(nextDate);
+    if (!isSameDay(startOfWeek(nextDate), currentWeekStart)) {
+      setCurrentWeekStart(startOfWeek(nextDate));
     }
-
-    touchStartX.current = null;
-    touchEndX.current = null;
+    handlers.onDateChange(nextDate);
   }, [selectedDate, currentWeekStart, handlers]);
 
   // Jump to today
@@ -320,10 +323,14 @@ export function MobileCalendarView({
       {/* Main content area with swipe support */}
       <div
         ref={containerRef}
-        className="flex-1 overflow-hidden"
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
+        className="flex flex-1 flex-col min-h-0 overflow-hidden touch-pan-y"
+        {...(mobileView === 'day'
+          ? {
+              onTouchStart: handleTouchStart,
+              onTouchMove: handleTouchMove,
+              onTouchEnd: handleTouchEnd,
+            }
+          : {})}
       >
         {mobileView === 'day' ? (
           <MobileDayAgenda
@@ -433,7 +440,7 @@ function MobileMonthAgenda({
   }
 
   return (
-    <div className="h-full overflow-auto">
+    <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
       <div className="p-4 space-y-4">
         {dayGroups.map((group: { date: Date; events: CalendarEvent[]; tasks: TaskWithDueDate[] }) => {
           const isTodayDate = isToday(group.date);

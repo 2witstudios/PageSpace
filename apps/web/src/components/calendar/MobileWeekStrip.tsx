@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useEffect } from 'react';
+import { useMemo } from 'react';
 import {
   startOfWeek,
   endOfWeek,
@@ -46,25 +46,12 @@ export function MobileWeekStrip({
   driveColorMap,
   context = 'drive',
 }: MobileWeekStripProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-
   // Calculate the week days
   const weekDays = useMemo(() => {
     const weekStart = startOfWeek(currentDate);
     const weekEnd = endOfWeek(currentDate);
     return eachDayOfInterval({ start: weekStart, end: weekEnd });
   }, [currentDate]);
-
-  // Scroll selected day into view on mount
-  useEffect(() => {
-    const selectedIndex = weekDays.findIndex((d) => isSameDay(d, selectedDate));
-    if (selectedIndex !== -1 && scrollRef.current) {
-      const dayElement = scrollRef.current.children[selectedIndex] as HTMLElement;
-      if (dayElement) {
-        dayElement.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-      }
-    }
-  }, [selectedDate, weekDays]);
 
   const handlePrevWeek = () => {
     onWeekChange(subWeeks(currentDate, 1));
@@ -102,10 +89,7 @@ export function MobileWeekStrip({
       </div>
 
       {/* Week days strip */}
-      <div
-        ref={scrollRef}
-        className="flex justify-around px-2 pb-3"
-      >
+      <div className="flex justify-around px-2 pb-3">
         {weekDays.map((day, index) => {
           const dayEvents = getEventsForDay(events, day);
           const dayTasks = getTasksForDay(tasks, day);
