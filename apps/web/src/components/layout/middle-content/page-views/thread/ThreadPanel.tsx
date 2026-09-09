@@ -176,6 +176,10 @@ const normalizeReply = (raw: RawReply): ThreadReply => ({
   fileId: raw.fileId ?? null,
   attachmentMeta: raw.attachmentMeta ?? null,
   file: raw.file ?? null,
+  // Both thread GETs return the attachment relation. Dropping it here would
+  // leave a multi-file reply rendering only the legacy first attachment, and
+  // a refresh would not fix it — normalization runs on the refetch too.
+  attachments: raw.attachments ?? null,
   reactions: raw.reactions ?? [],
   aiSenderName: raw.aiMeta?.senderName ?? null,
   commandExecution: raw.aiMeta?.commandExecution

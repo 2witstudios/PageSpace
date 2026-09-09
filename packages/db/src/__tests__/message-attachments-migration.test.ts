@@ -110,12 +110,28 @@ describe('0293 attachment backfill', () => {
 
   it('should be a no-op when replayed', () => {
     // The runner keys migrations by file hash, so ANY later edit re-runs this
-    // file wherever it already applied. A deterministic id plus ON CONFLICT is
-    // what keeps that replay from double-inserting.
+    // file wherever it already applied.
     expect(backfillCode).toContain("'legacy_' || cm.\"id\"");
     expect(backfillCode).toContain("'legacy_' || dm.\"id\"");
-    expect((backfillCode.match(/ON CONFLICT \("id"\) DO NOTHING/g) ?? []).length).toBe(2);
     expect(backfillCode).not.toContain('gen_random_uuid');
+  });
+
+  it('should skip messages that already have an attachment row', () => {
+    // The load-bearing half of replay safety, and NOT interchangeable with a
+    // primary-key conflict target. A message the new application wrote after
+    // this migration ran carries both the dual-written legacy columns and a
+    // real attachment row at position 0 with a cuid2 id. On replay the id
+    // would not collide, but the (messageId, position) unique index would, and
+    // ON CONFLICT ("id") does not suppress that — the migration would abort.
+    expect(backfillCode).toContain(
+      'NOT EXISTS (\n    SELECT 1 FROM "channel_message_attachments" a WHERE a."messageId" = cm."id"\n  )',
+    );
+    expect(backfillCode).toContain(
+      'NOT EXISTS (\n    SELECT 1 FROM "direct_message_attachments" a WHERE a."messageId" = dm."id"\n  )',
+    );
+    // Untargeted, so it covers the position index too — not just the PK.
+    expect((backfillCode.match(/ON CONFLICT DO NOTHING/g) ?? []).length).toBe(2);
+    expect(backfillCode).not.toContain('ON CONFLICT ("id")');
   });
 
   it('should copy rows carrying either a fileId or metadata, not only both', () => {
