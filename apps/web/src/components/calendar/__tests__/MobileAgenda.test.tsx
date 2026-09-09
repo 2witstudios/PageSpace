@@ -2,7 +2,12 @@ import { describe, test, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { assert } from '@/stores/__tests__/riteway';
 import { MobileAgenda } from '../MobileAgenda';
-import type { CalendarEvent, CalendarEventAttendee, CalendarHandlers } from '../calendar-types';
+import type {
+  CalendarEvent,
+  CalendarEventAttendee,
+  CalendarHandlers,
+  TaskWithDueDate,
+} from '../calendar-types';
 
 // A fixed, deliberately non-today date: on today the current-time marker
 // renders into the same gutter and can collide with an asserted time.
@@ -55,16 +60,31 @@ const handlers = (): CalendarHandlers => ({
   onViewChange: vi.fn(),
 });
 
-const renderAgenda = (events: CalendarEvent[], pinnedDate: Date | null = null) =>
+const task = (overrides: Partial<TaskWithDueDate> = {}): TaskWithDueDate => ({
+  id: 'task-1',
+  title: 'Ship the agenda',
+  dueDate: new Date(2027, 2, 10, 18, 0).toISOString(),
+  status: 'pending',
+  priority: 'high',
+  taskListPageId: 'page-1',
+  driveId: 'drive-1',
+  ...overrides,
+});
+
+const renderAgenda = (
+  events: CalendarEvent[],
+  pinnedDate: Date | null = null,
+  { tasks = [], showTasks = false }: { tasks?: TaskWithDueDate[]; showTasks?: boolean } = {}
+) =>
   render(
     <MobileAgenda
       days={[DAY, OTHER_DAY]}
       selectedDate={DAY}
       pinnedDate={pinnedDate}
       events={events}
-      tasks={[]}
+      tasks={tasks}
       handlers={handlers()}
-      showTasks={false}
+      showTasks={showTasks}
       onCreateEvent={vi.fn()}
       onVisibleDateChange={vi.fn()}
     />
@@ -214,6 +234,100 @@ describe('MobileAgenda scroll container', () => {
       given: 'the agenda with events',
       should: 'give the scroller flex-1 so it fills the column',
       actual: scroller?.className.includes('flex-1'),
+      expected: true,
+    });
+  });
+});
+
+describe('MobileAgenda secondary line', () => {
+  test('location and guest count share one line', () => {
+    renderAgenda([
+      event({ location: 'Studio B', attendees: [attendee('a'), attendee('b')] }),
+    ]);
+
+    assert({
+      given: 'an event with both a location and attendees',
+      should: 'join them into a single secondary line',
+      actual: screen.getByText('Studio B · 2 guests') !== null,
+      expected: true,
+    });
+  });
+
+  test('a bare event says nothing beyond its title and times', () => {
+    renderAgenda([event({ title: 'Design review' })]);
+
+    assert({
+      given: 'an event with no location and no attendees',
+      should: 'render no secondary line for it',
+      actual: [
+        screen.queryByText(/guests/),
+        screen.queryByText(/·/),
+      ].every((node) => node === null),
+      expected: true,
+    });
+  });
+});
+
+describe('MobileAgenda tasks', () => {
+  test('tasks appear only when they are switched on', () => {
+    renderAgenda([event()], null, { tasks: [task()] });
+
+    assert({
+      given: 'tasks that are switched off',
+      should: 'not render them',
+      actual: screen.queryByText('Ship the agenda') === null,
+      expected: true,
+    });
+  });
+
+  test('a task shares the row geometry and shows its status and priority', () => {
+    renderAgenda([event()], null, { tasks: [task()], showTasks: true });
+
+    assert({
+      given: 'a task due on the day',
+      should: 'render its title',
+      actual: screen.getByText('Ship the agenda') !== null,
+      expected: true,
+    });
+
+    assert({
+      given: 'a task due at 18:00',
+      should: 'put the due time in the same gutter the events use',
+      actual: screen.getByText('18:00') !== null,
+      expected: true,
+    });
+
+    assert({
+      given: 'a high priority task',
+      should: 'name the priority',
+      actual: screen.getByText('high') !== null,
+      expected: true,
+    });
+  });
+
+  test('a completed task is struck through', () => {
+    renderAgenda([event()], null, {
+      tasks: [task({ status: 'completed' })],
+      showTasks: true,
+    });
+
+    assert({
+      given: 'a completed task',
+      should: 'strike the title through',
+      actual: screen.getByText('Ship the agenda').className.includes('line-through'),
+      expected: true,
+    });
+  });
+});
+
+describe('MobileAgenda empty window', () => {
+  test('a window with nothing in it offers to create something', () => {
+    renderAgenda([]);
+
+    assert({
+      given: 'a window with no events or tasks at all',
+      should: 'offer to create an event rather than showing an empty list',
+      actual: screen.getByRole('button', { name: /Create Event/ }) !== null,
       expected: true,
     });
   });
