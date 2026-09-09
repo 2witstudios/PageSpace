@@ -79,7 +79,7 @@ describe('0292 multi-attachment DDL', () => {
     it(`should cap ${table} cardinality in the database itself`, () => {
       // The CHECK and the unique index together are the cap — no trigger, no
       // counter column. MAX_MESSAGE_ATTACHMENTS in @pagespace/lib must agree;
-      // attachment-cap.test.ts pins that side.
+      // attachment-upload-core.test.ts pins that side.
       expect(tableDdl).toContain(`CONSTRAINT "${table}_position_range" CHECK`);
       expect(tableDdl).toContain('< 10');
       expect(tableDdl).toContain(

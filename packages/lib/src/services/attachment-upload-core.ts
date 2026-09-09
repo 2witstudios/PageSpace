@@ -25,7 +25,7 @@ import type { AttachmentMeta } from '@pagespace/db/schema/storage';
  * like page webhooks and AI tools), and the database itself — the
  * `*_position_range` CHECK plus the unique (messageId, position) index cap
  * cardinality with no trigger and no counter column. The DB literal cannot
- * import this constant, so `attachment-cap.test.ts` pins the two together;
+ * import this constant, so `attachment-upload-core.test.ts` pins the two together;
  * raising the cap means a new migration, not just editing this line.
  */
 export const MAX_MESSAGE_ATTACHMENTS = 10;
