@@ -116,13 +116,13 @@ describe('DashboardCrumb', () => {
     });
   });
 
-  describe('below sm', () => {
+  describe('narrow headers', () => {
     // jsdom applies no media queries, so this asserts the MECHANISM rather than
     // the rendered result. It is here because "the word survives, the crumb
     // goes" is a deliberate decision about the reported bug — dropping to a
-    // bare glyph on the narrowest screen would rebuild it where guessing is
-    // hardest — and nothing else in the suite would notice that being undone.
-    it('given a loaded drive, should gate only the crumb on the sm breakpoint and never the label', () => {
+    // bare glyph would rebuild it exactly where guessing is hardest — and
+    // nothing else in the suite would notice that being undone.
+    it('given a loaded drive, should gate only the crumb on the breakpoint and never the label', () => {
       atRoute('/dashboard/drive_eng/page_1', { driveId: 'drive_eng' });
       useDriveStore.setState({ drives: [buildDrive()] });
 
@@ -130,18 +130,18 @@ describe('DashboardCrumb', () => {
 
       const crumb = screen.getByText('Engineering').parentElement;
       expect(crumb?.className).toMatch(/\bhidden\b/);
-      expect(crumb?.className).toMatch(/\bsm:flex\b/);
+      expect(crumb?.className).toMatch(/\blg:flex\b/);
 
       const label = screen.getByRole('link', { name: 'Dashboard' });
       expect(label.className).not.toMatch(/\bhidden\b/);
     });
 
-    // The way OUT always shows; the you-are-here marker does not. At 390px the
-    // left group has ~146px once the trailing controls are counted, and the nav
-    // toggle plus search button claim ~88px — so a control that refuses to
-    // shrink overflows into those controls rather than tightening. The marker
-    // can afford to go because it has nowhere to navigate to; the link cannot.
-    it('given the dashboard route, should gate the you-are-here marker on sm while the link variant never hides', () => {
+    // The way OUT always shows; the you-are-here marker does not. The left
+    // group tightens as the viewport GROWS — NavButtons arrives at sm and
+    // InlineSearch at md with a 200px minimum — so a control that refuses to
+    // shrink overflows its neighbours rather than tightening. The marker can
+    // afford to go because it has nowhere to navigate to; the link cannot.
+    it('given the dashboard route, should gate the you-are-here marker while the link variant never hides', () => {
       atRoute('/dashboard');
       const { unmount } = render(<DashboardCrumb />);
       expect(screen.getByText('Dashboard').className).toMatch(/\bhidden\b/);

@@ -40,14 +40,14 @@ export default function DashboardCrumb() {
   );
 
   if (pathname === DASHBOARD_PATH) {
-    // Hidden below sm, unlike the link. This variant is orientation only —
-    // there is nowhere for it to go — so it is the one part of this control
-    // that costs phone-width header space without answering the question the
-    // control exists for. The link variant, which IS the way out, always shows.
+    // Hidden below lg, unlike the link. This variant is orientation only —
+    // there is nowhere for it to go — so it is a part of this control that can
+    // yield header space without withholding the answer the control exists to
+    // give. The link variant, which IS the way out, never hides.
     return (
       <span
         aria-current="page"
-        className="hidden h-8 shrink-0 items-center gap-2 rounded-lg bg-primary-soft px-2.5 text-sm font-semibold text-foreground sm:flex"
+        className="hidden h-8 shrink-0 items-center gap-2 rounded-lg bg-primary-soft px-2.5 text-sm font-semibold text-foreground lg:flex"
       >
         <LayoutGrid className="h-4 w-4 text-primary" aria-hidden="true" />
         Dashboard
@@ -70,21 +70,26 @@ export default function DashboardCrumb() {
       </Link>
 
       {/*
-        Context, not a destination, so it drops before the label does: at 390px
-        the left group has ~146px once the trailing controls are counted and the
-        nav toggle and search button claim ~88px, which is not room for both.
+        Context, not a destination, so it yields before the label does.
+
+        Gated at lg, and NOT at sm, which is the counter-intuitive part: this
+        group gets tighter as the viewport grows, because growing is what adds
+        its expensive occupants. NavButtons appears at sm (~72px) and
+        InlineSearch at md carrying a 200px minimum, so md is a worse place to
+        put a crumb than a phone is. lg is the first width where the group has
+        clear room for all of it.
 
         The cost is worth naming — DriveSwitcher, the only other chrome saying
-        which drive you are in, lives in the sidebar, which is a sheet on a
-        phone. So below sm the drive's name is nowhere in persistent chrome.
-        The label still wins: it is the fix for the bug this control exists for.
+        which drive you are in, lives in the sidebar, which is a sheet below lg.
+        So below lg the drive's name is nowhere in persistent chrome. The label
+        still wins: it is the fix for the bug this control exists for.
       */}
       {driveName ? (
         <>
-          <span aria-hidden="true" className="hidden px-0.5 text-sm text-muted-foreground/60 sm:inline">
+          <span aria-hidden="true" className="hidden px-0.5 text-sm text-muted-foreground/60 lg:inline">
             /
           </span>
-          <span className="hidden min-w-0 items-center gap-1.5 px-2 text-sm font-semibold text-foreground sm:flex">
+          <span className="hidden min-w-0 items-center gap-1.5 px-2 text-sm font-semibold text-foreground lg:flex">
             <Folder className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             {/*
               title + a width cap, matching content-header/Breadcrumbs.tsx: a
