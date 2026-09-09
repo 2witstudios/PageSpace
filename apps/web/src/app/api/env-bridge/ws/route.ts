@@ -386,8 +386,22 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
     // Persist lastSeenAt at most once per heartbeat window — never on every ping.
     if (now.getTime() - lastPersisted >= LOCAL_ENV_HEARTBEAT_WINDOW_MS) {
       markEnvLastSeenPersisted(client, now);
-      const recorded = await (await getDriveEnvStore()).recordHeartbeat({ envId, now });
-      if (!recorded) refuse('env_bridge_heartbeat_refused', 'enrollment no longer live', 'Environment revoked', 0.5);
+      const store = await getDriveEnvStore();
+      const recorded = await store.recordHeartbeat({ envId, now });
+      if (!recorded) {
+        refuse('env_bridge_heartbeat_refused', 'enrollment no longer live', 'Environment revoked', 0.5);
+        return;
+      }
+      // STOP reaches this replica here (GA wave 3): the owner's PATCH may
+      // have landed elsewhere, but the grants in flight live where the socket
+      // is. Once per heartbeat window — the read the heartbeat already pays
+      // for — a paused row fails them typed `paused`, well inside any exec
+      // timeout. The socket stays: Stop pauses grants, not the machine.
+      const sibling = await store.findLocalByEnvId(envId);
+      if (sibling?.pausedAt != null) {
+        const ended = getEnvBridgeClient().pauseEnv(envId);
+        if (ended > 0) dropFrame('env_bridge_paused_in_flight', { ended }, 0.1);
+      }
     }
   };
 

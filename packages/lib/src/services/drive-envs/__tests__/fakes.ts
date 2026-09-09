@@ -71,6 +71,7 @@ export function makeLocalRecord(over: Partial<DriveEnvLocalRecord> = {}): DriveE
     lastSeenAt: null,
     enrolledAt: null,
     revokedAt: null,
+    pausedAt: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...over,
@@ -216,6 +217,15 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       // CAS on `revokedAt IS NULL`: a second revoke is an answer (false), not a rewrite of the stamp.
       if (!sibling || sibling.revokedAt !== null) return false;
       local.set(envId, { ...sibling, revokedAt: at, updatedAt: at });
+      return true;
+    },
+
+    async setPaused({ envId, ownerId, paused, now: at }) {
+      const sibling = local.get(envId);
+      // The real store's CAS predicate, verbatim: owner AND not revoked; Stop keeps the first stamp.
+      if (!sibling || sibling.ownerId !== ownerId || sibling.revokedAt !== null) return false;
+      if (paused && sibling.pausedAt !== null) return true;
+      local.set(envId, { ...sibling, pausedAt: paused ? at : null, updatedAt: at });
       return true;
     },
 

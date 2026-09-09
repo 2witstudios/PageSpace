@@ -41,6 +41,10 @@ export { DRIVE_ENV_SUBSTRATES };
  *   (`admins`, `members`) were REMOVED from the CHECK in 0291 rather than
  *   hidden, so the row cannot hold them; the pure gate is `decideBind` in
  *   `env-bridge`, which denies any other value as drift.
+ * - **Stop is a stamp, not a deletion.** `pausedAt` (GA wave 3) pauses the
+ *   env's GRANTS at the signing gate (`decideSign` → `paused`) and nothing
+ *   else: identity, policy and connection survive, and Resume clears it. It
+ *   is the owner's alone, like the policy.
  * - **No stored connection status.** `connected|connecting|disconnected` is
  *   derived from `lastSeenAt` plus the live socket registry, the way an env's
  *   Sprite status is derived from its pointers — a cached status is a lie
@@ -158,6 +162,16 @@ export const driveEnvLocal = pgTable('drive_env_local', {
   enrolledAt: timestamp('enrolledAt', { mode: 'date' }),
   /** When the machine's enrollment was revoked. NULL = live. A revoked env refuses every bind and token mint. */
   revokedAt: timestamp('revokedAt', { mode: 'date' }),
+  /**
+   * STOP (GA wave 3). When the OWNER paused this environment's grants; NULL =
+   * running. While set, `decideSign` refuses every grant with the typed reason
+   * `paused` — the key stays pinned, the policy stays, the socket stays, the
+   * row stays: Resume clears it and nothing has to be re-enrolled. Written
+   * only through the owner-only compare-and-set (`setPaused`, [D-6]); drive
+   * admins keep Delete and Revoke and never get Stop. Distinct from
+   * `revokedAt`, which is terminal.
+   */
+  pausedAt: timestamp('pausedAt', { mode: 'date' }),
 
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),

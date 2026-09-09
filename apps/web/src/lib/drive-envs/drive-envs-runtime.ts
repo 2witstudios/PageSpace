@@ -42,12 +42,14 @@ import {
   localFactsFor,
   renameDriveEnv,
   setLocalEnvServerPolicy,
+  setLocalEnvPaused,
   deleteDriveEnv,
   rebuildDriveEnv,
   toDriveEnvDTO,
   type CreateDriveEnvResult,
   type RenameDriveEnvResult,
   type SetLocalEnvServerPolicyResult,
+  type SetLocalEnvPausedResult,
   type DeleteDriveEnvResult,
   type RebuildDriveEnvResult,
 } from '@pagespace/lib/services/drive-envs/drive-envs';
@@ -303,6 +305,22 @@ export async function renameEnv(input: { envId: string; name: string }): Promise
 export async function setEnvServerPolicy(input: { envId: string; requesterId: string; serverPolicy: DriveEnvServerPolicy }): Promise<SetLocalEnvServerPolicyResult> {
   const store = await getDriveEnvStore();
   return setLocalEnvServerPolicy({ envId: input.envId, requesterId: input.requesterId, serverPolicy: input.serverPolicy, deps: { store, now: () => new Date() } });
+}
+
+/**
+ * STOP / RESUME (GA wave 3): owner-only through the service's CAS; on a
+ * successful Stop, the requests in flight on THIS replica fail typed `paused`
+ * at once (other replicas learn it on their next persisted heartbeat, see the
+ * socket route). Resume needs no client action — the next grant simply signs.
+ */
+export async function setEnvPaused(input: { envId: string; requesterId: string; paused: boolean }): Promise<SetLocalEnvPausedResult> {
+  const store = await getDriveEnvStore();
+  const result = await setLocalEnvPaused({ envId: input.envId, requesterId: input.requesterId, paused: input.paused, deps: { store, now: () => new Date() } });
+  if (result.ok && result.paused) {
+    const { getEnvBridgeClient } = await import('@/lib/env-bridge/bridge-client');
+    getEnvBridgeClient().pauseEnv(input.envId);
+  }
+  return result;
 }
 
 /**

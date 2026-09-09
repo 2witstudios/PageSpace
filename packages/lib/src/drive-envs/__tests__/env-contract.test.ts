@@ -17,7 +17,7 @@ const BASE_DTO = { id: 'env_1', driveId: 'drive_1', name: 'dev', substrate: 'spr
 
 describe('drive-env contract — the substrate axis (Local Environments epic)', () => {
   describe('driveEnvDtoSchema — the local variant exposes the server policy (what PageSpace may ask the machine to do)', () => {
-    const localDto = { ...BASE_DTO, substrate: 'local', status: 'disconnected', label: 'mac', enrolled: false, ownerId: 'u1', capabilities: null };
+    const localDto = { ...BASE_DTO, substrate: 'local', status: 'disconnected', label: 'mac', enrolled: false, ownerId: 'u1', capabilities: null, paused: false };
 
     it('given a local DTO with a serverPolicy, should accept', () => {
       expect(driveEnvDtoSchema.safeParse({ ...localDto, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } }).success).toBe(true);
@@ -33,6 +33,14 @@ describe('drive-env contract — the substrate axis (Local Environments epic)', 
       expect(driveEnvDtoSchema.safeParse(noCaps).success).toBe(false);
       // A Sprite DTO never carries either.
       expect(driveEnvDtoSchema.parse(BASE_DTO)).not.toHaveProperty('ownerId');
+    });
+
+    it('carries `paused` (Stop, GA wave 3): required on the local variant, absent on a Sprite DTO', () => {
+      const policy = { ops: [], checkpoint: false };
+      const { paused: _p, ...noPaused } = { ...localDto, serverPolicy: policy };
+      expect(driveEnvDtoSchema.safeParse(noPaused).success).toBe(false);
+      expect(driveEnvDtoSchema.parse({ ...localDto, serverPolicy: policy, paused: true })).toMatchObject({ paused: true });
+      expect(driveEnvDtoSchema.parse(BASE_DTO)).not.toHaveProperty('paused');
     });
 
     it('given a local DTO WITHOUT a serverPolicy, should reject — a settings page cannot render a policy it was not given', () => {
@@ -159,11 +167,11 @@ describe('drive-env contract — the substrate axis (Local Environments epic)', 
     it('given a local env, should reject a Sprite-only status, and vice versa (the vocabularies do not mix)', () => {
       expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'running' }).success).toBe(false);
       expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'sprite', status: 'connected' }).success).toBe(false);
-      expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'connected', label: 'm', enrolled: true, serverPolicy: { ops: [], checkpoint: false }, ownerId: 'u1', capabilities: null }).success).toBe(true);
+      expect(driveEnvDtoSchema.safeParse({ ...BASE_DTO, substrate: 'local', status: 'connected', label: 'm', enrolled: true, serverPolicy: { ops: [], checkpoint: false }, ownerId: 'u1', capabilities: null, paused: false }).success).toBe(true);
     });
 
     it('given a local env DTO, should carry the label AND whether a machine has enrolled — the fact the UI needs to offer a new code only while none has', () => {
-      const dto = driveEnvDtoSchema.parse({ ...BASE_DTO, substrate: 'local', status: 'disconnected', label: 'jono-macstudio', enrolled: false, serverPolicy: { ops: [], checkpoint: false }, ownerId: 'u1', capabilities: null });
+      const dto = driveEnvDtoSchema.parse({ ...BASE_DTO, substrate: 'local', status: 'disconnected', label: 'jono-macstudio', enrolled: false, serverPolicy: { ops: [], checkpoint: false }, ownerId: 'u1', capabilities: null, paused: false });
       expect(dto.substrate).toBe('local');
       if (dto.substrate === 'local') {
         expect(dto.label).toBe('jono-macstudio');
@@ -181,6 +189,12 @@ describe('drive-env contract — the substrate axis (Local Environments epic)', 
 
     it('given just a serverPolicy, should accept (owner-only at the route)', () => {
       expect(patchDriveEnvRequestSchema.parse({ serverPolicy: { ops: ['exec', 'exec'], checkpoint: false } })).toEqual({ serverPolicy: { ops: ['exec'], checkpoint: false } });
+        // Stop / Resume (GA wave 3): a THIRD exclusive field, a boolean and nothing else.
+        expect(patchDriveEnvRequestSchema.parse({ paused: true })).toEqual({ paused: true });
+        expect(patchDriveEnvRequestSchema.parse({ paused: false })).toEqual({ paused: false });
+        expect(patchDriveEnvRequestSchema.safeParse({ paused: 'true' }).success).toBe(false);
+        expect(patchDriveEnvRequestSchema.safeParse({ paused: true, name: 'x' }).success).toBe(false);
+        expect(patchDriveEnvRequestSchema.safeParse({ paused: true, serverPolicy: { ops: [], checkpoint: false } }).success).toBe(false);
     });
 
     it('given BOTH fields, should reject — two rules cannot be answered by one status code', () => {

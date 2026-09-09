@@ -108,7 +108,7 @@ describe('EnvBridgeClient', () => {
       getSocketFacts: (ws) => facts.get(ws as FakeSocket),
       keyring: () => ({ get: keyGet as (keyId: string) => ReturnType<typeof ring.get> }),
       // Default: an enrolled, live sibling that allows every op — every existing row keeps its meaning.
-      findLocalByEnvId: async (envId) => (siblings.has(envId) ? siblings.get(envId)! : { ownerId: 'owner-1', revokedAt: null, serverPolicy: { ops: ['exec', 'fs_read', 'fs_write', 'pty_open'], checkpoint: false } }),
+      findLocalByEnvId: async (envId) => (siblings.has(envId) ? siblings.get(envId)! : { ownerId: 'owner-1', pausedAt: null, revokedAt: null, serverPolicy: { ops: ['exec', 'fs_read', 'fs_write', 'pty_open'], checkpoint: false } }),
       flagEnabled: () => flagEnabled,
       onSignRefused: (info) => signRefusals.push({ envId: info.envId, op: info.op, reason: info.reason, userId: info.principal.userId }),
       now: () => 1_760_000_000_000,
@@ -340,7 +340,7 @@ describe('EnvBridgeClient', () => {
 
     it('EXIT CRITERION — given exec is NOT in serverPolicy.ops, should reject typed server_denied, never touch the signing key, send nothing, and leave nothing pending', async () => {
       const ws = connect('env-1');
-      siblings.set('env-1', { ownerId: 'owner-1', revokedAt: null, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } });
+      siblings.set('env-1', { ownerId: 'owner-1', pausedAt: null, revokedAt: null, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } });
       const pending = client.sendGrant({ envId: 'env-1', frame: exec, principal });
       await flushPromises();
       await expect(pending).rejects.toBeInstanceOf(EnvBridgeError);
@@ -355,7 +355,7 @@ describe('EnvBridgeClient', () => {
 
     it('given the same policy, should still sign fs_read (the policy is per op, not per env)', async () => {
       const ws = connect('env-1');
-      siblings.set('env-1', { ownerId: 'owner-1', revokedAt: null, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } });
+      siblings.set('env-1', { ownerId: 'owner-1', pausedAt: null, revokedAt: null, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } });
       const pending = client.sendGrant({ envId: 'env-1', frame: { type: 'grant_fs_read', paths: ['/a'] }, principal });
       await flushPromises();
       pending.catch(() => {});
@@ -366,7 +366,7 @@ describe('EnvBridgeClient', () => {
 
     it('given the sibling is revoked, should reject server_denied with reason revoked — ahead of the policy, key untouched', async () => {
       const ws = connect('env-1');
-      siblings.set('env-1', { ownerId: 'owner-1', revokedAt: new Date(1_760_000_000_000), serverPolicy: { ops: ['exec'], checkpoint: false } });
+      siblings.set('env-1', { ownerId: 'owner-1', pausedAt: null, revokedAt: new Date(1_760_000_000_000), serverPolicy: { ops: ['exec'], checkpoint: false } });
       await expect(client.sendGrant({ envId: 'env-1', frame: exec, principal })).rejects.toMatchObject({ kind: 'server_denied', detail: { reason: 'revoked' } });
       expect(keyGet).not.toHaveBeenCalled();
       expect(ws.sent).toHaveLength(0);
@@ -390,7 +390,7 @@ describe('EnvBridgeClient', () => {
 
     it('given a stored policy the strict parser refuses (an op outside the union), should reject server_denied — drift denies', async () => {
       const ws = connect('env-1');
-      siblings.set('env-1', { ownerId: 'owner-1', revokedAt: null, serverPolicy: { ops: ['exec', 'rm_rf'], checkpoint: false } });
+      siblings.set('env-1', { ownerId: 'owner-1', pausedAt: null, revokedAt: null, serverPolicy: { ops: ['exec', 'rm_rf'], checkpoint: false } });
       await expect(client.sendGrant({ envId: 'env-1', frame: exec, principal })).rejects.toMatchObject({ kind: 'server_denied', detail: { reason: 'server_denied' } });
       expect(keyGet).not.toHaveBeenCalled();
       expect(ws.sent).toHaveLength(0);
@@ -398,13 +398,39 @@ describe('EnvBridgeClient', () => {
 
     it('given the DB backstop default {ops:[]} (a row minted without an explicit policy), should refuse every op', async () => {
       const ws = connect('env-1');
-      siblings.set('env-1', { ownerId: 'owner-1', revokedAt: null, serverPolicy: { ops: [], checkpoint: false } });
+      siblings.set('env-1', { ownerId: 'owner-1', pausedAt: null, revokedAt: null, serverPolicy: { ops: [], checkpoint: false } });
       await expect(client.sendGrant({ envId: 'env-1', frame: { type: 'grant_fs_read', paths: ['/a'] }, principal })).rejects.toMatchObject({ kind: 'server_denied' });
       expect(ws.sent).toHaveLength(0);
     });
 
+    it('GA wave 3 (Stop) — given a sibling with pausedAt set, should refuse server_denied with reason paused AHEAD of the policy, key untouched, nothing sent, and audit the refusal', async () => {
+      const ws = connect('env-1');
+      siblings.set('env-1', { ownerId: 'owner-1', pausedAt: new Date(1_760_000_000_000), revokedAt: null, serverPolicy: { ops: ['exec', 'fs_read'], checkpoint: false } });
+      await expect(client.sendGrant({ envId: 'env-1', frame: exec, principal })).rejects.toMatchObject({ kind: 'server_denied', detail: { reason: 'paused' } });
+      expect(keyGet).not.toHaveBeenCalled();
+      expect(ws.sent).toHaveLength(0);
+      expect(auditWrites).toEqual([expect.objectContaining({ kind: 'refusal', input: expect.objectContaining({ reason: 'paused' }) })]);
+    });
+
+    it("GA wave 3 (Stop) — pauseEnv fails the env's IN-FLIGHT requests with typed paused (never left to time out), records failed:paused, and leaves other envs alone", async () => {
+      const ws1 = connect('env-1');
+      const ws2 = connect('env-2');
+      const stopped = client.sendGrant({ envId: 'env-1', frame: { type: 'grant_exec', cmd: 'sleep', args: ['100'], timeoutMs: 120_000 }, principal });
+      const other = client.sendGrant({ envId: 'env-2', frame: exec, principal });
+      await flushPromises();
+      expect(ws1.sent).toHaveLength(1);
+      expect(ws2.sent).toHaveLength(1);
+      expect(client.pauseEnv('env-1')).toBe(1);
+      await expect(stopped).rejects.toMatchObject({ kind: 'paused', detail: { envId: 'env-1' } });
+      await flushPromises();
+      expect(client.pendingCountForEnv('env-1')).toBe(0);
+      expect(client.pendingCountForEnv('env-2')).toBe(1);
+      expect(auditWrites.filter((w) => w.kind === 'result').map((w) => w.input)).toEqual([expect.objectContaining({ grantId: 'g-1', verdict: 'failed:paused' })]);
+      other.catch(() => {});
+    });
+
     it('given a refusal, the gate should have run BEFORE the socket was consulted (a disconnected env still learns the policy answer)', async () => {
-      siblings.set('env-x', { ownerId: 'owner-1', revokedAt: null, serverPolicy: { ops: [], checkpoint: false } });
+      siblings.set('env-x', { ownerId: 'owner-1', pausedAt: null, revokedAt: null, serverPolicy: { ops: [], checkpoint: false } });
       await expect(client.sendGrant({ envId: 'env-x', frame: exec, principal })).rejects.toMatchObject({ kind: 'server_denied' });
     });
   });
@@ -439,7 +465,7 @@ describe('EnvBridgeClient', () => {
 
     it('given a REFUSED sign, should write a refusal row with the typed reason, the same argsHash projection, and NO grant id', async () => {
       connect('env-1');
-      siblings.set('env-1', { ownerId: 'owner-1', revokedAt: null, serverPolicy: { ops: ['fs_read'], checkpoint: false } });
+      siblings.set('env-1', { ownerId: 'owner-1', pausedAt: null, revokedAt: null, serverPolicy: { ops: ['fs_read'], checkpoint: false } });
       await expect(client.sendGrant({ envId: 'env-1', frame: exec, principal })).rejects.toMatchObject({ kind: 'server_denied' });
       expect(auditWrites).toHaveLength(1);
       const write = auditWrites[0]!;

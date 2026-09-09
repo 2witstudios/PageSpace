@@ -59,6 +59,14 @@ describe('createLocalEnvTransport', () => {
     await expect(pending).rejects.toMatchObject({ envId: ENV_ID, reason: 'server_denied' });
   });
 
+  it('GA wave 3 (Stop) — given the bridge client fails an in-flight request as paused, should reject with LocalEnvServerDeniedError reason paused (the owner stopped it; the tool names that, not a transport failure)', async () => {
+    sendGrant.mockRejectedValueOnce(new EnvBridgeError('paused', 'stopped by owner', { envId: ENV_ID }));
+    const transport = createLocalEnvTransport({ principal: PRINCIPAL });
+    const pending = transport.sendGrant({ envId: ENV_ID, frame: FRAME });
+    await expect(pending).rejects.toBeInstanceOf(LocalEnvServerDeniedError);
+    await expect(pending).rejects.toMatchObject({ envId: ENV_ID, reason: 'paused' });
+  });
+
   it('given any OTHER bridge failure (not_connected, timeout, unverified), should pass it through unchanged', async () => {
     const original = new EnvBridgeError('not_connected', 'no socket', { envId: ENV_ID });
     sendGrant.mockRejectedValueOnce(original);

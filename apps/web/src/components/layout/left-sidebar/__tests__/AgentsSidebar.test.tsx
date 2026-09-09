@@ -2572,7 +2572,7 @@ describe('AgentsSidebar', () => {
     });
     const CODE = 'ABCDEFGHJKMNPQRSTVWX';
     const expiresAt = () => new Date(Date.now() + 10 * 60 * 1000).toISOString();
-    const localEnv = { id: 'env-mac', name: 'mac', driveId: 'drive-1', substrate: 'local' as const, status: 'disconnected' as const, label: 'jono-macstudio', enrolled: false, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false }, ownerId: 'user-owner', capabilities: null };
+    const localEnv = { id: 'env-mac', name: 'mac', driveId: 'drive-1', substrate: 'local' as const, status: 'disconnected' as const, label: 'jono-macstudio', enrolled: false, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false }, ownerId: 'user-owner', capabilities: null, paused: false };
     const enableLocalEnvs = () =>
       mockUsePageAgents.mockImplementation((driveId?: string, options?: { enabled?: boolean }) => {
         const base = defaultPageAgents(driveId, options);
@@ -2858,7 +2858,7 @@ describe('AgentsSidebar', () => {
      * even asks the route, so it never fills with 403s.
      */
     describe('live activity on the row', () => {
-      const enrolledMac = (ownerId: string) => ({ id: 'env-mac', name: 'mac', status: 'connected' as const, substrate: 'local' as const, label: 'jono-macstudio', enrolled: true, ownerId, capabilities: null, serverPolicy: { ops: ['exec'], checkpoint: false } });
+      const enrolledMac = (ownerId: string) => ({ id: 'env-mac', name: 'mac', status: 'connected' as const, substrate: 'local' as const, label: 'jono-macstudio', enrolled: true, ownerId, capabilities: null, paused: false, serverPolicy: { ops: ['exec'], checkpoint: false } });
       const running = { id: 'row-1', envId: 'env-mac', grantId: 'g-1', userId: 'user-owner', sessionId: 's', conversationId: 'c', op: 'exec', summary: "exec: sh -c 'bun test'", verdict: 'signed', exitCode: null, challengeId: null, approvalScope: null, ts: '2026-09-09T12:00:00.000Z', resultAt: null };
 
       test('the machine OWNER sees "Running now" with the command under the row, read from the owner-only route', async () => {

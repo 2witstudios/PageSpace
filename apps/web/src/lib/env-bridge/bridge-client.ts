@@ -43,7 +43,7 @@ export const ASK_PENDING_PREFIX = 'ask_pending:';
  * with no server record would be exactly the silent degradation invariant 12
  * forbids, so the row comes first and its failure is the request's failure.
  */
-export type EnvBridgeFailureKind = CorrelationFailureKind | 'not_connected' | 'signing_key_unavailable' | 'ttl_too_long' | 'server_denied' | 'audit_unavailable';
+export type EnvBridgeFailureKind = CorrelationFailureKind | 'not_connected' | 'signing_key_unavailable' | 'ttl_too_long' | 'server_denied' | 'audit_unavailable' | 'paused';
 
 export class EnvBridgeError extends Error {
   constructor(
@@ -69,7 +69,7 @@ export interface EnvSocketFacts {
  * strictly here) and who to tell (`ownerId` — the audit's activity hook fires
  * under the machine OWNER's id, never the principal's; [D-6]).
  */
-export type SigningSibling = { readonly ownerId: string; readonly revokedAt: Date | null; readonly serverPolicy: unknown };
+export type SigningSibling = { readonly ownerId: string; readonly revokedAt: Date | null; readonly pausedAt: Date | null; readonly serverPolicy: unknown };
 
 /** The server-side audit writes (GA wave 3). The production store; a fake in tests. */
 export type GrantAuditWriter = Pick<GrantAuditStore, 'recordSign' | 'recordRefusal' | 'recordResult'>;
@@ -164,6 +164,8 @@ export class EnvBridgeClient {
       // as revoked, exactly as the bind gate treats it. A stored policy the
       // strict parser refuses is `null` and denies.
       envRevoked: sibling === null || sibling.revokedAt !== null,
+      // Stop (GA wave 3): the owner's pause, read fresh per grant like the policy.
+      paused: sibling !== null && sibling.pausedAt !== null,
       serverPolicy: sibling === null ? null : parseServerPolicy(sibling.serverPolicy),
       flagEnabled: this.deps.flagEnabled(),
     });
@@ -357,6 +359,17 @@ export class EnvBridgeClient {
   /** The env's live socket is gone: fail its in-flight requests with a typed `disconnected`. */
   cancelEnv(envId: string, reason = 'bridge connection lost'): number {
     return this.deps.correlator.cancelGroup(envId, new EnvBridgeError('disconnected', `Environment ${envId}: ${reason}`, { envId }));
+  }
+
+  /**
+   * STOP (GA wave 3): the owner paused the env. New grants are already
+   * refused at `decideSign`; this fails the requests IN FLIGHT on this
+   * replica with a typed `paused` — never left to time out — and their audit
+   * rows record `failed:paused`. The socket is untouched: Stop pauses grants,
+   * it does not disconnect the machine. @returns how many requests it ended.
+   */
+  pauseEnv(envId: string): number {
+    return this.deps.correlator.cancelGroup(envId, new EnvBridgeError('paused', `Environment ${envId}: stopped by its owner`, { envId }));
   }
 
   pendingCountForEnv(envId: string): number {

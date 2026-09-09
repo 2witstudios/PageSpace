@@ -65,6 +65,8 @@ vi.mock('@pagespace/lib/services/drive-envs/drive-envs', () => ({
   renameDriveEnv: vi.fn(),
   deleteDriveEnv: vi.fn(),
   toDriveEnvDTO: vi.fn(),
+  setLocalEnvServerPolicy: vi.fn(),
+  setLocalEnvPaused: vi.fn(),
   /**
    * A probe for the identity wiring: mints through the runtime's `mintToken`
    * and then exercises its `revokeToken` (the C4 compensating write) with the
@@ -83,6 +85,9 @@ vi.mock('@pagespace/lib/services/drive-envs/drive-envs', () => ({
 type RedeemDeps = import('@pagespace/lib/services/drive-envs/drive-envs').LocalEnvIdentityServiceDeps;
 
 const sessionService = vi.hoisted(() => ({ createSession: vi.fn(async () => 'tok_raw_1'), revokeSession: vi.fn(async () => {}) }));
+/** Stop (GA wave 3): the in-flight cancel the runtime must reach for on a successful pause — and only then. */
+const bridgeClient = vi.hoisted(() => ({ pauseEnv: vi.fn(() => 1) }));
+vi.mock('@/lib/env-bridge/bridge-client', () => ({ getEnvBridgeClient: () => bridgeClient }));
 vi.mock('@pagespace/lib/auth/session-service', () => ({ sessionService }));
 vi.mock('@pagespace/lib/auth/env-bridge-signing-key', () => ({
   loadServerSigningKey: () => ({ keyId: 'srv-k1', publicKey: new Uint8Array(0) }),
@@ -106,7 +111,8 @@ vi.mock('@pagespace/lib/services/drive-envs/env-provision-deps', () => ({
 
 import type { EnsureSpriteHolderSandboxResult } from '@pagespace/lib/services/agent-workspaces/agent-workspace-sprite';
 import type { ensureDriveEnvSandbox as ensureDriveEnvSandboxFn } from '@pagespace/lib/services/drive-envs/env-provision-deps';
-import { ensureEnvSandboxForSession, rebuildEnv, resolveDriveEnvPayer, redeemEnvChallenge } from '../drive-envs-runtime';
+import { ensureEnvSandboxForSession, rebuildEnv, resolveDriveEnvPayer, redeemEnvChallenge, setEnvPaused } from '../drive-envs-runtime';
+import { setLocalEnvPaused } from '@pagespace/lib/services/drive-envs/drive-envs';
 import { db } from '@pagespace/db/db';
 
 type EnsureDriveEnvSandboxInput = Parameters<typeof ensureDriveEnvSandboxFn>[0];
@@ -161,6 +167,28 @@ describe('redeemEnvChallenge — the identity wiring', () => {
       expect.objectContaining({ userId: DRIVE_OWNER_ID, resourceType: 'drive_env', resourceId: ENV_ID, driveId: DRIVE_ID, createdByService: 'env-bridge' }),
     );
     expect(sessionService.revokeSession).toHaveBeenCalledWith('tok_raw_1', 'env_bridge_revoked_during_mint');
+  });
+});
+
+describe('setEnvPaused — Stop fails this replica\'s in-flight grants at once (GA wave 3)', () => {
+  beforeEach(() => {
+    bridgeClient.pauseEnv.mockClear();
+    vi.mocked(setLocalEnvPaused).mockReset();
+  });
+
+  it('given the service pauses, should call pauseEnv for the env — the CAS first, the cancel after', async () => {
+    vi.mocked(setLocalEnvPaused).mockResolvedValue({ ok: true, paused: true });
+    expect(await setEnvPaused({ envId: ENV_ID, requesterId: 'user-owner', paused: true })).toEqual({ ok: true, paused: true });
+    expect(setLocalEnvPaused).toHaveBeenCalledWith(expect.objectContaining({ envId: ENV_ID, requesterId: 'user-owner', paused: true }));
+    expect(bridgeClient.pauseEnv).toHaveBeenCalledWith(ENV_ID);
+  });
+
+  it('given a Resume, or a refused Stop (not the owner), should cancel NOTHING', async () => {
+    vi.mocked(setLocalEnvPaused).mockResolvedValue({ ok: true, paused: false });
+    await setEnvPaused({ envId: ENV_ID, requesterId: 'user-owner', paused: false });
+    vi.mocked(setLocalEnvPaused).mockResolvedValue({ ok: false, reason: 'not_owner', ownerId: 'user-owner' });
+    expect(await setEnvPaused({ envId: ENV_ID, requesterId: 'user-admin', paused: true })).toEqual({ ok: false, reason: 'not_owner', ownerId: 'user-owner' });
+    expect(bridgeClient.pauseEnv).not.toHaveBeenCalled();
   });
 });
 

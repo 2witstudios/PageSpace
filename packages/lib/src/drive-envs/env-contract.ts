@@ -196,6 +196,13 @@ export const driveEnvDtoSchema = z.discriminatedUnion('substrate', [
      * renders. Never a permission on its own.
      */
     capabilities: z.object({ shell: z.boolean(), pty: z.boolean(), fs: z.boolean(), checkpoint: z.boolean() }).nullable(),
+    /**
+     * STOP (GA wave 3): the owner paused this environment's grants. The
+     * server refuses to sign while this is true (`paused`); the key, policy
+     * and connection are untouched, and Resume reverses it. Owner-only to
+     * change (`PATCH { paused }`).
+     */
+    paused: z.boolean(),
   }),
 ]);
 
@@ -299,18 +306,20 @@ export const localEnvEnrollmentIssueSchema = z.object({
 });
 
 /**
- * PATCH body — exactly ONE of two fields, because they answer to two rules:
- * `name` is the rename (drive owner or admin), `serverPolicy` is the OWNER-ONLY
- * write of what PageSpace may ask the machine to do ([D-6]; GA wave 1). A body
- * carrying both could not be answered with one status code without a partial
- * write, so it is refused at the boundary.
+ * PATCH body — exactly ONE of three fields, because they answer to three
+ * rules: `name` is the rename (drive owner or admin), `serverPolicy` is the
+ * OWNER-ONLY write of what PageSpace may ask the machine to do ([D-6]; GA wave
+ * 1), and `paused` is the OWNER-ONLY Stop / Resume of its grants (GA wave 3).
+ * A body carrying more than one could not be answered with one status code
+ * without a partial write, so it is refused at the boundary.
  */
 export const patchDriveEnvRequestSchema = z
   .object({
     name: driveEnvNameSchema.optional(),
     serverPolicy: driveEnvServerPolicySchema.optional(),
+    paused: z.boolean().optional(),
   })
   .strict()
-  .refine((body) => (body.name === undefined) !== (body.serverPolicy === undefined), { message: 'Exactly one of name or serverPolicy is required' });
+  .refine((body) => [body.name, body.serverPolicy, body.paused].filter((field) => field !== undefined).length === 1, { message: 'Exactly one of name, serverPolicy or paused is required' });
 
 export type PatchDriveEnvRequest = z.infer<typeof patchDriveEnvRequestSchema>;

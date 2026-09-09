@@ -27,6 +27,7 @@ vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
   renameEnv: vi.fn(),
   readEnvDTO: vi.fn(async (row: { id: string; driveId: string; name: string; substrate?: string }) => ({ id: row.id, driveId: row.driveId, name: row.name, substrate: row.substrate ?? 'sprite', status: row.substrate === 'local' ? 'disconnected' : 'none', createdAt: '2026-08-17T12:00:00.000Z' })),
   setEnvServerPolicy: vi.fn(),
+  setEnvPaused: vi.fn(),
   deleteEnv: vi.fn(),
   revokeEnv: vi.fn(),
   rebuildEnv: vi.fn(),
@@ -58,6 +59,7 @@ import {
   resolveEnvInDrive,
   revokeEnv,
   setEnvServerPolicy,
+  setEnvPaused,
   toDriveEnvDTO,
 } from '@/lib/drive-envs/drive-envs-runtime';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -320,6 +322,66 @@ describe('PATCH /envs/[envId] — serverPolicy is OWNER-ONLY (D-6: the enrolling
     const response = await patchEnv(jsonReq({ serverPolicy: POLICY }), envParams);
     expect(response.status).toBe(404);
     expect(setEnvServerPolicy).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /envs/[envId] — Stop / Resume (`paused`) is OWNER-ONLY too (GA wave 3, leaf 3; D-6: admins keep Delete, never Stop)', () => {
+  const localRow = { ...envRow, substrate: 'local' as const };
+
+  it('given the env OWNER (a plain member), Stop should pause through the service, audit `pause`, and answer the env with paused: true', async () => {
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(false);
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+    vi.mocked(setEnvPaused).mockResolvedValue({ ok: true, paused: true } as never);
+    const response = await patchEnv(jsonReq({ paused: true }), envParams);
+    expect(response.status).toBe(200);
+    expect(setEnvPaused).toHaveBeenCalledWith({ envId: ENV_ID, requesterId: USER_ID, paused: true });
+    expect(await response.json()).toMatchObject({ env: { id: ENV_ID, substrate: 'local' }, paused: true });
+    expect(setEnvServerPolicy).not.toHaveBeenCalled();
+    expect(renameEnv).not.toHaveBeenCalled();
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', userId: USER_ID, resourceType: 'drive_env', resourceId: ENV_ID, details: expect.objectContaining({ operation: 'pause', envId: ENV_ID }) }));
+  });
+
+  it('Resume audits `resume` and answers paused: false', async () => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+    vi.mocked(setEnvPaused).mockResolvedValue({ ok: true, paused: false } as never);
+    const response = await patchEnv(jsonReq({ paused: false }), envParams);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ paused: false });
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', details: expect.objectContaining({ operation: 'resume' }) }));
+  });
+
+  it('given a drive ADMIN who did not enrol the machine, should refuse 403 naming the owner, audit it, and pause nothing', async () => {
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+    vi.mocked(setEnvPaused).mockResolvedValue({ ok: false, reason: 'not_owner', ownerId: 'user-owner' } as never);
+    const response = await patchEnv(jsonReq({ paused: true }), envParams);
+    expect(response.status).toBe(403);
+    const body = (await response.json()) as { error: string; reason: string; ownerId: string };
+    expect(body).toMatchObject({ reason: 'not_owner', ownerId: 'user-owner' });
+    expect(body.error).toMatch(/owner/i);
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ operation: 'pause', ownerId: 'user-owner' }) }));
+  });
+
+  it('given a revoked env, should answer 409; given a SPRITE env, 409 not_local without calling the service', async () => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+    vi.mocked(setEnvPaused).mockResolvedValue({ ok: false, reason: 'revoked' } as never);
+    expect((await patchEnv(jsonReq({ paused: true }), envParams)).status).toBe(409);
+    vi.mocked(setEnvPaused).mockClear();
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(envRow as never);
+    const response = await patchEnv(jsonReq({ paused: true }), envParams);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ reason: 'not_local' });
+    expect(setEnvPaused).not.toHaveBeenCalled();
+  });
+
+  it('given paused alongside another field, or a non-boolean, should answer 400 and call nothing', async () => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+    for (const body of [{ paused: true, name: 'x' }, { paused: true, serverPolicy: { ops: [], checkpoint: false } }, { paused: 'yes' }]) {
+      expect((await patchEnv(jsonReq(body), envParams)).status).toBe(400);
+    }
+    expect(setEnvPaused).not.toHaveBeenCalled();
+    expect(setEnvServerPolicy).not.toHaveBeenCalled();
+    expect(renameEnv).not.toHaveBeenCalled();
   });
 });
 

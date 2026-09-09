@@ -268,6 +268,17 @@ jobs:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
+      # Stop / Resume (GA wave 3): the owner-only compare-and-set on
+      # `drive_env_local.pausedAt` — `WHERE envId AND ownerId AND revokedAt IS
+      # NULL` — is Postgres's guarantee; a fake's `===` cannot tell a correct
+      # CAS from one that silently matches nothing. Named here so it always has
+      # a runner.
+      - name: Run local-env Stop/Resume integration tests
+        run: bun run --filter '@pagespace/lib' test:db -- src/services/drive-envs/__tests__/local-env-pause.integration.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
       # The published-app claim is what stops two workers provisioning the same
       # app on Fly, and its guarantee is Postgres's: FOR UPDATE SKIP LOCKED plus
       # a claim written inside the locking transaction. A mocked test can only

@@ -73,10 +73,10 @@ function claimsFor(over: Record<string, unknown> = {}) {
   return { sessionId: 'sess-1', userId: USER, userRole: 'user', tokenVersion: 1, adminRoleVersion: 0, type: 'mcp', scopes: ['env:bridge'], expiresAt: new Date(NOW.getTime() + 3600_000), resourceType: 'drive_env', resourceId: ENV, ...over };
 }
 
-type LocalRow = { envId: string; ownerId: string; enrollmentId: string; machinePublicKey: string | null; serverKeyId: string | null; enrolledAt: Date | null; revokedAt: Date | null; serverPolicy: { ops: string[]; checkpoint: boolean } };
+type LocalRow = { envId: string; ownerId: string; enrollmentId: string; machinePublicKey: string | null; serverKeyId: string | null; enrolledAt: Date | null; revokedAt: Date | null; pausedAt: Date | null; serverPolicy: { ops: string[]; checkpoint: boolean } };
 function rowFor(over: Partial<LocalRow> = {}): LocalRow {
   // `serverPolicy` is what `sendGrant` consults (decideSign) before a frame goes out: allow every implemented op unless a row says otherwise.
-  return { envId: ENV, ownerId: USER, enrollmentId: 'enr_a', machinePublicKey: spkiB64(machine), serverKeyId: ring.current.keyId, enrolledAt: NOW, revokedAt: null, serverPolicy: { ops: ['exec', 'fs_read', 'fs_write'], checkpoint: false }, ...over };
+  return { envId: ENV, ownerId: USER, enrollmentId: 'enr_a', machinePublicKey: spkiB64(machine), serverKeyId: ring.current.keyId, enrolledAt: NOW, revokedAt: null, pausedAt: null, serverPolicy: { ops: ['exec', 'fs_read', 'fs_write'], checkpoint: false }, ...over };
 }
 
 type FakeSocket = WebSocket & { readyState: number; sent: string[]; handlers: Record<string, (...args: unknown[]) => void>; emit: (event: string, ...args: unknown[]) => void };
@@ -507,6 +507,44 @@ describe('env-bridge ws route', () => {
       pong();
       await flush();
       expect(store.recordHeartbeat).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('GA wave 3 — Stop reaches the replica that holds the socket', () => {
+    /**
+     * A PATCH `{paused:true}` lands on whichever replica served it; the grants
+     * in flight live on the replica holding the machine's socket. The heartbeat
+     * that already persists `lastSeenAt` once per window is where THIS replica
+     * re-reads the row: a `pausedAt` it finds fails the env's in-flight
+     * requests typed `paused` — bounded by the heartbeat window, well inside
+     * any exec timeout — so Stop never leaves a request to time out.
+     */
+    it("given the row was paused elsewhere, the next persisted heartbeat fails this replica's in-flight grants typed paused", async () => {
+      const ws = await connectAuthorized();
+      const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'sleep', args: ['100'], timeoutMs: 120_000 }, principal: { userId: USER, sessionId: 'sess-1', conversationId: 'conv-1' } });
+      await settleGate();
+      expect(lastSent(ws).type).toBe('grant_exec');
+      rows.set(ENV, rowFor({ pausedAt: new Date(NOW.getTime() + 1000) }));
+      await vi.advanceTimersByTimeAsync(LOCAL_ENV_HEARTBEAT_WINDOW_MS);
+      ws.emit('message', Buffer.from(encodeFrame({ type: 'pong', ts: Date.now() })));
+      await flush();
+      await settleGate();
+      await expect(pending).rejects.toMatchObject({ kind: 'paused', detail: { envId: ENV } });
+      expect(store.recordHeartbeat).toHaveBeenCalledTimes(1);
+      // The socket stays: Stop pauses grants, it does not disconnect the machine.
+      expect(ws.close).not.toHaveBeenCalled();
+    });
+
+    it('given the row is NOT paused, the heartbeat leaves in-flight grants alone', async () => {
+      const ws = await connectAuthorized();
+      const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'sleep', args: ['100'], timeoutMs: 120_000 }, principal: { userId: USER, sessionId: 'sess-1', conversationId: 'conv-1' } });
+      await settleGate();
+      await vi.advanceTimersByTimeAsync(LOCAL_ENV_HEARTBEAT_WINDOW_MS);
+      ws.emit('message', Buffer.from(encodeFrame({ type: 'pong', ts: Date.now() })));
+      await flush();
+      await settleGate();
+      expect(getEnvBridgeClient().pendingCountForEnv(ENV)).toBe(1);
+      pending.catch(() => {});
     });
   });
 
