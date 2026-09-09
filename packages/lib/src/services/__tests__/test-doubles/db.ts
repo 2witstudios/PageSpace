@@ -110,6 +110,8 @@ export const operators = {
     (row) => compare(row[col.name], value) < 0,
   gt: (col: ColumnRef, value: unknown): RowPredicate =>
     (row) => compare(row[col.name], value) > 0,
+  inArray: (col: ColumnRef, values: readonly unknown[]): RowPredicate =>
+    (row) => values.includes(row[col.name]),
   isNull: (col: ColumnRef): RowPredicate =>
     (row) => row[col.name] === null || row[col.name] === undefined,
   isNotNull: (col: ColumnRef): RowPredicate =>
@@ -204,6 +206,10 @@ function applyDefaults(table: string, row: Row): Row {
     if (!out.id && (table === 'channelMessageReactions' || table === 'dmMessageReactions')) {
       out.id = autoId();
     }
+    if (!('createdAt' in out)) out.createdAt = new Date();
+  }
+  if (table === 'channelMessageAttachments' || table === 'directMessageAttachments') {
+    if (!out.id) out.id = autoId();
     if (!('createdAt' in out)) out.createdAt = new Date();
   }
   return out;
@@ -519,6 +525,8 @@ interface QueryApi {
 
 const QUERY_TABLES = [
   'channelMessages',
+  'channelMessageAttachments',
+  'directMessageAttachments',
   'channelMessageReactions',
   'directMessages',
   'dmMessageReactions',
@@ -574,9 +582,19 @@ const isSqlJoin = (v: unknown): v is SqlJoinMarker =>
  *   DELETE FROM file_conversations fc
  *   USING (VALUES (fileId, conversationId), …) AS purged_pairs
  *   WHERE fc.fileId = pp.fileId AND fc.conversationId = pp.conversationId
+ *     AND NOT EXISTS (SELECT 1 FROM direct_message_attachments a
+ *                     JOIN direct_messages dm ON dm.id = a."messageId"
+ *                     WHERE a.fileId = fc.fileId
+ *                       AND dm.conversationId = fc.conversationId)
  *     AND NOT EXISTS (SELECT 1 FROM direct_messages dm
  *                     WHERE dm.fileId = fc.fileId
  *                       AND dm.conversationId = fc.conversationId)
+ *
+ * Both NOT EXISTS clauses matter and are mirrored below. A live message can
+ * reference a file through an attachment row while the legacy column on that
+ * row is null (anything past the first attachment), and dropping the link for
+ * one of those is the first step of a chain that ends with the orphaned-file
+ * cron deleting the blob from S3.
  *
  * Tests must observe that the orphan-link delete actually runs — without
  * this branch, dropping the entire `tx.execute` call from the impl would
@@ -616,9 +634,18 @@ function applyExecuteSideEffects(state: DbState, marker: SqlMarker): void {
       (p) => p.fileId === link.fileId && p.conversationId === link.conversationId
     );
     if (!matchedPair) continue;
-    const stillReferenced = directMessages.some(
+    const messagesById = new Map(directMessages.map((dm) => [dm.id, dm]));
+    const referencedByAttachment = state
+      .rowsRef('directMessageAttachments')
+      .some((attachment) => {
+        if (attachment.fileId !== link.fileId) return false;
+        const owner = messagesById.get(attachment.messageId as string);
+        return owner?.conversationId === link.conversationId;
+      });
+    const referencedByLegacyColumn = directMessages.some(
       (dm) => dm.fileId === link.fileId && dm.conversationId === link.conversationId
     );
+    const stillReferenced = referencedByAttachment || referencedByLegacyColumn;
     if (!stillReferenced) fileConversations.splice(i, 1);
   }
 }
@@ -840,6 +867,9 @@ export const chatSchema = {
   channelThreadFollowers: makeTable('channelThreadFollowers', [
     'rootMessageId', 'userId', 'createdAt',
   ]),
+  channelMessageAttachments: makeTable('channelMessageAttachments', [
+    'id', 'messageId', 'fileId', 'attachmentMeta', 'position', 'createdAt',
+  ]),
 };
 
 export const socialSchema = {
@@ -858,6 +888,9 @@ export const socialSchema = {
   ]),
   dmMessageReactions: makeTable('dmMessageReactions', [
     'id', 'messageId', 'userId', 'emoji', 'createdAt',
+  ]),
+  directMessageAttachments: makeTable('directMessageAttachments', [
+    'id', 'messageId', 'fileId', 'attachmentMeta', 'position', 'createdAt',
   ]),
 };
 

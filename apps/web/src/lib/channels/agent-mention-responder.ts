@@ -403,8 +403,7 @@ async function postAgentThreadReply(input: {
     pageId: input.channelId,
     userId: input.userId,
     content: input.content,
-    fileId: null,
-    attachmentMeta: null,
+    attachments: [],
     aiMeta: {
       senderType: 'agent',
       senderName: input.agent.title,

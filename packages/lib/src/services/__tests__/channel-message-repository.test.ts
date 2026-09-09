@@ -206,8 +206,7 @@ describe('channelMessageRepository.insertChannelMessageWithAttachment', () => {
     pageId: 'page-1',
     userId: 'user-1',
     content: 'hello',
-    fileId: null as string | null,
-    attachmentMeta: null,
+    attachments: [] as Array<{ fileId: string; attachmentMeta: unknown }>,
   };
 
   it('writes pageId, userId, content, fileId, and attachmentMeta verbatim', async () => {
@@ -215,8 +214,7 @@ describe('channelMessageRepository.insertChannelMessageWithAttachment', () => {
 
     const result = await channelMessageRepository.insertChannelMessageWithAttachment({
       ...baseInput,
-      fileId: 'file-1',
-      attachmentMeta: { kind: 'image' } as never,
+      attachments: [{ fileId: 'file-1', attachmentMeta: { kind: 'image' } as never }],
     });
 
     const inserted = testDbState.rows('channelMessages')[0];
@@ -259,6 +257,131 @@ describe('channelMessageRepository.insertChannelMessageWithAttachment', () => {
     });
   });
 
+  it('writes one attachment row per file, numbered by the order sent', async () => {
+    testDbState.seed('files', [{ id: 'file-1' }, { id: 'file-2' }, { id: 'file-3' }]);
+
+    const result = await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
+      attachments: [
+        { fileId: 'file-3', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+        { fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+        { fileId: 'file-2', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+      ],
+    });
+
+    const rows = testDbState.rows('channelMessageAttachments');
+    assert({
+      given: 'a three-photo send whose files are NOT in id order',
+      should: 'number them by the order the client sent — position is display order, not the order the file rows were locked in',
+      actual: {
+        kind: result.kind,
+        messageCount: testDbState.count('channelMessages'),
+        ordered: rows.map((r) => `${r.position}:${r.fileId}`),
+      },
+      expected: {
+        kind: 'ok',
+        messageCount: 1,
+        ordered: ['0:file-3', '1:file-1', '2:file-2'],
+      },
+    });
+  });
+
+  it('takes exactly one ordered file lock for a multi-file send', async () => {
+    testDbState.seed('files', [{ id: 'file-1' }, { id: 'file-2' }]);
+
+    await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
+      attachments: [
+        { fileId: 'file-2', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+        { fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+      ],
+    });
+
+    assert({
+      given: 'a send attaching two files',
+      should: 'lock them in ONE statement — a lock per file, unordered, lets two sends sharing files deadlock',
+      actual: {
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        transactionCalls: testDbState.transactionCalls(),
+      },
+      expected: { fileLocks: 1, transactionCalls: 1 },
+    });
+  });
+
+  it('mirrors the first attachment into the legacy columns', async () => {
+    testDbState.seed('files', [{ id: 'file-1' }, { id: 'file-2' }]);
+
+    await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
+      attachments: [
+        { fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+        { fileId: 'file-2', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+      ],
+    });
+
+    const inserted = testDbState.rows('channelMessages')[0];
+    assert({
+      given: 'a two-photo send',
+      should: 'still populate fileId/attachmentMeta from the first file, for readers not yet migrated off them',
+      actual: inserted.fileId,
+      expected: 'file-1',
+    });
+  });
+
+  it('rejects the whole send when any one file is missing, writing nothing', async () => {
+    testDbState.seed('files', [{ id: 'file-1' }]);
+
+    const result = await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
+      attachments: [
+        { fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+        { fileId: 'missing', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+      ],
+    });
+
+    assert({
+      given: 'a batch where one file id does not resolve',
+      should: 'reject the send atomically rather than posting a partial gallery',
+      actual: {
+        kind: result.kind,
+        messages: testDbState.count('channelMessages'),
+        attachments: testDbState.count('channelMessageAttachments'),
+      },
+      expected: { kind: 'not_found', messages: 0, attachments: 0 },
+    });
+  });
+
+  it('rejects more attachments than a message may carry, before opening a transaction', async () => {
+    const result = await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
+      attachments: Array.from({ length: 11 }, (_, i) => ({
+        fileId: `file-${i}`,
+        attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) },
+      })),
+    });
+
+    assert({
+      given: 'eleven attachments, one past the cap',
+      should: 'reject without touching the database — the DB CHECK is the last line of defense, not the first',
+      actual: { kind: result.kind, transactionCalls: testDbState.transactionCalls() },
+      expected: { kind: 'too_many_attachments', transactionCalls: 0 },
+    });
+  });
+
+  it('writes no attachment rows for a text-only message', async () => {
+    await channelMessageRepository.insertChannelMessageWithAttachment(baseInput);
+
+    assert({
+      given: 'a text-only send',
+      should: 'insert the message and no attachment rows at all',
+      actual: {
+        messages: testDbState.count('channelMessages'),
+        attachments: testDbState.count('channelMessageAttachments'),
+      },
+      expected: { messages: 1, attachments: 0 },
+    });
+  });
+
   it('persists an explicit quotedMessageId on the row when provided', async () => {
     await channelMessageRepository.insertChannelMessageWithAttachment({
       ...baseInput,
@@ -295,7 +418,7 @@ describe('channelMessageRepository.insertChannelMessageWithAttachment', () => {
 
     await channelMessageRepository.insertChannelMessageWithAttachment({
       ...baseInput,
-      fileId: 'file-1',
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
     });
 
     assert({
@@ -312,7 +435,7 @@ describe('channelMessageRepository.insertChannelMessageWithAttachment', () => {
   it('rejects with not_found and inserts nothing when the file does not exist', async () => {
     const result = await channelMessageRepository.insertChannelMessageWithAttachment({
       ...baseInput,
-      fileId: 'missing-file',
+      attachments: [{ fileId: 'missing-file', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
     });
 
     assert({
@@ -533,8 +656,7 @@ describe('channelMessageRepository.insertChannelThreadReply', () => {
     pageId: 'page-1',
     userId: 'user-replier',
     content: 'thread response',
-    fileId: null,
-    attachmentMeta: null,
+    attachments: [],
   };
 
   const seedActiveParent = (overrides: Partial<Record<string, unknown>> = {}) => {
@@ -694,8 +816,7 @@ describe('channelMessageRepository.insertChannelThreadReply', () => {
 
     const result = await channelMessageRepository.insertChannelThreadReply({
       ...baseInput,
-      fileId: 'file-1',
-      attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) },
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
     });
 
     assert({
@@ -716,8 +837,7 @@ describe('channelMessageRepository.insertChannelThreadReply', () => {
 
     const result = await channelMessageRepository.insertChannelThreadReply({
       ...baseInput,
-      fileId: 'file-1',
-      attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) },
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
       alsoSendToParent: true,
     });
 
@@ -752,7 +872,7 @@ describe('channelMessageRepository.insertChannelThreadReply', () => {
 
     const result = await channelMessageRepository.insertChannelThreadReply({
       ...baseInput,
-      fileId: 'missing-file',
+      attachments: [{ fileId: 'missing-file', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
     });
 
     assert({
