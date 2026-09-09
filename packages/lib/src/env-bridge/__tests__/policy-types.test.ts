@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseMachinePolicy, DEFAULT_MAX_BYTES, DEFAULT_MAX_TIMEOUT_MS } from '../policy-types';
+import { parseMachinePolicy, parseServerPolicy, DEFAULT_MAX_BYTES, DEFAULT_MAX_TIMEOUT_MS } from '../policy-types';
 
 const VALID = {
   mode: 'allowlist',
@@ -43,5 +43,27 @@ describe('parseMachinePolicy — the daemon policy file, parsed without trust (i
 
   it('given mode deny with no principals/ops/roots, should still parse (deny-all is a legal explicit policy)', () => {
     expect(parseMachinePolicy({ mode: 'deny', principals: [], ops: [], roots: [], envAllowlist: [] })).not.toBeNull();
+  });
+});
+
+describe('parseServerPolicy — the stored serverPolicy jsonb, trusted only when fully recognized', () => {
+  it('given a well-formed policy, should return it', () => {
+    expect(parseServerPolicy({ ops: ['exec', 'fs_read'], checkpoint: false })).toEqual({ ops: ['exec', 'fs_read'], checkpoint: false });
+  });
+
+  it('given the deny-all backstop, should return it (an empty op set is valid; decideSign is what denies on it)', () => {
+    expect(parseServerPolicy({ ops: [], checkpoint: false })).toEqual({ ops: [], checkpoint: false });
+  });
+
+  it.each([
+    ['an op outside the closed union', { ops: ['exec', 'rm_rf'], checkpoint: false }],
+    ['a missing checkpoint', { ops: ['exec'] }],
+    ['a missing ops', { checkpoint: false }],
+    ['a stray field', { ops: ['exec'], checkpoint: false, roots: ['/'] }],
+    ['a non-object', 'exec'],
+    ['null', null],
+    ['ops as a string', { ops: 'exec', checkpoint: false }],
+  ])('given %s, should return null — drift can only make the server more restrictive', (_label, input) => {
+    expect(parseServerPolicy(input)).toBeNull();
   });
 });
