@@ -70,20 +70,14 @@ export default function DashboardCrumb() {
       </Link>
 
       {/*
-        Context, not a destination — and the first thing to go when space runs
-        out. Below sm the label on the button survives and this does not.
+        Context, not a destination, so it drops before the label does: at 390px
+        the left group has ~146px once the trailing controls are counted and the
+        nav toggle and search button claim ~88px, which is not room for both.
 
-        That ordering is the whole point: the label is the fix for the bug this
-        control exists to solve, so it is the last thing to drop, while a drive
-        name is what truncates into nonsense first.
-
-        The cost is real and worth naming — DriveSwitcher, the only other chrome
-        that says which drive you are in, sits in the left sidebar, which is a
-        sheet on a phone. So below sm the drive's name is not in persistent
-        chrome at all. It is still the right trade: at 390px the left group has
-        roughly 146px once the trailing controls are counted, and the nav toggle
-        and search button claim ~88px of that, so a crumb here would not fit
-        beside the label rather than merely being tight.
+        The cost is worth naming — DriveSwitcher, the only other chrome saying
+        which drive you are in, lives in the sidebar, which is a sheet on a
+        phone. So below sm the drive's name is nowhere in persistent chrome.
+        The label still wins: it is the fix for the bug this control exists for.
       */}
       {driveName ? (
         <>
