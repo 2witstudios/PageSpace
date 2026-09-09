@@ -638,7 +638,12 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
 
     it('given a signed approval revoke, should delete exactly that approval\'s rows, audit approval_revoked:<id>:<n>, and report approval_revoked — NOT revoke_verified: the key and the enrollment stand', async () => {
       const h = revokeHarness();
-      expect(await h.dispatcher.handle(approvalRevoke('ch_1'))).toEqual({ kind: 'approval_revoked', approvalId: 'ch_1', removed: 2 });
+      const result = await h.dispatcher.handle(approvalRevoke('ch_1'));
+      expect(result).toMatchObject({ kind: 'approval_revoked', approvalId: 'ch_1', removed: 2, frame: { type: 'approval_revoke_result', approvalId: 'ch_1', removed: 2 } });
+      // Codex P2 on #2583: the ack is machine-signed over {approvalId, removed} — the server may only claim what this machine did.
+      const ack = (result as { frame: Frame }).frame;
+      expect(verified(ack)).toMatchObject({ ok: true });
+      expect(verified({ ...ack, removed: 3 } as Frame)).toEqual({ ok: false, reason: 'bad_signature' });
       expect(h.approvals.entries().map((a) => a.approvalId)).toEqual(['ch_2']);
       expect(h.audits[0]?.verdict).toBe('approval_revoked:ch_1:2');
       // The revoked program now asks again; the untouched one still runs.
@@ -648,7 +653,7 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
 
     it('given an approval revoke for an id the machine does not hold, should report 0 removed and change nothing', async () => {
       const h = revokeHarness();
-      expect(await h.dispatcher.handle(approvalRevoke('ch_nope'))).toEqual({ kind: 'approval_revoked', approvalId: 'ch_nope', removed: 0 });
+      expect(await h.dispatcher.handle(approvalRevoke('ch_nope'))).toMatchObject({ kind: 'approval_revoked', approvalId: 'ch_nope', removed: 0, frame: { type: 'approval_revoke_result', removed: 0 } });
       expect(h.approvals.entries()).toHaveLength(3);
     });
 

@@ -28,6 +28,7 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { revokeLocalDriveEnv, type RevokeLocalDriveEnvResult, type RevokeMachineNotifyOutcome } from '@pagespace/lib/services/drive-envs/local-env-revoke';
 import { logger } from '@pagespace/lib/logging/logger-config';
 import { getEnvConnection, isEnvAuthorized, unregisterEnvConnection } from '@/lib/websocket/ws-env-connections';
+import { EnvBridgeError, getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
 
 export const ENV_REVOKED_CLOSE_CODE = 1008;
@@ -153,29 +154,50 @@ export function buildApprovalRevokeFrame(input: ApprovalRevokeFrameInput, keyrin
   return { ok: true, frame: { type: 'revoke', sig, issuedAt: input.issuedAt, reason: input.reason, approvalId: input.approvalId }, keyId: key.keyId };
 }
 
-export type ApprovalRevokeOutcome = 'sent' | 'no_live_socket' | 'unauthorized_socket' | 'signing_key_unavailable' | 'send_failed';
+export type ApprovalRevokeOutcome =
+  /** The machine's SIGNED ack arrived: it deleted `removed` rows. The only outcome that proves a revoke. */
+  | { kind: 'acknowledged'; removed: number }
+  /** Sent, but no genuine ack within the deadline (or the socket dropped, or only a forged ack arrived): the machine may still hold it. */
+  | { kind: 'unacknowledged'; reason: string }
+  | { kind: 'no_live_socket' }
+  | { kind: 'unauthorized_socket' }
+  | { kind: 'signing_key_unavailable' }
+  | { kind: 'send_failed' };
+
+/** How long the server waits for the machine's ack before reporting `unacknowledged`. */
+export const APPROVAL_REVOKE_ACK_TIMEOUT_MS = 5_000;
+
+export interface ApprovalRevokeNotifyDeps extends Pick<NotifyMachineDeps, 'getConnection' | 'isAuthorized' | 'keyring'> {
+  /** Send the frame and await the machine's verified ack (production: `EnvBridgeClient.awaitApprovalRevokeAck`). */
+  awaitAck: (input: { envId: string; approvalId: string; ws: WebSocket; frame: RevokeFrame; timeoutMs: number }) => Promise<{ removed: number }>;
+  timeoutMs?: number;
+}
 
 /**
  * Push a signed approval revoke over the env's live, AUTHORIZED socket on this
- * replica. The socket stays open. Honest about reach: without a live socket the
- * machine still holds the approval — the caller must say so, not claim a
- * revoke it could not deliver (a queued retry is a follow-up; see the PR).
+ * replica and wait for the machine's SIGNED acknowledgement (Codex P2 on
+ * #2583). The socket stays open. Honest about reach: without a live socket,
+ * or without a genuine ack before the deadline, the machine may still hold
+ * the approval — the caller says so, never claiming a revoke it cannot prove.
+ * (Wave 3 mirrors approvals server-side and replays unacknowledged revokes on
+ * reconnect; this ack is what it keys on.)
  */
-export function notifyMachineOfApprovalRevoke(input: ApprovalRevokeFrameInput, deps: Pick<NotifyMachineDeps, 'getConnection' | 'isAuthorized' | 'keyring'>): ApprovalRevokeOutcome {
+export async function notifyMachineOfApprovalRevoke(input: ApprovalRevokeFrameInput, deps: ApprovalRevokeNotifyDeps): Promise<ApprovalRevokeOutcome> {
   const ws = deps.getConnection(input.envId);
-  if (!ws || (ws.readyState !== 0 && ws.readyState !== 1)) return 'no_live_socket';
-  if (!deps.isAuthorized(ws)) return 'unauthorized_socket';
+  if (!ws || (ws.readyState !== 0 && ws.readyState !== 1)) return { kind: 'no_live_socket' };
+  if (!deps.isAuthorized(ws)) return { kind: 'unauthorized_socket' };
   const built = buildApprovalRevokeFrame(input, deps.keyring());
   if (!built.ok) {
     log().error('Enrollment pinned a signing key that is no longer loaded; approval revoke not sent', { envId: input.envId, approvalId: input.approvalId, serverKeyId: input.serverKeyId, action: 'approval_revoke_key_unavailable' });
-    return 'signing_key_unavailable';
+    return { kind: 'signing_key_unavailable' };
   }
   try {
-    ws.send(encodeFrame(built.frame));
-    return 'sent';
+    const ack = await deps.awaitAck({ envId: input.envId, approvalId: input.approvalId, ws, frame: built.frame, timeoutMs: deps.timeoutMs ?? APPROVAL_REVOKE_ACK_TIMEOUT_MS });
+    return { kind: 'acknowledged', removed: ack.removed };
   } catch (error) {
-    log().warn('Approval revoke frame send failed', { envId: input.envId, approvalId: input.approvalId, error: error instanceof Error ? error.message : String(error), action: 'approval_revoke_send_failed' });
-    return 'send_failed';
+    const reason = error instanceof EnvBridgeError ? error.kind : error instanceof Error ? error.message : String(error);
+    log().warn('Approval revoke not acknowledged by the machine', { envId: input.envId, approvalId: input.approvalId, reason, action: 'approval_revoke_unacknowledged' });
+    return { kind: 'unacknowledged', reason };
   }
 }
 
@@ -187,11 +209,12 @@ export async function revokeLocalEnvApproval(input: { envId: string; approvalId:
   const row = await store.findLocalByEnvId(input.envId);
   if (!row) return { ok: false, reason: 'not_found' };
   if (row.revokedAt !== null) return { ok: false, reason: 'revoked' };
-  const machine = notifyMachineOfApprovalRevoke(
+  const machine = await notifyMachineOfApprovalRevoke(
     { envId: input.envId, enrollmentId: row.enrollmentId, serverKeyId: row.serverKeyId, issuedAt: Date.now(), reason: input.reason, approvalId: input.approvalId },
     {
       getConnection: getEnvConnection,
       isAuthorized: isEnvAuthorized,
+      awaitAck: (ack) => getEnvBridgeClient().awaitApprovalRevokeAck(ack),
       keyring: () => {
         try {
           return loadKeyring();

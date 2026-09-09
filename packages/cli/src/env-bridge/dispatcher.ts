@@ -119,8 +119,8 @@ export interface DispatcherDeps {
 export type DispatchResult =
   | { readonly kind: 'reply'; readonly frame: Frame }
   | { readonly kind: 'revoke_verified' }
-  /** ONE durable approval was deleted on the server's signed request (GA wave 2); the enrollment and the key stand. */
-  | { readonly kind: 'approval_revoked'; readonly approvalId: string; readonly removed: number }
+  /** ONE durable approval was deleted on the server's signed request (GA wave 2); the enrollment and the key stand. `frame` is the machine-signed ack to send back. */
+  | { readonly kind: 'approval_revoked'; readonly approvalId: string; readonly removed: number; readonly frame: Frame }
   | { readonly kind: 'dropped'; readonly reason: string };
 
 export interface Dispatcher {
@@ -323,7 +323,8 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       // branch never touches the key or the enrollment.
       const removed = deps.approvals === undefined ? 0 : await deps.approvals.revoke(frame.approvalId);
       await deps.audit.record({ grantId: null, principal: null, op: 'revoke', verdict: `approval_revoked:${frame.approvalId}:${removed}`, argsHash: null, exitCode: null });
-      return { kind: 'approval_revoked', approvalId: frame.approvalId, removed };
+      // The ACK (Codex P2 on #2583): machine-signed over {approvalId, removed}, so the server can only ever claim what this machine did.
+      return { kind: 'approval_revoked', approvalId: frame.approvalId, removed, frame: signResultFrame({ type: 'approval_revoke_result', approvalId: frame.approvalId, removed }, signer) };
     }
     await deps.audit.record({ grantId: null, principal: null, op: 'revoke', verdict: 'revoked', argsHash: null, exitCode: null });
     return { kind: 'revoke_verified' };

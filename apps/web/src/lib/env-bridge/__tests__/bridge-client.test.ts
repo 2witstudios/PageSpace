@@ -18,7 +18,7 @@ import { decodeFrame, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
 import { createMemoryNonceStore, verifyGrant } from '@pagespace/lib/env-bridge/grant';
 import { grantRequestForFrame } from '@pagespace/lib/env-bridge/grant-args';
 import { ed25519Verify } from '../crypto';
-import { encodeResultForSigning, resultHashForFrame, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
+import { encodeResultForSigning, machineResultBindingId, resultHashForFrame, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
 import { parseServerSigningKeyring, type SigningKeyPrimitives } from '@pagespace/lib/env-bridge/server-signing-key';
 import { DEFAULT_TIMEOUT_DEFAULTS } from '@pagespace/lib/env-bridge/resolve-timeout';
 import { RequestCorrelator } from '../correlator';
@@ -57,7 +57,7 @@ type UnsignedResult<T = MachineResultFrame> = T extends unknown ? Omit<T, 'sig'>
 
 function signedResult(body: UnsignedResult, key = machine): MachineResultFrame {
   const resultHash = resultHashForFrame({ ...body, sig: '' } as MachineResultFrame, envBridgeHash);
-  return { ...body, sig: Buffer.from(nodeSign(null, encodeResultForSigning({ grantId: body.grantId, resultHash }), key.privateKey)).toString('base64') } as MachineResultFrame;
+  return { ...body, sig: Buffer.from(nodeSign(null, encodeResultForSigning({ grantId: machineResultBindingId({ ...body, sig: '' } as MachineResultFrame), resultHash }), key.privateKey)).toString('base64') } as MachineResultFrame;
 }
 
 describe('EnvBridgeClient', () => {

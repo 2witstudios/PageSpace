@@ -137,6 +137,9 @@ function outcomeOf(challengeId: string, scope: RequestEnvApprovalOutput['scope']
       return reply.ok ? { challengeId, outcome: 'allowed', scope } : { challengeId, outcome: 'failed', scope, error: reply.error ?? 'write failed' };
     case 'fs_read_result':
       return { challengeId, outcome: 'allowed', scope };
+    case 'approval_revoke_result':
+      // Not an answer to a grant; a click can never be answered by a revoke ack.
+      return { challengeId, outcome: 'failed', error: 'unexpected_frame' };
     case 'grant_denied':
       if (reply.reason === 'approval_mismatch') return { challengeId, outcome: 'mismatch', error: reply.reason };
       if (reply.reason === 'approval_expired') return { challengeId, outcome: 'expired', error: reply.reason };

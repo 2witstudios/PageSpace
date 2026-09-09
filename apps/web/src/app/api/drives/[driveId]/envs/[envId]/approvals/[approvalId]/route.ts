@@ -14,10 +14,10 @@
  * drive admins. Nobody can ADD an approval through PageSpace: the machine file
  * is authoritative for allow; the server may only revoke.
  *
- * **Honest about reach.** The frame goes over the env's live socket on this
- * replica. Without one the machine still holds the approval; the answer says
- * so (`machine: 'no_live_socket'`, 409) rather than claiming a revoke that
- * was never delivered. Every attempt is audited on the env with the id.
+ * **Honest about reach.** 200 ONLY on the machine's SIGNED acknowledgement
+ * (`approval_revoke_result { approvalId, removed }`). Sent but not acked in
+ * time ⇒ 202 `unacknowledged`; no live socket ⇒ 409. The server never claims
+ * a revoke it cannot prove. Every attempt is audited on the env with the id.
  */
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveMember, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
@@ -62,11 +62,14 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
       if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
       return NextResponse.json({ error: 'This environment has been revoked', reason: 'revoked' }, { status: 409 });
     }
-    auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'drive_env', resourceId: envId, details: { route: 'drive-env-approvals', operation: 'revoke', approvalId, machine: result.machine } });
-    if (result.machine !== 'sent') {
-      return NextResponse.json({ revoked: false, machine: result.machine, error: 'The machine is not connected right now, so it still holds this approval. Connect it and try again.' }, { status: 409 });
+    const machine = result.machine;
+    auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'drive_env', resourceId: envId, details: { route: 'drive-env-approvals', operation: 'revoke', approvalId, machine: machine.kind, ...(machine.kind === 'acknowledged' && { removed: machine.removed }) } });
+    // 200 ONLY on the machine's signed ack (Codex P2 on #2583): the server never claims a revoke it cannot prove.
+    if (machine.kind === 'acknowledged') return NextResponse.json({ revoked: true, machine: 'acknowledged', approvalId, removed: machine.removed });
+    if (machine.kind === 'unacknowledged') {
+      return NextResponse.json({ revoked: false, reason: 'unacknowledged', machine: machine.reason, error: 'The revoke was sent, but the machine did not acknowledge it in time; it may still hold this approval. Try again once it is connected.' }, { status: 202 });
     }
-    return NextResponse.json({ revoked: true, machine: result.machine, approvalId });
+    return NextResponse.json({ revoked: false, reason: machine.kind, machine: machine.kind, error: 'The machine is not connected right now, so it still holds this approval. Connect it and try again.' }, { status: 409 });
   } catch (error) {
     loggers.api.error('Failed to revoke an environment approval', error instanceof Error ? error : new Error(String(error)));
     return NextResponse.json({ error: 'Failed to revoke the approval' }, { status: 500 });

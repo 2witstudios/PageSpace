@@ -38,16 +38,23 @@ beforeEach(() => {
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: OWNER } as never);
   vi.mocked(resolveEnvInDrive).mockResolvedValue({ id: ENV, driveId: DRIVE, substrate: 'local' } as never);
   vi.mocked(getDriveEnvStore).mockResolvedValue({ findLocalByEnvId: vi.fn(async () => ({ envId: ENV, ownerId: OWNER, revokedAt: null })) } as never);
-  vi.mocked(revokeLocalEnvApproval).mockResolvedValue({ ok: true, machine: 'sent' });
+  vi.mocked(revokeLocalEnvApproval).mockResolvedValue({ ok: true, machine: { kind: 'acknowledged', removed: 2 } });
 });
 
 describe('DELETE /api/drives/[driveId]/envs/[envId]/approvals/[approvalId]', () => {
-  it('given the env OWNER (a plain member), should send the signed approval revoke and answer revoked', async () => {
+  it('given the env OWNER (a plain member) and the machine\'s signed ACK, should answer 200 revoked with the count the machine signed', async () => {
     const r = await call();
     expect(r.status).toBe(200);
-    expect(await json(r)).toEqual({ revoked: true, machine: 'sent', approvalId: 'ch_1' });
+    expect(await json(r)).toEqual({ revoked: true, machine: 'acknowledged', approvalId: 'ch_1', removed: 2 });
     expect(revokeLocalEnvApproval).toHaveBeenCalledWith({ envId: ENV, approvalId: 'ch_1', reason: `revoked_by_${OWNER}` });
-    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', details: expect.objectContaining({ operation: 'revoke', approvalId: 'ch_1', machine: 'sent' }) }));
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', details: expect.objectContaining({ operation: 'revoke', approvalId: 'ch_1', machine: 'acknowledged', removed: 2 }) }));
+  });
+
+  it('Codex P2 on #2583: sent but NOT acknowledged ⇒ 202 { revoked: false, reason: unacknowledged } — never a success it cannot prove', async () => {
+    vi.mocked(revokeLocalEnvApproval).mockResolvedValue({ ok: true, machine: { kind: 'unacknowledged', reason: 'timeout' } });
+    const r = await call();
+    expect(r.status).toBe(202);
+    expect(await json(r)).toMatchObject({ revoked: false, reason: 'unacknowledged', machine: 'timeout' });
   });
 
   it('given a drive ADMIN who is not the owner, should ALSO revoke (Revoke stays with admins, D-6)', async () => {
@@ -71,10 +78,10 @@ describe('DELETE /api/drives/[driveId]/envs/[envId]/approvals/[approvalId]', () 
   });
 
   it('given the machine is not connected, should answer 409 revoked:false with the reach outcome — never a claimed revoke', async () => {
-    vi.mocked(revokeLocalEnvApproval).mockResolvedValue({ ok: true, machine: 'no_live_socket' });
+    vi.mocked(revokeLocalEnvApproval).mockResolvedValue({ ok: true, machine: { kind: 'no_live_socket' } });
     const r = await call();
     expect(r.status).toBe(409);
-    expect(await json(r)).toMatchObject({ revoked: false, machine: 'no_live_socket' });
+    expect(await json(r)).toMatchObject({ revoked: false, reason: 'no_live_socket', machine: 'no_live_socket' });
   });
 
   it('given an env outside the drive, a Sprite env, or a revoked env, should answer 404 / 409 / 409', async () => {

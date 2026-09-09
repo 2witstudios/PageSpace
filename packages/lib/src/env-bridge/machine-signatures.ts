@@ -9,9 +9,11 @@
  *   replayed for another env, and neither the advertised capabilities nor the
  *   policy digest can be altered in flight.
  * - **result** (machine → server, invariant 7): every `exec_result`,
- *   `fs_read_result`, `fs_write_result` and `grant_denied` is signed over
- *   `{grantId, resultHash}` where `resultHash` covers EVERY payload field of
- *   the frame (`resultHashForFrame`). A result cannot be moved onto another
+ *   `fs_read_result`, `fs_write_result`, `grant_denied` and (GA wave 2)
+ *   `approval_revoke_result` is signed over `{grantId, resultHash}` — the
+ *   binding id is the grant, or the namespaced approval id for an ack
+ *   (`machineResultBindingId`) — where `resultHash` covers EVERY payload
+ *   field of the frame (`resultHashForFrame`). A result cannot be moved onto another
  *   grant, and no field of it can be edited between the machine and the agent.
  * - **revoke** (server → machine, invariant 8): signed over
  *   `{envId, enrollmentId, keyId, issuedAt}` — a revoke for one enrollment
@@ -43,11 +45,25 @@ export const REVOKE_APPROVAL_SIGNING_DOMAIN = 'pagespace-env-bridge/revoke-appro
 
 export type { HelloFrame };
 export type RevokeFrame = Extract<Frame, { type: 'revoke' }>;
-export type MachineResultFrame = Extract<Frame, { type: 'exec_result' | 'fs_read_result' | 'fs_write_result' | 'grant_denied' }>;
+export type MachineResultFrame = Extract<Frame, { type: 'exec_result' | 'fs_read_result' | 'fs_write_result' | 'grant_denied' | 'approval_revoke_result' }>;
 export type MachineResultFrameType = MachineResultFrame['type'];
 
 /** The machine frames that answer a grant and therefore MUST be signed (invariant 7). */
-export const MACHINE_RESULT_FRAME_TYPES: ReadonlySet<MachineResultFrameType> = new Set<MachineResultFrameType>(['exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied']);
+export const MACHINE_RESULT_FRAME_TYPES: ReadonlySet<MachineResultFrameType> = new Set<MachineResultFrameType>(['exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'approval_revoke_result']);
+
+/** The correlation id an approval-revoke ack is bound to — namespaced so it can never collide with a grant id. */
+export function approvalRevokeBindingId(approvalId: string): string {
+  return `approval-revoke:${approvalId}`;
+}
+
+/**
+ * What a machine result is BOUND to in its signature and correlated by on
+ * the server: the grant it answers, or — for an approval-revoke ack (GA
+ * wave 2) — the namespaced approval id.
+ */
+export function machineResultBindingId(frame: MachineResultFrame): string {
+  return frame.type === 'approval_revoke_result' ? approvalRevokeBindingId(frame.approvalId) : frame.grantId;
+}
 
 export function isMachineResultFrame(frame: Frame): frame is MachineResultFrame {
   return (MACHINE_RESULT_FRAME_TYPES as ReadonlySet<string>).has(frame.type);
@@ -111,6 +127,9 @@ export function resultPayloadForFrame(frame: MachineResultFrame): Record<string,
       // `pending` (a frozen request awaiting a chat click, GA wave 2) is
       // signed too: the card renders what the MACHINE said it froze.
       return { type: frame.type, grantId: frame.grantId, reason: frame.reason, pending: frame.pending ?? null };
+    case 'approval_revoke_result':
+      // The ack covers the id AND the count: the server may only claim what the machine signed.
+      return { type: frame.type, approvalId: frame.approvalId, removed: frame.removed };
   }
 }
 
@@ -148,7 +167,7 @@ export function verifyMachineResult(input: VerifyMachineResultInput): MachineRes
   } catch {
     return { ok: false, reason: 'malformed' };
   }
-  const verdict = safeVerify(input.verify, encodeResultForSigning({ grantId: input.frame.grantId, resultHash }), signature, input.machinePublicKey);
+  const verdict = safeVerify(input.verify, encodeResultForSigning({ grantId: machineResultBindingId(input.frame), resultHash }), signature, input.machinePublicKey);
   return verdict.ok ? { ok: true, resultHash } : verdict;
 }
 

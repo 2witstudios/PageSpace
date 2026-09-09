@@ -146,7 +146,11 @@ export function createBridgeConnection(deps: BridgeConnectionDeps): BridgeConnec
           const result = await deps.dispatcher.handle(effect.frame);
           if (result.kind === 'reply') send(target, result.frame);
           else if (result.kind === 'revoke_verified') await revoke(target);
-          else if (result.kind === 'approval_revoked') deps.log(`approval ${result.approvalId} revoked by the server (${result.removed} row${result.removed === 1 ? '' : 's'} removed); still connected`);
+          else if (result.kind === 'approval_revoked') {
+            // Signed ack back to the server; the enrollment stands and the socket stays open.
+            send(target, result.frame);
+            deps.log(`approval ${result.approvalId} revoked by the server (${result.removed} row${result.removed === 1 ? '' : 's'} removed); acknowledged, still connected`);
+          }
           break;
         }
         case 'reject':

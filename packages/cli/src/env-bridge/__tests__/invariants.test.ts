@@ -124,11 +124,15 @@ describe('daemon structural invariants', () => {
       const codec = readFileSync(join(HERE, '..', '..', '..', 'lib', 'src', 'env-bridge', 'frame-codec.ts'), 'utf8');
       const types = [...codec.matchAll(/z\.literal\('([a-z_]+)'\)/g)].map((m) => m[1]);
       expect(types.length).toBeGreaterThan(10);
-      expect(types.filter((t) => /approv|allow|remember/.test(t as string))).toEqual([]);
-      // `approvalId` appears exactly once in the codec: on the revoke schema. `approvalIntent` never does — it lives inside the opaque grant, parsed only by verifyGrant.
-      const approvalIdLines = codec.split('\n').filter((line) => line.includes('approvalId') && !line.trimStart().startsWith('/**') && !line.trimStart().startsWith('*'));
-      expect(approvalIdLines).toHaveLength(1);
-      expect(approvalIdLines[0]).toMatch(/z\.literal\('revoke'\)/);
+      // The only approval-shaped types: `revoke` (server → machine, DELETES one) and the machine → server ACK of that deletion. Neither can add.
+      expect(types.filter((t) => /approv|allow|remember/.test(t as string))).toEqual(['approval_revoke_result']);
+      expect(codec).toMatch(/MACHINE_TO_SERVER_FRAME_TYPES[^;]*'approval_revoke_result'/);
+      expect(codec).not.toMatch(/SERVER_TO_MACHINE_FRAME_TYPES[^;]*'approval_revoke_result'/);
+      // `approvalId` appears on exactly those two schemas. `approvalIntent` never does — it lives inside the opaque grant, parsed only by verifyGrant.
+      const approvalIdLines = codec.split('\n').filter((line) => line.includes('approvalId') && !line.trimStart().startsWith('/**') && !line.trimStart().startsWith('*') && !line.trimStart().startsWith('//'));
+      expect(approvalIdLines).toHaveLength(2);
+      expect(approvalIdLines.some((line) => /z\.literal\('revoke'\)/.test(line))).toBe(true);
+      expect(approvalIdLines.some((line) => /z\.literal\('approval_revoke_result'\)/.test(line))).toBe(true);
       expect(codec).not.toMatch(/approvalIntent/);
       // And the daemon never routes a frame by an approval-shaped type.
       expect(dispatcher).not.toMatch(/frame\.type === '(approve|approval|allow)/);
