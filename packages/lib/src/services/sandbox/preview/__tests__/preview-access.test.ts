@@ -132,6 +132,14 @@ describe('resolvePreviewTarget — the gather, in order', () => {
     assert({ given: 'dark', should: 'not attach', actual: d.calls.includes('attach'), expected: false });
   });
 
+  it('a sprite whose URL cannot exist in DNS is refused BY NAME before any fetch — not surfaced later as "fetch failed"', async () => {
+    // Production: 63-char names + the org suffix made a 69-char label; every forward died at the fetch.
+    const d = deps({ attach: async () => fakeHandle({ relay: runningRelay(), url: `https://pgs-env-${'a'.repeat(55)}-bskrl.sprites.app` }) });
+    const target = await resolvePreviewTarget({ holder, userId: USER, sessionId: SESSION, deps: d });
+    assert({ given: 'live + running, 69-char URL label', should: 'refuse as sprite-url-unresolvable, 502', actual: [target.decision.kind, 'reason' in target.decision ? target.decision.reason : null, 'status' in target.decision ? target.decision.status : null], expected: ['refuse', 'sprite-url-unresolvable', 502] });
+    assert({ given: 'the refusal', should: 'carry no sprite URL to forward', actual: 'spriteUrl' in target, expected: false });
+  });
+
   it('a paused sprite consults the wake gate on the PAYER and forwards as a wake when allowed', async () => {
     let seen: unknown;
     const d = deps({ attach: async () => fakeHandle({ relay: runningRelay(), power: 'paused' }), canRunCode: async (input) => { seen = input; return { ok: true }; } });

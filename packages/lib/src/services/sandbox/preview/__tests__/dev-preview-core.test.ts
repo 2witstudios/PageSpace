@@ -7,6 +7,7 @@ import {
   describeHttpPortSlot,
   planDevServerService,
   describeServiceState,
+  SPRITE_URL_UNRESOLVABLE_MESSAGE,
   resolveDevPreviewHolder,
   HTTP_PORT_BUSY_MESSAGE,
   requiresPreviewApproval,
@@ -460,6 +461,21 @@ describe('planDevServerService — thrash guard', () => {
 });
 
 describe('describeServiceState', () => {
+  it('a sandbox whose URL cannot resolve is down, NOT repairable, and says so — whatever the relay and listeners say', () => {
+    assert({
+      given: 'a live relay row and a listening target, but urlRoutable: false',
+      should: 'be down with the unresolvable-URL sentence and repairable: false',
+      actual: describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(5173), relay: relayService(5173), listeners: [{ port: 5173, pid: 7 }, { port: 8080, pid: 42 }], urlRoutable: false }),
+      expected: { status: 'down', targetPort: 5173, via: 'relay', error: 'sprite-url-unresolvable', repairable: false, message: SPRITE_URL_UNRESOLVABLE_MESSAGE },
+    });
+    assert({
+      given: 'the same with urlRoutable omitted',
+      should: 'be live — the default has nothing to say',
+      actual: describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(5173), relay: relayService(5173), listeners: [{ port: 5173, pid: 7 }, { port: 8080, pid: 42 }] }).status,
+      expected: 'live',
+    });
+  });
+
   it('reports none / instance-unknown / stale before anything live is consulted', () => {
     assert({ given: 'no row', should: 'be none', actual: describeServiceState({ liveInstanceId: INSTANCE, row: null, relay: null, listeners: null }).status, expected: 'none' });
     assert({

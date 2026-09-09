@@ -75,6 +75,7 @@ import type {
   WriteFileEntry,
 } from './types';
 import { SandboxProvisionError, type SandboxCreateOptions } from '../sandbox-options';
+import { loggers } from '../../../logging/logger-config';
 
 /** Thrown when a command exceeds the policy's per-run wall-clock cap. */
 export class SandboxCommandTimeoutError extends Error {
@@ -1204,6 +1205,32 @@ export function withKillSession<T extends { name: string; client: { baseURL: str
   });
 }
 
+/**
+ * The longest Sprite NAME that still yields a URL DNS can resolve.
+ *
+ * The API accepts names up to 63 chars (a DNS label), but the sprite's URL is
+ * `<name>-<org>.sprites.app` — the platform appends the org suffix to the
+ * SAME label and never checks the sum. Our keys are 72-char HMAC hex; sliced
+ * to 63 they produced 69-char labels (`pgs-env-…-bskrl`) that `dig` refuses
+ * outright ("label too long"), so no preview ever reached a sprite. 48 =
+ * 63 − 15: the observed org suffix is `-` + 5 chars, and 15 is headroom for
+ * a longer one, not a guess about its format. 48 chars is the 8-char prefix
+ * plus 40 hex — 160 bits of the digest, still collision-free for our keys.
+ */
+export const SPRITE_NAME_MAX = 48;
+/** The budget before {@link SPRITE_NAME_MAX} — kept ONLY to resume sprites created under it. */
+const LEGACY_SPRITE_NAME_MAX = 63;
+
+/** Pure: the Sprite name for a session/env key. Deterministic, so the same key always resumes the same sprite. */
+export function spriteNameFor(key: string): string {
+  return key.slice(0, SPRITE_NAME_MAX);
+}
+
+/** Pure: the name a sprite created before the 48-char budget was given — resumed by `getOrCreate`, never created. */
+export function legacySpriteNameFor(key: string): string {
+  return key.slice(0, LEGACY_SPRITE_NAME_MAX);
+}
+
 function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): ExecutableSandbox {
   return {
     sandboxId: sprite.name,
@@ -1332,6 +1359,16 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
  * and fall back to a conservative message match; a KNOWN non-404 status is never
  * a cache miss.
  */
+/** `getSprite`, with a genuine not-found folded to `null`; every other error (auth, rate limit, outage) surfaces. */
+async function getSpriteIfExists(sdk: SpritesSdk, name: string): Promise<SpriteInstanceLike | null> {
+  try {
+    return await sdk.getSprite(name);
+  } catch (error) {
+    if (isSpriteNotFoundError(error)) return null;
+    throw error;
+  }
+}
+
 export function isSpriteNotFoundError(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
   const e = error as {
@@ -1706,10 +1743,17 @@ export function createSpritesSandboxClient({
       // genuine not-found. Auth/rate-limit/outage errors from getSprite surface
       // rather than spawning a duplicate Sprite under a name that may still be live.
       //
-      // The Sprites API enforces a 63-char name limit (DNS label). Our session
-      // keys are 72-char HMAC hex strings; truncate to 63 before hitting the API.
-      // The full key stays as the DB session key — only the Sprites name is short.
-      const spriteName = name.slice(0, 63);
+      // Our session keys are 72-char HMAC hex strings; the Sprite NAME is the
+      // key cut to `SPRITE_NAME_MAX` so the sprite's URL stays a legal DNS
+      // label (see the constant). The full key stays as the DB session key.
+      //
+      // The name is not persisted anywhere — every attach re-derives it — so
+      // a sprite created under the old 63-char budget must still be found by
+      // THAT name, or every existing env and session would silently land on
+      // a fresh, empty VM. Hence the second lookup: short name, then legacy
+      // name, and only when neither exists a create — under the short name.
+      const spriteName = spriteNameFor(name);
+      const legacyName = legacySpriteNameFor(name);
       try {
         let sprite: SpriteInstanceLike;
         let fresh = false;
@@ -1717,10 +1761,19 @@ export function createSpritesSandboxClient({
           sprite = await sdk.getSprite(spriteName);
         } catch (error) {
           if (!isSpriteNotFoundError(error)) throw error;
-          // Caps (RAM / vCPUs / storage / region) come from the resolved policy and
-          // are set explicitly per Sprite rather than relying on the quota defaults.
-          sprite = await sdk.createSprite(spriteName, options.caps);
-          fresh = true;
+          const legacy = legacyName === spriteName ? null : await getSpriteIfExists(sdk, legacyName);
+          if (legacy !== null) {
+            // Resumed on a name whose URL cannot resolve: the sandbox works
+            // (shell, files, services) but cannot be previewed until it is
+            // recreated. Logged so the legacy population can be watched.
+            loggers.ai.info('sprite resumed by legacy name — its URL is not resolvable', { spriteName, legacyName });
+            sprite = legacy;
+          } else {
+            // Caps (RAM / vCPUs / storage / region) come from the resolved policy and
+            // are set explicitly per Sprite rather than relying on the quota defaults.
+            sprite = await sdk.createSprite(spriteName, options.caps);
+            fresh = true;
+          }
         }
         // Lock down egress only when THIS VM is not already proven to be running
         // THIS policy — see the file header and `../egress-lockdown.ts`. The proof
@@ -1749,7 +1802,8 @@ export function createSpritesSandboxClient({
             sleep,
           });
         }
-        // wrap sets sandboxId = sprite.name = spriteName (truncated). The token is
+        // wrap sets sandboxId = sprite.name (the short name, or the legacy one it
+        // resumed on — `get` reconnects by whichever was recorded). The token is
         // now CONFIRMED for this VM (freshly applied, or already proven) — the
         // caller records it, and it is what lets the next hand-back skip the push.
         return wrap(sprite, desiredToken);

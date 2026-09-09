@@ -83,6 +83,34 @@ export function assertTrustedPreviewUpstream(url: URL): void {
   if (url.protocol !== 'https:' || !url.hostname.endsWith(SPRITE_URL_HOST_SUFFIX) || url.hostname === SPRITE_URL_HOST_SUFFIX.slice(1)) {
     throw new Error('preview upstream is not a sprite URL — refusing to forward');
   }
+  if (!isRoutableSpriteUrl(url)) {
+    throw new Error('preview upstream host has a label longer than a DNS label allows — refusing to forward');
+  }
+}
+
+/** RFC 1035 §2.3.4: one hostname label is at most 63 octets. */
+const MAX_HOSTNAME_LABEL = 63;
+
+/**
+ * Pure: can this sprite URL exist in DNS at all? The platform builds a
+ * sprite's URL as `<name>-<org>.sprites.app` without checking that the first
+ * label fits; a sprite named to the API's own 63-char limit gets a 69-char
+ * label that no resolver will answer (`dig`: "label too long"). A request
+ * to such a URL fails as `fetch failed` — the one failure that must be named
+ * before the fetch, because nothing downstream can recover it.
+ */
+export function isRoutableSpriteUrl(url: URL): boolean {
+  return url.hostname.split('.').every((label) => label.length >= 1 && label.length <= MAX_HOSTNAME_LABEL);
+}
+
+/** {@link isRoutableSpriteUrl} over the string the control plane hands back; `null`/unparsable ⇒ nothing to say (true). */
+export function isRoutableSpriteUrlString(url: string | null): boolean {
+  if (url === null) return true;
+  try {
+    return isRoutableSpriteUrl(new URL(url));
+  } catch {
+    return true;
+  }
 }
 
 /**

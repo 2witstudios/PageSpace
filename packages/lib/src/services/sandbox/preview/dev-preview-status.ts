@@ -55,6 +55,7 @@ import type { DevPreviewStore } from './dev-preview-store';
 import { authorizePreviewHolder, type PreviewAccessDeps, type PreviewAuthorization } from './preview-access';
 import { buildPreviewOpenPath } from './preview-grant';
 import { PREVIEW_RELAY_SERVICE_NAME, SPRITE_HTTP_PORT } from './preview-relay';
+import { isRoutableSpriteUrlString } from './preview-proxy-policy';
 
 // -----------------------------------------------------------------------------
 // The read model
@@ -207,19 +208,21 @@ export interface BuildDevPreviewStatusInput {
    * say `'probe'` and let a missing target render as `down`.
    */
   listenerSource?: ListenerSource;
+  /** Whether the sprite's URL can exist in DNS — see `DescribeServiceStateInput.urlRoutable`. Defaults to true. */
+  urlRoutable?: boolean;
   detection: DevPreviewDetection;
   openPath: string | null;
 }
 
 /** Pure: the whole read model from what the gather collected. */
-export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, relay, listeners, listenerSource, detection, openPath }: BuildDevPreviewStatusInput): DevPreviewStatus {
+export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, relay, listeners, listenerSource, urlRoutable, detection, openPath }: BuildDevPreviewStatusInput): DevPreviewStatus {
   // Absent is the one reach the core cannot describe (it is asked about a
   // sprite); unreachable IS the core's `instance-unknown` (no live instance
   // id can be proven), so it is worded there and nowhere else.
   const state: DevPreviewServiceState =
     sandbox === 'absent'
       ? { status: 'none', message: SANDBOX_ABSENT_MESSAGE }
-      : describeServiceState({ liveInstanceId: sandbox === 'attached' ? liveInstanceId : null, row, relay, listeners, listenerSource });
+      : describeServiceState({ liveInstanceId: sandbox === 'attached' ? liveInstanceId : null, row, relay, listeners, listenerSource, urlRoutable });
 
   let slot: DevPreviewSlotReport = { known: false };
   if (sandbox === 'attached' && listeners !== null) {
@@ -313,10 +316,16 @@ export async function gatherDevPreviewStatus({
   if (handle === null) {
     return { ok: true, status: buildDevPreviewStatus({ holder, sandbox: 'unreachable', liveInstanceId: null, row, relay: null, listeners: null, detection: read.detection, openPath }) };
   }
-  const relay = await handle.services.get(PREVIEW_RELAY_SERVICE_NAME);
+  // `urlInfo` is a control-plane read (no wake). A holder with no URL
+  // surface at all (a local env) rejects it — that is "nothing to say", not
+  // "unroutable", so the answer stays `true`.
+  const [relay, urlRoutable] = await Promise.all([
+    handle.services.get(PREVIEW_RELAY_SERVICE_NAME),
+    handle.urlInfo().then((info) => isRoutableSpriteUrlString(info.url), () => true),
+  ]);
   return {
     ok: true,
-    status: buildDevPreviewStatus({ holder, sandbox: 'attached', liveInstanceId: handle.spriteInstanceId, row, relay, listeners: read.listeners, detection: read.detection, openPath }),
+    status: buildDevPreviewStatus({ holder, sandbox: 'attached', liveInstanceId: handle.spriteInstanceId, row, relay, listeners: read.listeners, detection: read.detection, openPath, urlRoutable }),
   };
 }
 

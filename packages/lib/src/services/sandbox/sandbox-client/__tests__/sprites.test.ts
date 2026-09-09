@@ -4,6 +4,9 @@ import {
   createSpritesSandboxClient,
   isSpriteGoneStatus,
   isSpriteNotFoundError,
+  spriteNameFor,
+  legacySpriteNameFor,
+  SPRITE_NAME_MAX,
   classifyProvisionError,
   planProvisionFailure,
   readSessionInfoId,
@@ -400,6 +403,61 @@ describe('spawnWithSelfHealingCwd (pure)', () => {
     should: 'keep it a positional arg (the arg-array no-injection invariant holds)',
     actual: spawnWithSelfHealingCwd({ command: 'bash', args: [], cwd: '/workspace; rm -rf /' })[1].slice(2),
     expected: ['sh', '/workspace; rm -rf /', 'bash'],
+  });
+});
+
+describe('sprite names fit the URL label', () => {
+  const KEY = `pgs-env-${'a'.repeat(64)}`; // a real key: 8-char prefix + 64 hex
+
+  it('cuts the key to SPRITE_NAME_MAX so `<name>-<org>.sprites.app` stays a legal DNS label; the legacy name is the old 63', () => {
+    expect(SPRITE_NAME_MAX).toBe(48);
+    expect(spriteNameFor(KEY)).toHaveLength(48);
+    expect(spriteNameFor(KEY)).toBe(spriteNameFor(KEY));
+    expect(legacySpriteNameFor(KEY)).toHaveLength(63);
+    // Room for a `-` plus an org suffix of up to 14 chars inside 63.
+    expect(`${spriteNameFor(KEY)}-bskrl`.length).toBeLessThanOrEqual(63);
+    expect(`${legacySpriteNameFor(KEY)}-bskrl`.length).toBeGreaterThan(63);
+  });
+
+  function sdkWith(existing: string[]) {
+    const { sdk, calls, sprite } = makeSdk({
+      getSprite: async (name) => {
+        if (!existing.includes(name)) throw Object.assign(new Error('sprite not found'), { status: 404 });
+        return { ...sprite, name };
+      },
+    });
+    return { sdk, calls };
+  }
+
+  it('resumes by the short name when it exists — no legacy lookup, no create', async () => {
+    const { sdk, calls } = sdkWith([spriteNameFor(KEY)]);
+    const handle = await createSpritesSandboxClient({ sdk }).getOrCreate({ name: KEY, options });
+    expect(handle.sandboxId).toBe(spriteNameFor(KEY));
+    expect(calls.created).toEqual([]);
+  });
+
+  it('resumes a sprite created under the LEGACY 63-char name — its disk and sessions, not a fresh VM — and creates nothing', async () => {
+    const { sdk, calls } = sdkWith([legacySpriteNameFor(KEY)]);
+    const handle = await createSpritesSandboxClient({ sdk }).getOrCreate({ name: KEY, options });
+    expect(handle.sandboxId).toBe(legacySpriteNameFor(KEY));
+    expect(calls.created).toEqual([]);
+  });
+
+  it('creates under the SHORT name when neither exists', async () => {
+    const { sdk, calls } = sdkWith([]);
+    const handle = await createSpritesSandboxClient({ sdk }).getOrCreate({ name: KEY, options });
+    expect(calls.created).toEqual([spriteNameFor(KEY)]);
+    expect(handle.sandboxId).toBe('session-key'); // makeSdk's fake returns its fixed sprite on create
+  });
+
+  it('a non-not-found error from the legacy lookup surfaces instead of creating a duplicate', async () => {
+    const { sdk } = makeSdk({
+      getSprite: async (name) => {
+        if (name === spriteNameFor(KEY)) throw Object.assign(new Error('sprite not found'), { status: 404 });
+        throw Object.assign(new Error('rate limited'), { status: 429 });
+      },
+    });
+    await expect(createSpritesSandboxClient({ sdk }).getOrCreate({ name: KEY, options })).rejects.toThrow();
   });
 });
 

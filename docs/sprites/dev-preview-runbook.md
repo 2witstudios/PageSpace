@@ -302,6 +302,35 @@ behaviour before — spike §8), it would remove the in-sprite relay, the 8080
 single slot, and the one-preview-per-sandbox limit entirely. Verify it against
 a real sprite before designing on it.
 
+## 9. Sprite names and the URL label
+
+A sprite's URL is `https://<name>-<org>.sprites.app`. The API accepts names
+up to 63 chars, but the URL puts the name AND `-<org>` in ONE DNS label,
+which RFC 1035 caps at 63 — and the platform never checks the sum. Our
+HMAC-derived names cut to 63 produced 69-char labels (`pgs-env-…-bskrl`);
+`dig` refuses them outright ("label too long"), so **no `pgs-*` sprite URL
+ever resolved** and every preview died at the fetch as `502 fetch failed`.
+
+- Names are now cut to `SPRITE_NAME_MAX` (48: 8-char prefix + 40 hex,
+  leaving 15 for `-<org>`). `spriteNameFor(key)` is the one spelling.
+- The name is not persisted: `getOrCreate` re-derives it on every attach.
+  So it looks up the short name, then the LEGACY 63-char name, and creates
+  (short) only when neither exists. A legacy sprite keeps its disk,
+  services and sessions — and **cannot be previewed**: there is no rename,
+  and its URL is structurally unresolvable. Recreate the env/session.
+- You can tell a legacy sandbox by its `sandboxId` length: 63.
+- The proxy refuses such a URL by name (`sprite-url-unresolvable`, 502)
+  before fetching, and the pane says so before the frame is opened
+  (`down`, not repairable, `SPRITE_URL_UNRESOLVABLE_MESSAGE`).
+- Report to Fly: the API accepts names whose URLs cannot exist.
+
+A related non-issue, verified the same day: Next ≥ 15.2's dev server 403s
+any request carrying an `Origin` header it does not know (even the sprite's
+own origin). The forwarder never sends `Origin` or `Referer` (allowlist in
+`preview-proxy-policy.ts`) and the WS tunnel forwards only the
+`sec-websocket-*` set, so chunks, RSC fetches and HMR all reach Next without
+one. Do not add `Origin` to the allowlist.
+
 ## Runtime behaviour worth knowing
 
 - **A refused reconcile is retried, three times across ~21s.** If the holder's

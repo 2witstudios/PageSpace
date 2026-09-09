@@ -712,6 +712,12 @@ export interface DescribeServiceStateInput {
    * perfectly well, for every framework the channel cannot see.
    */
   listenerSource?: ListenerSource;
+  /**
+   * Whether the sprite's URL can exist in DNS (`isRoutableSpriteUrlString`).
+   * Defaults to true — "nothing to say" — because most readers hold no URL;
+   * only the status gather, which reads `urlInfo`, can answer false.
+   */
+  urlRoutable?: boolean;
 }
 
 export type DevPreviewServiceState =
@@ -778,8 +784,12 @@ export const DETECTION_UNAVAILABLE_MESSAGE = 'Dev-server detection is not runnin
 export const HTTP_PORT_BUSY_MESSAGE =
   `Port ${SPRITE_HTTP_PORT} is already in use by something that is not the preview relay. Run your dev server on port ${SPRITE_HTTP_PORT} to preview it, or free the port.`;
 
+/** A sandbox whose URL cannot exist in DNS — the ONE place it is worded (the pane, the proxy and the status all say this). */
+export const SPRITE_URL_UNRESOLVABLE_MESSAGE =
+  'This sandbox was created with a name too long for a preview URL. Create a new environment or session to preview it.';
+
 /** Pure: the row folded with the live service read, as one UI-consumable status. */
-export function describeServiceState({ liveInstanceId, row, relay, listeners, listenerSource = 'watch' }: DescribeServiceStateInput): DevPreviewServiceState {
+export function describeServiceState({ liveInstanceId, row, relay, listeners, listenerSource = 'watch', urlRoutable = true }: DescribeServiceStateInput): DevPreviewServiceState {
   if (row === null) return { status: 'none', message: 'No dev server has been detected in this sandbox yet.' };
   if (liveInstanceId === null) {
     return { status: 'instance-unknown', message: 'The sandbox could not be identified, so its preview state cannot be shown.' };
@@ -797,6 +807,21 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners, li
       targetPort: row.targetPort,
       stoppedAt: row.stoppedByUserAt,
       message: `Preview of port ${row.targetPort} is switched off.`,
+    };
+  }
+
+  // Nothing below can help a sandbox whose URL no resolver will answer: the
+  // relay may be up and the server serving, and the proxy still cannot reach
+  // them. Said here, before the frame is ever opened, and NOT repairable —
+  // the fix is a new sandbox, which no button on this pane performs.
+  if (!urlRoutable) {
+    return {
+      status: 'down',
+      targetPort: row.targetPort,
+      via: row.relayServiceName === null ? 'direct' : 'relay',
+      error: 'sprite-url-unresolvable',
+      repairable: false,
+      message: SPRITE_URL_UNRESOLVABLE_MESSAGE,
     };
   }
 

@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { assert } from '../../__tests__/riteway';
 import {
   assertTrustedPreviewUpstream,
+  isRoutableSpriteUrl,
+  isRoutableSpriteUrlString,
   buildPreviewUpstreamUrl,
   buildPreviewAccessLog,
   buildPreviewResponseHeaders,
@@ -172,5 +174,25 @@ describe('attributable access log', () => {
       actual: buildPreviewAccessLog({ userId: 'u', holder: { kind: 'workspace', id: 'w' }, method: 'GET', path: '/', outcome: 'refused', reason: 'stale-instance', transport: 'websocket' }),
       expected: { userId: 'u', holderKind: 'workspace', holderId: 'w', transport: 'websocket', method: 'GET', path: '/', outcome: 'refused', reason: 'stale-instance' },
     });
+  });
+});
+
+describe('a sprite URL must be a hostname DNS can answer', () => {
+  const LONG = `https://pgs-env-${'a'.repeat(55)}-bskrl.sprites.app`; // 69-char first label — what production had
+  const OK = `https://pgs-env-${'a'.repeat(40)}-bskrl.sprites.app`;   // 54
+
+  it('refuses a first label longer than 63 chars, in the assertion and in the pure check', () => {
+    expect(new URL(LONG).hostname.split('.')[0]).toHaveLength(69);
+    expect(isRoutableSpriteUrl(new URL(LONG))).toBe(false);
+    expect(() => assertTrustedPreviewUpstream(new URL(LONG))).toThrow(/label longer/);
+    expect(isRoutableSpriteUrl(new URL(OK))).toBe(true);
+    expect(() => assertTrustedPreviewUpstream(new URL(OK))).not.toThrow();
+  });
+
+  it('the string form has nothing to say about null or garbage — only a parsable URL can be unroutable', () => {
+    expect(isRoutableSpriteUrlString(null)).toBe(true);
+    expect(isRoutableSpriteUrlString('not a url')).toBe(true);
+    expect(isRoutableSpriteUrlString(LONG)).toBe(false);
+    expect(isRoutableSpriteUrlString(OK)).toBe(true);
   });
 });
