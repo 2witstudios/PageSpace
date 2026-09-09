@@ -22,7 +22,7 @@ import type { AttachmentMeta } from '@pagespace/db/schema/storage';
  */
 export function buildLastMessagePreview(
   content: string,
-  attachmentMeta: AttachmentMeta | AttachmentMeta[] | null
+  attachmentMeta: AttachmentMeta | Array<AttachmentMeta | null> | null
 ): string {
   const trimmed = content.trim();
   if (trimmed.length > 0) {
@@ -31,6 +31,12 @@ export function buildLastMessagePreview(
 
   // Accepts a single meta so the legacy single-attachment call sites keep
   // working unchanged while N-attachment callers pass the whole array.
+  //
+  // An entry may be null: `attachmentMeta` is nullable on an attachment row,
+  // and a row backfilled from a legacy fileId has none. Such an attachment
+  // still renders (attachment-utils falls back to the joined files row), so it
+  // still COUNTS here — dropping it would preview a three-photo message as
+  // "[2 images]", a confident number that disagrees with the message.
   const attachments = attachmentMeta === null
     ? []
     : Array.isArray(attachmentMeta)
@@ -39,13 +45,14 @@ export function buildLastMessagePreview(
 
   if (attachments.length === 1) {
     const only = attachments[0];
+    if (!only) return '[file]';
     return only.mimeType.startsWith('image/')
       ? `[image: ${only.originalName}]`
       : `[file: ${only.originalName}]`;
   }
 
   if (attachments.length > 1) {
-    const images = attachments.filter((a) => a.mimeType.startsWith('image/')).length;
+    const images = attachments.filter((a) => a?.mimeType.startsWith('image/')).length;
     // Name the count rather than one arbitrary filename — "[image: a.png]" for
     // a five-photo send reads as though four of them went missing.
     if (images === attachments.length) return `[${images} images]`;
@@ -59,7 +66,8 @@ export function buildLastMessagePreview(
 export interface NewestConversationMessage {
   createdAt: Date;
   content: string;
-  attachmentMeta: AttachmentMeta | AttachmentMeta[] | null;
+  /** One meta, the whole batch (null entries included), or nothing. */
+  attachmentMeta: AttachmentMeta | Array<AttachmentMeta | null> | null;
 }
 
 export interface ConversationLastMessageState {

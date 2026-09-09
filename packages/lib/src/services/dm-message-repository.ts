@@ -341,7 +341,8 @@ async function recomputeConversationLastMessage(
   // Preview the whole batch, so a five-photo DM reads "[5 images]" rather than
   // one arbitrary filename. Falls back to the legacy column when the message
   // has no attachment rows (written by a pod on the previous build).
-  let previewAttachments: AttachmentMeta | AttachmentMeta[] | null = newest?.attachmentMeta ?? null;
+  let previewAttachments: AttachmentMeta | Array<AttachmentMeta | null> | null =
+    newest?.attachmentMeta ?? null;
   if (newest) {
     const attachmentRows = await tx
       .select({ attachmentMeta: directMessageAttachments.attachmentMeta })
@@ -349,13 +350,15 @@ async function recomputeConversationLastMessage(
       .where(eq(directMessageAttachments.messageId, newest.id))
       .orderBy(asc(directMessageAttachments.position));
 
-    const metas = attachmentRows
-      .map((row) => row.attachmentMeta)
-      // `!= null`, so a row whose meta is absent for any reason is skipped
-      // rather than reaching the preview builder as `undefined` and throwing
-      // on `.mimeType` — the preview must never be the thing that fails a
-      // purge or a send.
-      .filter((meta): meta is AttachmentMeta => meta != null);
+    // Every attachment row counts, including one whose meta is null (a row
+    // backfilled from a legacy fileId has none). The preview builder handles a
+    // null entry; filtering here would under-count a batch instead, and a
+    // `[2 images]` label on a three-photo message is worse than a generic one.
+    // `?? null` normalizes `undefined` away so nothing downstream has to reach
+    // through it for `.mimeType`.
+    const metas: Array<AttachmentMeta | null> = attachmentRows.map(
+      (row) => row.attachmentMeta ?? null
+    );
     if (metas.length > 0) previewAttachments = metas;
   }
 

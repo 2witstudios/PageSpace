@@ -13,12 +13,13 @@
  * one definition of what a file card looks like.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, ImageOff } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { MessageAttachment, ZoomableImage } from './MessageAttachment';
 import {
+  type MessageAttachmentLike,
   type MessageWithAttachment,
   getAttachments,
   isImageAttachment,
@@ -32,41 +33,72 @@ interface MessageAttachmentsProps {
 
 const viewUrl = (fileId: string) => `/api/files/${fileId}/view`;
 
+/**
+ * Identity of one tile, stable across the optimistic-to-confirmed swap.
+ *
+ * Deliberately NOT the attachment row's id: an optimistic row has none, and
+ * the server echo brings real cuid2 ids, so keying on the id would change
+ * every key when the send confirms — React would unmount and remount every
+ * `<img>` in the batch (a visible reload flash on the sender's own screen) and
+ * the `failed` set below would silently reset. (fileId, position) is what both
+ * shapes agree on, and it stays unique when the same file is attached twice,
+ * because file ids are content hashes but positions are not.
+ */
+const tileKey = (attachment: MessageAttachmentLike, index: number) =>
+  `${getFileId(attachment) ?? 'missing'}-${attachment.position ?? index}`;
+
 export function MessageAttachments({ message }: MessageAttachmentsProps) {
   const attachments = getAttachments(message);
   const images = attachments.filter(isImageAttachment);
   const others = attachments.filter((a) => !isImageAttachment(a));
 
-  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  // The OPEN IMAGE is held by key, not by index. `images` is re-derived from
+  // props on every render, so an index would silently point at a different
+  // photo if the message changed while the viewer was open — the server echo
+  // replacing the optimistic row, an edit, or a hard-deleted file dropping a
+  // tile out of the list.
+  const [lightboxKey, setLightboxKey] = useState<string | null>(null);
   const [failed, setFailed] = useState<Set<string>>(new Set());
 
-  const close = useCallback(() => setLightboxIndex(null), []);
-  const step = useCallback(
-    (delta: number) => {
-      setLightboxIndex((current) => {
-        if (current === null || images.length === 0) return current;
-        // Wrap, so paging past either end continues round the gallery.
-        return (current + delta + images.length) % images.length;
-      });
-    },
-    [images.length],
-  );
+  const imageKeys = images.map(tileKey);
+  const openAt = lightboxKey === null ? -1 : imageKeys.indexOf(lightboxKey);
+  const activeIndex = openAt === -1 ? null : openAt;
+
+  // Read through a ref so paging stays a stable callback: `imageKeys` is a new
+  // array every render, and putting it in the dependency list would re-create
+  // `step` each time and churn the keydown listener below.
+  const imageKeysRef = useRef<string[]>([]);
+  imageKeysRef.current = imageKeys;
+
+  const close = useCallback(() => setLightboxKey(null), []);
+  const step = useCallback((delta: number) => {
+    setLightboxKey((current) => {
+      const keys = imageKeysRef.current;
+      if (current === null || keys.length === 0) return current;
+      const at = keys.indexOf(current);
+      // A key that is no longer present (its file was hard-deleted while the
+      // viewer was open) resumes from the start rather than closing under the
+      // user. Wrap, so paging past either end continues round the gallery.
+      const from = at === -1 ? 0 : at;
+      return keys[(from + delta + keys.length) % keys.length];
+    });
+  }, []);
 
   // Arrow keys page the lightbox. Registered only while it is open so the
   // channel's own keyboard handling is untouched the rest of the time.
   useEffect(() => {
-    if (lightboxIndex === null) return;
+    if (activeIndex === null) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'ArrowLeft') step(-1);
       if (event.key === 'ArrowRight') step(1);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [lightboxIndex, step]);
+  }, [activeIndex, step]);
 
   if (attachments.length === 0) return null;
 
-  const active = lightboxIndex === null ? null : images[lightboxIndex];
+  const active = activeIndex === null ? null : images[activeIndex];
   const activeFileId = active ? getFileId(active) : null;
   // A single image keeps the roomier standalone treatment; two or more tile.
   const isSingle = images.length === 1;
@@ -78,10 +110,7 @@ export function MessageAttachments({ message }: MessageAttachmentsProps) {
           {images.map((attachment, index) => {
             const fileId = getFileId(attachment);
             const name = getAttachmentName(attachment);
-            // getAttachments already dropped attachments with no fileId, so a
-            // key collision here would mean the same file twice in one
-            // message — legitimate, since file ids are content hashes.
-            const key = attachment.id ?? `${fileId}-${index}`;
+            const key = tileKey(attachment, index);
 
             if (!fileId || failed.has(key)) {
               return (
@@ -99,7 +128,7 @@ export function MessageAttachments({ message }: MessageAttachmentsProps) {
               <button
                 key={key}
                 type="button"
-                onClick={() => setLightboxIndex(index)}
+                onClick={() => setLightboxKey(key)}
                 className={cn(
                   'cursor-zoom-in overflow-hidden rounded-lg border border-border/50',
                   isSingle ? 'block max-w-sm' : 'h-[120px] w-[120px]',
@@ -124,12 +153,12 @@ export function MessageAttachments({ message }: MessageAttachmentsProps) {
           each of which brings its own top margin. */}
       {others.map((attachment, index) => (
         <MessageAttachment
-          key={attachment.id ?? `${getFileId(attachment)}-${index}`}
+          key={tileKey(attachment, index)}
           message={attachment}
         />
       ))}
 
-      <Dialog open={lightboxIndex !== null} onOpenChange={(open) => !open && close()}>
+      <Dialog open={activeIndex !== null} onOpenChange={(open) => !open && close()}>
         {/* sm:max-w-[92vw] overrides shadcn DialogContent's default sm:max-w-lg
             (~512px), which would otherwise clamp the viewer to a tiny window. */}
         <DialogContent className="flex h-[90vh] w-[92vw] flex-col gap-0 p-4 sm:max-w-[92vw]">
@@ -147,7 +176,7 @@ export function MessageAttachments({ message }: MessageAttachmentsProps) {
             />
           )}
 
-          {images.length > 1 && lightboxIndex !== null && (
+          {images.length > 1 && activeIndex !== null && (
             <div className="flex items-center justify-center gap-3 pt-2">
               <button
                 type="button"
@@ -158,7 +187,7 @@ export function MessageAttachments({ message }: MessageAttachmentsProps) {
                 <ChevronLeft className="h-4 w-4" />
               </button>
               <span className="text-xs tabular-nums text-muted-foreground">
-                {`${lightboxIndex + 1} / ${images.length}`}
+                {`${activeIndex + 1} / ${images.length}`}
               </span>
               <button
                 type="button"

@@ -165,6 +165,61 @@ describe('MessageAttachments', () => {
     });
   });
 
+  it('keeps the same img elements when the send confirms', () => {
+    // The optimistic rows the composer builds carry no attachment id; the
+    // server echo replaces them with rows that do. Keying tiles on that id
+    // would change every key at that moment, remounting every <img> — a
+    // visible reload flash on the sender's own batch, and the failed-image set
+    // (keyed the same way) would reset with it.
+    const optimistic: MessageWithAttachment = {
+      attachments: [
+        { fileId: 'file-0', attachmentMeta: meta('photo-0.png'), position: 0 },
+        { fileId: 'file-1', attachmentMeta: meta('photo-1.png'), position: 1 },
+      ],
+    };
+    const { rerender } = render(<MessageAttachments message={optimistic} />);
+    const before = screen.getAllByRole('img');
+
+    rerender(<MessageAttachments message={imageMessage(2)} />);
+
+    assert({
+      given: 'the confirmed message replacing the optimistic one, same files in the same order',
+      should: 'reuse the very same DOM nodes rather than remounting the gallery',
+      actual: screen.getAllByRole('img').map((img, i) => img === before[i]),
+      expected: [true, true],
+    });
+  });
+
+  it('stays on the same photo when the message updates under an open viewer', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<MessageAttachments message={imageMessage(3)} />);
+    await user.click(screen.getAllByRole('button')[2]);
+    expect(screen.getByText('3 / 3')).toBeTruthy();
+
+    // The first photo's file is hard-deleted, so its tile drops out of the
+    // list. Holding the open image by index would silently show a different
+    // photo; holding it by identity keeps the one the user opened.
+    rerender(
+      <MessageAttachments
+        message={{
+          attachments: [
+            { id: 'att-1', fileId: 'file-1', attachmentMeta: meta('photo-1.png'), position: 1 },
+            { id: 'att-2', fileId: 'file-2', attachmentMeta: meta('photo-2.png'), position: 2 },
+          ],
+        }}
+      />,
+    );
+
+    // An index-based viewer would be pointing past the end of the list here:
+    // the dialog closes and this counter does not exist at all.
+    assert({
+      given: 'a tile disappearing while the viewer is open on the last photo',
+      should: 'still be showing that same photo, now second of two',
+      actual: screen.getByText('2 / 2').textContent,
+      expected: '2 / 2',
+    });
+  });
+
   it('offers no paging controls for a single image', async () => {
     const user = userEvent.setup();
     render(<MessageAttachments message={imageMessage(1)} />);
