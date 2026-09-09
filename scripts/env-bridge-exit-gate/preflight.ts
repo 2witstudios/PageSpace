@@ -37,7 +37,7 @@
  * Usage:  bun scripts/env-bridge-exit-gate/preflight.ts
  */
 import { execFileSync } from 'node:child_process';
-import { expect, failed, optional, required, summarize } from './report';
+import { expect, failed, optional, required, summarize } from './report.ts';
 
 const host = required('PAGESPACE_GATE_HOST'); // e.g. http://127.0.0.1:3000
 const cliBin = required('PAGESPACE_GATE_CLI'); // e.g. ./packages/cli/dist/bin.js
