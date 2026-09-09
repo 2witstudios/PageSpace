@@ -52,7 +52,7 @@ function isValidAttachmentMeta(value: unknown): value is AttachmentMeta {
   );
 }
 
-export type ParseAttachmentsResult =
+type ParseAttachmentsResult =
   | { kind: 'ok'; attachments: MessageAttachmentInput[] }
   | { kind: 'invalid'; error: string };
 

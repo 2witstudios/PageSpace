@@ -14,7 +14,7 @@
  * row.
  */
 
-export interface OptimisticallySent {
+interface OptimisticallySent {
   /** Optimistic rows carry a `temp-` prefixed id until the server confirms. */
   id: string;
   /** Set on an in-flight send and echoed back by the server. Never stored. */

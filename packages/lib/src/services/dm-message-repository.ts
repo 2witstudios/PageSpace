@@ -140,7 +140,7 @@ export type InsertDmMessageResult =
   | { kind: 'not_linked' }
   | { kind: 'too_many_attachments' };
 
-export type DmMessageAttachmentRow = InferSelectModel<typeof directMessageAttachments>;
+type DmMessageAttachmentRow = InferSelectModel<typeof directMessageAttachments>;
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
