@@ -10,6 +10,7 @@ import {
   localEnvEnrollmentIssueSchema,
   patchDriveEnvRequestSchema,
   SERVER_POLICY_OPS,
+  driveEnvApprovalDtoSchema,
 } from '../env-contract';
 import { GRANT_OPS } from '../../env-bridge/grant';
 
@@ -209,5 +210,13 @@ describe('drive-env contract — the substrate axis (Local Environments epic)', 
       expect(patchDriveEnvRequestSchema.safeParse({ serverPolicy: { ops: ['exec'], checkpoint: true } }).success).toBe(false);
       expect(patchDriveEnvRequestSchema.safeParse({ serverPolicy: { ops: ['shell'], checkpoint: false } }).success).toBe(false);
     });
+  });
+});
+
+describe('driveEnvApprovalDtoSchema (GA wave 3) — a mirrored approval carries revokePending', () => {
+  it('requires revokePending alongside the two revoke timestamps', () => {
+    const base = { id: 'ch_1', envId: 'e', driveId: null, envName: null, envLabel: null, userId: 'u', op: 'exec', summary: 's', scope: '30d', createdAt: '2026-09-09T12:00:00.000Z', expiresAt: null, revokedAt: null, revokeAcknowledgedAt: null };
+    expect(driveEnvApprovalDtoSchema.safeParse(base).success).toBe(false);
+    expect(driveEnvApprovalDtoSchema.parse({ ...base, revokePending: true })).toMatchObject({ revokePending: true });
   });
 });

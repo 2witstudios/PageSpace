@@ -28,6 +28,8 @@ export interface DriveEnvApprovalRecord {
   revokedBy: string | null;
   revokeAcknowledgedAt: Date | null;
   revokeRemoved: number | null;
+  /** The owner decided, the machine has not signed for it: the approval may still be held there (Codex P1 #4, review round 1). Derived. */
+  revokePending: boolean;
 }
 
 /** With the env's drive, for the account page (which links each row to its drive settings page). */
@@ -57,7 +59,7 @@ export interface ApprovalMirrorStore {
   markAcknowledged(input: { id: string; removed: number; now: Date }): Promise<DriveEnvApprovalRecord | null>;
   /** Revokes owed to the machine: `revokedAt` set, `revokeAcknowledgedAt` not — what the hello replays. */
   listUnacknowledgedRevokes(envId: string): Promise<DriveEnvApprovalRecord[]>;
-  /** In force (not revoked, not expired), newest first, bounded — the env's approvals. */
+  /** In force as the machine sees it (not acknowledged-revoked, not expired; revoked-but-unacked rows included and flagged), newest first, bounded. */
   listActiveForEnv(input: { envId: string; now: Date; limit: number }): Promise<DriveEnvApprovalRecord[]>;
   /** In force across every env the user OWNS (never merely requested on), newest first, bounded — the account page. */
   listActiveForOwner(input: { ownerId: string; now: Date; limit: number }): Promise<DriveEnvApprovalWithEnv[]>;
@@ -89,6 +91,7 @@ export function toDriveEnvApprovalDTO(row: DriveEnvApprovalRecord, env?: { drive
     expiresAt: row.expiresAt === null ? null : row.expiresAt.toISOString(),
     revokedAt: row.revokedAt === null ? null : row.revokedAt.toISOString(),
     revokeAcknowledgedAt: row.revokeAcknowledgedAt === null ? null : row.revokeAcknowledgedAt.toISOString(),
+    revokePending: row.revokePending,
   };
 }
 
@@ -115,9 +118,13 @@ export async function createDbApprovalMirrorStore(): Promise<ApprovalMirrorStore
     revokedBy: row.revokedBy,
     revokeAcknowledgedAt: row.revokeAcknowledgedAt,
     revokeRemoved: row.revokeRemoved,
+    revokePending: row.revokedAt !== null && row.revokeAcknowledgedAt === null,
   });
 
-  const inForce = (now: Date) => and(isNull(driveEnvApprovals.revokedAt), or(isNull(driveEnvApprovals.expiresAt), gt(driveEnvApprovals.expiresAt, now)));
+  // "In force" as the MACHINE sees it (Codex P1 #4, review round 1): a row leaves the listings only once the
+  // machine has ACKNOWLEDGED its revoke (or it expired). A revoked-but-unacknowledged row stays, flagged
+  // `revokePending` — the list must never say "none in force" while the machine may still hold one.
+  const inForce = (now: Date) => and(isNull(driveEnvApprovals.revokeAcknowledgedAt), or(isNull(driveEnvApprovals.expiresAt), gt(driveEnvApprovals.expiresAt, now)));
 
   return {
     async remember(input) {

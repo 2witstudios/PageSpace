@@ -111,13 +111,18 @@ describe('the revoke owed to the machine', () => {
 });
 
 describe('the two listings', () => {
-  it('listActiveForEnv: in force only — revoked and expired rows are out, until_revoked never expires; newest first', async () => {
+  it('Codex P1 #4 (review round 1) — listActiveForEnv keeps a REVOKED-BUT-UNACKNOWLEDGED row (flagged revokePending: the machine may still hold it) and drops it only once the machine acked; expired rows are out, until_revoked never expires; newest first', async () => {
     await remember('ch_live');
     await remember('ch_forever', { scope: 'until_revoked', expiresAt: null, createdAt: new Date(NOW.getTime() + 1000) });
     await remember('ch_expired', { expiresAt: new Date(NOW.getTime() - 1) });
-    await remember('ch_revoked', { createdAt: new Date(NOW.getTime() + 2000) });
-    await store.markRevoked({ id: 'ch_revoked', by: ownerId, now: LATER });
-    expect((await store.listActiveForEnv({ envId, now: NOW, limit: 50 })).map((row) => row.id)).toEqual(['ch_forever', 'ch_live']);
+    await remember('ch_revoked_unacked', { createdAt: new Date(NOW.getTime() + 2000) });
+    await remember('ch_revoked_acked', { createdAt: new Date(NOW.getTime() + 3000) });
+    await store.markRevoked({ id: 'ch_revoked_unacked', by: ownerId, now: LATER });
+    await store.markRevoked({ id: 'ch_revoked_acked', by: ownerId, now: LATER });
+    await store.markAcknowledged({ id: 'ch_revoked_acked', removed: 1, now: LATER });
+    const rows = await store.listActiveForEnv({ envId, now: NOW, limit: 50 });
+    expect(rows.map((row) => [row.id, row.revokePending])).toEqual([['ch_revoked_unacked', true], ['ch_forever', false], ['ch_live', false]]);
+    expect((await store.listActiveForOwner({ ownerId, now: NOW, limit: 50 })).map((row) => [row.id, row.revokePending])).toEqual([['ch_revoked_unacked', true], ['ch_forever', false], ['ch_live', false]]);
   });
 
   it('listActiveForOwner: the envs the user OWNS, with the env\'s drive, name and label — an approval the user holds on someone else\'s machine is that owner\'s to see', async () => {

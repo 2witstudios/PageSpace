@@ -263,6 +263,8 @@ export const driveEnvApprovalDtoSchema = z.object({
   revokedAt: isoTimestamp.nullable(),
   /** The machine's SIGNED ack — the only proof the approval is gone from the machine. */
   revokeAcknowledgedAt: isoTimestamp.nullable(),
+  /** Revoked by the owner, not yet acknowledged by the machine: listed, flagged, may still be held there. */
+  revokePending: z.boolean(),
 });
 export type DriveEnvApprovalDTO = z.infer<typeof driveEnvApprovalDtoSchema>;
 
