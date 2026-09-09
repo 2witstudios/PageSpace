@@ -1,11 +1,122 @@
-# PageSpace Android
+# PageSpace Android App
 
-Capacitor wrapper around the web app, mirroring `apps/ios`.
+Capacitor 7 wrapper around the PageSpace web app, mirroring `apps/ios`. **Not distributed.** There
+is no release build, no Play Console listing, and no release keystore; the last artifact was a
+debug APK on 2026-03-23. What has landed since is the Android Parity Epic (PRs #2500, #2501,
+#2552, #2557, #2558, #2559), and **none of it has been run on a device** — see "Device
+verification" below before trusting any behavioural claim in this file.
 
-> **Scope of this file today:** why the Capacitor config diverges from the iOS one, what deep
-> links ship and what is deferred, the server-side push requirements, and the client-side push
-> permission and registration path. Build and signing belong to the release work and are not
-> documented here yet.
+- **Application ID / namespace:** `ai.pagespace.android` (`android/app/build.gradle`)
+- **Capacitor app ID:** `ai.pagespace.android` (`capacitor.config.ts`)
+- **Firebase project:** `pagespace-f328e` (`android/app/google-services.json`)
+- **SDK levels:** `minSdk 23`, `compileSdk`/`targetSdk 36` (`android/variables.gradle`)
+- **Signing:** debug keystore only. No release signing config exists in `build.gradle`.
+- **Native plugin of our own:** `PageSpaceSecureStoragePlugin.java`, registered in
+  `MainActivity.java` under the name `PageSpaceKeychain` (same name as the iOS Swift plugin, so
+  the web layer's `keychain-plugin.ts` binding serves both)
+
+## Architecture
+
+This is a **remote-loading** app, like iOS. The WebView loads the live site directly:
+
+- `server.url = https://pagespace.ai` with `appStartPath = /dashboard` — the split is deliberate
+  and Android-specific; see "`server.url` must stay an origin" below. iOS carries the path in
+  `server.url` and must not be copied here.
+- `webDir: ./public` is only the offline fallback shell (`errorPath: index.html`, the Retry
+  screen).
+- Because behaviour comes from the live site, most product changes ship without an app update.
+  A new build is needed only when native config changes: version bump, manifest, permissions,
+  plugins, Gradle dependencies, icons/splash, or a Capacitor/plugin upgrade.
+
+Everything the shell *does* natively is driven from the shared web layer through the capability
+table in `apps/web/src/lib/capacitor-bridge.ts` — nothing in `apps/web` asks "is this iOS?" any
+more; it asks `hasNativeCapability('secureStore' | 'nativeAuth' | 'push' | 'badge')`, and Android
+answers yes to all four (Apple sign-in excepted — see below). Adding a capability to Android is a
+one-line table edit, not a call-site sweep.
+
+## Building locally
+
+Prereqs: Android Studio (or the command-line SDK) with an SDK 36 platform, a JDK 17+, and `bun`
+at the repo root. **Run `bun install` first** — the Capacitor packages live under
+`apps/android/node_modules`, not the workspace root.
+
+```bash
+# From the repo root — build the web app, then sync native
+bun run --cwd apps/android build:full   # builds `web`, then `cap sync android`
+# or, if the web build is current:
+bun run --cwd apps/android build        # `cap sync android` only
+
+bun run --cwd apps/android dev          # `cap open android` — opens Android Studio
+bun run --cwd apps/android run          # `cap run android` — build + install on a connected device/emulator
+bun run --cwd apps/android typecheck    # `tsc --noEmit` over capacitor.config.ts (also runs in CI)
+```
+
+`cap sync android` does three things you should know about: it regenerates
+`android/app/src/main/assets/capacitor.config.json` from `capacitor.config.ts` (gitignored — a
+stale copy ships whatever it last held, so **sync immediately before every build**), it rewrites
+`android/capacitor.settings.gradle` and `android/app/capacitor.build.gradle` from the plugin list
+in `package.json` (both are committed and currently **stale** — neither lists
+`@capawesome/capacitor-badge` yet, so a Gradle build without a prior sync compiles no badge plugin
+and `Badge.set()` rejects at runtime), and it copies `public/` into the assets dir.
+
+A plain Gradle build from `android/` (`./gradlew assembleDebug`) works after a sync and produces
+`android/app/build/outputs/apk/debug/app-debug.apk`, signed with `~/.android/debug.keystore`.
+
+### What CI checks — and what it does not
+
+Since Phase E, `apps/android` and `apps/ios` each have a `typecheck` script and a
+package-specific override in the root `turbo.json` (`"@pagespace/android#typecheck": { "dependsOn": [] }`)
+so `bun run typecheck` covers `capacitor.config.ts` **without** dragging web's Next.js build into
+the graph (the app devDepends on `web`, so the default `^build` dependency would). A guard test in
+`apps/web` — `src/lib/__tests__/capacitor-allow-navigation.guard.test.ts` — pins the
+`allowNavigation` and `server.url` invariants described below for both platforms.
+
+That is the whole of it. **Nothing in CI compiles the Java, parses the manifest, runs Gradle, or
+installs an APK.** A change to `MainActivity.java`, `PageSpaceSecureStoragePlugin.java`,
+`AndroidManifest.xml` or any Gradle file is checked by the reviewer's eyes and, later, by a
+device. Validate the manifest as XML at least (`xmllint --noout
+android/app/src/main/AndroidManifest.xml`).
+
+## Versioning
+
+`android/app/build.gradle`, `defaultConfig`:
+
+- `versionCode` — Android's build number, an integer that must strictly increase per upload to
+  Play. Currently **2** (Phase E bumped it from the 2026-03-23 debug APK's `1`).
+- `versionName` — the user-facing version. Currently **`1.4`**, deliberately tracking the iOS
+  `MARKETING_VERSION` so both stores show one product version; bump the two together.
+
+Neither is read from `capacitor.config.ts`; there is no equivalent of iOS's `$(MARKETING_VERSION)`
+indirection.
+
+## Native capabilities — what each phase wired, and how
+
+| Capability | Native side | Web side | Phase / PR |
+|---|---|---|---|
+| Secure storage | `PageSpaceSecureStoragePlugin.java` over `EncryptedSharedPreferences` (`androidx.security:security-crypto:1.1.0-alpha06`, an alpha) | `apps/web/src/lib/auth/platform-storage/android-storage.ts` (`AndroidStorage`), selected by `hasNativeCapability('secureStore')` | A — #2557 |
+| Native Google sign-in | `@capgo/capacitor-social-login`, Android SDK; `androidClientId` in `capacitor.config.ts` | `apps/web/src/lib/native-google-auth.ts`, initialised with `webClientId = NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID` (the ID token's audience is the web client, which `/api/auth/google/native` already accepts) | B — #2559 |
+| Sign in with Apple | **none** — Android has no native Apple SDK | `supportsNativeAuthProvider('apple')` is false on Android; the button falls to web OAuth, which leaves the app for the external browser and drops the session in the wrong cookie jar. **Known broken on Android**, not a regression; tracked on the "Mobile OAuth return-channel hardening" epic in the dev drive | B — #2559 |
+| Bearer auth + CSRF | — | `buildAuthCredentials` in `auth-fetch.ts` mirrors the server's rule: bearer if a token exists, else cookie credentials with `X-CSRF-Token` on mutations. Before #2559 every Android mutation answered 403 `CSRF_TOKEN_MISSING` | B — #2559 |
+| Push registration | `POST_NOTIFICATIONS` in the manifest; Firebase Messaging via the BoM in `build.gradle` | `usePushNotifications.ts`, gated on `capabilities.push`; token POSTs to `/api/notifications/push-tokens` with `platform: 'android'` | D — #2558 |
+| FCM sending | — | `packages/lib/src/notifications/push-notifications.ts`, `case 'android'`: OAuth2 token from `FCM_SERVICE_ACCOUNT_JSON`, FCM HTTP v1 | — #2501 |
+| App-icon badge | `@capawesome/capacitor-badge` (added to `package.json`; Gradle files regenerate on sync) | `useNativeBadgeSync.ts` (formerly `useIosBadgeSync`) | D — #2558 |
+| Deep links | `pagespace://` intent filter (inert); **no** https App Links filter | `DeepLinkHandler.tsx` + `deep-links.ts` (cross-platform, from #2569) | C — #2552 |
+| Error shell | `errorPath: index.html` → `public/index.html` Retry screen | — | C — #2552 |
+
+Details for storage: `AndroidStorage` reports `usesBearer() === true`; a session written by the
+web sign-in flow inside the WebView (before native sign-in existed) lives in `localStorage`, and
+the adapter falls back to it and adopts its device binding rather than stranding it. The plugin
+`call.reject`s if `EncryptedSharedPreferences.create()` threw at load, and `storeSession` /
+`getStoredSession` propagate that as an error instead of silently persisting nothing; every
+bridge read is bounded by a 3-second timeout. The device id is `pagespace_device_id` in
+`@capacitor/preferences`, the same key iOS uses.
+
+Details for native Google: **this is the only route to a Google session in the Android shell**,
+not an optimisation. Google One Tap returns early under Capacitor, the web OAuth handoff cookie
+lands in the external browser, and magic link never mints a device token off desktop. If the
+plugin fails to register on a device there is no working alternative. There is deliberately no
+fall-through from a failed native attempt to web OAuth (`useOAuthSignIn.ts`), because there is no
+working web OAuth inside the shell to fall through to.
 
 ## Why this config is not a copy of the iOS one
 
@@ -183,20 +294,31 @@ not about the mechanism: a debug build can be verified locally against a debug-f
 assetlinks file, and that workflow is documented below. What is missing is the release certificate,
 and with it any possibility of verification on a user's device.
 
-### Prerequisite 2 — link routing in the web app
+### Prerequisite 2 — link routing in the web app (met since PR #2569)
 
-Nothing listens for the `@capacitor/app` plugin's `appUrlOpen` event, on **either** platform, so a
-captured link never reaches the path it names. What the user sees depends on whether the app was
-already running, and the two cases differ:
+When Phase C shipped, nothing listened for the `@capacitor/app` plugin's `appUrlOpen` event on
+either platform, so a captured link never reached the path it named. That is no longer true:
+`apps/web/src/components/DeepLinkHandler.tsx` (mounted in the root layout) handles both halves —
+`App.getLaunchUrl()` for a cold start, where the URL is spent before any listener exists, and the
+`appUrlOpen` listener for a warm one, where `Bridge.onNewIntent` only notifies plugins and never
+calls `loadUrl`. It lives in the shared web layer, so Android gets it for free the moment it
+starts receiving links. Which URLs resolve to which route is
+`apps/web/src/lib/navigation/deep-links.ts` — an allowlist, currently `https://pagespace.ai/invite/<token>`
+only; anything else on the claimed host is handed to the browser rather than swallowed.
 
-| Start | What happens |
+Two things the resolver does **not** do, both on purpose: it ignores the `pagespace://` scheme
+entirely (the exchange-binding precondition above), and it does not route `/auth/callback/*` or
+`/join/*`. Widen the AASA, the Android filter, and the resolver **together** — claiming a path the
+resolver returns `null` for makes the link do nothing in the app, which is strictly worse than
+leaving it to the browser.
+
+The behaviour table below is therefore what a user on Android 6–11 would see **without** the
+routing, and is kept because it is what makes an unverified filter harmful on those versions:
+
+| Start | With no listener (pre-#2569) |
 |---|---|
 | **Cold** | The app launches and loads its start URL (`server.url` + `appStartPath`, so `/dashboard`). The linked path is dropped. |
-| **Warm** (`singleTask`, app already running) | The intent arrives via `onNewIntent`; `Bridge.onNewIntent` only notifies plugins — it never calls `loadUrl` — so `AppPlugin` fires `appUrlOpen` into a void and **the WebView stays exactly where it was.** Nothing visible happens at all. |
-
-Either way the invite token or auth callback code is silently dropped. Do not rely on a
-reset-to-`/dashboard` guarantee: it holds only on a cold launch, which matters both for device
-verification and for whoever implements the routing.
+| **Warm** (`singleTask`, app already running) | The intent arrives via `onNewIntent`; `Bridge.onNewIntent` only notifies plugins — it never calls `loadUrl` — so `AppPlugin` fires `appUrlOpen` into a void and **the WebView stays exactly where it was.** |
 
 ### Why `autoVerify` alone is not enough here
 
@@ -232,11 +354,9 @@ succeed — which is prerequisite 1.
 
 ### The filter to add, once both prerequisites are met
 
-**Prerequisite 2 is now met** — `apps/web/src/components/DeepLinkHandler.tsx` consumes
-`appUrlOpen` and `getLaunchUrl`, and it lives in the shared web layer, so the routing is
-already there for Android the moment it starts receiving links. What remains for Android is
-prerequisite 1: the release signing certificate and a real `assetlinks.json`. Until those
-exist **Android captures nothing** — no https intent-filter is registered.
+Prerequisite 2 is met (above). What remains for Android is prerequisite 1: the release signing
+certificate and a real `assetlinks.json`. Until those exist **Android captures nothing** — no
+https intent-filter is registered.
 
 When it does, mirror `apps/marketing/public/.well-known/apple-app-site-association` (the copy
 Caddy actually serves), currently `/invite/*` only, so both platforms capture the same links. Widening beyond these paths should still wait on prerequisite 2 — whole-host
@@ -393,3 +513,101 @@ Gradle directly without syncing first.
 **Not verified on a device.** Nothing here has been exercised on real hardware — there is no
 release build yet. The permission dialog, the FCM token round trip and badge behaviour across
 launchers are all the device-verification task's to confirm.
+
+## Device verification — the checklist nothing has run yet
+
+Every behavioural claim in PRs #2552, #2557, #2558 and #2559 was read off source (Capacitor 7.6.5
+Java, the plugin's Java, this repo) and **not observed on hardware**. This is the list of what a
+person with an Android device or emulator needs to confirm, in the order the failures would
+cascade. The board task "Device verification" on the Android Parity Epic is `blocked` until this
+is done; mark each line with the device, API level and build you used.
+
+**Setup**
+
+- [ ] `bun install`, then `bun run --cwd apps/android build:full`, then `./gradlew assembleDebug`
+      from `android/`. Confirm `android/app/src/main/assets/capacitor.config.json` contains
+      `"url": "https://pagespace.ai"`, `"appStartPath": "/dashboard"`, `"allowNavigation": ["pagespace.ai"]`,
+      `"errorPath": "index.html"` — that is what the shell actually reads.
+- [ ] Confirm `capacitor.settings.gradle` and `app/capacitor.build.gradle` now list
+      `capawesome-capacitor-badge` after the sync (they are stale in git).
+- [ ] Install on **one API 33+ device** (permission dialog path) and, if possible, **one API 23–30
+      device or emulator** (the App Links chooser row in the table above; also the
+      `POST_NOTIFICATIONS`-is-ignored path).
+
+**Shell (Phase C, #2552)**
+
+- [ ] Cold launch lands on `https://pagespace.ai/dashboard` (or the signin redirect), inside the
+      WebView, not the browser. This is the `appStartPath` split working.
+- [ ] **The bridge origin allowlist is live, not the fallback.** Two checks, from `chrome://inspect`
+      on the connected device: (1) on the app's own page, `window.androidBridge` exists and
+      `Capacitor.Plugins.PageSpaceKeychain` calls resolve; (2) open a page on a **non-listed**
+      origin in the same WebView (e.g. navigate via an in-app link that is not intercepted, or
+      load one through DevTools) and confirm `androidBridge.postMessage` is **absent or refused**
+      there. If it works on a foreign origin, `MessageHandler` took its
+      `addJavascriptInterface` catch — that is the finding-3 fallback, and it means the
+      allowlist protects nothing. Report upstream to Capacitor if so.
+- [ ] Airplane mode, cold launch: the bundled Retry screen renders (not Chrome's error page).
+      Restore connectivity, tap Retry: the app loads `/dashboard`.
+- [ ] Tap a `https://pagespace.ai/...` link from another app: it opens in the **browser**, with no
+      disambiguation chooser, on both API rows. (No https filter is registered; this confirms it.)
+- [ ] `adb shell am start -a android.intent.action.VIEW -d "pagespace://anything"` with the app
+      **running**: the app comes to the foreground, stays on its current route, and nothing else
+      happens (the resolver ignores the scheme). Cold: the app launches to `/dashboard`.
+
+**Secure storage (Phase A, #2557) and auth (Phase B, #2559)**
+
+- [ ] Native Google sign-in end to end: the native account picker appears (not a web consent
+      page), the app lands authenticated, and `adb logcat` shows no `PageSpaceKeychain` rejection.
+- [ ] A **mutation** after native sign-in — create a page, send a message — returns 2xx, not
+      403 `CSRF_TOKEN_MISSING`.
+- [ ] Force-stop and relaunch: the session survives (read from `EncryptedSharedPreferences`), with
+      no visit to `/auth/signin`.
+- [ ] Background the app for **more than five minutes**, foreground it: still signed in (the
+      proactive refresh must not sign a live session out — the Phase B round-3/4 defect).
+- [ ] Sign out: relaunch lands on `/auth/signin`, and the keychain holds no session
+      (`adb shell run-as ai.pagespace.android ls shared_prefs` shows the file; its contents are
+      encrypted, so judge by the relaunch).
+- [ ] Sign in with **Apple**: expected to **fail** (leaves for the external browser; app stays
+      signed out). Confirm that is what happens and that it fails cleanly, not with a crash.
+- [ ] Magic link from an email on the device: opens in the browser, not the app (no App Links),
+      and the app stays signed out — known, not a regression.
+
+**Push and badge (Phase D, #2558)**
+
+- [ ] API 33+: first launch after sign-in shows the notification permission dialog **once**. Deny,
+      relaunch: no dialog. Enable in system settings, relaunch: registration proceeds (the
+      `push_permission_denied` record is dropped when the OS reports `granted`).
+- [ ] With `FCM_SERVICE_ACCOUNT_JSON` set on the server: a row for this device appears with
+      `platform = 'android'`, and a mention from another account **arrives in the tray** with the
+      app in the background. Note the small icon and channel name — both are Firebase defaults
+      today (no `default_notification_icon` / `default_notification_channel_id` meta-data).
+- [ ] Tap the notification: the app opens the referenced page (`PushActionHandler`).
+- [ ] With the app in the **foreground**, a push does nothing visible — by design.
+- [ ] Badge: an unread count shows on the launcher icon on a launcher that supports badges
+      (Pixel Launcher, Samsung One UI); on one that does not, nothing happens and nothing errors.
+- [ ] Uninstall, send again: the server marks the token inactive (`UNREGISTERED`).
+
+**Not verifiable here and not expected to pass**: anything needing a release-signed build (App
+Links verification against a real `assetlinks.json`, Play internal testing) — see below.
+
+## What blocks a distributable build
+
+All deliberately outside the Android Parity Epic's scope, all still outstanding:
+
+- **Release keystore.** `build.gradle` has no `signingConfigs.release`; nothing in the repo or in
+  Fly secrets holds an upload key. Until it exists every build is debug-signed, `assetlinks.json`
+  cannot name a shipped certificate, and Play will not accept an upload.
+- **Play Console.** No app record, no internal-testing track, no store listing, no privacy
+  declarations (the data-safety form needs the same answers `PrivacyInfo.xcprivacy` gives on iOS).
+- **`assetlinks.json`** at `https://pagespace.ai/.well-known/assetlinks.json`, served by the
+  marketing app like the AASA is, carrying the release certificate's SHA-256 — and only then the
+  https intent filter above.
+- **Release automation.** iOS has a fastlane `beta` lane; Android has nothing. A Gradle
+  `bundleRelease` + Play upload lane (fastlane `supply`, or the Gradle Play Publisher plugin) is
+  the equivalent.
+- **Notification icon.** A monochrome `ic_notification` and the two Firebase meta-data entries in
+  the manifest, or the tray shows Firebase's default glyph.
+- **Dependency disclosure.** `@capgo/capacitor-social-login`'s Android target pulls the Facebook
+  SDK the same way its iOS target does. `OSS-COMPLIANCE.md` at the repo root carries the mobile
+  native-dependency inventory (the per-platform files were folded into it in #1029); re-check it
+  against `capacitor.settings.gradle` after a sync before any listing.

@@ -10,7 +10,8 @@
     "dev": "bun x cap open ios",
     "sync": "bun x cap sync ios",
     "update": "bun x cap update ios",
-    "add-platform": "bun x cap add ios"
+    "add-platform": "bun x cap add ios",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@capawesome/capacitor-badge": "^7.0.0",

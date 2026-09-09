@@ -30,11 +30,12 @@
                 API 23-30 the filter would put PageSpace in the disambiguation
                 chooser. No assetlinks.json can match a SHIPPED build (there is
                 no release signing certificate; a debug one can be verified
-                locally, which does not help a user's device) and nothing routes
-                appUrlOpen, so picking it there drops the invite or auth token —
-                landing on /dashboard from a cold start, or doing nothing visible
-                at all if the app is already running, since Bridge.onNewIntent
-                notifies plugins without reloading the WebView.
+                locally, which does not help a user's device). Link routing itself
+                now exists — apps/web/src/components/DeepLinkHandler.tsx (PR #2569)
+                consumes appUrlOpen and getLaunchUrl in the shared web layer, and
+                its resolver accepts /invite/* on pagespace.ai — so once a release
+                certificate and a matching assetlinks.json exist, the filter in
+                the README is the only remaining step for invite links.
             -->
 
             <!--
@@ -77,8 +78,11 @@
 
                 Note what that does NOT do: Bridge.onNewIntent only notifies
                 plugins, never loadUrl. So on a warm start the WebView stays on
-                whatever route it was showing — the event fires into a void while
-                no listener exists. Only a cold launch loads the start URL.
+                whatever route it was showing unless a listener acts. Since PR
+                #2569 one does — DeepLinkHandler in the web layer — but its
+                resolver ignores the pagespace:// scheme on purpose, for the
+                exchange-binding reason above. Nothing routes this scheme until
+                that binding lands.
             -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
