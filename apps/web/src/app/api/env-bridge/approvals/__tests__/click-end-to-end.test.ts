@@ -86,18 +86,32 @@ const ownerPem = ownerPrivate.export({ format: 'pem', type: 'pkcs8' }) as string
  * password or any other credential — the inputs are a public hostname and a
  * public JSON blob the browser produces.
  *
- * They are hoisted out of the ceremony function so CodeQL's taint tracking
- * cannot reach a hash call through this file's import graph
- * (`js/insufficient-password-hash`, alert 340, which fired on the calls when
- * they were inline): `RP_ID_HASH` is computed once from a module-scope
- * literal, and `sha256` takes a Buffer and nothing else. What gets signed is
- * unchanged.
+ * They are hoisted out of the ceremony function so the inputs are as narrow as
+ * they can be: `RP_ID_HASH` is computed once from a module-scope STRING
+ * LITERAL, and `sha256` takes a Buffer and nothing else. What gets signed is
+ * unchanged, and the end-to-end row proves it — the daemon's own verifier
+ * accepts the result, which a wrong rpIdHash (`rp_mismatch`) or wrong signed
+ * bytes (`bad_signature`) would not survive.
+ *
+ * THE SUPPRESSIONS ARE DELIBERATE AND NARROW, and restructuring did not remove
+ * the alert. `js/insufficient-password-hash` fired on these calls inline
+ * (alert 340) and fired AGAIN after the hoist (alert 341) — the second time on
+ * the hash of a string literal, which cannot be a password by construction.
+ * CodeQL's taint reaches this fixture through the app's import graph from an
+ * OAuth token path, so no arrangement of the code inside this file avoids it.
+ * Suppressed per line, with the reason, rather than by weakening the fixture
+ * or disabling the rule: both hashes are required by the WebAuthn spec
+ * (§ authenticator data begins with SHA-256 of the RP id; an assertion signs
+ * `authenticatorData || SHA-256(clientDataJSON)`), and their only inputs are a
+ * public hostname and the public JSON the browser produces.
  */
+// codeql[js/insufficient-password-hash] not a password hash — SHA-256 of a string-literal RP id, which WebAuthn requires as the first 32 bytes of authenticatorData (alerts 340/341; the taint is from this file's import graph, not from any value used here)
 const RP_ID_HASH = createHash('sha256').update('pagespace.test').digest();
 // The literal above must stay equal to RP_ID; if it drifts, every row here
 // fails `rp_mismatch`, because the verifier compares this against
 // SHA-256 of `PINNED.rpId` — so the duplication cannot go unnoticed.
 
+// codeql[js/insufficient-password-hash] not a password hash — SHA-256 of clientDataJSON, which is exactly what WebAuthn defines an assertion to sign alongside authenticatorData (alerts 340/341)
 const sha256 = (bytes: Buffer): Buffer => createHash('sha256').update(bytes).digest();
 
 /** What the browser's authenticator produces for a challenge the GET handed it. */
