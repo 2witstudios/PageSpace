@@ -68,6 +68,15 @@ export const SHOTS: Shot[] = [
     headline: ["Build your own", "expert."],
   },
   {
+    // The honest version of "automate your SOPs" — a training checklist where
+    // Coffee Bot holds "Read Roasting SOP sections 1-3" in the Assignee column
+    // beside two people. A cron dialog described the mechanism; this shows the
+    // outcome.
+    slug: "tasks",
+    tag: "Assign",
+    headline: ["Assign work.", "Even to an agent."],
+  },
+  {
     slug: "ask",
     tag: "Ask",
     headline: ["Give it the", "whole project."],
