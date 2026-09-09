@@ -340,7 +340,7 @@ function AgendaDaySection({
       ))}
 
       {isEmpty && (
-        <p className="px-3.5 py-2 pl-[62px] text-[13px] italic text-muted-foreground">
+        <p className="px-3.5 py-2 pl-[78px] text-[13px] italic text-muted-foreground">
           Nothing scheduled
         </p>
       )}
@@ -351,8 +351,8 @@ function AgendaDaySection({
 function NowMarker({ now }: { now: Date }) {
   return (
     <div className="flex items-center px-3.5" aria-hidden="true">
-      <span className="w-12 shrink-0 pr-2 text-right text-[11px] font-bold tabular-nums text-destructive">
-        {format(now, 'HH:mm')}
+      <span className="w-16 shrink-0 pr-2 text-right text-[11px] font-bold tabular-nums whitespace-nowrap text-destructive">
+        {format(now, 'h:mm a')}
       </span>
       <span className="relative h-px flex-1 bg-destructive">
         <span className="absolute -left-px -top-[3px] block h-[7px] w-[7px] rounded-full bg-destructive" />
@@ -387,12 +387,12 @@ function AgendaEventRow({
       onClick={onClick}
       className="flex w-full items-stretch border-b border-border/40 px-3.5 text-left active:bg-muted/50"
     >
-      <span className="flex w-12 shrink-0 flex-col justify-start py-2 pr-2 text-right tabular-nums">
-        <span className="text-[13px] font-medium leading-4">
-          {format(new Date(event.startAt), 'HH:mm')}
+      <span className="flex w-16 shrink-0 flex-col justify-start py-2 pr-2 text-right tabular-nums whitespace-nowrap">
+        <span className="text-[12px] font-medium leading-4">
+          {format(new Date(event.startAt), 'h:mm a')}
         </span>
         <span className="text-[11px] leading-4 text-muted-foreground">
-          {format(new Date(event.endAt), 'HH:mm')}
+          {format(new Date(event.endAt), 'h:mm a')}
         </span>
       </span>
       <span className={cn('my-2 w-[3px] shrink-0 rounded-full', colors.dot)} />
@@ -436,9 +436,9 @@ function AgendaTaskRow({ task, onClick }: { task: TaskWithDueDate; onClick: () =
         isCompleted && 'opacity-60'
       )}
     >
-      <span className="flex w-12 shrink-0 flex-col justify-start py-2 pr-2 text-right tabular-nums">
-        <span className="text-[13px] font-medium leading-4">
-          {format(new Date(task.dueDate), 'HH:mm')}
+      <span className="flex w-16 shrink-0 flex-col justify-start py-2 pr-2 text-right tabular-nums whitespace-nowrap">
+        <span className="text-[12px] font-medium leading-4">
+          {format(new Date(task.dueDate), 'h:mm a')}
         </span>
         <span className="text-[11px] leading-4 text-muted-foreground">due</span>
       </span>

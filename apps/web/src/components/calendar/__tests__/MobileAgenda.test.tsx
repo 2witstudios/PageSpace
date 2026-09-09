@@ -128,14 +128,14 @@ describe('MobileAgenda row density', () => {
     assert({
       given: 'a timed event',
       should: 'render its start time once, not twice as before',
-      actual: screen.getAllByText('10:00').length,
+      actual: screen.getAllByText('10:00 AM').length,
       expected: 1,
     });
 
     assert({
       given: 'a timed event',
       should: 'render its end time in the gutter',
-      actual: screen.getAllByText('11:00').length,
+      actual: screen.getAllByText('11:00 AM').length,
       expected: 1,
     });
   });
@@ -160,7 +160,7 @@ describe('MobileAgenda row density', () => {
     assert({
       given: 'a timed event crossing a day boundary',
       should: 'not print its absolute start time into either day gutter',
-      actual: screen.queryByText('22:00') === null,
+      actual: screen.queryByText('10:00 PM') === null,
       expected: true,
     });
   });
@@ -178,7 +178,7 @@ describe('MobileAgenda row density', () => {
     assert({
       given: 'an all-day event',
       should: 'not print a start time for it',
-      actual: screen.queryByText('10:00') === null,
+      actual: screen.queryByText('10:00 AM') === null,
       expected: true,
     });
   });
@@ -291,9 +291,9 @@ describe('MobileAgenda tasks', () => {
     });
 
     assert({
-      given: 'a task due at 18:00',
+      given: 'a task due at 6pm',
       should: 'put the due time in the same gutter the events use',
-      actual: screen.getByText('18:00') !== null,
+      actual: screen.getByText('6:00 PM') !== null,
       expected: true,
     });
 
