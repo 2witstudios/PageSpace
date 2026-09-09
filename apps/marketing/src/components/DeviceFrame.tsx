@@ -18,8 +18,9 @@ const deviceConfigs = {
     strokeWidth: 8,
   },
   ipad: {
-    width: 2064,
-    height: 2752,
+    // Landscape — see CANVAS in app-store-shots.ts for why.
+    width: 2752,
+    height: 2064,
     borderRadius: 80,
     strokeWidth: 10,
   },
