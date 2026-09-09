@@ -1,6 +1,5 @@
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
-import { LegalTodo } from "@/components/LegalTodo";
 import { pageMetadata, LEGAL_LAST_UPDATED } from "@/lib/metadata";
 
 export const metadata = pageMetadata.cookies;
@@ -50,10 +49,33 @@ export default function CookiePolicy() {
               disabled entirely on self-hosted (on-premises) deployments.
             </p>
             <p className="mb-4">
-              To distinguish returning devices for this first-party analytics, we may also store a
-              device identifier in your browser&#39;s local storage.
+              The tracker sends a small, fixed set of events to our own <code>/api/track</code>
+              endpoint: <code>page_view</code> (path, page title, referrer, screen size),{" "}
+              <code>feature_used</code>, <code>user_action</code>, <code>click</code>,{" "}
+              <code>search</code> (the first 100 characters of the query and the result count),{" "}
+              <code>client_error</code>, and <code>slow_operation</code>. Each event carries a
+              timestamp, your user ID, and the IP address and browser user-agent of the request.
+              Events are stored in our user-activity log and deleted after 180 days.
             </p>
-            <LegalTodo>confirm the exact analytics event schema, any additional cookie/local-storage key names beyond the consent and device-id storage described above, and how long device-identifier data is retained.</LegalTodo>
+            <p className="mb-4">
+              To recognise this browser as the same device across sign-ins, we store a device
+              identifier in your browser&#39;s local storage under the key{" "}
+              <code>browser_device_id</code>. It is a short one-way hash of general browser
+              characteristics (user agent, screen size, colour depth, timezone offset, language,
+              platform, and CPU-core count) and is not derived from your name, email, or any other
+              personal information. It is used to label the device in your account&#39;s device list
+              to tie sign-in sessions to a device, and to register the device for push
+              notifications, so it is strictly necessary. It is not sent with analytics events. It
+              persists until you clear your browser storage, and the copy held in your device list is
+              removed when you revoke the device or delete your account.
+            </p>
+            <p className="mb-4">
+              The complete list of first-party browser storage we use is: the session cookie,{" "}
+              <code>ps_consent</code>, <code>login_csrf</code>, and <code>theme</code> (cookies);
+              and <code>deviceToken</code> (a per-device sign-in credential used to refresh your
+              session) and <code>browser_device_id</code> (above) in local storage — both strictly
+              necessary. <code>ps_consent</code> and <code>theme</code> each expire after 1 year.
+            </p>
           </section>
 
           <section className="mb-8">
