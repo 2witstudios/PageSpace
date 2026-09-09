@@ -13,11 +13,14 @@ import { CANVAS, capturePath, type Shot, type ShotDevice } from "@/lib/app-store
  * because the whole point of shipping iPad shots is showing the three-pane
  * layout a phone cannot.
  */
-/* Tuned against rendered composites, not guessed: the first pass left a fifth of
-   each canvas empty below the device, and on iPad the device sat 36px off the
-   right edge, which reads as a mistake rather than a bleed. */
-const PORTRAIT = { copyTop: 150, copyPad: 90, deviceTop: 780, scale: 0.6 };
-const LANDSCAPE = { copyLeft: 110, copyWidth: 720, deviceLeft: 880, deviceTop: 360, scale: 0.65 };
+/* Tuned against rendered composites, not guessed.
+   Landscape went through two passes. Copy beside the device mirrored the landing
+   hero, but a 720px column wraps a 132px headline onto four lines and caps the
+   device at 0.65 — and an iPad capture is dense UI that a store listing already
+   renders a few hundred pixels wide. Copy now runs full width across the top,
+   which lets the device grow and stops the headlines breaking mid-phrase. */
+const PORTRAIT = { copyTop: 140, copyPad: 90, deviceTop: 800, scale: 0.66 };
+const LANDSCAPE = { copyLeft: 150, copyTop: 130, copyWidth: 1900, deviceTop: 500, scale: 0.72 };
 
 export function StoreScreenshot({ shot, device }: { shot: Shot; device: ShotDevice }) {
   const canvas = CANVAS[device];
@@ -39,27 +42,22 @@ export function StoreScreenshot({ shot, device }: { shot: Shot; device: ShotDevi
     return (
       <ScreenshotCanvas size={device} id={`${device}-${shot.slug}`}>
         <div
-          className="absolute"
-          style={{ left: LANDSCAPE.copyLeft, top: 0, bottom: 0, width: LANDSCAPE.copyWidth, display: "flex", flexDirection: "column", justifyContent: "center" }}
+          className="absolute flex flex-col items-start"
+          style={{ left: LANDSCAPE.copyLeft, top: LANDSCAPE.copyTop, width: LANDSCAPE.copyWidth }}
         >
-          {shot.tag && <Tag className="mb-10 self-start">{shot.tag}</Tag>}
-          <Headline>
-            {shot.headline.map((line) => (
-              <span key={line} style={{ display: "block" }}>
-                {line}
-              </span>
-            ))}
-          </Headline>
-          <Subline className="mt-10">{shot.subline}</Subline>
+          {shot.tag && <Tag className="mb-8">{shot.tag}</Tag>}
+          {/* One line at this width — the canvas is wide enough that the
+              portrait line break would read as an accident. */}
+          <Headline>{shot.headline.join(" ")}</Headline>
+          <Subline className="mt-8">{shot.subline}</Subline>
         </div>
 
         <div
-          className="absolute"
+          className="absolute left-1/2"
           style={{
-            left: LANDSCAPE.deviceLeft,
             top: LANDSCAPE.deviceTop,
-            transform: `scale(${LANDSCAPE.scale})`,
-            transformOrigin: "top left",
+            transform: `translateX(-50%) scale(${LANDSCAPE.scale})`,
+            transformOrigin: "top center",
           }}
         >
           <DeviceOutline device={device}>{capture}</DeviceOutline>
