@@ -36,7 +36,16 @@ const TEXTLESS_CONTENT_ELEMENTS: Readonly<Record<string, string | null>> = {
  * content, and their text is not prose. Removed from the source before the
  * text comparison, or a `<style>` block's CSS reads as lost text.
  */
-const NON_CONTENT_ELEMENTS = ['script', 'style', 'noscript', 'template'];
+export const NON_CONTENT_ELEMENTS: readonly string[] = ['script', 'style', 'noscript', 'template'];
+
+/** Removes `NON_CONTENT_ELEMENTS` from `root` in place — what the seed parse sees is `root` after this. */
+export function stripNonContentElements(root: HTMLElement): void {
+  for (const tag of NON_CONTENT_ELEMENTS) {
+    for (const element of Array.from(root.querySelectorAll(tag))) {
+      element.remove();
+    }
+  }
+}
 
 /**
  * Whitespace is stripped, not normalised, before comparing text.
@@ -46,10 +55,11 @@ const NON_CONTENT_ELEMENTS = ['script', 'style', 'noscript', 'template'];
  * invariant explicitly tolerates. What must not change is the sequence of
  * visible characters.
  */
-function visibleCharacters(text: string): string {
+export function visibleCharacters(text: string): string {
   return text.replace(/\s+/gu, '');
 }
 
+/** How many nodes of `typeName` the parsed document holds — the survivor count for a textless element. */
 function countNodesOfType(doc: PmNode, typeName: string): number {
   let count = 0;
   doc.descendants((node) => {
@@ -85,13 +95,19 @@ function parseAndDiagnose(
   workspace: DomWorkspace,
 ): { doc: PmNode; reasons: string[] } {
   const source = workspace.parse(html);
-  for (const tag of NON_CONTENT_ELEMENTS) {
-    for (const element of Array.from(source.querySelectorAll(tag))) {
-      element.remove();
-    }
-  }
+  stripNonContentElements(source);
+  const doc = parseHtmlElementUnchecked(source);
+  return { doc, reasons: describeParseLoss(source, doc) };
+}
 
-  const doc = parseIn(source);
+/**
+ * The gate's verdict on an already-parsed page: what `doc` lost relative to
+ * `source` (which must already have had `stripNonContentElements` applied).
+ * Exported so a survey that has done the parse itself — the seed fidelity
+ * audit — gets the gate's OWN reasons without re-parsing the page, and can
+ * never drift from what `htmlToPmDoc` would decide.
+ */
+export function describeParseLoss(source: HTMLElement, doc: PmNode): string[] {
   const reasons: string[] = [];
 
   const sourceText = visibleCharacters(source.textContent ?? '');
@@ -115,10 +131,18 @@ function parseAndDiagnose(
     }
   }
 
-  return { doc, reasons };
+  return reasons;
 }
 
 /**
+ * The parse itself, with NO loss check — the one step `htmlToPmDoc` wraps.
+ *
+ * Exported for surveys only: `scripts/collab-seed-audit.ts` needs the
+ * document a lossy page parses TO, so it can name what was lost, and
+ * `htmlToPmDoc` throws on exactly those pages. Nothing that seeds may call
+ * this; the gate is `htmlToPmDoc`/`htmlToYDoc`, and bypassing it is how a
+ * lossy document becomes permanent.
+ *
  * `preserveWhitespace: 'full'` is deliberately NOT passed. The schema's own
  * `codeBlock` carries `whitespace: 'pre'`, so ProseMirror already preserves
  * whitespace exactly where it is significant; forcing it document-wide would
@@ -129,7 +153,7 @@ function parseAndDiagnose(
  * global `document`, which is what lets this run in a Node service with no DOM
  * installed process-wide.
  */
-function parseIn(source: HTMLElement): PmNode {
+export function parseHtmlElementUnchecked(source: HTMLElement): PmNode {
   return PmDOMParser.fromSchema(collabSchema()).parse(source);
 }
 
@@ -146,8 +170,8 @@ function parseIn(source: HTMLElement): PmNode {
  * gets wrapped in `<p>`; `style` declarations reorder and requote. None of
  * that is loss, and a byte-equality test here would send its next reader off
  * to "fix" normalisation that is not broken. The allowlist of those rewrites
- * is explicit in `__tests__/seed-fidelity.test.ts` rather than expressed as a
- * tolerance, so a real loss cannot be rounded away by a loose comparison.
+ * is explicit in `seed-fidelity.ts` rather than expressed as a tolerance, so
+ * a real loss cannot be rounded away by a loose comparison.
  */
 export function htmlToPmDoc(html: string): PmNode {
   return withDomWorkspace((workspace) => {

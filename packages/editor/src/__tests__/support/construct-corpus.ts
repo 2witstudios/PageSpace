@@ -89,6 +89,13 @@ export const CONSTRUCT_CORPUS: readonly ConstructFixture[] = [
     text: ['outer', 'inner', 'deep'],
   },
   {
+    key: 'bare-ordered-list',
+    // The `<ol>` twin of `bare-list`: `MarkdownTightLists` infers and then
+    // writes `tight` on ordered lists too.
+    html: '<ol><li>first</li><li>second</li></ol>',
+    text: ['first', 'second'],
+  },
+  {
     key: 'ordered-list-with-start',
     html: '<ol start="7"><li><p>seven</p></li><li><p>eight</p></li></ol>',
     text: ['seven', 'eight'],
@@ -129,6 +136,15 @@ export const CONSTRUCT_CORPUS: readonly ConstructFixture[] = [
       '<tr><th colspan="1" rowspan="1"><p>Name</p></th><th colspan="1" rowspan="1"><p>Role</p></th></tr>' +
       '<tr><td colspan="1" rowspan="1"><p>Ada</p></td><td colspan="1" rowspan="1"><p>Engineer</p></td></tr>' +
       '</tbody></table>',
+    text: ['Name', 'Role', 'Ada', 'Engineer'],
+  },
+  {
+    key: 'bare-table',
+    // No `<tbody>`, no `colspan`/`rowspan`, bare cell text: the dialect a
+    // hand-written or imported table arrives in. The schema fills in every
+    // one of those (`colspan="1"`, `rowspan="1"`, `<p>` per cell), which is
+    // what earns those entries their place on the cosmetic allowlist.
+    html: '<table><tr><th>Name</th><th>Role</th></tr><tr><td>Ada</td><td>Engineer</td></tr></table>',
     text: ['Name', 'Role', 'Ada', 'Engineer'],
   },
   {
