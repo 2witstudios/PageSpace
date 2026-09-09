@@ -166,6 +166,24 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const gates: DecisionGates = deps.gates ?? { verifyGrant: libVerifyGrant, decideExecution: libDecideExecution };
   const signer = { privateKey: deps.privateKey, sign: deps.sign, hash: deps.hash };
 
+  /**
+   * THE PAUSED LATCH (Codex P1 #3, review round 1). `killAll` ends what is
+   * running, but a handler parked on an await — the terminal prompt, the
+   * approval write, the challenge lookup — resumes AFTER it and would spawn.
+   * So a verified pause records its `pausedAt` here, BEFORE anything is
+   * killed, and every grant path re-checks `predatesPause(grant)` after each
+   * await and immediately before each runner call: a grant issued at or
+   * before the latched pause is refused `paused`, audited.
+   *
+   * There is no resume frame and none is needed: the server signs only while
+   * the env is not paused, so a VERIFIED grant whose `iat` is later than the
+   * latched pause is itself the proof of resume — it proceeds, and grants
+   * older than the pause stay refused for good (the latch is a high-water
+   * mark, never rolled back).
+   */
+  let pausedAt: number | null = null;
+  const predatesPause = (grant: Grant): boolean => pausedAt !== null && grant.iat <= pausedAt;
+
   const reply = (unsigned: UnsignedMachineResultFrame): DispatchResult => ({ kind: 'reply', frame: signResultFrame(unsigned, signer) });
 
   const denied = async (grantId: string, reason: string, audit: { grant: Grant | null; op: string; verdict?: string }): Promise<DispatchResult> => {
@@ -193,6 +211,8 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     if (!verdict.ok) return denied(grantIdOf(frame), verdict.reason, { grant: null, op: request.op });
     const grant = verdict.grant;
     if (grantPredatesDaemon(grant.iat, deps.startedAt)) return denied(grant.grantId, PREDATES_DAEMON_REASON, { grant, op: grant.op });
+    // The latch, first: a grant issued at or before a pause runs nothing here.
+    if (predatesPause(grant)) return denied(grant.grantId, 'paused', { grant, op: grant.op });
 
     /** The audit word for an allow: how it came about. */
     let allowVerdict = 'allow';
@@ -242,6 +262,8 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       if (frozen.subjects !== null && intent.scope !== 'once' && deps.approvals !== undefined) {
         await deps.approvals.remember({ approvalId: intent.challengeId, envId: deps.envId, userId: grant.principal.userId, op: grant.op, subjects: frozen.subjects, scope: intent.scope });
       }
+      // Re-checked after the await: a pause that landed meanwhile wins.
+      if (predatesPause(grant)) return denied(grant.grantId, 'paused', { grant, op: grant.op });
       decision = { kind: 'allow', request: compared.request, basis: { kind: 'fresh_approval' } };
       allowVerdict = `allow:click:${intent.challengeId}:${intent.scope}`;
     }
@@ -262,12 +284,15 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         return reply({ type: 'grant_denied', grantId: grant.grantId, reason: `ask_pending:${pending.id}`, pending: { challengeId: pending.id, expiresAt: pending.exp, request: pendingRequestOnTheWire(pending.request) } });
       }
       const answer = await deps.ask.ask({ grantId: grant.grantId, principal: grant.principal, op: grant.op, request: shown, subjects });
+      // Re-checked after the await: the owner may have pressed Stop while the prompt sat open.
+      if (predatesPause(grant)) return denied(grant.grantId, 'paused', { grant, op: grant.op });
       if (!answer.approved) return denied(grant.grantId, 'declined', { grant, op: grant.op, verdict: 'ask:declined' });
       decision = gates.decideExecution({ ...decideInput, localApproval: { grantId: grant.grantId, approvedAt: deps.now(), request: shown } });
       // Remembered ONLY once the byte-compare allowed it, and only under the
       // subjects the owner was told about. `once` and null subjects remember nothing.
       if (decision.kind === 'allow' && subjects !== null && answer.scope !== 'once' && deps.approvals !== undefined) {
         await deps.approvals.remember({ approvalId: deps.ids?.approvalId() ?? `local_${grant.grantId}`, envId: deps.envId, userId: grant.principal.userId, op: grant.op, subjects, scope: answer.scope });
+        if (predatesPause(grant)) return denied(grant.grantId, 'paused', { grant, op: grant.op });
       }
       if (decision.kind === 'allow') decision = { ...decision, basis: { kind: 'fresh_approval' } };
       allowVerdict = `allow:approved:${answer.scope}`;
@@ -276,7 +301,9 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     if (decision.kind !== 'allow') return denied(grant.grantId, 'ask_unresolved', { grant, op: grant.op });
     if (decision.basis.kind === 'durable_approval') allowVerdict = `allow:approval:${decision.basis.approvalIds.join(',')}`;
 
-    // Allow: the normalized request is the ONLY thing the runners ever see.
+    // Allow: the normalized request is the ONLY thing the runners ever see —
+    // and the latch is checked one last time, immediately before any runner.
+    if (predatesPause(grant)) return denied(grant.grantId, 'paused', { grant, op: grant.op });
     const normalized = decision.request;
     try {
       switch (normalized.op) {
@@ -351,6 +378,8 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       await deps.audit.record({ grantId: null, principal: null, op: 'pause', verdict: 'dropped:pause_bad_signature', argsHash: null, exitCode: null });
       return { kind: 'dropped', reason: 'pause_bad_signature' };
     }
+    // Latched BEFORE the kill (and never rolled back): a handler resuming from an await after this point sees it.
+    pausedAt = Math.max(pausedAt ?? 0, frame.pausedAt);
     const killed = deps.execRunner.killAll();
     const dropped = deps.challenges?.clear() ?? 0;
     await deps.audit.record({ grantId: null, principal: null, op: 'pause', verdict: `paused:killed:${killed}`, argsHash: null, exitCode: null });
