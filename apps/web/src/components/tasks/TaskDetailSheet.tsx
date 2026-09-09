@@ -96,16 +96,27 @@ export function TaskDetailSheet({
 
   // Permission gate mirrors the row-level Task List badge: edit on the parent
   // task list page is what authorizes configuring triggers on its tasks.
-  // Optimistic while the answer is in flight. The sheet is the first thing to
-  // ask about a list's permissions on the dashboard, so the request starts when
-  // it opens — treating "not yet known" as "not allowed" would grey every
-  // control out on open and light them up a beat later. Erring open is safe:
-  // every handler guards and the route guards again, whereas a dead control
-  // that later comes alive just reads as broken.
+  // Two answers, because the controls here divide into two kinds.
+  //
+  // The sheet is the first thing to ask about a list's permissions on the
+  // dashboard, so the request starts when it opens and the answer is unknown
+  // for a round trip. Greying every control out for that window and lighting
+  // them up a beat later reads as broken, so controls whose worst case is a
+  // refused click use the optimistic answer.
+  //
+  // Two controls do NOT get that benefit of the doubt, because acting early
+  // writes rather than merely failing. The description editor autosaves through
+  // usePageContent, which debounces a second and then PATCHes with no
+  // permission check of its own — and it PATCHes the TASK's page while the
+  // permission here is the parent LIST's, so an early save is not even guarded
+  // by the same resource. TaskAgentTriggersDialog likewise PUTs and DELETEs
+  // unguarded, and flipping it off mid-edit would unmount the dialog under the
+  // user. Both wait for a definite yes.
   const { permissions, isLoading: permissionsLoading } = usePermissions(
     task?.taskListPageId ?? null,
   );
-  const canEdit = permissionsLoading || (permissions?.canEdit ?? false);
+  const canEditKnown = permissions?.canEdit ?? false;
+  const canEdit = permissionsLoading || canEditKnown;
 
   // Reset editing state when task changes
   useEffect(() => {
@@ -124,7 +135,7 @@ export function TaskDetailSheet({
   const hasLinkedPage = Boolean(task.pageId && task.driveId);
   const { label: statusLabel, color: statusColor } = statusDisplay;
   const triggerCount = task.activeTriggerCount ?? 0;
-  const canConfigureTriggers = canEdit && Boolean(task.taskListPageId && task.driveId);
+  const canConfigureTriggers = canEditKnown && Boolean(task.taskListPageId && task.driveId);
   const showTriggerBadge = canConfigureTriggers && triggerCount > 0;
 
   const startEditTitle = () => {
@@ -345,7 +356,7 @@ export function TaskDetailSheet({
                   <RichEditor
                     value={descriptionContent ?? ''}
                     onChange={saveDescription}
-                    readOnly={!canEdit}
+                    readOnly={!canEditKnown}
                     contentMode="html"
                   />
                 )}
