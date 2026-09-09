@@ -188,7 +188,14 @@ export function executionRequestForFrame(frame: GrantFrame): ExecutionRequest {
     case 'fs_read':
       return { op: 'fs_read', paths: request.args.paths };
     case 'fs_write':
-      return { op: 'fs_write', paths: request.args.files.map((file) => file.path) };
+      // `writeModes` is index-aligned with `paths` and present for `fs_write`
+      // ONLY (hardening A1). The mode is what turns a written file into a
+      // command the owner never approved (`.git/hooks/pre-commit` 0o755), so
+      // the decision layer has to see it — until this projection carried it,
+      // no gate could reason about the executable bit. A file that named no
+      // mode holds its place as `null`, never a missing entry, so position i
+      // of `writeModes` always describes path i.
+      return { op: 'fs_write', paths: request.args.files.map((file) => file.path), writeModes: request.args.files.map((file) => file.mode) };
     case 'pty_open': {
       const { command, args, cwd } = request.args;
       return {

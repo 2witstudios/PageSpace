@@ -79,6 +79,13 @@ export interface ExecutionRequest {
   readonly cwd?: string;
   /** File paths named by fs operations; required (non-empty) for `fs_read` / `fs_write`. Each must confine. */
   readonly paths?: readonly string[];
+  /**
+   * The POSIX mode each written file asks for, index-aligned with `paths` and
+   * present for `fs_write` ONLY (hardening A1). `null` where the request named
+   * no mode. A length that does not match `paths`, or an entry that is not a
+   * non-negative integer or `null`, is `malformed`.
+   */
+  readonly writeModes?: readonly (number | null)[];
   readonly env?: Readonly<Record<string, string>>;
   readonly timeoutMs?: number;
   readonly maxBytes?: number;
@@ -90,6 +97,8 @@ export interface NormalizedRequest {
   readonly args?: readonly string[];
   readonly cwd: string;
   readonly paths: readonly string[];
+  /** The requested modes, index-aligned with `paths`; present for `fs_write` only. Inside `canonicalizeArgs`, so an approval cannot be replayed at another mode. */
+  readonly writeModes?: readonly (number | null)[];
   readonly env: Readonly<Record<string, string>>;
   /** Always a positive integer ≤ the owner's cap. */
   readonly timeoutMs: number;
@@ -196,6 +205,15 @@ function isWellFormed(request: ExecutionRequest): boolean {
   if (r.cmd !== undefined && typeof r.cmd !== 'string') return false;
   if (r.args !== undefined && !(Array.isArray(r.args) && r.args.every((a) => typeof a === 'string'))) return false;
   if (r.paths !== undefined && !(Array.isArray(r.paths) && r.paths.every(isNonEmptyString))) return false;
+  if (r.writeModes !== undefined) {
+    // Off the wire, so shape first: only `fs_write` has modes at all, every
+    // entry is an integer mode or `null`, and the array is index-aligned with
+    // `paths` — a shorter one would silently make the LAST files modeless.
+    if (request.op !== 'fs_write') return false;
+    if (!Array.isArray(r.writeModes)) return false;
+    if (!r.writeModes.every((mode) => mode === null || (typeof mode === 'number' && Number.isInteger(mode) && mode >= 0))) return false;
+    if (!Array.isArray(r.paths) || r.writeModes.length !== r.paths.length) return false;
+  }
   if (r.env !== undefined && (r.env === null || typeof r.env !== 'object' || Array.isArray(r.env))) return false;
   if (r.timeoutMs !== undefined && typeof r.timeoutMs !== 'number') return false;
   if (r.maxBytes !== undefined && typeof r.maxBytes !== 'number') return false;
@@ -267,6 +285,7 @@ export function decideExecution(input: DecideExecutionInput): ExecutionVerdict {
     ...(request.args !== undefined && { args: request.args }),
     cwd: cwd.path,
     paths,
+    ...(request.writeModes !== undefined && { writeModes: [...request.writeModes] }),
     env,
     timeoutMs: timeout.value,
     maxBytes: bytes.value,

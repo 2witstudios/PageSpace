@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { decideExecution, type NormalizedRequest } from '../decide-execution';
-import type { Grant } from '../grant';
+import { canonicalizeArgs, type Grant } from '../grant';
 import type { MachinePolicy, ServerPolicy, AdvertisedCapabilities } from '../policy-types';
 import type { PathProbe } from '../confine-path';
 import type { DurableApproval } from '../decide-approval';
@@ -256,7 +256,65 @@ describe('decideExecution — the daemon is the policy enforcement point (invari
     const fsGrant = { ...grant, op: 'fs_write' as const };
     const probe: PathProbe = { realpath: (p) => (p === ROOT || p === `${ROOT}/src` ? p : null), isSymlink: () => false };
     const verdict = decide({ grant: fsGrant, request: { op: 'fs_write', paths: [`${ROOT}/src/new.ts`] }, probe });
+    // Exact shape, deliberately: a request that carried no modes normalises
+    // without a `writeModes` key at all (hardening A1 adds the key only when
+    // the request has one, so "absent" and "all null" stay distinct bytes).
     expect(verdict).toEqual({ kind: 'allow', request: { op: 'fs_write', cwd: ROOT, paths: [`${ROOT}/src/new.ts`], env: {}, timeoutMs: machine.maxTimeoutMs, maxBytes: machine.maxBytes, clamped: false }, basis: { kind: 'preapproved_op' } });
+  });
+
+  describe('A1: the file mode reaches the decision layer, index-aligned with the paths', () => {
+    const fsGrant = { ...grant, op: 'fs_write' as const };
+    const probe: PathProbe = { realpath: (p) => (p === ROOT || p === `${ROOT}/src` ? p : null), isSymlink: () => false };
+    const write = (writeModes?: readonly (number | null)[]) => decide({ grant: fsGrant, request: { op: 'fs_write', paths: [`${ROOT}/src/a.ts`, `${ROOT}/src/b.ts`], ...(writeModes !== undefined && { writeModes }) }, probe });
+
+    it('given an fs_write whose files carry modes, should normalise them in the same order as the paths', () => {
+      const verdict = write([0o644, null]);
+      if (verdict.kind !== 'allow') throw new Error(`expected allow, got ${verdict.kind}`);
+      expect(verdict.request).toEqual({ op: 'fs_write', cwd: ROOT, paths: [`${ROOT}/src/a.ts`, `${ROOT}/src/b.ts`], writeModes: [0o644, null], env: {}, timeoutMs: machine.maxTimeoutMs, maxBytes: machine.maxBytes, clamped: false });
+    });
+
+    it('given a mode that changes and NOTHING else, should produce different canonical bytes (an approval cannot be replayed at another mode)', () => {
+      const a = write([0o644, null]);
+      const b = write([0o755, null]);
+      if (a.kind !== 'allow' || b.kind !== 'allow') throw new Error('expected allow');
+      expect(Buffer.from(canonicalizeArgs(a.request)).toString('utf8')).not.toBe(Buffer.from(canonicalizeArgs(b.request)).toString('utf8'));
+      expect(Buffer.from(canonicalizeArgs(a.request)).toString('utf8')).toContain('"writeModes":[420,null]');
+    });
+
+    it('given a fresh approval over a request whose mode differs from the one now asked for, should deny approval_mismatch', () => {
+      const asked = write([0o644, null]);
+      if (asked.kind !== 'allow') throw new Error('expected allow');
+      const askMode = decideExecution({
+        grant: { ...fsGrant, op: 'fs_write' },
+        request: { op: 'fs_write', paths: [`${ROOT}/src/a.ts`, `${ROOT}/src/b.ts`], writeModes: [0o755, null] },
+        machinePolicy: { ...machine, mode: 'ask', ops: [] },
+        serverPolicy: server,
+        capabilities: advertised,
+        probe,
+        localApproval: { grantId: fsGrant.grantId, approvedAt: 1, request: asked.request },
+      });
+      expect(askMode).toEqual({ kind: 'deny', reason: 'approval_mismatch' });
+    });
+
+    it.each<[string, unknown]>([
+      ['a non-array writeModes', '0644'],
+      ['a string entry (aligned, so only the type check can refuse it)', ['0644', '0600']],
+      ['a boolean entry (aligned)', [true, null]],
+      ['a non-integer mode (aligned)', [0.5, null]],
+      ['a negative mode (aligned)', [-1, null]],
+      ['an undefined entry (aligned) — absent is spelled null', [undefined, null]],
+      ['fewer modes than paths', [0o644]],
+      ['more modes than paths', [0o644, null, 0o600]],
+    ])('given %s (a hostile frame), should deny malformed and never throw', (_label, writeModes) => {
+      const hostile = { op: 'fs_write', paths: [`${ROOT}/src/a.ts`, `${ROOT}/src/b.ts`], writeModes } as unknown as Parameters<typeof decideExecution>[0]['request'];
+      expect(() => decide({ grant: fsGrant, request: hostile, probe })).not.toThrow();
+      expect(decide({ grant: fsGrant, request: hostile, probe })).toEqual({ kind: 'deny', reason: 'malformed' });
+    });
+
+    it('given writeModes on an fs_read (an op that has no such thing), should deny malformed', () => {
+      const hostile = { op: 'fs_read', paths: [`${ROOT}/src/a.ts`], writeModes: [0o644] } as unknown as Parameters<typeof decideExecution>[0]['request'];
+      expect(decide({ grant: { ...grant, op: 'fs_read' }, request: hostile, probe })).toEqual({ kind: 'deny', reason: 'malformed' });
+    });
   });
 
   describe('malformed request shapes are refused BEFORE the policy gates ("allow" must mean executable)', () => {
