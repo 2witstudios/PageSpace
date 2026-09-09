@@ -15,6 +15,104 @@ import {
   validateMimeTypeDeclaration,
 } from './upload-validation';
 import type { SubscriptionTier } from './subscription-utils';
+import type { AttachmentMeta } from '@pagespace/db/schema/storage';
+
+/**
+ * Most files one message may carry.
+ *
+ * Enforced in four places, deliberately: the composer (UX), both send routes
+ * (the actual limit), the repositories (defense in depth for non-HTTP callers
+ * like page webhooks and AI tools), and the database itself — the
+ * `*_position_range` CHECK plus the unique (messageId, position) index cap
+ * cardinality with no trigger and no counter column. The DB literal cannot
+ * import this constant, so `attachment-cap.test.ts` pins the two together;
+ * raising the cap means a new migration, not just editing this line.
+ */
+export const MAX_MESSAGE_ATTACHMENTS = 10;
+
+/** One attachment as it arrives on a send request. */
+export interface MessageAttachmentInput {
+  fileId: string;
+  attachmentMeta: AttachmentMeta;
+}
+
+/**
+ * Shape check for a client-supplied `attachmentMeta`. Hoisted out of the DM
+ * send route, which was the only surface validating it — the channel route
+ * accepted any JSON at all.
+ */
+export function isValidAttachmentMeta(value: unknown): value is AttachmentMeta {
+  if (typeof value !== 'object' || value === null) return false;
+  const m = value as Record<string, unknown>;
+  return (
+    typeof m.originalName === 'string' &&
+    typeof m.size === 'number' &&
+    typeof m.mimeType === 'string' &&
+    typeof m.contentHash === 'string'
+  );
+}
+
+export type ParseAttachmentsResult =
+  | { kind: 'ok'; attachments: MessageAttachmentInput[] }
+  | { kind: 'invalid'; error: string };
+
+/**
+ * Normalize a send request's attachment payload into an ordered array.
+ *
+ * Accepts both the new `attachments: [{ fileId, attachmentMeta }]` shape and
+ * the legacy singular `fileId` + `attachmentMeta` pair, so the published SDK
+ * and CLI keep working unchanged against a server that understands N.
+ * Supplying both is rejected rather than guessed at.
+ */
+export function parseMessageAttachments(body: {
+  attachments?: unknown;
+  fileId?: unknown;
+  attachmentMeta?: unknown;
+}): ParseAttachmentsResult {
+  const hasLegacy = typeof body.fileId === 'string' && body.fileId.length > 0;
+  const hasArray = body.attachments !== undefined && body.attachments !== null;
+
+  if (hasArray && hasLegacy) {
+    return { kind: 'invalid', error: 'Provide either attachments or fileId, not both' };
+  }
+
+  if (!hasArray) {
+    if (!hasLegacy) return { kind: 'ok', attachments: [] };
+    if (!isValidAttachmentMeta(body.attachmentMeta)) {
+      return { kind: 'invalid', error: 'attachmentMeta required when fileId is provided' };
+    }
+    return {
+      kind: 'ok',
+      attachments: [{ fileId: body.fileId as string, attachmentMeta: body.attachmentMeta }],
+    };
+  }
+
+  if (!Array.isArray(body.attachments)) {
+    return { kind: 'invalid', error: 'attachments must be an array' };
+  }
+  if (body.attachments.length > MAX_MESSAGE_ATTACHMENTS) {
+    return {
+      kind: 'invalid',
+      error: `A message may carry at most ${MAX_MESSAGE_ATTACHMENTS} attachments`,
+    };
+  }
+
+  const attachments: MessageAttachmentInput[] = [];
+  for (const raw of body.attachments) {
+    if (typeof raw !== 'object' || raw === null) {
+      return { kind: 'invalid', error: 'Each attachment must be an object' };
+    }
+    const entry = raw as Record<string, unknown>;
+    if (typeof entry.fileId !== 'string' || entry.fileId.length === 0) {
+      return { kind: 'invalid', error: 'Each attachment requires a fileId' };
+    }
+    if (!isValidAttachmentMeta(entry.attachmentMeta)) {
+      return { kind: 'invalid', error: 'Each attachment requires a valid attachmentMeta' };
+    }
+    attachments.push({ fileId: entry.fileId, attachmentMeta: entry.attachmentMeta });
+  }
+  return { kind: 'ok', attachments };
+}
 
 /** Insert shape for the content-addressed `files` row. */
 export interface FileRecordInput {

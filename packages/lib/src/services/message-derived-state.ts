@@ -22,25 +22,44 @@ import type { AttachmentMeta } from '@pagespace/db/schema/storage';
  */
 export function buildLastMessagePreview(
   content: string,
-  attachmentMeta: AttachmentMeta | null
+  attachmentMeta: AttachmentMeta | AttachmentMeta[] | null
 ): string {
   const trimmed = content.trim();
   if (trimmed.length > 0) {
     return trimmed.length > 100 ? trimmed.substring(0, 100) + '...' : trimmed;
   }
-  if (attachmentMeta) {
-    const isImage = attachmentMeta.mimeType.startsWith('image/');
-    return isImage
-      ? `[image: ${attachmentMeta.originalName}]`
-      : `[file: ${attachmentMeta.originalName}]`;
+
+  // Accepts a single meta so the legacy single-attachment call sites keep
+  // working unchanged while N-attachment callers pass the whole array.
+  const attachments = attachmentMeta === null
+    ? []
+    : Array.isArray(attachmentMeta)
+      ? attachmentMeta
+      : [attachmentMeta];
+
+  if (attachments.length === 1) {
+    const only = attachments[0];
+    return only.mimeType.startsWith('image/')
+      ? `[image: ${only.originalName}]`
+      : `[file: ${only.originalName}]`;
   }
+
+  if (attachments.length > 1) {
+    const images = attachments.filter((a) => a.mimeType.startsWith('image/')).length;
+    // Name the count rather than one arbitrary filename — "[image: a.png]" for
+    // a five-photo send reads as though four of them went missing.
+    if (images === attachments.length) return `[${images} images]`;
+    if (images === 0) return `[${attachments.length} files]`;
+    return `[${attachments.length} attachments]`;
+  }
+
   return '';
 }
 
 export interface NewestConversationMessage {
   createdAt: Date;
   content: string;
-  attachmentMeta: AttachmentMeta | null;
+  attachmentMeta: AttachmentMeta | AttachmentMeta[] | null;
 }
 
 export interface ConversationLastMessageState {

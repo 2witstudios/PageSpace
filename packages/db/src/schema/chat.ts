@@ -1,5 +1,5 @@
-import { pgTable, text, timestamp, jsonb, boolean, integer, index, uniqueIndex, primaryKey, type AnyPgColumn } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { pgTable, text, timestamp, jsonb, boolean, integer, index, uniqueIndex, primaryKey, check, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
 import { users } from './auth';
 import { pages, drives } from './core';
 import { files, type AttachmentMeta } from './storage';
@@ -80,12 +80,60 @@ export const channelMessagesRelations = relations(channelMessages, ({ one, many 
         fields: [channelMessages.fileId],
         references: [files.id],
     }),
+    attachments: many(channelMessageAttachments),
     reactions: many(channelMessageReactions),
     mirroredFrom: one(channelMessages, {
         fields: [channelMessages.mirroredFromId],
         references: [channelMessages.id],
         relationName: 'mirroredFrom',
     }),
+}));
+
+/**
+ * Attachments carried by a channel message — the N side of a message that can
+ * hold several files (a batch of photos sent together renders as one message
+ * with one gallery, rather than N messages).
+ *
+ * Mirrors `direct_message_attachments` on the DM side, the same way
+ * channelMessageReactions mirrors dmMessageReactions. A single polymorphic
+ * table across both surfaces was rejected: it could not carry a real FK to two
+ * different parents, which would trade the free ON DELETE cascade below for
+ * permanent orphan sweeping.
+ *
+ * `fileId` is SET NULL rather than CASCADE so a hard file delete leaves the row
+ * (and its `attachmentMeta`) behind: the message keeps rendering, one tile
+ * short, exactly as the legacy single-attachment columns behave today.
+ */
+export const channelMessageAttachments = pgTable('channel_message_attachments', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  messageId: text('messageId').notNull().references(() => channelMessages.id, { onDelete: 'cascade' }),
+  fileId: text('fileId').references(() => files.id, { onDelete: 'set null' }),
+  // Nullable, mirroring the legacy channel_messages.attachmentMeta it is
+  // backfilled from — a legacy row may carry a fileId with no meta, and the
+  // backfill must not invent one. attachment-utils already falls back to the
+  // joined files row for mimeType/size.
+  attachmentMeta: jsonb('attachmentMeta').$type<AttachmentMeta | null>(),
+  // Display order, client-supplied. Also the cardinality cap: the CHECK below
+  // plus the unique (messageId, position) index cap a message at
+  // MAX_MESSAGE_ATTACHMENTS files with no trigger and no counter column.
+  position: integer('position').notNull(),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  messagePositionIdx: uniqueIndex('channel_message_attachments_message_position_idx').on(table.messageId, table.position),
+  fileIdx: index('channel_message_attachments_file_id_idx').on(table.fileId),
+  positionRange: check('channel_message_attachments_position_range', sql`${table.position} >= 0 AND ${table.position} < 10`),
+  notEmpty: check('channel_message_attachments_not_empty', sql`${table.fileId} IS NOT NULL OR ${table.attachmentMeta} IS NOT NULL`),
+}));
+
+export const channelMessageAttachmentsRelations = relations(channelMessageAttachments, ({ one }) => ({
+  message: one(channelMessages, {
+    fields: [channelMessageAttachments.messageId],
+    references: [channelMessages.id],
+  }),
+  file: one(files, {
+    fields: [channelMessageAttachments.fileId],
+    references: [files.id],
+  }),
 }));
 
 /**
