@@ -466,8 +466,6 @@ export function drainServiceLogStream(
 /** The Sprite instance subset the driver consumes. */
 export interface SpriteInstanceLike {
   readonly name: string;
-  /** The sprite's URL as the platform reports it (`<name>-<org>.sprites.app`); absent on a fake. */
-  readonly url?: string | null;
   /**
    * The platform's id for this Sprite INSTANCE, hydrated from the API response by
    * both `getSprite` and `createSprite` (the SDK `Object.assign`s the parsed body

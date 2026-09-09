@@ -456,7 +456,7 @@ describe('sprite names fit the URL label', () => {
     const ok = { name: 'x', url: `https://${'a'.repeat(48)}-bskrl.sprites.app` };
     expect(checkSpriteUrlLabelFits(long)).toBe(false);
     expect(checkSpriteUrlLabelFits(ok)).toBe(true);
-    expect(checkSpriteUrlLabelFits({ name: 'x', url: null })).toBe(true);
+    expect(checkSpriteUrlLabelFits({ name: 'x' })).toBe(true);
     expect(checkSpriteUrlLabelFits({ name: 'x', url: 'not a url' })).toBe(true);
   });
 
