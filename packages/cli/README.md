@@ -241,7 +241,8 @@ second surprises people:
   line whose programs cannot be pinned down (`$(…)`, `eval`, a nested `sh -c`, `find -exec`,
   `sudo`) is never remembered and asks every time. Approvals live in
   `~/.pagespace/env-approvals.json` (yours, 0600; a file anybody else can write is ignored), and
-  PageSpace can revoke one but never add one.
+  PageSpace can revoke one (from the environment's settings, over a signed frame the daemon checks
+  against its pinned key) but never add one.
 
 The `roots` in your policy file confine the paths an agent can **name** — the working directory it
 asks for, and the files it asks to read or write. They do **not** confine what a program does once

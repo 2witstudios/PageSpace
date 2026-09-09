@@ -104,7 +104,8 @@ const grantPtyOpen = z.object({
 const ptyInput = z.object({ type: z.literal('pty_input'), sessionId: nonEmpty, seq: nonNegInt, dataB64: b64 });
 const ptyResize = z.object({ type: z.literal('pty_resize'), sessionId: nonEmpty, cols: posInt, rows: posInt });
 const ptyKill = z.object({ type: z.literal('pty_kill'), sessionId: nonEmpty, signal: z.string().optional() });
-const revoke = z.object({ type: z.literal('revoke'), sig: b64, issuedAt: nonNegInt, reason: z.string().optional() });
+/** `approvalId` present ⇒ revoke ONE durable approval on the machine (GA wave 2); absent ⇒ revoke the enrollment (delete the key). Signed under different domains, so neither can be turned into the other. */
+const revoke = z.object({ type: z.literal('revoke'), sig: b64, issuedAt: nonNegInt, reason: z.string().optional(), approvalId: nonEmpty.optional() });
 const ping = z.object({ type: z.literal('ping'), ts: nonNegInt });
 
 const frameSchema = z.discriminatedUnion('type', [

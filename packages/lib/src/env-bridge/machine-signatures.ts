@@ -38,6 +38,8 @@ import { canonicalizeArgs, constantTimeEqual, decodeBase64, type Ed25519Verify, 
 export const HELLO_SIGNING_DOMAIN = 'pagespace-env-bridge/hello/v1';
 export const RESULT_SIGNING_DOMAIN = 'pagespace-env-bridge/result/v1';
 export const REVOKE_SIGNING_DOMAIN = 'pagespace-env-bridge/revoke/v1';
+/** A revoke of ONE durable approval (GA wave 2): its own domain, so an approval revoke can never be replayed as an enrollment revoke by dropping the id, nor the reverse. */
+export const REVOKE_APPROVAL_SIGNING_DOMAIN = 'pagespace-env-bridge/revoke-approval/v1';
 
 export type { HelloFrame };
 export type RevokeFrame = Extract<Frame, { type: 'revoke' }>;
@@ -161,9 +163,19 @@ export interface RevokeBinding {
   readonly issuedAt: number;
 }
 
-/** Canonical bytes the server signs for a revoke. */
+/** Canonical bytes the server signs for a revoke of the ENROLLMENT (unchanged by GA wave 2: an approval revoke uses its own domain and function). */
 export function encodeRevokeForSigning(binding: RevokeBinding): Uint8Array {
   return encode({ domain: REVOKE_SIGNING_DOMAIN, envId: binding.envId, enrollmentId: binding.enrollmentId, keyId: binding.keyId, issuedAt: binding.issuedAt });
+}
+
+export interface ApprovalRevokeBinding extends RevokeBinding {
+  /** The durable approval to delete — the challenge id the click was answered under. */
+  readonly approvalId: string;
+}
+
+/** Canonical bytes the server signs to revoke ONE approval on the machine. The server may only ever REVOKE an approval this way; nothing on the wire can add one. */
+export function encodeApprovalRevokeForSigning(binding: ApprovalRevokeBinding): Uint8Array {
+  return encode({ domain: REVOKE_APPROVAL_SIGNING_DOMAIN, envId: binding.envId, enrollmentId: binding.enrollmentId, keyId: binding.keyId, issuedAt: binding.issuedAt, approvalId: binding.approvalId });
 }
 
 export interface VerifyRevokeInput extends RevokeBinding {
@@ -173,12 +185,21 @@ export interface VerifyRevokeInput extends RevokeBinding {
   readonly verify: Ed25519Verify;
 }
 
-/** The daemon's check before it honours a revoke (t08). `issuedAt` is taken from the binding the daemon supplies, and must equal the frame's. */
+/**
+ * The daemon's check before it honours a revoke (t08). `issuedAt` is taken
+ * from the binding the daemon supplies, and must equal the frame's. A frame
+ * carrying `approvalId` is verified under the approval-revoke domain over
+ * THAT id; one without it under the enrollment-revoke domain — so a captured
+ * approval revoke with the id stripped is `bad_signature`, never a key
+ * deletion, and an enrollment revoke with an id added is `bad_signature`
+ * too.
+ */
 export function verifyRevoke(input: VerifyRevokeInput): MachineSignatureVerdict {
   if (input.frame.issuedAt !== input.issuedAt) return { ok: false, reason: 'bad_signature' };
   const signature = decodeBase64(input.frame.sig);
   if (signature === null) return { ok: false, reason: 'malformed' };
-  const bytes = encodeRevokeForSigning({ envId: input.envId, enrollmentId: input.enrollmentId, keyId: input.keyId, issuedAt: input.issuedAt });
+  const binding = { envId: input.envId, enrollmentId: input.enrollmentId, keyId: input.keyId, issuedAt: input.issuedAt };
+  const bytes = input.frame.approvalId !== undefined ? encodeApprovalRevokeForSigning({ ...binding, approvalId: input.frame.approvalId }) : encodeRevokeForSigning(binding);
   return safeVerify(input.verify, bytes, signature, input.serverPublicKey);
 }
 

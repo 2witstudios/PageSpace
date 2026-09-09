@@ -3,7 +3,7 @@ import { createHash, generateKeyPairSync, sign as nodeSign } from 'node:crypto';
 import { canonicalizeArgs, decodeBase64, encodeGrant, verifyGrant, type ApprovalIntent, type Grant } from '@pagespace/lib/env-bridge/grant';
 import { grantRequestForFrame, type GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 import { decideExecution, type NormalizedRequest } from '@pagespace/lib/env-bridge/decide-execution';
-import { encodeRevokeForSigning, verifyMachineResult, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
+import { encodeApprovalRevokeForSigning, encodeRevokeForSigning, verifyMachineResult, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
 import { execOutputCeiling, fsReadContentCeiling, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
 import type { MachinePolicy } from '@pagespace/lib/env-bridge/policy-types';
 import type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
@@ -615,6 +615,61 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
       await h.dispatcher.handle(genuine);
       expect(await h.dispatcher.handle(genuine)).toMatchObject({ kind: 'reply', frame: { reason: 'replayed' } });
       expect(h.spawnRun).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('GA wave 2 · leaf 8 — the server revokes ONE approval over the signed revoke frame; the machine file stays authoritative for ALLOW', () => {
+    const approvalRevoke = (approvalId: string, issuedAt = NOW, keyId = serverKeyId): Frame => ({ type: 'revoke', approvalId, issuedAt, sig: serverSign(encodeApprovalRevokeForSigning({ envId: ENV_ID, enrollmentId: ENROLLMENT_ID, keyId, issuedAt, approvalId })), reason: 'owner' });
+    function revokeHarness() {
+      const fs = { content: JSON.stringify({ version: 1, approvals: [
+        { approvalId: 'ch_1', envId: ENV_ID, userId: 'u1', op: 'exec', subject: 'exec:/usr/bin/tool', scope: 'until_revoked', createdAt: 1, expiresAt: null },
+        { approvalId: 'ch_1', envId: ENV_ID, userId: 'u1', op: 'exec', subject: 'builtin:cd', scope: 'until_revoked', createdAt: 1, expiresAt: null },
+        { approvalId: 'ch_2', envId: ENV_ID, userId: 'u1', op: 'exec', subject: 'exec:/bin/rm', scope: 'until_revoked', createdAt: 1, expiresAt: null },
+      ] }) as string | null };
+      const approvals = createApprovalsStore({ path: '/p', uid: 501, open: () => (fs.content === null ? null : { uid: 501, mode: 0o100600, content: fs.content }), write: async (_p, c) => { fs.content = c; }, now: () => NOW });
+      return { ...harness({ policy: () => ASK_POLICY, ask: null, approvals, resolveArgv0: (name) => ({ tool: '/usr/bin/tool', rm: '/bin/rm' })[name] ?? null }), approvals, fs };
+    }
+
+    it('given a signed approval revoke, should delete exactly that approval\'s rows, audit approval_revoked:<id>:<n>, and report approval_revoked — NOT revoke_verified: the key and the enrollment stand', async () => {
+      const h = revokeHarness();
+      expect(await h.dispatcher.handle(approvalRevoke('ch_1'))).toEqual({ kind: 'approval_revoked', approvalId: 'ch_1', removed: 2 });
+      expect(h.approvals.entries().map((a) => a.approvalId)).toEqual(['ch_2']);
+      expect(h.audits[0]?.verdict).toBe('approval_revoked:ch_1:2');
+      // The revoked program now asks again; the untouched one still runs.
+      expect(await h.dispatcher.handle(execFrame())).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'ask_unavailable' } });
+      expect(await h.dispatcher.handle(execFrame({ cmd: 'rm' }))).toMatchObject({ kind: 'reply', frame: { type: 'exec_result' } });
+    });
+
+    it('given an approval revoke for an id the machine does not hold, should report 0 removed and change nothing', async () => {
+      const h = revokeHarness();
+      expect(await h.dispatcher.handle(approvalRevoke('ch_nope'))).toEqual({ kind: 'approval_revoked', approvalId: 'ch_nope', removed: 0 });
+      expect(h.approvals.entries()).toHaveLength(3);
+    });
+
+    it('given an approval revoke NOT signed by the pinned key, or signed for another id, should drop it and delete nothing', async () => {
+      const h = revokeHarness();
+      const forged = { ...approvalRevoke('ch_1'), approvalId: 'ch_2' } as Frame;
+      expect(await h.dispatcher.handle(forged)).toEqual({ kind: 'dropped', reason: 'revoke_bad_signature' });
+      expect(await h.dispatcher.handle(approvalRevoke('ch_1', NOW, 'other-key'))).toEqual({ kind: 'dropped', reason: 'revoke_bad_signature' });
+      expect(h.approvals.entries()).toHaveLength(3);
+      expect(h.audits.map((a) => a.verdict)).toEqual(['dropped:approval_revoke_bad_signature', 'dropped:approval_revoke_bad_signature']);
+    });
+
+    it('given a signed approval revoke with the id STRIPPED, should drop it — it can never become an enrollment revoke (no deleteKey)', async () => {
+      const h = revokeHarness();
+      const { approvalId: _dropped, ...stripped } = approvalRevoke('ch_1') as Extract<Frame, { type: 'revoke' }>;
+      expect(await h.dispatcher.handle(stripped as Frame)).toEqual({ kind: 'dropped', reason: 'revoke_bad_signature' });
+    });
+
+    it('THE ASYMMETRY: nothing the server sends can ADD an approval — a revoke frame, a grant, a click for a challenge the machine never froze: the store only grows after the machine\'s own byte-compared approval', async () => {
+      const h = revokeHarness();
+      await h.dispatcher.handle(approvalRevoke('ch_1')); // tool is no longer covered
+      const before = h.approvals.entries().length;
+      await h.dispatcher.handle(approvalRevoke('ch_9'));
+      await h.dispatcher.handle(execFrame({ cmd: 'rm' }));
+      expect(await h.dispatcher.handle(signedGrant({ type: 'grant_exec', cmd: 'tool', cwd: ROOT }, { approvalIntent: { challengeId: 'server_recorded', scope: 'until_revoked', expiresAt: NOW + 30_000 } }))).toMatchObject({ kind: 'reply', frame: { reason: 'approval_unknown' } });
+      expect(h.approvals.entries().length).toBe(before);
+      expect(h.spawnRun).toHaveBeenCalledTimes(1); // only rm (covered by ch_2)
     });
   });
 

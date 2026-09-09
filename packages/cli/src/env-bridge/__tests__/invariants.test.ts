@@ -82,6 +82,31 @@ describe('daemon structural invariants', () => {
     expect(source).not.toMatch(/GrantFrame|ExecutionRequest\b/);
   });
 
+  describe('GA wave 2 — the approvals asymmetry: the machine file is authoritative for ALLOW; the server can only REVOKE', () => {
+    const dispatcher = read(join(HERE, 'dispatcher.ts'));
+    const store = read(join(HERE, 'approvals-store.ts'));
+
+    it('approvals-store.ts reads and writes ONLY the local file (node:fs) — it has no network, no socket, no frame input', () => {
+      const imports = [...store.matchAll(/from '([^']+)'/g)].map((m) => m[1]);
+      expect(imports.every((s) => s === 'node:fs/promises' || s === 'node:path' || s === './lib-core.js' || s === './policy.js')).toBe(true);
+      expect(store).not.toMatch(/fetch\(|from 'ws'|Frame\b/);
+    });
+
+    it('the dispatcher writes an approval in exactly TWO places, both after a byte-compared allow (a terminal answer, a click that matched) — never from a revoke or any other frame', () => {
+      const writes = [...dispatcher.matchAll(/approvals\.remember\(/g)];
+      expect(writes).toHaveLength(2);
+      const revokeStart = dispatcher.indexOf('const handleRevoke');
+      for (const w of writes) expect(w.index).toBeLessThan(revokeStart);
+      expect(dispatcher.slice(revokeStart)).not.toMatch(/remember\(/);
+      expect(dispatcher.slice(revokeStart)).toMatch(/approvals\.revoke\(frame\.approvalId\)/);
+    });
+
+    it('decideExecution is fed the machine\'s own approvals (deps.approvals) and nothing carried by the grant or the frame', () => {
+      expect(dispatcher).toMatch(/approvals: \{ entries: deps\.approvals\?\.entries\(\) \?\? \[\]/);
+      expect(dispatcher).not.toMatch(/grant\.approvals|frame\.approvals/);
+    });
+  });
+
   describe('GA wave 1 — the two docblocks that used to lie', () => {
     const dispatcher = read(join(HERE, 'dispatcher.ts'));
     const auditLog = read(join(HERE, 'audit-log.ts'));

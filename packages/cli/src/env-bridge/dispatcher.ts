@@ -116,7 +116,12 @@ export interface DispatcherDeps {
   readonly gates?: DecisionGates;
 }
 
-export type DispatchResult = { readonly kind: 'reply'; readonly frame: Frame } | { readonly kind: 'revoke_verified' } | { readonly kind: 'dropped'; readonly reason: string };
+export type DispatchResult =
+  | { readonly kind: 'reply'; readonly frame: Frame }
+  | { readonly kind: 'revoke_verified' }
+  /** ONE durable approval was deleted on the server's signed request (GA wave 2); the enrollment and the key stand. */
+  | { readonly kind: 'approval_revoked'; readonly approvalId: string; readonly removed: number }
+  | { readonly kind: 'dropped'; readonly reason: string };
 
 export interface Dispatcher {
   handle(frame: Frame): Promise<DispatchResult>;
@@ -305,8 +310,17 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const handleRevoke = async (frame: Extract<Frame, { type: 'revoke' }>): Promise<DispatchResult> => {
     const verdict = verifyRevoke({ frame, envId: deps.envId, enrollmentId: deps.enrollmentId, keyId: deps.serverKeyId, issuedAt: frame.issuedAt, serverPublicKey: deps.serverPublicKey, verify: deps.verify });
     if (!verdict.ok) {
-      await deps.audit.record({ grantId: null, principal: null, op: 'revoke', verdict: 'dropped:revoke_bad_signature', argsHash: null, exitCode: null });
+      await deps.audit.record({ grantId: null, principal: null, op: 'revoke', verdict: frame.approvalId !== undefined ? 'dropped:approval_revoke_bad_signature' : 'dropped:revoke_bad_signature', argsHash: null, exitCode: null });
       return { kind: 'dropped', reason: 'revoke_bad_signature' };
+    }
+    if (frame.approvalId !== undefined) {
+      // THE ASYMMETRY (GA wave 2, leaf 8): the server may delete exactly one
+      // approval by id — verified under the approval-revoke domain — and can
+      // never add one: no frame writes to the approvals store, and this
+      // branch never touches the key or the enrollment.
+      const removed = deps.approvals === undefined ? 0 : await deps.approvals.revoke(frame.approvalId);
+      await deps.audit.record({ grantId: null, principal: null, op: 'revoke', verdict: `approval_revoked:${frame.approvalId}:${removed}`, argsHash: null, exitCode: null });
+      return { kind: 'approval_revoked', approvalId: frame.approvalId, removed };
     }
     await deps.audit.record({ grantId: null, principal: null, op: 'revoke', verdict: 'revoked', argsHash: null, exitCode: null });
     return { kind: 'revoke_verified' };

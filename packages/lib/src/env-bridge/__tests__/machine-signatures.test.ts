@@ -16,6 +16,9 @@ import {
   encodeRevokeForSigning,
   resultHashForFrame,
   resultPayloadForFrame,
+  encodeApprovalRevokeForSigning,
+  REVOKE_APPROVAL_SIGNING_DOMAIN,
+  REVOKE_SIGNING_DOMAIN,
   verifyHello,
   verifyMachineResult,
   verifyRevoke,
@@ -185,6 +188,44 @@ describe('results — machine-signed over {grantId, resultHash} (invariant 7)', 
     expect(isMachineResultFrame({ type: 'pty_exit', sessionId: 's', code: 0 })).toBe(false);
     expect(isMachineResultFrame({ type: 'pong', ts: 1 })).toBe(false);
     expect(isMachineResultFrame({ type: 'exec_result', grantId: 'g', exitCode: 0, stdoutB64: '', stderrB64: '', truncated: false, sig: '' })).toBe(true);
+  });
+});
+
+describe('GA wave 2 — revoking ONE approval rides the revoke frame under its own domain', () => {
+  const binding = { envId: 'env_1', enrollmentId: 'enr_1', keyId: 'srv-k1', issuedAt: 1_800_000_000_000 };
+  const approvalRevoke = (key = server, approvalId = 'ch_1'): Extract<Frame, { type: 'revoke' }> => ({
+    type: 'revoke',
+    approvalId,
+    issuedAt: binding.issuedAt,
+    reason: 'owner_revoked_approval',
+    sig: signWith(key, encodeApprovalRevokeForSigning({ ...binding, approvalId })),
+  });
+  const check = (frame: Extract<Frame, { type: 'revoke' }>) => verifyRevoke({ frame, ...binding, serverPublicKey: spki(server), verify });
+
+  it('given an approval revoke signed by the pinned key for THIS enrollment and id, should verify', () => {
+    expect(check(approvalRevoke())).toEqual({ ok: true });
+  });
+
+  it('given the approvalId STRIPPED from a signed approval revoke, should deny bad_signature — it can never become an enrollment revoke (a key deletion)', () => {
+    const { approvalId: _dropped, ...stripped } = approvalRevoke();
+    expect(check(stripped as Extract<Frame, { type: 'revoke' }>)).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+
+  it('given an approvalId ADDED to a signed enrollment revoke, should deny bad_signature — the reverse is closed too', () => {
+    const full: Extract<Frame, { type: 'revoke' }> = { type: 'revoke', issuedAt: binding.issuedAt, sig: signWith(server, encodeRevokeForSigning(binding)) };
+    expect(check(full)).toEqual({ ok: true });
+    expect(check({ ...full, approvalId: 'ch_1' })).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+
+  it('given a different approvalId, enrollment, or a rogue key, should deny bad_signature', () => {
+    expect(check({ ...approvalRevoke(), approvalId: 'ch_other' })).toEqual({ ok: false, reason: 'bad_signature' });
+    expect(verifyRevoke({ frame: approvalRevoke(), ...binding, enrollmentId: 'enr_other', serverPublicKey: spki(server), verify })).toEqual({ ok: false, reason: 'bad_signature' });
+    expect(check(approvalRevoke(rogue))).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+
+  it('the two domains differ, and the enrollment revoke bytes are exactly what they were', () => {
+    expect(REVOKE_APPROVAL_SIGNING_DOMAIN).not.toBe(REVOKE_SIGNING_DOMAIN);
+    expect(Buffer.from(encodeRevokeForSigning(binding)).toString()).toBe(JSON.stringify({ domain: REVOKE_SIGNING_DOMAIN, ...binding }));
   });
 });
 

@@ -6,6 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **PageSpace can revoke one remembered approval on your machine — and can never add one.** A
+  revoke of a single approval rides the existing signed `revoke` frame with an `approvalId`,
+  signed under its own domain by the key this machine pinned at enrolment, so it can never be
+  turned into an enrolment revoke (your key stays). The daemon deletes exactly that approval's
+  rows from `~/.pagespace/env-approvals.json` and stays connected. Nothing on the wire can write
+  an approval: the file on this machine is the only source of allow.
+- **Chat approvals.** A request the machine froze for your click arrives as a card in the
+  PageSpace chat; your Allow re-issues the identical request with a server-signed intent that
+  the daemon verifies with the key it already holds, byte-compares against what it froze, and
+  only then remembers (under the scope you picked) and runs. A click can only ever unblock a
+  request this machine framed itself; anything else is refused as `approval_mismatch`,
+  `approval_expired` or `approval_unknown` and written to the audit log with the grant id.
+
 - **`ask` mode works without a terminal: the question goes to the PageSpace chat.** A request that
   is not pre-approved and not covered by a remembered approval is frozen under a challenge and
   answered `ask_pending:<id>` together with the exact normalised request (signed by the machine),

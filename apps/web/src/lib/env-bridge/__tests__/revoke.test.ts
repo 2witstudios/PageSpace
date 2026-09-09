@@ -25,7 +25,7 @@ import { parseServerSigningKeyring, type SigningKeyPrimitives } from '@pagespace
 import { clearAllEnvConnectionsForTesting, getEnvConnection, markEnvAuthorized, registerEnvConnection } from '@/lib/websocket/ws-env-connections';
 import { getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { ed25519Verify } from '@/lib/env-bridge/crypto';
-import { revokeLocalEnv, buildRevokeFrame, ENV_REVOKED_CLOSE_CODE, ENV_REVOKED_CLOSE_REASON } from '../revoke';
+import { revokeLocalEnv, buildRevokeFrame, ENV_REVOKED_CLOSE_CODE, ENV_REVOKED_CLOSE_REASON, revokeLocalEnvApproval } from '../revoke';
 
 const primitives: SigningKeyPrimitives = {
   importPrivateKey: (pkcs8) => {
@@ -164,5 +164,67 @@ describe('revokeLocalEnv — all three legs through the production seams', () =>
 
   it('buildRevokeFrame: given a null serverKeyId (never enrolled), should answer signing_key_unavailable', () => {
     expect(buildRevokeFrame({ envId: ENV, enrollmentId: 'e', serverKeyId: null, issuedAt: 1, reason: 'r' }, ring)).toEqual({ ok: false, reason: 'signing_key_unavailable' });
+  });
+});
+
+describe('GA wave 2 · leaf 8 — revoking ONE approval rides the signed revoke frame; the socket stays open, the key stays', () => {
+  let row: { envId: string; enrollmentId: string; serverKeyId: string | null; revokedAt: Date | null } | null;
+  let store: { findLocalByEnvId: ReturnType<typeof vi.fn> };
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    clearAllEnvConnectionsForTesting();
+    row = { envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, revokedAt: null };
+    store = { findLocalByEnvId: vi.fn(async () => row) };
+    vi.mocked(getDriveEnvStore).mockResolvedValue(store as never);
+    vi.mocked(loadServerSigningKeyring).mockReturnValue(ring);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  function liveSocket(serverKeyId: string | null = currentId, authorized = true): FakeSocket {
+    const ws = socket();
+    registerEnvConnection(ENV, ws, { userId: 'u', sessionId: 's', enrollmentId: 'enr_a', machinePublicKey: 'pk', serverKeyId, sessionExpiresAt: new Date(NOW.getTime() + 3600_000) });
+    if (authorized) markEnvAuthorized(ws);
+    return ws;
+  }
+
+  it('given an authorized socket, should send a revoke frame carrying approvalId that the daemon verifies under the approval domain, and NOT close the socket or stamp the row', async () => {
+    const ws = liveSocket();
+    expect(await revokeLocalEnvApproval({ envId: ENV, approvalId: 'ch_1', reason: 'owner' })).toEqual({ ok: true, machine: 'sent' });
+    const decoded = decodeFrame(ws.sent[0]!, { maxFrameBytes: 65536 });
+    if (!decoded.ok || decoded.frame.type !== 'revoke') throw new Error('no revoke frame');
+    expect(decoded.frame.approvalId).toBe('ch_1');
+    const binding = { envId: ENV, enrollmentId: 'enr_a', keyId: currentId, issuedAt: NOW.getTime(), serverPublicKey: ring.get(currentId)!.publicKey, verify: ed25519Verify };
+    expect(verifyRevoke({ frame: decoded.frame, ...binding })).toEqual({ ok: true });
+    // Stripping the id does NOT yield a valid enrollment revoke; another id does not verify either.
+    const { approvalId: _dropped, ...stripped } = decoded.frame;
+    expect(verifyRevoke({ frame: stripped as typeof decoded.frame, ...binding })).toEqual({ ok: false, reason: 'bad_signature' });
+    expect(verifyRevoke({ frame: { ...decoded.frame, approvalId: 'ch_2' }, ...binding })).toEqual({ ok: false, reason: 'bad_signature' });
+    expect(ws.close).not.toHaveBeenCalled();
+    expect(getEnvConnection(ENV)).toBe(ws);
+  });
+
+  it('given no live socket, should say so (no_live_socket) rather than claim a revoke the machine never received', async () => {
+    expect(await revokeLocalEnvApproval({ envId: ENV, approvalId: 'ch_1', reason: 'owner' })).toEqual({ ok: true, machine: 'no_live_socket' });
+  });
+
+  it('given an unauthorized socket, should send NOTHING to it', async () => {
+    const ws = liveSocket(currentId, false);
+    expect(await revokeLocalEnvApproval({ envId: ENV, approvalId: 'ch_1', reason: 'owner' })).toEqual({ ok: true, machine: 'unauthorized_socket' });
+    expect(ws.sent).toHaveLength(0);
+  });
+
+  it('given the pinned key (the ROW\'s serverKeyId) is not loaded, should not sign under another key', async () => {
+    row = { envId: ENV, enrollmentId: 'enr_a', serverKeyId: 'gone-key', revokedAt: null };
+    const ws = liveSocket('gone-key');
+    expect(await revokeLocalEnvApproval({ envId: ENV, approvalId: 'ch_1', reason: 'owner' })).toEqual({ ok: true, machine: 'signing_key_unavailable' });
+    expect(ws.sent).toHaveLength(0);
+  });
+
+  it('given a missing or revoked env, should answer the typed refusal', async () => {
+    row = null;
+    expect(await revokeLocalEnvApproval({ envId: ENV, approvalId: 'ch_1', reason: 'owner' })).toEqual({ ok: false, reason: 'not_found' });
+    row = { envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, revokedAt: NOW };
+    expect(await revokeLocalEnvApproval({ envId: ENV, approvalId: 'ch_1', reason: 'owner' })).toEqual({ ok: false, reason: 'revoked' });
   });
 });
