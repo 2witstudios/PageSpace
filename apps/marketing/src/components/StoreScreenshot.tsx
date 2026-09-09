@@ -23,11 +23,15 @@ import { CANVAS, capturePath, type Shot, type ShotDevice } from "@/lib/app-store
    is 1470x3000 around a 1320x2868 screen, the iPad 3000x2300 around 2752x2064.
    Both devices sit slightly higher than before to leave the reflection somewhere
    to fade; it is allowed to run off the bottom, where the canvas clips it. */
-const PORTRAIT = { copyTop: 130, copyPad: 90, deviceTop: 740, scale: 0.645 };
-const LANDSCAPE = { copyLeft: 150, copyTop: 100, copyWidth: 1900, deviceTop: 430, scale: 0.66 };
+const PORTRAIT = { copyTop: 150, copyPad: 90, deviceTop: 640, scale: 0.685 };
+const LANDSCAPE = { copyLeft: 150, copyTop: 120, copyWidth: 1900, deviceTop: 360, scale: 0.70 };
 
 export function StoreScreenshot({ shot, device }: { shot: Shot; device: ShotDevice }) {
   const canvas = CANVAS[device];
+  // Only `builds` carries a caption, and it needs a line's worth of room the
+  // caption-free layout does not reserve — without this the device rides up
+  // over it.
+  const hasCaption = Boolean(shot.subline);
 
   const capture = (
     /* Pixel-exact simulator capture: `unoptimized` keeps the optimizer from
@@ -53,14 +57,14 @@ export function StoreScreenshot({ shot, device }: { shot: Shot; device: ShotDevi
           {/* One line at this width — the canvas is wide enough that the
               portrait line break would read as an accident. */}
           <Headline>{shot.headline.join(" ")}</Headline>
-          <Subline className="mt-8">{shot.subline}</Subline>
+          {shot.subline && <Subline className="mt-8">{shot.subline}</Subline>}
         </div>
 
         <div
           className="absolute left-1/2"
           style={{
-            top: LANDSCAPE.deviceTop,
-            transform: `translateX(-50%) scale(${LANDSCAPE.scale})`,
+            top: LANDSCAPE.deviceTop + (hasCaption ? 90 : 0),
+            transform: `translateX(-50%) scale(${hasCaption ? 0.665 : LANDSCAPE.scale})`,
             transformOrigin: "top center",
           }}
         >
@@ -84,16 +88,18 @@ export function StoreScreenshot({ shot, device }: { shot: Shot; device: ShotDevi
             </span>
           ))}
         </Headline>
-        <Subline className="mt-12 mx-auto" style={{ maxWidth: canvas.width * 0.74 }}>
-          {shot.subline}
-        </Subline>
+        {shot.subline && (
+          <Subline className="mt-12 mx-auto" style={{ maxWidth: canvas.width * 0.74 }}>
+            {shot.subline}
+          </Subline>
+        )}
       </div>
 
       <div
         className="absolute left-1/2"
         style={{
-          top: PORTRAIT.deviceTop,
-          transform: `translateX(-50%) scale(${PORTRAIT.scale})`,
+          top: PORTRAIT.deviceTop + (hasCaption ? 110 : 0),
+          transform: `translateX(-50%) scale(${hasCaption ? 0.65 : PORTRAIT.scale})`,
           transformOrigin: "top center",
         }}
       >

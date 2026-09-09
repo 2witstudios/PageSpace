@@ -30,7 +30,19 @@ export interface Shot {
   tag?: string;
   /** Rendered as separate lines, so the break is deliberate rather than reflowed. */
   headline: string[];
-  subline: string;
+  /**
+   * Optional, and used on one shot only.
+   *
+   * Most captions were cut because they argued with the picture rather than
+   * adding to it: restating the headline ("edited in plain language" under
+   * "Change your site by asking"), or quoting figures from this one demo as
+   * though they were product claims ("Twenty-two pages across six folders").
+   * The captures tell the story; a caption has to earn its place.
+   *
+   * `builds` keeps one because naming the page types is the fastest way to
+   * show the breadth, and no screenshot of a single screen can.
+   */
+  subline?: string;
 }
 
 export const SHOTS: Shot[] = [
@@ -42,25 +54,25 @@ export const SHOTS: Shot[] = [
     slug: "publish",
     tag: "Publish",
     headline: ["Change your site", "by asking."],
-    subline: "Published to a real address, then edited in plain language.",
   },
   {
     slug: "ask",
     tag: "Ask",
     headline: ["Tell it what", "you need."],
-    subline: "It asks what a colleague would ask before starting.",
   },
   {
     slug: "builds",
     tag: "Build",
     headline: ["Then it", "builds it."],
-    subline: "Folders, documents, sheets and task lists — created, not suggested.",
+    // The one caption worth keeping. Naming the page types is the fastest way
+    // to show this is a workspace for everything rather than a note-taker —
+    // all nine of PageType, minus Folder, which the tree already shows.
+    subline: "Documents, sheets, channels, tasks, canvases, files, code and AI chats.",
   },
   {
     slug: "result",
     tag: "Workspace",
     headline: ["A workspace,", "not a blank page."],
-    subline: "Twenty-two pages across six folders, structured and ready to work in.",
   },
   {
     slug: "triggers",
@@ -68,7 +80,6 @@ export const SHOTS: Shot[] = [
     devices: ["ipad"],
     tag: "Automate",
     headline: ["Tasks that", "start themselves."],
-    subline: "Hand a task to an agent when it comes due, or the moment it's done.",
   },
   {
     slug: "workflows",
@@ -76,7 +87,6 @@ export const SHOTS: Shot[] = [
     devices: ["ipad"],
     tag: "Schedule",
     headline: ["Work that", "keeps running."],
-    subline: "Put the recurring work on a schedule and leave it to the agent.",
   },
 ];
 
