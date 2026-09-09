@@ -235,8 +235,7 @@ describe('POST /api/messages/[conversationId]', () => {
           conversationId: CONVERSATION_ID,
           senderId: SENDER_ID,
           content: 'hello world',
-          fileId: null,
-          attachmentMeta: null,
+          attachments: [],
         })
       );
       const broadcasts = captureRealtimeBroadcasts(fetchMock);
@@ -254,8 +253,7 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(mockInsertDmMessageWithAttachment).toHaveBeenCalledWith(
         expect.objectContaining({
           content: '',
-          fileId: FILE_ID,
-          attachmentMeta: imageMeta,
+          attachments: [{ fileId: FILE_ID, attachmentMeta: imageMeta }],
         })
       );
       const broadcasts = captureRealtimeBroadcasts(fetchMock);
@@ -276,8 +274,7 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(mockInsertDmMessageWithAttachment).toHaveBeenCalledWith(
         expect.objectContaining({
           content: 'see attached',
-          fileId: FILE_ID,
-          attachmentMeta: pdfMeta,
+          attachments: [{ fileId: FILE_ID, attachmentMeta: pdfMeta }],
         })
       );
       const broadcasts = captureRealtimeBroadcasts(fetchMock);
@@ -393,7 +390,7 @@ describe('POST /api/messages/[conversationId]', () => {
         fileId: FILE_ID,
         attachmentMeta: imageMeta,
       });
-      mockInsertDmMessageWithAttachment.mockResolvedValue({ kind: 'ok', message: inserted });
+      mockInsertDmMessageWithAttachment.mockResolvedValue({ kind: 'ok', message: inserted, attachments: [] });
 
       const res = await callRoute({ fileId: FILE_ID, attachmentMeta: imageMeta });
 
@@ -505,7 +502,7 @@ describe('POST /api/messages/[conversationId]', () => {
   describe('realtime fanout', () => {
     it('broadcasts new_dm_message with fileId and attachmentMeta in the payload', async () => {
       const inserted = mockInsertedRow({ fileId: FILE_ID, attachmentMeta: pdfMeta });
-      mockInsertDmMessageWithAttachment.mockResolvedValue({ kind: 'ok', message: inserted });
+      mockInsertDmMessageWithAttachment.mockResolvedValue({ kind: 'ok', message: inserted, attachments: [] });
 
       await callRoute({ fileId: FILE_ID, attachmentMeta: pdfMeta });
 
@@ -932,6 +929,8 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
         createdAt: replyCreatedAt,
       },
       mirror: null,
+      replyAttachments: [],
+      mirrorAttachments: [],
       rootId: PARENT_ID,
       replyCount: 1,
       lastReplyAt: replyCreatedAt,
@@ -986,6 +985,8 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
       kind: 'ok',
       reply: { id: 'reply-1', parentId: PARENT_ID, conversationId: CONVERSATION_ID, senderId: SENDER_ID, content: 'echo', createdAt: t },
       mirror: { id: 'mirror-1', mirroredFromId: 'reply-1', conversationId: CONVERSATION_ID, senderId: SENDER_ID, content: 'echo', createdAt: t },
+      replyAttachments: [],
+      mirrorAttachments: [],
       rootId: PARENT_ID,
       replyCount: 1,
       lastReplyAt: t,
@@ -1114,6 +1115,8 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
         createdAt: replyCreatedAt,
       },
       mirror: null,
+      replyAttachments: [],
+      mirrorAttachments: [],
       rootId: PARENT_ID,
       replyCount: 1,
       lastReplyAt: replyCreatedAt,
@@ -1145,6 +1148,8 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
         createdAt: replyCreatedAt,
       },
       mirror: null,
+      replyAttachments: [],
+      mirrorAttachments: [],
       rootId: PARENT_ID,
       replyCount: 2,
       lastReplyAt: replyCreatedAt,
@@ -1180,6 +1185,8 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
         createdAt: replyCreatedAt,
       },
       mirror: null,
+      replyAttachments: [],
+      mirrorAttachments: [],
       rootId: PARENT_ID,
       replyCount: 1,
       lastReplyAt: replyCreatedAt,

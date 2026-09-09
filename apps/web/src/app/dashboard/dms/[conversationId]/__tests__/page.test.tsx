@@ -114,13 +114,27 @@ vi.mock('@/components/messages/MessageLinkPreviews', () => ({
   MessageLinkPreviews: () => null,
 }));
 
-// MessageAttachment — sentinel for inspection
+// MessageAttachments — sentinel for inspection. The page renders the plural
+// gallery component; a message with no renderable attachment produces nothing,
+// which is what the negative assertions below rely on.
 const messageAttachmentCalls = vi.fn();
-vi.mock('@/components/shared/MessageAttachment', () => ({
-  MessageAttachment: ({ message }: { message: { fileId?: string | null } }) => {
+vi.mock('@/components/shared/MessageAttachments', () => ({
+  MessageAttachments: ({
+    message,
+  }: {
+    message: { fileId?: string | null; attachments?: Array<{ fileId?: string | null }> | null };
+  }) => {
     messageAttachmentCalls(message);
-    if (!message.fileId) return null;
-    return <div data-testid={`attachment-${message.fileId}`}>attachment</div>;
+    const ids = (message.attachments ?? []).map((a) => a.fileId).filter(Boolean);
+    const rendered = ids.length > 0 ? ids : message.fileId ? [message.fileId] : [];
+    if (rendered.length === 0) return null;
+    return (
+      <>
+        {rendered.map((id) => (
+          <div key={id} data-testid={`attachment-${id}`}>attachment</div>
+        ))}
+      </>
+    );
   },
 }));
 
