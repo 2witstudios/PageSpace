@@ -4,8 +4,10 @@ import { assert } from '@/stores/__tests__/riteway';
 import { MobileAgenda } from '../MobileAgenda';
 import type { CalendarEvent, CalendarEventAttendee, CalendarHandlers } from '../calendar-types';
 
-const DAY = new Date(2026, 8, 9, 0, 0, 0, 0);
-const OTHER_DAY = new Date(2026, 8, 10, 0, 0, 0, 0);
+// A fixed, deliberately non-today date: on today the current-time marker
+// renders into the same gutter and can collide with an asserted time.
+const DAY = new Date(2027, 2, 10, 0, 0, 0, 0);
+const OTHER_DAY = new Date(2027, 2, 11, 0, 0, 0, 0);
 
 const attendee = (id: string): CalendarEventAttendee => ({
   id,
@@ -28,8 +30,8 @@ const event = (overrides: Partial<CalendarEvent> = {}): CalendarEvent => ({
   title: 'Design review',
   description: null,
   location: null,
-  startAt: new Date(2026, 8, 9, 10, 0).toISOString(),
-  endAt: new Date(2026, 8, 9, 11, 0).toISOString(),
+  startAt: new Date(2027, 2, 10, 10, 0).toISOString(),
+  endAt: new Date(2027, 2, 10, 11, 0).toISOString(),
   allDay: false,
   timezone: 'UTC',
   recurrenceRule: null,
@@ -139,26 +141,26 @@ describe('MobileAgenda row density', () => {
 
 describe('MobileAgenda day sections', () => {
   test('an empty day is skipped unless it was picked', () => {
-    renderAgenda([event({ startAt: new Date(2026, 8, 10, 9, 0).toISOString(), endAt: new Date(2026, 8, 10, 10, 0).toISOString() })]);
+    renderAgenda([event({ startAt: new Date(2027, 2, 11, 9, 0).toISOString(), endAt: new Date(2027, 2, 11, 10, 0).toISOString() })]);
 
     assert({
       given: 'a day in the window with nothing on it and no pick',
       should: 'not render a header for it',
-      actual: screen.queryByText('Wed 9') === null,
+      actual: screen.queryByText('Wed 10') === null,
       expected: true,
     });
   });
 
   test('a picked empty day stays in the list so the pick lands', () => {
     renderAgenda(
-      [event({ startAt: new Date(2026, 8, 10, 9, 0).toISOString(), endAt: new Date(2026, 8, 10, 10, 0).toISOString() })],
+      [event({ startAt: new Date(2027, 2, 11, 9, 0).toISOString(), endAt: new Date(2027, 2, 11, 10, 0).toISOString() })],
       DAY
     );
 
     assert({
       given: 'an empty day the user picked',
       should: 'render its header',
-      actual: screen.getByText('Wed 9') !== null,
+      actual: screen.getByText('Wed 10') !== null,
       expected: true,
     });
 
