@@ -1,7 +1,5 @@
 import type { UIMessage } from 'ai';
-import { ASK_USER_TOOL_NAME, type AskUserOutput } from '@/lib/ai/tools/ask-user-tools';
-
-const ASK_USER_PART_TYPE = `tool-${ASK_USER_TOOL_NAME}`;
+import { isPausingToolPartType } from '@/lib/ai/tools/pausing-tools';
 
 type AskUserPart = { type: string; toolCallId?: string; state?: string; output?: unknown };
 
@@ -16,7 +14,7 @@ const patchAskUserPart = <T extends UIMessage>(
 
   const message = messages[idx];
   const parts = (message.parts ?? []) as AskUserPart[];
-  const partIdx = parts.findIndex((p) => p.type === ASK_USER_PART_TYPE && p.toolCallId === toolCallId);
+  const partIdx = parts.findIndex((p) => isPausingToolPartType(p.type) && p.toolCallId === toolCallId);
   if (partIdx < 0) return messages;
 
   const nextParts = parts.slice();
@@ -30,7 +28,8 @@ const patchAskUserPart = <T extends UIMessage>(
 export interface AskUserAnswerPayload {
   messageId: string;
   toolCallId: string;
-  output: AskUserOutput;
+  /** The tool's client result: an ask_user answer, or a request_env_approval outcome. */
+  output: unknown;
 }
 
 /**

@@ -1,7 +1,5 @@
 import type { UIMessage } from 'ai';
-import { ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
-
-const ASK_USER_PART_TYPE = `tool-${ASK_USER_TOOL_NAME}`;
+import { isPausingToolPartType } from '@/lib/ai/tools/pausing-tools';
 
 /**
  * sendAutomaticallyWhen predicate: auto-resubmit ONLY once every ask_user
@@ -17,7 +15,8 @@ export function askUserAnswersComplete({ messages }: { messages: UIMessage[] }):
   const last = messages[messages.length - 1];
   if (!last || last.role !== 'assistant' || !last.parts) return false;
 
-  const askParts = last.parts.filter((part) => part.type === ASK_USER_PART_TYPE);
+  // Every PAUSING tool part (ask_user, request_env_approval) must be answered before the turn resumes.
+  const askParts = last.parts.filter((part) => isPausingToolPartType(part.type));
   if (askParts.length === 0) return false;
 
   return askParts.every((part) => {

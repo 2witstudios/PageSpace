@@ -141,6 +141,40 @@ beforeEach(() => {
   saveGlobalAssistantMessageToDatabase.mockClear();
 });
 
+const pendingApprovalPart = (toolCallId: string): UIMessage['parts'][number] => ({
+  type: 'tool-request_env_approval',
+  toolCallId,
+  state: 'input-available',
+  input: { challengeId: 'ch_1' },
+} as UIMessage['parts'][number]);
+
+describe('GA wave 2 — the request_env_approval click resumes through the same merge, validated by ITS schema', () => {
+  it('merges a well-formed outcome into the pending approval part and persists it', async () => {
+    selectRows = [dbRow([pendingApprovalPart('a1')])];
+    const output = { challengeId: 'ch_1', outcome: 'allowed', scope: '30d', exitCode: 0, stdout: 'ok', stderr: '', truncated: false };
+    const result = await applyAskUserResultsToPageMessage({ messageId: 'msg-1', pageId: 'page-1', conversationId: 'conv-1', results: [{ toolCallId: 'a1', output }] });
+    expect(result).toEqual({ merged: true });
+    const saved = saveMessageToDatabase.mock.calls[0]![0] as { toolResults: Array<{ toolCallId: string; output: unknown; state: string }> };
+    expect(saved.toolResults).toEqual([expect.objectContaining({ toolCallId: 'a1', output, state: 'output-available' })]);
+  });
+
+  it('rejects an output that is an ask_user answer shape, or an unknown outcome, and persists nothing', async () => {
+    for (const output of [{ answers: [{ header: 'A', question: 'Q', selectedLabel: 'x' }] }, { challengeId: 'ch_1', outcome: 'sure' }, { dismissed: true, reason: 'x' }]) {
+      selectRows = [dbRow([pendingApprovalPart('a1')])];
+      const result = await applyAskUserResultsToPageMessage({ messageId: 'msg-1', pageId: 'page-1', conversationId: 'conv-1', results: [{ toolCallId: 'a1', output }] });
+      expect(result).toEqual({ merged: false });
+    }
+    expect(saveMessageToDatabase).not.toHaveBeenCalled();
+  });
+
+  it('a new chat message DISMISSES pending ask_user questions but never a pending approval click (that is not a question prose can answer)', async () => {
+    selectRows = [dbRow([pendingPart('q1'), pendingApprovalPart('a1')])];
+    await dismissPendingAskUserForPageConversation({ pageId: 'page-1', conversationId: 'conv-1' });
+    const saved = saveMessageToDatabase.mock.calls[0]![0] as { toolResults: Array<{ toolCallId: string }> };
+    expect(saved.toolResults.map((r) => r.toolCallId)).toEqual(['q1']);
+  });
+});
+
 describe('extractClientAskUserResults', () => {
   it('extracts output-available ask_user parts from a trailing assistant message', () => {
     const results = extractClientAskUserResults({

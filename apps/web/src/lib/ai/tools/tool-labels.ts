@@ -72,6 +72,7 @@ export const TOOL_NAME_MAP: Record<string, string> = {
   'multi_drive_list_agents': 'All Agents',
   'ask_agent': 'Ask Agent',
   'ask_user': 'Question',
+  'request_env_approval': 'Approval',
   // Web
   'web_search': 'Web Search',
   'web_fetch': 'Fetch Page',

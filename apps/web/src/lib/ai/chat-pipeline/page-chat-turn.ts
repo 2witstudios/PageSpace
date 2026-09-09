@@ -32,6 +32,8 @@ import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
+import { envApprovalTools, REQUEST_ENV_APPROVAL_TOOL_NAME } from '@/lib/ai/tools/env-approval-tools';
+import { resolveLocalEnvBindingForConversation } from '@/lib/ai/core/local-env-binding';
 import {
   extractClientAskUserResults,
   applyAskUserResultsToPageMessage,
@@ -1491,6 +1493,18 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     filteredTools = { ...filteredTools, ...askUserTools } as ToolSet;
     allowedToolNames.push(ASK_USER_TOOL_NAME);
 
+    // The Tier B approval click (GA wave 2): injected with the SAME discipline
+    // as ask_user (execute-less, after every transform, never in tool_search /
+    // execute_tool) — but ONLY when the session is bound to a LOCAL environment,
+    // the one substrate whose machine can freeze a request for its owner's click.
+    const localEnvBinding = sandboxEnabled ? await resolveLocalEnvBindingForConversation(conversationId) : null;
+    const pauseToolNames = [ASK_USER_TOOL_NAME];
+    if (localEnvBinding !== null) {
+      filteredTools = { ...filteredTools, ...envApprovalTools } as ToolSet;
+      allowedToolNames.push(REQUEST_ENV_APPROVAL_TOOL_NAME);
+      pauseToolNames.push(REQUEST_ENV_APPROVAL_TOOL_NAME);
+    }
+
     // Guard against a stale read_page tool-result (image bytes delivered on an
     // earlier turn when the model had vision) being re-embedded as an image when
     // convertToModelMessages re-converts history for a model that no longer has
@@ -1795,7 +1809,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
               : abortSignal,
             baseMessages: modelMessages,
             finishToolName: FINISH_TOOL_NAME,
-            pauseToolNames: [ASK_USER_TOOL_NAME],
+            pauseToolNames,
             maxSteps: AGENT_MAX_STEPS,
             startTimeMs: startTime,
             logger: loggers.ai,
@@ -1828,7 +1842,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
               tools: filteredTools,
               // hasToolCall(ASK_USER_TOOL_NAME) is documentation: ask_user has no
               // execute, so v6 halts the loop on it anyway (finishReason 'tool-calls').
-              stopWhen: [hasToolCall(FINISH_TOOL_NAME), hasToolCall(ASK_USER_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
+              stopWhen: [hasToolCall(FINISH_TOOL_NAME), ...pauseToolNames.map((name) => hasToolCall(name)), stepCountIs(AGENT_MAX_STEPS)],
               // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
               // creditAbortController fires when mid-stream credit check determines balance is exhausted
               abortSignal: creditAbortController

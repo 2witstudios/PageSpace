@@ -9,6 +9,7 @@ import { isHiddenTool } from './tool-significance';
 import { isIntegrationTool, parseIntegrationToolName } from '@pagespace/lib/integrations/converter/ai-sdk';
 import { getBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
 import { ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
+import { REQUEST_ENV_APPROVAL_TOOL_NAME } from '@/lib/ai/tools/env-approval-tools';
 
 // Not imported from image-generation-tools.ts: that module pulls in the DB
 // client and billing services (server-only) and must never reach the client
@@ -30,6 +31,8 @@ export type ToolCallDispatchResult<TPart extends DispatchToolPart> =
   | { kind: 'task'; part: TPart }
   | { kind: 'agent'; part: TPart }
   | { kind: 'question'; part: TPart }
+  /** The Tier B approval click for a local environment (GA wave 2) — a full-width card like a question. */
+  | { kind: 'env_approval'; part: TPart }
   | { kind: 'image'; part: TPart }
   | { kind: 'generic'; part: TPart; toolName: string };
 
@@ -77,6 +80,7 @@ export function dispatchToolCall<TPart extends DispatchToolPart>(
   if (taskToolNames.has(toolName)) return { kind: 'task', part: resolvedPart };
   if (toolName === 'ask_agent') return { kind: 'agent', part: resolvedPart };
   if (toolName === ASK_USER_TOOL_NAME) return { kind: 'question', part: resolvedPart };
+  if (toolName === REQUEST_ENV_APPROVAL_TOOL_NAME) return { kind: 'env_approval', part: resolvedPart };
   if (toolName === GENERATE_IMAGE_TOOL_NAME) return { kind: 'image', part: resolvedPart };
   return { kind: 'generic', part: resolvedPart, toolName };
 }
