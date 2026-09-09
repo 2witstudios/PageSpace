@@ -62,6 +62,16 @@ describe('approvalSubjects — what an approval is keyed on', () => {
     }
   });
 
+  it('Codex P1 on #2583: substitution INSIDE double quotes is still substitution — `echo "$(rm x)"`, a backtick, or `${…}` in double quotes ⇒ null (ask); single quotes stay literal', () => {
+    for (const script of ['echo "$(rm -rf x)"', 'echo "`rm x`"', 'echo "${HOME}"', 'echo "a ${x:-$(rm x)} b"', 'git log "--format=$(rm x)"']) {
+      expect(approvalSubjects(shell(script), deps), script).toBeNull();
+    }
+    expect(approvalSubjects(shell("echo '$(rm x)'"), deps)).toEqual(['builtin:echo']);
+    expect(approvalSubjects(shell("echo '`rm x`' '${HOME}'"), deps)).toEqual(['builtin:echo']);
+    expect(shellCommandWords('echo "$(rm x)"')).toBeNull();
+    expect(shellCommandWords("echo '$(rm x)'")).toEqual(['echo']);
+  });
+
   it('given a script with env assignments, wrappers and control keywords, should still find the programs', () => {
     expect(approvalSubjects(shell('CI=1 FOO=bar git status'), deps)).toEqual(['exec:/usr/bin/git']);
     expect(approvalSubjects(shell('if git diff --quiet; then ls; else rm x; fi'), deps)).toEqual(['exec:/usr/bin/git', 'exec:/bin/ls', 'exec:/bin/rm']);

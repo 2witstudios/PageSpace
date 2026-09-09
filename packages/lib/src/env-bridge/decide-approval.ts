@@ -112,6 +112,10 @@ function splitSegments(script: string): string[] | null {
         i += 1;
         continue;
       }
+      // Double quotes do NOT stop substitution (Codex P1 on #2583): `"$(…)"`,
+      // `"\`…\`"` and `"${…}"` run commands exactly as they would unquoted, so
+      // they are opaque here too. Single quotes are literal (POSIX).
+      if (quote === '"' && (ch === '`' || (ch === '$' && (script[i + 1] === '(' || script[i + 1] === '{')))) return null;
       if (ch === quote) quote = null;
       current += ch;
       continue;
