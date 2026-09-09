@@ -7,6 +7,22 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **iPhone and iPad: sign-in no longer tells you Google is blocked when it isn't, and an emailed
+  sign-in link now signs you in inside the app** — two things were wrong on the app's sign-in
+  screen. It showed a warning saying "Google sign-in is blocked in this app" and pushed you toward
+  an email link instead; that warning is meant for in-app browsers like Instagram's or Facebook's,
+  and the app's own window was being mistaken for one. Google sign-in has always worked in the
+  app, so the warning is gone there and the app no longer forces the email-link form open. A real
+  in-app browser still gets the warning, because there the advice is true. The email link was the
+  worse problem: it was the fallback the warning recommended, and it could not work at all. Tapping
+  it opened Safari, and the session it created stayed in Safari — the app never saw it and stayed
+  signed out. Ask for a sign-in link from the app now and the link opens **the app**, signs you in
+  there, and takes you where you were headed. The same link opened somewhere else — a laptop, a
+  friend's phone if you forwarded the mail — still signs that browser in as before, and hands out
+  nothing that would let it act as your phone. Links you request from a browser are unchanged. On
+  Android the link still opens Chrome and signs Chrome in; the app cannot receive links yet, which
+  needs a signed release build.
+
 - **Local Environments: create one from the app, get your enrollment code, and get a new one if
   you lose it (opt-in)** — a local Environment (your own computer, reached through the bridge) is
   now a choice in the ordinary "New environment" step rather than something only an API call could

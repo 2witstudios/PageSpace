@@ -8,7 +8,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Mail, ArrowLeft, Loader2, CheckCircle } from 'lucide-react';
-import { getDevicePlatformFields } from '@/lib/desktop-auth';
+import { getMagicLinkPlatformFields } from '@/lib/auth/magic-link-platform-fields';
+import { useCapacitor } from '@/hooks/useCapacitor';
 
 type FormState = 'input' | 'sending' | 'sent' | 'error';
 
@@ -24,6 +25,9 @@ export interface MagicLinkFormProps {
 }
 
 export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}) {
+  // Resolved after mount, never during render — the shell is a `window` fact
+  // the server does not have.
+  const { isNative } = useCapacitor();
   const formRef = useRef<HTMLFormElement>(null);
   const [email, setEmail] = useState('');
   const [acceptedTos, setAcceptedTos] = useState(false);
@@ -97,7 +101,7 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
 
       const { csrfToken } = (await csrfResponse.json()) as { csrfToken: string };
 
-      const platformFields = await getDevicePlatformFields();
+      const platformFields = await getMagicLinkPlatformFields();
 
       // Send magic link request
       const response = await fetch('/api/auth/magic-link/send', {
@@ -192,6 +196,11 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
         <p className="text-center text-xs text-muted-foreground">
           The link expires in 5 minutes. Check your spam folder if you don&apos;t see it.
         </p>
+        {isNative && (
+          <p className="text-center text-xs text-muted-foreground">
+            Open the link on this device and it will sign you in here.
+          </p>
+        )}
 
         <div className="flex flex-col gap-2">
           <Button

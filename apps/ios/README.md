@@ -33,8 +33,8 @@ This is a **remote-loading** app. The WebView loads the live site directly:
 
 ### Universal links (associated domains)
 
-`https://pagespace.ai/invite/*` opens in the app. Three pieces have to agree, and they broke
-independently before:
+`https://pagespace.ai/invite/*` and `https://pagespace.ai/auth/magic-link/*` open in the app.
+Three pieces have to agree, and they broke independently before:
 
 1. **Entitlement** — `applinks:pagespace.ai` in `App.entitlements`.
 2. **The AASA** — Caddy routes `/.well-known/*` to **marketing** (only `oauth-*` reaches web), so
@@ -42,8 +42,10 @@ independently before:
    `appID` is team plus bundle id (`M96WTV3CKX.ai.pagespace.ios`), and it must be served as
    `application/json` — the file is deliberately extensionless, so `apps/marketing/next.config.ts`
    sets the header.
-3. **Routing** — `apps/web/src/components/DeepLinkHandler.tsx`, mounted in
-   `DashboardLayoutClient`. Both halves are required: `App.getLaunchUrl()` for a cold start (the
+3. **Routing** — `apps/web/src/components/DeepLinkHandler.tsx`, mounted in the **root**
+   `apps/web/src/app/layout.tsx`, not the dashboard layout: a signed-out `/dashboard` is rewritten
+   to `/auth/signin`, and both an invite tap and a magic-link tap are very often signed out, so
+   mounted any lower the launch URL is never read. Both halves are required: `App.getLaunchUrl()` for a cold start (the
    URL is spent before any listener exists) and the `appUrlOpen` listener for a warm one (the
    native side only notifies plugins, it never calls `loadUrl`, so without a listener the WebView
    simply stays put). Which URLs resolve to which route is
@@ -56,8 +58,32 @@ which limits the blast radius but is not a licence to claim loosely.
 
 Navigation goes through the router, never `window.location`: in the iOS shell a top-level location
 change reaches Capacitor's `WKNavigationDelegate`, which cancels anything outside `server.url`'s
-`/dashboard` prefix and opens system Safari, blanking the WebView. `/invite/*` is outside that
-prefix.
+`/dashboard` prefix and opens system Safari, blanking the WebView. `/invite/*` and
+`/auth/magic-link/*` are both outside that prefix.
+
+### Magic links, and why they are a universal link
+
+A magic link requested from the app used to be unusable. `apps/web/src/lib/desktop-auth.ts` knew
+only about Electron, so the token was minted with no platform metadata and the email carried the
+plain `/api/auth/magic-link/verify?token=…` URL. iOS does not claim that path, so the tap opened
+Safari, the session cookie landed in **Safari's** cookie jar, and the WebView — which
+authenticates with a bearer token read from the Keychain (`platform-storage/ios-storage.ts`,
+`usesBearer() === true`) — stayed signed out. There was no path by which it could succeed.
+
+Now `apps/web/src/lib/auth/magic-link-platform-fields.ts` reports the shell and this device's id
+(the same id native Google / Apple sign-in use), the send route binds the link to it, and the
+adapter mints `https://pagespace.ai/auth/magic-link/<token>` instead — a claimed path, so the tap
+opens the app. `apps/web/src/app/auth/magic-link/[token]/page.tsx` then redeems the token with a
+same-origin `POST /api/auth/magic-link/verify`: the response's `Set-Cookie` lands in the WebView's
+own jar, and because the page presents the bound `deviceId`, the route also returns
+`sessionToken` / `csrfToken` / `deviceToken`, which the page writes to the Keychain — the same
+shape and the same store as `/api/auth/{apple,google}/native`.
+
+Bearer tokens are released **only** to the device the link was bound to. The same link opened
+anywhere else (a laptop browser, a second phone) still signs that browser in by cookie and
+receives no tokens, so a forwarded email cannot hand anyone a native session. The emailed URL for
+a link requested from a browser is unchanged, and that path stays unclaimed — a link requested in
+Safari must complete in Safari.
 
 Do **not** claim the OAuth callback paths. Native sign-in returns through the
 `pagespace://auth-exchange` custom scheme, and `/api/auth/desktop/exchange` redeems its code with
@@ -156,6 +182,9 @@ bundle exec fastlane release   # deliver: push metadata + submit the App Store v
       returns `M96WTV3CKX.ai.pagespace.ios` as `application/json`, **and** an
       `https://pagespace.ai/invite/...` link opens the app on a device from both a cold start and
       with the app already running (the two paths are handled separately — verify both)
+- [ ] Magic link verified on a device: request one **from the app**, tap it in Mail, and confirm
+      the app opens signed in (not Safari). Then open the same link on a Mac and confirm it signs
+      that browser in without handing out tokens
 - [ ] Build uploaded and finished **Processing** in App Store Connect
 - [ ] App privacy answers match `ios/App/PrivacyInfo.xcprivacy` (Email + User ID linked / App
       Functionality; Device ID / Analytics and Crash + Performance Data, not linked; Product

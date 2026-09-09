@@ -52,6 +52,14 @@ describe('DeepLinkHandler', () => {
     vi.restoreAllMocks();
   });
 
+  it('routes a magic link tapped while the app is running', async () => {
+    render(<DeepLinkHandler />);
+    await waitFor(() => expect(mockAddListener).toHaveBeenCalled());
+    warmStartHandler()({ url: 'https://pagespace.ai/auth/magic-link/ps_magic_warm' });
+    expect(mockPush).toHaveBeenCalledWith('/auth/magic-link/ps_magic_warm');
+    expect(mockOpenExternalUrl).not.toHaveBeenCalled();
+  });
+
   it('routes the launch URL on a cold start', async () => {
     // The launch URL is already spent by mount time, so a listener alone would
     // never see it.

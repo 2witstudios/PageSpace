@@ -17,15 +17,19 @@ import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
 
 const sendMagicLinkSchema = z.object({
   email: z.email({ message: 'Please enter a valid email address' }),
-  platform: z.enum(['web', 'desktop']).optional(),
+  // A shell that redeems on a specific device (desktop, or the iOS / Android
+  // app via a universal link) binds the link to that device; a browser sends
+  // no platform and gets a cookie session.
+  platform: z.enum(['web', 'desktop', 'ios', 'android']).optional(),
   deviceId: z.string().optional(),
   deviceName: z.string().optional(),
   next: z.string().min(1).max(2048).optional(),
   inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
   tosAccepted: z.boolean(),
 }).refine(
-  (data) => data.platform !== 'desktop' || (data.deviceId && data.deviceName),
-  { message: 'deviceId and deviceName are required for desktop platform' }
+  (data) =>
+    data.platform === undefined || data.platform === 'web' || (data.deviceId && data.deviceName),
+  { message: 'deviceId and deviceName are required for a device-bound platform' }
 );
 
 export async function POST(req: Request) {

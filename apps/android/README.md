@@ -362,8 +362,18 @@ certificate and a real `assetlinks.json`. Until those exist **Android captures n
 https intent-filter is registered.
 
 When it does, mirror `apps/marketing/public/.well-known/apple-app-site-association` (the copy
-Caddy actually serves), currently `/invite/*` only, so both platforms capture the same links. Widening beyond these paths should still wait on prerequisite 2 — whole-host
+Caddy actually serves), currently `/invite/*` and `/auth/magic-link/*`, so both platforms capture
+the same links. Widening beyond these paths should still wait on prerequisite 2 — whole-host
 capture would strand users on `/dashboard` from every marketing, blog, or docs link.
+
+**Magic links reach the same wall.** The shared web layer already treats Android as a
+device-bound platform: a magic link requested from the Android app is minted for this device and
+emailed as `https://pagespace.ai/auth/magic-link/<token>`, and
+`apps/web/src/app/auth/magic-link/[token]/page.tsx` would redeem it into the secure store exactly
+as it does on iOS. But with no https intent-filter registered, **Android never receives the tap** —
+Chrome opens the link and signs Chrome in with a cookie, which is what happens today and is no
+worse than before. It is not fixed for Android, and it cannot be until prerequisite 1 lands; the
+server and web halves are simply already in place for when it does.
 
 A third prerequisite applies to the auth-callback paths specifically: `/api/auth/desktop/exchange`
 authenticates possession of the one-time code alone, with no PKCE verifier and no binding to the

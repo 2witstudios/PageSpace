@@ -495,6 +495,23 @@ describe('requestMagicLink', () => {
     );
   });
 
+  it('given a native platform, should forward it to sendMagicLinkEmail so the adapter can mint a universal link', async () => {
+    const ports = buildMagicLinkPorts();
+    await requestMagicLink(ports)(
+      baseMagicLinkInput({ platform: 'ios', deviceId: 'dev_1', deviceName: 'iOS App' }),
+    );
+
+    expect(ports.sendMagicLinkEmail).toHaveBeenCalledOnce();
+    // Both halves travel together: the adapter decides "device-bound" from the
+    // pair, and must reach the same answer the token metadata did.
+    expect(ports.sendMagicLinkEmail).toHaveBeenCalledWith({
+      email: 'user@example.com',
+      token: 'ps_magic_xyz',
+      platform: 'ios',
+      deviceId: 'dev_1',
+    });
+  });
+
   it('given a next on the input, should forward it to sendMagicLinkEmail (and not to createTokenAndPersist)', async () => {
     const ports = buildMagicLinkPorts();
     await requestMagicLink(ports)(
