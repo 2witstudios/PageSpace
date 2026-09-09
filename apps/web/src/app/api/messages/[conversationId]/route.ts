@@ -19,13 +19,13 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 /**
  * Shared error mapping for the two attachment-validation call sites (the
  * thread-reply and top-level insert discriminated results) — both surface
- * the same three rejection kinds against the same fileId/conversationId
- * pair, just from different call shapes.
+ * the same rejection kinds against the same attachments/conversationId pair,
+ * just from different call shapes.
  */
 function attachmentValidationErrorResponse(
   request: Request,
   kind: 'not_found' | 'wrong_owner' | 'not_linked' | 'too_many_attachments',
-  ctx: { userId: string; fileId: string | null; conversationId: string }
+  ctx: { userId: string; fileIds: string[]; conversationId: string }
 ): NextResponse {
   if (kind === 'not_found') {
     return NextResponse.json({ error: 'File not found' }, { status: 404 });
@@ -41,10 +41,16 @@ function attachmentValidationErrorResponse(
     eventType: 'authz.access.denied',
     userId: ctx.userId,
     resourceType: 'dm_message',
-    resourceId: ctx.fileId ?? undefined,
+    // Only name a resource when the request referenced exactly one, since the
+    // repository reports which CHECK failed but not which file failed it.
+    // Pinning resourceId to attachments[0] on a batch would put an innocent
+    // file's id in a security audit record; the full list below is the honest
+    // statement of what the denied request referenced.
+    resourceId: ctx.fileIds.length === 1 ? ctx.fileIds[0] : undefined,
     details: {
       reason: isOwnerMismatch ? 'file_owner_mismatch' : 'file_not_linked_to_conversation',
       conversationId: ctx.conversationId,
+      fileIds: ctx.fileIds,
     },
   });
   return NextResponse.json(
@@ -285,7 +291,7 @@ export async function POST(
       return NextResponse.json({ error: parsedAttachments.error }, { status: 400 });
     }
     const attachments = parsedAttachments.attachments;
-    const fileId = attachments[0]?.fileId ?? null;
+    const attachmentFileIds = attachments.map((attachment) => attachment.fileId);
 
     const trimmedParent = typeof body.parentId === 'string' ? body.parentId.trim() : '';
     const parentId = trimmedParent.length > 0 ? trimmedParent : null;
@@ -364,7 +370,7 @@ export async function POST(
       ) {
         return attachmentValidationErrorResponse(request, result.kind, {
           userId,
-          fileId,
+          fileIds: attachmentFileIds,
           conversationId,
         });
       }
@@ -558,7 +564,7 @@ export async function POST(
     if (insertResult.kind !== 'ok') {
       return attachmentValidationErrorResponse(request, insertResult.kind, {
         userId,
-        fileId,
+        fileIds: attachmentFileIds,
         conversationId,
       });
     }
