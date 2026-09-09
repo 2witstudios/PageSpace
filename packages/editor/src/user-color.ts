@@ -1,4 +1,4 @@
-import { djb2 } from './collab-schema.js';
+import { djb2 } from './djb2.js';
 
 /**
  * One deterministic colour per user, for the avatar ring in the presence

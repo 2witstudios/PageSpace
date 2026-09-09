@@ -122,7 +122,8 @@ function rows(tallies: Tallies): TallyRow[] {
  * `el:img` → `<img>`; `attr:p@style:text-align` → `style:text-align`;
  * `attr:ul@data-type=taskList` → `attr:data-type=taskList` (`data-type` is
  * the census's one value-bearing attribute); every other attribute →
- * `attr:<name>`, presence only. Two audit keys can fold into one census key
+ * `attr:<name>`, presence only. Applied AFTER `contentFreeKey`, so the value
+ * has already been validated against the schema's enumeration. Two audit keys can fold into one census key
  * (`h2@style:text-align` and `p@style:text-align`); the census counted that
  * page once, and so does the fold.
  */
@@ -170,7 +171,7 @@ function createChainTallies() {
       // Folded to content-free form; two keys can fold into one, and a page
       // counts once per folded key, hence the Sets.
       for (const key of new Set(verdict.droppedConstructs.map(contentFreeKey))) tally(dropped, key, pageId);
-      for (const key of new Set(verdict.droppedConstructs.map(censusKeyOf))) {
+      for (const key of new Set(verdict.droppedConstructs.map((raw) => censusKeyOf(contentFreeKey(raw))))) {
         tally(droppedCensus, key, pageId);
       }
       for (const key of new Set(verdict.unexpectedAdditions.map(contentFreeKey))) tally(additions, key, pageId);
@@ -368,7 +369,7 @@ export function formatAuditReport(snapshot: AuditSnapshot, { partial }: ReportOp
       snapshot.divergence.rows,
       'DIFFERENCE',
     ),
-    'package seed gate (describeHtmlLoss) vs this audit, seed chain',
+    'package seed gate (what htmlToPmDoc throws on — describeParseLoss) vs this audit, seed chain',
     `  gate refuses, audit lossy   (agree)                 ${gate.agreement.bothLossy}`,
     `  gate ACCEPTS, audit lossy   (BLIND SPOT — read these) ${gate.agreement.gateBlindSpot}`,
     `  gate refuses, audit clean   (gate stricter)         ${gate.agreement.gateStricter}`,

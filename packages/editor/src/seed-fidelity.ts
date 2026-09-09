@@ -1,3 +1,5 @@
+import { HTML_ELEMENT_NAMES, UNESCAPED_ANGLE_BRACKET_KEY } from './html-element-names.js';
+
 /**
  * The seed-fidelity vocabulary: markup constructs as comparable keys, and the
  * one allowlist of rewrites a pass through the frozen schema is permitted to
@@ -127,32 +129,86 @@ export const VALUE_BEARING_ATTRIBUTES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The subset of `VALUE_BEARING_ATTRIBUTES` whose values are safe to PRINT:
- * enumerations and small integers the schema itself defines. Everything else
- * on that list — `href`, `alt`, the `data-*-id` family — is user content or
- * an identifier, and `contentFreeKey` folds it back to presence before a key
- * reaches a terminal. Declared beside the list it partitions so adding a
- * value-bearing attribute forces the printability decision in the same diff.
+ * The subset of `VALUE_BEARING_ATTRIBUTES` whose values may be PRINTED, each
+ * with the validator its value must pass first. These are the schema's own
+ * enumerations and small integers; a value that fails its validator is
+ * user-typed (`data-type="customer-name"`) and is folded to presence.
+ * Everything else on the value-bearing list — `href`, `alt`, the `data-*-id`
+ * family — is user content or an identifier and is never printed. Declared
+ * beside the list it partitions so adding a value-bearing attribute forces the
+ * printability decision in the same diff.
  */
-export const PRINTABLE_ATTRIBUTE_VALUES: ReadonlySet<string> = new Set([
-  'data-type',
-  'data-checked',
-  'data-tight',
-  'start',
-  'colspan',
-  'rowspan',
+export const PRINTABLE_ATTRIBUTE_VALUES: ReadonlyMap<string, (value: string) => boolean> = new Map([
+  ['data-type', (value: string) => SCHEMA_DATA_TYPES.has(value)],
+  ['data-checked', (value: string) => value === 'true' || value === 'false'],
+  ['data-tight', (value: string) => value === 'true' || value === 'false'],
+  ['start', (value: string) => /^\d{1,6}$/u.test(value)],
+  ['colspan', (value: string) => /^\d{1,6}$/u.test(value)],
+  ['rowspan', (value: string) => /^\d{1,6}$/u.test(value)],
 ]);
 
+/** Every `data-type` value a node in the frozen schema renders. */
+export const SCHEMA_DATA_TYPES: ReadonlySet<string> = new Set(['taskList', 'taskItem', 'pageMention']);
+
 /**
- * A construct key with any non-printable value removed. The COMPARISON must
- * run on the valued form (`ALLOWED_COSMETIC_ADDITIONS` names
- * `attr:a@data-drive-id=` and the `=1`/`=true` forms); only what is REPORTED
- * from real documents goes through here.
+ * The NAMES the report may print — closed lists, not a shape. A parser turns
+ * `Set<string>` in prose into a `<string>` element and `<p note=...>` into an
+ * attribute, so a name is as much under the author's control as a value is,
+ * and any lower-case token would print `secretattr`. Tags must be real HTML
+ * (`HTML_ELEMENT_NAMES`); attributes and CSS properties must be ones the
+ * frozen schema reads or writes, or common HTML the census has already
+ * reported on. The corpus test asserts every attribute and property the
+ * corpus produces is on these lists, so they cannot go stale silently.
+ */
+export const KNOWN_ATTRIBUTE_NAMES: ReadonlySet<string> = new Set([
+  'alt', 'checked', 'class', 'colspan', 'contenteditable', 'dir', 'height', 'href', 'id', 'lang',
+  'rel', 'rowspan', 'spellcheck', 'src', 'start', 'style', 'target', 'title', 'type', 'width',
+  'data-author-id', 'data-block-id', 'data-change-id', 'data-change-type', 'data-checked',
+  'data-drive-id', 'data-file-id', 'data-label', 'data-language', 'data-mention-type',
+  'data-page-id', 'data-role-id', 'data-thread-id', 'data-tight', 'data-type', 'data-user-id',
+  'data-width',
+]);
+
+export const KNOWN_STYLE_PROPERTIES: ReadonlySet<string> = new Set([
+  'background-color', 'color', 'font-family', 'font-size', 'font-style', 'font-weight',
+  'line-height', 'margin', 'margin-bottom', 'margin-left', 'margin-right', 'margin-top',
+  'min-width', 'padding', 'text-align', 'text-decoration', 'width',
+]);
+
+const UNRECOGNISED_ATTRIBUTE = '(unrecognised-attribute)';
+const UNRECOGNISED_PROPERTY = '(unrecognised-property)';
+
+/**
+ * A construct key with everything the author could have typed removed:
+ * unknown tag names become `UNESCAPED_ANGLE_BRACKET_KEY` (the census's own
+ * marker for the same artefact), attribute and property names outside the
+ * known lists are folded to a fixed placeholder, and a value survives only if
+ * its attribute is in `PRINTABLE_ATTRIBUTE_VALUES` AND the value passes that
+ * validator.
+ *
+ * The COMPARISON must run on the raw form (`ALLOWED_COSMETIC_ADDITIONS`
+ * names `attr:a@data-drive-id=` and the `=1`/`=true` forms); only what is
+ * REPORTED from real documents goes through here.
  */
 export function contentFreeKey(key: string): string {
-  const valued = /^(attr:[^@]+@)([^=]+)=/u.exec(key);
-  if (!valued) return key;
-  return PRINTABLE_ATTRIBUTE_VALUES.has(valued[2]) ? key : `${valued[1]}${valued[2]}`;
+  const element = /^el:(.+)$/u.exec(key);
+  if (element) {
+    return HTML_ELEMENT_NAMES.has(element[1]) ? key : UNESCAPED_ANGLE_BRACKET_KEY;
+  }
+  const attribute = /^attr:([^@]+)@([^=]+)(?:=(.*))?$/su.exec(key);
+  if (!attribute) return key;
+  const [, tag, rawName, value] = attribute;
+  if (!HTML_ELEMENT_NAMES.has(tag)) return UNESCAPED_ANGLE_BRACKET_KEY;
+
+  const style = /^style:(.*)$/su.exec(rawName);
+  if (style) {
+    const property = KNOWN_STYLE_PROPERTIES.has(style[1]) ? style[1] : UNRECOGNISED_PROPERTY;
+    return `attr:${tag}@style:${property}`;
+  }
+  const name = KNOWN_ATTRIBUTE_NAMES.has(rawName) ? rawName : UNRECOGNISED_ATTRIBUTE;
+  if (value === undefined) return `attr:${tag}@${name}`;
+  const printable = PRINTABLE_ATTRIBUTE_VALUES.get(name);
+  return printable?.(value) ? `attr:${tag}@${name}=${value}` : `attr:${tag}@${name}`;
 }
 
 /**

@@ -106,7 +106,7 @@ describe('content counters (criterion 2)', () => {
     });
   });
 
-  it('does not count the <div> TaskItem renders inside a task item, so a lost wrapper cannot be paid back by one', () => {
+  it('does not count the <div> TaskItem renders directly inside a task item, so a lost wrapper cannot be paid back by one', () => {
     const counts = countContent(
       parse(
         '<div><p>wrapper</p></div>' +
@@ -116,6 +116,16 @@ describe('content counters (criterion 2)', () => {
     );
     expect(counts['div (outside task items)']).toBe(1);
     expect(counts['input[type=checkbox]']).toBe(1);
+  });
+
+  it("still counts an author's <div> nested deeper inside a task item", () => {
+    const counts = countContent(
+      parse(
+        '<ul data-type="taskList"><li data-type="taskItem" data-checked="false">' +
+          '<div><p>todo</p><div><p>nested wrapper</p></div></div></li></ul>',
+      ),
+    );
+    expect(counts['div (outside task items)']).toBe(1);
   });
 
   it('reports a decrease and never an increase', () => {
@@ -156,8 +166,9 @@ describe('text (criterion 3)', () => {
     expect(visibleText(root)).toBe('keep');
   });
 
-  it('calls a document with no HTML element at all tagless', () => {
+  it('calls a document with no real HTML element tagless — a generic in prose is not markup', () => {
     expect(isTagless(parse('# heading\n\nplain markdown'))).toBe(true);
+    expect(isTagless(parse('const x: Set<string> = new Set();'))).toBe(true);
     expect(isTagless(parse('<p>html</p>'))).toBe(false);
   });
 });
@@ -284,7 +295,7 @@ describe('judgeChain and divergenceBetween (on DOMs, so the branches y-prosemirr
 });
 
 describe('gateReasonShape', () => {
-  it('strips the per-page counts off describeHtmlLoss reasons so they tally', () => {
+  it('strips the per-page counts off the gate reasons so they tally', () => {
     expect(gateReasonShape('dropped 2 <img> element(s)')).toBe('dropped <img>');
     expect(gateReasonShape('dropped 1 <iframe> element(s)')).toBe('dropped <iframe>');
     expect(gateReasonShape('visible text changed (140 characters in, 120 out)')).toBe('visible text changed');
@@ -460,11 +471,11 @@ describe('the accumulator and the report', () => {
     expect(formatAuditReport(clean.snapshot(), { partial: true })).toContain('INTERRUPTED');
 
     const blocked = createAuditAccumulator();
-    blocked.recordHtml('p', lossyAudit());
+    blocked.recordHtml('page_blocked_1', lossyAudit());
     const report = formatAuditReport(blocked.snapshot(), { partial: false });
     expect(report).toContain('AUDIT — BLOCKED');
     expect(report).toContain('counter decreased: img');
-    expect(report).toContain('p');
+    expect(report).toContain('page_blocked_1');
   });
 
   it('carries the tagless count into the header so a PASS cannot hide it', () => {
@@ -487,6 +498,31 @@ describe('the accumulator and the report', () => {
     expect(report).not.toContain(sentinel);
     expect(JSON.stringify(audit.snapshot())).not.toContain(sentinel);
   });
+
+  it('never prints markup TOKENS the author controls either — tag names, attribute names, style properties, enumerated values', () => {
+    // Every one of these is dropped by the schema, so every one lands in the
+    // dropped-constructs tables — the place a token would leak from.
+    const tokens = {
+      tag: 'secrettag9f3a',
+      attribute: 'secretattr9f3a',
+      property: 'secretprop9f3a',
+      dataType: 'secrettype9f3a',
+      checked: 'secretchecked9f3a',
+      start: 'secretstart9f3a',
+    };
+    const html =
+      `<${tokens.tag}>x</${tokens.tag}>` +
+      `<p ${tokens.attribute}="1" style="${tokens.property}: 1; --${tokens.property}: 2">y</p>` +
+      `<span data-type="${tokens.dataType}">z</span>` +
+      `<ul data-type="taskList"><li data-type="taskItem" data-checked="${tokens.checked}"><p>t</p></li></ul>` +
+      `<ol start="${tokens.start}"><li><p>o</p></li></ol>`;
+    const audit = createAuditAccumulator();
+    audit.recordHtml('page_y', auditPage(html, workspace));
+    const printed = formatAuditReport(audit.snapshot(), { partial: false }) + JSON.stringify(audit.snapshot());
+    for (const [position, token] of Object.entries(tokens)) {
+      expect(printed, position).not.toContain(token);
+    }
+  });
 });
 
 describe('options', () => {
@@ -503,6 +539,17 @@ describe('options', () => {
     expect(() => parseAuditArgs(['--limit'])).toThrow(/--limit requires a positive integer/);
     expect(() => parseAuditArgs(['--limit', '0'])).toThrow(/--limit requires a positive integer/);
     expect(() => parseAuditArgs(['--limit', 'ten'])).toThrow(/--limit requires a positive integer/);
+    expect(() => parseAuditArgs(['--limit='])).toThrow(/--limit requires a positive integer/);
+  });
+
+  it('accepts --flag=value', () => {
+    expect(parseAuditArgs(['--limit=5', '--batch-size=2']).limit).toBe(5);
+    expect(parseAuditArgs(['--limit=5', '--batch-size=2']).batchSize).toBe(2);
+  });
+
+  it('refuses an argument it does not know, so a typo cannot audit the whole table', () => {
+    expect(() => parseAuditArgs(['--limt', '5'])).toThrow(/unknown argument --limt/);
+    expect(() => parseAuditArgs(['5'])).toThrow(/unknown argument 5/);
   });
 });
 
@@ -538,6 +585,9 @@ describe('the audit is read-only and sequential by construction', () => {
     /\.delete\s*\(/,
     /\btransaction\s*\(/,
     /\b(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|DROP|CREATE|GRANT)\b/i,
+    // The one write a read-only session still permits is turning itself off.
+    /\bSET\s+(default_transaction_read_only|transaction|session)\b/i,
+    /\bREAD\s+WRITE\b/i,
   ];
 
   it.each(sources)('%s contains no write', (relative) => {

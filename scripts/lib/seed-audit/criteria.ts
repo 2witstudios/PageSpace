@@ -1,3 +1,4 @@
+import { hasRealHtmlElement } from '@pagespace/editor/html-element-names';
 import { visibleCharacters } from '@pagespace/editor/html-to-ydoc';
 
 /**
@@ -67,9 +68,12 @@ export const CONTENT_COUNTERS: readonly ContentCounter[] = [
   bySelector('details', 'details'),
   {
     key: 'div (outside task items)',
+    // Only TaskItem's OWN wrapper — the direct child of the item — is chrome.
+    // A `<div>` nested deeper inside a task item is the author's, and losing
+    // it must count.
     count: (root) =>
       Array.from(root.querySelectorAll('div')).filter(
-        (div) => div.closest(TASK_ITEM_SELECTOR) === null,
+        (div) => !(div.parentElement?.matches(TASK_ITEM_SELECTOR) ?? false),
       ).length,
   },
   bySelector('input[type=checkbox]', 'input[type="checkbox"]'),
@@ -121,15 +125,19 @@ export function spaceCollapsedText(root: Element): string {
 }
 
 /**
- * Whether a stored `contentMode='html'` document contains any HTML element at
- * all. A page that parses to none is markdown (or plain text) filed under the
- * wrong content mode; the content census found 3,003 of them and the
+ * Whether a stored `contentMode='html'` document contains no REAL HTML
+ * element. A page with none is markdown (or plain text) filed under the wrong
+ * content mode; the content census found 3,003 of them and the
  * mislabelled-content backfill has since corrected 2,718. Seeding one through
  * the HTML path flattens every heading, list and code fence into a single
  * paragraph, permanently — so Phase E must refuse them, and this audit counts
  * them separately rather than letting them pass criterion 2 with every
  * counter at zero.
+ *
+ * "Real" is the census's and the backfill's definition (`HTML_ELEMENT_NAMES`):
+ * `Set<string>` in a markdown page makes happy-dom create a `<string>`
+ * element, and a rule of "any element at all" would call that page HTML.
  */
 export function isTagless(root: Element): boolean {
-  return root.querySelector('*') === null;
+  return !hasRealHtmlElement(root);
 }

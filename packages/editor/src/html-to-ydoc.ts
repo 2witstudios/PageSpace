@@ -169,8 +169,8 @@ export function parseHtmlElementUnchecked(source: HTMLElement): PmNode {
  * gets wrapped in `<p>`; `style` declarations reorder and requote. None of
  * that is loss, and a byte-equality test here would send its next reader off
  * to "fix" normalisation that is not broken. The allowlist of those rewrites
- * is explicit in `__tests__/seed-fidelity.test.ts` rather than expressed as a
- * tolerance, so a real loss cannot be rounded away by a loose comparison.
+ * is explicit in `seed-fidelity.ts` rather than expressed as a tolerance, so
+ * a real loss cannot be rounded away by a loose comparison.
  */
 export function htmlToPmDoc(html: string): PmNode {
   return withDomWorkspace((workspace) => {

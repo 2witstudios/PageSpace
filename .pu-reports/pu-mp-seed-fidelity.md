@@ -32,12 +32,14 @@ Headlines:
 | `scripts/lib/seed-audit/analyze.ts` | `auditPage` — both chains, the divergence between them, and the package gate's own verdict per page |
 | `scripts/lib/seed-audit/report.ts` | tallies with example page ids, census-keyed construct table, gate-agreement matrix, `contentFreeKey` |
 | `scripts/lib/seed-audit/options.ts` | `--limit`, `--batch-size`, `--progress-every`; refuses a non-integer rather than auditing everything |
-| `scripts/__tests__/collab-seed-audit.test.ts` | 48 tests, incl. read-only-by-construction and no-`Promise.all` scans of every audit source |
-| `packages/editor/src/seed-fidelity.ts` | **new subpath** — `ALLOWED_COSMETIC_ADDITIONS`, `VALUE_BEARING_ATTRIBUTES`, `constructKeysOf`; extracted from the corpus test so the corpus and real documents are held to ONE allowlist |
+| `scripts/__tests__/collab-seed-audit.test.ts` | 50 tests, incl. read-only-by-construction and no-`Promise.all` scans of every audit source and a six-position token sentinel |
+| `packages/editor/src/seed-fidelity.ts` | **new subpath** — `ALLOWED_COSMETIC_ADDITIONS`, `VALUE_BEARING_ATTRIBUTES`, `constructKeysOf`, and the printing side: `KNOWN_ATTRIBUTE_NAMES`, `KNOWN_STYLE_PROPERTIES`, `PRINTABLE_ATTRIBUTE_VALUES` (validators), `contentFreeKey`; extracted from the corpus test so the corpus and real documents are held to ONE allowlist |
+| `packages/editor/src/html-element-names.ts` | **new subpath** — `HTML_ELEMENT_NAMES` and `hasRealHtmlElement`, moved out of `apps/web` (which re-exports) so the audit's tagless rule is the census's and the backfill's |
+| `packages/editor/src/djb2.ts` | **new subpath** — the one hash, shared by `SCHEMA_HASH` and `userColor` |
 | `packages/editor/src/user-color.ts` | **new subpath** — `userColor(userId)` and `USER_COLOR_PALETTE` (second leaf) |
 | `packages/editor/src/html-to-ydoc.ts` | exports `parseHtmlElementUnchecked` (the parse without the gate), `describeParseLoss` (the gate's verdict over an already-parsed page), `stripNonContentElements` and `visibleCharacters` — so the audit measures exactly what the gate measures instead of mirroring it; `htmlToPmDoc` still throws |
 | `packages/editor/src/y-doc-to-html.ts` | `pmDocToHtmlIn(doc, workspace)` — `pmDocToHtml` into a caller-owned window, for the audit's four renders per page |
-| `packages/editor/src/collab-schema.ts` | `djb2` extracted from `hashProjection` and shared with `userColor` (hash value unchanged) |
+| `packages/editor/src/collab-schema.ts` | `hashProjection` now calls `djb2` (hash value unchanged) |
 | `packages/db/src/read-only-session.ts` | **moved** from `apps/web/src/lib/editor/census/` — its own docstring said "a second read-only consumer is the signal to promote it"; the census now imports `@pagespace/db/read-only-session` |
 | root `package.json` | `@pagespace/editor` as a workspace devDependency (root scripts could not resolve it), and `bun run collab:seed-audit` |
 
@@ -85,8 +87,9 @@ could not process, makes the run BLOCKED and the exit code 1. No thresholds anyw
 
 ## Verified how
 
-- **Fixtures**: 48 script tests + 344 editor tests (the corpus suites run over 25 fixtures now) +
-  5 db tests + the census's own read-only scan in web (9). All green as single-file runs.
+- **Fixtures**: 50 script tests + 352 editor tests (the corpus suites run over 25 fixtures now) +
+  5 db tests + the web suites that consume the moved constant (46) and the census's own read-only
+  scan (9). All green as single-file runs.
 - **Seeded local database** (`pagespace_seed_audit`, migrated to head, 12 pages: clean, `<img>`
   without file id, `<iframe>`, `<style>` block, tagless markdown, markdown-mode, empty, TipTap task
   list, `h4`+mention+`mark`+`sup`, bare table + `ol start=7`, pretty-printed, and a FOLDER decoy).
@@ -155,7 +158,42 @@ deriving `bothLossy` from the wrong cell (the agreement test had one page per ce
 was 1 — now 2/1/3/4), and judging the gate over the unstripped source (no test asserted the gate's
 verdict on a `<style>` page — now it does).
 
-### Mutation sweep — 33 mutations, 0 survivors (first pass) + 12 after the refactor, 0 survivors after fixes
+### `/review` pass and the Codex threads (third commit)
+
+Two review agents (security/OWASP, quality/tests) plus my own pass; findings recorded on the leaf
+page's `## Findings` section. Codex's two threads said the same two things. Fixed in this commit:
+
+- **The report could echo markup TOKENS the author controls** — tag names, attribute names,
+  `style` property names, and the "printable" enumerated values (`data-type="customer-name"`),
+  probe-confirmed in all six positions. Printing now goes through closed lists in the package
+  (`HTML_ELEMENT_NAMES`, `KNOWN_ATTRIBUTE_NAMES`, `KNOWN_STYLE_PROPERTIES`) and per-attribute
+  validators (`data-type` ∈ {taskList, taskItem, pageMention}; booleans; `\d{1,6}`); anything else
+  folds to `text:unescaped-angle-bracket` (the census's own marker) or a fixed
+  `(unrecognised-…)` placeholder. The corpus test asserts every name the schema renders is on the
+  lists, so they cannot go stale silently; the sentinel test now plants a token in each of the six
+  positions and asserts none reaches the report.
+- **Tagless rule was weaker than the census's** — `Set<string>` in a markdown page made happy-dom
+  create a `<string>` element and the page counted as HTML. `HTML_ELEMENT_NAMES` /
+  `hasRealHtmlElement` moved from `apps/web` into `@pagespace/editor/html-element-names` (web
+  re-exports); the audit, the census and the backfill now share one definition.
+- Two-clients `userColor` test could not fail for a first-come assignment table (both clients met
+  the id first) — client A now meets two other ids first. Mutating the implementation to a table
+  is red.
+- `--limit=5` and `--limt 5` no longer silently audit the whole table: `--flag=value` is accepted
+  and any unknown argument is refused.
+- Task-item `div` exclusion narrowed to TaskItem's own direct-child wrapper; an author's nested
+  `div` counts again.
+- Read-only source scan also refuses `SET default_transaction_read_only|transaction|session` and
+  `READ WRITE`.
+- `djb2` in its own module so `userColor` no longer imports the schema; stale doc strings; the
+  vacuous `toContain('p')`; the `parse` cast.
+
+Not done (follow-ups, recorded on the leaf page): a `scripts/tsconfig.json` so CI typechecks
+`scripts/` (today only my scratch `tsc` does); a block-aware whitespace-only diagnostic (it fires
+on every pretty-printed page as written — read that number as "pretty-printed or a lost space");
+the two test-only wrapper exports.
+
+### Mutation sweep — 33 mutations, 0 survivors (first pass) + 12 after the refactor + 13 after the review, 0 survivors after fixes
 
 Each mutation was applied by exact-needle replacement with the runner asserting the needle occurred
 once, the file content changed on disk, the test went red, and the file was byte-identical to the
@@ -207,6 +245,13 @@ import `@pagespace/editor` from `dist`.
 | P9 | `bothLossy` derived from the `bothClean` tally | survived → test fixed → ✔ |
 | P10 | `bothClean` rows leak into the example table | ✔ |
 | A7 | gate judged over the unstripped source | survived → test fixed → ✔ |
+| K1–K6 | each printable-value validator / name list disabled in the package (dist rebuilt, scripts sentinel) | ✔ |
+| K7 | `hasRealHtmlElement` counts pseudo-elements | ✔ |
+| K8 | `data-mention-type` dropped from the known-attribute list (corpus guard) | ✔ |
+| K9 | `userColor` replaced by a first-come table | ✔ 2 tests |
+| C7 | `div` exclusion widened back to `closest` | ✔ |
+| O2 / O3 | unknown arguments accepted / `--flag=` ignored | ✔ |
+| T4 | `SET default_transaction_read_only = off` in a lib module | ✔ |
 
 Honest gap: "divergence always `null`" (as opposed to flipped) would survive, because no fixture
 I could construct makes `y-prosemirror` alter a projection — every construct in the corpus and the

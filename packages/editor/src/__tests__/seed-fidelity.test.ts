@@ -109,16 +109,7 @@ describe('the allowlist itself', () => {
 
 describe('printable attribute values', () => {
   it('are a subset of the value-bearing attributes — a value that is never in a key needs no printability rule', () => {
-    expect([...PRINTABLE_ATTRIBUTE_VALUES].filter((name) => !VALUE_BEARING_ATTRIBUTES.has(name))).toEqual([]);
-  });
-
-  it('keep enumerations and fold prose, urls and ids back to presence', () => {
-    expect(contentFreeKey('attr:ul@data-type=taskList')).toBe('attr:ul@data-type=taskList');
-    expect(contentFreeKey('attr:td@colspan=2')).toBe('attr:td@colspan=2');
-    expect(contentFreeKey('attr:img@alt=a photo of Ada')).toBe('attr:img@alt');
-    expect(contentFreeKey('attr:a@href=https://x.test/ada-lovelace')).toBe('attr:a@href');
-    expect(contentFreeKey('attr:a@data-page-id=pg_1')).toBe('attr:a@data-page-id');
-    expect(contentFreeKey('el:img')).toBe('el:img');
+    expect([...PRINTABLE_ATTRIBUTE_VALUES.keys()].filter((name) => !VALUE_BEARING_ATTRIBUTES.has(name))).toEqual([]);
   });
 
   it('every value-bearing attribute that is not printable is one whose value could be content or an identifier', () => {
@@ -127,5 +118,56 @@ describe('printable attribute values', () => {
       'alt', 'data-block-id', 'data-change-id', 'data-change-type', 'data-drive-id', 'data-file-id',
       'data-page-id', 'data-role-id', 'data-user-id', 'href',
     ]);
+  });
+});
+
+describe('contentFreeKey', () => {
+  it('keeps values the schema itself enumerates', () => {
+    expect(contentFreeKey('attr:ul@data-type=taskList')).toBe('attr:ul@data-type=taskList');
+    expect(contentFreeKey('attr:li@data-checked=true')).toBe('attr:li@data-checked=true');
+    expect(contentFreeKey('attr:td@colspan=2')).toBe('attr:td@colspan=2');
+    expect(contentFreeKey('attr:ol@start=7')).toBe('attr:ol@start=7');
+    expect(contentFreeKey('attr:p@style:text-align')).toBe('attr:p@style:text-align');
+    expect(contentFreeKey('el:img')).toBe('el:img');
+  });
+
+  it('folds prose, urls and ids back to presence', () => {
+    expect(contentFreeKey('attr:img@alt=a photo of Ada')).toBe('attr:img@alt');
+    expect(contentFreeKey('attr:a@href=https://x.test/ada-lovelace')).toBe('attr:a@href');
+    expect(contentFreeKey('attr:a@data-page-id=pg_1')).toBe('attr:a@data-page-id');
+  });
+
+  it('folds a printable attribute whose value is not one the schema renders', () => {
+    expect(contentFreeKey('attr:span@data-type=customer-name')).toBe('attr:span@data-type');
+    expect(contentFreeKey('attr:li@data-checked=SECRET')).toBe('attr:li@data-checked');
+    expect(contentFreeKey('attr:ol@start=SECRET_START')).toBe('attr:ol@start');
+    expect(contentFreeKey('attr:td@colspan=1234567')).toBe('attr:td@colspan');
+  });
+
+  it('folds names the author could have typed: unknown tags, odd attribute names, custom properties', () => {
+    expect(contentFreeKey('el:secret-tag')).toBe('text:unescaped-angle-bracket');
+    expect(contentFreeKey('attr:secret-tag@class')).toBe('text:unescaped-angle-bracket');
+    expect(contentFreeKey('attr:p@secret_attr_name')).toBe('attr:p@(unrecognised-attribute)');
+    expect(contentFreeKey('attr:p@secretattr')).toBe('attr:p@(unrecognised-attribute)');
+    expect(contentFreeKey('attr:p@data-secret=x')).toBe('attr:p@(unrecognised-attribute)');
+    expect(contentFreeKey('attr:p@style:--secret-name')).toBe('attr:p@style:(unrecognised-property)');
+    expect(contentFreeKey('attr:p@style:secret_prop')).toBe('attr:p@style:(unrecognised-property)');
+    expect(contentFreeKey('attr:p@style:margin-top')).toBe('attr:p@style:margin-top');
+  });
+
+  it('passes keys in neither form through unchanged', () => {
+    expect(contentFreeKey('text:unescaped-angle-bracket')).toBe('text:unescaped-angle-bracket');
+  });
+});
+
+describe('the corpus reports only recognised names', () => {
+  it('folds nothing the schema renders — every corpus key is already content-free', () => {
+    for (const fixture of CONSTRUCT_CORPUS) {
+      const rendered = constructsOf(pmDocToHtml(htmlToPmDoc(fixture.html)));
+      for (const key of rendered) {
+        if (VALUE_BEARING_ATTRIBUTES.has(/@([^=]+)=/u.exec(key)?.[1] ?? '') && !PRINTABLE_ATTRIBUTE_VALUES.has(/@([^=]+)=/u.exec(key)?.[1] ?? '')) continue;
+        expect(contentFreeKey(key), key).toBe(key);
+      }
+    }
   });
 });

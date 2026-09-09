@@ -12,6 +12,7 @@ import { CodeBlockNode } from './code-block-node.js';
 import { BlockId } from './block-id.js';
 import { CommentMark, InsertionMark, DeletionMark } from './collab-marks.js';
 import { ImageNode } from './image-node.js';
+import { djb2 } from './djb2.js';
 
 /**
  * Node-safe by contract: no React, no `document`/`window` at module-eval
@@ -370,20 +371,6 @@ export function projectSchema(schema: Schema): { nodes: ProjectedSpec[]; marks: 
  */
 export function hashProjection(projection: unknown): string {
   return djb2(JSON.stringify(projection)).toString(16);
-}
-
-/**
- * djb2 over UTF-16 code units, as an unsigned 32-bit integer. Shared with
- * `userColor` (`user-color.ts`) for the same reasons it is used here: no
- * `node:crypto`, identical in the browser and in Node, and nothing but the
- * string as input.
- */
-export function djb2(input: string): number {
-  let hash = 5381;
-  for (let i = 0; i < input.length; i += 1) {
-    hash = (hash * 33 + input.charCodeAt(i)) | 0;
-  }
-  return hash >>> 0;
 }
 
 /**

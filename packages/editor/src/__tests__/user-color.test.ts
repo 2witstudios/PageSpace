@@ -46,6 +46,10 @@ describe('userColor', () => {
     const clientA = await import('../user-color.js');
     vi.resetModules();
     const clientB = await import('../user-color.js');
+    // Client A has met other users first; client B meets usr_beta cold. A
+    // first-come assignment table would give them different answers.
+    clientA.userColor('usr_gamma');
+    clientA.userColor('usr_delta');
     expect(clientA.userColor('usr_beta')).toBe(clientB.userColor('usr_beta'));
   });
 

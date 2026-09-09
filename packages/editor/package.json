@@ -43,10 +43,20 @@
       "import": "./dist/collab-schema.js",
       "default": "./dist/collab-schema.js"
     },
+    "./djb2": {
+      "types": "./dist/djb2.d.ts",
+      "import": "./dist/djb2.js",
+      "default": "./dist/djb2.js"
+    },
     "./dom-workspace": {
       "types": "./dist/dom-workspace.d.ts",
       "import": "./dist/dom-workspace.js",
       "default": "./dist/dom-workspace.js"
+    },
+    "./html-element-names": {
+      "types": "./dist/html-element-names.d.ts",
+      "import": "./dist/html-element-names.js",
+      "default": "./dist/html-element-names.js"
     },
     "./html-to-ydoc": {
       "types": "./dist/html-to-ydoc.d.ts",
@@ -129,8 +139,14 @@
       "collab-schema": [
         "./dist/collab-schema.d.ts"
       ],
+      "djb2": [
+        "./dist/djb2.d.ts"
+      ],
       "dom-workspace": [
         "./dist/dom-workspace.d.ts"
+      ],
+      "html-element-names": [
+        "./dist/html-element-names.d.ts"
       ],
       "html-to-ydoc": [
         "./dist/html-to-ydoc.d.ts"

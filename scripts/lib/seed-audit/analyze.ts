@@ -114,8 +114,8 @@ type PmNode = ReturnType<typeof parseHtmlElementUnchecked>;
  * `describeParseLoss` is run over the same parse so the gate's own verdict is
  * on the record for every page without parsing it twice.
  */
-function parse(root: Element): PmNode {
-  return parseHtmlElementUnchecked(root as HTMLElement);
+function parse(root: HTMLElement): PmNode {
+  return parseHtmlElementUnchecked(root);
 }
 
 function throughYDoc(doc: PmNode): PmNode {
