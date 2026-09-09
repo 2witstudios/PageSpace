@@ -51,7 +51,7 @@ import { parseServerSigningKeyring, type SigningKeyPrimitives } from '@pagespace
 import { createMemoryNonceStore, verifyGrant } from '@pagespace/lib/env-bridge/grant';
 import { decodeFrame, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
 import { grantRequestForFrame, type GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
-import { verifyOwnerApproval, type PinnedOwnerApproval } from '@pagespace/lib/env-bridge/owner-approval';
+import { deriveOwnerApprovalChallenge, verifyOwnerApproval, type PinnedOwnerApproval } from '@pagespace/lib/env-bridge/owner-approval';
 
 const OWNER = 'user_owner';
 const ENV = 'env_1';
@@ -93,17 +93,21 @@ const ownerPem = ownerPrivate.export({ format: 'pem', type: 'pkcs8' }) as string
  * accepts the result, which a wrong rpIdHash (`rp_mismatch`) or wrong signed
  * bytes (`bad_signature`) would not survive.
  *
- * THE SUPPRESSIONS ARE DELIBERATE AND NARROW, and restructuring did not remove
- * the alert. `js/insufficient-password-hash` fired on these calls inline
- * (alert 340) and fired AGAIN after the hoist (alert 341) — the second time on
- * the hash of a string literal, which cannot be a password by construction.
- * CodeQL's taint reaches this fixture through the app's import graph from an
- * OAuth token path, so no arrangement of the code inside this file avoids it.
- * Suppressed per line, with the reason, rather than by weakening the fixture
- * or disabling the rule: both hashes are required by the WebAuthn spec
- * (§ authenticator data begins with SHA-256 of the RP id; an assertion signs
- * `authenticatorData || SHA-256(clientDataJSON)`), and their only inputs are a
- * public hostname and the public JSON the browser produces.
+ * ON THE `codeql[...]` COMMENTS BELOW: they are DOCUMENTATION, NOT A CONTROL.
+ * This repo runs `security-extended` through GitHub's default setup, which
+ * does not honour inline suppressions, so they never cleared anything — they
+ * are kept only to tell the next reader what these hashes are.
+ *
+ * What actually cleared it was breaking the TAINT: the challenge signed here
+ * is derived locally from literals (`expectedChallenge`) and the route's value
+ * is ASSERTED against it, instead of the route's value being fed into the
+ * hash. `js/insufficient-password-hash` had traced a value from
+ * `validateOAuthAccessToken` / `authenticateOAuthRequest` into these calls
+ * (alerts 340 inline, then 341 after hoisting them to module scope — the
+ * second on the hash of a string literal, which cannot be a password by
+ * construction). Both hashes are required by the WebAuthn spec: authenticator
+ * data begins with SHA-256 of the RP id, and an assertion signs
+ * `authenticatorData || SHA-256(clientDataJSON)`.
  */
 // codeql[js/insufficient-password-hash] not a password hash — SHA-256 of a string-literal RP id, which WebAuthn requires as the first 32 bytes of authenticatorData (alerts 340/341; the taint is from this file's import graph, not from any value used here)
 const RP_ID_HASH = createHash('sha256').update('pagespace.test').digest();
@@ -114,7 +118,24 @@ const RP_ID_HASH = createHash('sha256').update('pagespace.test').digest();
 // codeql[js/insufficient-password-hash] not a password hash — SHA-256 of clientDataJSON, which is exactly what WebAuthn defines an assertion to sign alongside authenticatorData (alerts 340/341)
 const sha256 = (bytes: Buffer): Buffer => createHash('sha256').update(bytes).digest();
 
-/** What the browser's authenticator produces for a challenge the GET handed it. */
+/**
+ * The challenge the owner's authenticator should be given, derived HERE from
+ * literals with the same pure function the daemon uses — never taken from the
+ * route's response.
+ *
+ * That is deliberate on two counts. It makes the test prove MORE: every row
+ * below asserts the route produced exactly this value, so the server's
+ * derivation is pinned against the pure one rather than assumed. And it keeps
+ * the bytes that reach a hash in this file traceable to literals, which is
+ * what stops CodeQL tracing an OAuth-derived value into `authenticatorSigns`
+ * (`js/insufficient-password-hash`, alerts 340/341 — GitHub's default setup
+ * does not honour inline suppressions, so the taint has to be broken, not
+ * annotated).
+ */
+const expectedChallenge = (scope: 'once' | 'session' | '30d' | 'until_revoked'): string =>
+  deriveOwnerApprovalChallenge({ envId: ENV, challengeId: 'ch_1', request: REQUEST, scope }, envBridgeSha256);
+
+/** What the browser's authenticator produces for the challenge it was given. */
 function authenticatorSigns(challenge: string) {
   const clientDataJSON = Buffer.from(JSON.stringify({ type: 'webauthn.get', challenge, origin: ORIGIN, crossOrigin: false }));
   // rpIdHash (32) ‖ flags (UP|UV) ‖ signCount (4) — the real layout.
@@ -231,8 +252,10 @@ describe("the owner's click, end to end — card → route → signer → wire �
     const options = ((await (await get()).json()) as { webauthn: { available: boolean; challenges: Record<string, string> } }).webauthn;
     expect(options.available).toBe(true);
 
-    // 2. The owner's authenticator signs the challenge for the scope they chose.
-    const assertion = authenticatorSigns(options.challenges['30d']!);
+    // 2. The route's challenge for the chosen scope IS the pure derivation over
+    //    the request the machine froze — asserted, then signed.
+    expect(options.challenges['30d']).toBe(expectedChallenge('30d'));
+    const assertion = authenticatorSigns(expectedChallenge('30d'));
 
     // 3. The card POSTs the decision — exactly the body EnvApprovalCard sends.
     const response = await post({ decision: 'allow', scope: '30d', assertion });
@@ -252,7 +275,8 @@ describe("the owner's click, end to end — card → route → signer → wire �
 
   it('the assertion is under the SERVER SIGNATURE: stripping or altering it after signing makes the grant unverifiable', async () => {
     const options = ((await (await get()).json()) as { webauthn: { challenges: Record<string, string> } }).webauthn;
-    await post({ decision: 'allow', scope: '30d', assertion: authenticatorSigns(options.challenges['30d']!) });
+    expect(options.challenges['30d']).toBe(expectedChallenge('30d'));
+    await post({ decision: 'allow', scope: '30d', assertion: authenticatorSigns(expectedChallenge('30d')) });
     const frame = sentOverTheWire[0] as GrantFrame;
     const grant = frame.grant as { approvalIntent: { assertion: { signature: string } } };
 
@@ -277,7 +301,8 @@ describe("the owner's click, end to end — card → route → signer → wire �
     expect(new Set(Object.values(options.challenges)).size).toBe(4);
 
     // The owner chose `once`; a compromised server re-issues that proof under a durable scope.
-    const assertion = authenticatorSigns(options.challenges.once!);
+    expect(options.challenges.once).toBe(expectedChallenge('once'));
+    const assertion = authenticatorSigns(expectedChallenge('once'));
     await post({ decision: 'allow', scope: 'until_revoked', assertion });
     const relayed = daemonVerifies(sentOverTheWire[0]!);
     expect(relayed.stage === 'proof' && relayed.intent.scope).toBe('until_revoked');
