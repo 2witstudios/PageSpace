@@ -25,7 +25,9 @@
  * Deny order is FIXED and tested for every adjacent pair: malformed →
  * no_policy → policy_deny → principal_not_allowed → op_mismatch →
  * op_not_advertised → server_denied → machine_denied → cwd_denied →
- * path_denied → approval_expired → approval_mismatch → then `ask` or `allow`. `malformed` runs
+ * path_denied → approval_expired → approval_mismatch → then `allow` (pre-approved op,
+ * fresh approval, or a durable approval covering every subject — GA wave 2,
+ * `decide-approval.ts`) or `ask`. `malformed` runs
  * FIRST so "allow" always means "executable": an exec without a command or an
  * fs op without paths never reaches the runner as an allow. All policy gates
  * run BEFORE any path is confined, so a request denied by policy never reaches
@@ -66,6 +68,7 @@ import type { AdvertisedCapabilities, MachinePolicy, ServerPolicy } from './poli
 import { capabilityForOp } from './intersect-capabilities';
 import { confinePath, type PathResolver } from './confine-path';
 import { scrubEnv } from './scrub-env';
+import { findApprovalCoverage, type ApprovalMatchDeps, type DurableApproval } from './decide-approval';
 
 export interface ExecutionRequest {
   readonly op: GrantOp;
@@ -110,9 +113,21 @@ export type ExecDenyReason =
   | 'approval_expired'
   | 'approval_mismatch';
 
+/** How an `allow` came about — for the audit line, never for a decision. */
+export type AllowBasis =
+  | { readonly kind: 'preapproved_op' }
+  | { readonly kind: 'fresh_approval' }
+  | { readonly kind: 'durable_approval'; readonly approvalIds: readonly string[] };
+
 export type ExecutionVerdict =
-  | { readonly kind: 'allow'; readonly request: NormalizedRequest }
-  | { readonly kind: 'ask'; readonly reason: 'op_not_preapproved'; readonly request: NormalizedRequest }
+  | { readonly kind: 'allow'; readonly request: NormalizedRequest; readonly basis: AllowBasis }
+  | {
+      readonly kind: 'ask';
+      readonly reason: 'op_not_preapproved';
+      readonly request: NormalizedRequest;
+      /** What a durable approval of this request would be keyed on (`null`: nothing durable can be written; ask every time). */
+      readonly subjects: readonly string[] | null;
+    }
   | { readonly kind: 'deny'; readonly reason: ExecDenyReason };
 
 /**
@@ -139,6 +154,19 @@ export interface DecideExecutionInput {
   readonly capabilities: AdvertisedCapabilities;
   readonly probe: PathResolver;
   readonly localApproval?: LocalApproval;
+  /**
+   * The durable approvals in force on this machine (GA wave 2). Consulted
+   * AFTER confinement and scrubbing, against the normalised request, and
+   * only when the op is not pre-approved and no fresh `localApproval` is
+   * being answered. Omitted = none.
+   */
+  readonly approvals?: ApprovalConsultation;
+}
+
+export interface ApprovalConsultation extends Omit<ApprovalMatchDeps, 'roots'> {
+  readonly entries: readonly DurableApproval[];
+  /** ms since epoch, from the adapter's clock. */
+  readonly now: number;
 }
 
 function deny(reason: ExecDenyReason): ExecutionVerdict {
@@ -201,7 +229,7 @@ function resolveLimit(requested: number | undefined, cap: number): { readonly va
  * the same normalized request for the owner to approve, or a closed-union deny.
  */
 export function decideExecution(input: DecideExecutionInput): ExecutionVerdict {
-  const { grant, request, machinePolicy, serverPolicy, capabilities, probe, localApproval } = input;
+  const { grant, request, machinePolicy, serverPolicy, capabilities, probe, localApproval, approvals } = input;
 
   if (!isWellFormed(request)) return deny('malformed');
   if (machinePolicy === null) return deny('no_policy');
@@ -245,14 +273,25 @@ export function decideExecution(input: DecideExecutionInput): ExecutionVerdict {
     clamped: timeout.clamped || bytes.clamped,
   };
 
-  if (preapproved) return { kind: 'allow', request: normalized };
+  if (preapproved) return { kind: 'allow', request: normalized, basis: { kind: 'preapproved_op' } };
   if (localApproval !== undefined && localApproval.grantId === grant.grantId) {
     // The grant bounds the whole authorization, prompt included.
     if (!Number.isFinite(localApproval.approvedAt) || localApproval.approvedAt > grant.exp) return deny('approval_expired');
     // The approval is for the request the owner SAW. Anything that drifted
     // since — filesystem resolution, a tampered copy — is not what was approved.
     if (!sameBytes(canonicalizeArgs(localApproval.request), canonicalizeArgs(normalized))) return deny('approval_mismatch');
-    return { kind: 'allow', request: normalized };
+    return { kind: 'allow', request: normalized, basis: { kind: 'fresh_approval' } };
   }
-  return { kind: 'ask', reason: 'op_not_preapproved', request: normalized };
+
+  // Durable approvals (GA wave 2): matched against the NORMALISED request —
+  // confined cwd and paths, scrubbed env — so what an old approval covers is
+  // what would run now, not what was asked for. Every subject the request
+  // names must be covered; `expired` and `ask` both fall through to asking.
+  if (approvals !== undefined) {
+    const approvalDeps: ApprovalMatchDeps = { resolveArgv0: approvals.resolveArgv0, roots };
+    const coverage = findApprovalCoverage(approvals.entries, grant, normalized, approvals.now, approvalDeps);
+    if (coverage.match === 'covered') return { kind: 'allow', request: normalized, basis: { kind: 'durable_approval', approvalIds: coverage.approvalIds } };
+    return { kind: 'ask', reason: 'op_not_preapproved', request: normalized, subjects: coverage.subjects };
+  }
+  return { kind: 'ask', reason: 'op_not_preapproved', request: normalized, subjects: null };
 }

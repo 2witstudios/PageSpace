@@ -3,6 +3,7 @@ import { decideExecution, type NormalizedRequest } from '../decide-execution';
 import type { Grant } from '../grant';
 import type { MachinePolicy, ServerPolicy, AdvertisedCapabilities } from '../policy-types';
 import type { PathProbe } from '../confine-path';
+import type { DurableApproval } from '../decide-approval';
 
 const ROOT = '/home/u/proj';
 const identityProbe: PathProbe = { realpath: (p) => p, isSymlink: () => false };
@@ -82,18 +83,18 @@ describe('decideExecution — the daemon is the policy enforcement point (invari
   });
 
   it('given all three allow, should return allow with a NORMALIZED request: confined cwd, scrubbed env, clamped timeout and bytes', () => {
-    expect(decide()).toEqual({ kind: 'allow', request: NORMALIZED });
+    expect(decide()).toEqual({ kind: 'allow', request: NORMALIZED, basis: { kind: 'preapproved_op' } });
   });
 
   describe('the ask → allow seam (major: approval must be pure and bound to the grant)', () => {
     const askPolicy: MachinePolicy = { ...machine, mode: 'ask', ops: ['fs_read'] };
 
     it('given mode ask and an op NOT pre-approved, should return ask carrying the exact NormalizedRequest the owner is approving (confined + scrubbed BEFORE asking)', () => {
-      expect(decide({ machinePolicy: askPolicy })).toEqual({ kind: 'ask', reason: 'op_not_preapproved', request: NORMALIZED });
+      expect(decide({ machinePolicy: askPolicy })).toEqual({ kind: 'ask', reason: 'op_not_preapproved', request: NORMALIZED, subjects: null });
     });
 
     it('given mode ask and an op that IS pre-approved, should allow without asking', () => {
-      expect(decide({ machinePolicy: { ...machine, mode: 'ask' } })).toEqual({ kind: 'allow', request: NORMALIZED });
+      expect(decide({ machinePolicy: { ...machine, mode: 'ask' } })).toEqual({ kind: 'allow', request: NORMALIZED, basis: { kind: 'preapproved_op' } });
     });
 
     // The owner approves exactly the NormalizedRequest the ask verdict showed them.
@@ -102,7 +103,7 @@ describe('decideExecution — the daemon is the policy enforcement point (invari
     it('given an approval whose request is the ask verdict\'s own NormalizedRequest, should allow it unchanged', () => {
       const asked = decide({ machinePolicy: askPolicy });
       if (asked.kind !== 'ask') throw new Error('expected ask');
-      expect(decide({ machinePolicy: askPolicy, localApproval: { grantId: grant.grantId, approvedAt: 30_000, request: asked.request } })).toEqual({ kind: 'allow', request: asked.request });
+      expect(decide({ machinePolicy: askPolicy, localApproval: { grantId: grant.grantId, approvedAt: 30_000, request: asked.request } })).toEqual({ kind: 'allow', request: asked.request, basis: { kind: 'fresh_approval' } });
     });
 
     it('given the filesystem DRIFTED between ask and approval (an in-root symlink now resolves elsewhere), should deny approval_mismatch — never execute what the owner did not see', () => {
@@ -131,7 +132,7 @@ describe('decideExecution — the daemon is the policy enforcement point (invari
     });
 
     it('given mode ask, a non-pre-approved op, and localApproval for THIS grantId within the grant TTL, should allow with the same NormalizedRequest', () => {
-      expect(decide({ machinePolicy: askPolicy, localApproval: approval })).toEqual({ kind: 'allow', request: NORMALIZED });
+      expect(decide({ machinePolicy: askPolicy, localApproval: approval })).toEqual({ kind: 'allow', request: NORMALIZED, basis: { kind: 'fresh_approval' } });
     });
 
     it('given localApproval for a DIFFERENT grantId, should still ask (an approval is bound to one grant)', () => {
@@ -255,7 +256,7 @@ describe('decideExecution — the daemon is the policy enforcement point (invari
     const fsGrant = { ...grant, op: 'fs_write' as const };
     const probe: PathProbe = { realpath: (p) => (p === ROOT || p === `${ROOT}/src` ? p : null), isSymlink: () => false };
     const verdict = decide({ grant: fsGrant, request: { op: 'fs_write', paths: [`${ROOT}/src/new.ts`] }, probe });
-    expect(verdict).toEqual({ kind: 'allow', request: { op: 'fs_write', cwd: ROOT, paths: [`${ROOT}/src/new.ts`], env: {}, timeoutMs: machine.maxTimeoutMs, maxBytes: machine.maxBytes, clamped: false } });
+    expect(verdict).toEqual({ kind: 'allow', request: { op: 'fs_write', cwd: ROOT, paths: [`${ROOT}/src/new.ts`], env: {}, timeoutMs: machine.maxTimeoutMs, maxBytes: machine.maxBytes, clamped: false }, basis: { kind: 'preapproved_op' } });
   });
 
   describe('malformed request shapes are refused BEFORE the policy gates ("allow" must mean executable)', () => {
@@ -357,5 +358,54 @@ describe('decideExecution — the daemon is the policy enforcement point (invari
     const b = decide();
     expect(a).toEqual(b);
     expect(JSON.stringify(request)).toBe(before);
+  });
+});
+
+describe('GA wave 2 — durable approvals are consulted AFTER confinePath and scrubEnv, against the normalised request', () => {
+  const askPolicy: MachinePolicy = { ...machine, mode: 'ask', ops: [] };
+  const BIN: Record<string, string> = { ls: '/bin/ls', rm: '/bin/rm' };
+  const resolveArgv0 = (name: string) => BIN[name] ?? null;
+  const lsApproval: DurableApproval = { approvalId: 'ap1', envId: grant.envId, userId: grant.principal.userId, op: 'exec', subject: 'exec:/bin/ls', scope: '30d', createdAt: 0, expiresAt: 100_000 };
+  const consult = (entries: DurableApproval[] = [lsApproval], now = 50_000) => ({ entries, now, resolveArgv0 });
+
+  it('given a live durable approval for the subject, should allow with basis durable_approval naming the approval id', () => {
+    expect(decide({ machinePolicy: askPolicy, approvals: consult() })).toEqual({ kind: 'allow', request: NORMALIZED, basis: { kind: 'durable_approval', approvalIds: ['ap1'] } });
+  });
+
+  it('given no covering approval, should ask and carry the SUBJECTS a click would approve', () => {
+    expect(decide({ machinePolicy: askPolicy, approvals: consult([]) })).toEqual({ kind: 'ask', reason: 'op_not_preapproved', request: NORMALIZED, subjects: ['exec:/bin/ls'] });
+    expect(decide({ machinePolicy: askPolicy, request: { ...request, cmd: 'rm' }, approvals: consult() })).toMatchObject({ kind: 'ask', subjects: ['exec:/bin/rm'] });
+  });
+
+  it('given only an expired approval, should ask (the daemon prunes it)', () => {
+    expect(decide({ machinePolicy: askPolicy, approvals: consult([lsApproval], 100_000) })).toMatchObject({ kind: 'ask' });
+  });
+
+  it('given an unresolvable subject, should ask with subjects null — nothing durable can ever be written for it', () => {
+    expect(decide({ machinePolicy: askPolicy, request: { ...request, cmd: 'sh', args: ['-c', 'ls $(rm x)'] }, approvals: consult() })).toMatchObject({ kind: 'ask', subjects: null });
+  });
+
+  it('given every policy gate fails, the approval is never consulted: a denied request stays denied whatever the file says', () => {
+    expect(decide({ machinePolicy: { ...askPolicy, principals: ['someone_else'] }, approvals: consult() })).toEqual({ kind: 'deny', reason: 'principal_not_allowed' });
+    expect(decide({ machinePolicy: askPolicy, request: { ...request, cwd: '/etc' }, approvals: consult() })).toEqual({ kind: 'deny', reason: 'cwd_denied' });
+  });
+
+  it('given a file op, the subject is the ROOT the confined path resolves inside — a retargeted symlink to another root cannot ride the first root\'s approval', () => {
+    const roots = [ROOT, '/srv/other'];
+    const policy: MachinePolicy = { ...askPolicy, roots };
+    const rootApproval: DurableApproval = { ...lsApproval, op: 'fs_read', subject: `root:${ROOT}` };
+    const readGrant = { ...grant, op: 'fs_read' as const };
+    const readRequest = { op: 'fs_read' as const, paths: [`${ROOT}/link`] };
+    const inRoot: PathProbe = { realpath: (p) => (p === `${ROOT}/link` ? `${ROOT}/real.txt` : p), isSymlink: () => false };
+    expect(decide({ machinePolicy: policy, grant: readGrant, request: readRequest, probe: inRoot, approvals: consult([rootApproval]) })).toMatchObject({ kind: 'allow', basis: { kind: 'durable_approval' } });
+    const retargeted: PathProbe = { realpath: (p) => (p === `${ROOT}/link` ? '/srv/other/secret' : p), isSymlink: () => false };
+    expect(decide({ machinePolicy: policy, grant: readGrant, request: readRequest, probe: retargeted, approvals: consult([rootApproval]) })).toMatchObject({ kind: 'ask', subjects: ['root:/srv/other'] });
+  });
+
+  it('given a fresh localApproval for this grant, that path answers first and stays byte-compared (untouched)', () => {
+    const asked = decide({ machinePolicy: askPolicy, approvals: consult([]) });
+    if (asked.kind !== 'ask') throw new Error('expected ask');
+    expect(decide({ machinePolicy: askPolicy, approvals: consult([]), localApproval: { grantId: grant.grantId, approvedAt: 30_000, request: asked.request } })).toEqual({ kind: 'allow', request: asked.request, basis: { kind: 'fresh_approval' } });
+    expect(decide({ machinePolicy: askPolicy, approvals: consult([]), localApproval: { grantId: grant.grantId, approvedAt: 30_000, request: { ...asked.request, cmd: 'rm' } } })).toEqual({ kind: 'deny', reason: 'approval_mismatch' });
   });
 });

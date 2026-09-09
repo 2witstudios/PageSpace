@@ -15,6 +15,7 @@ export * from './intersect-capabilities';
 export * from './scrub-env';
 export * from './confine-path';
 export * from './decide-execution';
+export * from './decide-approval';
 export * from './frame-codec';
 export * from './bridge-session';
 export * from './resolve-timeout';
