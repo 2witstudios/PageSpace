@@ -99,7 +99,14 @@ export type PreviewForwardDecision =
          * that HAS the surface is not serving on it: this one will never
          * become available, so a client must not retry.
          */
-        | 'preview-unsupported';
+        | 'preview-unsupported'
+        /**
+         * The sprite exists and may be serving, but its URL cannot resolve:
+         * the name it was created under, plus the platform's org suffix,
+         * exceeds a DNS label. Structural — no retry, no wake, no repair
+         * short of recreating the sandbox under the current name budget.
+         */
+        | 'sprite-url-unresolvable';
       /** Suggested HTTP status; the caller's not-found/denied policy may collapse it. */
       status: 403 | 404 | 409 | 502 | 503;
       /** Human copy for the response body — never a sprite name, URL or token. */
@@ -136,7 +143,9 @@ export function decidePreviewForward(input: PreviewForwardInput): PreviewForward
     case 'blocked':
       return { kind: 'refuse', reason: 'http-port-busy', status: 409, message: state.message };
     case 'down':
-      return { kind: 'refuse', reason: 'preview-down', status: 502, message: state.message };
+      // A URL DNS cannot answer is structural, not a relay that is down:
+      // named so a client never retries or wakes for it.
+      return { kind: 'refuse', reason: state.error === 'sprite-url-unresolvable' ? 'sprite-url-unresolvable' : 'preview-down', status: 502, message: state.message };
     case 'starting':
       return { kind: 'refuse', reason: 'preview-starting', status: 503, message: state.message };
     case 'live':

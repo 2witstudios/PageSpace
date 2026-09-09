@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { assert } from '../../__tests__/riteway';
 import { SPRITE_SANDBOX_CAPABILITIES, type SandboxHandle, type SandboxServiceInfo } from '../../sandbox-host';
 import type { DevPreviewHolderRef, DevPreviewRow } from '../dev-preview-core';
-import { HTTP_PORT_BUSY_MESSAGE, describeServiceState } from '../dev-preview-core';
+import { HTTP_PORT_BUSY_MESSAGE, describeServiceState, SPRITE_URL_UNRESOLVABLE_MESSAGE } from '../dev-preview-core';
 import type { DevPreviewRecord, DevPreviewStore } from '../dev-preview-store';
 import {
   SANDBOX_ABSENT_MESSAGE,
@@ -274,6 +274,17 @@ describe('gatherDevPreviewStatus — authorize, attach, fold; never a probe', ()
     assert({ given: 'member + live relay + snapshot', should: 'be live with a known relay-held slot', actual: [result.status.state.status, result.status.slot.known && result.status.slot.holder, result.status.sandbox, result.status.openPath], expected: ['live', 'relay', 'attached', '/api/drives/d1/envs/env1/preview/open'] });
     assert({ given: 'the gather', should: 'never exec', actual: d.calls.includes('exec'), expected: false });
     assert({ given: 'the gather', should: 'read the services API once', actual: d.calls.filter((c) => c === 'services.get').length, expected: 1 });
+  });
+
+  it('a LEGACY sprite (name over the budget, so its URL cannot resolve) reads as down/unrepairable BEFORE the frame is opened — from the name alone, no control-plane read', async () => {
+    const legacy = statusDeps({ attach: async () => ({ ...fakeHandle({ relay: relayService(5173) }), sandboxId: `pgs-env-${'a'.repeat(55)}` }) });
+    const r1 = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, userId: 'u1', deps: legacy });
+    if (!r1.ok) throw new Error('expected ok');
+    assert({ given: 'a 63-char sprite name', should: 'be down, unrepairable, with the sentence', actual: [r1.status.state.status, 'repairable' in r1.status.state ? r1.status.state.repairable : null, r1.status.state.message], expected: ['down', false, SPRITE_URL_UNRESOLVABLE_MESSAGE] });
+    const current = statusDeps({ attach: async () => ({ ...fakeHandle({ relay: relayService(5173) }), sandboxId: `pgs-env-${'a'.repeat(40)}` }) });
+    const r2 = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, userId: 'u1', deps: current });
+    if (!r2.ok) throw new Error('expected ok');
+    assert({ given: 'a 48-char sprite name', should: 'stay live', actual: r2.status.state.status, expected: 'live' });
   });
 
   it('a refused user gets the decider reason and NO control-plane read', async () => {

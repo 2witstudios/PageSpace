@@ -7,8 +7,8 @@
  * and is a documented limitation for multi-segment TLDs like .co.uk.
  */
 
-/** Max length of a single DNS label (RFC 1035 §2.3.4). */
-const MAX_LABEL_LENGTH = 63;
+/** Max length of a single DNS label (RFC 1035 §2.3.4). Exported: the sprite-URL policy and the sprite name budget are sized from it. */
+export const MAX_LABEL_LENGTH = 63;
 
 /** Max total length of a fully-qualified domain name (RFC 1035 §3.1). */
 const MAX_HOSTNAME_LENGTH = 253;

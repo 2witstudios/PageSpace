@@ -36,6 +36,7 @@ import { describeServiceState, type DevPreviewHolderRef } from './dev-preview-co
 import type { DevPreviewStore } from './dev-preview-store';
 import { decidePreviewForward, type PreviewAuthz, type PreviewForwardDecision } from './preview-forward-gate';
 import { PREVIEW_RELAY_SERVICE_NAME } from './preview-relay';
+import { isRoutableSpriteUrl } from './preview-proxy-policy';
 
 /** The session row slice the access gather reads. */
 export interface PreviewSessionRow {
@@ -244,7 +245,11 @@ export async function resolvePreviewTarget({
     handle.powerState(),
     handle.urlInfo(),
   ]);
-  const state = describeServiceState({ liveInstanceId: handle.spriteInstanceId, row, relay, listeners: null });
+  // The URL the control plane hands back decides routability here (the
+  // status gather judges it from the name); an unroutable one reads as
+  // `down`/`sprite-url-unresolvable`, which the gate refuses BEFORE the wake
+  // gate is consulted — nothing about it is transient or wakeable.
+  const state = describeServiceState({ liveInstanceId: handle.spriteInstanceId, row, relay, listeners: null, urlRoutable: isRoutableSpriteUrl(urlInfo.url) });
 
   let decision = decidePreviewForward({ featureEnabled, authz, state, power, wakeAuthorization: 'not-consulted' });
   if (decision.kind === 'needs-wake-gate') {
