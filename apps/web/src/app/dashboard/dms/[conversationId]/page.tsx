@@ -15,7 +15,9 @@ import { type ChannelInputRef } from '@/components/layout/middle-content/page-vi
 import { MessageInput } from '@/components/shared/MessageInput';
 import { MessageDropZone } from '@/components/layout/middle-content/page-views/channel/MessageDropZone';
 import type { FileAttachment } from '@/hooks/useAttachmentUpload';
-import { MessageAttachment } from '@/components/shared/MessageAttachment';
+import { MessageAttachments } from '@/components/shared/MessageAttachments';
+import type { MessageAttachmentLike } from '@/lib/attachment-utils';
+import { createId } from '@paralleldrive/cuid2';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { RichText, addHardLineBreaks } from '@/components/messages/RichText';
@@ -60,6 +62,12 @@ interface Message {
   createdAt: string;
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
+  attachments?: MessageAttachmentLike[] | null;
+  /**
+   * Correlation id for an in-flight send — set on the optimistic row, echoed
+   * by the server on the response and broadcast, never persisted.
+   */
+  clientNonce?: string;
   reactions?: Reaction[];
   parentId?: string | null;
   replyCount?: number;
@@ -85,12 +93,18 @@ interface DmConversation {
   };
 }
 
+/**
+ * Match a server-confirmed message to the optimistic row that produced it.
+ *
+ * Keyed on the client nonce the sender minted and the server echoed back.
+ * This used to compare (conversationId, senderId, content, fileId), which is
+ * only sound while the server never normalizes content — and cannot tell two
+ * attachment-only messages apart at all, since both have empty content.
+ */
 const isMatchingOptimisticMessage = (optimistic: Message, message: Message) =>
   optimistic.id.startsWith('temp-') &&
-  optimistic.conversationId === message.conversationId &&
-  optimistic.senderId === message.senderId &&
-  optimistic.content === message.content &&
-  (optimistic.fileId ?? null) === (message.fileId ?? null);
+  optimistic.clientNonce !== undefined &&
+  optimistic.clientNonce === message.clientNonce;
 
 const reconcileMessage = (prev: Message[], message: Message) => {
   const optimisticIndex = prev.findIndex((m) => isMatchingOptimisticMessage(m, message));
@@ -290,7 +304,7 @@ export default function InboxDMPage() {
 
     // Track this request's temp id so a rollback after a 409 race can't remove
     // a confirmed reaction that already arrived via reaction_added.
-    const tempReactionId = `temp-${Date.now()}`;
+    const tempReactionId = `temp-${createId()}`;
     const optimisticReaction: Reaction = {
       id: tempReactionId,
       emoji,
@@ -408,10 +422,10 @@ export default function InboxDMPage() {
 
   const handleTopLevelSubmit = async ({
     content,
-    attachment,
+    attachments,
   }: {
     content: string;
-    attachment?: FileAttachment;
+    attachments: FileAttachment[];
   }) => {
     if (!user || !conversationId) return;
 
@@ -420,16 +434,20 @@ export default function InboxDMPage() {
     clearInputDraft();
     clearQuote();
 
-    const attachmentMeta: AttachmentMeta | null = attachment
-      ? {
-          originalName: attachment.originalName,
-          size: attachment.size,
-          mimeType: attachment.mimeType,
-          contentHash: attachment.contentHash,
-        }
-      : null;
+    const attachmentPayload = attachments.map((attachment) => ({
+      fileId: attachment.id,
+      attachmentMeta: {
+        originalName: attachment.originalName,
+        size: attachment.size,
+        mimeType: attachment.mimeType,
+        contentHash: attachment.contentHash,
+      },
+    }));
 
-    const tempId = `temp-${Date.now()}`;
+    // createId(), not Date.now(): two sends can start in the same millisecond,
+    // and a duplicate id here is a duplicate React key.
+    const clientNonce = createId();
+    const tempId = `temp-${clientNonce}`;
     const optimistic: Message = {
       id: tempId,
       conversationId,
@@ -440,8 +458,13 @@ export default function InboxDMPage() {
       isEdited: false,
       editedAt: null,
       createdAt: new Date().toISOString(),
-      fileId: attachment?.id ?? null,
-      attachmentMeta,
+      fileId: attachmentPayload[0]?.fileId ?? null,
+      attachmentMeta: attachmentPayload[0]?.attachmentMeta ?? null,
+      attachments: attachmentPayload.map(({ fileId, attachmentMeta }) => ({
+        fileId,
+        attachmentMeta,
+      })),
+      clientNonce,
       quotedMessageId: activeQuoteId,
       // Carry the snapshot through the optimistic phase so the embed renders
       // immediately; the server's enriched payload will replace it.
@@ -450,13 +473,16 @@ export default function InboxDMPage() {
     setMessages((prev) => [...prev, optimistic]);
 
     try {
-      const body: { content: string; fileId?: string; attachmentMeta?: AttachmentMeta; quotedMessageId?: string } = {
+      const body: {
+        content: string;
+        attachments: Array<{ fileId: string; attachmentMeta: AttachmentMeta }>;
+        quotedMessageId?: string;
+        clientNonce: string;
+      } = {
         content,
+        attachments: attachmentPayload,
+        clientNonce,
       };
-      if (attachment) {
-        body.fileId = attachment.id;
-        body.attachmentMeta = attachmentMeta!;
-      }
       if (activeQuoteId) {
         body.quotedMessageId = activeQuoteId;
       }
@@ -531,7 +557,7 @@ export default function InboxDMPage() {
             </div>
           )}
           {m.content && <MessageLinkPreviews content={m.content} />}
-          <MessageAttachment message={m} />
+          <MessageAttachments message={m} />
         </div>
       </div>
     );
@@ -711,7 +737,7 @@ export default function InboxDMPage() {
                           </div>
                         )}
                         {message.content && <MessageLinkPreviews content={message.content} />}
-                        <MessageAttachment message={message} />
+                        <MessageAttachments message={message} />
                         {!isFirst && (message.isEdited || (isLastRead && isOwnMessage)) && (
                           <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                             {message.isEdited && (

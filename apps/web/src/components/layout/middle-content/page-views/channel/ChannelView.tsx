@@ -21,7 +21,9 @@ import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock, Check, X, MessageSquareText, Webhook } from 'lucide-react';
 import { PageWebhooksDialog } from '@/components/shared/PageWebhooksDialog';
-import { MessageAttachment } from '@/components/shared/MessageAttachment';
+import { MessageAttachments } from '@/components/shared/MessageAttachments';
+import type { MessageAttachmentLike } from '@/lib/attachment-utils';
+import { createId } from '@paralleldrive/cuid2';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
@@ -86,6 +88,7 @@ interface MessageWithReactions extends MessageWithUser {
   reactions?: Reaction[];
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
+  attachments?: MessageAttachmentLike[] | null;
   file?: FileRelation | null;
   aiMeta?: AiMeta | null;
   editedAt?: string | null;
@@ -95,6 +98,42 @@ interface MessageWithReactions extends MessageWithUser {
   lastReplyAt?: string | null;
   mirroredFromId?: string | null;
   mirroredFrom?: { parentId: string | null } | null;
+  /**
+   * Correlation id for an in-flight send. Set on the optimistic row and echoed
+   * by the server on the POST response and the socket broadcast; never stored.
+   */
+  clientNonce?: string;
+}
+
+/**
+ * Merge a server-confirmed message into the list.
+ *
+ * The optimistic row is matched by `clientNonce`, so one echo retires exactly
+ * one pending row. This used to drop EVERY `temp-` row on the first
+ * confirmation, which made a multi-file send flicker as rows vanished and came
+ * back; and the sender's own rows were keyed on `Date.now()`, so a batch sent
+ * in one tick shared an id and React stranded the duplicates on screen.
+ */
+function reconcileChannelMessage(
+  prev: MessageWithReactions[],
+  message: MessageWithReactions,
+): MessageWithReactions[] {
+  const pendingIndex = message.clientNonce
+    ? prev.findIndex((m) => m.id.startsWith('temp-') && m.clientNonce === message.clientNonce)
+    : -1;
+
+  if (pendingIndex !== -1) {
+    // Replace in place so the message keeps its position in the stream, and
+    // drop any copy that already arrived by another route (e.g. a refetch).
+    return prev.reduce<MessageWithReactions[]>((next, current, index) => {
+      if (index !== pendingIndex && current.id === message.id) return next;
+      next.push(index === pendingIndex ? message : current);
+      return next;
+    }, []);
+  }
+
+  if (prev.some((m) => m.id === message.id)) return prev;
+  return [...prev, message];
 }
 
 function ChannelView({ page }: ChannelViewProps) {
@@ -262,13 +301,7 @@ function ChannelView({ page }: ChannelViewProps) {
       // the ThreadPanel; until then, drop them here so the thread API does
       // not pollute the live channel view of older clients.
       if (message.parentId) return;
-      setMessages((prev) => {
-        // If the message is already in the list, don't add it again.
-        if (prev.find((m) => m.id === message.id)) {
-          return prev;
-        }
-        return [...prev.filter(m => !m.id.startsWith('temp-')), message];
-      });
+      setMessages((prev) => reconcileChannelMessage(prev, message));
       // It is on screen now, so it is not unread.
       scheduleMarkChannelRead();
     };
@@ -319,7 +352,7 @@ function ChannelView({ page }: ChannelViewProps) {
 
   const handleSubmit = async (
     content: string,
-    attachment?: FileAttachment,
+    attachments: FileAttachment[],
     activeQuoteId?: string | null,
     activeQuoteSnapshot?: QuotedMessageSnapshot | null,
   ) => {
@@ -332,7 +365,21 @@ function ChannelView({ page }: ChannelViewProps) {
 
     const messageContent = typeof content === 'string' ? content : JSON.stringify(content);
 
-    const tempId = `temp-${Date.now()}`;
+    const attachmentPayload = attachments.map((attachment) => ({
+      fileId: attachment.id,
+      attachmentMeta: {
+        originalName: attachment.originalName,
+        size: attachment.size,
+        mimeType: attachment.mimeType,
+        contentHash: attachment.contentHash,
+      },
+    }));
+
+    // createId(), not Date.now(): several sends can start inside one
+    // millisecond, and a duplicate id here is a duplicate React key, which
+    // strands the extra rows on screen until the list remounts.
+    const clientNonce = createId();
+    const tempId = `temp-${clientNonce}`;
     const optimisticMessage: MessageWithReactions = {
       id: tempId,
       pageId: page.id,
@@ -347,14 +394,16 @@ function ChannelView({ page }: ChannelViewProps) {
         name: user.name || 'You',
         image: user.image ?? null,
       },
-      // Include attachment info in optimistic message
-      fileId: attachment?.id || null,
-      attachmentMeta: attachment ? {
-        originalName: attachment.originalName,
-        size: attachment.size,
-        mimeType: attachment.mimeType,
-        contentHash: attachment.contentHash,
-      } : null,
+      // Render the whole batch optimistically, and keep the legacy singular
+      // fields pointing at the first file so anything still reading them
+      // agrees with the gallery.
+      fileId: attachmentPayload[0]?.fileId ?? null,
+      attachmentMeta: attachmentPayload[0]?.attachmentMeta ?? null,
+      attachments: attachmentPayload.map(({ fileId, attachmentMeta }) => ({
+        fileId,
+        attachmentMeta,
+      })),
+      clientNonce,
       quotedMessageId: activeQuoteId ?? null,
       // Carry the snapshot through the optimistic phase so the embed renders
       // immediately; the server's enriched payload will replace it.
@@ -366,14 +415,9 @@ function ChannelView({ page }: ChannelViewProps) {
     try {
       await post(`/api/channels/${page.id}/messages`, {
         content: messageContent,
-        fileId: attachment?.id,
-        attachmentMeta: attachment ? {
-          originalName: attachment.originalName,
-          size: attachment.size,
-          mimeType: attachment.mimeType,
-          contentHash: attachment.contentHash,
-        } : undefined,
+        attachments: attachmentPayload,
         quotedMessageId: activeQuoteId ?? undefined,
+        clientNonce,
       });
 
       // The new message will be received via the socket connection,
@@ -395,12 +439,12 @@ function ChannelView({ page }: ChannelViewProps) {
 
   const handleTopLevelSubmit = ({
     content,
-    attachment,
+    attachments,
   }: {
     content: string;
-    attachment?: FileAttachment;
+    attachments: FileAttachment[];
   }) => {
-    if (!content.trim() && !attachment) return;
+    if (!content.trim() && attachments.length === 0) return;
     if (!canEdit) {
       toast.error(getPermissionErrorMessage('send', 'channel'));
       return;
@@ -410,7 +454,7 @@ function ChannelView({ page }: ChannelViewProps) {
     clearInputDraft();
     channelInputRef.current?.clear();
     clearQuote();
-    handleSubmit(content, attachment, activeQuoteId, activeQuoteSnapshot);
+    handleSubmit(content, attachments, activeQuoteId, activeQuoteSnapshot);
   };
 
   // Load older messages when scrolling to top
@@ -440,7 +484,7 @@ function ChannelView({ page }: ChannelViewProps) {
       prev.map((m) => {
         if (m.id !== messageId) return m;
         const optimisticReaction: Reaction = {
-          id: `temp-${Date.now()}`,
+          id: `temp-${createId()}`,
           emoji,
           userId: user.id,
           user: { id: user.id, name: user.name || 'You' },
@@ -653,7 +697,7 @@ function ChannelView({ page }: ChannelViewProps) {
             </div>
           )}
           {m.content && <MessageLinkPreviews content={m.content} />}
-          <MessageAttachment message={m} />
+          <MessageAttachments message={m} />
         </div>
       </div>
     );
@@ -856,7 +900,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                     )}
                                   </>
                                 )}
-                                <MessageAttachment message={m} />
+                                <MessageAttachments message={m} />
                                 {replyCount > 0 && (
                                   <button
                                     type="button"

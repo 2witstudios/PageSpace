@@ -58,6 +58,12 @@ export interface RecentChannelMessage {
   aiMeta: ChannelMessageAiMeta | null;
   fileId: string | null;
   attachmentMeta: AttachmentMeta | null;
+  /** Present since messages gained real attachment rows; ordered by position. */
+  attachments?: Array<{
+    fileId: string | null;
+    attachmentMeta: AttachmentMeta | null;
+    position: number;
+  }>;
 }
 
 export interface TriggerMentionedAgentResponsesParams {
@@ -247,6 +253,9 @@ export async function fetchRecentChannelMessages(channelId: string): Promise<Rec
           name: true,
         },
       },
+      attachments: {
+        columns: { fileId: true, attachmentMeta: true, position: true },
+      },
     },
     orderBy: [desc(channelMessages.createdAt)],
     limit: CONTEXT_MESSAGE_LIMIT,
@@ -277,10 +286,29 @@ async function resolveImageAttachmentsForContext(
   // the end of iteration order, so final ordering reflects last-seen position.
   const latestByFileId = new Map<string, RecentChannelMessage & { fileId: string }>();
   for (const message of contextMessages) {
-    if (!message.fileId) continue;
-    const withFileId = message as RecentChannelMessage & { fileId: string };
-    latestByFileId.delete(message.fileId);
-    latestByFileId.set(message.fileId, withFileId);
+    // Read every attachment on the message, not just the first. A message can
+    // now carry a whole batch of photos, and an agent mentioned on one should
+    // see all of them. Falls back to the legacy column for rows written before
+    // messages had attachment rows.
+    const messageAttachments =
+      message.attachments && message.attachments.length > 0
+        ? [...message.attachments]
+            .sort((a, b) => a.position - b.position)
+            .map((attachment) => ({
+              fileId: attachment.fileId,
+              attachmentMeta: attachment.attachmentMeta,
+            }))
+        : [{ fileId: message.fileId, attachmentMeta: message.attachmentMeta }];
+
+    for (const attachment of messageAttachments) {
+      if (!attachment.fileId) continue;
+      latestByFileId.delete(attachment.fileId);
+      latestByFileId.set(attachment.fileId, {
+        ...message,
+        fileId: attachment.fileId,
+        attachmentMeta: attachment.attachmentMeta,
+      });
+    }
   }
 
   if (latestByFileId.size === 0) {

@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { createId } from '@paralleldrive/cuid2';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { uploadAttachment } from '@/lib/upload/attachment-client';
+import { MAX_MESSAGE_ATTACHMENTS } from '@pagespace/lib/services/attachment-upload-core';
 
 export interface FileAttachment {
   /** Client-side unique key for UI tracking (e.g. remove-by-slot). NOT the server file id. */
@@ -37,6 +38,11 @@ export function useAttachmentUpload({
   onUploaded,
 }: UseAttachmentUploadOptions): UseAttachmentUploadReturn {
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
+  // Mirrors `attachments` for the upload callback, which must not close over
+  // the state value: adding it to the dep list would change the callback's
+  // identity on every upload, and reading it without would go stale.
+  const attachmentsRef = useRef<FileAttachment[]>([]);
+  attachmentsRef.current = attachments;
   const [isUploading, setIsUploading] = useState(false);
   const isUploadingRef = useRef(false);
   const onUploadedRef = useRef(onUploaded);
@@ -45,6 +51,21 @@ export function useAttachmentUpload({
   const uploadFiles = useCallback(
     async (files: File[]) => {
       if (!uploadUrl || isUploadingRef.current || files.length === 0) return;
+
+      // Client-side cap is UX — it keeps the user from uploading bytes the
+      // send would reject. The server enforces the real limit, and the
+      // database backs it with a CHECK on the attachment position.
+      const room = MAX_MESSAGE_ATTACHMENTS - attachmentsRef.current.length;
+      if (room <= 0) {
+        toast.error(`A message can carry at most ${MAX_MESSAGE_ATTACHMENTS} files`);
+        return;
+      }
+      const accepted = files.length > room ? files.slice(0, room) : files;
+      if (accepted.length < files.length) {
+        toast.error(
+          `Only ${room} more file${room === 1 ? '' : 's'} can be attached to this message`,
+        );
+      }
 
       const sessionId = `attachment-upload-${createId()}`;
       const { startEditing, endEditing } = useEditingStore.getState();
@@ -58,7 +79,7 @@ export function useAttachmentUpload({
 
         // Direct-to-S3: each file goes presign → PUT(Tigris) → complete. Serial so
         // the per-user upload semaphore isn't contended by one message's batch.
-        for (const file of files) {
+        for (const file of accepted) {
           const result = await uploadAttachment(uploadUrl, file);
           if (result.ok) {
             const attachment: FileAttachment = {

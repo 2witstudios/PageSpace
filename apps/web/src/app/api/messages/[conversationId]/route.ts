@@ -11,7 +11,7 @@ import { attachQuotedMessages } from '@pagespace/lib/services/quote-enrichment';
 import { broadcastInboxEvent, broadcastThreadReplyCountUpdated } from '@/lib/websocket/socket-utils';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
-import type { AttachmentMeta } from '@pagespace/lib/types';
+import { MAX_MESSAGE_ATTACHMENTS, parseMessageAttachments } from '@pagespace/lib/services/attachment-upload-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -24,11 +24,17 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
  */
 function attachmentValidationErrorResponse(
   request: Request,
-  kind: 'not_found' | 'wrong_owner' | 'not_linked',
+  kind: 'not_found' | 'wrong_owner' | 'not_linked' | 'too_many_attachments',
   ctx: { userId: string; fileId: string | null; conversationId: string }
 ): NextResponse {
   if (kind === 'not_found') {
     return NextResponse.json({ error: 'File not found' }, { status: 404 });
+  }
+  if (kind === 'too_many_attachments') {
+    return NextResponse.json(
+      { error: `A message may carry at most ${MAX_MESSAGE_ATTACHMENTS} attachments` },
+      { status: 400 }
+    );
   }
   const isOwnerMismatch = kind === 'wrong_owner';
   auditRequest(request, {
@@ -235,17 +241,6 @@ export async function GET(
   }
 }
 
-function isValidAttachmentMeta(value: unknown): value is AttachmentMeta {
-  if (typeof value !== 'object' || value === null) return false;
-  const m = value as Record<string, unknown>;
-  return (
-    typeof m.originalName === 'string' &&
-    typeof m.size === 'number' &&
-    typeof m.mimeType === 'string' &&
-    typeof m.contentHash === 'string'
-  );
-}
-
 // POST /api/messages/[conversationId] - Send a message
 export async function POST(
   request: Request,
@@ -275,42 +270,39 @@ export async function POST(
       parentId?: unknown;
       alsoSendToParent?: unknown;
       quotedMessageId?: unknown;
+      attachments?: unknown;
+      clientNonce?: unknown;
     };
 
     const rawContent = typeof body.content === 'string' ? body.content : '';
     const content = rawContent.trim().length > 0 ? rawContent : '';
-    const fileId = typeof body.fileId === 'string' && body.fileId.length > 0 ? body.fileId : null;
-    const rawAttachmentMeta = body.attachmentMeta ?? null;
+    const clientNonce = typeof body.clientNonce === 'string' ? body.clientNonce : undefined;
+
+    // Accepts the new attachments array and the legacy singular fileId +
+    // attachmentMeta pair, so the published SDK and CLI keep working.
+    const parsedAttachments = parseMessageAttachments(body);
+    if (parsedAttachments.kind === 'invalid') {
+      return NextResponse.json({ error: parsedAttachments.error }, { status: 400 });
+    }
+    const attachments = parsedAttachments.attachments;
+    const fileId = attachments[0]?.fileId ?? null;
+
     const trimmedParent = typeof body.parentId === 'string' ? body.parentId.trim() : '';
     const parentId = trimmedParent.length > 0 ? trimmedParent : null;
     const alsoSendToParent = body.alsoSendToParent === true;
     const trimmedQuoted = typeof body.quotedMessageId === 'string' ? body.quotedMessageId.trim() : '';
     const quotedMessageId = trimmedQuoted.length > 0 ? trimmedQuoted : null;
 
-    if (content.length === 0 && !fileId) {
+    if (content.length === 0 && attachments.length === 0) {
       return NextResponse.json(
         { error: 'Message content or file is required' },
         { status: 400 }
       );
     }
 
-    if (fileId && rawAttachmentMeta === null) {
-      return NextResponse.json(
-        { error: 'attachmentMeta required when fileId is provided' },
-        { status: 400 }
-      );
-    }
-
-    let attachmentMeta: AttachmentMeta | null = null;
-    if (fileId) {
-      if (!isValidAttachmentMeta(rawAttachmentMeta)) {
-        return NextResponse.json(
-          { error: 'Invalid attachmentMeta shape' },
-          { status: 400 }
-        );
-      }
-      attachmentMeta = rawAttachmentMeta;
-    }
+    // Preview/notification payloads below describe the whole batch, so a
+    // five-photo DM reads "[5 images]" rather than one arbitrary filename.
+    const attachmentMetas = attachments.map((a) => a.attachmentMeta);
 
     const conversation = await dmMessageRepository.findConversationForParticipant(
       conversationId,
@@ -360,8 +352,7 @@ export async function POST(
         conversationId,
         senderId: userId,
         content,
-        fileId,
-        attachmentMeta,
+        attachments,
         alsoSendToParent,
       });
 
@@ -401,7 +392,7 @@ export async function POST(
       // NOT touch the inbox preview here; PR 5 wires the inbox bump for
       // thread followers separately.
       if (result.mirror) {
-        const previewSource = buildLastMessagePreview(content, attachmentMeta);
+        const previewSource = buildLastMessagePreview(content, attachmentMetas);
 
         const recipientId = conversation.participant1Id === userId
           ? conversation.participant2Id
@@ -420,7 +411,7 @@ export async function POST(
           id: conversationId,
           lastMessageAt: result.mirror.createdAt.toISOString(),
           lastMessagePreview: previewSource,
-          attachmentMeta,
+          attachmentMeta: attachmentMetas[0] ?? null,
         });
       }
 
@@ -433,7 +424,11 @@ export async function POST(
           const threadBody = JSON.stringify({
             channelId: `dm:${conversationId}`,
             event: 'new_dm_message',
-            payload: result.reply,
+            // clientNonce rides the wire only — never a column. It lets the
+            // sender retire exactly its own optimistic row instead of guessing
+            // from (content, fileId), which cannot tell two attachment-only
+            // messages apart.
+            payload: clientNonce ? { ...result.reply, clientNonce } : result.reply,
           });
           await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
             method: 'POST',
@@ -446,6 +441,8 @@ export async function POST(
             const mirrorBody = JSON.stringify({
               channelId: `dm:${conversationId}`,
               event: 'new_dm_message',
+              // A different row than the one optimistically inserted, so it
+              // deliberately carries no nonce.
               payload: result.mirror,
             });
             await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
@@ -472,7 +469,7 @@ export async function POST(
       // mention" path is rare but kept for symmetry. Failures are logged and
       // swallowed; the DB commit is durable.
       try {
-        const previewSource = buildLastMessagePreview(content, attachmentMeta);
+        const previewSource = buildLastMessagePreview(content, attachmentMetas);
         const replyCreatedAt = result.lastReplyAt.toISOString();
         const replySender = {
           id: userId,
@@ -527,7 +524,7 @@ export async function POST(
                 id: conversationId,
                 lastMessageAt: replyCreatedAt,
                 lastMessagePreview: previewSource,
-                attachmentMeta,
+                attachmentMeta: attachmentMetas[0] ?? null,
               })
             )
           );
@@ -536,7 +533,9 @@ export async function POST(
         loggers.realtime.error('Failed to broadcast DM thread inbox update:', error as Error);
       }
 
-      return NextResponse.json({ message: result.reply });
+      return NextResponse.json({
+        message: clientNonce ? { ...result.reply, clientNonce } : result.reply,
+      });
     }
 
     // Validates the attachment (if any) and inserts the message atomically —
@@ -546,8 +545,7 @@ export async function POST(
       conversationId,
       senderId: userId,
       content,
-      fileId,
-      attachmentMeta,
+      attachments,
       quotedMessageId,
     });
 
@@ -559,7 +557,11 @@ export async function POST(
       });
     }
 
-    const baseMessage = insertResult.message;
+    // The insert returns the bare row, so — unlike the channel route, which
+    // re-loads through the shared `with` clause — the attachment rows have to
+    // be put back on by hand here. Without this the recipient's socket payload
+    // would carry an empty bubble until they refreshed.
+    const baseMessage = { ...insertResult.message, attachments: insertResult.attachments };
     // Enrich with the quote snapshot so the realtime payload and the JSON
     // response carry the same denormalized shape the GET list returns.
     const [newMessage] = await attachQuotedMessages([baseMessage], 'dm');
@@ -574,7 +576,7 @@ export async function POST(
     // insertDmMessageWithAttachment already recomputed the stored preview
     // (#2153); this local copy is only for the notification/broadcast
     // payloads below.
-    const messagePreview = buildLastMessagePreview(content, attachmentMeta);
+    const messagePreview = buildLastMessagePreview(content, attachmentMetas);
 
     const recipientId = conversation.participant1Id === userId
       ? conversation.participant2Id
@@ -594,7 +596,7 @@ export async function POST(
         const requestBody = JSON.stringify({
           channelId: `dm:${conversationId}`,
           event: 'new_dm_message',
-          payload: newMessage,
+          payload: clientNonce ? { ...newMessage, clientNonce } : newMessage,
         });
 
         await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
@@ -614,7 +616,7 @@ export async function POST(
       id: conversationId,
       lastMessageAt: newMessage.createdAt.toISOString(),
       lastMessagePreview: messagePreview,
-      attachmentMeta,
+      attachmentMeta: attachmentMetas[0] ?? null,
     });
 
     auditRequest(request, {
@@ -624,7 +626,9 @@ export async function POST(
       resourceId: conversationId,
     });
 
-    return NextResponse.json({ message: newMessage });
+    return NextResponse.json({
+      message: clientNonce ? { ...newMessage, clientNonce } : newMessage,
+    });
   } catch (error) {
     loggers.api.error('Error sending message:', error as Error);
     return NextResponse.json(

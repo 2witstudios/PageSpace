@@ -19,6 +19,7 @@ import { attachQuotedMessages } from '@pagespace/lib/services/quote-enrichment';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import type { AttachmentMeta } from '@pagespace/lib/types';
+import { MAX_MESSAGE_ATTACHMENTS, parseMessageAttachments } from '@pagespace/lib/services/attachment-upload-core';
 
 interface ChannelInboxFanoutInput {
   pageId: string;
@@ -224,21 +225,37 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     }, { status: 403 });
   }
 
-  const { content, fileId, attachmentMeta, parentId: rawParentId, alsoSendToParent, quotedMessageId: rawQuotedMessageId } = await req.json() as {
+  const body = await req.json() as {
     content: string;
+    // Legacy singular pair, still accepted so the published SDK and CLI keep
+    // working against a server that understands N.
     fileId?: string;
     attachmentMeta?: AttachmentMeta;
+    attachments?: unknown;
     parentId?: string;
     alsoSendToParent?: boolean;
     quotedMessageId?: string;
+    // Client-generated correlation id, echoed back on the response and the
+    // broadcast so the sender can retire exactly its own optimistic row.
+    // Never persisted.
+    clientNonce?: string;
   };
+  const { content, parentId: rawParentId, alsoSendToParent, quotedMessageId: rawQuotedMessageId } = body;
+  const clientNonce = typeof body.clientNonce === 'string' ? body.clientNonce : undefined;
+
+  const parsedAttachments = parseMessageAttachments(body);
+  if (parsedAttachments.kind === 'invalid') {
+    return NextResponse.json({ error: parsedAttachments.error }, { status: 400 });
+  }
+  const attachments = parsedAttachments.attachments;
+
   const messageContent = typeof content === 'string' ? content : '';
   const parentId = typeof rawParentId === 'string' ? rawParentId.trim() : '';
   const quotedMessageId = typeof rawQuotedMessageId === 'string' ? rawQuotedMessageId.trim() : '';
 
   // Debug: Check what content type is being received
   loggers.realtime.debug('API received content type:', { type: typeof content });
-  loggers.realtime.debug('API received content:', { content, fileId });
+  loggers.realtime.debug('API received content:', { content, attachmentCount: attachments.length });
 
   // Quote-reply validation. Quotes are top-level only — the quoted message
   // must (a) belong to this channel, (b) be active, and (c) itself be a
@@ -278,13 +295,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       pageId,
       userId,
       content: messageContent,
-      fileId: fileId || null,
-      attachmentMeta: attachmentMeta || null,
+      attachments,
       alsoSendToParent: alsoSendToParent === true,
     });
 
     if (result.kind === 'not_found') {
       return NextResponse.json({ error: 'File not found' }, { status: 400 });
+    }
+    if (result.kind === 'too_many_attachments') {
+      return NextResponse.json(
+        { error: `A message may carry at most ${MAX_MESSAGE_ATTACHMENTS} attachments` },
+        { status: 400 },
+      );
     }
     if (result.kind === 'parent_not_found') {
       return NextResponse.json({ error: 'Parent message not found' }, { status: 404 });
@@ -319,7 +341,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         const thread = JSON.stringify({
           channelId: pageId,
           event: 'new_message',
-          payload: replyWithRelations,
+          payload: clientNonce ? { ...replyWithRelations, clientNonce } : replyWithRelations,
         });
         await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
           method: 'POST',
@@ -332,6 +354,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           const mirror = JSON.stringify({
             channelId: pageId,
             event: 'new_message',
+            // The mirror is a different row than the one the sender optimistically
+            // inserted, so it deliberately carries NO nonce — matching it would
+            // retire the wrong optimistic entry.
             payload: mirrorWithRelations,
           });
           await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
@@ -519,7 +544,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       loggers.realtime.error('Failed to broadcast thread inbox update:', error as Error);
     }
 
-    return NextResponse.json(replyWithRelations, { status: 201 });
+    return NextResponse.json(
+      clientNonce ? { ...replyWithRelations, clientNonce } : replyWithRelations,
+      { status: 201 },
+    );
   }
 
   // Validates the attachment (if any) and inserts the message atomically —
@@ -529,13 +557,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     pageId,
     userId,
     content: messageContent,
-    fileId: fileId || null,
-    attachmentMeta: attachmentMeta || null,
+    attachments,
     quotedMessageId: quotedMessageId.length > 0 ? quotedMessageId : null,
   });
 
   if (insertResult.kind === 'not_found') {
     return NextResponse.json({ error: 'File not found' }, { status: 400 });
+  }
+  if (insertResult.kind === 'too_many_attachments') {
+    return NextResponse.json(
+      { error: `A message may carry at most ${MAX_MESSAGE_ATTACHMENTS} attachments` },
+      { status: 400 },
+    );
   }
   const createdMessage = insertResult.message;
 
@@ -565,7 +598,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       const requestBody = JSON.stringify({
         channelId: pageId,
         event: 'new_message',
-        payload: newMessage,
+        // clientNonce rides along on the wire only — it is not a column. The
+        // sender matches it to retire exactly its own optimistic row instead
+        // of guessing from (content, fileId), which cannot tell two
+        // attachment-only messages apart.
+        payload: clientNonce ? { ...newMessage, clientNonce } : newMessage,
       });
 
       await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
@@ -649,5 +686,5 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     loggers.realtime.error('Failed to broadcast inbox update:', error as Error);
   }
 
-  return NextResponse.json(newMessage, { status: 201 });
+  return NextResponse.json(clientNonce ? { ...newMessage, clientNonce } : newMessage, { status: 201 });
 }
