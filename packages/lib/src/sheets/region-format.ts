@@ -26,6 +26,9 @@ import type { CellFormat } from './types';
 const DEFAULT_HUE: PaletteHue = PALETTE[0];
 export const DEFAULT_REGION_THEME = DEFAULT_HUE.name;
 
+/** What `decodeColumnLabel` will accept without throwing. */
+const COLUMN_LABEL = /^[A-Z]{1,7}$/;
+
 /**
  * Precision per role, where the role implies one.
  *
@@ -168,6 +171,14 @@ const prepare = (region: SheetRegion, rowCount: number): PreparedRegion | null =
 
   const columns = new Map<number, CellFormat>();
   for (const column of region.columns ?? []) {
+    // `decodeColumnLabel` THROWS on anything that is not letters, and this is
+    // reached from `evaluateSheet`, which takes a `SheetData` directly — so a
+    // region that never went through `parseRegion` (a hand-built sheet, or a
+    // future caller) could abort the evaluation of the whole sheet over one
+    // malformed label. Skipping the column degrades to "this column is not
+    // styled", which is the right failure for presentation.
+    if (!COLUMN_LABEL.test(column.column)) continue;
+
     const format = columnRoleFormat(column);
     // An empty format (role `text`) would still cost a spread per cell for
     // nothing.

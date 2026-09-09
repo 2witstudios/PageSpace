@@ -229,6 +229,30 @@ describe('createRegionResolver', () => {
     expect(at(1, 0)).toBeUndefined();
   });
 
+  it('skips a malformed column label instead of aborting the whole sheet', () => {
+    // `evaluateSheet` takes a SheetData directly, so a region that never went
+    // through `parseRegion` can carry a label `decodeColumnLabel` would throw
+    // on. Losing one column's styling beats losing the sheet.
+    const at = createRegionResolver(
+      [
+        {
+          id: 'r',
+          range: 'A1:D',
+          headerRows: 0,
+          columns: [
+            { column: '', role: 'currency' },
+            { column: 'B1', role: 'currency' },
+            { column: 'C', role: 'currency' },
+          ],
+        },
+      ],
+      20
+    );
+    expect(() => at(1, 0)).not.toThrow();
+    expect(at(1, 0)).toBeUndefined();
+    expect(at(1, 2)).toEqual(columnRoleFormat({ column: 'C', role: 'currency' }));
+  });
+
   it('drops a region whose range cannot be located rather than failing the sheet', () => {
     const at = createRegionResolver([{ id: 'bad', range: 'nonsense' }, budget()], 50);
     expect(at(1, 1)).toEqual(columnRoleFormat({ column: 'B', role: 'currency' }));

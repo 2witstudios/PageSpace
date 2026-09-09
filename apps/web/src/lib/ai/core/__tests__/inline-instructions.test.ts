@@ -428,6 +428,15 @@ describe('SHEET bullet vs the agent allowlist', () => {
     expect(formatOnly).toContain('format_sheet');
     expect(formatOnly).not.toContain('edit_sheet_cells');
     expect(formatOnly).not.toContain('read_sheet');
+    // format_sheet must not advertise the rules tool it does not imply:
+    // `page.enabledTools` is a per-agent allowlist, so the two travel apart.
+    expect(formatOnly).not.toContain('set_conditional_format');
+
+    const rulesOnly = sheetLine(['set_conditional_format']);
+    expect(rulesOnly).toContain('set_conditional_format');
+    expect(rulesOnly).not.toContain('format_sheet');
+    expect(rulesOnly).not.toContain('edit_sheet_cells');
+    expect(rulesOnly).not.toContain('read_sheet');
 
     const nothing = sheetLine([]);
     expect(nothing).not.toContain('read_sheet');

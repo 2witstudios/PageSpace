@@ -102,6 +102,12 @@ const PAGE_TYPE_BULLETS: ReadonlyArray<{
       if (has('format_sheet')) {
         parts.push('Use format_sheet to declare a table (header rows, column roles, totals, theme) so its presentation is derived; cell edits never format.');
       }
+      // Gated separately, not folded into the branch above: `page.enabledTools`
+      // is a per-agent allowlist, so an agent can hold one of these without the
+      // other, and naming a tool it does not have produces an unknown-tool call.
+      if (has('set_conditional_format')) {
+        parts.push('Use set_conditional_format for value-driven colouring; its conditions compare the computed, unformatted value.');
+      }
       return parts.join(' ');
     },
     slimSuffix: 'load the spreadsheets skill before formulas or new sheets.',

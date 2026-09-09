@@ -185,10 +185,28 @@ describe('moveRule', () => {
 });
 
 describe('newRuleId', () => {
+  it('mints the CUID2 shape the repository uses, not a hand-rolled token', () => {
+    // A timestamp-plus-random string only looks unique, and it does not match
+    // the id format the rest of the codebase stores.
+    expect(newRuleId()).toMatch(/^[a-z0-9]{20,32}$/);
+    expect(newRuleId()).not.toContain('_');
+  });
+
   it('does not collide across rapid creation', () => {
     // A counter would repeat across two tabs of the same sheet.
     const ids = new Set(Array.from({ length: 500 }, () => newRuleId()));
     expect(ids.size).toBe(500);
+  });
+
+  it('refuses a duplicate rule id, because update and remove would disagree', () => {
+    // `updateRule` edits the FIRST match and `removeRule` drops EVERY match, so
+    // two rules sharing an id make the panel and an API caller each right about
+    // a different rule.
+    const sheet = sheetWith(rule('dup'));
+    const result = addRule(sheet, rule('dup'));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toMatch(/already on this sheet/i);
+    expect(sheet.conditionalFormats).toHaveLength(1);
   });
 });
 

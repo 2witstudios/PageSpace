@@ -23,6 +23,7 @@ import {
   type ConditionalRule,
 } from './conditional';
 import type { SheetData } from './types';
+import { createId } from '@paralleldrive/cuid2';
 
 /**
  * Why a rule was refused, in words a panel can show.
@@ -67,9 +68,14 @@ export const validateRanges = (ranges: readonly string[]): RuleRefusal | { ok: t
   return { ok: true };
 };
 
-/** Rule ids are opaque; a counter would collide across two tabs of one sheet. */
-export const newRuleId = (): string =>
-  `cf_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+/**
+ * Rule ids are opaque, but they are still identity: `updateRule` finds the FIRST
+ * match while `removeRule` drops EVERY match, so a duplicate id makes editing
+ * and deleting disagree about which rule they mean. `addRule` refuses duplicates
+ * for that reason, and this mints the same CUID2 the rest of the codebase uses
+ * rather than a timestamp-plus-random string that only looks unique.
+ */
+export const newRuleId = (): string => createId();
 
 const withRules = (sheet: SheetData, rules: ConditionalRule[]): SheetData => ({
   ...sheet,
@@ -84,6 +90,14 @@ const withRules = (sheet: SheetData, rules: ConditionalRule[]): SheetData => ({
  */
 export const addRule = (sheet: SheetData, rule: ConditionalRule): RuleResult => {
   const existing = sheet.conditionalFormats ?? [];
+
+  // Identity, not decoration: with two rules sharing an id, `updateRule` edits
+  // the first and `removeRule` deletes both, so the panel and an API caller
+  // would each be right about a different rule.
+  if (existing.some((entry) => entry.id === rule.id)) {
+    return { ok: false, reason: 'A rule with that id is already on this sheet.' };
+  }
+
   if (existing.length >= MAX_CONDITIONAL_RULES) {
     return {
       ok: false,
