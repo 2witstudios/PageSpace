@@ -116,7 +116,17 @@ export function MobileCalendarView({
     if (!parentDate) return;
     // A guard, not a trigger. The effect fires on a new parentDate only, and
     // this makes it a no-op for the echo of our own onDateChange.
-    if (lastSentToParent.current && isSameDay(parentDate, lastSentToParent.current)) return;
+    // Suppress only a true echo: same day we sent AND we have not drifted since.
+    // At the instant of the echo `selectedDate` still equals what we sent, so this
+    // is exactly as tight as before; once scroll-sync has moved on, a same-day
+    // re-selection (a second deep link into that day) syncs again.
+    if (
+      lastSentToParent.current &&
+      isSameDay(parentDate, lastSentToParent.current) &&
+      isSameDay(parentDate, selectedDate)
+    ) {
+      return;
+    }
     lastSentToParent.current = parentDate;
     setSelectedDate(parentDate);
     setWindowDate(parentDate);
@@ -208,8 +218,12 @@ export function MobileCalendarView({
     if (isToday(selectedDate)) {
       start.setMinutes(0, 0, 0);
       start.setHours(now.getHours() + 1);
-      // After 23:00 the "next hour" is tomorrow; keep the event on the day in view.
-      if (!isSameDay(start, selectedDate)) start.setHours(23, 0, 0, 0);
+      // After 23:00 setHours(24) has already rolled `start` into tomorrow, so it
+      // has to be rebuilt from selectedDate -- calling setHours(23) on the
+      // rolled-over value just moves it to 23:00 on the wrong day.
+      if (!isSameDay(start, selectedDate)) {
+        start.setTime(new Date(selectedDate).setHours(23, 0, 0, 0));
+      }
     } else {
       start.setHours(9, 0, 0, 0);
     }

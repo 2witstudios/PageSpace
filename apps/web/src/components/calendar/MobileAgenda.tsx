@@ -138,7 +138,12 @@ export const MobileAgenda = forwardRef<MobileAgendaHandle, MobileAgendaProps>(
             // ending exactly at midnight also matches the following day. It has
             // no presence there -- and as a banner chip it would read as an
             // all-day event the next morning.
-            (event) => event.allDay || new Date(event.endAt).getTime() > dayStart.getTime()
+            (event) =>
+              event.allDay ||
+              new Date(event.endAt).getTime() > dayStart.getTime() ||
+              // ...but never drop an event that actually starts on this day: a
+              // zero-length 00:00 event ends at dayStart and would vanish entirely.
+              isSameDay(new Date(event.startAt), date)
           );
           return {
             date,
@@ -232,6 +237,7 @@ export const MobileAgenda = forwardRef<MobileAgendaHandle, MobileAgendaProps>(
             driveColorMap={driveColorMap}
             context={context}
             registerDay={registerDay}
+            suppressEmptyLine={!hasContent}
           />
         ))}
 
@@ -277,9 +283,12 @@ function AgendaDaySection({
   driveColorMap,
   context,
   registerDay,
+  suppressEmptyLine,
 }: {
   group: AgendaDay;
   now: Date;
+  /** The window-level empty footer already says it; don't say it twice. */
+  suppressEmptyLine: boolean;
   handlers: CalendarHandlers;
   driveColorMap?: Map<string | null, EventColorConfig> | null;
   context: 'user' | 'drive';
@@ -353,7 +362,7 @@ function AgendaDaySection({
         <AgendaTaskRow key={task.id} task={task} onClick={() => handlers.onTaskClick?.(task)} />
       ))}
 
-      {isEmpty && (
+      {isEmpty && !suppressEmptyLine && (
         <p className="px-3.5 py-2 pl-[78px] text-[13px] italic text-muted-foreground">
           Nothing scheduled
         </p>

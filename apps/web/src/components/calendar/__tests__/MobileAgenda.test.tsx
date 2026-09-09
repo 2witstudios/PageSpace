@@ -357,6 +357,25 @@ describe('MobileAgenda day boundaries', () => {
     });
   });
 
+  test('a zero-length event at midnight is not erased', () => {
+    // It ends exactly at its own dayStart, so the midnight filter would drop it
+    // from its own day -- and getEventsForDay never matches it to the day before.
+    renderAgenda([
+      event({
+        title: 'Midnight marker',
+        startAt: new Date(2027, 2, 10, 0, 0).toISOString(),
+        endAt: new Date(2027, 2, 10, 0, 0).toISOString(),
+      }),
+    ]);
+
+    assert({
+      given: 'a zero-length event at midnight',
+      should: 'still appear on its own day',
+      actual: screen.getAllByText('Midnight marker').length,
+      expected: 1,
+    });
+  });
+
   test('a picked day survives a window with nothing in it', () => {
     renderAgenda([], DAY);
 
