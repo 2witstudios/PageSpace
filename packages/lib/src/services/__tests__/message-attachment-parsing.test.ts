@@ -7,11 +7,7 @@
  * at all.
  */
 import { describe, it, expect } from 'vitest';
-import {
-  MAX_MESSAGE_ATTACHMENTS,
-  isValidAttachmentMeta,
-  parseMessageAttachments,
-} from '../attachment-upload-core';
+import { MAX_MESSAGE_ATTACHMENTS, parseMessageAttachments } from '../attachment-upload-core';
 
 interface AssertParams {
   given: string;
@@ -174,17 +170,15 @@ describe('MAX_MESSAGE_ATTACHMENTS', () => {
   });
 });
 
-describe('isValidAttachmentMeta', () => {
-  it('accepts a well-formed meta', () => {
-    assert({ given: 'a complete meta', should: 'accept', actual: isValidAttachmentMeta(meta), expected: true });
-  });
-
+describe('attachmentMeta shape validation', () => {
   it.each([
     ['null', null],
     ['a string', 'photo.png'],
     ['a missing contentHash', { originalName: 'a', size: 1, mimeType: 'image/png' }],
-    ['a numeric originalName', { ...meta, originalName: 1 }],
-  ])('rejects %s', (_label, value) => {
-    expect(isValidAttachmentMeta(value)).toBe(false);
+    ['a numeric originalName', { originalName: 1, size: 1, mimeType: 'image/png', contentHash: 'h' }],
+  ])('rejects an attachment whose meta is %s', (_label, value) => {
+    expect(
+      parseMessageAttachments({ attachments: [{ fileId: 'f-1', attachmentMeta: value }] }).kind,
+    ).toBe('invalid');
   });
 });

@@ -88,7 +88,3 @@ export function hasAttachment(m: MessageAttachmentLike): boolean {
   return !!(m.attachmentMeta || m.file) && getFileId(m) !== null;
 }
 
-/** Whether a message has anything to render in its attachment area. */
-export function hasAnyAttachment(m: MessageWithAttachment): boolean {
-  return getAttachments(m).length > 0;
-}

@@ -41,7 +41,7 @@ export interface MessageAttachmentInput {
  * send route, which was the only surface validating it — the channel route
  * accepted any JSON at all.
  */
-export function isValidAttachmentMeta(value: unknown): value is AttachmentMeta {
+function isValidAttachmentMeta(value: unknown): value is AttachmentMeta {
   if (typeof value !== 'object' || value === null) return false;
   const m = value as Record<string, unknown>;
   return (

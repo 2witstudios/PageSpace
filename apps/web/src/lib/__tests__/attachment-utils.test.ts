@@ -5,12 +5,7 @@
  * to render on one path, so this is where that promise is pinned.
  */
 import { describe, it, expect } from 'vitest';
-import {
-  getAttachments,
-  hasAnyAttachment,
-  isImageAttachment,
-  type MessageWithAttachment,
-} from '../attachment-utils';
+import { getAttachments, isImageAttachment, type MessageWithAttachment } from '../attachment-utils';
 
 const assert = ({ given, should, actual, expected }: {
   given: string; should: string; actual: unknown; expected: unknown;
@@ -113,13 +108,13 @@ describe('getAttachments', () => {
   });
 });
 
-describe('hasAnyAttachment', () => {
+describe('getAttachments as a render predicate', () => {
   it.each([
-    ['a modern message with rows', { attachments: [{ fileId: 'f-1', attachmentMeta: meta('a.png') }] }, true],
-    ['a legacy message', { fileId: 'f-1', attachmentMeta: meta('a.png') }, true],
-    ['a text-only message', { fileId: null, attachmentMeta: null }, false],
-    ['a message whose only file was deleted', { attachments: [{ fileId: null, attachmentMeta: meta('x.png') }] }, false],
-  ])('reads %s correctly', (_label, message, expected) => {
-    expect(hasAnyAttachment(message as MessageWithAttachment)).toBe(expected);
+    ['a modern message with rows', { attachments: [{ fileId: 'f-1', attachmentMeta: meta('a.png') }] }, 1],
+    ['a legacy message', { fileId: 'f-1', attachmentMeta: meta('a.png') }, 1],
+    ['a text-only message', { fileId: null, attachmentMeta: null }, 0],
+    ['a message whose only file was deleted', { attachments: [{ fileId: null, attachmentMeta: meta('x.png') }] }, 0],
+  ])('reports the right tile count for %s', (_label, message, expected) => {
+    expect(getAttachments(message as MessageWithAttachment).length).toBe(expected);
   });
 });
