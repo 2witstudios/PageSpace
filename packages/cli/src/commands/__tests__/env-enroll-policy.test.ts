@@ -124,14 +124,27 @@ describe('pagespace env enroll — scaffolds the policy with the OWNER as its on
     expect(c.err.text()).toMatch(/owner/i);
   });
 
-  it('given the policy write fails, should still report the enrollment as done (the key is pinned) and print the failure — never the key', async () => {
+  it("given enrol runs from '/' (a root the strict parser rejects), should write NOTHING, exit non-zero from the scaffold step, and say the enrollment succeeded, exactly why no policy was written, and what to write (Codex P2)", async () => {
+    const d = deps({ cwd: () => '/' });
+    const c = ctx();
+    expect(await enroll(d, c)).not.toBe(EXIT_SUCCESS);
+    expect(d.writes).toHaveLength(0);
+    expect(c.out.text()).toContain('Enrolled this machine as environment env_1');
+    const err = c.err.text();
+    expect(err).toMatch(/filesystem root/i);
+    expect(err).toContain(`${HOME}/.pagespace/env-policy.json`);
+    expect(err).toContain('"roots"');
+    expect(err).toContain(OWNER);
+  });
+
+  it('given the policy write fails, should still report the enrollment as done (the key is pinned), print the failure — never the key — and exit non-zero for the scaffold step', async () => {
     const d = deps({
       writePolicyFile: async () => {
         throw new Error('EROFS');
       },
     });
     const c = ctx();
-    expect(await enroll(d, c)).toBe(EXIT_SUCCESS);
+    expect(await enroll(d, c)).not.toBe(EXIT_SUCCESS);
     expect(c.err.text()).toContain('EROFS');
     expect(c.out.text()).toContain('Enrolled this machine as environment env_1');
     expect(`${c.out.text()}${c.err.text()}`).not.toContain('PRIV');

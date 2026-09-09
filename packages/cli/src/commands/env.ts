@@ -89,8 +89,25 @@ async function scaffoldPolicyForOwner(deps: EnvEnrollHandlerDeps, env: Readonly<
         : null;
     return { path, scaffolded: false, kept: true, warning, error: null };
   }
+  // Never guess a root for someone's machine (Codex P2 on #2582): the scaffold
+  // must be a policy `connect` will accept, so it is parsed with the same
+  // strict parser before it is written. The filesystem root, a relative
+  // directory, or one with `..` are all refused — and refused OUT LOUD.
+  const root = deps.cwd();
+  const content = scaffoldedPolicy({ ownerId, root });
+  if (parseMachinePolicyText(content) === null) {
+    return {
+      path,
+      scaffolded: false,
+      kept: false,
+      warning: null,
+      error:
+        `the directory you ran enroll in (${root}) is not a valid root — a root must be an absolute directory other than the filesystem root, without ".." segments — so nothing was written. ` +
+        `Create ${path} yourself (chmod 600) with "principals": ["${ownerId}"] and "roots": ["<an absolute project directory>"], then run "pagespace env policy" to check it`,
+    };
+  }
   try {
-    await deps.writePolicyFile(path, scaffoldedPolicy({ ownerId, root: deps.cwd() }));
+    await deps.writePolicyFile(path, content);
     return { path, scaffolded: true, kept: false, warning: null, error: null };
   } catch (error) {
     return { path, scaffolded: false, kept: false, warning: null, error: messageOf(error) };
@@ -202,7 +219,12 @@ export function createEnvEnrollHandler(deps: EnvEnrollHandlerDeps): CommandHandl
     }
     if (ownerId === null) ctx.stderr.write('The server did not say who the owner of this environment is, so no policy was scaffolded; create ~/.pagespace/env-policy.json yourself with "principals": [<your user id>].\n');
     if (policy?.warning) ctx.stderr.write(`${policy.warning}\n`);
-    if (policy?.error) ctx.stderr.write(`Enrolled, but the starter policy could not be written to ${policy.path}: ${policy.error}. Create it yourself with "principals": ["${ownerId}"].\n`);
+    if (policy?.error) {
+      // The enrollment stands (the key is pinned); the SCAFFOLD step failed,
+      // and a step that failed exits non-zero so a script notices.
+      ctx.stderr.write(`Enrolled, but no starter policy was written to ${policy.path}: ${policy.error}.\n`);
+      return EXIT_RUNTIME_ERROR;
+    }
     return EXIT_SUCCESS;
   };
 }
