@@ -156,10 +156,13 @@ const conversationsState = vi.hoisted(() => ({
   // hook fires it when the deleted id is the current conversation; this mock
   // stands in for the hook's own logic, not the callback wiring under test.
   lastOnConversationDelete: null as ((conversationId: string) => void) | null,
+  /** Whether the page asked the hook to actually FETCH on the latest render. */
+  lastEnabled: null as boolean | null,
 }));
 vi.mock('@/lib/ai/shared/hooks/useConversations', () => ({
-  useConversations: (opts: { onConversationDelete?: (conversationId: string) => void }) => {
+  useConversations: (opts: { onConversationDelete?: (conversationId: string) => void; enabled?: boolean }) => {
     conversationsState.lastOnConversationDelete = opts.onConversationDelete ?? null;
+    conversationsState.lastEnabled = opts.enabled ?? null;
     return conversationsState.current;
   },
 }));
@@ -260,6 +263,7 @@ beforeEach(() => {
     refreshConversations: vi.fn(),
   };
   conversationsState.lastOnConversationDelete = null;
+  conversationsState.lastEnabled = null;
   agentPanesState.lastOnConversationClosed = null;
   agentPanesState.firstOnConversationClosed = null;
   __resetWorkspaceQueuesForTests();
@@ -706,6 +710,30 @@ describe('AgentPageView', () => {
     // it would state the OPPOSITE of what ships, since every page-hosted pane
     // renders that link from its own bar. See AgentPanes' suite for the real
     // assertion.
+  });
+
+  it('does not fetch the agent history for a session-bound conversation — nothing there reads it', async () => {
+    // `activeTab` is the SESSION-LESS branch's state. The grid keeps it on
+    // 'chat' forever, so the old `enabled: history || chat` meant every
+    // session-bound page load pulled the agent's whole conversation list for a
+    // branch that renders no History and cannot reach `handleSelectConversation`.
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+    expect(conversationsState.lastEnabled).toBe(false);
+  });
+
+  it('fetches the agent history exactly when the session-less History tab shows it', async () => {
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await screen.findByTestId('pane-bar');
+    expect(conversationsState.lastEnabled).toBe(false);
+
+    await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+    await screen.findByTestId('history-tab');
+    expect(conversationsState.lastEnabled).toBe(true);
   });
 
   it('the webhooks entry point is no longer page chrome — it moved into Settings', async () => {
