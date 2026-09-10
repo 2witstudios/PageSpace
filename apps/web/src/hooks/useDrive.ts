@@ -19,7 +19,13 @@ interface DriveState {
 
 const CACHE_DURATION = 5 * 60 * 1000;
 
-/** Shape of the drives request currently in flight, so a narrower one can wait for it. */
+/**
+ * The drives request in flight, if any, and its shape. Several controls ask
+ * on the same mount; a narrower ask awaits this one instead of starting
+ * another, so `await fetchDrives()` never resolves before the store has
+ * drives (the voice trigger reads the store right after awaiting).
+ */
+let inFlight: Promise<void> | null = null;
 let inFlightIncludesTrash = false; // 5 minutes
 
 export const useDriveStore = create<DriveState>()(
@@ -40,24 +46,31 @@ export const useDriveStore = create<DriveState>()(
         // Several controls ask on the same mount (sidebar, crumb, a page's
         // focus line); one request serves them all — unless the new ask is
         // broader (trash included) than the one in flight.
-        if (!forceRefresh && state.isLoading && (inFlightIncludesTrash || !includeTrash)) {
-          return;
+        if (!forceRefresh && inFlight && (inFlightIncludesTrash || !includeTrash)) {
+          return inFlight;
         }
         inFlightIncludesTrash = includeTrash;
-        
+
         set({ isLoading: true });
-        try {
-          const url = includeTrash ? '/api/drives?includeTrash=true' : '/api/drives';
-          const response = await fetchWithAuth(url);
-          if (!response.ok) {
-            throw new Error('Failed to fetch drives');
+        inFlight = (async () => {
+          try {
+            const url = includeTrash ? '/api/drives?includeTrash=true' : '/api/drives';
+            const response = await fetchWithAuth(url);
+            if (!response.ok) {
+              throw new Error('Failed to fetch drives');
+            }
+            const drives = await response.json();
+            set({ drives, isLoading: false, lastFetched: now });
+          } catch (error) {
+            console.error(error);
+            set({ isLoading: false });
           }
-          const drives = await response.json();
-          set({ drives, isLoading: false, lastFetched: now });
-        } catch (error) {
-          console.error(error);
-          set({ isLoading: false });
-        }
+        })();
+        const request = inFlight;
+        void request.finally(() => {
+          if (inFlight === request) inFlight = null;
+        });
+        return request;
       },
       addDrive: (drive: Drive) => set((state) => ({
         drives: [...state.drives, drive],

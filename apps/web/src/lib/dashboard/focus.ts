@@ -1,6 +1,7 @@
 'use client';
 
-import { useParams } from 'next/navigation';
+import { useEffect } from 'react';
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 /**
  * The drive focus of a dashboard route.
@@ -105,6 +106,22 @@ export function legacyFocusHref(pathname: string | null | undefined, searchParam
   const query = rest.toString();
   const href = focusSectionHref(driveFocus(driveId), sectionForPathname(pathname));
   return query ? `${href}?${query}` : href;
+}
+
+/**
+ * Sends a pre-focus `?driveId=` bookmark to its drive route. Returns the
+ * destination while the redirect is pending, so a page can render nothing
+ * (and fetch nothing) on its way out; null when there is nothing to do.
+ */
+export function useLegacyFocusRedirect(enabled = true): string | null {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const href = enabled ? legacyFocusHref(pathname, searchParams) : null;
+  useEffect(() => {
+    if (href) router.replace(href);
+  }, [href, router]);
+  return href;
 }
 
 /**

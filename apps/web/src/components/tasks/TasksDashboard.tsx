@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { formatDistanceToNow } from 'date-fns';
 import {
   RefreshCw,
@@ -58,7 +58,7 @@ import type { Task, TaskFilters, Pagination, StatusConfigsByTaskList } from './t
 import { getStatusDisplay } from './task-helpers';
 import { FocusTrigger } from '@/components/shared/FocusTrigger';
 import { useDriveStore } from '@/hooks/useDrive';
-import { legacyFocusHref } from '@/lib/dashboard/focus';
+import { ALL_DRIVES, driveFocus, focusSectionHref, useLegacyFocusRedirect } from '@/lib/dashboard/focus';
 import { FilterControls } from './FilterControls';
 import { TaskCompactRow } from './TaskCompactRow';
 import { TaskDetailSheet } from './TaskDetailSheet';
@@ -84,7 +84,6 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
   const isLocked = !!propDriveId;
   const router = useRouter();
   const searchParams = useSearchParams();
-  const pathname = usePathname();
 
   // State
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -124,12 +123,7 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
   // A bookmarked `/dashboard/tasks?driveId=…` from when the drive was a filter
   // means the same thing the drive route now means. Known before any fetch
   // effect below, so the page never asks for the all-drives list on its way out.
-  const legacyHref = !isLocked ? legacyFocusHref(pathname, searchParams) : null;
-  useEffect(() => {
-    if (legacyHref) {
-      router.replace(legacyHref);
-    }
-  }, [legacyHref, router]);
+  const legacyHref = useLegacyFocusRedirect(!isLocked);
 
   // Drive names come from the store the switcher and subtitle already read,
   // so a row's "Drive › List" can never disagree with the focus line.
@@ -175,7 +169,7 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
       params.set('statusGroup', newFilters.statusGroup);
     }
     const queryString = params.toString();
-    const basePath = propDriveId ? `/dashboard/${propDriveId}/tasks` : '/dashboard/tasks';
+    const basePath = focusSectionHref(propDriveId ? driveFocus(propDriveId) : ALL_DRIVES, 'tasks');
     const newUrl = queryString ? `${basePath}?${queryString}` : basePath;
 
     router.replace(newUrl, { scroll: false });

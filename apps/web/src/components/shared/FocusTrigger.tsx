@@ -10,10 +10,20 @@ import { cn } from '@/lib/utils';
 
 const ALL_DRIVES_LABEL = 'All drives';
 
+/**
+ * How a focus is named and drawn, shared by every control that shows one
+ * (this trigger, the sidebar's switcher), so they can never drift apart.
+ * The name is allowed to be missing: a drive the store has not loaded is
+ * still the focus, and reads as "This drive" rather than as All drives.
+ */
+export function focusPresentation(focus: Focus, driveName: string | undefined) {
+  return focus.kind === 'all'
+    ? { label: ALL_DRIVES_LABEL, Icon: Layers }
+    : { label: driveName ?? 'This drive', Icon: Folder };
+}
+
 interface FocusTriggerProps {
   section: FocusSection;
-  /** The route's focus by default; an override is for rendering outside a route. */
-  focus?: Focus;
   /**
    * `text`: a subtitle-sized label with a chevron — what a page's own
    * "in this drive" line becomes once it can be pressed.
@@ -34,9 +44,8 @@ interface FocusTriggerProps {
  * The drive name comes from the store and is allowed to be missing: the
  * trigger must be pressable before drives have loaded.
  */
-export function FocusTrigger({ section, focus: focusOverride, variant = 'text', size = 'md', className }: FocusTriggerProps) {
-  const routeFocus = useFocus();
-  const focus = focusOverride ?? routeFocus;
+export function FocusTrigger({ section, variant = 'text', size = 'md', className }: FocusTriggerProps) {
+  const focus = useFocus();
   const [open, setOpen] = useState(false);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
   // On a phone the sidebar (and its switcher, which loads drives) lives in a
@@ -51,8 +60,7 @@ export function FocusTrigger({ section, focus: focusOverride, variant = 'text', 
   );
 
   const isAll = focus.kind === 'all';
-  const label = isAll ? ALL_DRIVES_LABEL : (driveName ?? 'This drive');
-  const Icon = isAll ? Layers : Folder;
+  const { label, Icon } = focusPresentation(focus, driveName);
   const description = isAll
     ? `Viewing ${section} across all drives. Change focus.`
     : `Viewing ${section} in ${label}. Change focus.`;

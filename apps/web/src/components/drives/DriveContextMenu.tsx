@@ -17,6 +17,7 @@ import { useDriveStore, type Drive } from "@/hooks/useDrive";
 import { patch, del } from "@/lib/auth/auth-fetch";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { driveFocus, focusSectionHref } from "@/lib/dashboard/focus";
 
 interface DriveContextMenuProps {
   drive: Drive;
@@ -34,7 +35,7 @@ export function DriveContextMenu({ drive, children }: DriveContextMenuProps) {
 
   const handleOpen = () => {
     // Match the card click: from the Files surface a drive opens on its files.
-    router.push(`/dashboard/${drive.id}/files`);
+    router.push(focusSectionHref(driveFocus(drive.id), "files"));
   };
 
   const handleRename = async (newName: string) => {

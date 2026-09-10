@@ -259,6 +259,17 @@ describe('DriveSwitcherDialog', () => {
       expect(push).not.toHaveBeenCalledWith('/dashboard');
     });
 
+    it('given a query nothing matches, Enter should do nothing rather than leave the drive', async () => {
+      const { onOpenChange } = renderPicker();
+
+      await userEvent.type(screen.getByPlaceholderText('Search drives…'), 'zzz');
+      expect(screen.queryByRole('option')).not.toBeInTheDocument();
+      await userEvent.keyboard('{Enter}');
+
+      expect(push).not.toHaveBeenCalled();
+      expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    });
+
     it('given the focus you are already in, should close without navigating', async () => {
       pathname = '/dashboard/dms/thread_1';
       params = {};

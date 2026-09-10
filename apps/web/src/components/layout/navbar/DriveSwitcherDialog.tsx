@@ -229,7 +229,9 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
           </CommandGroup>
         )}
 
-        {isSearching && allDrivesRow}
+        {/* Not when nothing matched: alone it would be highlighted, and Enter on a typo must not leave the drive. */}
+
+        {isSearching && allDrives.length > 0 && allDrivesRow}
       </CommandList>
 
       {/* Keyboard hints for a keyboard: gone on touch, where there is none to hint at. */}

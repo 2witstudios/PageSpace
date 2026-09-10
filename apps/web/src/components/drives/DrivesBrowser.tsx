@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FocusTrigger } from "@/components/shared/FocusTrigger";
+import { driveFocus, focusSectionHref } from "@/lib/dashboard/focus";
 import {
   Table,
   TableBody,
@@ -149,7 +150,7 @@ export default function DrivesBrowser() {
     );
     // This browser is the Files surface, so opening a drive lands in its
     // file browser rather than on the drive home.
-    router.push(`/dashboard/${drive.id}/files`);
+    router.push(focusSectionHref(driveFocus(drive.id), "files"));
   };
 
   if (isLoading && drives.length === 0) {

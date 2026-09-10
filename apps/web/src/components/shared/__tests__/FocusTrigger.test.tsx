@@ -3,6 +3,14 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Drive } from '@pagespace/lib/types';
 
+let params: { driveId?: string } = {};
+vi.mock('next/navigation', () => ({
+  useParams: () => params,
+  usePathname: () => '/dashboard',
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}));
+
 const dialogSpy = vi.fn();
 vi.mock('@/components/layout/navbar/DriveSwitcherDialog', () => ({
   default: ({ open }: { open: boolean }) => {
@@ -12,7 +20,6 @@ vi.mock('@/components/layout/navbar/DriveSwitcherDialog', () => ({
 }));
 
 import { FocusTrigger } from '../FocusTrigger';
-import { ALL_DRIVES, driveFocus } from '@/lib/dashboard/focus';
 import { useDriveStore } from '@/hooks/useDrive';
 
 const buildDrive = (overrides: Partial<Drive> = {}): Drive => ({
@@ -31,11 +38,12 @@ const buildDrive = (overrides: Partial<Drive> = {}): Drive => ({
 describe('FocusTrigger', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    params = {};
     useDriveStore.setState({ drives: [], currentDriveId: null, isLoading: false, lastFetched: Date.now() });
   });
 
   it('given All drives, should say so and describe the section in its accessible name', () => {
-    render(<FocusTrigger section="tasks" focus={ALL_DRIVES} />);
+    render(<FocusTrigger section="tasks" />);
 
     const trigger = screen.getByRole('button', { name: 'Viewing tasks across all drives. Change focus.' });
     expect(trigger).toHaveTextContent('All drives');
@@ -45,7 +53,9 @@ describe('FocusTrigger', () => {
   it('given a drive the store knows, should name it', () => {
     useDriveStore.setState({ drives: [buildDrive()] });
 
-    render(<FocusTrigger section="files" focus={driveFocus('drive_eng')} />);
+    params = { driveId: 'drive_eng' };
+
+    render(<FocusTrigger section="files" />);
 
     expect(screen.getByRole('button', { name: 'Viewing files in Engineering. Change focus.' })).toHaveTextContent(
       'Engineering'
@@ -53,7 +63,8 @@ describe('FocusTrigger', () => {
   });
 
   it('given a drive the store has not loaded, should still be pressable', async () => {
-    render(<FocusTrigger section="channels" focus={driveFocus('drive_missing')} />);
+    params = { driveId: 'drive_missing' };
+    render(<FocusTrigger section="channels" />);
 
     const trigger = screen.getByRole('button', { name: /This drive/ });
     await userEvent.click(trigger);
@@ -63,7 +74,7 @@ describe('FocusTrigger', () => {
   });
 
   it('given a coarse pointer, the text variant should grow its hit area with padding, not height', () => {
-    render(<FocusTrigger section="tasks" focus={ALL_DRIVES} />);
+    render(<FocusTrigger section="tasks" />);
 
     const cls = screen.getByRole('button').className;
     expect(cls).toMatch(/pointer-coarse:py-2/);
@@ -74,12 +85,14 @@ describe('FocusTrigger', () => {
   it('given the compact variant, should be icon-only at the size of its row and keep the words in its name', () => {
     useDriveStore.setState({ drives: [buildDrive()] });
 
-    const { rerender } = render(<FocusTrigger section="calendar" focus={driveFocus('drive_eng')} variant="compact" size="sm" />);
+    params = { driveId: 'drive_eng' };
+
+    const { rerender } = render(<FocusTrigger section="calendar" variant="compact" size="sm" />);
     const small = screen.getByRole('button', { name: 'Viewing calendar in Engineering. Change focus.' });
     expect(small).not.toHaveTextContent('Engineering');
     expect(small.className).toMatch(/h-8 w-8/);
 
-    rerender(<FocusTrigger section="calendar" focus={driveFocus('drive_eng')} variant="compact" size="md" />);
+    rerender(<FocusTrigger section="calendar" variant="compact" size="md" />);
     expect(screen.getByRole('button').className).toMatch(/h-9 w-9/);
   });
 });
