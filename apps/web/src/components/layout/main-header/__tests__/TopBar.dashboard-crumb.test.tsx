@@ -44,10 +44,10 @@ const renderTopBar = () =>
   );
 
 describe('TopBar — the way back to the dashboard', () => {
-  it('given the header renders, should say the word "Dashboard" on screen', () => {
+  it('given the header renders, should say the word "Home" on screen', () => {
     renderTopBar();
 
-    expect(screen.getByText('Dashboard')).toBeInTheDocument();
+    expect(screen.getByText('Home')).toBeInTheDocument();
   });
 
   it('given a labelled control in the left group, should let that group wrap rather than overflow its neighbours', () => {
@@ -59,7 +59,7 @@ describe('TopBar — the way back to the dashboard', () => {
     // this survives reordering.
     renderTopBar();
 
-    let group: HTMLElement | null = screen.getByText('Dashboard');
+    let group: HTMLElement | null = screen.getByText('Home');
     while (group && !/\bflex-1\b/.test(group.className)) {
       group = group.parentElement;
     }
@@ -68,17 +68,27 @@ describe('TopBar — the way back to the dashboard', () => {
     expect(group?.className).toMatch(/\bflex-wrap\b/);
   });
 
-  it('given a phone-width header, should give up Recents before it gives up the word', () => {
-    // At 390px the right-hand group is five icon controls and the left group
-    // gets what is left. Recents is the one that goes: the left sheet lists
-    // them anyway, and Dashboard's word is the fix for the reported bug.
-    // jsdom applies no media queries, so this pins the mechanism.
+  it('given a phone-width header, should keep Recents: below lg the sidebar is a sheet, so this is the only quick navigation', () => {
+    // jsdom applies no media queries, so this pins the mechanism: the ONLY
+    // gate on the recents trigger is lg, where the sidebar becomes a panel.
     renderTopBar();
 
     const recents = screen.getByTestId('recents');
-    expect(recents.className).toMatch(/\bhidden\b/);
-    expect(recents.className).toMatch(/\bsm:flex\b/);
-    expect(recents.className).toMatch(/\blg:hidden\b/);
+    expect(recents.className.split(/\s+/).filter(Boolean)).toEqual(['lg:hidden']);
+  });
+
+  it('given a phone-width header, should keep the search trigger with the other actions, not trailing Home', () => {
+    // Left is navigation, right is actions. The search trigger in the left
+    // group is what pushed the left group to three rows on a phone; walking
+    // up from it must never reach the flex-1 navigation group.
+    renderTopBar();
+
+    let node: HTMLElement | null = screen.getByRole('button', { name: 'Open search' });
+    while (node && !/\bflex-1\b/.test(node.className)) {
+      node = node.parentElement;
+    }
+
+    expect(node).toBeNull();
   });
 
   it('given the header renders, should not fall back to a lone slash as the route home', () => {

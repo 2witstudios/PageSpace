@@ -82,7 +82,10 @@ export default function DrivePickerDialog({ open, onOpenChange }: DrivePickerDia
         onOpenChange={(next) => (next ? onOpenChange(true) : close())}
         title="Switch drive"
         description="Search your drives and open one"
-        className="sm:max-w-xl"
+        // Phone: top-anchored with 12px margins instead of centred, so the
+        // keyboard never covers the input; the dialog becomes a column whose
+        // list takes whatever height is left. sm+: the usual centred 576px.
+        className="max-sm:top-3 max-sm:flex max-sm:max-h-[calc(100dvh-1.5rem)] max-sm:max-w-[calc(100%-1.5rem)] max-sm:translate-y-0 max-sm:flex-col sm:max-w-xl"
         showCloseButton
       >
         <CommandInput placeholder="Search drives…" value={query} onValueChange={setQuery} />
@@ -117,7 +120,7 @@ export default function DrivePickerDialog({ open, onOpenChange }: DrivePickerDia
           </button>
         </div>
 
-        <CommandList className="max-h-[60vh]">
+        <CommandList className="max-h-[60vh] max-sm:min-h-0 max-sm:flex-1 max-sm:max-h-none">
           <CommandEmpty>{isSearching ? "No drives match." : "No drives yet."}</CommandEmpty>
 
           {favoriteDrives.length > 0 && (
@@ -139,9 +142,10 @@ export default function DrivePickerDialog({ open, onOpenChange }: DrivePickerDia
           )}
         </CommandList>
 
+        {/* Keyboard hints for a keyboard: gone on touch, where there is none to hint at. */}
         <div
           aria-hidden="true"
-          className="flex h-9 items-center gap-4 border-t border-border px-3.5 text-xs text-muted-foreground"
+          className="flex h-9 items-center gap-4 border-t border-border px-3.5 text-xs text-muted-foreground pointer-coarse:hidden"
         >
           <span>
             <Kbd>↑</Kbd>

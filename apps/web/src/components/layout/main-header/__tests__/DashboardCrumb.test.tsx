@@ -44,12 +44,12 @@ describe('DashboardCrumb', () => {
   });
 
   describe('on the dashboard itself', () => {
-    it('given the dashboard route, should name the dashboard as the current page rather than link to it', () => {
+    it('given the dashboard route, should name Home as the current page rather than link to it', () => {
       atRoute('/dashboard');
 
       render(<DashboardCrumb />);
 
-      const marker = screen.getByText('Dashboard');
+      const marker = screen.getByText('Home');
       expect(marker).toHaveAttribute('aria-current', 'page');
       expect(screen.queryByRole('link')).not.toBeInTheDocument();
     });
@@ -61,7 +61,7 @@ describe('DashboardCrumb', () => {
 
       render(<DashboardCrumb />);
 
-      expect(screen.getByRole('link', { name: 'Dashboard' })).toHaveAttribute('href', '/dashboard');
+      expect(screen.getByRole('link', { name: 'Home' })).toHaveAttribute('href', '/dashboard');
     });
 
     it('given a loaded drive, should name the drive you are standing in', () => {
@@ -78,7 +78,7 @@ describe('DashboardCrumb', () => {
 
       render(<DashboardCrumb />);
 
-      expect(screen.getByRole('link', { name: 'Dashboard' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument();
       expect(screen.queryByText('Engineering')).not.toBeInTheDocument();
     });
 
@@ -136,7 +136,7 @@ describe('DashboardCrumb', () => {
 
       render(<DashboardCrumb />);
 
-      const link = screen.getByRole('link', { name: 'Dashboard' });
+      const link = screen.getByRole('link', { name: 'Home' });
       expect(link).toHaveAttribute('href', '/dashboard');
       expect(link).not.toHaveAttribute('aria-current');
     });
@@ -158,7 +158,7 @@ describe('DashboardCrumb', () => {
       expect(crumb.className).toMatch(/\bhidden\b/);
       expect(crumb.className).toMatch(/\blg:inline-flex\b/);
 
-      const label = screen.getByRole('link', { name: 'Dashboard' });
+      const label = screen.getByRole('link', { name: 'Home' });
       expect(label.className).not.toMatch(/\bhidden\b/);
     });
 
@@ -171,37 +171,48 @@ describe('DashboardCrumb', () => {
     it('given the dashboard route, should gate the you-are-here marker while the link variant never hides', () => {
       atRoute('/dashboard');
       const { unmount } = render(<DashboardCrumb />);
-      expect(screen.getByText('Dashboard').className).toMatch(/\bhidden\b/);
+      expect(screen.getByText('Home').className).toMatch(/\bhidden\b/);
       unmount();
 
       atRoute('/dashboard/drive_eng', { driveId: 'drive_eng' });
       render(<DashboardCrumb />);
-      expect(screen.getByRole('link', { name: 'Dashboard' }).className).not.toMatch(/\bhidden\b/);
+      expect(screen.getByRole('link', { name: 'Home' }).className).not.toMatch(/\bhidden\b/);
     });
   });
 
   describe('fits the navbar', () => {
-    // Every other control in this header is a ghost button. The outlined card
-    // this replaced was the one bordered thing in the row, and it was the
-    // thing users called out. Asserting the absence keeps the border from
-    // creeping back in a "make it more visible" pass.
-    it('given the link variant, should be a ghost control with no border or card background', () => {
+    // Home is the ONE outlined control in the row — the outline is what says
+    // "destination" next to a row of ghost icons — and it stands at the icon
+    // buttons' own height so it lines up with them instead of floating.
+    it('given the link variant, should be the outlined control at icon-button height', () => {
       atRoute('/dashboard/drive_eng', { driveId: 'drive_eng' });
 
       render(<DashboardCrumb />);
 
-      const link = screen.getByRole('link', { name: 'Dashboard' });
-      expect(link.className).not.toMatch(/\bborder\b/);
-      expect(link.className).not.toMatch(/\bbg-card\b/);
-      expect(link.className).toMatch(/\bhover:bg-accent\b/);
+      const link = screen.getByRole('link', { name: 'Home' });
+      expect(link.className).toMatch(/\bborder\b/);
+      expect(link.className).toMatch(/\bh-9\b/);
     });
 
-    it('given the dashboard route, should render the marker as plain text rather than a tinted pill', () => {
+    it('given a loaded drive, should keep the drive crumb a ghost so only the destination is outlined', () => {
+      atRoute('/dashboard/drive_eng', { driveId: 'drive_eng' });
+      useDriveStore.setState({ drives: [buildDrive()] });
+
+      render(<DashboardCrumb />);
+
+      const crumb = screen.getByRole('button', { name: /Engineering/ });
+      expect(crumb.className).not.toMatch(/\bborder\b/);
+      expect(crumb.className).toMatch(/\bhover:bg-accent\b/);
+    });
+
+    it('given the dashboard route, should render the marker muted and unpilled: the box stays, the button-ness goes', () => {
       atRoute('/dashboard');
 
       render(<DashboardCrumb />);
 
-      expect(screen.getByText('Dashboard').className).not.toMatch(/\bbg-primary-soft\b/);
+      const marker = screen.getByText('Home');
+      expect(marker.className).not.toMatch(/\bbg-primary-soft\b/);
+      expect(marker.className).toMatch(/\btext-muted-foreground\b/);
     });
   });
 
@@ -211,7 +222,7 @@ describe('DashboardCrumb', () => {
 
       render(<DashboardCrumb />);
 
-      expect(screen.getByRole('link', { name: 'Dashboard' })).not.toHaveAttribute('aria-label');
+      expect(screen.getByRole('link', { name: 'Home' })).not.toHaveAttribute('aria-label');
     });
   });
 });

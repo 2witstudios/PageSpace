@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
-import { ChevronsUpDown, Folder, LayoutGrid } from "lucide-react";
+import { ChevronsUpDown, Folder, Home } from "lucide-react";
 
 import DrivePickerDialog from "@/components/layout/navbar/DrivePickerDialog";
 import { useDriveStore } from "@/hooks/useDrive";
@@ -11,24 +11,27 @@ import { useDriveStore } from "@/hooks/useDrive";
 const DASHBOARD_PATH = "/dashboard";
 
 /**
- * Ghost, like every other control in this header: `Button` variant="ghost"
- * size="sm" without the component, because one of the two renderings is a
- * Link. The bordered card it replaced was the only outlined thing in the row.
+ * Home is the ONE outlined control in the header, at icon-button height
+ * (h-9, matching `Button size="icon"`), with the house at the icons' own
+ * 20px so it does not read as a smaller, dimmer cousin of its neighbours.
+ * The outline is the tell that this is the destination; the drive crumb
+ * beside it stays a ghost because it is context.
  */
-const GHOST_CLASS =
-  "inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-sm font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
+const HOME_CLASS =
+  "inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 pl-2 text-sm font-medium";
+
+const DRIVE_CRUMB_CLASS =
+  "hidden h-8 min-w-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-sm font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 lg:inline-flex";
 
 /**
- * The header's route back to the dashboard, and the only place the header
- * says where you currently are.
+ * The header's route home, and the only place the header says where you
+ * currently are.
  *
- * What this replaced was a house glyph followed by a bare "/". The word
- * "Dashboard" lived only in that link's aria-label, so the people who were
- * lost were exactly the ones who could not read it — and the house already
- * means "this drive's home page" one surface over, where PrimaryNavigation
- * labels the same slot "Drive Home" whenever a drive is open. LayoutGrid is
- * the dashboard's own glyph here, on the link and on the marker alike, so
- * the same shape means the same place whether you are on it or heading to it.
+ * "Home", not "Dashboard": the dashboard is becoming the home drive, and a
+ * four-letter word is what lets this control keep its word on a 375px phone
+ * with every other control still in the row. The house glyph that #2592
+ * removed comes back with it — the old objection (the sidebar's "Drive Home"
+ * uses a house too) dissolves once the dashboard IS home.
  *
  * The shape follows the route rather than the drive id, because "is a drive
  * open" and "am I on the dashboard" are different questions: /dashboard/dms
@@ -52,16 +55,17 @@ export default function DashboardCrumb() {
 
   if (pathname === DASHBOARD_PATH) {
     // Hidden below lg, unlike the link. This variant is orientation only —
-    // there is nowhere for it to go — so it is a part of this control that can
-    // yield header space without withholding the answer the control exists to
-    // give. The link variant, which IS the way out, never hides.
+    // there is nowhere for it to go — so it can yield header space without
+    // withholding the answer the control exists to give. It keeps the box so
+    // the slot holds its shape, but the border drops to the separator colour
+    // and the text goes muted: visibly not a button.
     return (
       <span
         aria-current="page"
-        className="hidden h-8 shrink-0 items-center gap-1.5 px-2 text-sm font-medium text-foreground lg:flex"
+        className={`${HOME_CLASS} hidden border-[var(--separator)] text-muted-foreground lg:inline-flex`}
       >
-        <LayoutGrid className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-        Dashboard
+        <Home className="h-5 w-5" aria-hidden="true" />
+        Home
       </span>
     );
   }
@@ -72,9 +76,12 @@ export default function DashboardCrumb() {
         No aria-label: the visible text is the accessible name, and an
         aria-label would silently override the thing we just made visible.
       */}
-      <Link href={DASHBOARD_PATH} className={GHOST_CLASS}>
-        <LayoutGrid className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-        Dashboard
+      <Link
+        href={DASHBOARD_PATH}
+        className={`${HOME_CLASS} border-border bg-card text-foreground transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50`}
+      >
+        <Home className="h-5 w-5" aria-hidden="true" />
+        Home
       </Link>
 
       {/*
@@ -101,7 +108,7 @@ export default function DashboardCrumb() {
             onClick={() => setPickerOpen(true)}
             aria-haspopup="dialog"
             aria-expanded={pickerOpen}
-            className={`${GHOST_CLASS} hidden min-w-0 lg:inline-flex`}
+            className={DRIVE_CRUMB_CLASS}
           >
             <Folder className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             {/*

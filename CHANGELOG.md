@@ -434,21 +434,20 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
-- **The header now says "Dashboard" instead of showing a house and a slash, and the drive name
-  next to it opens a proper drive picker** — the way back out of a drive used to be a small house
-  icon followed by a `/`, and nothing on screen said where it went. That made it easy to miss
-  entirely, and easy to misread when you did notice it: drives have their own home page, and the
-  sidebar calls that "Drive Home", so a house in the header looked like it meant the drive you were
-  already in. It now reads **Dashboard** in words, with the dashboard's own grid icon, styled like
-  every other control in the header rather than as a bordered button. Inside a drive it is
-  followed by the name of the drive you are standing in, and that name is now a button: click it
-  and a drive picker opens — a wide, searchable dialog with your favourite drives, the ones you
-  opened most recently, and everything else, plus **All drives** and **Create drive** right under
-  the search box. It replaces the narrow dropdown the sidebar used to open for the same job, which
-  had to squeeze search, sections and actions into one thin scrolling column; the sidebar's drive
-  button now opens this same dialog. On the dashboard itself the word stops being a link, because
-  you are already there. On a phone the header fits on one row again: the "recents" clock is left
-  to the navigation sheet, and Dashboard keeps its word wherever it is a way out.
+- **The header now says "Home", and the drive name next to it opens a proper drive picker** —
+  the way back out of a drive used to be a small house icon followed by a `/`, and nothing on
+  screen said where it went, so it was easy to miss entirely. It now reads **Home** in words, next
+  to the house, as the one outlined button in the header so it is clearly the place to go. Inside a
+  drive it is followed by the name of the drive you are standing in, and that name is now a button:
+  click it and a drive picker opens — a wide, searchable dialog with your favourite drives, the
+  ones you opened most recently, and everything else, plus **All drives** and **Create drive**
+  right under the search box. It replaces the narrow dropdown the sidebar used to open for the
+  same job, which had to squeeze search, sections and actions into one thin scrolling column; the
+  sidebar's drive button now opens this same dialog, and on a phone the dialog sits at the top of
+  the screen so the keyboard never covers the search box. On the dashboard itself the word stops
+  being a button, because you are already there. On a phone the header fits on one row again with
+  every control still present, including recent pages: the search button moves in with the other
+  actions, and the spacing tightens a little below tablet width.
 
 - **Android app: first internal-testing version identity, and the Android/iOS shell configs are now
   checked in CI (still not distributed)** — the Android build now identifies itself as version 1.4
