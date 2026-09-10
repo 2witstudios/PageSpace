@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Grip, List, Plus } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
+import { DriveScopeSwitcher } from '@/components/shared/DriveScopeSwitcher';
 import { usePageTree } from '@/hooks/usePageTree';
 import { useDriveStore } from '@/hooks/useDrive';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
@@ -119,6 +120,7 @@ export function FilesFinderContent({ driveId, currentPageId }: FilesFinderConten
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            <DriveScopeSwitcher section="files" driveId={driveId} />
             <Button variant={viewMode === 'list' ? 'secondary' : 'ghost'} size="icon" onClick={() => setViewMode('list')}>
               <List className="h-4 w-4" />
             </Button>

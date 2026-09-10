@@ -7,6 +7,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Jump between a drive's channels, files, tasks or calendar and the all-drives version** — each
+  of those four views exists in two shapes: one drive, or everything you can see. The sidebar only
+  ever linked to whichever shape you were already in, so from inside a drive's task list there was
+  no way to reach "My Tasks" short of going back to the dashboard, and from the global calendar no
+  way into a particular drive's. Every one of these views now carries a scope control in its
+  header: it names where you are ("All drives" or the drive's name) and opens a list with the
+  all-drives view at the top and every drive below it. Files has no all-drives listing of its own,
+  so its "All drives" entry goes to the Drives browser, which gets the same control pointing back
+  into each drive's files.
 - **AI agents can format spreadsheets** — two new workspace tools, **Format Sheet** and
   **Conditional Formatting**, let an agent make a SHEET page presentable instead of leaving a grid
   of bare numbers. An agent declares what a table *is* (its range, header rows, which columns are

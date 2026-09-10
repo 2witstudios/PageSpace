@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } from 'react';
 import {
   format,
   addMonths,
@@ -62,6 +62,8 @@ interface MobileCalendarViewProps {
   currentDate?: Date;
   driveColorMap?: Map<string | null, EventColorConfig> | null;
   context?: 'user' | 'drive';
+  /** Header control for jumping between this drive's calendar and the global one. */
+  scopeSwitcher?: ReactNode;
   calendarEntries?: CalendarEntryForMobile[];
   onToggleCalendar?: (key: string) => void;
   onShowAllCalendars?: () => void;
@@ -79,6 +81,7 @@ export function MobileCalendarView({
   currentDate: parentDate,
   driveColorMap,
   context = 'drive',
+  scopeSwitcher,
   calendarEntries,
   onToggleCalendar,
   onShowAllCalendars,
@@ -349,6 +352,8 @@ export function MobileCalendarView({
           >
             <ListTodo className="h-4 w-4" />
           </Button>
+
+          {scopeSwitcher}
 
           {calendarEntries && onToggleCalendar && onShowAllCalendars && onHideAllCalendars && (
             <Sheet>

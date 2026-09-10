@@ -12,6 +12,7 @@ import {
   Star,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DriveScopeSwitcher } from "@/components/shared/DriveScopeSwitcher";
 import {
   Table,
   TableBody,
@@ -291,6 +292,7 @@ export default function DrivesBrowser() {
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold">Drives</h1>
           <div className="flex items-center gap-2">
+            <DriveScopeSwitcher section="files" />
             <Button
               variant={viewMode === "list" ? "secondary" : "ghost"}
               size="icon"

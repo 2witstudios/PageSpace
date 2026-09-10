@@ -6,6 +6,7 @@ import { format, addMonths, subMonths, addWeeks, subWeeks, addDays, subDays } fr
 import { Bot, ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, List, LayoutGrid, Clock, PanelLeft, User } from 'lucide-react';
 import useSWR from 'swr';
 import { Button } from '@/components/ui/button';
+import { DriveScopeSwitcher } from '@/components/shared/DriveScopeSwitcher';
 import { Toggle } from '@/components/ui/toggle';
 import {
   Select,
@@ -455,6 +456,13 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           currentDate={currentDate}
           driveColorMap={driveColorMap}
           context={context}
+          scopeSwitcher={
+            <DriveScopeSwitcher
+              section="calendar"
+              driveId={isUserContext ? undefined : driveId}
+              compact
+            />
+          }
           calendarEntries={isUserContext ? calendarEntries : undefined}
           onToggleCalendar={toggleCalendar}
           onShowAllCalendars={showAll}
@@ -510,6 +518,8 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
 
           {/* Title */}
           <h2 className="text-lg font-semibold">{getHeaderTitle()}</h2>
+
+          <DriveScopeSwitcher section="calendar" driveId={isUserContext ? undefined : driveId} />
         </div>
 
         <div className="flex items-center gap-2">

@@ -13,6 +13,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useInboxSocket } from '@/hooks/useInboxSocket';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { ThreadUnreadBadge } from '@/components/inbox/ThreadUnreadBadge';
+import { DriveScopeSwitcher } from '@/components/shared/DriveScopeSwitcher';
 import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
 
 const fetcher = async (url: string) => {
@@ -129,16 +130,19 @@ export default function ChannelsCenterList({ driveId }: ChannelsCenterListProps)
   return (
     <div className="h-full flex flex-col max-w-4xl mx-auto w-full">
       <div className="flex-shrink-0 px-4 pt-6 pb-4">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
-            <Hash className="h-5 w-5 text-primary" />
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="h-10 w-10 shrink-0 rounded-full bg-primary/10 flex items-center justify-center">
+              <Hash className="h-5 w-5 text-primary" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-xl font-semibold">Channels</h1>
+              <p className="text-sm text-muted-foreground truncate">
+                {driveId ? 'Channels in this drive' : 'Channels across your drives'}
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-xl font-semibold">Channels</h1>
-            <p className="text-sm text-muted-foreground">
-              {driveId ? 'Channels in this drive' : 'Channels across your drives'}
-            </p>
-          </div>
+          <DriveScopeSwitcher section="channels" driveId={driveId} />
         </div>
 
         <div className="relative">

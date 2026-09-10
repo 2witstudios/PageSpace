@@ -57,6 +57,7 @@ import {
 import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
 import type { Task, TaskFilters, Drive, Pagination, StatusConfigsByTaskList } from './types';
 import { getStatusDisplay } from './task-helpers';
+import { DriveScopeSwitcher } from '@/components/shared/DriveScopeSwitcher';
 import { FilterControls } from './FilterControls';
 import { TaskCompactRow } from './TaskCompactRow';
 import { TaskDetailSheet } from './TaskDetailSheet';
@@ -651,6 +652,11 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
                       <ArrowLeft className="h-4 w-4" />
                     </Button>
                     <h1 className="text-base font-semibold truncate flex-1">{title}</h1>
+                    <DriveScopeSwitcher
+                      section="tasks"
+                      driveId={isLocked ? selectedDriveId : undefined}
+                      compact
+                    />
                     <Button
                       variant="ghost"
                       size="icon"
@@ -783,6 +789,10 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
                       <p className="text-sm text-muted-foreground">{description}</p>
                     </div>
                     <div className="flex items-center gap-2">
+                      <DriveScopeSwitcher
+                        section="tasks"
+                        driveId={isLocked ? selectedDriveId : undefined}
+                      />
                       {/* View toggle */}
                       <div className="hidden md:flex items-center bg-muted rounded-md p-0.5">
                         <button
