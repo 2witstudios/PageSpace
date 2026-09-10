@@ -26,7 +26,9 @@ const CACHE_DURATION = 5 * 60 * 1000;
  * drives (the voice trigger reads the store right after awaiting).
  */
 let inFlight: Promise<void> | null = null;
-let inFlightIncludesTrash = false; // 5 minutes
+let inFlightIncludesTrash = false;
+/** Only the newest request may write: an older, narrower response must not overwrite a trash-inclusive one. */
+let latestRequestId = 0; // 5 minutes
 
 export const useDriveStore = create<DriveState>()(
   persist(
@@ -50,6 +52,7 @@ export const useDriveStore = create<DriveState>()(
           return inFlight;
         }
         inFlightIncludesTrash = includeTrash;
+        const requestId = ++latestRequestId;
 
         set({ isLoading: true });
         inFlight = (async () => {
@@ -60,10 +63,14 @@ export const useDriveStore = create<DriveState>()(
               throw new Error('Failed to fetch drives');
             }
             const drives = await response.json();
-            set({ drives, isLoading: false, lastFetched: now });
+            if (requestId === latestRequestId) {
+              set({ drives, isLoading: false, lastFetched: now });
+            }
           } catch (error) {
             console.error(error);
-            set({ isLoading: false });
+            if (requestId === latestRequestId) {
+              set({ isLoading: false });
+            }
           }
         })();
         const request = inFlight;
