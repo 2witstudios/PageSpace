@@ -32,6 +32,7 @@ import { generatePresignedUrl, getPresignedUrlTtl, toContentHash } from '@/lib/p
 import { isAllowedImageType } from '@/lib/validation/image-validation';
 import {
   buildRecentImageFileParts,
+  MAX_RECENT_IMAGE_ATTACHMENTS,
   MAX_RECENT_IMAGE_ATTACHMENT_SIZE_BYTES,
   type ImageFilePart,
   type RecentImageFileCandidate,
@@ -58,6 +59,12 @@ export interface RecentChannelMessage {
   aiMeta: ChannelMessageAiMeta | null;
   fileId: string | null;
   attachmentMeta: AttachmentMeta | null;
+  /** Present since messages gained real attachment rows; ordered by position. */
+  attachments?: Array<{
+    fileId: string | null;
+    attachmentMeta: AttachmentMeta | null;
+    position: number;
+  }>;
 }
 
 export interface TriggerMentionedAgentResponsesParams {
@@ -247,6 +254,9 @@ export async function fetchRecentChannelMessages(channelId: string): Promise<Rec
           name: true,
         },
       },
+      attachments: {
+        columns: { fileId: true, attachmentMeta: true, position: true },
+      },
     },
     orderBy: [desc(channelMessages.createdAt)],
     limit: CONTEXT_MESSAGE_LIMIT,
@@ -275,12 +285,48 @@ async function resolveImageAttachmentsForContext(
   // older images from the eventual 5-slot cap with copies of one image.
   // Map.delete+set (rather than a plain overwrite) moves the re-seen key to
   // the end of iteration order, so final ordering reflects last-seen position.
+  //
+  // `contextMessages` arrives OLDEST-FIRST: `fetchRecentChannelMessages` orders
+  // newest-first (it takes the newest CONTEXT_MESSAGE_LIMIT rows) and the sole
+  // caller reverses it before passing it here, because the transcript reads in
+  // reading order. Everything below depends on that: `buildRecentImageFileParts`
+  // keeps the LAST `maxCount` candidates, so oldest-first is what makes the cap
+  // keep the newest images and the dedupe keep each file's latest mention. Do
+  // not "fix" this by reversing again — that inverts both.
   const latestByFileId = new Map<string, RecentChannelMessage & { fileId: string }>();
   for (const message of contextMessages) {
-    if (!message.fileId) continue;
-    const withFileId = message as RecentChannelMessage & { fileId: string };
-    latestByFileId.delete(message.fileId);
-    latestByFileId.set(message.fileId, withFileId);
+    // Read every attachment on the message, not just the first. A message can
+    // now carry a whole batch of photos, and an agent mentioned on one should
+    // see all of them. Falls back to the legacy column for rows written before
+    // messages had attachment rows.
+    //
+    // Capped per message at the same number of slots the final selection has,
+    // taking the first few in the sender's own order. One message cannot then
+    // contribute more than the whole budget, and which few it contributes
+    // reads the way the batch reads. The final selection keeps the LAST
+    // candidates, so the newest messages win the cap — a ten-photo message
+    // posted just now can fill all five slots, and an older one cannot evict
+    // what came after it.
+    const messageAttachments =
+      message.attachments && message.attachments.length > 0
+        ? [...message.attachments]
+            .sort((a, b) => a.position - b.position)
+            .slice(0, MAX_RECENT_IMAGE_ATTACHMENTS)
+            .map((attachment) => ({
+              fileId: attachment.fileId,
+              attachmentMeta: attachment.attachmentMeta,
+            }))
+        : [{ fileId: message.fileId, attachmentMeta: message.attachmentMeta }];
+
+    for (const attachment of messageAttachments) {
+      if (!attachment.fileId) continue;
+      latestByFileId.delete(attachment.fileId);
+      latestByFileId.set(attachment.fileId, {
+        ...message,
+        fileId: attachment.fileId,
+        attachmentMeta: attachment.attachmentMeta,
+      });
+    }
   }
 
   if (latestByFileId.size === 0) {
@@ -375,8 +421,7 @@ async function postAgentThreadReply(input: {
     pageId: input.channelId,
     userId: input.userId,
     content: input.content,
-    fileId: null,
-    attachmentMeta: null,
+    attachments: [],
     aiMeta: {
       senderType: 'agent',
       senderName: input.agent.title,

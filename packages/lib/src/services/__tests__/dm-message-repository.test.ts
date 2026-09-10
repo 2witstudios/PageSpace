@@ -25,6 +25,7 @@ vi.mock('@pagespace/db/schema/storage', async () => {
 });
 
 import { dmMessageRepository } from '../dm-message-repository';
+import type { MessageAttachmentInput } from '../attachment-upload-core';
 // Real encryption helpers (NOT mocked) — prove ciphertext seeded at rest is
 // decrypted at the read edge. Legacy plaintext must still pass through.
 import { encryptField, looksEncrypted } from '../../encryption/field-crypto';
@@ -322,6 +323,234 @@ describe('dmMessageRepository.purgeInactiveMessages', () => {
     });
   });
 
+  it('purges a large sweep without exceeding the bind-parameter ceiling', async () => {
+    // Postgres caps a statement at 65535 bind parameters, and a retention
+    // sweep can cover far more tombstones than that. The message lock, the
+    // legacy-pair capture and the DELETE are predicate-based and name no ids
+    // at all. Two things do name rows — the attachment capture here, and the
+    // orphan-link statements further down, which the sibling test covers —
+    // and both are chunked well under the ceiling. An unbounded list in
+    // either would turn a large sweep into an opaque 08P01 protocol error.
+    //
+    // Asserting on the purge's RESULT cannot see any of that: an unchunked
+    // `inArray(directMessages.id, doomedIds)` returns exactly the same rows
+    // here and only fails in production. So this reads the binds the double
+    // records — how many ids each query actually named — which is the property
+    // the ceiling is about.
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+
+    const SWEEP = 1200;
+    testDbState.seed(
+      'directMessages',
+      Array.from({ length: SWEEP }, (_, i) => ({
+        id: `stale-${i}`,
+        conversationId: 'conv-1',
+        senderId: 'u-1',
+        isActive: false,
+        deletedAt: old,
+        parentId: null,
+        fileId: null,
+      })),
+    );
+    // Give every doomed message an attachment row, so the one query that does
+    // name ids runs over the whole sweep.
+    testDbState.seed(
+      'directMessageAttachments',
+      Array.from({ length: SWEEP }, (_, i) => ({
+        id: `att-${i}`,
+        messageId: `stale-${i}`,
+        fileId: `file-${i}`,
+        attachmentMeta: null,
+        position: 0,
+      })),
+    );
+
+    const count = await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    const messageIdBinds = testDbState.binds({ table: 'directMessages', name: 'id' });
+    const attachmentBinds = testDbState.binds({
+      table: 'directMessageAttachments',
+      name: 'messageId',
+    });
+
+    assert({
+      given: 'a sweep of 1200 tombstones, each carrying an attachment row',
+      should:
+        'purge them all, name no message ids in the predicate-based queries, and chunk the one lookup that does name them',
+      actual: {
+        count,
+        remaining: testDbState.count('directMessages'),
+        boundMessageIdLists: messageIdBinds.length,
+        attachmentChunks: attachmentBinds.length,
+        largestAttachmentChunk: Math.max(0, ...attachmentBinds.map((b) => b.count)),
+        idsNamedInTotal: attachmentBinds.reduce((sum, b) => sum + b.count, 0),
+      },
+      expected: {
+        count: SWEEP,
+        remaining: 0,
+        boundMessageIdLists: 0,
+        attachmentChunks: 3,
+        largestAttachmentChunk: 500,
+        idsNamedInTotal: SWEEP,
+      },
+    });
+  });
+
+  it('splits the orphan-link cleanup across statements instead of naming every pair at once', async () => {
+    // The capture is chunked, but the two statements that follow it inline the
+    // released pairs as a VALUES list — two bind parameters per pair. A large
+    // retention sweep would hit the same 65535 ceiling there, and the failure
+    // is an opaque 08P01 rather than anything that names the cause.
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+    const SWEEP = 600;
+
+    testDbState.seed(
+      'directMessages',
+      Array.from({ length: SWEEP }, (_, i) => ({
+        id: `stale-${i}`,
+        conversationId: 'conv-1',
+        senderId: 'u-1',
+        isActive: false,
+        deletedAt: old,
+        parentId: null,
+        fileId: null,
+      })),
+    );
+    testDbState.seed(
+      'directMessageAttachments',
+      Array.from({ length: SWEEP }, (_, i) => ({
+        id: `att-${i}`,
+        messageId: `stale-${i}`,
+        fileId: `file-${String(i).padStart(4, '0')}`,
+        position: 0,
+      })),
+    );
+    testDbState.seed(
+      'fileConversations',
+      Array.from({ length: SWEEP }, (_, i) => ({
+        fileId: `file-${String(i).padStart(4, '0')}`,
+        conversationId: 'conv-1',
+      })),
+    );
+
+    await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    // Every released link is gone — chunking must not lose a pair at a
+    // boundary — and no statement named more than one chunk's worth.
+    // BOTH statements, not just the DELETE. The lock SELECT that precedes it
+    // inlines the same VALUES list and carries the identical bind risk, so
+    // scoping this to the DELETE would leave the test green with the lock
+    // un-chunked — the 08P01 back, from the statement one line earlier.
+    const pairStatements = testDbState
+      .executes()
+      .filter((marker) => /file_conversations/i.test(marker.strings.join(' ')))
+      .map((marker) => {
+        const join = marker.values.find(
+          (value): value is { __sqlJoin: true; items: unknown[] } =>
+            typeof value === 'object' && value !== null && '__sqlJoin' in value,
+        );
+        return join ? join.items.length : 0;
+      });
+
+    assert({
+      given: '600 released (file, conversation) pairs in one sweep',
+      should:
+        'delete every orphaned link, with the lock and the delete each split into bounded statements rather than one unbounded one',
+      actual: {
+        remainingLinks: testDbState.count('fileConversations'),
+        // Two chunks, each locking then deleting: four statements naming pairs.
+        statements: pairStatements.length,
+        largestStatement: Math.max(0, ...pairStatements),
+        pairsNamed: pairStatements.reduce((sum, n) => sum + n, 0),
+      },
+      expected: {
+        remainingLinks: 0,
+        statements: 4,
+        largestStatement: 500,
+        pairsNamed: SWEEP * 2,
+      },
+    });
+  });
+
+  it('keeps a file_conversations link that a live message still references through an attachment row, not the legacy column', async () => {
+    // The data-loss case this change had to close. A message can now carry
+    // several files, and only the FIRST is mirrored into the legacy
+    // directMessages.fileId column. An orphan check that looked only at that
+    // column would drop the link for files 2..N of a live message — and once
+    // the link is gone the file is unreferenced, so the orphaned-file cron
+    // deletes the row and its S3 blob. Nothing else in the codebase deletes a
+    // file_conversations row, so this query is the only way in.
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+
+    testDbState.seed('directMessages', [
+      { id: 'stale', conversationId: 'conv-1', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: 'file-shared' },
+      // Live three-photo message. Its legacy column names only file-shared;
+      // file-second and file-third exist ONLY as attachment rows.
+      { id: 'live', conversationId: 'conv-1', senderId: 'u-1', isActive: true, deletedAt: null, parentId: null, fileId: 'file-shared' },
+    ]);
+    testDbState.seed('directMessageAttachments', [
+      { id: 'att-1', messageId: 'stale', fileId: 'file-shared', position: 0 },
+      { id: 'att-2', messageId: 'live', fileId: 'file-shared', position: 0 },
+      { id: 'att-3', messageId: 'live', fileId: 'file-second', position: 1 },
+      { id: 'att-4', messageId: 'live', fileId: 'file-third', position: 2 },
+    ]);
+    testDbState.seed('fileConversations', [
+      { fileId: 'file-shared', conversationId: 'conv-1' },
+      { fileId: 'file-second', conversationId: 'conv-1' },
+      { fileId: 'file-third', conversationId: 'conv-1' },
+    ]);
+
+    const count = await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    assert({
+      given: 'a purged message sharing a conversation with a live three-photo message whose 2nd and 3rd files exist only as attachment rows',
+      should: 'purge the stale row and keep every link — dropping one would end with the file deleted from S3',
+      actual: {
+        count,
+        remainingLinks: testDbState
+          .rows('fileConversations')
+          .map((l) => `${l.fileId}:${l.conversationId}`)
+          .sort(),
+      },
+      expected: {
+        count: 1,
+        remainingLinks: ['file-second:conv-1', 'file-shared:conv-1', 'file-third:conv-1'],
+      },
+    });
+  });
+
+  it('releases the links of a purged multi-attachment message once nothing references them', async () => {
+    // The other half: attachment rows cascade away with the message, so the
+    // released files cannot be read from DELETE ... RETURNING. If the impl
+    // stopped capturing them before the delete, these links would leak.
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+
+    testDbState.seed('directMessages', [
+      { id: 'stale', conversationId: 'conv-1', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: 'file-a' },
+    ]);
+    testDbState.seed('directMessageAttachments', [
+      { id: 'att-1', messageId: 'stale', fileId: 'file-a', position: 0 },
+      { id: 'att-2', messageId: 'stale', fileId: 'file-b', position: 1 },
+    ]);
+    testDbState.seed('fileConversations', [
+      { fileId: 'file-a', conversationId: 'conv-1' },
+      { fileId: 'file-b', conversationId: 'conv-1' },
+    ]);
+
+    const count = await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    assert({
+      given: 'a purged two-photo message whose second file is referenced only by its attachment row',
+      should: 'release BOTH links — capturing only the legacy column would strand file-b forever',
+      actual: { count, remainingLinks: testDbState.rows('fileConversations') },
+      expected: { count: 1, remainingLinks: [] },
+    });
+  });
+
   it('locks the candidate link rows (FOR UPDATE) in a SEPARATE statement before the orphan-check DELETE — the re-check needs a fresh snapshot that sees a concurrently committed send', async () => {
     const cutoff = new Date('2026-04-01T00:00:00Z');
     const old = new Date('2026-03-01T00:00:00Z');
@@ -369,8 +598,7 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
     conversationId: 'conv-1',
     senderId: 'user-replier',
     content: 'thread response',
-    fileId: null,
-    attachmentMeta: null,
+    attachments: [],
   };
 
   const seedActiveParent = (overrides: Partial<Record<string, unknown>> = {}) => {
@@ -527,8 +755,7 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
 
     const result = await dmMessageRepository.insertDmThreadReply({
       ...baseInput,
-      fileId: 'file-1',
-      attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) },
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
     });
 
     assert({
@@ -551,8 +778,7 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
 
     const result = await dmMessageRepository.insertDmThreadReply({
       ...baseInput,
-      fileId: 'file-1',
-      attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) },
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
       alsoSendToParent: true,
     });
 
@@ -592,7 +818,7 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
 
     const result = await dmMessageRepository.insertDmThreadReply({
       ...baseInput,
-      fileId: 'missing-file',
+      attachments: [{ fileId: 'missing-file', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
     });
 
     assert({
@@ -609,7 +835,7 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
 
     const result = await dmMessageRepository.insertDmThreadReply({
       ...baseInput,
-      fileId: 'file-1',
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
     });
 
     assert({
@@ -626,7 +852,7 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
 
     const result = await dmMessageRepository.insertDmThreadReply({
       ...baseInput,
-      fileId: 'file-1',
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
     });
 
     assert({
@@ -1110,8 +1336,7 @@ describe('dmMessageRepository.insertDmMessageWithAttachment', () => {
     conversationId: 'conv-1',
     senderId: 'user-1',
     content: 'hello',
-    fileId: null as string | null,
-    attachmentMeta: null,
+    attachments: [] as MessageAttachmentInput[],
   };
 
   it('persists an explicit quotedMessageId on the row when provided', async () => {
@@ -1167,7 +1392,7 @@ describe('dmMessageRepository.insertDmMessageWithAttachment', () => {
 
     const result = await dmMessageRepository.insertDmMessageWithAttachment({
       ...baseInput,
-      fileId: 'file-1',
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
     });
 
     const inserted = testDbState.rows('directMessages')[0];
@@ -1194,7 +1419,7 @@ describe('dmMessageRepository.insertDmMessageWithAttachment', () => {
   it('rejects with not_found and inserts nothing when the file does not exist', async () => {
     const result = await dmMessageRepository.insertDmMessageWithAttachment({
       ...baseInput,
-      fileId: 'missing-file',
+      attachments: [{ fileId: 'missing-file', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
     });
 
     assert({
@@ -1210,7 +1435,7 @@ describe('dmMessageRepository.insertDmMessageWithAttachment', () => {
 
     const result = await dmMessageRepository.insertDmMessageWithAttachment({
       ...baseInput,
-      fileId: 'file-1',
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
     });
 
     assert({
@@ -1226,7 +1451,7 @@ describe('dmMessageRepository.insertDmMessageWithAttachment', () => {
 
     const result = await dmMessageRepository.insertDmMessageWithAttachment({
       ...baseInput,
-      fileId: 'file-1',
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
     });
 
     assert({
@@ -1441,8 +1666,7 @@ describe('DM conversation derived state (#2153)', () => {
       conversationId: 'conv-1',
       senderId: 'u-1',
       content: 'fresh send',
-      fileId: null,
-      attachmentMeta: null,
+      attachments: [],
     });
 
     const conv = testDbState.rows('dmConversations')[0];
@@ -1468,8 +1692,7 @@ describe('DM conversation derived state (#2153)', () => {
       conversationId: 'conv-1',
       senderId: 'u-2',
       content: 'echoed reply',
-      fileId: null,
-      attachmentMeta: null,
+      attachments: [],
       alsoSendToParent: true,
     });
 

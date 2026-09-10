@@ -133,3 +133,59 @@ describe('deriveLatestTimestamp', () => {
     });
   });
 });
+
+describe('buildLastMessagePreview with several attachments', () => {
+  it('counts a batch of images rather than naming one of them', () => {
+    assert({
+      given: 'an attachment-only message carrying three images',
+      should: 'describe the batch — naming one file reads as though the others went missing',
+      actual: buildLastMessagePreview('', [imageMeta, imageMeta, imageMeta]),
+      expected: '[3 images]',
+    });
+  });
+
+  it('counts a batch of non-images as files', () => {
+    assert({
+      given: 'an attachment-only message carrying two PDFs',
+      should: 'describe them as files',
+      actual: buildLastMessagePreview('', [pdfMeta, pdfMeta]),
+      expected: '[2 files]',
+    });
+  });
+
+  it('falls back to the neutral noun for a mixed batch', () => {
+    assert({
+      given: 'a batch of one image and one PDF',
+      should: 'avoid claiming the batch is all images or all files',
+      actual: buildLastMessagePreview('', [imageMeta, pdfMeta]),
+      expected: '[2 attachments]',
+    });
+  });
+
+  it('names the file when a batch holds exactly one', () => {
+    assert({
+      given: 'a single-element array',
+      should: 'read identically to the legacy singular form — one file is still worth naming',
+      actual: buildLastMessagePreview('', [imageMeta]),
+      expected: buildLastMessagePreview('', imageMeta),
+    });
+  });
+
+  it('still prefers the message text over any attachment count', () => {
+    assert({
+      given: 'a message with both text and three images',
+      should: 'preview the text — the attachment placeholder is only a fallback',
+      actual: buildLastMessagePreview('look at these', [imageMeta, imageMeta, imageMeta]),
+      expected: 'look at these',
+    });
+  });
+
+  it('treats an empty array as no attachment at all', () => {
+    assert({
+      given: 'an empty attachment array and no text',
+      should: 'return the empty preview rather than "[0 files]"',
+      actual: buildLastMessagePreview('', []),
+      expected: '',
+    });
+  });
+});

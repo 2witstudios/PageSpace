@@ -102,8 +102,7 @@ export async function publishWebhookMessage(webhookId: string, rawPayload: unkno
       pageId: webhook.pageId,
       userId: SYSTEM_WEBHOOKS_USER_ID,
       content: validation.content,
-      fileId: null,
-      attachmentMeta: null,
+      attachments: [],
       aiMeta: formatWebhookSenderIdentity(validation.username, webhook.name),
     });
     if (result.kind !== 'ok') {

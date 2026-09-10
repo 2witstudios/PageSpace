@@ -37,7 +37,12 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function ZoomableImage({ src, alt }: { src: string; alt: string }) {
+/**
+ * Pan/pinch/zoom image viewer. Exported so the multi-attachment gallery's
+ * lightbox uses the same viewer as the single-attachment one rather than
+ * growing a second, worse copy.
+ */
+export function ZoomableImage({ src, alt }: { src: string; alt: string }) {
   const [view, setView] = useState<ViewState>({ zoom: 1, x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);

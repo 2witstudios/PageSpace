@@ -1,5 +1,5 @@
-import { pgTable, text, timestamp, boolean, jsonb, integer, pgEnum, index, unique, uniqueIndex, primaryKey, type AnyPgColumn } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { pgTable, text, timestamp, boolean, jsonb, integer, pgEnum, index, unique, uniqueIndex, primaryKey, check, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
 import { users } from './auth';
 import { files, type AttachmentMeta } from './storage';
 import { createId } from '@paralleldrive/cuid2';
@@ -107,6 +107,35 @@ export const directMessages = pgTable('direct_messages', {
 });
 
 /**
+ * Attachments carried by a direct message. Mirror of
+ * `channel_message_attachments` — see its docblock for why the two surfaces get
+ * mirrored tables rather than one polymorphic one, and why `fileId` is SET NULL.
+ */
+export const directMessageAttachments = pgTable('direct_message_attachments', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  messageId: text('messageId').notNull().references(() => directMessages.id, { onDelete: 'cascade' }),
+  fileId: text('fileId').references(() => files.id, { onDelete: 'set null' }),
+  attachmentMeta: jsonb('attachmentMeta').$type<AttachmentMeta | null>(),
+  position: integer('position').notNull(),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  messagePositionIdx: uniqueIndex('direct_message_attachments_message_position_idx').on(table.messageId, table.position),
+  fileIdx: index('direct_message_attachments_file_id_idx').on(table.fileId),
+  positionRange: check('direct_message_attachments_position_range', sql`${table.position} >= 0 AND ${table.position} < 10`),
+}));
+
+export const directMessageAttachmentsRelations = relations(directMessageAttachments, ({ one }) => ({
+  message: one(directMessages, {
+    fields: [directMessageAttachments.messageId],
+    references: [directMessages.id],
+  }),
+  file: one(files, {
+    fields: [directMessageAttachments.fileId],
+    references: [files.id],
+  }),
+}));
+
+/**
  * DM message reactions - emoji reactions on direct messages.
  *
  * Mirrors channelMessageReactions in shape and constraints: each user can add
@@ -187,6 +216,7 @@ export const directMessagesRelations = relations(directMessages, ({ one, many })
     fields: [directMessages.fileId],
     references: [files.id],
   }),
+  attachments: many(directMessageAttachments),
   reactions: many(dmMessageReactions),
   mirroredFrom: one(directMessages, {
     fields: [directMessages.mirroredFromId],

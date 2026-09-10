@@ -32,7 +32,9 @@ import { MessageLinkPreviews } from '@/components/messages/MessageLinkPreviews';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
 import { isCommandInertForMessage } from '@/lib/commands/command-chip-model';
 import { normalizeCommandExecutionList } from '@/lib/commands/execution-indicator-model';
-import { MessageAttachment } from '@/components/shared/MessageAttachment';
+import { MessageAttachments } from '@/components/shared/MessageAttachments';
+import type { MessageAttachmentLike } from '@/lib/attachment-utils';
+import { createId } from '@paralleldrive/cuid2';
 import { MessageInput } from '@/components/shared/MessageInput';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
@@ -68,6 +70,7 @@ export interface ThreadReply {
   authorImage?: string | null;
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
+  attachments?: MessageAttachmentLike[] | null;
   file?: FileRelation | null;
   reactions?: Reaction[];
   aiSenderName?: string | null;
@@ -135,6 +138,7 @@ interface RawReply {
   // common
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
+  attachments?: MessageAttachmentLike[] | null;
   file?: FileRelation | null;
   reactions?: Reaction[];
   parentId?: string | null;
@@ -172,6 +176,10 @@ const normalizeReply = (raw: RawReply): ThreadReply => ({
   fileId: raw.fileId ?? null,
   attachmentMeta: raw.attachmentMeta ?? null,
   file: raw.file ?? null,
+  // Both thread GETs return the attachment relation. Dropping it here would
+  // leave a multi-file reply rendering only the legacy first attachment, and
+  // a refresh would not fix it — normalization runs on the refetch too.
+  attachments: raw.attachments ?? null,
   reactions: raw.reactions ?? [],
   aiSenderName: raw.aiMeta?.senderName ?? null,
   commandExecution: raw.aiMeta?.commandExecution
@@ -433,14 +441,20 @@ export function ThreadPanel({
       alsoSendToParent,
     }: {
       content: string;
-      attachment?: unknown;
+      // Deliberately unused: composing a thread reply WITH an attachment has
+      // never worked — this handler has always dropped the file and posted no
+      // fileId. Thread replies render attachments fine (the route and
+      // repository both accept them); only this composer path is missing.
+      // Left as-is here so this change stays about grouping, and tracked
+      // separately rather than smuggled in.
+      attachments?: unknown;
       alsoSendToParent: boolean;
     }) => {
       if (!currentUserId) return;
       // Snapshot the thread identity at send time so async results bound to
       // the OLD thread can't leak state into a thread the user switched to.
       const submitThreadKey = `${source}:${contextId}:${parentId}`;
-      const tempId = `temp-${Date.now()}`;
+      const tempId = `temp-${createId()}`;
       const optimistic: ThreadReply = {
         id: tempId,
         content,
@@ -561,7 +575,7 @@ export function ThreadPanel({
   const handleAddReaction = useCallback(
     async (id: string, emoji: string) => {
       if (!currentUserId) return;
-      const tempId = `temp-${Date.now()}`;
+      const tempId = `temp-${createId()}`;
       const optimistic: Reaction = {
         id: tempId,
         emoji,
@@ -847,15 +861,14 @@ export function ThreadPanel({
                         </div>
                       )}
                       {reply.content && <MessageLinkPreviews content={reply.content} />}
-                      {(reply.fileId || reply.attachmentMeta) && (
-                        <MessageAttachment
-                          message={{
-                            fileId: reply.fileId ?? null,
-                            attachmentMeta: reply.attachmentMeta ?? null,
-                            file: reply.file ?? null,
-                          }}
-                        />
-                      )}
+                      <MessageAttachments
+                        message={{
+                          fileId: reply.fileId ?? null,
+                          attachmentMeta: reply.attachmentMeta ?? null,
+                          file: reply.file ?? null,
+                          attachments: reply.attachments ?? null,
+                        }}
+                      />
                     </>
                   )}
                   {currentUserId && !isTemp && (

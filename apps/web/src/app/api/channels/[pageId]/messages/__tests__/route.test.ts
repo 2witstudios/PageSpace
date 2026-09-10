@@ -167,6 +167,19 @@ function makePostRequest(body: unknown): Request {
 const callGet = (qs = '') =>
   GET(makeGetRequest(qs), { params: Promise.resolve({ pageId: PAGE_ID }) });
 
+/**
+ * Both send routes now validate attachmentMeta's shape per attachment — the
+ * channel route previously accepted any JSON here, or none at all. A body
+ * carrying a fileId with no metadata is rejected at the door, so tests that
+ * mean to exercise the repository must supply it.
+ */
+const IMAGE_META = {
+  originalName: 'photo.png',
+  size: 1024,
+  mimeType: 'image/png',
+  contentHash: 'a'.repeat(64),
+};
+
 const callPost = (body: unknown) =>
   POST(makePostRequest(body), { params: Promise.resolve({ pageId: PAGE_ID }) });
 
@@ -408,7 +421,7 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
   it('returns 400 when the reply fileId does not exist', async () => {
     mockInsertChannelThreadReply.mockResolvedValueOnce({ kind: 'not_found' });
 
-    const res = await callPost({ content: 'x', parentId: PARENT_ID, fileId: 'file-1' });
+    const res = await callPost({ content: 'x', parentId: PARENT_ID, fileId: 'file-1', attachmentMeta: IMAGE_META });
 
     expect(res.status).toBe(400);
     const body = await res.json();
@@ -696,10 +709,71 @@ describe('POST /api/channels/[pageId]/messages (top-level — existing path)', (
     expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
   });
 
+  it('rejects a fileId sent without its metadata', async () => {
+    // Behaviour change: this route previously accepted a fileId with no
+    // attachmentMeta (it validated nothing at all), which stored an attachment
+    // that could only half-render. The DM route always rejected it; both now
+    // share one validator.
+    const res = await callPost({ content: 'hi', fileId: 'file-1' });
+
+    expect(res.status).toBe(400);
+    expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
+  });
+
+  it('rejects metadata whose fields are the wrong type', async () => {
+    const res = await callPost({
+      content: 'hi',
+      fileId: 'file-1',
+      attachmentMeta: { ...IMAGE_META, size: '1024' },
+    });
+
+    expect(res.status).toBe(400);
+    expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
+  });
+
+  it('accepts several attachments on one message and passes them through in order', async () => {
+    mockInsertChannelMessageWithAttachment.mockResolvedValueOnce({
+      kind: 'ok',
+      message: { id: 'msg-multi' },
+    });
+
+    const res = await callPost({
+      content: 'look at these',
+      attachments: [
+        { fileId: 'file-1', attachmentMeta: IMAGE_META },
+        { fileId: 'file-2', attachmentMeta: IMAGE_META },
+        { fileId: 'file-3', attachmentMeta: IMAGE_META },
+      ],
+    });
+
+    expect(res.status).toBe(201);
+    expect(mockInsertChannelMessageWithAttachment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [
+          { fileId: 'file-1', attachmentMeta: IMAGE_META },
+          { fileId: 'file-2', attachmentMeta: IMAGE_META },
+          { fileId: 'file-3', attachmentMeta: IMAGE_META },
+        ],
+      }),
+    );
+  });
+
+  it('refuses a body carrying both the array and the legacy pair', async () => {
+    const res = await callPost({
+      content: 'hi',
+      fileId: 'file-1',
+      attachmentMeta: IMAGE_META,
+      attachments: [{ fileId: 'file-2', attachmentMeta: IMAGE_META }],
+    });
+
+    expect(res.status).toBe(400);
+    expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when insertChannelMessageWithAttachment rejects with not_found (fileId vanished inside the tx)', async () => {
     mockInsertChannelMessageWithAttachment.mockResolvedValueOnce({ kind: 'not_found' });
 
-    const res = await callPost({ content: 'hi', fileId: 'file-1' });
+    const res = await callPost({ content: 'hi', fileId: 'file-1', attachmentMeta: IMAGE_META });
 
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'File not found' });
