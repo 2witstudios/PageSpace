@@ -505,6 +505,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   and is unchanged here. A message can carry up to ten files; the composer says so rather than
   silently dropping the extras.
 
+- **Phone: opening a side panel no longer pops the keyboard** — on a phone or in the iOS and
+  Android apps, tapping the menu button to open the navigation panel (or the assistant panel)
+  immediately focused the search box inside it, so the keyboard slid up over the panel you had just
+  opened. The panel now opens with nothing focused; tap the search box when you want it.
+
 - **The account menu no longer labels free accounts "Billing (Business)"** — the plan name in the
   avatar dropdown fell through to "Business" whenever the subscription lookup had not answered yet
   (every first paint, and permanently if the request failed), so a brand-new free user saw a paid
