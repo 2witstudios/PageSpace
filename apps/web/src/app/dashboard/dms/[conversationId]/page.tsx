@@ -19,19 +19,6 @@ import { MessageAttachments } from '@/components/shared/MessageAttachments';
 import type { MessageAttachmentLike } from '@/lib/attachment-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { reconcileOptimistic } from '@/lib/messages/reconcile-optimistic';
-
-const senderOf = (m: Message) => m.senderId;
-
-/**
- * Fallback used ONLY when a confirmation carries no `clientNonce` — which is
- * what a pod that predates the nonce broadcasts, so it is reachable during a
- * rolling deploy. Same conversation, same text, same first file: the matcher
- * this surface used before the nonce existed.
- */
-const looksLikeSameSend = (pending: Message, confirmed: Message) =>
-  pending.conversationId === confirmed.conversationId &&
-  pending.content === confirmed.content &&
-  (pending.fileId ?? null) === (confirmed.fileId ?? null);
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { RichText, addHardLineBreaks } from '@/components/messages/RichText';
@@ -55,6 +42,23 @@ import { formatDistanceToNow } from 'date-fns';
 import { isFirstInGroup, formatMessageDate } from '@/lib/messages/grouping';
 import { MessageDateSeparator } from '@/components/messages/MessageDateSeparator';
 import { cn } from '@/lib/utils';
+
+const senderOf = (m: { senderId?: string | null }) => m.senderId;
+
+/**
+ * Fallback used ONLY when a confirmation carries no `clientNonce` — which is
+ * what a pod that predates the nonce broadcasts, so it is reachable during a
+ * rolling deploy. Same conversation, same text, same first file: the matcher
+ * this surface used before the nonce existed.
+ */
+const looksLikeSameSend = (
+  pending: { conversationId?: string; content?: string; fileId?: string | null },
+  confirmed: { conversationId?: string; content?: string; fileId?: string | null },
+) =>
+  pending.conversationId === confirmed.conversationId &&
+  pending.content === confirmed.content &&
+  (pending.fileId ?? null) === (confirmed.fileId ?? null);
+
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);

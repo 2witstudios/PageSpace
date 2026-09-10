@@ -25,17 +25,6 @@ import { MessageAttachments } from '@/components/shared/MessageAttachments';
 import type { MessageAttachmentLike } from '@/lib/attachment-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { reconcileOptimistic } from '@/lib/messages/reconcile-optimistic';
-
-const authorOf = (m: MessageWithReactions) => m.userId;
-
-/**
- * Fallback used ONLY when a confirmation carries no `clientNonce` — what a pod
- * that predates the nonce broadcasts, so it is reachable during a rolling
- * deploy. Same text, same first file, same author (checked by the reconciler).
- */
-const looksLikeSameSend = (pending: MessageWithReactions, confirmed: MessageWithReactions) =>
-  pending.content === confirmed.content &&
-  (pending.fileId ?? null) === (confirmed.fileId ?? null);
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
@@ -61,6 +50,21 @@ import { cn } from '@/lib/utils';
 import { useFindStore } from '@/stores/useFindStore';
 import { useDraft } from '@/hooks/useDraft';
 import { buildDraftKey } from '@/lib/draft/draft';
+
+const authorOf = (m: { userId?: string | null }) => m.userId;
+
+/**
+ * Fallback used ONLY when a confirmation carries no `clientNonce` — what a pod
+ * that predates the nonce broadcasts, so it is reachable during a rolling
+ * deploy. Same text, same first file, same author (checked by the reconciler).
+ */
+const looksLikeSameSend = (
+  pending: { content?: string; fileId?: string | null },
+  confirmed: { content?: string; fileId?: string | null },
+) =>
+  pending.content === confirmed.content &&
+  (pending.fileId ?? null) === (confirmed.fileId ?? null);
+
 
 /** Coalesces the re-mark-as-read POST across a burst of incoming messages. */
 const MARK_READ_DEBOUNCE_MS = 1000;
