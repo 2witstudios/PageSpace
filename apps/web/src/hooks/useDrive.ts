@@ -34,6 +34,11 @@ export const useDriveStore = create<DriveState>()(
         if (!forceRefresh && state.drives.length > 0 && (now - state.lastFetched) < CACHE_DURATION) {
           return;
         }
+        // Several controls ask on the same mount (sidebar, crumb, a page's
+        // focus line); one request serves them all.
+        if (!forceRefresh && state.isLoading) {
+          return;
+        }
         
         set({ isLoading: true });
         try {

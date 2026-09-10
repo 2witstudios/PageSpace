@@ -39,9 +39,53 @@ interface DriveSwitcherDialogProps {
  * fuzzy match would rank across groups we want kept apart.
  */
 export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitcherDialogProps) {
-  const [query, setQuery] = useState("");
   const [isCreateOpen, setCreateOpen] = useState(false);
 
+  return (
+    <>
+      <CommandDialog
+        open={open}
+        onOpenChange={onOpenChange}
+        title="Switch drive"
+        description="Search your drives and open one"
+        // Phone: top-anchored 12px below the safe area instead of centred, so
+        // the keyboard never covers the input and the notch never covers the
+        // dialog (the header pads the same inset; in the iOS app it is real);
+        // the dialog becomes a column whose list takes whatever height is left
+        // above the bottom inset. sm+: the usual centred 576px.
+        className="max-sm:top-[calc(var(--safe-area-top)+0.75rem)] max-sm:flex max-sm:max-h-[calc(100dvh-var(--safe-area-top)-var(--safe-area-bottom)-1.5rem)] max-sm:max-w-[calc(100%-1.5rem)] max-sm:translate-y-0 max-sm:flex-col sm:max-w-xl"
+        showCloseButton
+        // useDrivePicker owns filtering (Recent must vanish under a query, and
+        // groups must not be re-ranked against each other). Item values are
+        // `group:id`, so cmdk's own filter would hide rows matched by name.
+        shouldFilter={false}
+      >
+        {/*
+          The body — its query, its store subscriptions, its favourites sync —
+          mounts only while the dialog is open. Every section's focus line
+          renders one of these, and a closed one must cost a single state.
+        */}
+        <DrivePickerBody
+          onClose={() => onOpenChange(false)}
+          onCreate={() => {
+            onOpenChange(false);
+            setCreateOpen(true);
+          }}
+        />
+      </CommandDialog>
+
+      <CreateDriveDialog isOpen={isCreateOpen} setIsOpen={setCreateOpen} />
+    </>
+  );
+}
+
+interface DrivePickerBodyProps {
+  onClose: () => void;
+  onCreate: () => void;
+}
+
+function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
+  const [query, setQuery] = useState("");
   // This dialog opens from every section's subtitle, including on a phone
   // where nothing else that syncs favourites is mounted.
   useFavoritesSync();
@@ -57,19 +101,16 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
     toggleFavorite,
   } = useDrivePicker(query);
 
-  const close = () => {
-    onOpenChange(false);
-    setQuery("");
-  };
+  // The query needs no reset: this body unmounts with the dialog.
+  const close = () => onClose();
 
-  // Picking the focus you are already in is a no-op, not a trip to its home:
-  // the row is first and highlighted, so a stray Enter must not move you.
   const handleSelect = (drive: Drive) => {
     close();
-    if (drive.id === currentDriveId) return;
     selectDrive(drive);
   };
 
+  // All drives is first and highlighted with no query, so a stray Enter on
+  // the focus you are already in must be a no-op, not a trip to its home.
   const handleSelectAll = () => {
     close();
     if (isAllDrivesCurrent) return;
@@ -136,110 +177,85 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
   );
 
   return (
-    <>
-      <CommandDialog
-        open={open}
-        onOpenChange={(next) => (next ? onOpenChange(true) : close())}
-        title="Switch drive"
-        description="Search your drives and open one"
-        // Phone: top-anchored 12px below the safe area instead of centred, so
-        // the keyboard never covers the input and the notch never covers the
-        // dialog (the header pads the same inset; in the iOS app it is real);
-        // the dialog becomes a column whose list takes whatever height is left
-        // above the bottom inset. sm+: the usual centred 576px.
-        className="max-sm:top-[calc(var(--safe-area-top)+0.75rem)] max-sm:flex max-sm:max-h-[calc(100dvh-var(--safe-area-top)-var(--safe-area-bottom)-1.5rem)] max-sm:max-w-[calc(100%-1.5rem)] max-sm:translate-y-0 max-sm:flex-col sm:max-w-xl"
-        showCloseButton
-        // useDrivePicker owns filtering (Recent must vanish under a query, and
-        // groups must not be re-ranked against each other). Item values are
-        // `group:id`, so cmdk's own filter would hide rows matched by name.
-        shouldFilter={false}
-      >
-        <div className="flex min-h-0 flex-1 flex-col" onKeyDownCapture={handleKeyDownCapture}>
-        <CommandInput placeholder="Search drives…" value={query} onValueChange={setQuery} />
+      <div className="flex min-h-0 flex-1 flex-col" onKeyDownCapture={handleKeyDownCapture}>
+      <CommandInput placeholder="Search drives…" value={query} onValueChange={setQuery} />
 
-        {/*
-          Fixed chrome under the input, outside the list on purpose: cmdk's
-          arrow keys walk CommandItems, and Create drive is an action, not a
-          destination — it should not sit between ↓ and the first row.
-        */}
-        <div className="flex border-b border-border bg-card">
-          <button
-            type="button"
-            onClick={() => {
-              close();
-              setCreateOpen(true);
-            }}
-            className="flex h-10 flex-1 items-center justify-center gap-2 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:bg-accent focus-visible:text-foreground"
-          >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            Create drive
-          </button>
-        </div>
-
-        <CommandList className="max-h-[60vh] max-sm:min-h-0 max-sm:flex-1 max-sm:max-h-none">
-          {/*
-            All drives is a focus like any drive, so it is a row, first, and
-            it survives a query: the way out of a drive must never depend on
-            what was typed. Picking it keeps the section you are in.
-          */}
-          {!isSearching && allDrivesRow}
-
-          {/* cmdk's own empty state never fires now that All drives is always a row. */}
-          {allDrives.length === 0 && (
-            <div className="py-6 text-center text-sm text-muted-foreground" role="status">
-              {isSearching ? "No drives match." : "No drives yet."}
-            </div>
-          )}
-
-          {favoriteDrives.length > 0 && (
-            <CommandGroup heading="Favorites">
-              {favoriteDrives.map((drive) => renderItem(drive, "favorite"))}
-            </CommandGroup>
-          )}
-
-          {recentDrives.length > 0 && !isSearching && (
-            <CommandGroup heading="Recent">
-              {recentDrives.map((drive) => renderItem(drive, "recent"))}
-            </CommandGroup>
-          )}
-
-          {allDrives.length > 0 && (
-            <CommandGroup heading={isSearching ? "Results" : `All drives · ${allDrives.length}`}>
-              {allDrives.map((drive) => renderItem(drive, "all"))}
-            </CommandGroup>
-          )}
-
-          {isSearching && allDrivesRow}
-        </CommandList>
-
-        {/* Keyboard hints for a keyboard: gone on touch, where there is none to hint at. */}
-        <div
-          aria-hidden="true"
-          className="flex h-9 items-center gap-4 border-t border-border px-3.5 text-xs text-muted-foreground pointer-coarse:hidden"
+      {/*
+        Fixed chrome under the input, outside the list on purpose: cmdk's
+        arrow keys walk CommandItems, and Create drive is an action, not a
+        destination — it should not sit between ↓ and the first row.
+      */}
+      <div className="flex border-b border-border bg-card">
+        <button
+          type="button"
+          onClick={onCreate}
+          className="flex h-10 flex-1 items-center justify-center gap-2 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:bg-accent focus-visible:text-foreground"
         >
-          <span>
-            <Kbd>↑</Kbd>
-            <Kbd>↓</Kbd>
-            move
-          </span>
-          <span>
-            <Kbd>↵</Kbd>
-            open drive
-          </span>
-          <span>
-            <Kbd>⇧↵</Kbd>
-            favorite
-          </span>
-          <span>
-            <Kbd>esc</Kbd>
-            close
-          </span>
-        </div>
-        </div>
-      </CommandDialog>
+          <Plus className="h-4 w-4" aria-hidden="true" />
+          Create drive
+        </button>
+      </div>
 
-      <CreateDriveDialog isOpen={isCreateOpen} setIsOpen={setCreateOpen} />
-    </>
+      <CommandList className="max-h-[60vh] max-sm:min-h-0 max-sm:flex-1 max-sm:max-h-none">
+        {/*
+          All drives is a focus like any drive, so it is a row, first, and
+          it survives a query: the way out of a drive must never depend on
+          what was typed. Picking it keeps the section you are in.
+        */}
+        {!isSearching && allDrivesRow}
+
+        {/* cmdk's own empty state never fires now that All drives is always a row. */}
+        {allDrives.length === 0 && (
+          <div className="py-6 text-center text-sm text-muted-foreground" role="status">
+            {isSearching ? "No drives match." : "No drives yet."}
+          </div>
+        )}
+
+        {favoriteDrives.length > 0 && (
+          <CommandGroup heading="Favorites">
+            {favoriteDrives.map((drive) => renderItem(drive, "favorite"))}
+          </CommandGroup>
+        )}
+
+        {recentDrives.length > 0 && !isSearching && (
+          <CommandGroup heading="Recent">
+            {recentDrives.map((drive) => renderItem(drive, "recent"))}
+          </CommandGroup>
+        )}
+
+        {allDrives.length > 0 && (
+          <CommandGroup heading={isSearching ? "Results" : `All drives · ${allDrives.length}`}>
+            {allDrives.map((drive) => renderItem(drive, "all"))}
+          </CommandGroup>
+        )}
+
+        {isSearching && allDrivesRow}
+      </CommandList>
+
+      {/* Keyboard hints for a keyboard: gone on touch, where there is none to hint at. */}
+      <div
+        aria-hidden="true"
+        className="flex h-9 items-center gap-4 border-t border-border px-3.5 text-xs text-muted-foreground pointer-coarse:hidden"
+      >
+        <span>
+          <Kbd>↑</Kbd>
+          <Kbd>↓</Kbd>
+          move
+        </span>
+        <span>
+          <Kbd>↵</Kbd>
+          open drive
+        </span>
+        <span>
+          <Kbd>⇧↵</Kbd>
+          favorite
+        </span>
+        <span>
+          <Kbd>esc</Kbd>
+          close
+        </span>
+      </div>
+      </div>
   );
 }
 

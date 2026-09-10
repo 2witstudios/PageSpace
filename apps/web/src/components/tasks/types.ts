@@ -70,7 +70,6 @@ export interface TaskFilters {
   priority?: TaskPriority;
   startDate?: Date;
   endDate?: Date;
-  driveId?: string;
 }
 
 export interface Pagination {

@@ -42,8 +42,6 @@ export function TaskEmptyState({
   onClearFilters,
   isMobile = false,
 }: TaskEmptyStateProps) {
-  const getTitle = () => 'No tasks found';
-
   const getDescription = () => {
     if (hasActiveFilters) {
       return 'Try adjusting your filters';
@@ -70,7 +68,7 @@ export function TaskEmptyState({
           isMobile ? 'text-base' : 'text-lg'
         )}
       >
-        {getTitle()}
+        No tasks found
       </h3>
       <p className="text-sm text-muted-foreground">{getDescription()}</p>
       {hasActiveFilters && onClearFilters && (

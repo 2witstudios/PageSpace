@@ -12,20 +12,18 @@ export interface PersistableFilters {
   dueDateFilter?: DueDateFilter;
   assigneeFilter?: AssigneeFilter;
   statusGroup?: StatusGroupFilter;
-  driveId?: string;
 }
 
 export const DEFAULT_DASHBOARD_FILTERS: PersistableFilters = {
   status: undefined,
   priority: undefined,
-  driveId: undefined,
   search: undefined,
   dueDateFilter: undefined,
   assigneeFilter: 'mine',
   statusGroup: 'active',
 };
 
-const URL_FILTER_KEYS = ['status', 'priority', 'driveId', 'search', 'dueDateFilter', 'assigneeFilter', 'statusGroup'] as const;
+const URL_FILTER_KEYS = ['status', 'priority', 'search', 'dueDateFilter', 'assigneeFilter', 'statusGroup'] as const;
 
 export function scopeKeyFor(context: 'user' | 'drive', driveId: string | undefined): string {
   return context === 'user' ? 'user' : `drive:${driveId ?? ''}`;
@@ -37,9 +35,7 @@ export function scopeKeyFor(context: 'user' | 'drive', driveId: string | undefin
  * would throw away the preferences AND show nothing for it.
  */
 function urlHasHonouredParam(searchParams: URLSearchParams, scopedToDrive: boolean): boolean {
-  return URL_FILTER_KEYS.some(
-    (key) => key !== 'driveId' && (scopedToDrive || key !== 'status') && searchParams.has(key),
-  );
+  return URL_FILTER_KEYS.some((key) => (scopedToDrive || key !== 'status') && searchParams.has(key));
 }
 
 const VALID_STATUS_GROUPS: ReadonlyArray<StatusGroupFilter> = ['all', 'active', 'completed'];
@@ -67,7 +63,6 @@ function readFromUrl(searchParams: URLSearchParams, scopedToDrive: boolean): Per
   return {
     status,
     priority: (searchParams.get('priority') as TaskPriority) || undefined,
-    driveId: searchParams.get('driveId') || undefined,
     search: searchParams.get('search') || undefined,
     dueDateFilter: (searchParams.get('dueDateFilter') as DueDateFilter) || undefined,
     assigneeFilter: (searchParams.get('assigneeFilter') as AssigneeFilter) || 'mine',
@@ -98,34 +93,14 @@ export function pickInitialFilters(
 /**
  * What a focus can honour. Across all drives a slug-level `status` belongs
  * to no list in particular, and the control for it is not shown, so a
- * persisted or bookmarked one would narrow the list invisibly; and there
- * is no drive filter any more — the focus is the drive. Applied at every
- * entry point (mount, change) so state, URL, persistence and the request
- * never carry a filter the UI cannot show.
+ * persisted or bookmarked one would narrow the list invisibly. Applied at
+ * every entry point (mount, change) so state, URL, persistence and the
+ * request never carry a filter the UI cannot show.
  */
 export function forFocus(filters: PersistableFilters, scopedToDrive: boolean): PersistableFilters {
-  const { driveId: _driveId, ...rest } = filters;
-  if (scopedToDrive) return rest;
-  const { status: _status, ...withoutStatus } = rest;
+  if (scopedToDrive) return filters;
+  const { status: _status, ...withoutStatus } = filters;
   return withoutStatus;
-}
-
-/**
- * Where a pre-focus bookmark `/dashboard/tasks?driveId=…&…` now lives: the
- * drive's own tasks route, with every other filter carried across.
- */
-export function legacyDriveTasksHref(searchParams: URLSearchParams): string | null {
-  const driveId = searchParams.get('driveId');
-  if (!driveId || !isDriveIdShape(driveId)) return null;
-  const rest = new URLSearchParams(searchParams);
-  rest.delete('driveId');
-  const query = rest.toString();
-  return query ? `/dashboard/${driveId}/tasks?${query}` : `/dashboard/${driveId}/tasks`;
-}
-
-/** Drive ids are cuid2; anything else is not a drive and must not become a path. */
-export function isDriveIdShape(value: string): boolean {
-  return /^[a-z0-9]+$/.test(value);
 }
 
 export function toStoredDashboardFilters(filters: PersistableFilters): StoredDashboardFilters {

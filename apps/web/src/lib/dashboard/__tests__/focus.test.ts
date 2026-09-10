@@ -5,7 +5,7 @@ import {
   driveFocus,
   focusDestinationHref,
   focusSectionHref,
-  isSameFocus,
+  legacyFocusHref,
   sectionForPathname,
 } from '../focus';
 
@@ -86,11 +86,18 @@ describe('focusDestinationHref', () => {
   });
 });
 
-describe('isSameFocus', () => {
-  it('given two focuses, should compare kind and drive', () => {
-    expect(isSameFocus(ALL_DRIVES, { kind: 'all' })).toBe(true);
-    expect(isSameFocus(driveFocus('a'), driveFocus('a'))).toBe(true);
-    expect(isSameFocus(driveFocus('a'), driveFocus('b'))).toBe(false);
-    expect(isSameFocus(driveFocus('a'), ALL_DRIVES)).toBe(false);
+describe('legacyFocusHref', () => {
+  it('given a pre-focus bookmark with other filters, should move to the drive route and keep them', () => {
+    const params = new URLSearchParams('driveId=d1&priority=high&statusGroup=completed&search=release');
+    expect(legacyFocusHref('/dashboard/tasks', params)).toBe(
+      '/dashboard/d1/tasks?priority=high&statusGroup=completed&search=release'
+    );
+    expect(legacyFocusHref('/dashboard/channels', new URLSearchParams('driveId=d1'))).toBe('/dashboard/d1/channels');
+  });
+
+  it('given no drive id, or one that is not a drive id, should do nothing', () => {
+    expect(legacyFocusHref('/dashboard/tasks', new URLSearchParams('priority=high'))).toBeNull();
+    expect(legacyFocusHref('/dashboard/tasks', new URLSearchParams('driveId=..%2F..%2Fsettings%2Fbackups%3Fx%3D'))).toBeNull();
+    expect(legacyFocusHref('/dashboard/tasks', new URLSearchParams('driveId=Drive%20One'))).toBeNull();
   });
 });

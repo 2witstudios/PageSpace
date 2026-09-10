@@ -18,7 +18,6 @@ export type StatusGroupFilter = 'all' | 'active' | 'completed';
 export interface FilterValues {
   status?: TaskStatus;
   priority?: TaskPriority;
-  driveId?: string;
   dueDateFilter?: DueDateFilter;
   assigneeFilter?: AssigneeFilter;
   statusGroup?: StatusGroupFilter;

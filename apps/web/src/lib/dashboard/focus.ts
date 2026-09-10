@@ -26,10 +26,6 @@ export function focusDriveId(focus: Focus): string | undefined {
   return focus.kind === 'drive' ? focus.driveId : undefined;
 }
 
-export function isSameFocus(a: Focus, b: Focus): boolean {
-  return a.kind === b.kind && focusDriveId(a) === focusDriveId(b);
-}
-
 /**
  * Every section that exists in both focuses. Agents, activity and trash
  * have a drive shape and a global one too (with different bodies), and a
@@ -88,6 +84,26 @@ export function focusSectionHref(focus: Focus, section: FocusSection | null): st
  */
 export function focusDestinationHref(pathname: string | null | undefined, focus: Focus): string {
   return focusSectionHref(focus, sectionForPathname(pathname));
+}
+
+/** Drive ids are cuid2; anything else is not a drive and must not become a path. */
+export function isDriveIdShape(value: string): boolean {
+  return /^[a-z0-9]+$/.test(value);
+}
+
+/**
+ * Where a pre-focus bookmark `/dashboard/<section>?driveId=…` now lives:
+ * the same section under that drive, with every other query parameter
+ * carried across. Null when the URL carries no usable drive id.
+ */
+export function legacyFocusHref(pathname: string | null | undefined, searchParams: URLSearchParams): string | null {
+  const driveId = searchParams.get('driveId');
+  if (!driveId || !isDriveIdShape(driveId)) return null;
+  const rest = new URLSearchParams(searchParams);
+  rest.delete('driveId');
+  const query = rest.toString();
+  const href = focusSectionHref(driveFocus(driveId), sectionForPathname(pathname));
+  return query ? `${href}?${query}` : href;
 }
 
 /**

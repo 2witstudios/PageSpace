@@ -25,7 +25,6 @@ export function useDrivePicker(query: string) {
   const pathname = usePathname();
 
   const drives = useDriveStore((state) => state.drives);
-  const currentDriveId = useDriveStore((state) => state.currentDriveId);
   const setCurrentDrive = useDriveStore((state) => state.setCurrentDrive);
   const updateDrive = useDriveStore((state) => state.updateDrive);
 
@@ -104,7 +103,6 @@ export function useDrivePicker(query: string) {
     favoriteDrives,
     recentDrives,
     allDrives,
-    currentDriveId,
     isSearching: normalizedQuery.length > 0,
     selectDrive,
     selectAllDrives,

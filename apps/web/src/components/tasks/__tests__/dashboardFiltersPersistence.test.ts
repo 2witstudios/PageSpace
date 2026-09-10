@@ -9,7 +9,6 @@ import {
   toStoredDashboardFilters,
   fromStoredOrDefaults,
   forFocus,
-  legacyDriveTasksHref,
   DEFAULT_DASHBOARD_FILTERS,
 } from '../dashboardFiltersPersistence';
 import type { StoredDashboardFilters } from '@/stores/useLayoutStore';
@@ -90,8 +89,7 @@ describe('pickInitialFilters', () => {
 
     const result = pickInitialFilters(params({ driveId: 'd1' }), stored);
 
-    expect(result.driveId).toBeUndefined();
-    expect(result.assigneeFilter).toBe('all');
+    expect(result).toEqual(fromStoredOrDefaults(stored));
   });
 
   it('given URL has only assigneeFilter=mine, should still treat as URL precedence (explicit)', () => {
@@ -134,7 +132,6 @@ describe('toStoredDashboardFilters', () => {
     const result = toStoredDashboardFilters({
       status: 'pending',
       priority: 'high',
-      driveId: 'd1',
       search: 'budget',
       dueDateFilter: 'overdue',
       assigneeFilter: 'all',
@@ -180,8 +177,8 @@ describe('pickInitialFilters across all drives', () => {
 });
 
 describe('forFocus', () => {
-  it('given a drive focus, should keep the slug status and drop the retired drive filter', () => {
-    expect(forFocus({ status: 'in_progress', driveId: 'd1', priority: 'high' }, true)).toEqual({
+  it('given a drive focus, should keep the slug status', () => {
+    expect(forFocus({ status: 'in_progress', priority: 'high' }, true)).toEqual({
       status: 'in_progress',
       priority: 'high',
     });
@@ -196,25 +193,5 @@ describe('forFocus', () => {
 
   it('given nothing to drop, should return an equal object', () => {
     expect(forFocus({ priority: 'low', assigneeFilter: 'all' }, false)).toEqual({ priority: 'low', assigneeFilter: 'all' });
-  });
-});
-
-describe('legacyDriveTasksHref', () => {
-  it('given a pre-focus bookmark with other filters, should move to the drive route and keep them', () => {
-    const params = new URLSearchParams('driveId=d1&priority=high&statusGroup=completed&search=release');
-    expect(legacyDriveTasksHref(params)).toBe('/dashboard/d1/tasks?priority=high&statusGroup=completed&search=release');
-  });
-
-  it('given only a drive id, should produce a bare drive route', () => {
-    expect(legacyDriveTasksHref(new URLSearchParams('driveId=d1'))).toBe('/dashboard/d1/tasks');
-  });
-
-  it('given no drive id, should do nothing', () => {
-    expect(legacyDriveTasksHref(new URLSearchParams('priority=high'))).toBeNull();
-  });
-
-  it('given a value that is not a drive id, should not build a path from it', () => {
-    expect(legacyDriveTasksHref(new URLSearchParams('driveId=..%2F..%2Fsettings%2Fbackups%3Fx%3D'))).toBeNull();
-    expect(legacyDriveTasksHref(new URLSearchParams('driveId=Drive%20One'))).toBeNull();
   });
 });

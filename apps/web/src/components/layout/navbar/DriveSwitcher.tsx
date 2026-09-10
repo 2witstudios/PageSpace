@@ -7,7 +7,6 @@ import { ChevronsUpDown, Folder, Layers } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDriveStore } from "@/hooks/useDrive";
-import { useFavoritesSync } from "@/hooks/useFavorites";
 
 import DriveSwitcherDialog from "./DriveSwitcherDialog";
 
@@ -25,8 +24,6 @@ export default function DriveSwitcher() {
   const isLoading = useDriveStore((state) => state.isLoading);
   const currentDriveId = useDriveStore((state) => state.currentDriveId);
   const setCurrentDrive = useDriveStore((state) => state.setCurrentDrive);
-
-  useFavoritesSync();
 
   const { driveId } = params;
   const urlDriveId = Array.isArray(driveId) ? driveId[0] : driveId;
