@@ -11,6 +11,8 @@ import { getStatusDisplay, getAssigneeText } from './task-helpers';
 
 export interface TaskCompactRowProps {
   task: Task;
+  /** Drive to name before the list title; only in the All drives focus. */
+  driveName?: string;
   onToggleComplete: (task: Task) => void;
   onTap: (task: Task) => void;
   /**
@@ -36,6 +38,7 @@ const PRIORITY_DOT: Record<string, string> = {
 
 export const TaskCompactRow = memo(function TaskCompactRow({
   task,
+  driveName,
   onToggleComplete,
   onTap,
   rowMeta,
@@ -120,7 +123,8 @@ export const TaskCompactRow = memo(function TaskCompactRow({
 
           {/* Source task list name */}
           {task.taskListPageTitle && (
-            <span className="truncate max-w-[80px] text-muted-foreground/70">
+            <span className="truncate max-w-[140px] text-muted-foreground/70">
+              {driveName ? `${driveName} › ` : ''}
               {task.taskListPageTitle}
             </span>
           )}

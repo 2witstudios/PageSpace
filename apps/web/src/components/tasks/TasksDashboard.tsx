@@ -4,7 +4,6 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { formatDistanceToNow } from 'date-fns';
 import {
-  ArrowLeft,
   RefreshCw,
   AlertTriangle,
   Search,
@@ -41,7 +40,6 @@ import {
   scopeKeyFor,
   pickInitialFilters,
   toStoredDashboardFilters,
-  fromStoredOrDefaults,
   type DueDateFilter,
   type AssigneeFilter,
   type StatusGroupFilter,
@@ -57,7 +55,8 @@ import {
 import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
 import type { Task, TaskFilters, Drive, Pagination, StatusConfigsByTaskList } from './types';
 import { getStatusDisplay } from './task-helpers';
-import { DriveScopeSwitcher } from '@/components/shared/DriveScopeSwitcher';
+import { FocusTrigger } from '@/components/shared/FocusTrigger';
+import { ALL_DRIVES, driveFocus } from '@/lib/dashboard/focus';
 import { FilterControls } from './FilterControls';
 import { TaskCompactRow } from './TaskCompactRow';
 import { TaskDetailSheet } from './TaskDetailSheet';
@@ -111,7 +110,10 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
 
   // Filter state — URL params win on mount; otherwise fall back to per-scope persisted prefs.
-  const [selectedDriveId, setSelectedDriveId] = useState<string | undefined>(propDriveId);
+  // The focus: the route's drive, or All drives. There is no in-page drive
+  // filter any more — changing drive is changing focus, via the picker.
+  const selectedDriveId = propDriveId;
+  const focus = propDriveId ? driveFocus(propDriveId) : ALL_DRIVES;
   const persistDashboardFilter = useLayoutStore((state) => state.setTasksDashboardFilter);
   const [filters, setFilters] = useState<ExtendedFilters>(() => {
     const initialScopeKey = scopeKeyFor(isLocked ? 'drive' : 'user', propDriveId);
@@ -164,11 +166,6 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
     if (newFilters.statusGroup && newFilters.statusGroup !== 'active') {
       params.set('statusGroup', newFilters.statusGroup);
     }
-    // For user context, driveId is a filter (not in the URL path)
-    if (newFilters.driveId && !newDriveId) {
-      params.set('driveId', newFilters.driveId);
-    }
-
     const queryString = params.toString();
     const basePath = newDriveId
       ? `/dashboard/${newDriveId}/tasks`
@@ -228,8 +225,6 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
 
         if (isLocked && selectedDriveId) {
           params.set('driveId', selectedDriveId);
-        } else if (!isLocked && filters.driveId) {
-          params.set('driveId', filters.driveId);
         }
         if (filters.status) {
           params.set('status', filters.status);
@@ -319,31 +314,19 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
     await fetchTasks();
   };
 
+  // A bookmarked `/dashboard/tasks?driveId=…` from when the drive was a filter
+  // means the same thing the drive route now means.
+  const legacyDriveId = !isLocked ? searchParams.get('driveId') : null;
+  useEffect(() => {
+    if (legacyDriveId) {
+      router.replace(`/dashboard/${legacyDriveId}/tasks`);
+    }
+  }, [legacyDriveId, router]);
+
   const handleFiltersChange = (newFilters: Partial<ExtendedFilters>) => {
     const updated = { ...filters, ...newFilters };
     setFilters(updated);
     updateUrl(updated, selectedDriveId);
-  };
-
-  const handleDriveChange = (driveId: string) => {
-    if (isLocked) {
-      setSelectedDriveId(driveId);
-      const stored = useLayoutStore.getState().tasksDashboardFilters[scopeKeyFor('drive', driveId)];
-      const updatedFilters = fromStoredOrDefaults(stored);
-      // Cancel any in-flight debounced search and sync the input to the restored filter
-      // so the search box doesn't display the previous drive's text.
-      if (searchTimeoutRef.current) {
-        clearTimeout(searchTimeoutRef.current);
-        searchTimeoutRef.current = null;
-      }
-      setSearchValue(updatedFilters.search || '');
-      setFilters(updatedFilters);
-      updateUrl(updatedFilters, driveId);
-    } else {
-      const updatedFilters = { ...filters, driveId: driveId || undefined };
-      setFilters(updatedFilters);
-      updateUrl(updatedFilters, undefined);
-    }
   };
 
   // Helper to get status configs for a specific task
@@ -566,15 +549,14 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
     );
   }
 
-  const title = isLocked
-    ? `${drives.find(d => d.id === selectedDriveId)?.name || 'Drive'} Tasks`
-    : 'My Tasks';
+  // The title names the section; the focus line under it names the drive
+  // (or All drives) and is how you change it. Scope no longer lives in words.
+  const assigneeSuffix = filters.assigneeFilter === 'all' ? 'all assignees' : 'assigned to you';
 
-  const description = isLocked
-    ? 'Tasks assigned to you in this drive'
-    : filters.driveId
-      ? `Your tasks in ${drives.find(d => d.id === filters.driveId)?.name || 'selected drive'}`
-      : 'Your tasks across all drives';
+  // A row's list title is ambiguous across drives, so in the All drives focus
+  // the Source also names the drive. Tasks carry driveId but not the name.
+  const driveNameFor = (task: Task): string | undefined =>
+    isLocked ? undefined : drives.find((d) => d.id === task.driveId)?.name;
 
   // Note: assigneeFilter === 'all' and statusGroup !== 'active' are included because their
   // defaults are 'mine' and 'active' respectively — deviations users may want to clear.
@@ -583,7 +565,6 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
     filters.status ||
     filters.priority ||
     (filters.dueDateFilter && filters.dueDateFilter !== 'all') ||
-    (!isLocked && filters.driveId) ||
     filters.assigneeFilter === 'all' ||
     (filters.statusGroup && filters.statusGroup !== 'active')
   );
@@ -610,7 +591,6 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
     filters.status,
     filters.priority,
     filters.dueDateFilter && filters.dueDateFilter !== 'all',
-    !isLocked && filters.driveId,
     filters.assigneeFilter === 'all',
     filters.statusGroup && filters.statusGroup !== 'active',
   ].filter(Boolean).length;
@@ -639,24 +619,15 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
               <>
                 {/* Mobile Header - compact */}
                 <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b border-border/50">
+                  {/*
+                    No Back: Home is in the header and the nav. The row is the
+                    title, the focus, refresh, filters — every button 36px.
+                  */}
                   <div className="flex items-center gap-2 px-3 py-2.5">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-9 w-9 shrink-0"
-                      onClick={() => router.push(isLocked && selectedDriveId
-                        ? `/dashboard/${selectedDriveId}`
-                        : '/dashboard'
-                      )}
-                    >
-                      <ArrowLeft className="h-4 w-4" />
-                    </Button>
-                    <h1 className="text-base font-semibold truncate flex-1">{title}</h1>
-                    <DriveScopeSwitcher
-                      section="tasks"
-                      driveId={isLocked ? selectedDriveId : undefined}
-                      compact
-                    />
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                      <h1 className="text-base font-semibold shrink-0">Tasks</h1>
+                      <FocusTrigger section="tasks" focus={focus} />
+                    </div>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -711,6 +682,7 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
                       <TaskCompactRow
                         key={task.id}
                         task={task}
+                        driveName={driveNameFor(task)}
                         onToggleComplete={handleToggleComplete}
                         onTap={handleOpenDetailSheet}
                         // This list spans every drive the user belongs to, so
@@ -740,6 +712,7 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
                 {/* Mobile Sheets */}
                 <TaskDetailSheet
                   task={liveDetailSheetTask}
+                  driveName={liveDetailSheetTask ? driveNameFor(liveDetailSheetTask) : undefined}
                   statusConfigs={liveDetailSheetTask ? getConfigsForTask(liveDetailSheetTask) : []}
                   open={detailSheetOpen}
                   onOpenChange={setDetailSheetOpen}
@@ -756,13 +729,10 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
                 <TaskFilterSheet
                   open={filterSheetOpen}
                   onOpenChange={setFilterSheetOpen}
-                  isLocked={isLocked}
-                  drives={drives}
-                  selectedDriveId={selectedDriveId}
+                  scopedToDrive={isLocked}
                   filters={filters}
                   activeFilterCount={activeFilterCount}
                   statusConfigsByTaskList={statusConfigsByTaskList}
-                  onDriveChange={handleDriveChange}
                   onFiltersChange={handleFiltersChange}
                   onClearFilters={clearFilters}
                 />
@@ -771,28 +741,16 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
               <>
                 {/* Desktop Header */}
                 <div className="mb-6">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => router.push(isLocked && selectedDriveId
-                      ? `/dashboard/${selectedDriveId}`
-                      : '/dashboard'
-                    )}
-                    className="mb-3 sm:mb-4"
-                  >
-                    <ArrowLeft className="h-4 w-4 mr-2" />
-                    Back
-                  </Button>
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <h1 className="text-2xl font-bold">{title}</h1>
-                      <p className="text-sm text-muted-foreground">{description}</p>
+                    <div className="min-w-0">
+                      <h1 className="text-2xl font-bold">Tasks</h1>
+                      <div className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
+                        <FocusTrigger section="tasks" focus={focus} />
+                        <span aria-hidden="true">·</span>
+                        <span className="shrink-0">{assigneeSuffix}</span>
+                      </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <DriveScopeSwitcher
-                        section="tasks"
-                        driveId={isLocked ? selectedDriveId : undefined}
-                      />
                       {/* View toggle */}
                       <div className="hidden md:flex items-center bg-muted rounded-md p-0.5">
                         <button
@@ -860,13 +818,10 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
 
                   <FilterControls
                     layout="desktop"
-                    isLocked={isLocked}
-                    drives={drives}
-                    selectedDriveId={selectedDriveId}
+                    scopedToDrive={isLocked}
                     filters={filters}
                     hasActiveFilters={hasActiveFilters}
                     statusConfigsByTaskList={statusConfigsByTaskList}
-                    onDriveChange={handleDriveChange}
                     onFiltersChange={handleFiltersChange}
                     onClearFilters={clearFilters}
                   />
@@ -945,6 +900,7 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
                           <TaskTableRow
                             key={task.id}
                             task={task}
+                            driveName={driveNameFor(task)}
                             statusConfigs={getConfigsForTask(task)}
                             onStatusChange={handleStatusChange}
                             onPriorityChange={handlePriorityChange}

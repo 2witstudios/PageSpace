@@ -49,6 +49,8 @@ import { getStatusDisplay } from './task-helpers';
 
 export interface TaskDetailSheetProps {
   task: Task | null;
+  /** Drive to name before the list title; only in the All drives focus. */
+  driveName?: string;
   statusConfigs: TaskStatusConfig[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -70,6 +72,7 @@ export const shouldFetchDescription = (
 
 export function TaskDetailSheet({
   task,
+  driveName,
   statusConfigs,
   open,
   onOpenChange,
@@ -346,7 +349,10 @@ export function TaskDetailSheet({
                 onClick={() => onOpenChange(false)}
                 className="flex items-center gap-2 rounded-md border px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
               >
-                <span className="truncate">{task.taskListPageTitle}</span>
+                <span className="truncate">
+                  {driveName ? `${driveName} › ` : ''}
+                  {task.taskListPageTitle}
+                </span>
                 <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" />
               </Link>
             </div>

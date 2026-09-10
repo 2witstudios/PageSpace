@@ -12,7 +12,8 @@ import {
   Star,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DriveScopeSwitcher } from "@/components/shared/DriveScopeSwitcher";
+import { FocusTrigger } from "@/components/shared/FocusTrigger";
+import { ALL_DRIVES } from "@/lib/dashboard/focus";
 import {
   Table,
   TableBody,
@@ -291,10 +292,17 @@ export default function DrivesBrowser() {
     <div className="h-full overflow-y-auto overflow-x-hidden">
       <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-full">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold">Drives</h1>
-          <div className="flex items-center gap-2">
-            <DriveScopeSwitcher section="files" />
+        <div className="flex items-center justify-between gap-4 mb-6">
+          {/*
+            This browser is what Files shows in the All drives focus: a
+            drive card sets the focus and the same section shows its files.
+            So it is titled as the section, with the focus line under it.
+          */}
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl font-bold">Files</h1>
+            <FocusTrigger section="files" focus={ALL_DRIVES} />
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
             <Button
               variant={viewMode === "list" ? "secondary" : "ghost"}
               size="icon"

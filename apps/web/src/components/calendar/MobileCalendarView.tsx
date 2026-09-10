@@ -62,8 +62,8 @@ interface MobileCalendarViewProps {
   currentDate?: Date;
   driveColorMap?: Map<string | null, EventColorConfig> | null;
   context?: 'user' | 'drive';
-  /** Header control for jumping between this drive's calendar and the global one. */
-  scopeSwitcher?: ReactNode;
+  /** Header control naming the focus (this drive or All drives) and changing it. */
+  focusTrigger?: ReactNode;
   calendarEntries?: CalendarEntryForMobile[];
   onToggleCalendar?: (key: string) => void;
   onShowAllCalendars?: () => void;
@@ -81,7 +81,7 @@ export function MobileCalendarView({
   currentDate: parentDate,
   driveColorMap,
   context = 'drive',
-  scopeSwitcher,
+  focusTrigger,
   calendarEntries,
   onToggleCalendar,
   onShowAllCalendars,
@@ -353,7 +353,7 @@ export function MobileCalendarView({
             <ListTodo className="h-4 w-4" />
           </Button>
 
-          {scopeSwitcher}
+          {focusTrigger}
 
           {calendarEntries && onToggleCalendar && onShowAllCalendars && onHideAllCalendars && (
             <Sheet>
