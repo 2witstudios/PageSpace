@@ -33,7 +33,8 @@ export function DriveContextMenu({ drive, children }: DriveContextMenuProps) {
   const removeDriveFromStore = useDriveStore((state) => state.removeDrive);
 
   const handleOpen = () => {
-    router.push(`/dashboard/${drive.id}`);
+    // Match the card click: from the Files surface a drive opens on its files.
+    router.push(`/dashboard/${drive.id}/files`);
   };
 
   const handleRename = async (newName: string) => {

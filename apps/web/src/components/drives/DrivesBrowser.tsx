@@ -147,7 +147,9 @@ export default function DrivesBrowser() {
     fetchWithAuth(`/api/drives/${drive.id}/access`, { method: "POST" }).catch(
       (err) => console.warn("Failed to record drive access:", err)
     );
-    router.push(`/dashboard/${drive.id}`);
+    // This browser is the Files surface, so opening a drive lands in its
+    // file browser rather than on the drive home.
+    router.push(`/dashboard/${drive.id}/files`);
   };
 
   if (isLoading && drives.length === 0) {
