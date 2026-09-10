@@ -10,6 +10,15 @@ const assert = ({ given, should, actual, expected }: {
   given: string; should: string; actual: unknown; expected: unknown;
 }) => expect(actual, `Given ${given}, should ${should}`).toEqual(expected);
 
+/** The rows the fallback tests below work with: a nonce is OPTIONAL on them,
+ *  because the whole point is a confirmation that arrives without one. */
+interface Row {
+  id: string;
+  clientNonce?: string;
+  userId: string;
+  content: string;
+}
+
 const pending = (nonce: string) => ({ id: `temp-${nonce}`, clientNonce: nonce });
 const confirmed = (id: string, nonce?: string) => ({ id, clientNonce: nonce });
 
@@ -138,9 +147,9 @@ describe('reconcileOptimistic', () => {
     // rolling deploy, where a new client posts to an old server. Without this
     // fallback the sender sees their own message twice until a refetch, which
     // is the exact complaint this change exists to answer.
-    const prev = [{ id: 'temp-a', clientNonce: 'a', userId: 'me', content: 'hi' }];
+    const prev: Row[] = [{ id: 'temp-a', clientNonce: 'a', userId: 'me', content: 'hi' }];
 
-    const next = reconcileOptimistic(
+    const next = reconcileOptimistic<Row>(
       prev,
       { id: 'server-a', userId: 'me', content: 'hi' },
       (m) => m.userId,
@@ -156,9 +165,9 @@ describe('reconcileOptimistic', () => {
   });
 
   it('never lets the nonce-less fallback match another sender', () => {
-    const prev = [{ id: 'temp-a', clientNonce: 'a', userId: 'me', content: 'hi' }];
+    const prev: Row[] = [{ id: 'temp-a', clientNonce: 'a', userId: 'me', content: 'hi' }];
 
-    const next = reconcileOptimistic(
+    const next = reconcileOptimistic<Row>(
       prev,
       { id: 'server-theirs', userId: 'someone-else', content: 'hi' },
       (m) => m.userId,
@@ -174,12 +183,12 @@ describe('reconcileOptimistic', () => {
   });
 
   it('prefers the nonce over the fallback when both could match', () => {
-    const prev = [
+    const prev: Row[] = [
       { id: 'temp-a', clientNonce: 'a', userId: 'me', content: 'hi' },
       { id: 'temp-b', clientNonce: 'b', userId: 'me', content: 'hi' },
     ];
 
-    const next = reconcileOptimistic(
+    const next = reconcileOptimistic<Row>(
       prev,
       { id: 'server-b', clientNonce: 'b', userId: 'me', content: 'hi' },
       (m) => m.userId,
