@@ -16,68 +16,31 @@ import {
 import { useDriveStore } from '@/hooks/useDrive';
 import { cn } from '@/lib/utils';
 
-/**
- * The four surfaces that exist both as a drive-scoped view
- * (`/dashboard/[driveId]/<section>`) and as a global, cross-drive view.
- */
-export type DriveScopedSection = 'channels' | 'files' | 'tasks' | 'calendar';
+import {
+  ALL_DRIVES,
+  driveFocus,
+  focusDestinationHref,
+  focusSectionHref,
+  sectionForPathname,
+  type FocusSection,
+} from '@/lib/dashboard/focus';
 
-/**
- * The global counterpart of each section. Files has no cross-drive listing
- * of its own, so the drives browser stands in for it — the same mapping the
- * left sidebar's primary navigation uses.
- */
-const GLOBAL_HREF: Record<DriveScopedSection, string> = {
-  channels: '/dashboard/channels',
-  files: '/dashboard/drives',
-  tasks: '/dashboard/tasks',
-  calendar: '/dashboard/calendar',
-};
+export type DriveScopedSection = FocusSection;
+export { sectionForPathname };
 
 const ALL_DRIVES_LABEL = 'All drives';
 
 export function globalSectionHref(section: DriveScopedSection): string {
-  return GLOBAL_HREF[section];
+  return focusSectionHref(ALL_DRIVES, section);
 }
 
 export function driveSectionHref(section: DriveScopedSection, driveId: string): string {
-  return `/dashboard/${driveId}/${section}`;
+  return focusSectionHref(driveFocus(driveId), section);
 }
 
-const SECTIONS: DriveScopedSection[] = ['channels', 'files', 'tasks', 'calendar'];
-
-/**
- * Which drive-scoped section, if any, the current route is showing.
- *
- * Recognises both shapes: `/dashboard/[driveId]/<section>` (with anything
- * nested below it, e.g. a files sub-folder) and the global counterparts,
- * including `/dashboard/drives` standing in for files.
- */
-export function sectionForPathname(pathname: string | null | undefined): DriveScopedSection | null {
-  if (!pathname) return null;
-  const segments = pathname.split('/').filter(Boolean);
-  if (segments[0] !== 'dashboard' || segments.length < 2) return null;
-
-  const isSection = (value: string | undefined): value is DriveScopedSection =>
-    SECTIONS.includes(value as DriveScopedSection);
-
-  // Global shape: /dashboard/<section> — or /dashboard/drives for files.
-  if (segments.length === 2) {
-    if (segments[1] === 'drives') return 'files';
-    return isSection(segments[1]) ? segments[1] : null;
-  }
-  // Drive shape: /dashboard/<driveId>/<section>/...
-  return isSection(segments[2]) ? segments[2] : null;
-}
-
-/**
- * Where switching to `driveId` should land, given where the user is now:
- * the same section in the new drive when they are in one, else its home.
- * A drive picked from a files view is wanted for its files.
- */
+/** @deprecated use focusDestinationHref from lib/dashboard/focus */
 export function driveDestinationHref(pathname: string | null | undefined, driveId: string): string {
-  const section = sectionForPathname(pathname);
-  return section ? driveSectionHref(section, driveId) : `/dashboard/${driveId}`;
+  return focusDestinationHref(pathname, driveFocus(driveId));
 }
 
 interface DriveScopeSwitcherProps {
@@ -146,7 +109,7 @@ export function DriveScopeSwitcher({ section, driveId, compact = false, classNam
           Show {section} for
         </DropdownMenuLabel>
         <DropdownMenuItem asChild>
-          <Link href={GLOBAL_HREF[section]} aria-current={isGlobal ? 'page' : undefined}>
+          <Link href={globalSectionHref(section)} aria-current={isGlobal ? 'page' : undefined}>
             <Layers className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
             <span className="flex-1 truncate">{ALL_DRIVES_LABEL}</span>
             {isGlobal && <Check className="h-4 w-4" aria-hidden="true" />}

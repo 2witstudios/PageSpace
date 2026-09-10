@@ -2,13 +2,11 @@
 
 import { useState } from "react";
 import type { KeyboardEvent } from "react";
-import { useRouter } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
-import { Check, Folder, LayoutGrid, Plus, Star } from "lucide-react";
+import { Check, Folder, Layers, Plus, Star } from "lucide-react";
 
 import {
   CommandDialog,
-  CommandEmpty,
   CommandGroup,
   CommandInput,
   CommandItem,
@@ -39,7 +37,6 @@ interface DriveSwitcherDialogProps {
  * fuzzy match would rank across groups we want kept apart.
  */
 export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitcherDialogProps) {
-  const router = useRouter();
   const [query, setQuery] = useState("");
   const [isCreateOpen, setCreateOpen] = useState(false);
 
@@ -50,6 +47,7 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
     currentDriveId,
     isSearching,
     selectDrive,
+    selectAllDrives,
     isFavorite,
     toggleFavorite,
   } = useDrivePicker(query);
@@ -63,6 +61,15 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
     close();
     selectDrive(drive);
   };
+
+  const handleSelectAll = () => {
+    close();
+    selectAllDrives();
+  };
+
+  // The sidebar's DriveSwitcher clears this whenever the URL has no drive,
+  // so "no current drive" is exactly the All drives focus.
+  const isAllDrivesCurrent = currentDriveId == null;
 
   // Shift+Enter favourites the highlighted row. cmdk keeps focus on the input
   // and walks rows via aria-activedescendant, so a button INSIDE a row is
@@ -116,28 +123,17 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
 
         {/*
           Fixed chrome under the input, outside the list on purpose: cmdk's
-          arrow keys walk CommandItems, and these two are destinations, not
-          drives — they should not sit between ↓ and the first drive.
+          arrow keys walk CommandItems, and Create drive is an action, not a
+          destination — it should not sit between ↓ and the first row.
         */}
-        <div className="grid grid-cols-2 border-b border-border bg-card">
-          <button
-            type="button"
-            onClick={() => {
-              close();
-              router.push("/dashboard/drives");
-            }}
-            className="flex h-10 items-center justify-center gap-2 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:bg-accent focus-visible:text-foreground"
-          >
-            <LayoutGrid className="h-4 w-4" aria-hidden="true" />
-            All drives
-          </button>
+        <div className="flex border-b border-border bg-card">
           <button
             type="button"
             onClick={() => {
               close();
               setCreateOpen(true);
             }}
-            className="flex h-10 items-center justify-center gap-2 border-l border-border text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:bg-accent focus-visible:text-foreground"
+            className="flex h-10 flex-1 items-center justify-center gap-2 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:bg-accent focus-visible:text-foreground"
           >
             <Plus className="h-4 w-4" aria-hidden="true" />
             Create drive
@@ -145,7 +141,33 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
         </div>
 
         <CommandList className="max-h-[60vh] max-sm:min-h-0 max-sm:flex-1 max-sm:max-h-none">
-          <CommandEmpty>{isSearching ? "No drives match." : "No drives yet."}</CommandEmpty>
+          {/*
+            All drives is a focus like any drive, so it is a row, first, and
+            it survives a query: the way out of a drive must never depend on
+            what was typed. Picking it keeps the section you are in.
+          */}
+          <CommandGroup>
+            <CommandItem
+              value="focus:all"
+              onSelect={handleSelectAll}
+              aria-label={isAllDrivesCurrent ? "All drives, current" : "All drives"}
+              aria-current={isAllDrivesCurrent ? "true" : undefined}
+              className={cn("cursor-pointer gap-2.5", isAllDrivesCurrent && "bg-primary-soft")}
+              data-current={isAllDrivesCurrent ? "true" : undefined}
+              data-focus="all"
+            >
+              <Layers className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">All drives</span>
+              {isAllDrivesCurrent && <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />}
+            </CommandItem>
+          </CommandGroup>
+
+          {/* cmdk's own empty state never fires now that All drives is always a row. */}
+          {allDrives.length === 0 && (
+            <div className="py-6 text-center text-sm text-muted-foreground" role="status">
+              {isSearching ? "No drives match." : "No drives yet."}
+            </div>
+          )}
 
           {favoriteDrives.length > 0 && (
             <CommandGroup heading="Favorites">

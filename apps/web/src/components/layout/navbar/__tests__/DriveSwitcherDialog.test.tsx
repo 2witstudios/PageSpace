@@ -12,10 +12,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Drive } from '@pagespace/lib/types';
 
 const push = vi.fn();
+let pathname = '/dashboard';
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push }),
   useParams: () => ({}),
-  usePathname: () => '/dashboard',
+  usePathname: () => pathname,
 }));
 
 const fetchWithAuth = vi.fn((..._args: unknown[]) => Promise.resolve(new Response(null, { status: 200 })));
@@ -105,13 +106,28 @@ describe('DriveSwitcherDialog', () => {
       expect(screen.queryByText('current')).not.toBeInTheDocument();
     });
 
-    it('given the actions bar, should offer All drives and Create drive above the list, outside it', () => {
+    it('given the actions bar, should offer Create drive above the list, outside it', () => {
       renderPicker();
 
-      const allDrives = screen.getByRole('button', { name: 'All drives' });
       const create = screen.getByRole('button', { name: 'Create drive' });
-      expect(allDrives.closest('[cmdk-list]')).toBeNull();
       expect(create.closest('[cmdk-list]')).toBeNull();
+    });
+
+    it('given the list, should offer All drives as its first row, unmarked while a drive is current', () => {
+      renderPicker();
+
+      const rows = screen.getAllByRole('option');
+      expect(rows[0]).toHaveAttribute('aria-label', 'All drives');
+      expect(rows[0].getAttribute('data-current')).toBeNull();
+    });
+
+    it('given no current drive, should mark All drives as current', () => {
+      useDriveStore.setState({ currentDriveId: null });
+      renderPicker();
+
+      const all = screen.getByRole('option', { name: 'All drives, current' });
+      expect(all.getAttribute('data-current')).toBe('true');
+      expect(all).toHaveAttribute('aria-current', 'true');
     });
   });
 
@@ -186,6 +202,8 @@ describe('DriveSwitcherDialog', () => {
       const input = screen.getByPlaceholderText('Search drives…');
 
       await userEvent.type(input, 'marketing');
+      // All drives is the first row; the first drive is one step down.
+      await userEvent.keyboard('{ArrowDown}');
       await userEvent.keyboard('{Shift>}{Enter}{/Shift}');
 
       expect(addFavorite).toHaveBeenCalledWith('h2s7d0yb5j', 'drive');
@@ -193,13 +211,35 @@ describe('DriveSwitcherDialog', () => {
       expect(onOpenChange).not.toHaveBeenCalledWith(false);
     });
 
-    it('given All drives, should go to the drives page and close', async () => {
+    it('given All drives from a drive section, should keep the section, clear the current drive, and close', async () => {
+      pathname = '/dashboard/k3xq9w2p7m/tasks';
       const { onOpenChange } = renderPicker();
 
-      await userEvent.click(screen.getByRole('button', { name: 'All drives' }));
+      await userEvent.click(screen.getByRole('option', { name: 'All drives' }));
 
-      expect(push).toHaveBeenCalledWith('/dashboard/drives');
+      expect(push).toHaveBeenCalledWith('/dashboard/tasks');
+      expect(useDriveStore.getState().currentDriveId).toBeNull();
       expect(onOpenChange).toHaveBeenCalledWith(false);
+      pathname = '/dashboard';
+    });
+
+    it('given All drives from a page inside a drive, should go home', async () => {
+      pathname = '/dashboard/k3xq9w2p7m/page_1';
+      renderPicker();
+
+      await userEvent.click(screen.getByRole('option', { name: 'All drives' }));
+
+      expect(push).toHaveBeenCalledWith('/dashboard');
+      pathname = '/dashboard';
+    });
+
+    it('given a query, should keep All drives reachable above the results', async () => {
+      renderPicker();
+
+      await userEvent.type(screen.getByPlaceholderText('Search drives…'), 'eng');
+
+      const rows = screen.getAllByRole('option');
+      expect(rows[0]).toHaveAttribute('aria-label', 'All drives');
     });
 
     it('given Create drive, should hand off to the create dialog', async () => {

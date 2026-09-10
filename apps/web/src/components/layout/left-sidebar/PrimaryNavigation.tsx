@@ -49,7 +49,9 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
 
     const navigation = [
         {
-            name: driveId ? "Drive Home" : "Dashboard",
+            // One name in both focuses: the dashboard is Home for all drives,
+            // and a drive's home is Home for that drive.
+            name: "Home",
             href: driveId ? `/dashboard/${driveId}` : "/dashboard",
             icon: Home,
             exact: true,

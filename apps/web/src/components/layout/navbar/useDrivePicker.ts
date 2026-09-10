@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useDriveStore, type Drive } from "@/hooks/useDrive";
 import { useFavorites } from "@/hooks/useFavorites";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
-import { driveDestinationHref } from "@/components/shared/DriveScopeSwitcher";
+import { ALL_DRIVES, driveFocus, focusDestinationHref } from "@/lib/dashboard/focus";
 
 const RECENT_LIMIT = 5;
 
@@ -64,13 +64,24 @@ export function useDrivePicker(query: string) {
       setCurrentDrive(drive.id);
       // Stay in the section you were in: a drive picked while looking at
       // files (or channels, tasks, calendar) opens on that drive's files.
-      router.push(driveDestinationHref(pathname, drive.id));
+      router.push(focusDestinationHref(pathname, driveFocus(drive.id)));
       // Optimistic, so "Recent" reorders before the server has heard about it.
       updateDrive(drive.id, { lastAccessedAt: new Date().toISOString() });
       fetchWithAuth(`/api/drives/${drive.id}/access`, { method: "POST" }).catch(() => {});
     },
     [router, pathname, setCurrentDrive, updateDrive]
   );
+
+  /**
+   * All drives is a focus like any drive: it keeps the section you are in
+   * (a drive's tasks → every drive's tasks) and clears the current drive,
+   * which the sidebar's DriveSwitcher would otherwise only do on the next
+   * URL change.
+   */
+  const selectAllDrives = useCallback(() => {
+    setCurrentDrive(null);
+    router.push(focusDestinationHref(pathname, ALL_DRIVES));
+  }, [router, pathname, setCurrentDrive]);
 
   const isFavorite = useCallback((driveId: string) => driveIds.has(driveId), [driveIds]);
 
@@ -96,6 +107,7 @@ export function useDrivePicker(query: string) {
     currentDriveId,
     isSearching: normalizedQuery.length > 0,
     selectDrive,
+    selectAllDrives,
     isFavorite,
     toggleFavorite,
   };

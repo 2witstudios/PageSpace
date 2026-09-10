@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { ChevronsUpDown, Folder } from "lucide-react";
+import { ChevronsUpDown, Folder, Layers } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -64,9 +64,18 @@ export default function DriveSwitcher() {
         aria-expanded={isOpen}
         className="flex items-center gap-2 px-2 h-9 min-w-0 max-w-full"
       >
-        <Folder className="h-4 w-4 shrink-0" />
+        {/*
+          No drive open IS the All drives focus, so this names it as such:
+          "Select Drive" implied nothing was chosen, when every section is
+          already showing all of them.
+        */}
+        {currentDrive ? (
+          <Folder className="h-4 w-4 shrink-0" aria-hidden="true" />
+        ) : (
+          <Layers className="h-4 w-4 shrink-0" aria-hidden="true" />
+        )}
         <span className="truncate font-medium">
-          {currentDrive ? currentDrive.name : "Select Drive"}
+          {currentDrive ? currentDrive.name : "All drives"}
         </span>
         <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
       </Button>
