@@ -55,9 +55,10 @@ import {
   type TaskStatusConfig,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
-import type { Task, TaskFilters, Drive, Pagination, StatusConfigsByTaskList } from './types';
+import type { Task, TaskFilters, Pagination, StatusConfigsByTaskList } from './types';
 import { getStatusDisplay } from './task-helpers';
 import { FocusTrigger } from '@/components/shared/FocusTrigger';
+import { useDriveStore } from '@/hooks/useDrive';
 import { ALL_DRIVES, driveFocus } from '@/lib/dashboard/focus';
 import { FilterControls } from './FilterControls';
 import { TaskCompactRow } from './TaskCompactRow';
@@ -87,7 +88,6 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
 
   // State
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [drives, setDrives] = useState<Drive[]>([]);
   const [statusConfigsByTaskList, setStatusConfigsByTaskList] = useState<StatusConfigsByTaskList>({});
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -120,8 +120,23 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
   const [filters, setFilters] = useState<ExtendedFilters>(() => {
     const initialScopeKey = scopeKeyFor(isLocked ? 'drive' : 'user', propDriveId);
     const stored = useLayoutStore.getState().tasksDashboardFilters[initialScopeKey];
-    return forFocus(pickInitialFilters(searchParams, stored), isLocked);
+    return forFocus(pickInitialFilters(searchParams, stored, isLocked), isLocked);
   });
+
+  // A bookmarked `/dashboard/tasks?driveId=…` from when the drive was a filter
+  // means the same thing the drive route now means. Known before any fetch
+  // effect below, so the page never asks for the all-drives list on its way out.
+  const legacyHref = !isLocked ? legacyDriveTasksHref(searchParams) : null;
+  useEffect(() => {
+    if (legacyHref) {
+      router.replace(legacyHref);
+    }
+  }, [legacyHref, router]);
+
+  // Drive names come from the store the switcher and subtitle already read,
+  // so a row's "Drive › List" can never disagree with the focus line.
+  const drives = useDriveStore((state) => state.drives);
+  const driveNameById = useMemo(() => new Map(drives.map((d) => [d.id, d.name])), [drives]);
 
   // Track last data refresh time
   const [lastRefreshTime, setLastRefreshTime] = useState<Date>(new Date());
@@ -196,18 +211,6 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
       });
     }, 300);
   }, [updateUrl]);
-
-  // Fetch drives for the selector
-  const fetchDrives = useCallback(async () => {
-    try {
-      const response = await fetchWithAuth('/api/drives');
-      if (!response.ok) throw new Error('Failed to fetch drives');
-      const data = await response.json();
-      setDrives(data);
-    } catch (err) {
-      console.error('Error fetching drives:', err);
-    }
-  }, []);
 
   // Fetch tasks
   const fetchTasks = useCallback(
@@ -284,17 +287,14 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
     [isLocked, selectedDriveId, filters]
   );
 
-  // Initial load
+  // Fetch tasks when filters or drive changes — unless this mount is only
+  // here to redirect a legacy bookmark.
   useEffect(() => {
-    fetchDrives();
-  }, [fetchDrives]);
-
-  // Fetch tasks when filters or drive changes
-  useEffect(() => {
+    if (legacyHref) return;
     if (!isLocked || selectedDriveId) {
       fetchTasks();
     }
-  }, [isLocked, selectedDriveId, filters, fetchTasks]);
+  }, [legacyHref, isLocked, selectedDriveId, filters, fetchTasks]);
 
   // Register/unregister editing state for UI refresh protection
   useEffect(() => {
@@ -317,15 +317,6 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
   const handleRefresh = async () => {
     await fetchTasks();
   };
-
-  // A bookmarked `/dashboard/tasks?driveId=…` from when the drive was a filter
-  // means the same thing the drive route now means.
-  const legacyHref = !isLocked ? legacyDriveTasksHref(searchParams) : null;
-  useEffect(() => {
-    if (legacyHref) {
-      router.replace(legacyHref);
-    }
-  }, [legacyHref, router]);
 
   const handleFiltersChange = (newFilters: Partial<ExtendedFilters>) => {
     const updated = forFocus({ ...filters, ...newFilters }, isLocked);
@@ -560,7 +551,7 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
   // A row's list title is ambiguous across drives, so in the All drives focus
   // the Source also names the drive. Tasks carry driveId but not the name.
   const driveNameFor = (task: Task): string | undefined =>
-    isLocked ? undefined : drives.find((d) => d.id === task.driveId)?.name;
+    isLocked || !task.driveId ? undefined : driveNameById.get(task.driveId);
 
   // Note: assigneeFilter === 'all' and statusGroup !== 'active' are included because their
   // defaults are 'mine' and 'active' respectively — deviations users may want to clear.
@@ -674,8 +665,6 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
                 {/* Mobile Compact Task List */}
                 {tasks.length === 0 ? (
                   <TaskEmptyState
-                    isLocked={isLocked}
-                    hasDriveSelected={!!selectedDriveId}
                     hasActiveFilters={hasActiveFilters}
                     onClearFilters={clearFilters}
                     isMobile
@@ -834,8 +823,6 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
                 {/* Desktop Tasks View */}
                 {tasks.length === 0 ? (
                   <TaskEmptyState
-                    isLocked={isLocked}
-                    hasDriveSelected={!!selectedDriveId}
                     hasActiveFilters={hasActiveFilters}
                     onClearFilters={clearFilters}
                   />

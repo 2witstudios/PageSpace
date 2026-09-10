@@ -30,10 +30,15 @@ export function isSameFocus(a: Focus, b: Focus): boolean {
   return a.kind === b.kind && focusDriveId(a) === focusDriveId(b);
 }
 
-/** The four sections that exist in both focuses. */
-export type FocusSection = 'channels' | 'files' | 'tasks' | 'calendar';
+/**
+ * Every section that exists in both focuses. Agents, activity and trash
+ * have a drive shape and a global one too (with different bodies), and a
+ * focus change must keep them just like the four the sidebar's primary
+ * navigation shows.
+ */
+export type FocusSection = 'channels' | 'files' | 'tasks' | 'calendar' | 'agents' | 'activity' | 'trash';
 
-const SECTIONS: readonly FocusSection[] = ['channels', 'files', 'tasks', 'calendar'];
+const SECTIONS: readonly FocusSection[] = ['channels', 'files', 'tasks', 'calendar', 'agents', 'activity', 'trash'];
 
 const isSection = (value: string | undefined): value is FocusSection =>
   SECTIONS.includes(value as FocusSection);
@@ -48,6 +53,9 @@ const ALL_DRIVES_SECTION_HREF: Record<FocusSection, string> = {
   files: '/dashboard/drives',
   tasks: '/dashboard/tasks',
   calendar: '/dashboard/calendar',
+  agents: '/dashboard/agents',
+  activity: '/dashboard/activity',
+  trash: '/dashboard/trash',
 };
 
 /**

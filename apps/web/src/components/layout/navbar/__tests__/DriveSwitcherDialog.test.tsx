@@ -13,9 +13,12 @@ import type { Drive } from '@pagespace/lib/types';
 
 const push = vi.fn();
 let pathname = '/dashboard';
+// The route is what makes a drive "current" in the picker; the store's
+// currentDriveId is only a sidebar-synced mirror of it.
+let params: { driveId?: string } = { driveId: 'k3xq9w2p7m' };
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push }),
-  useParams: () => ({}),
+  useParams: () => params,
   usePathname: () => pathname,
 }));
 
@@ -72,6 +75,8 @@ const group = (heading: string | RegExp) => {
 describe('DriveSwitcherDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    pathname = '/dashboard/k3xq9w2p7m';
+    params = { driveId: 'k3xq9w2p7m' };
     useDriveStore.setState({ drives, currentDriveId: 'k3xq9w2p7m', isLoading: false, lastFetched: 0 });
     useFavorites.setState({
       driveIds: new Set(['k3xq9w2p7m']),
@@ -121,9 +126,13 @@ describe('DriveSwitcherDialog', () => {
       expect(rows[0].getAttribute('data-current')).toBeNull();
     });
 
-    it('given no current drive, should mark All drives as current', () => {
-      useDriveStore.setState({ currentDriveId: null });
+    it('given a route with no drive, should mark All drives as current even if the store still remembers one', () => {
+      pathname = '/dashboard/tasks';
+      params = {};
       renderPicker();
+
+      // The store still says Coffee Co.; the route wins, so no row is current.
+      expect(screen.queryAllByRole('option', { name: /current drive/ })).toHaveLength(0);
 
       const all = screen.getByRole('option', { name: 'All drives, current' });
       expect(all.getAttribute('data-current')).toBe('true');
@@ -202,8 +211,6 @@ describe('DriveSwitcherDialog', () => {
       const input = screen.getByPlaceholderText('Search drives…');
 
       await userEvent.type(input, 'marketing');
-      // All drives is the first row; the first drive is one step down.
-      await userEvent.keyboard('{ArrowDown}');
       await userEvent.keyboard('{Shift>}{Enter}{/Shift}');
 
       expect(addFavorite).toHaveBeenCalledWith('h2s7d0yb5j', 'drive');
@@ -230,16 +237,33 @@ describe('DriveSwitcherDialog', () => {
       await userEvent.click(screen.getByRole('option', { name: 'All drives' }));
 
       expect(push).toHaveBeenCalledWith('/dashboard');
-      pathname = '/dashboard';
     });
 
-    it('given a query, should keep All drives reachable above the results', async () => {
+    it('given a query, Enter should pick the typed drive, not All drives', async () => {
       renderPicker();
 
       await userEvent.type(screen.getByPlaceholderText('Search drives…'), 'eng');
+      expect(screen.queryByRole('option', { name: /^All drives/ })).not.toBeInTheDocument();
+      await userEvent.keyboard('{Enter}');
 
-      const rows = screen.getAllByRole('option');
-      expect(rows[0]).toHaveAttribute('aria-label', 'All drives');
+      expect(push).toHaveBeenCalledWith('/dashboard/v8n1t6zr4c');
+    });
+
+    it('given a query that names it, should still offer All drives', async () => {
+      renderPicker();
+
+      await userEvent.type(screen.getByPlaceholderText('Search drives…'), 'all');
+
+      expect(screen.getByRole('option', { name: 'All drives' })).toBeInTheDocument();
+    });
+
+    it('given Shift+Enter while All drives is highlighted, should do nothing rather than navigate', async () => {
+      const { onOpenChange } = renderPicker();
+
+      await userEvent.keyboard('{Shift>}{Enter}{/Shift}');
+
+      expect(push).not.toHaveBeenCalled();
+      expect(onOpenChange).not.toHaveBeenCalledWith(false);
     });
 
     it('given Create drive, should hand off to the create dialog', async () => {

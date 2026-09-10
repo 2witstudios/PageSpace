@@ -110,7 +110,7 @@ export default function DMSidebar({ className }: SidebarProps) {
   };
 
   return (
-    <SidebarShell className={className} footer="dashboard">
+    <SidebarShell className={className}>
       <div className="flex flex-1 min-h-0 flex-col px-3">
 
         <div className="relative mb-3">

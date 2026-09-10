@@ -32,31 +32,19 @@ export function TaskLoadingSkeleton({ isMobile = false }: TaskLoadingSkeletonPro
 }
 
 export interface TaskEmptyStateProps {
-  isLocked: boolean;
-  hasDriveSelected: boolean;
   hasActiveFilters: boolean;
   onClearFilters?: () => void;
   isMobile?: boolean;
 }
 
 export function TaskEmptyState({
-  isLocked,
-  hasDriveSelected,
   hasActiveFilters,
   onClearFilters,
   isMobile = false,
 }: TaskEmptyStateProps) {
-  const getTitle = () => {
-    if (isLocked && !hasDriveSelected) {
-      return isMobile ? 'Select a drive' : 'Select a drive to view tasks';
-    }
-    return 'No tasks found';
-  };
+  const getTitle = () => 'No tasks found';
 
   const getDescription = () => {
-    if (isLocked && !hasDriveSelected) {
-      return isMobile ? 'Open filters to choose a drive' : 'Choose a drive from the dropdown above';
-    }
     if (hasActiveFilters) {
       return 'Try adjusting your filters';
     }

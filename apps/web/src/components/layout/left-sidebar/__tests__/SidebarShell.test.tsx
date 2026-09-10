@@ -41,12 +41,4 @@ describe('SidebarShell', () => {
     expect(screen.getByTestId('drive-footer')).toBeInTheDocument();
     expect(screen.queryByTestId('dashboard-footer')).not.toBeInTheDocument();
   });
-
-  it('given a user-scoped variant inside a drive, should keep the dashboard footer', () => {
-    params = { driveId: 'drive_eng' };
-    render(<SidebarShell footer="dashboard"><div /></SidebarShell>);
-
-    expect(screen.getByTestId('dashboard-footer')).toBeInTheDocument();
-    expect(screen.queryByTestId('drive-footer')).not.toBeInTheDocument();
-  });
 });

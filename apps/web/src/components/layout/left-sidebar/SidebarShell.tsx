@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 
 import DriveSwitcher from "@/components/layout/navbar/DriveSwitcher";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
+import { useIsMac } from "@/hooks/useIsMac";
 import { useDriveStore } from "@/hooks/useDrive";
 import { canManageDrive } from "@/hooks/usePermissions";
 import { focusDriveId, useFocus } from "@/lib/dashboard/focus";
 import { cn, isElectron } from "@/lib/utils";
+import { SHEET_BREAKPOINT_QUERY } from "@/stores/agents/useAgentSurfaceStore";
 
 import DashboardFooter from "./DashboardFooter";
 import DriveFooter from "./DriveFooter";
@@ -18,12 +20,6 @@ const ASIDE_CLASS =
 
 interface SidebarShellProps {
   className?: string;
-  /**
-   * Which footer closes the sidebar. `focus` (default) follows the focus:
-   * a drive's footer in a drive, the dashboard's for All drives. DMs are
-   * user-scoped whichever drive is open, so they pin `dashboard`.
-   */
-  footer?: "focus" | "dashboard";
   /** The variant's body. It brings its own horizontal padding. */
   children: ReactNode;
 }
@@ -36,19 +32,20 @@ interface SidebarShellProps {
  * three themselves, so "which footer goes with which focus" lived in four
  * places. Now a variant supplies only what differs: its body.
  */
-export default function SidebarShell({ className, footer = "focus", children }: SidebarShellProps) {
-  const [isElectronMac, setIsElectronMac] = useState(false);
-  const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
+export default function SidebarShell({ className, children }: SidebarShellProps) {
+  // The same query the agent surface store consults, so the sheet padding
+  // and the store's "is this a sheet" answer can never disagree.
+  const isSheetBreakpoint = useBreakpoint(SHEET_BREAKPOINT_QUERY);
+  const isElectronMac = useIsMac() && isElectron();
   const focus = useFocus();
   const driveId = focusDriveId(focus);
   const drive = useDriveStore((state) => (driveId ? state.drives.find((d) => d.id === driveId) : undefined));
   const canManage = canManageDrive(drive);
 
-  useEffect(() => {
-    setIsElectronMac(isElectron() && /Mac/.test(navigator.platform));
-  }, []);
-
-  const showDriveFooter = footer === "focus" && focus.kind === "drive";
+  // Footer follows the focus: a drive's footer in a drive, the dashboard's
+  // for All drives. DMs only ever render under All drives, so they need no
+  // special case.
+  const showDriveFooter = focus.kind === "drive";
 
   return (
     <aside className={cn(ASIDE_CLASS, className)}>

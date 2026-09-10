@@ -41,8 +41,11 @@ function isValidStatusGroup(value: string | null): value is StatusGroupFilter {
   return value !== null && (VALID_STATUS_GROUPS as readonly string[]).includes(value);
 }
 
-function readFromUrl(searchParams: URLSearchParams): PersistableFilters {
-  const status = searchParams.get('status') || undefined;
+function readFromUrl(searchParams: URLSearchParams, scopedToDrive: boolean): PersistableFilters {
+  // A slug status belongs to one drive's lists: outside a drive it is not
+  // read at all, so it can neither narrow the list nor widen the status
+  // group on its behalf.
+  const status = scopedToDrive ? searchParams.get('status') || undefined : undefined;
   const rawStatusGroup = searchParams.get('statusGroup');
 
   // Validate URL value; if absent and an explicit `status` slug is set,
@@ -77,9 +80,10 @@ export function fromStoredOrDefaults(
 export function pickInitialFilters(
   searchParams: URLSearchParams,
   stored: StoredDashboardFilters | undefined,
+  scopedToDrive = true,
 ): PersistableFilters {
   if (urlHasAnyPersistableParam(searchParams)) {
-    return readFromUrl(searchParams);
+    return readFromUrl(searchParams, scopedToDrive);
   }
   return fromStoredOrDefaults(stored);
 }

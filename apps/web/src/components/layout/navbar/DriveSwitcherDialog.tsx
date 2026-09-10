@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/command";
 import CreateDriveDialog from "@/components/layout/left-sidebar/CreateDriveDialog";
 import { useTouchDevice } from "@/hooks/useTouchDevice";
+import { focusDriveId, useFocus } from "@/lib/dashboard/focus";
 import type { Drive } from "@/hooks/useDrive";
 import { cn } from "@/lib/utils";
 
@@ -44,7 +45,6 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
     favoriteDrives,
     recentDrives,
     allDrives,
-    currentDriveId,
     isSearching,
     selectDrive,
     selectAllDrives,
@@ -67,9 +67,18 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
     selectAllDrives();
   };
 
-  // The sidebar's DriveSwitcher clears this whenever the URL has no drive,
-  // so "no current drive" is exactly the All drives focus.
-  const isAllDrivesCurrent = currentDriveId == null;
+  // Current comes from the route, not the persisted store: the store is only
+  // synced to the URL while the sidebar is mounted, which on a phone (a closed
+  // sheet) it is not, while this dialog opens from every section's subtitle.
+  const focus = useFocus();
+  const currentDriveId = focusDriveId(focus);
+  const isAllDrivesCurrent = focus.kind === "all";
+
+  // cmdk highlights its first row after every keystroke and Enter picks it.
+  // With All drives always first, typing "mark" + Enter would leave the drive
+  // instead of entering Marketing — so under a query the row is a match like
+  // any other. With no query it is always there, first, as the way out.
+  const showAllDrivesRow = !isSearching || "all drives".includes(query.trim().toLowerCase());
 
   // Shift+Enter favourites the highlighted row. cmdk keeps focus on the input
   // and walks rows via aria-activedescendant, so a button INSIDE a row is
@@ -78,12 +87,14 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
   // Capture phase, so cmdk's own Enter (select) never sees it.
   const handleKeyDownCapture = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter" || !event.shiftKey) return;
+    // Whatever is highlighted, Shift+Enter never selects: on a row that is
+    // not a drive (All drives) it is a no-op rather than a navigation.
+    event.preventDefault();
+    event.stopPropagation();
     const selected = event.currentTarget.querySelector<HTMLElement>(
       '[cmdk-item][data-selected="true"][data-drive-id]'
     );
     if (!selected?.dataset.driveId) return;
-    event.preventDefault();
-    event.stopPropagation();
     void toggleFavorite(selected.dataset.driveId);
   };
 
@@ -146,6 +157,7 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
             it survives a query: the way out of a drive must never depend on
             what was typed. Picking it keeps the section you are in.
           */}
+          {showAllDrivesRow && (
           <CommandGroup>
             <CommandItem
               value="focus:all"
@@ -161,6 +173,7 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
               {isAllDrivesCurrent && <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />}
             </CommandItem>
           </CommandGroup>
+          )}
 
           {/* cmdk's own empty state never fires now that All drives is always a row. */}
           {allDrives.length === 0 && (

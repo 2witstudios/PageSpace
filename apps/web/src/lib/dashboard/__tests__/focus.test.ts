@@ -24,12 +24,24 @@ describe('sectionForPathname', () => {
     expect(sectionForPathname('/dashboard/calendar')).toBe('calendar');
   });
 
-  it('given a route outside the four sections, should find nothing', () => {
+  it('given agents, activity or trash in either shape, should name them too', () => {
+    expect(sectionForPathname('/dashboard/agents')).toBe('agents');
+    expect(sectionForPathname('/dashboard/drive_eng/agents')).toBe('agents');
+    expect(sectionForPathname('/dashboard/activity')).toBe('activity');
+    expect(sectionForPathname('/dashboard/drive_eng/trash')).toBe('trash');
+    expect(focusSectionHref(ALL_DRIVES, 'agents')).toBe('/dashboard/agents');
+    expect(focusDestinationHref('/dashboard/drive_eng/agents', ALL_DRIVES)).toBe('/dashboard/agents');
+    expect(focusDestinationHref('/dashboard/agents', driveFocus('drive_eng'))).toBe('/dashboard/drive_eng/agents');
+  });
+
+  it('given a route outside the sections, should find nothing', () => {
     expect(sectionForPathname('/dashboard')).toBeNull();
     expect(sectionForPathname('/dashboard/drive_eng')).toBeNull();
     expect(sectionForPathname('/dashboard/drive_eng/page_9')).toBeNull();
     expect(sectionForPathname('/dashboard/dms')).toBeNull();
     expect(sectionForPathname('/dashboard/files')).toBeNull();
+    expect(sectionForPathname('/dashboard/agentsx')).toBeNull();
+    expect(sectionForPathname('/dashboard/drive_eng/agents-archive')).toBeNull();
     expect(sectionForPathname(null)).toBeNull();
     expect(sectionForPathname(undefined)).toBeNull();
   });

@@ -158,6 +158,21 @@ describe('toStoredDashboardFilters', () => {
   });
 });
 
+describe('pickInitialFilters across all drives', () => {
+  it('given ?status= outside a drive, should ignore it and not widen the status group on its behalf', () => {
+    const result = pickInitialFilters(new URLSearchParams('status=done&priority=high'), undefined, false);
+    expect(result.status).toBeUndefined();
+    expect(result.statusGroup).toBe('active');
+    expect(result.priority).toBe('high');
+  });
+
+  it('given ?status= inside a drive, should read it and let the group fall to all', () => {
+    const result = pickInitialFilters(new URLSearchParams('status=done'), undefined, true);
+    expect(result.status).toBe('done');
+    expect(result.statusGroup).toBe('all');
+  });
+});
+
 describe('forFocus', () => {
   it('given a drive focus, should keep the slug status and drop the retired drive filter', () => {
     expect(forFocus({ status: 'in_progress', driveId: 'd1', priority: 'high' }, true)).toEqual({
