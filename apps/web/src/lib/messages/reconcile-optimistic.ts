@@ -23,6 +23,51 @@ interface OptimisticallySent {
 
 const isPending = (row: OptimisticallySent) => row.id.startsWith('temp-');
 
+interface AttachmentRef {
+  fileId?: string | null;
+  position?: number;
+}
+
+const orderedFileIds = (attachments: AttachmentRef[]) =>
+  [...attachments]
+    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+    .map((a) => a.fileId ?? null);
+
+/**
+ * Do two rows carry the same attachments? Used only by the nonce-less
+ * fallback below, where content alone cannot tell two sends apart.
+ *
+ * Comparing just the FIRST file is not enough: two sends can share their text
+ * and their first photo and differ from the second one on, and matching those
+ * would retire the wrong pending row and leave the stream mis-ordered. So when
+ * both sides name their batch, the whole ordered batch has to agree — and a
+ * pending row carrying SEVERAL files is never matched by a payload that does
+ * not name them at all.
+ *
+ * That last case costs nothing real: a server old enough to omit the nonce is
+ * also old enough to read only `fileId`, so it rejects a multi-attachment send
+ * outright (400, "Message content or file is required") rather than echoing
+ * one. Refusing the match just declines to guess.
+ */
+export function sameAttachmentBatch(
+  pending: { fileId?: string | null; attachments?: AttachmentRef[] | null },
+  confirmed: { fileId?: string | null; attachments?: AttachmentRef[] | null },
+): boolean {
+  const pendingBatch = pending.attachments ?? [];
+  const confirmedBatch = confirmed.attachments ?? [];
+
+  if (pendingBatch.length > 0 && confirmedBatch.length > 0) {
+    if (pendingBatch.length !== confirmedBatch.length) return false;
+    const a = orderedFileIds(pendingBatch);
+    const b = orderedFileIds(confirmedBatch);
+    return a.every((fileId, index) => fileId === b[index]);
+  }
+
+  if (pendingBatch.length > 1) return false;
+
+  return (pending.fileId ?? null) === (confirmed.fileId ?? null);
+}
+
 /**
  * Replace the pending row this message confirms, or append it if there is
  * none (which is the case for every other viewer in the channel).

@@ -24,7 +24,7 @@ import { PageWebhooksDialog } from '@/components/shared/PageWebhooksDialog';
 import { MessageAttachments } from '@/components/shared/MessageAttachments';
 import type { MessageAttachmentLike } from '@/lib/attachment-utils';
 import { createId } from '@paralleldrive/cuid2';
-import { reconcileOptimistic } from '@/lib/messages/reconcile-optimistic';
+import { reconcileOptimistic, sameAttachmentBatch } from '@/lib/messages/reconcile-optimistic';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
@@ -51,6 +51,12 @@ import { useFindStore } from '@/stores/useFindStore';
 import { useDraft } from '@/hooks/useDraft';
 import { buildDraftKey } from '@/lib/draft/draft';
 
+interface MessageAttachmentBearing {
+  content?: string;
+  fileId?: string | null;
+  attachments?: Array<{ fileId?: string | null; position?: number }> | null;
+}
+
 const authorOf = (m: { userId?: string | null }) => m.userId;
 
 /**
@@ -59,11 +65,9 @@ const authorOf = (m: { userId?: string | null }) => m.userId;
  * deploy. Same text, same first file, same author (checked by the reconciler).
  */
 const looksLikeSameSend = (
-  pending: { content?: string; fileId?: string | null },
-  confirmed: { content?: string; fileId?: string | null },
-) =>
-  pending.content === confirmed.content &&
-  (pending.fileId ?? null) === (confirmed.fileId ?? null);
+  pending: MessageAttachmentBearing,
+  confirmed: MessageAttachmentBearing,
+) => pending.content === confirmed.content && sameAttachmentBatch(pending, confirmed);
 
 
 /** Coalesces the re-mark-as-read POST across a burst of incoming messages. */

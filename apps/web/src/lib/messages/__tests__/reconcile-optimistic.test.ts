@@ -4,7 +4,7 @@
  * their own copy of this logic. These pin the behaviour of the single copy.
  */
 import { describe, it, expect } from 'vitest';
-import { reconcileOptimistic } from '../reconcile-optimistic';
+import { reconcileOptimistic, sameAttachmentBatch } from '../reconcile-optimistic';
 
 const assert = ({ given, should, actual, expected }: {
   given: string; should: string; actual: unknown; expected: unknown;
@@ -21,6 +21,70 @@ interface Row {
 
 const pending = (nonce: string) => ({ id: `temp-${nonce}`, clientNonce: nonce });
 const confirmed = (id: string, nonce?: string) => ({ id, clientNonce: nonce });
+
+describe('sameAttachmentBatch', () => {
+  const batch = (...fileIds: string[]) =>
+    fileIds.map((fileId, position) => ({ fileId, position }));
+
+  it('matches two rows naming the same files in the same order', () => {
+    assert({
+      given: 'the same three photos, one side handed back out of order',
+      should: 'match on position, not on arrival order',
+      actual: sameAttachmentBatch(
+        { attachments: batch('f-1', 'f-2', 'f-3') },
+        { attachments: [{ fileId: 'f-3', position: 2 }, { fileId: 'f-1', position: 0 }, { fileId: 'f-2', position: 1 }] },
+      ),
+      expected: true,
+    });
+  });
+
+  it('separates two sends that share a first photo but differ after it', () => {
+    // The case the first-file comparison could not see: matching these would
+    // retire the wrong pending row and leave the stream mis-ordered.
+    assert({
+      given: 'two batches starting with the same photo',
+      should: 'not treat them as the same send',
+      actual: sameAttachmentBatch(
+        { attachments: batch('f-1', 'f-2') },
+        { attachments: batch('f-1', 'f-9') },
+      ),
+      expected: false,
+    });
+  });
+
+  it('never matches a multi-file pending row against a payload that names no batch', () => {
+    // A server old enough to omit the nonce reads only `fileId`, so it rejects
+    // a multi-attachment send outright rather than echoing one. Declining to
+    // guess here costs nothing and cannot retire the wrong row.
+    assert({
+      given: 'a two-photo send pending and a legacy-shaped confirmation',
+      should: 'decline the match rather than guess from the first file',
+      actual: sameAttachmentBatch(
+        { fileId: 'f-1', attachments: batch('f-1', 'f-2') },
+        { fileId: 'f-1' },
+      ),
+      expected: false,
+    });
+  });
+
+  it('still matches the single-attachment legacy shape', () => {
+    assert({
+      given: 'one file on each side, named only by the legacy column',
+      should: 'match — this is the shape an old pod actually echoes',
+      actual: sameAttachmentBatch({ fileId: 'f-1' }, { fileId: 'f-1' }),
+      expected: true,
+    });
+  });
+
+  it('matches two text-only sends', () => {
+    assert({
+      given: 'no attachment on either side',
+      should: 'match on the absence, leaving content to separate them',
+      actual: sameAttachmentBatch({}, {}),
+      expected: true,
+    });
+  });
+});
 
 describe('reconcileOptimistic', () => {
   it('retires exactly one pending row per confirmation', () => {

@@ -18,7 +18,7 @@ import type { FileAttachment } from '@/hooks/useAttachmentUpload';
 import { MessageAttachments } from '@/components/shared/MessageAttachments';
 import type { MessageAttachmentLike } from '@/lib/attachment-utils';
 import { createId } from '@paralleldrive/cuid2';
-import { reconcileOptimistic } from '@/lib/messages/reconcile-optimistic';
+import { reconcileOptimistic, sameAttachmentBatch } from '@/lib/messages/reconcile-optimistic';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { RichText, addHardLineBreaks } from '@/components/messages/RichText';
@@ -43,6 +43,13 @@ import { isFirstInGroup, formatMessageDate } from '@/lib/messages/grouping';
 import { MessageDateSeparator } from '@/components/messages/MessageDateSeparator';
 import { cn } from '@/lib/utils';
 
+interface MessageAttachmentBearing {
+  conversationId?: string;
+  content?: string;
+  fileId?: string | null;
+  attachments?: Array<{ fileId?: string | null; position?: number }> | null;
+}
+
 const senderOf = (m: { senderId?: string | null }) => m.senderId;
 
 /**
@@ -52,12 +59,12 @@ const senderOf = (m: { senderId?: string | null }) => m.senderId;
  * this surface used before the nonce existed.
  */
 const looksLikeSameSend = (
-  pending: { conversationId?: string; content?: string; fileId?: string | null },
-  confirmed: { conversationId?: string; content?: string; fileId?: string | null },
+  pending: MessageAttachmentBearing,
+  confirmed: MessageAttachmentBearing,
 ) =>
   pending.conversationId === confirmed.conversationId &&
   pending.content === confirmed.content &&
-  (pending.fileId ?? null) === (confirmed.fileId ?? null);
+  sameAttachmentBatch(pending, confirmed);
 
 
 const fetcher = async (url: string) => {
