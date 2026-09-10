@@ -10,12 +10,10 @@ import { Search } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
-import { cn, isElectron } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { SidebarProps } from './index';
-import DriveSwitcher from '@/components/layout/navbar/DriveSwitcher';
-import DashboardFooter from './DashboardFooter';
-import PrimaryNavigation from './PrimaryNavigation';
+import SidebarShell from './SidebarShell';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useInboxSocket } from '@/hooks/useInboxSocket';
@@ -39,7 +37,6 @@ export default function DMSidebar({ className }: SidebarProps) {
   const [pagination, setPagination] = useState<{ hasMore: boolean; nextCursor: string | null } | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasLoadedMore, setHasLoadedMore] = useState(false);
-  const [isElectronMac, setIsElectronMac] = useState(false);
   const isSheetBreakpoint = useBreakpoint('(max-width: 1023px)');
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
 
@@ -73,9 +70,6 @@ export default function DMSidebar({ className }: SidebarProps) {
     }
   }, [data, hasLoadedMore]);
 
-  useEffect(() => {
-    setIsElectronMac(isElectron() && /Mac/.test(navigator.platform));
-  }, []);
 
   const loadMore = async () => {
     if (!pagination?.hasMore || !pagination?.nextCursor || isLoadingMore) return;
@@ -116,18 +110,8 @@ export default function DMSidebar({ className }: SidebarProps) {
   };
 
   return (
-    <aside
-      className={cn(
-        'flex h-full w-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground liquid-glass-regular rounded-tr-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)] dark:shadow-none overflow-hidden',
-        className
-      )}
-    >
-      <div className="flex h-full flex-col px-3 py-3">
-        <div className={cn('mb-3', isElectronMac && isSheetBreakpoint && 'pl-[60px]')}>
-          <DriveSwitcher />
-        </div>
-
-        <PrimaryNavigation />
+    <SidebarShell className={className} footer="dashboard">
+      <div className="flex flex-1 min-h-0 flex-col px-3">
 
         <div className="relative mb-3">
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -218,8 +202,7 @@ export default function DMSidebar({ className }: SidebarProps) {
           </div>
         </ScrollArea>
 
-        <DashboardFooter />
       </div>
-    </aside>
+    </SidebarShell>
   );
 }

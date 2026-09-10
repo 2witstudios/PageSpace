@@ -25,23 +25,19 @@ import EndSessionDialog from '@/components/agents/EndSessionDialog';
 import { useSpawnSession } from '@/components/agents/useSpawnSession';
 import DrivePickerDialog from '@/components/agents/DrivePickerDialog';
 import { Input } from '@/components/ui/input';
-import { cn, isElectron } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import type { SidebarProps } from './index';
-import DriveSwitcher from '@/components/layout/navbar/DriveSwitcher';
 import CreateDriveDialog from './CreateDriveDialog';
-import DashboardFooter from './DashboardFooter';
-import DriveFooter from './DriveFooter';
-import PrimaryNavigation from './PrimaryNavigation';
+import SidebarShell from './SidebarShell';
 import { SidebarLoading, SidebarNotice } from './sidebar-states';
 import { matchesKeyEvent, getEffectiveBinding } from '@/stores/useHotkeyStore';
 import { isEditingActive } from '@/stores/useEditingStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useTouchDevice } from '@/hooks/useTouchDevice';
-import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
 import { canManageDrive, isDriveOwner } from '@/hooks/usePermissions';
 import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
-import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
+import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import {
   artifactRowsOf,
@@ -113,15 +109,11 @@ import type { DriveEnvStatus } from '@pagespace/lib/drive-envs/env-contract';
  */
 export default function AgentsSidebar({ className }: SidebarProps) {
   const params = useParams();
-  const [isElectronMac, setIsElectronMac] = useState(false);
-  const isSheetBreakpoint = useBreakpoint(SHEET_BREAKPOINT_QUERY);
 
   const driveIdParams = params?.driveId;
   const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
 
   const drives = useDriveStore((state) => state.drives);
-  const drive = drives.find((d) => d.id === driveId);
-  const canManage = canManageDrive(drive);
 
   const { user, isLoading: authLoading } = useAuth();
   // Sessions/chat/panes are open to every authenticated user — only the
@@ -168,10 +160,6 @@ export default function AgentsSidebar({ className }: SidebarProps) {
   // authenticated user now (#2326).
   const { agentsByDrive } = usePageAgents(undefined, { enabled: isAuthenticated });
 
-  useEffect(() => {
-    setIsElectronMac(isElectron() && /Mac/.test(navigator.platform));
-  }, []);
-
   // SEAT EVERY LISTED WORKSPACE'S TREE. This is the sidebar's only write to the
   // store's structural half, and after it the rows render from the store alone —
   // so a broadcast, a pane the user opened in another tab, and this poll all
@@ -194,18 +182,8 @@ export default function AgentsSidebar({ className }: SidebarProps) {
   }, [data]);
 
   return (
-    <aside
-      className={cn(
-        'flex h-full w-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground liquid-glass-regular rounded-tr-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)] dark:shadow-none overflow-hidden',
-        className
-      )}
-    >
-      <div className="flex h-full flex-col px-3 py-3">
-        <div className={cn('mb-3', isElectronMac && isSheetBreakpoint && 'pl-[60px]')}>
-          <DriveSwitcher />
-        </div>
-
-        <PrimaryNavigation driveId={driveId} />
+    <SidebarShell className={className}>
+      <div className="flex flex-1 min-h-0 flex-col px-3">
 
         <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none">
           <div className="space-y-0.5">
@@ -224,9 +202,8 @@ export default function AgentsSidebar({ className }: SidebarProps) {
           </div>
         </div>
 
-        {driveId ? <DriveFooter canManage={canManage} /> : <DashboardFooter />}
       </div>
-    </aside>
+    </SidebarShell>
   );
 }
 

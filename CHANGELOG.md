@@ -7,19 +7,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
-- **Jump between a drive's channels, files, tasks or calendar and the all-drives version** — each
-  of those four views exists in two shapes: one drive, or everything you can see. The sidebar only
-  ever linked to whichever shape you were already in, so from inside a drive's task list there was
-  no way to reach "My Tasks" short of going back to the dashboard, and from the global calendar no
-  way into a particular drive's. Every one of these views now carries a scope control in its
-  header: it names where you are ("All drives" or the drive's name) and opens a list with the
-  all-drives view at the top and every drive below it. Files has no all-drives listing of its own,
-  so its "All drives" entry goes to the Drives browser, which gets the same control pointing back
-  into each drive's files. Opening a drive from that browser, by click or from its right-click
-  menu, now lands in the drive's file browser instead of on the drive's home page. The drive
-  picker in the header and sidebar does the same: switching drives while you are looking at files,
-  channels, tasks or the calendar keeps you in that section in the new drive, instead of dropping
-  you on its home page.
+- **Channels, Files, Tasks and Calendar are one page each, with a drive focus** — each of those
+  views used to exist twice: a dashboard version and a drive version, with different titles and a
+  sidebar that only ever linked to whichever one you were in. Now "All drives" is a focus like any
+  drive. The sidebar's drive switcher names the focus ("All drives" or the drive), and the drive
+  picker it opens lists All drives as its first row; choosing either keeps you in the section you
+  are in, so a drive's tasks become every drive's tasks and back. Page titles stop encoding scope
+  ("Tasks", not "My Tasks" and "Drive Tasks"); the line under each title names the focus and
+  opens the same picker, and on a phone it is the only control added to the row. Files across all
+  drives is the drives browser, and opening a drive there lands in its files. Tasks loses its
+  separate Drive filter and Back button (the focus is the drive, Home is one tap away), withholds
+  the per-list Status filter across all drives where it would merge unrelated lists, and names the
+  drive before the list on every row. The calendar's sidebar now labels the calendar new events go
+  to. The first navigation item is "Home" whichever focus you are in.
 - **AI agents can format spreadsheets** — two new workspace tools, **Format Sheet** and
   **Conditional Formatting**, let an agent make a SHEET page presentable instead of leaving a grid
   of bare numbers. An agent declares what a table *is* (its range, header rows, which columns are

@@ -1,16 +1,16 @@
+import { sectionForPathname } from "@/lib/dashboard/focus";
+
 /**
- * Which sidebar a pathname gets. Each top-level nav destination that swaps the
- * left sidebar owns a matcher here; everything else falls through to the drive's
- * page tree.
+ * Which sidebar a pathname gets. Two driveless destinations and one focus
+ * section swap the left sidebar; everything else falls through to the
+ * drive's page tree (or the dashboard's Pulse / Favorites / Recents).
  *
- * A pure function rather than inline `if`s in `MemoizedSidebar` so the matchers
- * — the part with the actual edge cases — are testable without rendering a
- * sidebar.
+ * A pure function rather than inline `if`s in `MemoizedSidebar` so the
+ * matchers — the part with the actual edge cases — are testable without
+ * rendering a sidebar.
  */
 
 const DMS_PATH = /^\/dashboard\/dms(\/|$)/;
-const CHANNELS_PATH = /^\/dashboard\/channels(\/|$)/;
-const DRIVE_CHANNELS_PATH = /^\/dashboard\/[^/]+\/channels(\/|$)/;
 /**
  * ONE matcher for both Agents shapes: the driveless GLOBAL console
  * (`/dashboard/agents` — every accessible drive's agents, grouped by drive)
@@ -22,11 +22,12 @@ const DRIVE_CHANNELS_PATH = /^\/dashboard\/[^/]+\/channels(\/|$)/;
  */
 const AGENTS_PATH = /^\/dashboard\/(?:[^/]+\/)?agents(\/|$)/;
 
-export type SidebarVariant = 'dms' | 'channels' | 'agents' | 'default';
+export type SidebarVariant = "dms" | "channels" | "agents" | "default";
 
 export function resolveSidebarVariant(pathname: string): SidebarVariant {
-  if (DMS_PATH.test(pathname)) return 'dms';
-  if (CHANNELS_PATH.test(pathname) || DRIVE_CHANNELS_PATH.test(pathname)) return 'channels';
-  if (AGENTS_PATH.test(pathname)) return 'agents';
-  return 'default';
+  if (DMS_PATH.test(pathname)) return "dms";
+  // Channels is a focus section, so both of its shapes come from the one grammar.
+  if (sectionForPathname(pathname) === "channels") return "channels";
+  if (AGENTS_PATH.test(pathname)) return "agents";
+  return "default";
 }
