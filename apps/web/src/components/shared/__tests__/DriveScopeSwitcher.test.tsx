@@ -3,7 +3,13 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Drive } from '@pagespace/lib/types';
 
-import { DriveScopeSwitcher, driveSectionHref, globalSectionHref } from '../DriveScopeSwitcher';
+import {
+  DriveScopeSwitcher,
+  driveDestinationHref,
+  driveSectionHref,
+  globalSectionHref,
+  sectionForPathname,
+} from '../DriveScopeSwitcher';
 import { useDriveStore } from '@/hooks/useDrive';
 
 // The switcher asks the store to (re)load drives on mount. With an empty
@@ -48,6 +54,41 @@ describe('DriveScopeSwitcher', () => {
 
     it('given a drive, should nest the section under that drive', () => {
       expect(driveSectionHref('calendar', 'drive_eng')).toBe('/dashboard/drive_eng/calendar');
+    });
+  });
+
+  describe('sectionForPathname', () => {
+    it('given a drive-scoped section route, should name the section, sub-paths included', () => {
+      expect(sectionForPathname('/dashboard/drive_eng/files')).toBe('files');
+      expect(sectionForPathname('/dashboard/drive_eng/files/page_9')).toBe('files');
+      expect(sectionForPathname('/dashboard/drive_eng/calendar')).toBe('calendar');
+    });
+
+    it('given a global section route, should name the section, with drives standing in for files', () => {
+      expect(sectionForPathname('/dashboard/drives')).toBe('files');
+      expect(sectionForPathname('/dashboard/tasks')).toBe('tasks');
+    });
+
+    it('given a route outside the four sections, should find nothing', () => {
+      expect(sectionForPathname('/dashboard')).toBeNull();
+      expect(sectionForPathname('/dashboard/drive_eng')).toBeNull();
+      expect(sectionForPathname('/dashboard/drive_eng/page_9')).toBeNull();
+      expect(sectionForPathname('/dashboard/dms')).toBeNull();
+      expect(sectionForPathname(null)).toBeNull();
+    });
+  });
+
+  describe('driveDestinationHref', () => {
+    it('given a files view, should send a picked drive to its files', () => {
+      expect(driveDestinationHref('/dashboard/drives', 'drive_eng')).toBe('/dashboard/drive_eng/files');
+      expect(driveDestinationHref('/dashboard/drive_x/files/page_1', 'drive_eng')).toBe(
+        '/dashboard/drive_eng/files'
+      );
+    });
+
+    it('given no section, should fall back to the drive home', () => {
+      expect(driveDestinationHref('/dashboard', 'drive_eng')).toBe('/dashboard/drive_eng');
+      expect(driveDestinationHref('/dashboard/drive_x/page_1', 'drive_eng')).toBe('/dashboard/drive_eng');
     });
   });
 

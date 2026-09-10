@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 import { useDriveStore, type Drive } from "@/hooks/useDrive";
 import { useFavorites } from "@/hooks/useFavorites";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
+import { driveDestinationHref } from "@/components/shared/DriveScopeSwitcher";
 
 const RECENT_LIMIT = 5;
 
@@ -21,6 +22,7 @@ const RECENT_LIMIT = 5;
  */
 export function useDrivePicker(query: string) {
   const router = useRouter();
+  const pathname = usePathname();
 
   const drives = useDriveStore((state) => state.drives);
   const currentDriveId = useDriveStore((state) => state.currentDriveId);
@@ -60,12 +62,14 @@ export function useDrivePicker(query: string) {
   const selectDrive = useCallback(
     (drive: Drive) => {
       setCurrentDrive(drive.id);
-      router.push(`/dashboard/${drive.id}`);
+      // Stay in the section you were in: a drive picked while looking at
+      // files (or channels, tasks, calendar) opens on that drive's files.
+      router.push(driveDestinationHref(pathname, drive.id));
       // Optimistic, so "Recent" reorders before the server has heard about it.
       updateDrive(drive.id, { lastAccessedAt: new Date().toISOString() });
       fetchWithAuth(`/api/drives/${drive.id}/access`, { method: "POST" }).catch(() => {});
     },
-    [router, setCurrentDrive, updateDrive]
+    [router, pathname, setCurrentDrive, updateDrive]
   );
 
   const isFavorite = useCallback((driveId: string) => driveIds.has(driveId), [driveIds]);

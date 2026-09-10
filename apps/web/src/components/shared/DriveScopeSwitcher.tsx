@@ -44,6 +44,42 @@ export function driveSectionHref(section: DriveScopedSection, driveId: string): 
   return `/dashboard/${driveId}/${section}`;
 }
 
+const SECTIONS: DriveScopedSection[] = ['channels', 'files', 'tasks', 'calendar'];
+
+/**
+ * Which drive-scoped section, if any, the current route is showing.
+ *
+ * Recognises both shapes: `/dashboard/[driveId]/<section>` (with anything
+ * nested below it, e.g. a files sub-folder) and the global counterparts,
+ * including `/dashboard/drives` standing in for files.
+ */
+export function sectionForPathname(pathname: string | null | undefined): DriveScopedSection | null {
+  if (!pathname) return null;
+  const segments = pathname.split('/').filter(Boolean);
+  if (segments[0] !== 'dashboard' || segments.length < 2) return null;
+
+  const isSection = (value: string | undefined): value is DriveScopedSection =>
+    SECTIONS.includes(value as DriveScopedSection);
+
+  // Global shape: /dashboard/<section> — or /dashboard/drives for files.
+  if (segments.length === 2) {
+    if (segments[1] === 'drives') return 'files';
+    return isSection(segments[1]) ? segments[1] : null;
+  }
+  // Drive shape: /dashboard/<driveId>/<section>/...
+  return isSection(segments[2]) ? segments[2] : null;
+}
+
+/**
+ * Where switching to `driveId` should land, given where the user is now:
+ * the same section in the new drive when they are in one, else its home.
+ * A drive picked from a files view is wanted for its files.
+ */
+export function driveDestinationHref(pathname: string | null | undefined, driveId: string): string {
+  const section = sectionForPathname(pathname);
+  return section ? driveSectionHref(section, driveId) : `/dashboard/${driveId}`;
+}
+
 interface DriveScopeSwitcherProps {
   section: DriveScopedSection;
   /** The drive the view is scoped to; omit on the global view. */

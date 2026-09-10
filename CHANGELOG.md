@@ -16,7 +16,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   all-drives view at the top and every drive below it. Files has no all-drives listing of its own,
   so its "All drives" entry goes to the Drives browser, which gets the same control pointing back
   into each drive's files. Opening a drive from that browser, by click or from its right-click
-  menu, now lands in the drive's file browser instead of on the drive's home page.
+  menu, now lands in the drive's file browser instead of on the drive's home page. The drive
+  picker in the header and sidebar does the same: switching drives while you are looking at files,
+  channels, tasks or the calendar keeps you in that section in the new drive, instead of dropping
+  you on its home page.
 - **AI agents can format spreadsheets** — two new workspace tools, **Format Sheet** and
   **Conditional Formatting**, let an agent make a SHEET page presentable instead of leaving a grid
   of bare numbers. An agent declares what a table *is* (its range, header rows, which columns are
