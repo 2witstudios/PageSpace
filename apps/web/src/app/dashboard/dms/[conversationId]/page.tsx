@@ -20,7 +20,7 @@ import type { MessageAttachmentLike } from '@/lib/attachment-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { reconcileOptimistic } from '@/lib/messages/reconcile-optimistic';
 
-const senderOf = (m: { senderId?: string }) => m.senderId;
+const senderOf = (m: Message) => m.senderId;
 
 /**
  * Fallback used ONLY when a confirmation carries no `clientNonce` — which is
@@ -28,10 +28,7 @@ const senderOf = (m: { senderId?: string }) => m.senderId;
  * rolling deploy. Same conversation, same text, same first file: the matcher
  * this surface used before the nonce existed.
  */
-const looksLikeSameSend = (
-  pending: { conversationId?: string; content?: string; fileId?: string | null },
-  confirmed: { conversationId?: string; content?: string; fileId?: string | null },
-) =>
+const looksLikeSameSend = (pending: Message, confirmed: Message) =>
   pending.conversationId === confirmed.conversationId &&
   pending.content === confirmed.content &&
   (pending.fileId ?? null) === (confirmed.fileId ?? null);

@@ -26,17 +26,14 @@ import type { MessageAttachmentLike } from '@/lib/attachment-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { reconcileOptimistic } from '@/lib/messages/reconcile-optimistic';
 
-const authorOf = (m: { userId?: string }) => m.userId;
+const authorOf = (m: MessageWithReactions) => m.userId;
 
 /**
  * Fallback used ONLY when a confirmation carries no `clientNonce` — what a pod
  * that predates the nonce broadcasts, so it is reachable during a rolling
  * deploy. Same text, same first file, same author (checked by the reconciler).
  */
-const looksLikeSameSend = (
-  pending: { content?: string; fileId?: string | null },
-  confirmed: { content?: string; fileId?: string | null },
-) =>
+const looksLikeSameSend = (pending: MessageWithReactions, confirmed: MessageWithReactions) =>
   pending.content === confirmed.content &&
   (pending.fileId ?? null) === (confirmed.fileId ?? null);
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
