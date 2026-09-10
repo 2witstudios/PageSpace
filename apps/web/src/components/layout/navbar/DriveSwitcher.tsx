@@ -69,13 +69,15 @@ export default function DriveSwitcher() {
           "Select Drive" implied nothing was chosen, when every section is
           already showing all of them.
         */}
-        {currentDrive ? (
+        {urlDriveId ? (
           <Folder className="h-4 w-4 shrink-0" aria-hidden="true" />
         ) : (
           <Layers className="h-4 w-4 shrink-0" aria-hidden="true" />
         )}
+        {/* Keyed on the route, not the store: a drive the store has not
+            loaded is still the focus, so it must not read as All drives. */}
         <span className="truncate font-medium">
-          {currentDrive ? currentDrive.name : "All drives"}
+          {urlDriveId ? (currentDrive?.name ?? "This drive") : "All drives"}
         </span>
         <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
       </Button>

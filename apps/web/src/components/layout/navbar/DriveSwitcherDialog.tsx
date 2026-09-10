@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/command";
 import CreateDriveDialog from "@/components/layout/left-sidebar/CreateDriveDialog";
 import { useTouchDevice } from "@/hooks/useTouchDevice";
+import { useFavoritesSync } from "@/hooks/useFavorites";
 import { focusDriveId, useFocus } from "@/lib/dashboard/focus";
 import type { Drive } from "@/hooks/useDrive";
 import { cn } from "@/lib/utils";
@@ -41,6 +42,10 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
   const [query, setQuery] = useState("");
   const [isCreateOpen, setCreateOpen] = useState(false);
 
+  // This dialog opens from every section's subtitle, including on a phone
+  // where nothing else that syncs favourites is mounted.
+  useFavoritesSync();
+
   const {
     favoriteDrives,
     recentDrives,
@@ -57,13 +62,17 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
     setQuery("");
   };
 
+  // Picking the focus you are already in is a no-op, not a trip to its home:
+  // the row is first and highlighted, so a stray Enter must not move you.
   const handleSelect = (drive: Drive) => {
     close();
+    if (drive.id === currentDriveId) return;
     selectDrive(drive);
   };
 
   const handleSelectAll = () => {
     close();
+    if (isAllDrivesCurrent) return;
     selectAllDrives();
   };
 
@@ -75,10 +84,26 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
   const isAllDrivesCurrent = focus.kind === "all";
 
   // cmdk highlights its first row after every keystroke and Enter picks it.
-  // With All drives always first, typing "mark" + Enter would leave the drive
-  // instead of entering Marketing — so under a query the row is a match like
-  // any other. With no query it is always there, first, as the way out.
-  const showAllDrivesRow = !isSearching || "all drives".includes(query.trim().toLowerCase());
+  // With no query All drives is first: the way out, one Enter away. Under a
+  // query it moves BELOW the results, so Enter picks the typed drive and the
+  // row is still reachable for someone who typed "all".
+  const allDrivesRow = (
+    <CommandGroup>
+      <CommandItem
+        value="focus:all"
+        onSelect={handleSelectAll}
+        aria-label={isAllDrivesCurrent ? "All drives, current" : "All drives"}
+        aria-current={isAllDrivesCurrent ? "true" : undefined}
+        className={cn("cursor-pointer gap-2.5", isAllDrivesCurrent && "bg-primary-soft")}
+        data-current={isAllDrivesCurrent ? "true" : undefined}
+        data-focus="all"
+      >
+        <Layers className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate">All drives</span>
+        {isAllDrivesCurrent && <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />}
+      </CommandItem>
+    </CommandGroup>
+  );
 
   // Shift+Enter favourites the highlighted row. cmdk keeps focus on the input
   // and walks rows via aria-activedescendant, so a button INSIDE a row is
@@ -157,23 +182,7 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
             it survives a query: the way out of a drive must never depend on
             what was typed. Picking it keeps the section you are in.
           */}
-          {showAllDrivesRow && (
-          <CommandGroup>
-            <CommandItem
-              value="focus:all"
-              onSelect={handleSelectAll}
-              aria-label={isAllDrivesCurrent ? "All drives, current" : "All drives"}
-              aria-current={isAllDrivesCurrent ? "true" : undefined}
-              className={cn("cursor-pointer gap-2.5", isAllDrivesCurrent && "bg-primary-soft")}
-              data-current={isAllDrivesCurrent ? "true" : undefined}
-              data-focus="all"
-            >
-              <Layers className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span className="min-w-0 flex-1 truncate">All drives</span>
-              {isAllDrivesCurrent && <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />}
-            </CommandItem>
-          </CommandGroup>
-          )}
+          {!isSearching && allDrivesRow}
 
           {/* cmdk's own empty state never fires now that All drives is always a row. */}
           {allDrives.length === 0 && (
@@ -199,6 +208,8 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
               {allDrives.map((drive) => renderItem(drive, "all"))}
             </CommandGroup>
           )}
+
+          {isSearching && allDrivesRow}
         </CommandList>
 
         {/* Keyboard hints for a keyboard: gone on touch, where there is none to hint at. */}

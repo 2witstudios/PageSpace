@@ -3,6 +3,7 @@
 import { Suspense, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import ChannelsCenterList from '@/components/inbox/ChannelsCenterList';
+import { isDriveIdShape } from '@/components/tasks/dashboardFiltersPersistence';
 
 function ChannelsPageContent() {
   const router = useRouter();
@@ -10,7 +11,8 @@ function ChannelsPageContent() {
   // `/dashboard/channels?driveId=…` predates the drive focus. It means what
   // `/dashboard/[driveId]/channels` means, and rendering it here would show a
   // drive's list under an "All drives" sidebar, so it goes there instead.
-  const legacyDriveId = searchParams.get('driveId');
+  const rawDriveId = searchParams.get('driveId');
+  const legacyDriveId = rawDriveId && isDriveIdShape(rawDriveId) ? rawDriveId : null;
   useEffect(() => {
     if (legacyDriveId) {
       router.replace(`/dashboard/${legacyDriveId}/channels`);

@@ -73,12 +73,6 @@ export interface TaskFilters {
   driveId?: string;
 }
 
-export interface Drive {
-  id: string;
-  name: string;
-  slug: string;
-}
-
 export interface Pagination {
   total: number;
   limit: number;

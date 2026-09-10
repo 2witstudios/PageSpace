@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronsUpDown, Folder, Layers } from 'lucide-react';
 
 import DriveSwitcherDialog from '@/components/layout/navbar/DriveSwitcherDialog';
@@ -35,6 +35,13 @@ interface FocusTriggerProps {
  */
 export function FocusTrigger({ section, focus, variant = 'text', size = 'md', className }: FocusTriggerProps) {
   const [open, setOpen] = useState(false);
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
+  // On a phone the sidebar (and its switcher, which loads drives) lives in a
+  // closed sheet, so this may be the only drive control mounted. The store
+  // caches for five minutes; elsewhere this is a no-op.
+  useEffect(() => {
+    fetchDrives();
+  }, [fetchDrives]);
   const driveId = focusDriveId(focus);
   const driveName = useDriveStore((state) =>
     driveId ? state.drives.find((drive) => drive.id === driveId)?.name : undefined

@@ -239,22 +239,35 @@ describe('DriveSwitcherDialog', () => {
       expect(push).toHaveBeenCalledWith('/dashboard');
     });
 
-    it('given a query, Enter should pick the typed drive, not All drives', async () => {
+    it('given any query, Enter should pick the typed drive, with All drives moved below the results', async () => {
       renderPicker();
 
-      await userEvent.type(screen.getByPlaceholderText('Search drives…'), 'eng');
-      expect(screen.queryByRole('option', { name: /^All drives/ })).not.toBeInTheDocument();
+      const input = screen.getByPlaceholderText('Search drives…');
+      // A one-letter query matches "all drives" too; the row must still not be first.
+      await userEvent.type(input, 'e');
+      let rows = screen.getAllByRole('option');
+      expect(rows[0].getAttribute('aria-label')).not.toMatch(/^All drives/);
+      expect(rows[rows.length - 1]).toHaveAttribute('aria-label', 'All drives');
+
+      await userEvent.clear(input);
+      await userEvent.type(input, 'mark');
+      rows = screen.getAllByRole('option');
+      expect(rows[0].getAttribute('aria-label')).toMatch(/^Marketing/);
       await userEvent.keyboard('{Enter}');
 
-      expect(push).toHaveBeenCalledWith('/dashboard/v8n1t6zr4c');
+      expect(push).toHaveBeenCalledWith('/dashboard/h2s7d0yb5j');
+      expect(push).not.toHaveBeenCalledWith('/dashboard');
     });
 
-    it('given a query that names it, should still offer All drives', async () => {
-      renderPicker();
+    it('given the focus you are already in, should close without navigating', async () => {
+      pathname = '/dashboard/dms/thread_1';
+      params = {};
+      const { onOpenChange } = renderPicker();
 
-      await userEvent.type(screen.getByPlaceholderText('Search drives…'), 'all');
+      await userEvent.click(screen.getByRole('option', { name: 'All drives, current' }));
 
-      expect(screen.getByRole('option', { name: 'All drives' })).toBeInTheDocument();
+      expect(push).not.toHaveBeenCalled();
+      expect(onOpenChange).toHaveBeenCalledWith(false);
     });
 
     it('given Shift+Enter while All drives is highlighted, should do nothing rather than navigate', async () => {

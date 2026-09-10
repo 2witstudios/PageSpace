@@ -85,13 +85,13 @@ describe('pickInitialFilters', () => {
     expect(result).toEqual(DEFAULT_DASHBOARD_FILTERS);
   });
 
-  it('given URL has driveId param, should treat that as a persistable param triggering URL precedence', () => {
+  it('given URL has only a driveId param, should not let it override stored preferences — the drive is the focus, not a filter', () => {
     const stored: StoredDashboardFilters = { assigneeFilter: 'all' };
 
     const result = pickInitialFilters(params({ driveId: 'd1' }), stored);
 
-    expect(result.driveId).toBe('d1');
-    expect(result.assigneeFilter).toBe('mine');
+    expect(result.driveId).toBeUndefined();
+    expect(result.assigneeFilter).toBe('all');
   });
 
   it('given URL has only assigneeFilter=mine, should still treat as URL precedence (explicit)', () => {
@@ -166,6 +166,12 @@ describe('pickInitialFilters across all drives', () => {
     expect(result.priority).toBe('high');
   });
 
+  it('given a URL carrying only keys this focus discards, should keep the stored preferences', () => {
+    const stored = { assigneeFilter: 'all', statusGroup: 'completed', priority: 'high' } as const;
+    expect(pickInitialFilters(new URLSearchParams('status=done'), stored, false)).toEqual(fromStoredOrDefaults(stored));
+    expect(pickInitialFilters(new URLSearchParams('driveId=d1'), stored, true)).toEqual(fromStoredOrDefaults(stored));
+  });
+
   it('given ?status= inside a drive, should read it and let the group fall to all', () => {
     const result = pickInitialFilters(new URLSearchParams('status=done'), undefined, true);
     expect(result.status).toBe('done');
@@ -205,5 +211,10 @@ describe('legacyDriveTasksHref', () => {
 
   it('given no drive id, should do nothing', () => {
     expect(legacyDriveTasksHref(new URLSearchParams('priority=high'))).toBeNull();
+  });
+
+  it('given a value that is not a drive id, should not build a path from it', () => {
+    expect(legacyDriveTasksHref(new URLSearchParams('driveId=..%2F..%2Fsettings%2Fbackups%3Fx%3D'))).toBeNull();
+    expect(legacyDriveTasksHref(new URLSearchParams('driveId=Drive%20One'))).toBeNull();
   });
 });

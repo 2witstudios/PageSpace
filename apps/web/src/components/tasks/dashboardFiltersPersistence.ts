@@ -31,8 +31,15 @@ export function scopeKeyFor(context: 'user' | 'drive', driveId: string | undefin
   return context === 'user' ? 'user' : `drive:${driveId ?? ''}`;
 }
 
-function urlHasAnyPersistableParam(searchParams: URLSearchParams): boolean {
-  return URL_FILTER_KEYS.some((key) => searchParams.has(key));
+/**
+ * The URL wins over stored preferences only when it carries a filter this
+ * focus will honour — otherwise a bookmark holding just a discarded key
+ * would throw away the preferences AND show nothing for it.
+ */
+function urlHasHonouredParam(searchParams: URLSearchParams, scopedToDrive: boolean): boolean {
+  return URL_FILTER_KEYS.some(
+    (key) => key !== 'driveId' && (scopedToDrive || key !== 'status') && searchParams.has(key),
+  );
 }
 
 const VALID_STATUS_GROUPS: ReadonlyArray<StatusGroupFilter> = ['all', 'active', 'completed'];
@@ -82,7 +89,7 @@ export function pickInitialFilters(
   stored: StoredDashboardFilters | undefined,
   scopedToDrive = true,
 ): PersistableFilters {
-  if (urlHasAnyPersistableParam(searchParams)) {
+  if (urlHasHonouredParam(searchParams, scopedToDrive)) {
     return readFromUrl(searchParams, scopedToDrive);
   }
   return fromStoredOrDefaults(stored);
@@ -109,11 +116,16 @@ export function forFocus(filters: PersistableFilters, scopedToDrive: boolean): P
  */
 export function legacyDriveTasksHref(searchParams: URLSearchParams): string | null {
   const driveId = searchParams.get('driveId');
-  if (!driveId) return null;
+  if (!driveId || !isDriveIdShape(driveId)) return null;
   const rest = new URLSearchParams(searchParams);
   rest.delete('driveId');
   const query = rest.toString();
   return query ? `/dashboard/${driveId}/tasks?${query}` : `/dashboard/${driveId}/tasks`;
+}
+
+/** Drive ids are cuid2; anything else is not a drive and must not become a path. */
+export function isDriveIdShape(value: string): boolean {
+  return /^[a-z0-9]+$/.test(value);
 }
 
 export function toStoredDashboardFilters(filters: PersistableFilters): StoredDashboardFilters {
