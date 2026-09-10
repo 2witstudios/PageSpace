@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useParams, usePathname } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { ChevronsUpDown, Folder, Home } from "lucide-react";
 
 import DriveSwitcherDialog from "@/components/layout/navbar/DriveSwitcherDialog";
 import { useDriveStore } from "@/hooks/useDrive";
+import { focusDriveId, useFocus } from "@/lib/dashboard/focus";
 
 const DASHBOARD_PATH = "/dashboard";
 
@@ -40,11 +41,9 @@ const DRIVE_CRUMB_CLASS =
  */
 export default function DashboardCrumb() {
   const pathname = usePathname();
-  const params = useParams<{ driveId?: string | string[] }>();
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  const rawDriveId = params?.driveId;
-  const driveId = Array.isArray(rawDriveId) ? rawDriveId[0] : rawDriveId;
+  const driveId = focusDriveId(useFocus());
 
   // The NAME is the only thing taken from the store, and it is allowed to be
   // missing. Drives load asynchronously; a control whose whole job is being

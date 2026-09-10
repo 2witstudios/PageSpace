@@ -17,18 +17,7 @@ interface DriveState {
   reset: () => void;
 }
 
-const CACHE_DURATION = 5 * 60 * 1000;
-
-/**
- * The drives request in flight, if any, and its shape. Several controls ask
- * on the same mount; a narrower ask awaits this one instead of starting
- * another, so `await fetchDrives()` never resolves before the store has
- * drives (the voice trigger reads the store right after awaiting).
- */
-let inFlight: Promise<void> | null = null;
-let inFlightIncludesTrash = false;
-/** Only the newest request may write: an older, narrower response must not overwrite a trash-inclusive one. */
-let latestRequestId = 0; // 5 minutes
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 export const useDriveStore = create<DriveState>()(
   persist(
@@ -45,39 +34,20 @@ export const useDriveStore = create<DriveState>()(
         if (!forceRefresh && state.drives.length > 0 && (now - state.lastFetched) < CACHE_DURATION) {
           return;
         }
-        // Several controls ask on the same mount (sidebar, crumb, a page's
-        // focus line); one request serves them all — unless the new ask is
-        // broader (trash included) than the one in flight.
-        if (!forceRefresh && inFlight && (inFlightIncludesTrash || !includeTrash)) {
-          return inFlight;
-        }
-        inFlightIncludesTrash = includeTrash;
-        const requestId = ++latestRequestId;
-
+        
         set({ isLoading: true });
-        inFlight = (async () => {
-          try {
-            const url = includeTrash ? '/api/drives?includeTrash=true' : '/api/drives';
-            const response = await fetchWithAuth(url);
-            if (!response.ok) {
-              throw new Error('Failed to fetch drives');
-            }
-            const drives = await response.json();
-            if (requestId === latestRequestId) {
-              set({ drives, isLoading: false, lastFetched: now });
-            }
-          } catch (error) {
-            console.error(error);
-            if (requestId === latestRequestId) {
-              set({ isLoading: false });
-            }
+        try {
+          const url = includeTrash ? '/api/drives?includeTrash=true' : '/api/drives';
+          const response = await fetchWithAuth(url);
+          if (!response.ok) {
+            throw new Error('Failed to fetch drives');
           }
-        })();
-        const request = inFlight;
-        void request.finally(() => {
-          if (inFlight === request) inFlight = null;
-        });
-        return request;
+          const drives = await response.json();
+          set({ drives, isLoading: false, lastFetched: now });
+        } catch (error) {
+          console.error(error);
+          set({ isLoading: false });
+        }
       },
       addDrive: (drive: Drive) => set((state) => ({
         drives: [...state.drives, drive],
@@ -92,13 +62,7 @@ export const useDriveStore = create<DriveState>()(
         lastFetched: Date.now()
       })),
       setCurrentDrive: (driveId: string | null) => set({ currentDriveId: driveId }),
-      reset: () => {
-        // A request still pending for the previous user must neither be
-        // handed to the next one nor allowed to write once it lands.
-        inFlight = null;
-        latestRequestId++;
-        set({ drives: [], lastFetched: 0, currentDriveId: null, isLoading: false });
-      },
+      reset: () => set({ drives: [], lastFetched: 0, currentDriveId: null, isLoading: false }),
     }),
     {
       name: 'drive-storage',

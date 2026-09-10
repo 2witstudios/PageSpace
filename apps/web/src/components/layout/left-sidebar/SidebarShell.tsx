@@ -49,7 +49,7 @@ export default function SidebarShell({ className, children }: SidebarShellProps)
   // Footer follows the focus: a drive's footer in a drive, the dashboard's
   // for All drives. DMs only ever render under All drives, so they need no
   // special case.
-  const showDriveFooter = focus.kind === "drive";
+  const footer = focus.kind === "drive" ? <DriveFooter driveId={focus.driveId} canManage={canManage} /> : <DashboardFooter />;
 
   return (
     <aside className={cn(ASIDE_CLASS, className)}>
@@ -65,7 +65,7 @@ export default function SidebarShell({ className, children }: SidebarShellProps)
 
         {children}
 
-        <div className="px-3">{showDriveFooter ? <DriveFooter canManage={canManage} /> : <DashboardFooter />}</div>
+        <div className="px-3">{footer}</div>
       </div>
     </aside>
   );

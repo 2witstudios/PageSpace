@@ -126,8 +126,8 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
 
   // cmdk highlights its first row after every keystroke and Enter picks it.
   // With no query All drives is first: the way out, one Enter away. Under a
-  // query it moves BELOW the results, so Enter picks the typed drive and the
-  // row is still reachable for someone who typed "all".
+  // query it moves BELOW the results, so Enter picks the typed drive; when
+  // nothing matches it is withheld, so Enter on a typo goes nowhere.
   const allDrivesRow = (
     <CommandGroup>
       <CommandItem
@@ -153,8 +153,11 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
   // Capture phase, so cmdk's own Enter (select) never sees it.
   const handleKeyDownCapture = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter" || !event.shiftKey) return;
-    // Whatever is highlighted, Shift+Enter never selects: on a row that is
-    // not a drive (All drives) it is a no-op rather than a navigation.
+    // Only from the search input, where cmdk's highlight is what the key
+    // refers to; a focused button (Create drive) keeps its own Enter.
+    if (!(event.target instanceof HTMLInputElement)) return;
+    // From the input, Shift+Enter never selects: on a row that is not a
+    // drive (All drives) it is a no-op rather than a navigation.
     event.preventDefault();
     event.stopPropagation();
     const selected = event.currentTarget.querySelector<HTMLElement>(
@@ -197,11 +200,7 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
       </div>
 
       <CommandList className="max-h-[60vh] max-sm:min-h-0 max-sm:flex-1 max-sm:max-h-none">
-        {/*
-          All drives is a focus like any drive, so it is a row, first, and
-          it survives a query: the way out of a drive must never depend on
-          what was typed. Picking it keeps the section you are in.
-        */}
+        {/* All drives is a focus like any drive: a row, first, and picking it keeps the section you are in. */}
         {!isSearching && allDrivesRow}
 
         {/* cmdk's own empty state never fires now that All drives is always a row. */}

@@ -50,7 +50,7 @@ export function FocusTrigger({ section, variant = 'text', size = 'md', className
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
   // On a phone the sidebar (and its switcher, which loads drives) lives in a
   // closed sheet, so this may be the only drive control mounted. The store
-  // caches for five minutes; elsewhere this is a no-op.
+  // caches for five minutes, so a warm store answers without a request.
   useEffect(() => {
     fetchDrives();
   }, [fetchDrives]);
