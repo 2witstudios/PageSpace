@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { Check, Folder, Layers, Plus, Star } from "lucide-react";
@@ -16,7 +16,7 @@ import CreateDriveDialog from "@/components/layout/left-sidebar/CreateDriveDialo
 import { useTouchDevice } from "@/hooks/useTouchDevice";
 import { useFavoritesSync } from "@/hooks/useFavorites";
 import { focusDriveId, useFocus } from "@/lib/dashboard/focus";
-import type { Drive } from "@/hooks/useDrive";
+import { useDriveStore, type Drive } from "@/hooks/useDrive";
 import { cn } from "@/lib/utils";
 
 import { useDrivePicker } from "./useDrivePicker";
@@ -87,8 +87,12 @@ interface DrivePickerBodyProps {
 function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
   const [query, setQuery] = useState("");
   // This dialog opens from every section's subtitle, including on a phone
-  // where nothing else that syncs favourites is mounted.
+  // where nothing else that syncs favourites or loads drives is mounted.
   useFavoritesSync();
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
+  useEffect(() => {
+    fetchDrives();
+  }, [fetchDrives]);
 
   const {
     favoriteDrives,
@@ -245,7 +249,7 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
         </span>
         <span>
           <Kbd>↵</Kbd>
-          open drive
+          open
         </span>
         <span>
           <Kbd>⇧↵</Kbd>

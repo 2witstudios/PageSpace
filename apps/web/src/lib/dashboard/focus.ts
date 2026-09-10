@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { isCuid } from '@paralleldrive/cuid2';
+import { isValidId } from '@pagespace/lib/validators/id-validators';
 
 /**
  * The drive focus of a dashboard route.
@@ -91,7 +91,7 @@ export function focusDestinationHref(pathname: string | null | undefined, focus:
 
 /** Drive ids are cuid2; anything else is not a drive and must not become a path. */
 export function isDriveIdShape(value: string): boolean {
-  return isCuid(value);
+  return isValidId(value);
 }
 
 /**

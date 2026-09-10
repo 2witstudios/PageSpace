@@ -259,6 +259,15 @@ describe('DriveSwitcherDialog', () => {
       expect(push).not.toHaveBeenCalledWith('/dashboard');
     });
 
+    it('given no query on a drive section, Enter should take the highlighted All drives row and keep the section', async () => {
+      pathname = '/dashboard/k3xq9w2p7m/tasks';
+      renderPicker();
+
+      await userEvent.keyboard('{Enter}');
+
+      expect(push).toHaveBeenCalledWith('/dashboard/tasks');
+    });
+
     it('given a query nothing matches, Enter should do nothing rather than leave the drive', async () => {
       const { onOpenChange } = renderPicker();
 

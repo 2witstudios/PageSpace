@@ -44,7 +44,6 @@ import {
   type AssigneeFilter,
   type StatusGroupFilter,
   forFocus,
-  fromStoredOrDefaults,
 } from './dashboardFiltersPersistence';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useMobile } from '@/hooks/useMobile';
@@ -131,20 +130,8 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
   // Only across all drives; in a drive the rows never name it, so the
   // dashboard does not re-render on every drive-store write there.
   const drives = useDriveStore((state) => (isLocked ? undefined : state.drives));
-  const fetchDrives = useDriveStore((state) => state.fetchDrives);
   const driveNameById = useMemo(() => new Map((drives ?? []).map((d) => [d.id, d.name])), [drives]);
 
-  // Across all drives a task may belong to a drive the cached list has not
-  // caught up with (a fresh invite, a rename inside the cache window); one
-  // forced refresh per such drive keeps the row's "Drive › List" honest.
-  const refreshedForDriveRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    if (isLocked || !drives) return;
-    const missing = tasks.map((t) => t.driveId).find((id) => id && !driveNameById.has(id) && !refreshedForDriveRef.current.has(id));
-    if (!missing) return;
-    refreshedForDriveRef.current.add(missing);
-    fetchDrives(false, true);
-  }, [isLocked, drives, tasks, driveNameById, fetchDrives]);
 
   // Track last data refresh time
   const [lastRefreshTime, setLastRefreshTime] = useState<Date>(new Date());
@@ -153,24 +140,6 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
   const [searchValue, setSearchValue] = useState(filters.search || '');
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // The same instance survives a drive-to-drive focus change (same page
-  // file, new param), so the new scope's persisted filters are loaded here,
-  // as the retired in-page drive select used to do — otherwise the previous
-  // drive's filters would apply to, and be persisted into, the new drive.
-  const scopeKey = scopeKeyFor(isLocked ? 'drive' : 'user', propDriveId);
-  const mountedScopeKeyRef = useRef(scopeKey);
-  useEffect(() => {
-    if (mountedScopeKeyRef.current === scopeKey) return;
-    mountedScopeKeyRef.current = scopeKey;
-    const stored = useLayoutStore.getState().tasksDashboardFilters[scopeKey];
-    const next = forFocus(fromStoredOrDefaults(stored), isLocked);
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
-      searchTimeoutRef.current = null;
-    }
-    setSearchValue(next.search || '');
-    setFilters(next);
-  }, [scopeKey, isLocked]);
 
 
   // Cleanup debounce timeout on unmount
@@ -213,6 +182,17 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
     const scopeKey = scopeKeyFor(isLocked ? 'drive' : 'user', propDriveId);
     persistDashboardFilter(scopeKey, toStoredDashboardFilters(newFilters));
   }, [router, persistDashboardFilter, isLocked, propDriveId]);
+
+  // Across all drives a bookmarked slug status is not applied (forFocus), so
+  // the address bar is brought into line with the state once, or a share or
+  // reload would assert a filter the list is not using.
+  const urlSyncedRef = useRef(false);
+  useEffect(() => {
+    if (urlSyncedRef.current || legacyHref || isLocked || !searchParams.has('status')) return;
+    urlSyncedRef.current = true;
+    updateUrl(filters);
+  }, [legacyHref, isLocked, searchParams, filters, updateUrl]);
+
 
   // Handle search with debounce
   const handleSearchChange = useCallback((value: string) => {

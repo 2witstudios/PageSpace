@@ -48,12 +48,14 @@ export function FocusTrigger({ section, variant = 'text', size = 'md', className
   const focus = useFocus();
   const [open, setOpen] = useState(false);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
+  const hasDrives = useDriveStore((state) => state.drives.length > 0);
   // On a phone the sidebar (and its switcher, which loads drives) lives in a
-  // closed sheet, so this may be the only drive control mounted. The store
-  // caches for five minutes, so a warm store answers without a request.
+  // closed sheet, so this may be the only drive control mounted. Only an
+  // empty store asks; a stale one keeps its names until something that
+  // refreshes anyway (the sidebar, the picker) does so.
   useEffect(() => {
-    fetchDrives();
-  }, [fetchDrives]);
+    if (!hasDrives) fetchDrives();
+  }, [hasDrives, fetchDrives]);
   const driveId = focusDriveId(focus);
   const driveName = useDriveStore((state) =>
     driveId ? state.drives.find((drive) => drive.id === driveId)?.name : undefined
