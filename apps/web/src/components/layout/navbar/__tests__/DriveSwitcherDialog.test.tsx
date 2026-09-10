@@ -115,6 +115,20 @@ describe('DriveSwitcherDialog', () => {
     });
   });
 
+  describe('on a phone', () => {
+    // jsdom applies no media queries, so this pins the mechanism: the phone
+    // placement is measured from the safe-area insets, not the screen edge.
+    // The header pads the same inset, and in the iOS app it is a real notch.
+    it('given the phone layout classes, should anchor below the top inset and stop above the bottom one', () => {
+      renderPicker();
+
+      const content = screen.getByRole('dialog').className;
+      expect(content).toMatch(/max-sm:top-\[calc\(var\(--safe-area-top\)\+0\.75rem\)\]/);
+      expect(content).toMatch(/max-sm:max-h-\[calc\(100dvh-var\(--safe-area-top\)-var\(--safe-area-bottom\)-1\.5rem\)\]/);
+      expect(content).toMatch(/max-sm:translate-y-0/);
+    });
+  });
+
   describe('searching', () => {
     it('given a query, should filter every group and drop Recent, whose order means nothing under a query', async () => {
       // Fixture ids are opaque on purpose: cmdk's own filter matches on item

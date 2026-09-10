@@ -99,10 +99,12 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
         onOpenChange={(next) => (next ? onOpenChange(true) : close())}
         title="Switch drive"
         description="Search your drives and open one"
-        // Phone: top-anchored with 12px margins instead of centred, so the
-        // keyboard never covers the input; the dialog becomes a column whose
-        // list takes whatever height is left. sm+: the usual centred 576px.
-        className="max-sm:top-3 max-sm:flex max-sm:max-h-[calc(100dvh-1.5rem)] max-sm:max-w-[calc(100%-1.5rem)] max-sm:translate-y-0 max-sm:flex-col sm:max-w-xl"
+        // Phone: top-anchored 12px below the safe area instead of centred, so
+        // the keyboard never covers the input and the notch never covers the
+        // dialog (the header pads the same inset; in the iOS app it is real);
+        // the dialog becomes a column whose list takes whatever height is left
+        // above the bottom inset. sm+: the usual centred 576px.
+        className="max-sm:top-[calc(var(--safe-area-top)+0.75rem)] max-sm:flex max-sm:max-h-[calc(100dvh-var(--safe-area-top)-var(--safe-area-bottom)-1.5rem)] max-sm:max-w-[calc(100%-1.5rem)] max-sm:translate-y-0 max-sm:flex-col sm:max-w-xl"
         showCloseButton
         // useDrivePicker owns filtering (Recent must vanish under a query, and
         // groups must not be re-ranked against each other). Item values are
