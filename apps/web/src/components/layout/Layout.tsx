@@ -57,6 +57,19 @@ interface LayoutProps {
   children?: React.ReactNode;
 }
 
+/**
+ * Radix focuses the first tabbable descendant when a sheet opens. On phones that is
+ * the sidebar search input (or the assistant textarea), which pops the keyboard over
+ * the panel the user just opened. Cancel that and focus the sheet container instead
+ * so focus still enters the modal for keyboard and screen-reader users.
+ */
+function focusSheetContainer(event: Event) {
+  event.preventDefault();
+  if (event.currentTarget instanceof HTMLElement) {
+    event.currentTarget.focus();
+  }
+}
+
 function Layout({ children }: LayoutProps) {
   const { isLoading, isAuthenticated } = useAuth();
   // Has THIS mount observed a successful auth check yet? Starts false on every fresh
@@ -575,8 +588,9 @@ function Layout({ children }: LayoutProps) {
           >
             <SheetContent
               side="left"
-              className="w-full max-w-[22rem] border-r p-0 sm:max-w-sm"
-              onOpenAutoFocus={(event) => event.preventDefault()}
+              className="w-full max-w-[22rem] border-r p-0 outline-none sm:max-w-sm"
+              tabIndex={-1}
+              onOpenAutoFocus={focusSheetContainer}
             >
               <SheetHeader className="sr-only">
                 <SheetTitle>Navigation menu</SheetTitle>
@@ -597,8 +611,9 @@ function Layout({ children }: LayoutProps) {
           >
             <SheetContent
               side="right"
-              className="w-full max-w-[22rem] border-l p-0 sm:max-w-sm"
-              onOpenAutoFocus={(event) => event.preventDefault()}
+              className="w-full max-w-[22rem] border-l p-0 outline-none sm:max-w-sm"
+              tabIndex={-1}
+              onOpenAutoFocus={focusSheetContainer}
             >
               <SheetHeader className="sr-only">
                 <SheetTitle>Global Assistant panel</SheetTitle>
