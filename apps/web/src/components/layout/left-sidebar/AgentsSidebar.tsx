@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams } from 'next/navigation';
 import {
   Boxes,
   ChevronDown,
@@ -70,6 +69,7 @@ import { envDevPreviewPath } from '@/hooks/dev-preview/useDevPreviewStatus';
 import { useDriveEnvs } from '@/hooks/drive-envs/useDriveEnvs';
 import { reportDriveEnvWriteFailure, type DriveEnvWriteOutcome } from '@/hooks/drive-envs/drive-env-writes';
 import type { DriveEnvStatus } from '@pagespace/lib/drive-envs/env-contract';
+import { focusDriveId, useFocus } from '@/lib/dashboard/focus';
 
 /**
  * The Agents console's left sidebar: **Drive → Session → Pane.**
@@ -108,10 +108,7 @@ import type { DriveEnvStatus } from '@pagespace/lib/drive-envs/env-contract';
  * component remounts, so live shells and streaming chats survive every click.
  */
 export default function AgentsSidebar({ className }: SidebarProps) {
-  const params = useParams();
-
-  const driveIdParams = params?.driveId;
-  const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
+  const driveId = focusDriveId(useFocus());
 
   const drives = useDriveStore((state) => state.drives);
 

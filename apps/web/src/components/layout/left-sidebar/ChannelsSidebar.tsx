@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useParams, usePathname } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import useSWR from 'swr';
 import { formatDistanceToNow } from 'date-fns';
@@ -18,6 +18,7 @@ import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useInboxSocket } from '@/hooks/useInboxSocket';
 import { useEditingStore } from '@/stores/useEditingStore';
 import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
+import { focusDriveId, useFocus } from '@/lib/dashboard/focus';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -28,7 +29,6 @@ const fetcher = async (url: string) => {
 };
 
 export default function ChannelsSidebar({ className }: SidebarProps) {
-  const params = useParams();
   const pathname = usePathname();
   const [searchQuery, setSearchQuery] = useState('');
   const [allItems, setAllItems] = useState<InboxItem[]>([]);
@@ -38,8 +38,7 @@ export default function ChannelsSidebar({ className }: SidebarProps) {
   const isSheetBreakpoint = useBreakpoint('(max-width: 1023px)');
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
 
-  const driveIdParams = params.driveId;
-  const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
+  const driveId = focusDriveId(useFocus());
 
   const apiUrl = driveId
     ? `/api/inbox?type=channel&driveId=${driveId}&limit=20`

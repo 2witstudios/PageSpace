@@ -44,11 +44,8 @@ function isValidStatusGroup(value: string | null): value is StatusGroupFilter {
   return value !== null && (VALID_STATUS_GROUPS as readonly string[]).includes(value);
 }
 
-function readFromUrl(searchParams: URLSearchParams, scopedToDrive: boolean): PersistableFilters {
-  // A slug status belongs to one drive's lists: outside a drive it is not
-  // read at all, so it can neither narrow the list nor widen the status
-  // group on its behalf.
-  const status = scopedToDrive ? searchParams.get('status') || undefined : undefined;
+function readFromUrl(searchParams: URLSearchParams): PersistableFilters {
+  const status = searchParams.get('status') || undefined;
   const rawStatusGroup = searchParams.get('statusGroup');
 
   // Validate URL value; if absent and an explicit `status` slug is set,
@@ -84,10 +81,13 @@ export function pickInitialFilters(
   stored: StoredDashboardFilters | undefined,
   scopedToDrive = true,
 ): PersistableFilters {
-  if (urlHasHonouredParam(searchParams, scopedToDrive)) {
-    return readFromUrl(searchParams, scopedToDrive);
-  }
-  return fromStoredOrDefaults(stored);
+  // The URL is read as written and forFocus decides what the focus keeps,
+  // so `?status=done&statusGroup=all` under All drives loses both the slug
+  // and the group it widened, the same as a persisted pair would.
+  const filters = urlHasHonouredParam(searchParams, scopedToDrive)
+    ? readFromUrl(searchParams)
+    : fromStoredOrDefaults(stored);
+  return forFocus(filters, scopedToDrive);
 }
 
 /**

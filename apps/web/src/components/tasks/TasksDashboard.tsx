@@ -117,7 +117,7 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
   const [filters, setFilters] = useState<ExtendedFilters>(() => {
     const initialScopeKey = scopeKeyFor(isLocked ? 'drive' : 'user', propDriveId);
     const stored = useLayoutStore.getState().tasksDashboardFilters[initialScopeKey];
-    return forFocus(pickInitialFilters(searchParams, stored, isLocked), isLocked);
+    return pickInitialFilters(searchParams, stored, isLocked);
   });
 
   // A bookmarked `/dashboard/tasks?driveId=…` from when the drive was a filter
@@ -127,8 +127,10 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
 
   // Drive names come from the store the switcher and subtitle already read,
   // so a row's "Drive › List" can never disagree with the focus line.
-  const drives = useDriveStore((state) => state.drives);
-  const driveNameById = useMemo(() => new Map(drives.map((d) => [d.id, d.name])), [drives]);
+  // Only across all drives; in a drive the rows never name it, so the
+  // dashboard does not re-render on every drive-store write there.
+  const drives = useDriveStore((state) => (isLocked ? undefined : state.drives));
+  const driveNameById = useMemo(() => new Map((drives ?? []).map((d) => [d.id, d.name])), [drives]);
 
   // Track last data refresh time
   const [lastRefreshTime, setLastRefreshTime] = useState<Date>(new Date());
@@ -212,7 +214,6 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
         if (propDriveId) {
           params.set('driveId', propDriveId);
         }
-        // forFocus is the one seam that keeps a slug status out of all-drives state.
         if (filters.status) {
           params.set('status', filters.status);
         }

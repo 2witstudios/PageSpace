@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
 import { Lock, Plus, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -20,6 +19,7 @@ import { useUIStore } from "@/stores/useUIStore";
 import DashboardSidebar from "./DashboardSidebar";
 import PageTree from "./page-tree/PageTree";
 import SidebarShell from "./SidebarShell";
+import { focusDriveId, useFocus } from "@/lib/dashboard/focus";
 
 export interface SidebarProps {
   className?: string;
@@ -28,14 +28,12 @@ export interface SidebarProps {
 
 export default function Sidebar({ className }: SidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
-  const params = useParams();
-  const { driveId: driveIdParams } = params;
   const { user } = useAuth();
 
   const drives = useDriveStore((state) => state.drives);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
   const openQuickCreate = useUIStore((state) => state.openQuickCreate);
-  const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
+  const driveId = focusDriveId(useFocus());
 
   const drive = drives.find((d) => d.id === driveId);
   const canManage = canManageDrive(drive);

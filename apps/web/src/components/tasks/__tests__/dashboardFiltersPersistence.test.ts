@@ -169,6 +169,11 @@ describe('pickInitialFilters across all drives', () => {
     expect(pickInitialFilters(new URLSearchParams('driveId=d1'), stored, true)).toEqual(fromStoredOrDefaults(stored));
   });
 
+  it('given ?status= with the group it widened, outside a drive, should drop both', () => {
+    const result = pickInitialFilters(new URLSearchParams('status=done&statusGroup=all&search=x'), undefined, false);
+    expect(result).toEqual({ statusGroup: 'active', assigneeFilter: 'mine', search: 'x', priority: undefined, dueDateFilter: undefined });
+  });
+
   it('given ?status= inside a drive, should read it and let the group fall to all', () => {
     const result = pickInitialFilters(new URLSearchParams('status=done'), undefined, true);
     expect(result.status).toBe('done');

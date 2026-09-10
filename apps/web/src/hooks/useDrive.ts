@@ -92,7 +92,13 @@ export const useDriveStore = create<DriveState>()(
         lastFetched: Date.now()
       })),
       setCurrentDrive: (driveId: string | null) => set({ currentDriveId: driveId }),
-      reset: () => set({ drives: [], lastFetched: 0, currentDriveId: null, isLoading: false }),
+      reset: () => {
+        // A request still pending for the previous user must neither be
+        // handed to the next one nor allowed to write once it lands.
+        inFlight = null;
+        latestRequestId++;
+        set({ drives: [], lastFetched: 0, currentDriveId: null, isLoading: false });
+      },
     }),
     {
       name: 'drive-storage',
