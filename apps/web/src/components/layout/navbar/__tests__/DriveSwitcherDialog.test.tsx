@@ -18,7 +18,7 @@ vi.mock('next/navigation', () => ({
   usePathname: () => '/dashboard',
 }));
 
-const fetchWithAuth = vi.fn(() => Promise.resolve(new Response(null, { status: 200 })));
+const fetchWithAuth = vi.fn((..._args: unknown[]) => Promise.resolve(new Response(null, { status: 200 })));
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: (...args: unknown[]) => fetchWithAuth(...args),
   post: vi.fn(),
