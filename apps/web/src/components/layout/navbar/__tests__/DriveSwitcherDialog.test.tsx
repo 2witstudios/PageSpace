@@ -33,7 +33,7 @@ vi.mock('@/components/layout/left-sidebar/CreateDriveDialog', () => ({
   },
 }));
 
-import DrivePickerDialog from '../DrivePickerDialog';
+import DriveSwitcherDialog from '../DriveSwitcherDialog';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useFavorites } from '@/hooks/useFavorites';
 
@@ -49,14 +49,14 @@ const buildDrive = (overrides: Partial<Drive> & Pick<Drive, 'id' | 'name'>): Dri
 });
 
 const drives: Drive[] = [
-  buildDrive({ id: 'drive_coffee', name: 'Coffee Co.', lastAccessedAt: '2026-09-09T10:00:00.000Z' }),
-  buildDrive({ id: 'drive_eng', name: 'Engineering', lastAccessedAt: '2026-09-08T10:00:00.000Z' }),
-  buildDrive({ id: 'drive_mkt', name: 'Marketing', lastAccessedAt: '2026-09-01T10:00:00.000Z' }),
-  buildDrive({ id: 'drive_trash', name: 'Old Stuff', isTrashed: true }),
+  buildDrive({ id: 'k3xq9w2p7m', name: 'Coffee Co.', lastAccessedAt: '2026-09-09T10:00:00.000Z' }),
+  buildDrive({ id: 'v8n1t6zr4c', name: 'Engineering', lastAccessedAt: '2026-09-08T10:00:00.000Z' }),
+  buildDrive({ id: 'h2s7d0yb5j', name: 'Marketing', lastAccessedAt: '2026-09-01T10:00:00.000Z' }),
+  buildDrive({ id: 'q4f9l3mx8a', name: 'Old Stuff', isTrashed: true }),
 ];
 
 const renderPicker = (onOpenChange = vi.fn()) => {
-  render(<DrivePickerDialog open onOpenChange={onOpenChange} />);
+  render(<DriveSwitcherDialog open onOpenChange={onOpenChange} />);
   return { onOpenChange };
 };
 
@@ -68,12 +68,12 @@ const group = (heading: string | RegExp) => {
   return within(groupEl as HTMLElement);
 };
 
-describe('DrivePickerDialog', () => {
+describe('DriveSwitcherDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useDriveStore.setState({ drives, currentDriveId: 'drive_coffee', isLoading: false, lastFetched: 0 });
+    useDriveStore.setState({ drives, currentDriveId: 'k3xq9w2p7m', isLoading: false, lastFetched: 0 });
     useFavorites.setState({
-      driveIds: new Set(['drive_coffee']),
+      driveIds: new Set(['k3xq9w2p7m']),
       pageIds: new Set(),
       favorites: [],
       isSynced: true,
@@ -98,8 +98,10 @@ describe('DrivePickerDialog', () => {
       renderPicker();
 
       const row = group('Favorites').getByText('Coffee Co.').closest('[cmdk-item]') as HTMLElement;
-      expect(within(row).getByLabelText('Current drive')).toBeInTheDocument();
       expect(row.getAttribute('data-current')).toBe('true');
+      // The state lives in the option's accessible name, because nothing inside
+      // a cmdk row is a separate control to assistive tech.
+      expect(row).toHaveAttribute('aria-label', 'Coffee Co., current drive, favorite');
       expect(screen.queryByText('current')).not.toBeInTheDocument();
     });
 
@@ -115,9 +117,13 @@ describe('DrivePickerDialog', () => {
 
   describe('searching', () => {
     it('given a query, should filter every group and drop Recent, whose order means nothing under a query', async () => {
+      // Fixture ids are opaque on purpose: cmdk's own filter matches on item
+      // VALUE (group:id), so with `shouldFilter` left on it would hide every
+      // row our name filter kept. Ids that happened to contain the name
+      // fragment masked exactly that in the first cut of this file.
       renderPicker();
 
-      await userEvent.type(screen.getByPlaceholderText('Search drives…'), 'eng');
+      await userEvent.type(screen.getByPlaceholderText('Search drives…'), 'engineering');
 
       expect(screen.queryByText('Recent')).not.toBeInTheDocument();
       expect(group('Results').getByText('Engineering')).toBeInTheDocument();
@@ -140,20 +146,35 @@ describe('DrivePickerDialog', () => {
 
       await userEvent.click(group('Recent').getByText('Engineering'));
 
-      expect(push).toHaveBeenCalledWith('/dashboard/drive_eng');
-      expect(fetchWithAuth).toHaveBeenCalledWith('/api/drives/drive_eng/access', { method: 'POST' });
+      expect(push).toHaveBeenCalledWith('/dashboard/v8n1t6zr4c');
+      expect(fetchWithAuth).toHaveBeenCalledWith('/api/drives/v8n1t6zr4c/access', { method: 'POST' });
       expect(onOpenChange).toHaveBeenCalledWith(false);
-      expect(useDriveStore.getState().currentDriveId).toBe('drive_eng');
+      expect(useDriveStore.getState().currentDriveId).toBe('v8n1t6zr4c');
     });
 
     it('given a star is tapped, should toggle the favorite and NOT switch drive', async () => {
       const { onOpenChange } = renderPicker();
       const addFavorite = useFavorites.getState().addFavorite;
 
-      // Engineering is listed under Recent AND All drives; either star is the same control.
-      await userEvent.click(group('Recent').getByRole('button', { name: 'Add Engineering to favorites' }));
+      const row = group('Recent').getByText('Engineering').closest('[cmdk-item]') as HTMLElement;
+      await userEvent.click(within(row).getByTestId('favorite-toggle'));
 
-      expect(addFavorite).toHaveBeenCalledWith('drive_eng', 'drive');
+      expect(addFavorite).toHaveBeenCalledWith('v8n1t6zr4c', 'drive');
+      expect(push).not.toHaveBeenCalled();
+      expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    });
+
+    it('given Shift+Enter on the highlighted row, should toggle its favorite from the keyboard and NOT switch drive', async () => {
+      // The star is pointer-only; this is the path a keyboard or screen-reader
+      // user has, and the one the hint footer names.
+      const { onOpenChange } = renderPicker();
+      const addFavorite = useFavorites.getState().addFavorite;
+      const input = screen.getByPlaceholderText('Search drives…');
+
+      await userEvent.type(input, 'marketing');
+      await userEvent.keyboard('{Shift>}{Enter}{/Shift}');
+
+      expect(addFavorite).toHaveBeenCalledWith('h2s7d0yb5j', 'drive');
       expect(push).not.toHaveBeenCalled();
       expect(onOpenChange).not.toHaveBeenCalledWith(false);
     });

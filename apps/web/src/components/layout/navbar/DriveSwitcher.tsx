@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useDriveStore } from "@/hooks/useDrive";
 import { useFavoritesSync } from "@/hooks/useFavorites";
 
-import DrivePickerDialog from "./DrivePickerDialog";
+import DriveSwitcherDialog from "./DriveSwitcherDialog";
 
 /**
  * The sidebar's drive trigger. It keeps the URL and the drive store in step
@@ -71,7 +71,7 @@ export default function DriveSwitcher() {
         <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
       </Button>
 
-      <DrivePickerDialog open={isOpen} onOpenChange={setIsOpen} />
+      <DriveSwitcherDialog open={isOpen} onOpenChange={setIsOpen} />
     </>
   );
 }

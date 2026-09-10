@@ -14,7 +14,7 @@ vi.mock('next/navigation', () => ({
 
 // The picker is its own component with its own tests; here it only needs to
 // report whether the crumb opened it.
-vi.mock('@/components/layout/navbar/DrivePickerDialog', () => ({
+vi.mock('@/components/layout/navbar/DriveSwitcherDialog', () => ({
   default: ({ open }: { open: boolean }) => (open ? <div data-testid="drive-picker" /> : null),
 }));
 

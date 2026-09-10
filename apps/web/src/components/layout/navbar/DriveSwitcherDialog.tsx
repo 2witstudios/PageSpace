@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import type { KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
 import { Check, Folder, LayoutGrid, Plus, Star } from "lucide-react";
@@ -20,7 +21,7 @@ import { cn } from "@/lib/utils";
 
 import { useDrivePicker } from "./useDrivePicker";
 
-interface DrivePickerDialogProps {
+interface DriveSwitcherDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -37,7 +38,7 @@ interface DrivePickerDialogProps {
  * behave differently under a query (Recent disappears) and cmdk's built-in
  * fuzzy match would rank across groups we want kept apart.
  */
-export default function DrivePickerDialog({ open, onOpenChange }: DrivePickerDialogProps) {
+export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitcherDialogProps) {
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [isCreateOpen, setCreateOpen] = useState(false);
@@ -61,6 +62,22 @@ export default function DrivePickerDialog({ open, onOpenChange }: DrivePickerDia
   const handleSelect = (drive: Drive) => {
     close();
     selectDrive(drive);
+  };
+
+  // Shift+Enter favourites the highlighted row. cmdk keeps focus on the input
+  // and walks rows via aria-activedescendant, so a button INSIDE a row is
+  // unreachable from the keyboard and invisible to a screen reader; the star
+  // is therefore a pointer affordance only, and this is the accessible path.
+  // Capture phase, so cmdk's own Enter (select) never sees it.
+  const handleKeyDownCapture = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter" || !event.shiftKey) return;
+    const selected = event.currentTarget.querySelector<HTMLElement>(
+      '[cmdk-item][data-selected="true"][data-drive-id]'
+    );
+    if (!selected?.dataset.driveId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void toggleFavorite(selected.dataset.driveId);
   };
 
   const renderItem = (drive: Drive, group: string) => (
@@ -87,7 +104,12 @@ export default function DrivePickerDialog({ open, onOpenChange }: DrivePickerDia
         // list takes whatever height is left. sm+: the usual centred 576px.
         className="max-sm:top-3 max-sm:flex max-sm:max-h-[calc(100dvh-1.5rem)] max-sm:max-w-[calc(100%-1.5rem)] max-sm:translate-y-0 max-sm:flex-col sm:max-w-xl"
         showCloseButton
+        // useDrivePicker owns filtering (Recent must vanish under a query, and
+        // groups must not be re-ranked against each other). Item values are
+        // `group:id`, so cmdk's own filter would hide rows matched by name.
+        shouldFilter={false}
       >
+        <div className="flex min-h-0 flex-1 flex-col" onKeyDownCapture={handleKeyDownCapture}>
         <CommandInput placeholder="Search drives…" value={query} onValueChange={setQuery} />
 
         {/*
@@ -157,9 +179,14 @@ export default function DrivePickerDialog({ open, onOpenChange }: DrivePickerDia
             open drive
           </span>
           <span>
+            <Kbd>⇧↵</Kbd>
+            favorite
+          </span>
+          <span>
             <Kbd>esc</Kbd>
             close
           </span>
+        </div>
         </div>
       </CommandDialog>
 
@@ -196,28 +223,40 @@ function DriveRow({ drive, group, isCurrent, isFavorite, onSelect, onToggleFavor
   return (
     <CommandItem
       // Same drive can appear in Favorites and All; cmdk dedupes by value, so
-      // the value carries the group.
+      // the value carries the group. Filtering is ours (shouldFilter=false),
+      // so an opaque value is fine.
       value={`${group}:${drive.id}`}
       onSelect={onSelect}
+      // The option's name carries the state a nested control cannot: cmdk rows
+      // are reached by aria-activedescendant, so nothing inside them is a
+      // separate control to assistive tech.
+      aria-label={[drive.name, isCurrent ? "current drive" : null, isFavorite ? "favorite" : null]
+        .filter(Boolean)
+        .join(", ")}
       className={cn("group/row cursor-pointer gap-2.5", isCurrent && "bg-primary-soft")}
       data-current={isCurrent ? "true" : undefined}
+      data-drive-id={drive.id}
     >
       <Folder className="h-4 w-4 shrink-0" aria-hidden="true" />
       <span className="min-w-0 flex-1 truncate">{drive.name}</span>
       {accessed && <span className="text-xs text-muted-foreground tabular-nums">{accessed}</span>}
-      <button
-        type="button"
-        // cmdk selects the row on click; stop it here so a star tap never
-        // switches drive.
+      {/*
+        Pointer affordance only (aria-hidden): the keyboard path is Shift+Enter
+        on the highlighted row, listed in the hint footer. cmdk selects the
+        row on click, so stop the click here or a star tap switches drive.
+      */}
+      <span
+        role="presentation"
+        aria-hidden="true"
+        data-testid="favorite-toggle"
+        title={isFavorite ? "Remove from favorites" : "Add to favorites"}
         onClick={(event) => {
           event.stopPropagation();
           event.preventDefault();
           onToggleFavorite();
         }}
-        aria-label={isFavorite ? `Remove ${drive.name} from favorites` : `Add ${drive.name} to favorites`}
-        aria-pressed={isFavorite}
         className={cn(
-          "flex h-6 w-6 items-center justify-center rounded-sm transition-opacity hover:bg-accent focus-visible:opacity-100",
+          "flex h-6 w-6 items-center justify-center rounded-sm transition-opacity hover:bg-accent",
           isTouchDevice || isFavorite ? "opacity-100" : "opacity-0 group-hover/row:opacity-100"
         )}
       >
@@ -226,10 +265,9 @@ function DriveRow({ drive, group, isCurrent, isFavorite, onSelect, onToggleFavor
             "h-3.5 w-3.5",
             isFavorite ? "fill-yellow-500 text-yellow-500" : "text-muted-foreground"
           )}
-          aria-hidden="true"
         />
-      </button>
-      {isCurrent && <Check className="h-4 w-4 shrink-0 text-primary" aria-label="Current drive" />}
+      </span>
+      {isCurrent && <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />}
     </CommandItem>
   );
 }

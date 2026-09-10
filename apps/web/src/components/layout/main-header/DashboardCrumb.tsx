@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { ChevronsUpDown, Folder, Home } from "lucide-react";
 
-import DrivePickerDialog from "@/components/layout/navbar/DrivePickerDialog";
+import DriveSwitcherDialog from "@/components/layout/navbar/DriveSwitcherDialog";
 import { useDriveStore } from "@/hooks/useDrive";
 
 const DASHBOARD_PATH = "/dashboard";
@@ -121,7 +121,7 @@ export default function DashboardCrumb() {
             </span>
             <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           </button>
-          <DrivePickerDialog open={pickerOpen} onOpenChange={setPickerOpen} />
+          <DriveSwitcherDialog open={pickerOpen} onOpenChange={setPickerOpen} />
         </>
       ) : null}
     </div>
