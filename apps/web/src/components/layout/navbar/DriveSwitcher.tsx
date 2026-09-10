@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
-import { ChevronsUpDown, Folder } from "lucide-react";
+import { ChevronsUpDown } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDriveStore } from "@/hooks/useDrive";
-import { useFavoritesSync } from "@/hooks/useFavorites";
+import { focusPresentation } from "@/components/shared/FocusTrigger";
+import { focusDriveId, useFocus } from "@/lib/dashboard/focus";
 
 import DriveSwitcherDialog from "./DriveSwitcherDialog";
 
@@ -17,19 +17,15 @@ import DriveSwitcherDialog from "./DriveSwitcherDialog";
  * drive crumb, so there is one list, one "recent", and one way to switch.
  */
 export default function DriveSwitcher() {
-  const params = useParams();
   const [isOpen, setIsOpen] = useState(false);
+  const focus = useFocus();
 
   const drives = useDriveStore((state) => state.drives);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
   const isLoading = useDriveStore((state) => state.isLoading);
-  const currentDriveId = useDriveStore((state) => state.currentDriveId);
   const setCurrentDrive = useDriveStore((state) => state.setCurrentDrive);
 
-  useFavoritesSync();
-
-  const { driveId } = params;
-  const urlDriveId = Array.isArray(driveId) ? driveId[0] : driveId;
+  const urlDriveId = focusDriveId(focus);
 
   useEffect(() => {
     fetchDrives();
@@ -46,10 +42,13 @@ export default function DriveSwitcher() {
     }
   }, [urlDriveId, drives, setCurrentDrive]);
 
+  // Looked up by the route's drive, so a drive the list has not caught up
+  // with never shows the previous drive's name.
   const currentDrive = useMemo(
-    () => drives.find((d) => d.id === currentDriveId),
-    [drives, currentDriveId]
+    () => (urlDriveId ? drives.find((d) => d.id === urlDriveId) : undefined),
+    [drives, urlDriveId]
   );
+  const { label, Icon } = focusPresentation(focus, currentDrive?.name);
 
   if (isLoading) {
     return <Skeleton className="h-9 w-40" />;
@@ -64,10 +63,9 @@ export default function DriveSwitcher() {
         aria-expanded={isOpen}
         className="flex items-center gap-2 px-2 h-9 min-w-0 max-w-full"
       >
-        <Folder className="h-4 w-4 shrink-0" />
-        <span className="truncate font-medium">
-          {currentDrive ? currentDrive.name : "Select Drive"}
-        </span>
+        {/* No drive open IS the All drives focus, and it is named as such. */}
+        <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span className="truncate font-medium">{label}</span>
         <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
       </Button>
 

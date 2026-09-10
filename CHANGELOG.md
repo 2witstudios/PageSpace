@@ -7,6 +7,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Channels, Files, Tasks and Calendar are one page each, with a drive focus** — each of those
+  views used to exist twice: a dashboard version and a drive version, with different titles and a
+  sidebar that only ever linked to whichever one you were in. Now "All drives" is a focus like any
+  drive. The sidebar's drive switcher names the focus ("All drives" or the drive), and the drive
+  picker it opens lists All drives as its first row; choosing either keeps you in the section you
+  are in, so a drive's tasks become every drive's tasks and back. Page titles stop encoding scope
+  ("Tasks", not "My Tasks" and "Drive Tasks"); the line under each title names the focus and
+  opens the same picker, and on a phone it is the only control added to the row. Files across all
+  drives is the drives browser, and opening a drive there lands in its files. Tasks loses its
+  separate Drive filter and Back button (the focus is the drive, Home is one tap away), withholds
+  the per-list Status filter across all drives where it would merge unrelated lists, and names the
+  drive before the list on every row. The calendar's sidebar now labels the calendar new events go
+  to. The first navigation item is "Home" whichever focus you are in.
 - **AI agents can format spreadsheets** — two new workspace tools, **Format Sheet** and
   **Conditional Formatting**, let an agent make a SHEET page presentable instead of leaving a grid
   of bare numbers. An agent declares what a table *is* (its range, header rows, which columns are

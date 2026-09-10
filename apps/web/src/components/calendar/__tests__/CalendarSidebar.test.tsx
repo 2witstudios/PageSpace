@@ -162,3 +162,50 @@ describe('CalendarSidebar', () => {
     });
   });
 });
+
+describe('CalendarSidebar create target', () => {
+  test('names the calendar new events go to, only when selection is offered', () => {
+    const { rerender } = render(
+      <CalendarSidebar
+        calendars={makeCalendars()}
+        onToggle={() => {}}
+        onShowAll={() => {}}
+        onHideAll={() => {}}
+        agentEventsVisible={true}
+        userEventsVisible={true}
+        onToggleAgentEvents={() => {}}
+        onToggleUserEvents={() => {}}
+        selectedKey="drive-aaa"
+        onSelectCalendar={() => {}}
+      />
+    );
+
+    assert({
+      given: 'a selected calendar with selection offered',
+      should: 'label it as the New events target',
+      actual: screen.getByText('New events').closest('[role="button"]')?.textContent?.includes('Work Drive'),
+      expected: true,
+    });
+
+    rerender(
+      <CalendarSidebar
+        calendars={makeCalendars()}
+        onToggle={() => {}}
+        onShowAll={() => {}}
+        onHideAll={() => {}}
+        agentEventsVisible={true}
+        userEventsVisible={true}
+        onToggleAgentEvents={() => {}}
+        onToggleUserEvents={() => {}}
+        selectedKey="drive-aaa"
+      />
+    );
+
+    assert({
+      given: 'no selection handler',
+      should: 'show no target label, since rows only toggle visibility',
+      actual: screen.queryByText('New events'),
+      expected: null,
+    });
+  });
+});

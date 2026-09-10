@@ -111,3 +111,40 @@ describe('completion state', () => {
     });
   });
 });
+
+describe('source across drives', () => {
+  it('given a drive name, leads the list title with it', () => {
+    render(
+      <TaskCompactRow
+        task={task({ taskListPageTitle: 'Launch Q3' } as Partial<Task>)}
+        driveName="Marketing"
+        onToggleComplete={noop}
+        onTap={noop}
+        canEdit
+      />
+    );
+    assert({
+      given: 'a task in the All drives focus',
+      should: 'name the drive before the list',
+      actual: screen.getByText('Marketing › Launch Q3').textContent,
+      expected: 'Marketing › Launch Q3',
+    });
+  });
+
+  it('given no drive name, shows the list title alone', () => {
+    render(
+      <TaskCompactRow
+        task={task({ taskListPageTitle: 'Launch Q3' } as Partial<Task>)}
+        onToggleComplete={noop}
+        onTap={noop}
+        canEdit
+      />
+    );
+    assert({
+      given: 'a task in a drive focus',
+      should: 'not prefix the list title',
+      actual: screen.getByText('Launch Q3').textContent,
+      expected: 'Launch Q3',
+    });
+  });
+});
