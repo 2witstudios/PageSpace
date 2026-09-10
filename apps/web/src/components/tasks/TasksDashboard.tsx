@@ -58,7 +58,7 @@ import type { Task, TaskFilters, Pagination, StatusConfigsByTaskList } from './t
 import { getStatusDisplay } from './task-helpers';
 import { FocusTrigger } from '@/components/shared/FocusTrigger';
 import { useDriveStore } from '@/hooks/useDrive';
-import { ALL_DRIVES, driveFocus, legacyFocusHref } from '@/lib/dashboard/focus';
+import { legacyFocusHref } from '@/lib/dashboard/focus';
 import { FilterControls } from './FilterControls';
 import { TaskCompactRow } from './TaskCompactRow';
 import { TaskDetailSheet } from './TaskDetailSheet';
@@ -114,7 +114,6 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
   // Filter state — URL params win on mount; otherwise fall back to per-scope persisted prefs.
   // The focus: the route's drive, or All drives. There is no in-page drive
   // filter any more — changing drive is changing focus, via the picker.
-  const focus = propDriveId ? driveFocus(propDriveId) : ALL_DRIVES;
   const persistDashboardFilter = useLayoutStore((state) => state.setTasksDashboardFilter);
   const [filters, setFilters] = useState<ExtendedFilters>(() => {
     const initialScopeKey = scopeKeyFor(isLocked ? 'drive' : 'user', propDriveId);
@@ -216,12 +215,11 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
         params.set('limit', '50');
         params.set('offset', offset.toString());
 
-        if (isLocked && propDriveId) {
+        if (propDriveId) {
           params.set('driveId', propDriveId);
         }
-        // Slug statuses belong to one drive's lists; forFocus keeps them out of
-        // all-drives state, and this keeps them out of the request regardless.
-        if (isLocked && filters.status) {
+        // forFocus is the one seam that keeps a slug status out of all-drives state.
+        if (filters.status) {
           params.set('status', filters.status);
         }
         if (filters.priority) {
@@ -279,10 +277,8 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
   // here to redirect a legacy bookmark.
   useEffect(() => {
     if (legacyHref) return;
-    if (!isLocked || propDriveId) {
-      fetchTasks();
-    }
-  }, [legacyHref, isLocked, propDriveId, filters, fetchTasks]);
+    fetchTasks();
+  }, [legacyHref, filters, fetchTasks]);
 
   // Register/unregister editing state for UI refresh protection
   useEffect(() => {
@@ -609,7 +605,7 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
                   <div className="flex items-center gap-2 px-3 py-2.5">
                     <div className="flex min-w-0 flex-1 items-center gap-2">
                       <h1 className="text-base font-semibold shrink-0">Tasks</h1>
-                      <FocusTrigger section="tasks" focus={focus} />
+                      <FocusTrigger section="tasks" />
                     </div>
                     <Button
                       variant="ghost"
@@ -726,7 +722,7 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
                     <div className="min-w-0">
                       <h1 className="text-2xl font-bold">Tasks</h1>
                       <div className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
-                        <FocusTrigger section="tasks" focus={focus} />
+                        <FocusTrigger section="tasks" />
                         <span aria-hidden="true">·</span>
                         <span className="shrink-0">{assigneeSuffix}</span>
                       </div>

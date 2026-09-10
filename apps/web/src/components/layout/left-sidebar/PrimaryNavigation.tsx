@@ -10,12 +10,16 @@ import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { useSidebarBadges } from "@/hooks/useSidebarBadges";
 import { EMPTY_AGENT_SELECTION, buildAgentSelectionUrl } from "@/lib/agents/agent-selection";
+import { ALL_DRIVES, driveFocus, focusSectionHref } from "@/lib/dashboard/focus";
 
 interface PrimaryNavigationProps {
     driveId?: string;
 }
 
 export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
+    // The section hrefs come from the focus grammar, so the nav and the
+    // picker can never disagree about where a section lives.
+    const focus = driveId ? driveFocus(driveId) : ALL_DRIVES;
     const pathname = usePathname();
     const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
     const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
@@ -52,7 +56,7 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
             // One name in both focuses: the dashboard is Home for all drives,
             // and a drive's home is Home for that drive.
             name: "Home",
-            href: driveId ? `/dashboard/${driveId}` : "/dashboard",
+            href: focusSectionHref(focus, null),
             icon: Home,
             exact: true,
             badge: 0,
@@ -67,28 +71,28 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
         },
         {
             name: "Channels",
-            href: driveId ? `/dashboard/${driveId}/channels` : "/dashboard/channels",
+            href: focusSectionHref(focus, "channels"),
             icon: Hash,
             exact: false,
             badge: badges.channels,
         },
         {
             name: "Files",
-            href: driveId ? `/dashboard/${driveId}/files` : "/dashboard/drives",
+            href: focusSectionHref(focus, "files"),
             icon: Folder,
             exact: false,
             badge: badges.files,
         },
         {
             name: "Tasks",
-            href: driveId ? `/dashboard/${driveId}/tasks` : "/dashboard/tasks",
+            href: focusSectionHref(focus, "tasks"),
             icon: CheckSquare,
             exact: false,
             badge: badges.tasks,
         },
         {
             name: "Calendar",
-            href: driveId ? `/dashboard/${driveId}/calendar` : "/dashboard/calendar",
+            href: focusSectionHref(focus, "calendar"),
             icon: Calendar,
             exact: false,
             badge: badges.calendar,

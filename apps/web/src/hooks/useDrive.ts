@@ -17,7 +17,10 @@ interface DriveState {
   reset: () => void;
 }
 
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const CACHE_DURATION = 5 * 60 * 1000;
+
+/** Shape of the drives request currently in flight, so a narrower one can wait for it. */
+let inFlightIncludesTrash = false; // 5 minutes
 
 export const useDriveStore = create<DriveState>()(
   persist(
@@ -35,10 +38,12 @@ export const useDriveStore = create<DriveState>()(
           return;
         }
         // Several controls ask on the same mount (sidebar, crumb, a page's
-        // focus line); one request serves them all.
-        if (!forceRefresh && state.isLoading) {
+        // focus line); one request serves them all — unless the new ask is
+        // broader (trash included) than the one in flight.
+        if (!forceRefresh && state.isLoading && (inFlightIncludesTrash || !includeTrash)) {
           return;
         }
+        inFlightIncludesTrash = includeTrash;
         
         set({ isLoading: true });
         try {

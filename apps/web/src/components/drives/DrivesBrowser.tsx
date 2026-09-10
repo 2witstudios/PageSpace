@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FocusTrigger } from "@/components/shared/FocusTrigger";
-import { ALL_DRIVES } from "@/lib/dashboard/focus";
 import {
   Table,
   TableBody,
@@ -300,7 +299,7 @@ export default function DrivesBrowser() {
           */}
           <div className="min-w-0 flex-1">
             <h1 className="text-2xl font-bold">Files</h1>
-            <FocusTrigger section="files" focus={ALL_DRIVES} />
+            <FocusTrigger section="files" />
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <Button

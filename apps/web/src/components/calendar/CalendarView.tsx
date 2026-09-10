@@ -7,7 +7,6 @@ import { Bot, ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, List, L
 import useSWR from 'swr';
 import { Button } from '@/components/ui/button';
 import { FocusTrigger } from '@/components/shared/FocusTrigger';
-import { ALL_DRIVES, driveFocus } from '@/lib/dashboard/focus';
 import { Toggle } from '@/components/ui/toggle';
 import {
   Select,
@@ -147,7 +146,6 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
 
   // Force-refresh drives on mount so the sidebar reflects current memberships
   const isUserContext = context === 'user';
-  const calendarFocus = isUserContext || !driveId ? ALL_DRIVES : driveFocus(driveId);
   useEffect(() => {
     if (isUserContext) fetchDrives(false, true);
   }, [isUserContext, fetchDrives]);
@@ -460,7 +458,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           context={context}
           focusTrigger={
             // 32px, like the tasks toggle and the filter it sits between.
-            <FocusTrigger section="calendar" focus={calendarFocus} variant="compact" size="sm" />
+            <FocusTrigger section="calendar" variant="compact" size="sm" />
           }
           calendarEntries={isUserContext ? calendarEntries : undefined}
           onToggleCalendar={toggleCalendar}
@@ -519,7 +517,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           <h2 className="text-lg font-semibold">{getHeaderTitle()}</h2>
 
           {/* The focus, as a subtitle-sized chip after the month. Context IS the focus here. */}
-          <FocusTrigger section="calendar" focus={calendarFocus} />
+          <FocusTrigger section="calendar" />
         </div>
 
         <div className="flex items-center gap-2">

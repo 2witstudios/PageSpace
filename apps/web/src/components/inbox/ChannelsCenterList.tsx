@@ -14,7 +14,6 @@ import { useInboxSocket } from '@/hooks/useInboxSocket';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { ThreadUnreadBadge } from '@/components/inbox/ThreadUnreadBadge';
 import { FocusTrigger } from '@/components/shared/FocusTrigger';
-import { ALL_DRIVES, driveFocus } from '@/lib/dashboard/focus';
 import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
 
 const fetcher = async (url: string) => {
@@ -142,7 +141,7 @@ export default function ChannelsCenterList({ driveId }: ChannelsCenterListProps)
               now it names the focus and is the way to change it. One page,
               one control, no room taken from the row.
             */}
-            <FocusTrigger section="channels" focus={driveId ? driveFocus(driveId) : ALL_DRIVES} />
+            <FocusTrigger section="channels" />
           </div>
         </div>
 

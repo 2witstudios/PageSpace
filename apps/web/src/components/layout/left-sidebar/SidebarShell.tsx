@@ -6,6 +6,7 @@ import DriveSwitcher from "@/components/layout/navbar/DriveSwitcher";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { useIsMac } from "@/hooks/useIsMac";
 import { useDriveStore } from "@/hooks/useDrive";
+import { useFavoritesSync } from "@/hooks/useFavorites";
 import { canManageDrive } from "@/hooks/usePermissions";
 import { focusDriveId, useFocus } from "@/lib/dashboard/focus";
 import { cn, isElectron } from "@/lib/utils";
@@ -39,6 +40,9 @@ export default function SidebarShell({ className, children }: SidebarShellProps)
   const isElectronMac = useIsMac() && isElectron();
   const focus = useFocus();
   const driveId = focusDriveId(focus);
+  // Every sidebar mounts this shell, so this is where favourites revalidate
+  // on load and on refocus (the page tree's star menus read the result).
+  useFavoritesSync();
   const drive = useDriveStore((state) => (driveId ? state.drives.find((d) => d.id === driveId) : undefined));
   const canManage = canManageDrive(drive);
 

@@ -184,11 +184,13 @@ describe('forFocus', () => {
     });
   });
 
-  it('given the All drives focus, should also drop the slug status the UI cannot show', () => {
+  it('given the All drives focus, should drop the slug status the UI cannot show, and the group it widened', () => {
     expect(forFocus({ status: 'in_progress', statusGroup: 'all', search: 'x' }, false)).toEqual({
-      statusGroup: 'all',
+      statusGroup: 'active',
       search: 'x',
     });
+    expect(forFocus({ status: 'in_progress', statusGroup: 'completed' }, false)).toEqual({ statusGroup: 'completed' });
+    expect(forFocus({ statusGroup: 'all' }, false)).toEqual({ statusGroup: 'all' });
   });
 
   it('given nothing to drop, should return an equal object', () => {

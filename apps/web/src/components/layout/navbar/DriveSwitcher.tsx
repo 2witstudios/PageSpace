@@ -22,7 +22,6 @@ export default function DriveSwitcher() {
   const drives = useDriveStore((state) => state.drives);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
   const isLoading = useDriveStore((state) => state.isLoading);
-  const currentDriveId = useDriveStore((state) => state.currentDriveId);
   const setCurrentDrive = useDriveStore((state) => state.setCurrentDrive);
 
   const { driveId } = params;
@@ -43,9 +42,11 @@ export default function DriveSwitcher() {
     }
   }, [urlDriveId, drives, setCurrentDrive]);
 
+  // Looked up by the route's drive, like FocusTrigger, so a drive the list
+  // has not caught up with never shows the previous drive's name.
   const currentDrive = useMemo(
-    () => drives.find((d) => d.id === currentDriveId),
-    [drives, currentDriveId]
+    () => (urlDriveId ? drives.find((d) => d.id === urlDriveId) : undefined),
+    [drives, urlDriveId]
   );
 
   if (isLoading) {

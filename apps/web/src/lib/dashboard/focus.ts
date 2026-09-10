@@ -9,7 +9,8 @@ import { useParams } from 'next/navigation';
  * channels, files, tasks, calendar — is one page whose data is filtered by
  * this value. "All drives" is a focus like any drive, not a different page.
  *
- * The grammar lives here and nowhere else. The URL keeps its two shapes
+ * The grammar lives here; the sidebar's navigation and the picker both
+ * build their hrefs from it. The URL keeps its two shapes
  * (`/dashboard/<section>` and `/dashboard/[driveId]/<section>`): a missing
  * `driveId` param IS the All drives focus, which is what every `useParams`
  * reader in the app already assumes.

@@ -5,14 +5,15 @@ import { ChevronsUpDown, Folder, Layers } from 'lucide-react';
 
 import DriveSwitcherDialog from '@/components/layout/navbar/DriveSwitcherDialog';
 import { useDriveStore } from '@/hooks/useDrive';
-import { focusDriveId, type Focus, type FocusSection } from '@/lib/dashboard/focus';
+import { focusDriveId, useFocus, type Focus, type FocusSection } from '@/lib/dashboard/focus';
 import { cn } from '@/lib/utils';
 
 const ALL_DRIVES_LABEL = 'All drives';
 
 interface FocusTriggerProps {
   section: FocusSection;
-  focus: Focus;
+  /** The route's focus by default; an override is for rendering outside a route. */
+  focus?: Focus;
   /**
    * `text`: a subtitle-sized label with a chevron — what a page's own
    * "in this drive" line becomes once it can be pressed.
@@ -33,7 +34,9 @@ interface FocusTriggerProps {
  * The drive name comes from the store and is allowed to be missing: the
  * trigger must be pressable before drives have loaded.
  */
-export function FocusTrigger({ section, focus, variant = 'text', size = 'md', className }: FocusTriggerProps) {
+export function FocusTrigger({ section, focus: focusOverride, variant = 'text', size = 'md', className }: FocusTriggerProps) {
+  const routeFocus = useFocus();
+  const focus = focusOverride ?? routeFocus;
   const [open, setOpen] = useState(false);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
   // On a phone the sidebar (and its switcher, which loads drives) lives in a

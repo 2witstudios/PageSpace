@@ -98,9 +98,11 @@ export function pickInitialFilters(
  * request never carry a filter the UI cannot show.
  */
 export function forFocus(filters: PersistableFilters, scopedToDrive: boolean): PersistableFilters {
-  if (scopedToDrive) return filters;
+  if (scopedToDrive || filters.status === undefined) return filters;
   const { status: _status, ...withoutStatus } = filters;
-  return withoutStatus;
+  // A slug used to widen the group to 'all' so the two would not be ANDed;
+  // with the slug gone that widening has no reason left either.
+  return withoutStatus.statusGroup === 'all' ? { ...withoutStatus, statusGroup: 'active' } : withoutStatus;
 }
 
 export function toStoredDashboardFilters(filters: PersistableFilters): StoredDashboardFilters {
