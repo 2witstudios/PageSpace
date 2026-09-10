@@ -8,6 +8,8 @@ import {
   pickInitialFilters,
   toStoredDashboardFilters,
   fromStoredOrDefaults,
+  forFocus,
+  legacyDriveTasksHref,
   DEFAULT_DASHBOARD_FILTERS,
 } from '../dashboardFiltersPersistence';
 import type { StoredDashboardFilters } from '@/stores/useLayoutStore';
@@ -153,5 +155,40 @@ describe('toStoredDashboardFilters', () => {
     const result = toStoredDashboardFilters({ assigneeFilter: 'mine' });
 
     expect(result).toEqual({ assigneeFilter: 'mine' });
+  });
+});
+
+describe('forFocus', () => {
+  it('given a drive focus, should keep the slug status and drop the retired drive filter', () => {
+    expect(forFocus({ status: 'in_progress', driveId: 'd1', priority: 'high' }, true)).toEqual({
+      status: 'in_progress',
+      priority: 'high',
+    });
+  });
+
+  it('given the All drives focus, should also drop the slug status the UI cannot show', () => {
+    expect(forFocus({ status: 'in_progress', statusGroup: 'all', search: 'x' }, false)).toEqual({
+      statusGroup: 'all',
+      search: 'x',
+    });
+  });
+
+  it('given nothing to drop, should return an equal object', () => {
+    expect(forFocus({ priority: 'low', assigneeFilter: 'all' }, false)).toEqual({ priority: 'low', assigneeFilter: 'all' });
+  });
+});
+
+describe('legacyDriveTasksHref', () => {
+  it('given a pre-focus bookmark with other filters, should move to the drive route and keep them', () => {
+    const params = new URLSearchParams('driveId=d1&priority=high&statusGroup=completed&search=release');
+    expect(legacyDriveTasksHref(params)).toBe('/dashboard/d1/tasks?priority=high&statusGroup=completed&search=release');
+  });
+
+  it('given only a drive id, should produce a bare drive route', () => {
+    expect(legacyDriveTasksHref(new URLSearchParams('driveId=d1'))).toBe('/dashboard/d1/tasks');
+  });
+
+  it('given no drive id, should do nothing', () => {
+    expect(legacyDriveTasksHref(new URLSearchParams('priority=high'))).toBeNull();
   });
 });

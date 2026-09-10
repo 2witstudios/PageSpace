@@ -43,6 +43,8 @@ import {
   type DueDateFilter,
   type AssigneeFilter,
   type StatusGroupFilter,
+  forFocus,
+  legacyDriveTasksHref,
 } from './dashboardFiltersPersistence';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useMobile } from '@/hooks/useMobile';
@@ -118,7 +120,7 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
   const [filters, setFilters] = useState<ExtendedFilters>(() => {
     const initialScopeKey = scopeKeyFor(isLocked ? 'drive' : 'user', propDriveId);
     const stored = useLayoutStore.getState().tasksDashboardFilters[initialScopeKey];
-    return pickInitialFilters(searchParams, stored);
+    return forFocus(pickInitialFilters(searchParams, stored), isLocked);
   });
 
   // Track last data refresh time
@@ -226,7 +228,9 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
         if (isLocked && selectedDriveId) {
           params.set('driveId', selectedDriveId);
         }
-        if (filters.status) {
+        // Slug statuses belong to one drive's lists; forFocus keeps them out of
+        // all-drives state, and this keeps them out of the request regardless.
+        if (isLocked && filters.status) {
           params.set('status', filters.status);
         }
         if (filters.priority) {
@@ -316,15 +320,15 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
 
   // A bookmarked `/dashboard/tasks?driveId=…` from when the drive was a filter
   // means the same thing the drive route now means.
-  const legacyDriveId = !isLocked ? searchParams.get('driveId') : null;
+  const legacyHref = !isLocked ? legacyDriveTasksHref(searchParams) : null;
   useEffect(() => {
-    if (legacyDriveId) {
-      router.replace(`/dashboard/${legacyDriveId}/tasks`);
+    if (legacyHref) {
+      router.replace(legacyHref);
     }
-  }, [legacyDriveId, router]);
+  }, [legacyHref, router]);
 
   const handleFiltersChange = (newFilters: Partial<ExtendedFilters>) => {
-    const updated = { ...filters, ...newFilters };
+    const updated = forFocus({ ...filters, ...newFilters }, isLocked);
     setFilters(updated);
     updateUrl(updated, selectedDriveId);
   };

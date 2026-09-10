@@ -84,6 +84,34 @@ export function pickInitialFilters(
   return fromStoredOrDefaults(stored);
 }
 
+/**
+ * What a focus can honour. Across all drives a slug-level `status` belongs
+ * to no list in particular, and the control for it is not shown, so a
+ * persisted or bookmarked one would narrow the list invisibly; and there
+ * is no drive filter any more — the focus is the drive. Applied at every
+ * entry point (mount, change) so state, URL, persistence and the request
+ * never carry a filter the UI cannot show.
+ */
+export function forFocus(filters: PersistableFilters, scopedToDrive: boolean): PersistableFilters {
+  const { driveId: _driveId, ...rest } = filters;
+  if (scopedToDrive) return rest;
+  const { status: _status, ...withoutStatus } = rest;
+  return withoutStatus;
+}
+
+/**
+ * Where a pre-focus bookmark `/dashboard/tasks?driveId=…&…` now lives: the
+ * drive's own tasks route, with every other filter carried across.
+ */
+export function legacyDriveTasksHref(searchParams: URLSearchParams): string | null {
+  const driveId = searchParams.get('driveId');
+  if (!driveId) return null;
+  const rest = new URLSearchParams(searchParams);
+  rest.delete('driveId');
+  const query = rest.toString();
+  return query ? `/dashboard/${driveId}/tasks?${query}` : `/dashboard/${driveId}/tasks`;
+}
+
 export function toStoredDashboardFilters(filters: PersistableFilters): StoredDashboardFilters {
   const out: StoredDashboardFilters = {};
   if (filters.status !== undefined) out.status = filters.status;
