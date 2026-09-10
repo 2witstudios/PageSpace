@@ -1,0 +1,275 @@
+"use client";
+
+import { useState } from "react";
+import type { KeyboardEvent } from "react";
+import { useRouter } from "next/navigation";
+import { formatDistanceToNow } from "date-fns";
+import { Check, Folder, LayoutGrid, Plus, Star } from "lucide-react";
+
+import {
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import CreateDriveDialog from "@/components/layout/left-sidebar/CreateDriveDialog";
+import { useTouchDevice } from "@/hooks/useTouchDevice";
+import type { Drive } from "@/hooks/useDrive";
+import { cn } from "@/lib/utils";
+
+import { useDrivePicker } from "./useDrivePicker";
+
+interface DriveSwitcherDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+/**
+ * The drive picker: a command palette, not a dropdown.
+ *
+ * The 256px dropdown it replaces was too narrow for the size of a real drive
+ * list and had to fold its search, its sections, and its two actions into one
+ * scrolling column. Here the search input, the All drives / Create drive bar,
+ * and the keyboard hints are fixed chrome; only the drive list scrolls.
+ *
+ * Filtering is done by `useDrivePicker`, not by cmdk — the groups have to
+ * behave differently under a query (Recent disappears) and cmdk's built-in
+ * fuzzy match would rank across groups we want kept apart.
+ */
+export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitcherDialogProps) {
+  const router = useRouter();
+  const [query, setQuery] = useState("");
+  const [isCreateOpen, setCreateOpen] = useState(false);
+
+  const {
+    favoriteDrives,
+    recentDrives,
+    allDrives,
+    currentDriveId,
+    isSearching,
+    selectDrive,
+    isFavorite,
+    toggleFavorite,
+  } = useDrivePicker(query);
+
+  const close = () => {
+    onOpenChange(false);
+    setQuery("");
+  };
+
+  const handleSelect = (drive: Drive) => {
+    close();
+    selectDrive(drive);
+  };
+
+  // Shift+Enter favourites the highlighted row. cmdk keeps focus on the input
+  // and walks rows via aria-activedescendant, so a button INSIDE a row is
+  // unreachable from the keyboard and invisible to a screen reader; the star
+  // is therefore a pointer affordance only, and this is the accessible path.
+  // Capture phase, so cmdk's own Enter (select) never sees it.
+  const handleKeyDownCapture = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter" || !event.shiftKey) return;
+    const selected = event.currentTarget.querySelector<HTMLElement>(
+      '[cmdk-item][data-selected="true"][data-drive-id]'
+    );
+    if (!selected?.dataset.driveId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void toggleFavorite(selected.dataset.driveId);
+  };
+
+  const renderItem = (drive: Drive, group: string) => (
+    <DriveRow
+      key={`${group}:${drive.id}`}
+      drive={drive}
+      group={group}
+      isCurrent={drive.id === currentDriveId}
+      isFavorite={isFavorite(drive.id)}
+      onSelect={() => handleSelect(drive)}
+      onToggleFavorite={() => toggleFavorite(drive.id)}
+    />
+  );
+
+  return (
+    <>
+      <CommandDialog
+        open={open}
+        onOpenChange={(next) => (next ? onOpenChange(true) : close())}
+        title="Switch drive"
+        description="Search your drives and open one"
+        // Phone: top-anchored 12px below the safe area instead of centred, so
+        // the keyboard never covers the input and the notch never covers the
+        // dialog (the header pads the same inset; in the iOS app it is real);
+        // the dialog becomes a column whose list takes whatever height is left
+        // above the bottom inset. sm+: the usual centred 576px.
+        className="max-sm:top-[calc(var(--safe-area-top)+0.75rem)] max-sm:flex max-sm:max-h-[calc(100dvh-var(--safe-area-top)-var(--safe-area-bottom)-1.5rem)] max-sm:max-w-[calc(100%-1.5rem)] max-sm:translate-y-0 max-sm:flex-col sm:max-w-xl"
+        showCloseButton
+        // useDrivePicker owns filtering (Recent must vanish under a query, and
+        // groups must not be re-ranked against each other). Item values are
+        // `group:id`, so cmdk's own filter would hide rows matched by name.
+        shouldFilter={false}
+      >
+        <div className="flex min-h-0 flex-1 flex-col" onKeyDownCapture={handleKeyDownCapture}>
+        <CommandInput placeholder="Search drives…" value={query} onValueChange={setQuery} />
+
+        {/*
+          Fixed chrome under the input, outside the list on purpose: cmdk's
+          arrow keys walk CommandItems, and these two are destinations, not
+          drives — they should not sit between ↓ and the first drive.
+        */}
+        <div className="grid grid-cols-2 border-b border-border bg-card">
+          <button
+            type="button"
+            onClick={() => {
+              close();
+              router.push("/dashboard/drives");
+            }}
+            className="flex h-10 items-center justify-center gap-2 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:bg-accent focus-visible:text-foreground"
+          >
+            <LayoutGrid className="h-4 w-4" aria-hidden="true" />
+            All drives
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              close();
+              setCreateOpen(true);
+            }}
+            className="flex h-10 items-center justify-center gap-2 border-l border-border text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:bg-accent focus-visible:text-foreground"
+          >
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            Create drive
+          </button>
+        </div>
+
+        <CommandList className="max-h-[60vh] max-sm:min-h-0 max-sm:flex-1 max-sm:max-h-none">
+          <CommandEmpty>{isSearching ? "No drives match." : "No drives yet."}</CommandEmpty>
+
+          {favoriteDrives.length > 0 && (
+            <CommandGroup heading="Favorites">
+              {favoriteDrives.map((drive) => renderItem(drive, "favorite"))}
+            </CommandGroup>
+          )}
+
+          {recentDrives.length > 0 && !isSearching && (
+            <CommandGroup heading="Recent">
+              {recentDrives.map((drive) => renderItem(drive, "recent"))}
+            </CommandGroup>
+          )}
+
+          {allDrives.length > 0 && (
+            <CommandGroup heading={isSearching ? "Results" : `All drives · ${allDrives.length}`}>
+              {allDrives.map((drive) => renderItem(drive, "all"))}
+            </CommandGroup>
+          )}
+        </CommandList>
+
+        {/* Keyboard hints for a keyboard: gone on touch, where there is none to hint at. */}
+        <div
+          aria-hidden="true"
+          className="flex h-9 items-center gap-4 border-t border-border px-3.5 text-xs text-muted-foreground pointer-coarse:hidden"
+        >
+          <span>
+            <Kbd>↑</Kbd>
+            <Kbd>↓</Kbd>
+            move
+          </span>
+          <span>
+            <Kbd>↵</Kbd>
+            open drive
+          </span>
+          <span>
+            <Kbd>⇧↵</Kbd>
+            favorite
+          </span>
+          <span>
+            <Kbd>esc</Kbd>
+            close
+          </span>
+        </div>
+        </div>
+      </CommandDialog>
+
+      <CreateDriveDialog isOpen={isCreateOpen} setIsOpen={setCreateOpen} />
+    </>
+  );
+}
+
+function Kbd({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="mr-1 inline-flex h-5 min-w-[18px] items-center justify-center rounded border border-border bg-card px-1 font-sans text-[11px] text-foreground">
+      {children}
+    </kbd>
+  );
+}
+
+interface DriveRowProps {
+  drive: Drive;
+  group: string;
+  isCurrent: boolean;
+  isFavorite: boolean;
+  onSelect: () => void;
+  onToggleFavorite: () => void;
+}
+
+function DriveRow({ drive, group, isCurrent, isFavorite, onSelect, onToggleFavorite }: DriveRowProps) {
+  const isTouchDevice = useTouchDevice();
+
+  const accessed =
+    group === "recent" && drive.lastAccessedAt
+      ? formatDistanceToNow(new Date(drive.lastAccessedAt), { addSuffix: true })
+      : null;
+
+  return (
+    <CommandItem
+      // Same drive can appear in Favorites and All; cmdk dedupes by value, so
+      // the value carries the group. Filtering is ours (shouldFilter=false),
+      // so an opaque value is fine.
+      value={`${group}:${drive.id}`}
+      onSelect={onSelect}
+      // The option's name carries the state a nested control cannot: cmdk rows
+      // are reached by aria-activedescendant, so nothing inside them is a
+      // separate control to assistive tech.
+      aria-label={[drive.name, isCurrent ? "current drive" : null, isFavorite ? "favorite" : null]
+        .filter(Boolean)
+        .join(", ")}
+      className={cn("group/row cursor-pointer gap-2.5", isCurrent && "bg-primary-soft")}
+      data-current={isCurrent ? "true" : undefined}
+      data-drive-id={drive.id}
+    >
+      <Folder className="h-4 w-4 shrink-0" aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate">{drive.name}</span>
+      {accessed && <span className="text-xs text-muted-foreground tabular-nums">{accessed}</span>}
+      {/*
+        Pointer affordance only (aria-hidden): the keyboard path is Shift+Enter
+        on the highlighted row, listed in the hint footer. cmdk selects the
+        row on click, so stop the click here or a star tap switches drive.
+      */}
+      <span
+        role="presentation"
+        aria-hidden="true"
+        data-testid="favorite-toggle"
+        title={isFavorite ? "Remove from favorites" : "Add to favorites"}
+        onClick={(event) => {
+          event.stopPropagation();
+          event.preventDefault();
+          onToggleFavorite();
+        }}
+        className={cn(
+          "flex h-6 w-6 items-center justify-center rounded-sm transition-opacity hover:bg-accent",
+          isTouchDevice || isFavorite ? "opacity-100" : "opacity-0 group-hover/row:opacity-100"
+        )}
+      >
+        <Star
+          className={cn(
+            "h-3.5 w-3.5",
+            isFavorite ? "fill-yellow-500 text-yellow-500" : "text-muted-foreground"
+          )}
+        />
+      </span>
+      {isCurrent && <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />}
+    </CommandItem>
+  );
+}

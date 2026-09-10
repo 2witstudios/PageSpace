@@ -1,43 +1,31 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { ChevronsUpDown, Folder, Plus, Search, Star } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
-import { CustomScrollArea } from "@/components/ui/custom-scroll-area";
-import { useDriveStore, type Drive } from "@/hooks/useDrive";
-import { useFavorites, useFavoritesSync } from "@/hooks/useFavorites";
-import { useTouchDevice } from "@/hooks/useTouchDevice";
-import { fetchWithAuth } from "@/lib/auth/auth-fetch";
-import CreateDriveDialog from "@/components/layout/left-sidebar/CreateDriveDialog";
-import { cn } from "@/lib/utils";
+import { useParams } from "next/navigation";
+import { ChevronsUpDown, Folder } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useDriveStore } from "@/hooks/useDrive";
+import { useFavoritesSync } from "@/hooks/useFavorites";
+
+import DriveSwitcherDialog from "./DriveSwitcherDialog";
+
+/**
+ * The sidebar's drive trigger. It keeps the URL and the drive store in step
+ * and opens the drive picker; the picker itself is shared with the header's
+ * drive crumb, so there is one list, one "recent", and one way to switch.
+ */
 export default function DriveSwitcher() {
-  const router = useRouter();
   const params = useParams();
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isCreateDriveOpen, setCreateDriveOpen] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
 
-  // Drive store
   const drives = useDriveStore((state) => state.drives);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
   const isLoading = useDriveStore((state) => state.isLoading);
   const currentDriveId = useDriveStore((state) => state.currentDriveId);
   const setCurrentDrive = useDriveStore((state) => state.setCurrentDrive);
 
-  const { isFavorite, addFavorite, removeFavorite, driveIds } = useFavorites();
   useFavoritesSync();
 
   const { driveId } = params;
@@ -63,260 +51,27 @@ export default function DriveSwitcher() {
     [drives, currentDriveId]
   );
 
-  // Filter and organize drives
-  const { favoriteDrives, recentDrives, allDrives } = useMemo(() => {
-    const activeDrives = drives.filter((d) => !d.isTrashed);
-    const query = searchQuery.toLowerCase().trim();
-
-    // Filter by search query
-    const filtered = query
-      ? activeDrives.filter((d) => d.name.toLowerCase().includes(query))
-      : activeDrives;
-
-    // Favorite drives
-    const favorites = filtered.filter((d) => driveIds.has(d.id));
-
-    // Sort all drives alphabetically
-    const sortedAll = [...filtered].sort((a, b) =>
-      a.name.toLowerCase().localeCompare(b.name.toLowerCase())
-    );
-
-    // Recent drives - sorted by last accessed time (most recent first)
-    const recent = sortedAll
-      .filter((d) => !driveIds.has(d.id))
-      .sort((a, b) => {
-        const aTime = a.lastAccessedAt ? new Date(a.lastAccessedAt).getTime() : 0;
-        const bTime = b.lastAccessedAt ? new Date(b.lastAccessedAt).getTime() : 0;
-        return bTime - aTime;
-      })
-      .slice(0, 5);
-
-    return {
-      favoriteDrives: favorites,
-      recentDrives: recent,
-      allDrives: sortedAll,
-    };
-  }, [drives, searchQuery, driveIds]);
-
-  const handleSelectDrive = (drive: Drive) => {
-    setCurrentDrive(drive.id);
-    router.push(`/dashboard/${drive.id}`);
-    setIsOpen(false);
-    setSearchQuery("");
-    // Optimistically update local state so "Recent" ordering reflects immediately
-    useDriveStore.getState().updateDrive(drive.id, { lastAccessedAt: new Date().toISOString() });
-    // Fire-and-forget: persist drive access for recent ordering
-    fetchWithAuth(`/api/drives/${drive.id}/access`, { method: 'POST' }).catch(() => {});
-  };
-
-  const handleToggleFavorite = async (e: React.MouseEvent, drive: Drive) => {
-    e.stopPropagation();
-    e.preventDefault();
-    try {
-      if (isFavorite(drive.id, 'drive')) {
-        await removeFavorite(drive.id, 'drive');
-      } else {
-        await addFavorite(drive.id, 'drive');
-      }
-    } catch (error) {
-      console.error('Error toggling favorite:', error);
-    }
-  };
-
   if (isLoading) {
     return <Skeleton className="h-9 w-40" />;
   }
 
   return (
     <>
-      <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            className="flex items-center gap-2 px-2 h-9 min-w-0 max-w-full"
-          >
-            <Folder className="h-4 w-4 shrink-0" />
-            <span className="truncate font-medium">
-              {currentDrive ? currentDrive.name : "Select Drive"}
-            </span>
-            <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent className="w-64" align="start">
-          {/* Search */}
-          <div className="p-2">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Search drives..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  // Radix DropdownMenu typeahead steals focus on printable keys —
-                  // swallow them so the input keeps focus while typing.
-                  if (!["Escape", "Tab", "ArrowDown", "ArrowUp"].includes(e.key)) {
-                    e.stopPropagation();
-                  }
-                }}
-                className="h-8 pl-8"
-                autoFocus
-              />
-            </div>
-          </div>
-
-          <DropdownMenuSeparator />
-
-          {/* Favorites Section */}
-          {favoriteDrives.length > 0 && (
-            <>
-              <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-2 py-1.5">
-                Favorites <span aria-hidden>·</span> {favoriteDrives.length}
-              </DropdownMenuLabel>
-              <CustomScrollArea className="max-h-[200px] overflow-x-hidden">
-                <DropdownMenuGroup>
-                  {favoriteDrives.map((drive) => (
-                    <DriveMenuItem
-                      key={drive.id}
-                      drive={drive}
-                      isActive={drive.id === currentDriveId}
-                      isFavorite={true}
-                      onSelect={() => handleSelectDrive(drive)}
-                      onToggleFavorite={(e) => handleToggleFavorite(e, drive)}
-                    />
-                  ))}
-                </DropdownMenuGroup>
-              </CustomScrollArea>
-              <DropdownMenuSeparator />
-            </>
-          )}
-
-          {/* Recent Section */}
-          {recentDrives.length > 0 && !searchQuery && (
-            <>
-              <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-2 py-1.5">
-                Recent
-              </DropdownMenuLabel>
-              <DropdownMenuGroup>
-                {recentDrives.map((drive) => (
-                  <DriveMenuItem
-                    key={drive.id}
-                    drive={drive}
-                    isActive={drive.id === currentDriveId}
-                    isFavorite={false}
-                    onSelect={() => handleSelectDrive(drive)}
-                    onToggleFavorite={(e) => handleToggleFavorite(e, drive)}
-                  />
-                ))}
-              </DropdownMenuGroup>
-              <DropdownMenuSeparator />
-            </>
-          )}
-
-          {/* All Drives Section */}
-          <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-2 py-1.5">
-            {searchQuery ? "Results" : "All Drives"}
-          </DropdownMenuLabel>
-          <CustomScrollArea className="max-h-[240px] overflow-x-hidden">
-            <DropdownMenuGroup>
-              {allDrives.length > 0 ? (
-                allDrives.map((drive) => (
-                  <DriveMenuItem
-                    key={drive.id}
-                    drive={drive}
-                    isActive={drive.id === currentDriveId}
-                    isFavorite={isFavorite(drive.id, 'drive')}
-                    onSelect={() => handleSelectDrive(drive)}
-                    onToggleFavorite={(e) => handleToggleFavorite(e, drive)}
-                  />
-                ))
-              ) : (
-                <div className="px-2 py-4 text-center text-sm text-muted-foreground">
-                  {searchQuery ? "No drives found" : "No drives yet"}
-                </div>
-              )}
-            </DropdownMenuGroup>
-          </CustomScrollArea>
-
-          <DropdownMenuSeparator />
-
-          {/* All Drives link */}
-          <DropdownMenuItem
-            onSelect={() => {
-              setIsOpen(false);
-              router.push('/dashboard/drives');
-            }}
-            className="gap-2"
-          >
-            <Folder className="h-4 w-4" />
-            All Drives
-          </DropdownMenuItem>
-
-          <DropdownMenuSeparator />
-
-          {/* Create Drive */}
-          <DropdownMenuItem
-            onSelect={() => {
-              setIsOpen(false);
-              setCreateDriveOpen(true);
-            }}
-            className="gap-2"
-          >
-            <Plus className="h-4 w-4" />
-            Create Drive
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      <CreateDriveDialog isOpen={isCreateDriveOpen} setIsOpen={setCreateDriveOpen} />
-    </>
-  );
-}
-
-interface DriveMenuItemProps {
-  drive: Drive;
-  isActive: boolean;
-  isFavorite: boolean;
-  onSelect: () => void;
-  onToggleFavorite: (e: React.MouseEvent) => void;
-}
-
-function DriveMenuItem({
-  drive,
-  isActive,
-  isFavorite,
-  onSelect,
-  onToggleFavorite,
-}: DriveMenuItemProps) {
-  const [isHovered, setIsHovered] = useState(false);
-  const isTouchDevice = useTouchDevice();
-
-  return (
-    <DropdownMenuItem
-      onSelect={onSelect}
-      className={cn(
-        "flex items-center gap-2 pr-2 cursor-pointer",
-        isActive && "bg-primary-soft"
-      )}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-    >
-      <Folder className="h-4 w-4 shrink-0" />
-      <span className="flex-1 truncate">{drive.name}</span>
-      <button
-        onClick={onToggleFavorite}
-        className={cn(
-          "h-6 w-6 flex items-center justify-center rounded-sm transition-opacity",
-          isTouchDevice || isHovered || isFavorite ? "opacity-100" : "opacity-0",
-          "hover:bg-accent"
-        )}
+      <Button
+        variant="ghost"
+        onClick={() => setIsOpen(true)}
+        aria-haspopup="dialog"
+        aria-expanded={isOpen}
+        className="flex items-center gap-2 px-2 h-9 min-w-0 max-w-full"
       >
-        <Star
-          className={cn(
-            "h-3.5 w-3.5",
-            isFavorite ? "fill-yellow-500 text-yellow-500" : "text-muted-foreground"
-          )}
-        />
-      </button>
-    </DropdownMenuItem>
+        <Folder className="h-4 w-4 shrink-0" />
+        <span className="truncate font-medium">
+          {currentDrive ? currentDrive.name : "Select Drive"}
+        </span>
+        <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+      </Button>
+
+      <DriveSwitcherDialog open={isOpen} onOpenChange={setIsOpen} />
+    </>
   );
 }
