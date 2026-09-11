@@ -32,7 +32,7 @@ export function HeroSection() {
       <div className="hero-in">
         <div className="hero-cap">
           <h1 className="hero-h">The AI for working</h1>
-          <p className="hero-sub">Partner for any project, workspace for any team.</p>
+          <p className="hero-sub">A 24/7 AI partner with the context, tools, and workspace to take on almost anything.</p>
           <div className="hero-cta">
             <a className="cta-primary" href={`${APP_URL}/auth/signup`}>
               Start free
