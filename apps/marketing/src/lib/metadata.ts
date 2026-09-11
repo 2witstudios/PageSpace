@@ -172,7 +172,7 @@ export const LEGAL_LAST_UPDATED = "September 9, 2026";
  */
 export const pageMetadata = {
   home: createMetadata({
-    title: "The AI for working",
+    title: "The workspace that keeps working",
     // ~155 chars (AEO: 150–160). Trimmed form of ENTITY_DESCRIPTION; the full
     // sentence goes verbatim to OG/Twitter (below) and to the schema.
     description:
