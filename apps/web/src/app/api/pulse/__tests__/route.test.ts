@@ -52,7 +52,8 @@ vi.mock('@/lib/ai/core/timestamp-utils', () => ({
 
 vi.mock('@pagespace/db/db', async () => {
   const { createFixtureSelect } = await import('./task-fixture-db');
-  return { db: { select: createFixtureSelect(h.tableRows) } };
+  const select = createFixtureSelect(h.tableRows);
+  return { db: { select, selectDistinct: select } };
 });
 
 vi.mock('@pagespace/db/operators', async () => {
@@ -65,10 +66,28 @@ vi.mock('@pagespace/lib/permissions/accessible-page-ids', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/auth', () => ({
-  users: { id: 'id', timezone: 'timezone' },
+  users: { id: 'id', timezone: 'timezone', name: 'name' },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', isTrashed: 'isTrashed', updatedAt: 'updatedAt', title: 'title' },
+  drives: { id: 'id', name: 'name' },
+}));
+// Home-signal tables the route now also queries (compute-signals.ts). Not
+// seeded by these task-count-focused tests — an unmocked real schema import
+// here would throw on the first column access (e.g. `drives.id` above), so
+// every table the signal queries touch needs at least a column-name mock,
+// even where these tests never populate rows for it.
+vi.mock('@pagespace/db/schema/notifications', () => ({
+  notifications: { userId: 'userId', type: 'type', isRead: 'isRead', pageId: 'pageId', triggeredByUserId: 'triggeredByUserId', createdAt: 'createdAt' },
+}));
+vi.mock('@pagespace/db/schema/page-views', () => ({
+  userPageViews: { userId: 'userId', pageId: 'pageId', viewedAt: 'viewedAt' },
+}));
+vi.mock('@pagespace/db/schema/versioning', () => ({
+  pageVersions: { pageId: 'pageId', driveId: 'driveId', createdAt: 'createdAt', createdBy: 'createdBy' },
+}));
+vi.mock('@pagespace/db/schema/agent-workspaces', () => ({
+  agentWorkspaces: { id: 'id', ownerId: 'ownerId', driveId: 'driveId', endedAt: 'endedAt' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'driveId', userId: 'userId', acceptedAt: 'acceptedAt' },
