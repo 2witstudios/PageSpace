@@ -70,7 +70,7 @@ function DocMock() {
       </div>
       <div className="doc">
         <div className="h3">Q1 Planning</div>
-        <p>Ship the redesigned onboarding and hit 45% week-one activation. This is the plan the team runs from, and the AI keeps it in step with the brief.</p>
+        <p>Ship the redesigned onboarding and hit 45% week-one activation. This is the plan the team runs from. The AI drafted it from the brief.</p>
         <p><span className="fg">Ask the AI to rewrite a section</span> and the edit lands here, inline, with every version kept.</p>
         <ul>
           <li>Owners, timeline, and the launch checklist below</li>
@@ -345,15 +345,15 @@ function FolderMock() {
 }
 
 export const PAGE_TYPES: PageType[] = [
-  { id: "tree", label: "The tree", icon: "tree", parent: "", title: "My Workspace", actions: <span className="iconbtn"><Ico name="updown" size="i14" /></span>, desc: "Where a page sits is what the AI knows about it. Put the launch in one folder and the agent inside it knows the whole launch.", Body: TreeMock },
-  { id: "document", label: "Document", icon: "fileText", parent: "Product Launch", title: "Q1 Planning", actions: null, desc: "The plan. Ask the AI to draft the next section and it writes from the spec and the tasks beside it, not from what you pasted in.", Body: DocMock },
+  { id: "tree", label: "The tree", icon: "tree", parent: "", title: "My Workspace", actions: <span className="iconbtn"><Ico name="updown" size="i14" /></span>, desc: "Where a page sits is where the agent finds it. Put the launch in one folder and every page in it is one read away.", Body: TreeMock },
+  { id: "document", label: "Document", icon: "fileText", parent: "Product Launch", title: "Q1 Planning", actions: null, desc: "The plan. Ask the AI to draft the next section and it can read the spec and the tasks beside it before it writes.", Body: DocMock },
   { id: "ai-chat", label: "AI Chat", icon: "bot", parent: "Product Launch", title: "Product AI", actions: <><span className="pill">Anthropic<Ico name="chevD" size="i14" /></span><span className="muted">/</span><span className="pill">Opus 4.6<Ico name="chevD" size="i14" /></span></>, desc: "An agent inside the project. Ask for a launch plan and it reads the spec next door, writes the page, and files it where the team will look.", Body: ChatMock },
-  { id: "channel", label: "Channel", icon: "channel", parent: "Product Launch", title: "product-launch", actions: <span className="muted" style={{ fontSize: 13 }}>12 members</span>, desc: "The team's thread, with the agent in it. @-mention it and it answers from the positioning doc two pages away.", Body: ChannelMock },
-  { id: "task-list", label: "Task List", icon: "task", parent: "Product Launch", title: "Launch Tasks", actions: <span className="seg"><span className="s"><Ico name="book" size="i14" /></span><span className="s on"><Ico name="rows" size="i14" /></span><span className="s"><Ico name="kanban" size="i14" /></span></span>, desc: "The checklist. Assign a task to a person or to an agent. Both can see the plan it came from.", Body: TaskMock },
-  { id: "sheet", label: "Sheet", icon: "sheet", parent: "Product Launch", title: "Budget", actions: <span className="iconbtn"><Ico name="download" size="i14" /></span>, desc: "The budget. Ask what is over plan and the AI reads the cells, and the plan they belong to.", Body: SheetMock },
+  { id: "channel", label: "Channel", icon: "channel", parent: "Product Launch", title: "product-launch", actions: <span className="muted" style={{ fontSize: 13 }}>12 members</span>, desc: "The team's thread, with the agent in it. @-mention it and it can pull up the positioning doc two pages away.", Body: ChannelMock },
+  { id: "task-list", label: "Task List", icon: "task", parent: "Product Launch", title: "Launch Tasks", actions: <span className="seg"><span className="s"><Ico name="book" size="i14" /></span><span className="s on"><Ico name="rows" size="i14" /></span><span className="s"><Ico name="kanban" size="i14" /></span></span>, desc: "The checklist. Assign a task to a person or to an agent. Both can open the plan it came from.", Body: TaskMock },
+  { id: "sheet", label: "Sheet", icon: "sheet", parent: "Product Launch", title: "Budget", actions: <span className="iconbtn"><Ico name="download" size="i14" /></span>, desc: "The budget. Ask what is over plan and the AI reads the cells, not a screenshot.", Body: SheetMock },
   { id: "canvas", label: "Canvas", icon: "canvas", parent: "Product Launch", title: "Launch Site", actions: <span className="pill pri">Publish</span>, desc: "The launch site, published from the same tree as the plan behind it. The agent that wrote the plan can build the page.", Body: CanvasMock },
-  { id: "code", label: "Code", icon: "code", parent: "Product Launch", title: "config.json", actions: null, desc: "Config and scripts beside the docs that explain them, so the agent editing one has already read the other.", Body: CodeMock },
-  { id: "file", label: "File", icon: "file", parent: "Assets", title: "brief.pdf", actions: <span className="pill on"><Ico name="download" size="i14" />Download</span>, desc: "Drop in the brief. From then on the AI has read it and the team can search it.", Body: FileMock },
+  { id: "code", label: "Code", icon: "code", parent: "Product Launch", title: "config.json", actions: null, desc: "Config and scripts beside the docs that explain them, so an agent editing one can read the other first.", Body: CodeMock },
+  { id: "file", label: "File", icon: "file", parent: "Assets", title: "brief.pdf", actions: <span className="pill on"><Ico name="download" size="i14" />Download</span>, desc: "Drop in the brief. From then on the AI can read it and the team can search it.", Body: FileMock },
   { id: "folder", label: "Folder", icon: "folder", parent: "", title: "Product Launch", actions: <span className="seg"><span className="s on"><Ico name="rows" size="i14" /></span><span className="s"><Ico name="lgrid" size="i14" /></span></span>, desc: "The project, whole. A person or an agent opening it sees everything in it, and only what they are allowed to see.", Body: FolderMock },
 ];
 
