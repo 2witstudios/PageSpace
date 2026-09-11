@@ -69,7 +69,7 @@ export function PageTypeCarouselSection() {
       <div className="wrap">
         <div className="center">
           <h2 className="sec">Everything is a page</h2>
-          <p className="sub">Documents, channels, agents, sheets, task lists, and code are one primitive in one tree. Where a page sits is what the AI knows about it.</p>
+          <p className="sub">Docs, chat, tasks, sheets, agents, and code are all pages in one tree. Put them in the same folder and the AI working on one already knows the rest.</p>
         </div>
 
         <div className="tabs" role="tablist" aria-label="Page types">
