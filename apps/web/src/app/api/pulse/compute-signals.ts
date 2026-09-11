@@ -51,11 +51,34 @@ export async function computeFootprint(
   return { drivesInUse: drivesInUse.length > 0 ? drivesInUse : driveIds, lastVisitAt };
 }
 
-export async function computeMentionSignal(userId: string, now: Date): Promise<Signal> {
-  const rows = await db
-    .select({ count: count() })
-    .from(notifications)
-    .where(and(eq(notifications.userId, userId), eq(notifications.type, 'MENTION'), eq(notifications.isRead, false)));
+/**
+ * A notification can outlive the user's access to the page it points at
+ * (permission revoked, drive membership removed, page trashed after the
+ * notification was created). `pageId` is nullable on some notification
+ * types, so a null page is let through unfiltered — only a *set* pageId is
+ * checked against `accessiblePageIds`, the same set the rest of this route
+ * already treats as the source of truth for "can this user actually open
+ * this page right now".
+ */
+function notificationPageAccessClause(accessiblePageIds: string[]) {
+  return accessiblePageIds.length > 0
+    ? or(isNull(notifications.pageId), inArray(notifications.pageId, accessiblePageIds))
+    : isNull(notifications.pageId);
+}
+
+export async function computeMentionSignal(
+  userId: string,
+  accessiblePageIds: string[],
+  now: Date,
+): Promise<Signal> {
+  const whereClause = and(
+    eq(notifications.userId, userId),
+    eq(notifications.type, 'MENTION'),
+    eq(notifications.isRead, false),
+    notificationPageAccessClause(accessiblePageIds),
+  );
+
+  const rows = await db.select({ count: count() }).from(notifications).where(whereClause);
   const total = rows[0]?.count ?? 0;
 
   let leadText = `${total} mentions`;
@@ -67,9 +90,7 @@ export async function computeMentionSignal(userId: string, now: Date): Promise<S
       .from(notifications)
       .leftJoin(users, eq(users.id, notifications.triggeredByUserId))
       .leftJoin(pages, eq(pages.id, notifications.pageId))
-      .where(
-        and(eq(notifications.userId, userId), eq(notifications.type, 'MENTION'), eq(notifications.isRead, false)),
-      )
+      .where(whereClause)
       .orderBy(desc(notifications.createdAt))
       .limit(1);
     if (row?.actorName && row.pageTitle) {
@@ -110,18 +131,14 @@ async function computeTaskSignal(
   const dueClause = isOverdue
     ? lt(taskItems.dueDate, startOfToday)
     : and(gte(taskItems.dueDate, startOfToday), lt(taskItems.dueDate, endOfToday));
+  const whereClause = and(
+    eq(taskItems.assigneeId, userId),
+    ne(taskItems.status, 'completed'),
+    dueClause,
+    accessiblePageIds.length > 0 ? inArray(taskItems.pageId, accessiblePageIds) : undefined,
+  );
 
-  const [row]: TaskCountRow[] = await db
-    .select({ count: count() })
-    .from(taskItems)
-    .where(
-      and(
-        eq(taskItems.assigneeId, userId),
-        ne(taskItems.status, 'completed'),
-        dueClause,
-        accessiblePageIds.length > 0 ? inArray(taskItems.pageId, accessiblePageIds) : undefined,
-      ),
-    );
+  const [row]: TaskCountRow[] = await db.select({ count: count() }).from(taskItems).where(whereClause);
   const total = row?.count ?? 0;
 
   let leadText = isOverdue ? `${total} tasks overdue` : `${total} tasks due today`;
@@ -134,14 +151,7 @@ async function computeTaskSignal(
       .select({ id: taskItems.id, title: pages.title })
       .from(taskItems)
       .innerJoin(pages, eq(pages.id, taskItems.pageId))
-      .where(
-        and(
-          eq(taskItems.assigneeId, userId),
-          ne(taskItems.status, 'completed'),
-          dueClause,
-          accessiblePageIds.length > 0 ? inArray(taskItems.pageId, accessiblePageIds) : undefined,
-        ),
-      )
+      .where(whereClause)
       .limit(1);
     if (task) {
       leadText = isOverdue ? `${task.title} is overdue` : `${task.title} is due today`;
@@ -234,12 +244,37 @@ export async function computeMeetingTodaySignal(
   };
 }
 
-export async function computeLeftOffSignal(userId: string, now: Date): Promise<Signal> {
+export async function computeLeftOffSignal(
+  userId: string,
+  accessiblePageIds: string[],
+  now: Date,
+): Promise<Signal> {
+  // A page view can outlive access to the page (permission revoked, drive
+  // membership removed after the visit) — scope to accessiblePageIds so
+  // "where you left off" never discloses a title/link the user can no
+  // longer open.
+  if (accessiblePageIds.length === 0) {
+    return {
+      kind: 'left_off',
+      count: 0,
+      window: { since: now, kind: 'today' },
+      computedAt: now,
+      text: { lead: '', short: '' },
+      action: {},
+    };
+  }
+
   const [row] = await db
     .select({ pageId: pages.id, title: pages.title })
     .from(userPageViews)
     .innerJoin(pages, eq(pages.id, userPageViews.pageId))
-    .where(and(eq(userPageViews.userId, userId), eq(pages.isTrashed, false)))
+    .where(
+      and(
+        eq(userPageViews.userId, userId),
+        eq(pages.isTrashed, false),
+        inArray(pages.id, accessiblePageIds),
+      ),
+    )
     .orderBy(desc(userPageViews.viewedAt))
     .limit(1);
 
@@ -269,14 +304,20 @@ export async function computeLeftOffSignal(userId: string, now: Date): Promise<S
  * visits (`drivesInUse`), since `since`. Uses `page_versions.createdBy`
  * (the only actor-attributed edit record) rather than `pages.updatedAt`,
  * which carries no actor.
+ *
+ * `drivesInUse` alone is NOT an access-control boundary — drive membership
+ * does not imply per-page access (a drive can hold private pages the user
+ * was never granted). `accessiblePageIds` is additionally required so this
+ * signal can never name a page, or its editor, the user cannot open.
  */
 export async function computePagesChangedSignal(
   userId: string,
+  accessiblePageIds: string[],
   drivesInUse: string[],
   since: Date,
   now: Date,
 ): Promise<Signal> {
-  if (drivesInUse.length === 0) {
+  if (drivesInUse.length === 0 || accessiblePageIds.length === 0) {
     return {
       kind: 'pages_changed',
       count: 0,
@@ -295,6 +336,7 @@ export async function computePagesChangedSignal(
     .where(
       and(
         inArray(pageVersions.driveId, drivesInUse),
+        inArray(pageVersions.pageId, accessiblePageIds),
         gte(pageVersions.createdAt, since),
         ne(pageVersions.createdBy, userId),
         eq(pages.isTrashed, false),
@@ -424,13 +466,13 @@ export async function computeAllSignals(args: ComputeAllSignalsArgs): Promise<Si
   } = args;
 
   const [mention, overdue, dueToday, invite, meeting, leftOff, pagesChanged, agentFinished] = await Promise.all([
-    computeMentionSignal(userId, now),
+    computeMentionSignal(userId, accessiblePageIds, now),
     computeOverdueTaskSignal(userId, accessiblePageIds, startOfToday, endOfToday, now),
     computeDueTodaySignal(userId, accessiblePageIds, startOfToday, endOfToday, now),
     computePendingInviteSignal(userId, now),
     computeMeetingTodaySignal(userId, driveIds, startOfToday, endOfToday, now),
-    computeLeftOffSignal(userId, now),
-    computePagesChangedSignal(userId, drivesInUse, sinceWindowStart, now),
+    computeLeftOffSignal(userId, accessiblePageIds, now),
+    computePagesChangedSignal(userId, accessiblePageIds, drivesInUse, sinceWindowStart, now),
     computeAgentFinishedSignal(userId, sinceWindowStart, now),
   ]);
 

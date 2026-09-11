@@ -33,8 +33,16 @@ const SIGNAL_TTL_MS: Record<Signal['kind'], number> = {
   pulse_summary: 6 * 60 * 60 * 1000,
 };
 
-/** Icon name (lucide) shown next to the line, keyed by the lead signal's kind. */
-export const SIGNAL_ICON: Record<Signal['kind'], string> = {
+/**
+ * Icon name (lucide) shown next to the line, keyed by the lead signal's
+ * kind. `as const satisfies` keeps this exhaustive over every SignalKind
+ * (a missing kind is a compile error) while ALSO narrowing the values to a
+ * literal union ({@link SignalIconName}) rather than plain `string` — the UI
+ * layer's icon map (HomeLine.tsx's `ICONS`) is typed against that union, so
+ * a value here with no matching UI icon is a compile error there too,
+ * instead of silently rendering no icon at runtime.
+ */
+export const SIGNAL_ICON = {
   mention: 'at',
   overdue_task: 'alert-triangle',
   pending_invite: 'calendar',
@@ -45,7 +53,10 @@ export const SIGNAL_ICON: Record<Signal['kind'], string> = {
   left_off: 'file-text',
   meeting_today: 'calendar',
   pulse_summary: 'sparkles',
-};
+} as const satisfies Record<Signal['kind'], string>;
+
+/** The literal set of icon names {@link SIGNAL_ICON} can produce. */
+export type SignalIconName = (typeof SIGNAL_ICON)[Signal['kind']];
 
 export interface ComposedLine {
   /** e.g. "Good morning, Jono." or "Welcome back, Jono." */
@@ -55,7 +66,7 @@ export interface ComposedLine {
   /** Trailing facts, muted, joined with " · " after the lead. */
   rest: string[];
   /** lucide icon name for the lead signal, or `null` when there is no lead (quiet day). */
-  icon: string | null;
+  icon: SignalIconName | null;
   /** Up to three suggestion strings, signal-derived first, generic filler after. */
   suggestions: string[];
   /** The lead signal's `action.href`, when it navigates instead of prompting. */

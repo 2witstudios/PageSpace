@@ -81,7 +81,7 @@ describe('computeMentionSignal', () => {
     seed(notifications, [
       { userId: USER, type: 'MENTION', isRead: false, pageId: 'p1', createdAt: NOW, name: 'Sarah', title: 'design-review', id: 'p1' },
     ]);
-    const result = await computeMentionSignal(USER, NOW);
+    const result = await computeMentionSignal(USER, ['p1'], NOW);
     expect(result.count).toBe(1);
     expect(result.text.lead).toBe('Sarah is waiting on you in design-review');
     expect(result.subject).toEqual({ type: 'page', id: 'p1', title: 'design-review' });
@@ -89,13 +89,13 @@ describe('computeMentionSignal', () => {
 
   it('drops mentions belonging to another user (control row)', async () => {
     seed(notifications, [{ userId: 'other-user', type: 'MENTION', isRead: false, createdAt: NOW }]);
-    const result = await computeMentionSignal(USER, NOW);
+    const result = await computeMentionSignal(USER, ['p1'], NOW);
     expect(result.count).toBe(0);
   });
 
   it('drops already-read mentions (control row)', async () => {
     seed(notifications, [{ userId: USER, type: 'MENTION', isRead: true, createdAt: NOW }]);
-    const result = await computeMentionSignal(USER, NOW);
+    const result = await computeMentionSignal(USER, ['p1'], NOW);
     expect(result.count).toBe(0);
   });
 
@@ -104,10 +104,24 @@ describe('computeMentionSignal', () => {
       { userId: USER, type: 'MENTION', isRead: false, createdAt: NOW },
       { userId: USER, type: 'MENTION', isRead: false, createdAt: NOW },
     ]);
-    const result = await computeMentionSignal(USER, NOW);
+    const result = await computeMentionSignal(USER, ['p1'], NOW);
     expect(result.count).toBe(2);
     expect(result.subject).toBeUndefined();
     expect(result.text.lead).toBe('2 mentions');
+  });
+
+  it('excludes a mention on a page access to which has been revoked (control row)', async () => {
+    seed(notifications, [
+      { userId: USER, type: 'MENTION', isRead: false, pageId: 'revoked-page', createdAt: NOW },
+    ]);
+    const result = await computeMentionSignal(USER, ['p1'], NOW); // 'revoked-page' not accessible
+    expect(result.count).toBe(0);
+  });
+
+  it('still counts a mention that carries no pageId at all', async () => {
+    seed(notifications, [{ userId: USER, type: 'MENTION', isRead: false, createdAt: NOW }]);
+    const result = await computeMentionSignal(USER, ['p1'], NOW);
+    expect(result.count).toBe(1);
   });
 });
 
@@ -181,12 +195,12 @@ describe('computeLeftOffSignal', () => {
   // itself is exercised by the real Drizzle query in production, not by
   // this fixture. The row NOT wanted goes second so a regression that drops
   // the `isTrashed` filter (the case below) still gets caught.
-  it('returns the most recently viewed non-trashed page', async () => {
+  it('returns the most recently viewed non-trashed, accessible page', async () => {
     seed(userPageViews, [
       { userId: USER, viewedAt: new Date('2026-09-10T00:00:00Z'), id: 'p-new', title: 'Trip planning', isTrashed: false },
       { userId: USER, viewedAt: new Date('2026-09-01T00:00:00Z'), id: 'p-old', title: 'Old page', isTrashed: false },
     ]);
-    const result = await computeLeftOffSignal(USER, NOW);
+    const result = await computeLeftOffSignal(USER, ['p-new', 'p-old'], NOW);
     expect(result.count).toBe(1);
     expect(result.subject?.title).toBe('Trip planning');
   });
@@ -196,8 +210,26 @@ describe('computeLeftOffSignal', () => {
       { userId: USER, viewedAt: new Date('2026-09-10T00:00:00Z'), id: 'p-trashed', title: 'Trashed', isTrashed: true },
       { userId: USER, viewedAt: new Date('2026-09-05T00:00:00Z'), id: 'p-older', title: 'Older page', isTrashed: false },
     ]);
-    const result = await computeLeftOffSignal(USER, NOW);
+    const result = await computeLeftOffSignal(USER, ['p-trashed', 'p-older'], NOW);
     expect(result.subject?.title).toBe('Older page');
+  });
+
+  it('falls back past a most-recent view whose access has been revoked (control row)', async () => {
+    seed(userPageViews, [
+      { userId: USER, viewedAt: new Date('2026-09-10T00:00:00Z'), id: 'p-revoked', title: 'No longer accessible', isTrashed: false },
+      { userId: USER, viewedAt: new Date('2026-09-05T00:00:00Z'), id: 'p-still-ok', title: 'Still accessible', isTrashed: false },
+    ]);
+    // 'p-revoked' is deliberately absent from accessiblePageIds.
+    const result = await computeLeftOffSignal(USER, ['p-still-ok'], NOW);
+    expect(result.subject?.title).toBe('Still accessible');
+  });
+
+  it('returns the quiet count when the user has no accessible pages at all', async () => {
+    seed(userPageViews, [
+      { userId: USER, viewedAt: NOW, id: 'p1', title: 'Anything', isTrashed: false },
+    ]);
+    const result = await computeLeftOffSignal(USER, [], NOW);
+    expect(result.count).toBe(0);
   });
 });
 
@@ -208,7 +240,7 @@ describe('computePagesChangedSignal', () => {
     seed(pageVersions, [
       { pageId: 'p1', driveId: 'd1', createdAt: NOW, createdBy: 'sarah', title: 'Sessions redesign spec', name: 'Sarah', isTrashed: false },
     ]);
-    const result = await computePagesChangedSignal(USER, ['d1'], since, NOW);
+    const result = await computePagesChangedSignal(USER, ['p1'], ['d1'], since, NOW);
     expect(result.count).toBe(1);
     expect(result.text.lead).toBe('Sessions redesign spec changed by Sarah');
   });
@@ -217,7 +249,7 @@ describe('computePagesChangedSignal', () => {
     seed(pageVersions, [
       { pageId: 'p1', driveId: 'd1', createdAt: NOW, createdBy: USER, title: 'My own edit', isTrashed: false },
     ]);
-    const result = await computePagesChangedSignal(USER, ['d1'], since, NOW);
+    const result = await computePagesChangedSignal(USER, ['p1'], ['d1'], since, NOW);
     expect(result.count).toBe(0);
   });
 
@@ -225,7 +257,17 @@ describe('computePagesChangedSignal', () => {
     seed(pageVersions, [
       { pageId: 'p1', driveId: 'd-not-used', createdAt: NOW, createdBy: 'sarah', title: 'Elsewhere', isTrashed: false },
     ]);
-    const result = await computePagesChangedSignal(USER, ['d1'], since, NOW);
+    const result = await computePagesChangedSignal(USER, ['p1'], ['d1'], since, NOW);
+    expect(result.count).toBe(0);
+  });
+
+  it('excludes a page in a used drive that the user has no per-page access to (control row)', async () => {
+    // A private page inside a drive the user belongs to — drive membership
+    // alone must not be enough to surface it or its editor's identity.
+    seed(pageVersions, [
+      { pageId: 'private-page', driveId: 'd1', createdAt: NOW, createdBy: 'sarah', title: 'Private page', name: 'Sarah', isTrashed: false },
+    ]);
+    const result = await computePagesChangedSignal(USER, ['some-other-page'], ['d1'], since, NOW);
     expect(result.count).toBe(0);
   });
 });

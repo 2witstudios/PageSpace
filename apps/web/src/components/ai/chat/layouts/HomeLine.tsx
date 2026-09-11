@@ -13,10 +13,14 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
-import type { ComposedLine } from "@pagespace/lib/home-signals/composer";
+import type { ComposedLine, SignalIconName } from "@pagespace/lib/home-signals/composer";
 import { cn } from "@/lib/utils";
 
-const ICONS: Record<string, LucideIcon> = {
+// Keyed by SignalIconName (not a bare string) so a new icon NAME introduced
+// in composer.ts's SIGNAL_ICON — the actual value domain ComposedLine.icon
+// draws from — is a compile error here until a component is added, instead
+// of silently rendering no icon at runtime.
+const ICONS: Record<SignalIconName, LucideIcon> = {
   at: AtSign,
   "alert-triangle": AlertTriangle,
   calendar: Calendar,

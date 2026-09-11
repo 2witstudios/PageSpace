@@ -164,6 +164,9 @@ const GlobalAssistantView: React.FC = () => {
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
   const { line: homeLine } = useHomeSignals();
   const leftSidebarOpen = useLayoutStore((state) => state.leftSidebarOpen);
+  // No agent selected and no drive context — the Home line/suggestions,
+  // the drive-scope pill, and the collapsed strip all gate on this.
+  const isGlobalMode = !selectedAgent && !locationContext?.currentDrive;
   // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>(DEFAULT_PROVIDER);
   const [agentSelectedModel, setAgentSelectedModel] = useState<string>('');
@@ -921,7 +924,7 @@ const GlobalAssistantView: React.FC = () => {
           />
           {/* When the left sidebar (and its drive switcher) is hidden, the
               scope the assistant can see would otherwise be invisible. */}
-          {!leftSidebarOpen && !selectedAgent && !locationContext?.currentDrive && (
+          {!leftSidebarOpen && isGlobalMode && (
             <div className="rounded-lg bg-primary-soft">
               <DriveSwitcher />
             </div>
@@ -960,7 +963,7 @@ const GlobalAssistantView: React.FC = () => {
         </div>
       </div>
 
-      {!selectedAgent && !locationContext?.currentDrive && plainMessages.length > 0 && (
+      {isGlobalMode && plainMessages.length > 0 && (
         <HomeStrip line={homeLine} />
       )}
 
@@ -1042,7 +1045,7 @@ const GlobalAssistantView: React.FC = () => {
             : 'Tell me what you\'re thinking about or working on.'
         }
         welcomeContent={
-          !selectedAgent && !locationContext?.currentDrive ? (
+          isGlobalMode ? (
             <>
               <HomeLine line={homeLine} />
               <HomeSuggestions suggestions={homeLine.suggestions} onSelect={setInput} />
