@@ -32,7 +32,7 @@ export function HeroSection() {
       <div className="hero-in">
         <div className="hero-cap">
           <h1 className="hero-h">The workspace that keeps working</h1>
-          <p className="hero-sub">Hand off the work and step away. Your agents have the context and tools to keep going, day and night.</p>
+          <p className="hero-sub">Your virtual office, where you, your team, and your agents all work together.</p>
           <div className="hero-cta">
             <a className="cta-primary" href={`${APP_URL}/auth/signup`}>
               Start free
