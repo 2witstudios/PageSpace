@@ -68,7 +68,7 @@ export function PageTypeCarouselSection() {
     <section className="band" id="pages">
       <div className="wrap">
         <div className="center">
-          <h2 className="sec">All the context humans and agents need</h2>
+          <h2 className="sec">All the context humans and agents need, in one place</h2>
           <p className="sub">Every doc, chat, task list, sheet, and file is a page in one tree, and the AI reads it the way your team does. Ask about the launch and it already knows the spec, the budget, the thread, and who owns what. Nothing to paste into a prompt.</p>
         </div>
 
