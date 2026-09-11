@@ -1,5 +1,5 @@
 /*
- * Landing page ("The AI for working") — scoped styles.
+ * Landing page ("The workspace that keeps working") — scoped styles.
  * Ported from the finalized design prototype. Everything is scoped under `.lp`
  * to avoid leaking into the rest of the marketing site. Dark mode is driven by
  * the app's `.dark` class (not [data-theme]); only prototype-only tokens are
@@ -491,6 +491,8 @@
 @media (min-width: 1100px) {
   .lp .hero-in { display: grid; grid-template-columns: minmax(320px, 440px) minmax(0, 1fr); align-items: center; gap: 44px; }
   .lp .hero-cap { max-width: none; margin-bottom: 0; }
+  /* Five-word headline in a 440px column: cap the size so "The workspace" holds one line (3 lines, not 4). */
+  .lp h1.hero-h { font-size: clamp(44px, 4.6vw, 64px); }
   .lp .appwin { width: 960px; justify-self: start; }
   .lp .aw-body { height: 548px; }
   /* The window is laid out at 960x595 and scaled to fit between its column's
