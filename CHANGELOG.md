@@ -7,6 +7,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **The Home screen now tells you what's actually waiting for you** — opening the dashboard used
+  to show a generic "How can I help you today?" with no sign of what changed across your drives,
+  and the only place that context lived (the sidebar's Pulse note) disappeared the moment you
+  collapsed the sidebar. Home now leads with one line above the composer naming the single most
+  important thing that needs you — someone mentioning you, an overdue task, invites waiting on an
+  RSVP, a finished agent session, or what changed since you were last here — with a couple of
+  quick prompts underneath that put the same thing straight into the composer without sending it.
+  Nothing is invented: the line only ever says what it can back up, and on a quiet day it just says
+  you're caught up. Once you start a conversation the line tucks into a small strip under the
+  header instead of taking up the page, and you can still expand it. Collapse the left sidebar and
+  a small drive switcher stays next to the title, so you always know what the assistant can see.
 - **AI agents can format spreadsheets** — two new workspace tools, **Format Sheet** and
   **Conditional Formatting**, let an agent make a SHEET page presentable instead of leaving a grid
   of bare numbers. An agent declares what a table *is* (its range, header rows, which columns are

@@ -19,7 +19,7 @@ import { userPageViews } from '@pagespace/db/schema/page-views';
 import { pageVersions } from '@pagespace/db/schema/versioning';
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { users } from '@pagespace/db/schema/auth';
-import type { HomeContext, Signal } from '@pagespace/lib/home-signals/types';
+import type { Signal } from '@pagespace/lib/home-signals/types';
 
 const DASHBOARD_HOME_DAYS_BACK = 60; // recency window for "drives you use"
 const MAX_RECENT_VIEWS = 50;

@@ -222,6 +222,31 @@ describe('composeLine — width fitting', () => {
   });
 });
 
+describe('composeLine — leadHref', () => {
+  it('carries the lead signal action href when present', () => {
+    const signals = [
+      signal('left_off', {
+        count: 1,
+        text: { lead: 'you left off in Trip planning', short: 'x' },
+        action: { prompt: 'Pick up Trip planning', href: '/pages/p1' },
+      }),
+    ];
+    const result = composeLine(signals, ctx(), { asOf: NOW });
+    expect(result.leadHref).toBe('/pages/p1');
+  });
+
+  it('is null when the lead signal has no href', () => {
+    const signals = [signal('mention', { count: 1, text: { lead: 'x', short: 'x' }, action: {} })];
+    const result = composeLine(signals, ctx(), { asOf: NOW });
+    expect(result.leadHref).toBeNull();
+  });
+
+  it('is null on the quiet state', () => {
+    const result = composeLine([], ctx(), { asOf: NOW });
+    expect(result.leadHref).toBeNull();
+  });
+});
+
 describe('composeLine — suggestions', () => {
   it('does not duplicate a generic prompt already emitted by a signal', () => {
     const signals = [

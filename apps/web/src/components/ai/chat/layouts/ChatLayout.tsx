@@ -54,6 +54,12 @@ export interface ChatLayoutProps {
   welcomeSubtitle?: string;
   /** Custom welcome icon */
   welcomeIcon?: React.ReactNode;
+  /**
+   * Replaces the default `WelcomeContent` (title/subtitle/icon) entirely when
+   * provided — used by the Home screen's signal line. `welcomeTitle` /
+   * `welcomeSubtitle` / `welcomeIcon` are ignored while this is set.
+   */
+  welcomeContent?: React.ReactNode;
   /** Edit message handler */
   onEdit?: (messageId: string, newContent: string) => Promise<void>;
   /** Delete message handler */
@@ -154,6 +160,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       welcomeTitle,
       welcomeSubtitle,
       welcomeIcon,
+      welcomeContent,
       onEdit,
       onDelete,
       onRetry,
@@ -318,12 +325,14 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
               className="absolute inset-0 flex items-center justify-center pointer-events-none z-20"
             >
               <div className="w-full max-w-[600px] px-6 -translate-y-48">
-                <WelcomeContent
-                  title={welcomeTitle}
-                  subtitle={welcomeSubtitle}
-                  icon={welcomeIcon}
-                  showIcon={false}
-                />
+                {welcomeContent ?? (
+                  <WelcomeContent
+                    title={welcomeTitle}
+                    subtitle={welcomeSubtitle}
+                    icon={welcomeIcon}
+                    showIcon={false}
+                  />
+                )}
               </div>
             </motion.div>
           )}

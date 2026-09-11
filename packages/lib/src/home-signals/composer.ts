@@ -58,6 +58,8 @@ export interface ComposedLine {
   icon: string | null;
   /** Up to three suggestion strings, signal-derived first, generic filler after. */
   suggestions: string[];
+  /** The lead signal's `action.href`, when it navigates instead of prompting. */
+  leadHref: string | null;
 }
 
 /** Below this, the line uses "since last visit" framing instead of "today". */
@@ -129,6 +131,7 @@ export function composeLine(
       rest: [],
       icon: null,
       suggestions: GENERIC_SUGGESTIONS.slice(0, 3),
+      leadHref: null,
     };
   }
 
@@ -160,5 +163,6 @@ export function composeLine(
     rest: restText,
     icon: SIGNAL_ICON[leadSignal.kind],
     suggestions,
+    leadHref: leadSignal.action.href ?? null,
   };
 }
