@@ -69,7 +69,7 @@ export function PageTypeCarouselSection() {
       <div className="wrap">
         <div className="center">
           <h2 className="sec">All the context humans and agents need, in one place</h2>
-          <p className="sub">Documents, messaging, task lists, agents, and skills in one workspace, for you, your team, and your agents.</p>
+          <p className="sub">No more bouncing between apps, accounts, and permission settings. Docs, messaging, tasks, agents, and skills, one login, one set of rules.</p>
         </div>
 
         <div className="tabs" role="tablist" aria-label="Page types">
