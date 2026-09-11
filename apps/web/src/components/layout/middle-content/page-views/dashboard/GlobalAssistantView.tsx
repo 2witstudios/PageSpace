@@ -55,6 +55,11 @@ import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { VoiceCallBarForConversation } from '@/components/ai/voice/realtime';
 import { useVoiceRebindStore } from '@/stores/useVoiceRebindStore';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
+import { useHomeSignals } from '@/hooks/useHomeSignals';
+import { HomeLine } from '@/components/ai/chat/layouts/HomeLine';
+import { HomeSuggestions } from '@/components/ai/chat/layouts/HomeSuggestions';
+import { HomeStrip } from '@/components/ai/chat/layouts/HomeStrip';
+import DriveSwitcher from '@/components/layout/navbar/DriveSwitcher';
 
 // Shared hooks and components
 import {
@@ -157,6 +162,11 @@ const GlobalAssistantView: React.FC = () => {
   const [input, setInput] = useState<string>('');
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
+  const { line: homeLine } = useHomeSignals();
+  const leftSidebarOpen = useLayoutStore((state) => state.leftSidebarOpen);
+  // No agent selected and no drive context — the Home line/suggestions,
+  // the drive-scope pill, and the collapsed strip all gate on this.
+  const isGlobalMode = !selectedAgent && !locationContext?.currentDrive;
   // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>(DEFAULT_PROVIDER);
   const [agentSelectedModel, setAgentSelectedModel] = useState<string>('');
@@ -912,6 +922,13 @@ const GlobalAssistantView: React.FC = () => {
             // longer reports "streaming" at all, because this client does not read a body.
             disabled={effectiveIsStreaming}
           />
+          {/* When the left sidebar (and its drive switcher) is hidden, the
+              scope the assistant can see would otherwise be invisible. */}
+          {!leftSidebarOpen && isGlobalMode && (
+            <div className="rounded-lg bg-primary-soft">
+              <DriveSwitcher />
+            </div>
+          )}
         </div>
         <div className="flex items-center space-x-2">
           <PlanChip conversationId={currentConversationId} messages={plainMessages} />
@@ -945,6 +962,10 @@ const GlobalAssistantView: React.FC = () => {
           </Button>
         </div>
       </div>
+
+      {isGlobalMode && plainMessages.length > 0 && (
+        <HomeStrip line={homeLine} />
+      )}
 
       {/*
         Voice as a MODE on this surface — same conversation, same message list,
@@ -1022,6 +1043,14 @@ const GlobalAssistantView: React.FC = () => {
             : locationContext?.currentDrive
             ? 'Ask about pages in this drive, or tell me what you\'re working on.'
             : 'Tell me what you\'re thinking about or working on.'
+        }
+        welcomeContent={
+          isGlobalMode ? (
+            <>
+              <HomeLine line={homeLine} />
+              <HomeSuggestions suggestions={homeLine.suggestions} onSelect={setInput} />
+            </>
+          ) : undefined
         }
         onEdit={handleEdit}
         onDelete={handleDelete}
