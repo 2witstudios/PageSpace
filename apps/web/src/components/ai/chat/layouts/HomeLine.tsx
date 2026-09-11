@@ -47,8 +47,15 @@ export function HomeLine({ line, className }: HomeLineProps) {
   const shouldReduceMotion = useReducedMotion();
   const Icon = line.icon ? ICONS[line.icon] : null;
 
+  // ChatLayout's welcome overlay is `pointer-events-none` (it sits above the
+  // conversation while centered); HomeSuggestions' buttons already opt back
+  // in per-element, and this link needs the same treatment or it renders
+  // clickable-looking but never receives the click.
   const leadNode = line.leadHref && line.lead ? (
-    <Link href={line.leadHref} className="text-foreground hover:underline underline-offset-2">
+    <Link
+      href={line.leadHref}
+      className="pointer-events-auto text-foreground hover:underline underline-offset-2"
+    >
       {line.lead}
     </Link>
   ) : (

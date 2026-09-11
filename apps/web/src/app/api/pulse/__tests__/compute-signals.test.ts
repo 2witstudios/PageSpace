@@ -38,7 +38,11 @@ const users = { id: 'id', name: 'name' };
 vi.mock('@pagespace/db/db', async () => {
   const { createFixtureSelect } = await import('./task-fixture-db');
   const select = createFixtureSelect(tableRows);
-  return { db: { select, selectDistinct: select } };
+  // A real distinct implementation, not aliased to `select` — see
+  // computePagesChangedSignal's "two editors, one page" test below, which
+  // only means anything with genuine dedup behavior here.
+  const selectDistinct = createFixtureSelect(tableRows, { distinct: true });
+  return { db: { select, selectDistinct } };
 });
 
 vi.mock('@pagespace/db/operators', async () => {
@@ -160,6 +164,19 @@ describe('computeOverdueTaskSignal', () => {
     const result = await computeOverdueTaskSignal(USER, ['p1'], startOfToday, endOfToday, NOW);
     expect(result.count).toBe(0);
   });
+
+  it('returns zero, not every matching task, when accessiblePageIds is empty (control row)', async () => {
+    // A ternary that falls back to `undefined` for the empty case would drop
+    // the page filter from the query entirely instead of denying all — this
+    // seeds a task whose page is NOT in (an empty) accessiblePageIds and
+    // asserts it is still excluded, the way it would be with any non-empty
+    // list that doesn't contain 'p1'.
+    seed(taskItems, [
+      { id: 't1', assigneeId: USER, status: 'pending', dueDate: new Date('2026-09-10T00:00:00Z'), pageId: 'p1' },
+    ]);
+    const result = await computeOverdueTaskSignal(USER, [], startOfToday, endOfToday, NOW);
+    expect(result.count).toBe(0);
+  });
 });
 
 describe('computePendingInviteSignal', () => {
@@ -270,6 +287,17 @@ describe('computePagesChangedSignal', () => {
     const result = await computePagesChangedSignal(USER, ['some-other-page'], ['d1'], since, NOW);
     expect(result.count).toBe(0);
   });
+
+  it('counts one page, not one row per editor, when two people changed the same page', async () => {
+    // selectDistinct on (pageId, title, actor) would treat these as two
+    // distinct rows — the fix selects distinct pageId alone.
+    seed(pageVersions, [
+      { pageId: 'p1', driveId: 'd1', createdAt: NOW, createdBy: 'sarah', title: 'Shared doc', name: 'Sarah', isTrashed: false },
+      { pageId: 'p1', driveId: 'd1', createdAt: NOW, createdBy: 'marcus', title: 'Shared doc', name: 'Marcus', isTrashed: false },
+    ]);
+    const result = await computePagesChangedSignal(USER, ['p1'], ['d1'], since, NOW);
+    expect(result.count).toBe(1);
+  });
 });
 
 describe('computeAgentFinishedSignal', () => {
@@ -307,5 +335,15 @@ describe('computeFootprint', () => {
     seed(userPageViews, [{ userId: USER, viewedAt: NOW, driveId: 'd-revoked', isTrashed: false }]);
     const result = await computeFootprint(USER, ['d1'], NOW); // d-revoked is not in the accessible driveIds
     expect(result.drivesInUse).not.toContain('d-revoked');
+  });
+
+  it('returns an empty footprint, not an unscoped one, when driveIds is empty (control row)', async () => {
+    // Same fail-open shape as the task-signal test above: a ternary
+    // fallback to `undefined` for the empty case would drop the driveId
+    // filter entirely and walk every page view the user has ever made.
+    seed(userPageViews, [{ userId: USER, viewedAt: NOW, driveId: 'any-drive', isTrashed: false }]);
+    const result = await computeFootprint(USER, [], NOW);
+    expect(result.drivesInUse).toEqual([]);
+    expect(result.lastVisitAt).toBeNull();
   });
 });

@@ -19,6 +19,7 @@ import { userPageViews } from '@pagespace/db/schema/page-views';
 import { pageVersions } from '@pagespace/db/schema/versioning';
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { users } from '@pagespace/db/schema/auth';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import type { Signal } from '@pagespace/lib/home-signals/types';
 
 const DASHBOARD_HOME_DAYS_BACK = 60; // recency window for "drives you use"
@@ -30,6 +31,13 @@ export async function computeFootprint(
   driveIds: string[],
   now: Date = new Date(),
 ): Promise<{ drivesInUse: string[]; lastVisitAt: Date | null }> {
+  // driveIds is the caller's accessible-drive set. A bare `undefined` fallback
+  // for the empty case would drop the filter from `and()` entirely (Drizzle
+  // omits `undefined` conditions), unscoping every page view the user has
+  // ever made — `inArray(col, [])` compiles to a false predicate instead, so
+  // it is always passed unconditionally: deny-all, never filter-dropped.
+  if (driveIds.length === 0) return { drivesInUse: [], lastVisitAt: null };
+
   const since = new Date(now.getTime() - DASHBOARD_HOME_DAYS_BACK * 24 * 60 * 60 * 1000);
   const rows = await db
     .select({ driveId: pages.driveId, viewedAt: userPageViews.viewedAt })
@@ -40,7 +48,7 @@ export async function computeFootprint(
         eq(userPageViews.userId, userId),
         gte(userPageViews.viewedAt, since),
         eq(pages.isTrashed, false),
-        driveIds.length > 0 ? inArray(pages.driveId, driveIds) : undefined,
+        inArray(pages.driveId, driveIds),
       ),
     )
     .orderBy(desc(userPageViews.viewedAt))
@@ -93,14 +101,19 @@ export async function computeMentionSignal(
       .where(whereClause)
       .orderBy(desc(notifications.createdAt))
       .limit(1);
-    if (row?.actorName && row.pageTitle) {
-      leadText = `${row.actorName} is waiting on you in ${row.pageTitle}`;
-      shortText = `${row.actorName} in ${row.pageTitle}`;
+    // users.name is field-level encrypted when PII encryption is on;
+    // decryptField is a no-op on plaintext (checks looksEncrypted first), so
+    // it's always safe to call — matching how pulse/generate/route.ts already
+    // decrypts every actor name it reads.
+    const actorName = row?.actorName ? await decryptField(row.actorName) : null;
+    if (actorName && row?.pageTitle) {
+      leadText = `${actorName} is waiting on you in ${row.pageTitle}`;
+      shortText = `${actorName} in ${row.pageTitle}`;
       subject = { type: 'page', id: row.pageId ?? '', title: row.pageTitle };
-    } else if (row?.actorName) {
-      leadText = `${row.actorName} mentioned you`;
-      shortText = `${row.actorName} mentioned you`;
-      subject = { type: 'user', id: '', title: row.actorName };
+    } else if (actorName) {
+      leadText = `${actorName} mentioned you`;
+      shortText = `${actorName} mentioned you`;
+      subject = { type: 'user', id: '', title: actorName };
     }
   }
 
@@ -128,14 +141,29 @@ async function computeTaskSignal(
   now: Date,
 ): Promise<Signal> {
   const isOverdue = kind === 'overdue_task';
+  if (accessiblePageIds.length === 0) {
+    const emptyLead = isOverdue ? '0 tasks overdue' : '0 tasks due today';
+    return {
+      kind,
+      count: 0,
+      window: { since: startOfToday, kind: 'today' },
+      computedAt: now,
+      text: { lead: emptyLead, short: emptyLead },
+      action: { prompt: isOverdue ? 'What is overdue?' : 'What is due today?' },
+    };
+  }
   const dueClause = isOverdue
     ? lt(taskItems.dueDate, startOfToday)
     : and(gte(taskItems.dueDate, startOfToday), lt(taskItems.dueDate, endOfToday));
+  // accessiblePageIds is always passed to inArray unconditionally — see the
+  // comment in computeFootprint above for why a ternary-to-undefined fallback
+  // for the empty case is unsafe. The `.length === 0` guard above handles
+  // that case before this point is ever reached.
   const whereClause = and(
     eq(taskItems.assigneeId, userId),
     ne(taskItems.status, 'completed'),
     dueClause,
-    accessiblePageIds.length > 0 ? inArray(taskItems.pageId, accessiblePageIds) : undefined,
+    inArray(taskItems.pageId, accessiblePageIds),
   );
 
   const [row]: TaskCountRow[] = await db.select({ count: count() }).from(taskItems).where(whereClause);
@@ -328,31 +356,47 @@ export async function computePagesChangedSignal(
     };
   }
 
-  const rows = await db
-    .selectDistinct({ pageId: pageVersions.pageId, pageTitle: pages.title, actorName: users.name })
+  const whereClause = and(
+    inArray(pageVersions.driveId, drivesInUse),
+    inArray(pageVersions.pageId, accessiblePageIds),
+    gte(pageVersions.createdAt, since),
+    ne(pageVersions.createdBy, userId),
+    eq(pages.isTrashed, false),
+  );
+
+  // Distinct on pageId alone: two different editors touching the SAME page
+  // in the window is one changed page, not two. Selecting the joined
+  // title/actor columns too (as an earlier version did) makes each distinct
+  // (page, editor) COMBINATION its own row, inflating the count whenever a
+  // page had more than one editor.
+  const pageIdRows = await db
+    .selectDistinct({ pageId: pageVersions.pageId })
     .from(pageVersions)
     .innerJoin(pages, eq(pages.id, pageVersions.pageId))
-    .leftJoin(users, eq(users.id, pageVersions.createdBy))
-    .where(
-      and(
-        inArray(pageVersions.driveId, drivesInUse),
-        inArray(pageVersions.pageId, accessiblePageIds),
-        gte(pageVersions.createdAt, since),
-        ne(pageVersions.createdBy, userId),
-        eq(pages.isTrashed, false),
-      ),
-    )
+    .where(whereClause)
     .limit(50);
 
-  const total = rows.length;
+  const total = pageIdRows.length;
   let leadText = `${total} pages changed`;
   let shortText = `${total} pages changed`;
   let subject: Signal['subject'];
-  if (total === 1 && rows[0]) {
-    const [row] = rows;
-    leadText = row.actorName ? `${row.pageTitle} changed by ${row.actorName}` : `${row.pageTitle} changed`;
-    shortText = row.pageTitle;
-    subject = { type: 'page', id: row.pageId, title: row.pageTitle };
+  if (total === 1) {
+    const [row] = await db
+      .select({ pageId: pageVersions.pageId, pageTitle: pages.title, actorName: users.name })
+      .from(pageVersions)
+      .innerJoin(pages, eq(pages.id, pageVersions.pageId))
+      .leftJoin(users, eq(users.id, pageVersions.createdBy))
+      .where(whereClause)
+      .orderBy(desc(pageVersions.createdAt))
+      .limit(1);
+    if (row) {
+      // users.name may be field-level encrypted — see the matching comment
+      // in computeMentionSignal.
+      const actorName = row.actorName ? await decryptField(row.actorName) : null;
+      leadText = actorName ? `${row.pageTitle} changed by ${actorName}` : `${row.pageTitle} changed`;
+      shortText = row.pageTitle;
+      subject = { type: 'page', id: row.pageId, title: row.pageTitle };
+    }
   }
 
   return {

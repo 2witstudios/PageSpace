@@ -14,6 +14,7 @@ import { resolvePulseEnabled } from '@pagespace/lib/billing/automation-preferenc
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getStartOfTodayInTimezone, normalizeTimezone } from '@/lib/ai/core/timestamp-utils';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { SINCE_LAST_VISIT_THRESHOLD_MS } from '@pagespace/lib/home-signals/composer';
 import type { HomeContext, Signal } from '@pagespace/lib/home-signals/types';
 import { computeAllSignals, computeFootprint } from './compute-signals';
@@ -75,7 +76,12 @@ export async function GET(req: Request) {
     // Get user timezone for accurate "today" boundaries
     const [user] = await db.select({ timezone: users.timezone, name: users.name }).from(users).where(eq(users.id, userId));
     const userTimezone = normalizeTimezone(user?.timezone);
-    const displayName = user?.name?.split(' ')[0] ?? 'there';
+    // users.name is field-level encrypted when PII encryption is on;
+    // decryptField is a no-op on already-plaintext values. Trim before
+    // splitting so a whitespace-only or whitespace-prefixed stored name
+    // (passkey signup allows both) can't produce "Good morning, .".
+    const userNamePlain = user?.name ? (await decryptField(user.name)).trim() : '';
+    const displayName = userNamePlain.split(/\s+/)[0] || 'there';
 
     // Whether the user has Pulse enabled (opt-out: no row ⇒ enabled). When off, we
     // never tell the client to auto-generate, so no credits are spent on Pulse.
