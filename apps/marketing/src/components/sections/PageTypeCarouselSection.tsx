@@ -68,8 +68,8 @@ export function PageTypeCarouselSection() {
     <section className="band" id="pages">
       <div className="wrap">
         <div className="center">
-          <h2 className="sec">Everything is a page</h2>
-          <p className="sub">Docs, chat, tasks, sheets, agents, and code are all pages in one tree. Put them in the same folder and the AI working on one already knows the rest.</p>
+          <h2 className="sec">One app, nothing to wire together</h2>
+          <p className="sub">Docs, chat, tasks, sheets, agents, and code are all pages in one tree. Nothing to copy between tabs, no integrations to connect, no handing an AI a login to five apps. It works from what is already here and sees only what you are allowed to.</p>
         </div>
 
         <div className="tabs" role="tablist" aria-label="Page types">
