@@ -69,7 +69,7 @@ export function PageTypeCarouselSection() {
       <div className="wrap">
         <div className="center">
           <h2 className="sec">All the context humans and agents need, in one place</h2>
-          <p className="sub">Every doc, chat, task list, sheet, and file is a page in one tree, and the AI reads it the way your team does. Ask about the launch and it already knows the spec, the budget, the thread, and who owns what. Nothing to paste into a prompt.</p>
+          <p className="sub">Documents, messaging, task lists, agents, and skills in one workspace, for you, your team, and your agents.</p>
         </div>
 
         <div className="tabs" role="tablist" aria-label="Page types">
