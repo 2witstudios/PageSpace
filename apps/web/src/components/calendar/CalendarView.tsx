@@ -6,6 +6,7 @@ import { format, addMonths, subMonths, addWeeks, subWeeks, addDays, subDays } fr
 import { Bot, ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, List, LayoutGrid, Clock, PanelLeft, User } from 'lucide-react';
 import useSWR from 'swr';
 import { Button } from '@/components/ui/button';
+import { FocusTrigger } from '@/components/shared/FocusTrigger';
 import { Toggle } from '@/components/ui/toggle';
 import {
   Select,
@@ -455,6 +456,10 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           currentDate={currentDate}
           driveColorMap={driveColorMap}
           context={context}
+          focusTrigger={
+            // 32px, like the tasks toggle and the filter it sits between.
+            <FocusTrigger section="calendar" variant="compact" size="sm" />
+          }
           calendarEntries={isUserContext ? calendarEntries : undefined}
           onToggleCalendar={toggleCalendar}
           onShowAllCalendars={showAll}
@@ -510,6 +515,9 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
 
           {/* Title */}
           <h2 className="text-lg font-semibold">{getHeaderTitle()}</h2>
+
+          {/* The focus, as a subtitle-sized chip after the month. Context IS the focus here. */}
+          <FocusTrigger section="calendar" />
         </div>
 
         <div className="flex items-center gap-2">

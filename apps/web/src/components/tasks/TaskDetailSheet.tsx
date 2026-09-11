@@ -43,12 +43,14 @@ import {
   type TaskPriority,
   type TaskStatusConfig,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
-import { useCanEdit } from '@/hooks/usePermissions';
+import { usePermissions } from '@/hooks/usePermissions';
 import type { Task } from './types';
 import { getStatusDisplay } from './task-helpers';
 
 export interface TaskDetailSheetProps {
   task: Task | null;
+  /** Drive to name before the list title; only in the All drives focus. */
+  driveName?: string;
   statusConfigs: TaskStatusConfig[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -70,6 +72,7 @@ export const shouldFetchDescription = (
 
 export function TaskDetailSheet({
   task,
+  driveName,
   statusConfigs,
   open,
   onOpenChange,
@@ -96,7 +99,33 @@ export function TaskDetailSheet({
 
   // Permission gate mirrors the row-level Task List badge: edit on the parent
   // task list page is what authorizes configuring triggers on its tasks.
-  const canEdit = useCanEdit(task?.taskListPageId ?? null);
+  // Two answers, because the controls here divide into two kinds.
+  //
+  // The sheet is the first thing to ask about a list's permissions on the
+  // dashboard, so the request starts when it opens and the answer is unknown
+  // for a round trip. Greying every control out for that window and lighting
+  // them up a beat later reads as broken, so controls whose worst case is a
+  // refused click use the optimistic answer.
+  //
+  // Two controls do NOT get that benefit of the doubt, because acting early
+  // writes rather than merely failing. The description editor autosaves through
+  // usePageContent, which debounces a second and then PATCHes with no
+  // permission check of its own — and it PATCHes the TASK's page while the
+  // permission here is the parent LIST's, so an early save is not even guarded
+  // by the same resource. TaskAgentTriggersDialog likewise PUTs and DELETEs
+  // unguarded, and gating its mount on an optimistic answer would have let the
+  // dialog be unmounted under the user when the answer arrived. Both wait for a
+  // definite yes.
+  //
+  // The resource mismatch cuts the other way too, and is left standing: someone
+  // with edit on the task page but view-only on the list cannot edit the
+  // description here at all. That is the safe direction, but the real fix is a
+  // second permission read against task.pageId for the editor.
+  const { permissions, isLoading: permissionsLoading } = usePermissions(
+    task?.taskListPageId ?? null,
+  );
+  const canEditKnown = permissions?.canEdit ?? false;
+  const canEdit = permissionsLoading || canEditKnown;
 
   // Reset editing state when task changes
   useEffect(() => {
@@ -115,7 +144,8 @@ export function TaskDetailSheet({
   const hasLinkedPage = Boolean(task.pageId && task.driveId);
   const { label: statusLabel, color: statusColor } = statusDisplay;
   const triggerCount = task.activeTriggerCount ?? 0;
-  const canConfigureTriggers = canEdit && Boolean(task.taskListPageId && task.driveId);
+  // canEditKnown, not canEdit: this mounts a dialog that writes.
+  const canConfigureTriggers = canEditKnown && Boolean(task.taskListPageId && task.driveId);
   const showTriggerBadge = canConfigureTriggers && triggerCount > 0;
 
   const startEditTitle = () => {
@@ -162,6 +192,8 @@ export function TaskDetailSheet({
               checked={isCompleted}
               onCheckedChange={() => onToggleComplete(task)}
               className="mt-1 h-5 w-5"
+              disabled={!canEdit}
+              aria-label={`${isCompleted ? 'Reopen' : 'Complete'} ${task.title}`}
             />
             <div className="flex-1 min-w-0">
               {isEditingTitle ? (
@@ -192,6 +224,7 @@ export function TaskDetailSheet({
                   type="button"
                   className="w-full text-left bg-transparent border-0 p-0"
                   onClick={startEditTitle}
+                  disabled={!canEdit}
                 >
                   <span
                     className={cn(
@@ -229,6 +262,7 @@ export function TaskDetailSheet({
               <Select
                 value={task.status}
                 onValueChange={(value) => onStatusChange(task, value)}
+                disabled={!canEdit}
               >
                 <SelectTrigger className="h-10 w-full">
                   <SelectValue>
@@ -257,6 +291,7 @@ export function TaskDetailSheet({
               <Select
                 value={task.priority}
                 onValueChange={(value) => onPriorityChange(task, value)}
+                disabled={!canEdit}
               >
                 <SelectTrigger className="h-10 w-full">
                   <SelectValue>
@@ -285,6 +320,7 @@ export function TaskDetailSheet({
               <DueDatePicker
                 currentDate={task.dueDate}
                 onSelect={(date) => onDueDateChange(task, date)}
+                disabled={!canEdit}
               />
             </div>
           </div>
@@ -298,6 +334,7 @@ export function TaskDetailSheet({
                   driveId={task.driveId}
                   assignees={task.assignees || []}
                   onUpdate={(assigneeIds) => onMultiAssigneeChange(task, assigneeIds)}
+                  disabled={!canEdit}
                 />
               </div>
             </div>
@@ -312,7 +349,10 @@ export function TaskDetailSheet({
                 onClick={() => onOpenChange(false)}
                 className="flex items-center gap-2 rounded-md border px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
               >
-                <span className="truncate">{task.taskListPageTitle}</span>
+                <span className="truncate">
+                  {driveName ? `${driveName} › ` : ''}
+                  {task.taskListPageTitle}
+                </span>
                 <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" />
               </Link>
             </div>
@@ -329,7 +369,8 @@ export function TaskDetailSheet({
                   <RichEditor
                     value={descriptionContent ?? ''}
                     onChange={saveDescription}
-                    readOnly={!canEdit}
+                    // canEditKnown, not canEdit: this autosaves.
+                    readOnly={!canEditKnown}
                     contentMode="html"
                   />
                 )}
@@ -367,6 +408,8 @@ export function TaskDetailSheet({
               variant="outline"
               className="h-11 text-destructive hover:text-destructive hover:bg-destructive/10"
               onClick={handleDelete}
+              disabled={!canEdit}
+              aria-label="Delete task"
             >
               <Trash2 className="h-4 w-4" />
             </Button>

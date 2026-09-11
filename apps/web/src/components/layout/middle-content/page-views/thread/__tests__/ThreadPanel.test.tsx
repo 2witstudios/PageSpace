@@ -87,6 +87,7 @@ vi.mock('@/hooks/useAttachmentUpload', () => ({
     uploadFiles: vi.fn(),
     clearAttachment: vi.fn(),
     removeAttachment: vi.fn(),
+    restoreAttachments: vi.fn(),
   }),
 }));
 

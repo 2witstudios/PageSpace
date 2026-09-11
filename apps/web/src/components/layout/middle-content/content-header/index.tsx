@@ -136,12 +136,22 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
   return (
     <div className="flex flex-col gap-1 @[400px]:gap-2 p-2 @[400px]:p-4 border-b border-[var(--separator)]">
       <Breadcrumbs pageId={pageId} />
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-2 min-w-0">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           <EditableTitle pageId={pageId} />
           <DocumentSaveStatus pageId={page?.id ?? null} enabled={showSaveStatus} />
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-1 @[400px]:gap-2">
+        {/* One row that scrolls rather than wraps: wrapping cost the content
+            below a whole header row on a narrow pane. Not an overflow menu —
+            ShareDialog, ExportDropdown and PublishControls are dialog triggers,
+            and a DropdownMenu unmounts the dialog when it closes. And no
+            `justify-end`: end-aligning an overflow container pushes the excess
+            past the inline-start edge, where scrollLeft cannot reach it. The
+            `py-1 -my-1` is not spacing: `overflow-x-auto` makes overflow-y
+            compute to `auto` too, which would clip the buttons' 3px focus
+            rings — the padding gives them room, the margin takes the row's
+            height back. */}
+        <div className="flex items-center gap-1 @[400px]:gap-2 min-w-0 py-1 -my-1 overflow-x-auto scrollbar-none">
           {pageIsDocument && <EditorToggles />}
           {pageIsDocument && page && <PageSetupButton pageId={page.id} />}
           {(pageIsDocument || pageIsSheet) && page && (

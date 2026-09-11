@@ -1,8 +1,8 @@
 'use client';
 
-import { useParams } from 'next/navigation';
 
 import AgentsSurface from '@/components/agents/AgentsSurface';
+import { focusDriveId, useFocus } from '@/lib/dashboard/focus';
 
 /**
  * The drive-scoped Agents console — one drive's agents.
@@ -14,9 +14,7 @@ import AgentsSurface from '@/components/agents/AgentsSurface';
  * boundary that does nothing.
  */
 export default function DriveAgentsPage() {
-  const params = useParams();
-  const driveIdParam = params?.driveId;
-  const driveId = Array.isArray(driveIdParam) ? driveIdParam[0] : driveIdParam;
+  const driveId = focusDriveId(useFocus());
 
   return <AgentsSurface driveId={driveId} />;
 }

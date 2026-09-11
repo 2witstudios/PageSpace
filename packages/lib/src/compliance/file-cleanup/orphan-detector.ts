@@ -22,6 +22,12 @@ const REFERENCE_JOINS = sql`
   LEFT JOIN pages p ON p."filePath" = f."storagePath" AND p."filePath" IS NOT NULL
   LEFT JOIN file_conversations fc ON fc."fileId" = f.id
   LEFT JOIN direct_messages dm ON dm."fileId" = f.id AND dm."isActive" = true
+  LEFT JOIN channel_message_attachments cma ON cma."fileId" = f.id
+  LEFT JOIN direct_message_attachments dma ON dma."fileId" = f.id
+    AND EXISTS (
+      SELECT 1 FROM direct_messages dma_m
+      WHERE dma_m.id = dma."messageId" AND dma_m."isActive" = true
+    )
 `;
 
 const IS_UNREFERENCED = sql`
@@ -30,6 +36,8 @@ const IS_UNREFERENCED = sql`
   AND p.id IS NULL
   AND fc."fileId" IS NULL
   AND dm."fileId" IS NULL
+  AND cma."fileId" IS NULL
+  AND dma."fileId" IS NULL
 `;
 
 // Content-addressed storage means one physical blob may back multiple file
@@ -47,6 +55,12 @@ const NO_LIVE_SIBLING_SHARES_BLOB = sql`
           OR EXISTS (SELECT 1 FROM channel_messages WHERE "fileId" = other_f.id)
           OR EXISTS (SELECT 1 FROM file_conversations WHERE "fileId" = other_f.id)
           OR EXISTS (SELECT 1 FROM direct_messages WHERE "fileId" = other_f.id AND "isActive" = true)
+          OR EXISTS (SELECT 1 FROM channel_message_attachments WHERE "fileId" = other_f.id)
+          OR EXISTS (
+            SELECT 1 FROM direct_message_attachments dma
+            JOIN direct_messages dma_m ON dma_m.id = dma."messageId"
+            WHERE dma."fileId" = other_f.id AND dma_m."isActive" = true
+          )
         )
     )
   )
@@ -57,7 +71,8 @@ const NO_LIVE_SIBLING_SHARES_BLOB = sql`
  *
  * A file is orphaned when:
  * 1. No filePages rows reference it by fileId
- * 2. No channelMessages reference it (via fileId)
+ * 2. No channelMessages reference it (via fileId, or via a
+ *    channel_message_attachments row)
  * 3. No pages reference it (via filePath = storagePath pattern)
  * 4. No fileConversations rows reference it by fileId (DM-attached files)
  * 5. No live (isActive=true) directMessages reference it (via fileId) — soft-deleted

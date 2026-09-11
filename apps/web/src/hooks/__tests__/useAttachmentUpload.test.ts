@@ -190,4 +190,117 @@ describe('useAttachmentUpload', () => {
     expect(result.current.attachments[0].id).toBe('file-1');
     expect(mockToast.error).toHaveBeenCalledWith('File too large');
   });
+
+  it('caps a batch at the message limit and keeps what fits', async () => {
+    mockUploadAttachment.mockResolvedValue(ok());
+
+    const { result } = renderHook(() =>
+      useAttachmentUpload({ uploadUrl: '/api/channels/x/upload' })
+    );
+
+    await act(async () => {
+      await result.current.uploadFiles(
+        Array.from({ length: 12 }, (_, i) => makeFile(`f-${i}.png`)),
+      );
+    });
+
+    // The cap is UX — the server and a DB CHECK enforce the real limit — but
+    // it has to stop the excess BEFORE the bytes go up, not after.
+    expect(mockUploadAttachment).toHaveBeenCalledTimes(10);
+    expect(mockToast.error).toHaveBeenCalled();
+  });
+
+  it('restores files after a failed send', async () => {
+    const { result } = renderHook(() =>
+      useAttachmentUpload({ uploadUrl: '/api/channels/x/upload' })
+    );
+
+    const restored = [
+      {
+        instanceId: 'i-1',
+        id: 'file-1',
+        originalName: 'a.png',
+        size: 1,
+        mimeType: 'image/png',
+        contentHash: 'a'.repeat(64),
+      },
+    ];
+
+    act(() => {
+      result.current.restoreAttachments(restored);
+    });
+
+    // The composer clears optimistically on send; a rejected POST would
+    // otherwise discard uploads the user would have to make all over again.
+    expect(result.current.attachments).toEqual(restored);
+  });
+
+  it('does not overwrite a fresh selection when a late failure restores', async () => {
+    mockUploadAttachment.mockResolvedValue(ok());
+
+    const { result } = renderHook(() =>
+      useAttachmentUpload({ uploadUrl: '/api/channels/x/upload' })
+    );
+
+    await act(async () => {
+      await result.current.uploadFiles([makeFile()]);
+    });
+
+    act(() => {
+      result.current.restoreAttachments([
+        {
+          instanceId: 'stale',
+          id: 'stale-file',
+          originalName: 'stale.png',
+          size: 1,
+          mimeType: 'image/png',
+          contentHash: 'b'.repeat(64),
+        },
+      ]);
+    });
+
+    expect(result.current.attachments.map((a) => a.id)).toEqual(['file-1']);
+  });
+
+  it('does not restore stale files while a new upload is still in flight', async () => {
+    // `attachments` only gains the new files when the whole batch finishes, so
+    // mid-upload the composer looks empty even though the user has clearly
+    // moved on. Restoring there puts the old batch back and the completing
+    // upload then appends the new files on top of it — one send carrying both.
+    let finishUpload: (value: ReturnType<typeof ok>) => void = () => {};
+    mockUploadAttachment.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishUpload = resolve;
+      }),
+    );
+
+    const { result } = renderHook(() =>
+      useAttachmentUpload({ uploadUrl: '/api/channels/x/upload' })
+    );
+
+    let uploading!: Promise<void>;
+    act(() => {
+      uploading = result.current.uploadFiles([makeFile('new.png')]);
+    });
+
+    act(() => {
+      result.current.restoreAttachments([
+        {
+          instanceId: 'stale',
+          id: 'stale-file',
+          originalName: 'stale.png',
+          size: 1,
+          mimeType: 'image/png',
+          contentHash: 'b'.repeat(64),
+        },
+      ]);
+    });
+
+    await act(async () => {
+      finishUpload(ok({ ...attachment, id: 'new-file', originalName: 'new.png' }));
+      await uploading;
+    });
+
+    expect(result.current.attachments.map((a) => a.id)).toEqual(['new-file']);
+  });
 });

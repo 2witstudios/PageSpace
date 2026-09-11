@@ -13,6 +13,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useInboxSocket } from '@/hooks/useInboxSocket';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { ThreadUnreadBadge } from '@/components/inbox/ThreadUnreadBadge';
+import { FocusTrigger } from '@/components/shared/FocusTrigger';
 import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
 
 const fetcher = async (url: string) => {
@@ -130,14 +131,17 @@ export default function ChannelsCenterList({ driveId }: ChannelsCenterListProps)
     <div className="h-full flex flex-col max-w-4xl mx-auto w-full">
       <div className="flex-shrink-0 px-4 pt-6 pb-4">
         <div className="flex items-center gap-3 mb-4">
-          <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+          <div className="h-10 w-10 shrink-0 rounded-full bg-primary/10 flex items-center justify-center">
             <Hash className="h-5 w-5 text-primary" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h1 className="text-xl font-semibold">Channels</h1>
-            <p className="text-sm text-muted-foreground">
-              {driveId ? 'Channels in this drive' : 'Channels across your drives'}
-            </p>
+            {/*
+              The subtitle used to say "in this drive" / "across your drives";
+              now it names the focus and is the way to change it. One page,
+              one control, no room taken from the row.
+            */}
+            <FocusTrigger section="channels" />
           </div>
         </div>
 

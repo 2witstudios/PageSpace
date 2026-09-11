@@ -42,6 +42,8 @@ import { getStatusDisplay } from './task-helpers';
 
 export interface TaskTableRowProps {
   task: Task;
+  /** Drive to name before the list title; only in the All drives focus. */
+  driveName?: string;
   statusConfigs: TaskStatusConfig[];
   onStatusChange: (task: Task, status: string) => void;
   onPriorityChange: (task: Task, priority: string) => void;
@@ -60,6 +62,7 @@ export interface TaskTableRowProps {
 
 export function TaskTableRow({
   task,
+  driveName,
   statusConfigs,
   onStatusChange,
   onPriorityChange,
@@ -208,8 +211,11 @@ export function TaskTableRow({
         {task.taskListPageTitle && task.driveId && task.taskListPageId && (
           <Link
             href={`/dashboard/${task.driveId}/${task.taskListPageId}`}
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded-md bg-muted hover:bg-muted/80 transition-colors max-w-[150px]"
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded-md bg-muted hover:bg-muted/80 transition-colors max-w-[220px]"
+            title={driveName ? `${driveName} › ${task.taskListPageTitle}` : task.taskListPageTitle}
           >
+            {/* Across drives a list title alone is ambiguous, so the drive leads. */}
+            {driveName && <span className="truncate text-muted-foreground/70">{driveName} ›</span>}
             <span className="truncate">{task.taskListPageTitle}</span>
             <ExternalLink className="h-3 w-3 flex-shrink-0" />
           </Link>

@@ -18,6 +18,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   you're caught up. Once you start a conversation the line tucks into a small strip under the
   header instead of taking up the page, and you can still expand it. Collapse the left sidebar and
   a small drive switcher stays next to the title, so you always know what the assistant can see.
+- **Channels, Files, Tasks and Calendar are one page each, with a drive focus** — each of those
+  views used to exist twice: a dashboard version and a drive version, with different titles and a
+  sidebar that only ever linked to whichever one you were in. Now "All drives" is a focus like any
+  drive. The sidebar's drive switcher names the focus ("All drives" or the drive), and the drive
+  picker it opens lists All drives as its first row; choosing either keeps you in the section you
+  are in, so a drive's tasks become every drive's tasks and back. Page titles stop encoding scope
+  ("Tasks", not "My Tasks" and "Drive Tasks"); the line under each title names the focus and
+  opens the same picker, and on a phone it is the only control added to the row. Files across all
+  drives is the drives browser, and opening a drive there lands in its files. Tasks loses its
+  separate Drive filter and Back button (the focus is the drive, Home is one tap away), withholds
+  the per-list Status filter across all drives where it would merge unrelated lists, and names the
+  drive before the list on every row. The calendar's sidebar now labels the calendar new events go
+  to. The first navigation item is "Home" whichever focus you are in.
 - **AI agents can format spreadsheets** — two new workspace tools, **Format Sheet** and
   **Conditional Formatting**, let an agent make a SHEET page presentable instead of leaving a grid
   of bare numbers. An agent declares what a table *is* (its range, header rows, which columns are
@@ -445,16 +458,20 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
-- **The header now says "Dashboard" instead of showing a house and a slash** — the way back out of
-  a drive used to be a small house icon followed by a `/`, and nothing on screen said where it
-  went. That made it easy to miss entirely, and easy to misread when you did notice it: drives have
-  their own home page, and the sidebar calls that "Drive Home", so a house in the header looked like
-  it meant the drive you were already in. It now reads **Dashboard** in words. Inside a drive it
-  becomes a bordered button with a back arrow, followed by the name of the drive you are in, so the
-  header tells you both where you can go and where you are standing; on the dashboard itself it
-  stops being a button, because you are already there. On narrower windows, where the header has
-  other things to fit, the button keeps its word wherever it is a way out — that being the whole
-  point — and the drive name and the you-are-here marker are the parts that give way.
+- **The header now says "Home", and the drive name next to it opens a proper drive picker** —
+  the way back out of a drive used to be a small house icon followed by a `/`, and nothing on
+  screen said where it went, so it was easy to miss entirely. It now reads **Home** in words, next
+  to the house, as the one outlined button in the header so it is clearly the place to go. Inside a
+  drive it is followed by the name of the drive you are standing in, and that name is now a button:
+  click it and a drive picker opens — a wide, searchable dialog with your favourite drives, the
+  ones you opened most recently, and everything else, plus **All drives** and **Create drive**
+  right under the search box. It replaces the narrow dropdown the sidebar used to open for the
+  same job, which had to squeeze search, sections and actions into one thin scrolling column; the
+  sidebar's drive button now opens this same dialog, and on a phone the dialog sits at the top of
+  the screen so the keyboard never covers the search box. On the dashboard itself the word stops
+  being a button, because you are already there. On a phone the header fits on one row again with
+  every control still present, including recent pages: the search button moves in with the other
+  actions, and the spacing tightens a little below tablet width.
 
 - **Android app: first internal-testing version identity, and the Android/iOS shell configs are now
   checked in CI (still not distributed)** — the Android build now identifies itself as version 1.4
@@ -500,6 +517,26 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   OpenRouter's live data, and a handful of models OpenRouter no longer serves were removed.
 
 ### Fixed
+
+- **Sending several photos at once now makes one message with one gallery, and stops them appearing
+  twice** — attaching a batch of photos used to send them as separate messages, one per file: the
+  channel or DM filled with a column of single-photo bubbles, the typed text sat on the first one,
+  and until you refreshed the page each photo also appeared a second time. The doubling and the
+  splitting were the same bug. A batch is now a single message carrying every file, stacked into a
+  grid you can click into: the viewer opens on the photo you picked and pages through the rest with
+  the arrow keys or the on-screen arrows. Text and photos sent together stay in one bubble. Mixed
+  batches put the images in the grid and any videos or documents beneath it, a single photo looks
+  exactly as it did before, and a message sent before this change still renders the way it always
+  has. Channels and DMs both work this way, and the other person sees the batch arrive as one
+  message rather than as several. Thread replies display a batch as one gallery too, though
+  attaching a file while writing a thread reply is still not possible — that part has never worked
+  and is unchanged here. A message can carry up to ten files; the composer says so rather than
+  silently dropping the extras.
+
+- **Phone: opening a side panel no longer pops the keyboard** — on a phone or in the iOS and
+  Android apps, tapping the menu button to open the navigation panel (or the assistant panel)
+  immediately focused the search box inside it, so the keyboard slid up over the panel you had just
+  opened. The panel now opens with nothing focused; tap the search box when you want it.
 
 - **The account menu no longer labels free accounts "Billing (Business)"** — the plan name in the
   avatar dropdown fell through to "Business" whenever the subscription lookup had not answered yet
