@@ -10,6 +10,7 @@ const {
   mockEndSession,
   mockFindSessionRecord,
   mockProvisionSessionSandbox,
+  mockRenameSession,
   mockResolveSandboxToolEligibility,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
@@ -20,6 +21,7 @@ const {
   mockEndSession: vi.fn(),
   mockFindSessionRecord: vi.fn(),
   mockProvisionSessionSandbox: vi.fn(),
+  mockRenameSession: vi.fn(),
   mockResolveSandboxToolEligibility: vi.fn(),
 }));
 
@@ -40,13 +42,14 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   endSession: (...args: unknown[]) => mockEndSession(...args),
   findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),
   provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
+  renameSession: (...args: unknown[]) => mockRenameSession(...args),
   toSessionDTOWithEnv: async (row: { id: string }) => ({ workspaceId: row.id, dto: true }),
 }));
 vi.mock('@pagespace/lib/services/agent-workspaces/agent-workspace-tenant', () => ({
   canRunCodeForSession: (...args: unknown[]) => mockResolveSandboxToolEligibility(...args),
 }));
 
-import { GET, POST, DELETE } from '../route';
+import { GET, POST, PATCH, DELETE } from '../route';
 
 const AUTH_USER = { userId: 'user-1', role: 'admin' };
 const SESSION_ID = 'ses-1';
@@ -56,6 +59,15 @@ const params = { params: Promise.resolve({ workspaceId: SESSION_ID }) };
 const get = () => GET(new Request(`http://localhost/api/agent-workspaces/${SESSION_ID}`), params);
 const post = () => POST(new Request(`http://localhost/api/agent-workspaces/${SESSION_ID}`, { method: 'POST' }), params);
 const del = () => DELETE(new Request(`http://localhost/api/agent-workspaces/${SESSION_ID}`, { method: 'DELETE' }), params);
+const patch = (body: unknown) =>
+  PATCH(
+    new Request(`http://localhost/api/agent-workspaces/${SESSION_ID}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+    }),
+    params,
+  );
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -67,6 +79,7 @@ beforeEach(() => {
   mockCountOpenConversationsForSession.mockResolvedValue(1);
   mockEndSession.mockResolvedValue({ ok: true, spriteTornDown: true });
   mockResolveSandboxToolEligibility.mockResolvedValue(true);
+  mockRenameSession.mockResolvedValue({ workspaceId: SESSION_ID, name: 'Renamed' });
 });
 
 describe('GET /api/agent-workspaces/[workspaceId]', () => {
@@ -255,5 +268,116 @@ describe('DELETE /api/agent-workspaces/[workspaceId]', () => {
     mockEndSession.mockResolvedValue({ ok: false, reason: 'teardown_failed', detail: 'kill failed' });
     const response = await del();
     expect(response.status).toBe(502);
+  });
+});
+
+describe('PATCH /api/agent-workspaces/[workspaceId]', () => {
+  it('renames the session and returns the DTO', async () => {
+    const response = await patch({ name: 'Deploy work' });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ session: { workspaceId: SESSION_ID, name: 'Renamed' } });
+    expect(mockRenameSession).toHaveBeenCalledWith({ workspaceId: SESSION_ID, name: 'Deploy work' });
+  });
+
+  it('trims the name at the boundary', async () => {
+    await patch({ name: '  Deploy work  ' });
+
+    expect(mockRenameSession).toHaveBeenCalledWith({ workspaceId: SESSION_ID, name: 'Deploy work' });
+  });
+
+  it('audits the write', async () => {
+    await patch({ name: 'Deploy work' });
+
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        eventType: 'data.write',
+        resourceId: SESSION_ID,
+        details: expect.objectContaining({ operation: 'rename' }),
+      }),
+    );
+  });
+
+  it('refuses an unauthenticated caller', async () => {
+    mockAuthenticateRequest.mockResolvedValue({ error: new Response(null, { status: 401 }) });
+
+    const response = await patch({ name: 'Deploy work' });
+
+    expect(response.status).toBe(401);
+    expect(mockRenameSession).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The family's anti-enumeration promise: a session the caller may not see
+   * and one that does not exist must answer IDENTICALLY, or the difference
+   * tells a prober which ids are real.
+   */
+  it('answers 404 for a denied session and for an unknown one alike', async () => {
+    mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'not_a_member' });
+    const denied = await patch({ name: 'Deploy work' });
+    const deniedBody = await denied.json();
+
+    vi.clearAllMocks();
+    mockAuthenticateRequest.mockResolvedValue(AUTH_USER);
+    mockCheckSessionAccess.mockResolvedValue({ allowed: true });
+    mockFindSessionRecord.mockResolvedValue(null);
+    const unknown = await patch({ name: 'Deploy work' });
+    const unknownBody = await unknown.json();
+
+    expect(denied.status).toBe(404);
+    expect(unknown.status).toBe(404);
+    expect(deniedBody).toEqual(unknownBody);
+    expect(mockRenameSession).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The ONE deliberate 403 in this family. A drive member may REACH a
+   * colleague's session; relabelling it in that colleague's own sidebar is a
+   * different act. Naming the refusal leaks nothing — the access check above
+   * already admitted this caller to the row.
+   */
+  it('answers 403 when the caller may reach the session but does not own it', async () => {
+    mockFindSessionRecord.mockResolvedValue({ ...ROW, ownerId: 'someone-else' });
+
+    const response = await patch({ name: 'Deploy work' });
+
+    expect(response.status).toBe(403);
+    expect(mockRenameSession).not.toHaveBeenCalled();
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        eventType: 'authz.access.denied',
+        details: expect.objectContaining({ reason: 'not_owner', operation: 'rename' }),
+      }),
+    );
+  });
+
+  it.each([
+    ['a missing name', {}],
+    ['an empty name', { name: '' }],
+    ['a whitespace-only name', { name: '     ' }],
+    ['an over-long name', { name: 'x'.repeat(121) }],
+    ['a non-string name', { name: 42 }],
+    ['an unparseable body', 'not json'],
+  ])('refuses %s with a 400', async (_label, body) => {
+    const response = await patch(body);
+
+    expect(response.status).toBe(400);
+    expect(mockRenameSession).not.toHaveBeenCalled();
+  });
+
+  it('accepts a name at exactly the limit', async () => {
+    const response = await patch({ name: 'x'.repeat(120) });
+
+    expect(response.status).toBe(200);
+  });
+
+  it('answers 404 when the row vanishes between the read and the write', async () => {
+    mockRenameSession.mockResolvedValue(null);
+
+    const response = await patch({ name: 'Deploy work' });
+
+    expect(response.status).toBe(404);
   });
 });

@@ -34,10 +34,11 @@ const PANES = { paneCount: 2, nodeId: 'pane-shell' };
 
 function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
   return {
-    findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: null })),
+    findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: null, name: 'Workspace' })),
     // The layout family's session-access gate (security review HIGH 2).
     checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })),
     checkWorkspaceEndAccess: vi.fn(async () => ({ allowed: true })),
+    renameWorkspace: vi.fn(async ({ name }: { name: string }) => ({ ok: true as const, name })),
     listWorkspaceWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
     listOwnWorkspaces: vi.fn(async () => []),
     listSharedWorkspaces: vi.fn(async () => []),
@@ -95,8 +96,8 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('the fourteen-tool surface', () => {
-  it('should export EXACTLY the fourteen tools of the three verb families', () => {
+describe('the fifteen-tool surface', () => {
+  it('should export EXACTLY the fifteen tools of the three verb families', () => {
     const tools = createSessionTools(makeDeps());
     // Workers + shells (frozen since Phase 1) plus the LAYOUT family that
     // issue #2208 added once the pane grid became relational entities.
@@ -116,6 +117,7 @@ describe('the fourteen-tool surface', () => {
       'move_pane',
       'read_session',
       'read_shell',
+      'rename_workspace',
       'resize_pane',
       'send_session',
       'send_shell',
@@ -1054,7 +1056,7 @@ describe('a drive-scoped credential is held to its ceiling, whoever owns the wor
     // sessionId and agent binding, every shell, live sandbox status) for a drive
     // it may not touch.
     const deps = makeDeps({
-      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope' })),
+      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope', name: 'Workspace' })),
       listOwnWorkspaces: vi.fn(async () => []),
       listSharedWorkspaces: vi.fn(async () => []),
     });
@@ -1091,7 +1093,7 @@ describe('a drive-scoped credential is held to its ceiling, whoever owns the wor
     // scope — with none, `ensure` mints in the agent's own drive, which the
     // page-scope check upstream already admitted.
     const deps = makeDeps({
-      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope' })),
+      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope', name: 'Workspace' })),
     });
 
     const result = await run(createSessionTools(deps).spawn_shell, {}, contextOptions(scoped));
@@ -1103,7 +1105,7 @@ describe('a drive-scoped credential is held to its ceiling, whoever owns the wor
 
   it('the pane grid is unreachable when the bound workspace is out of scope', async () => {
     const deps = makeDeps({
-      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope' })),
+      findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: 'drive-out-of-scope', name: 'Workspace' })),
     });
 
     const result = await run(createSessionTools(deps).list_panes, {}, contextOptions(scoped));

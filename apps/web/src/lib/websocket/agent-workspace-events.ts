@@ -113,6 +113,43 @@ export function broadcastWorkspaceNodesUpdated(payload: WorkspaceNodesUpdatedPay
 }
 
 /**
+ * The DIRECTORY plane's session event: "this session's row changed — re-read
+ * the listing."
+ *
+ * `session-directory-listener.ts` has listened for `session:created |
+ * session:updated | session:ended` since the directory plane landed, treating
+ * every one of them as a plain re-read. Nothing ever EMITTED one; a session
+ * row's only mutable user-visible field was created at spawn and never
+ * changed again. Rename is the first, which is why this is the first emitter.
+ *
+ * THE PAYLOAD CARRIES NO NAME, and that is the same rule the node event above
+ * obeys rather than an oversight: a room has no viewer to redact for (security
+ * review HIGH 1). The listener re-reads through each subscriber's own
+ * access-checked `GET` regardless, so shipping the label would buy nothing and
+ * would put a title on a wire that cannot ask whose it is.
+ *
+ * Two rooms, the same two and for the same reasons spelled out above —
+ * `session:<id>` for a mounted grid, `user:<ownerId>:sessions` for the owner's
+ * sidebar. Deliberately no `drive:<driveId>`: see that note.
+ */
+export function broadcastSessionUpdated(input: { workspaceId: string; ownerId: string | null }): void {
+  emit({
+    event: 'session:updated',
+    workspaceId: input.workspaceId,
+    channelId: sessionRoom(input.workspaceId),
+    payload: { workspaceId: input.workspaceId },
+  });
+  if (input.ownerId) {
+    emit({
+      event: 'session:updated',
+      workspaceId: input.workspaceId,
+      channelId: userSessionsRoom(input.ownerId),
+      payload: { workspaceId: input.workspaceId },
+    });
+  }
+}
+
+/**
  * Fire-and-forget: broadcast failures are logged, never thrown — a layout write
  * must not fail because the realtime service hiccuped.
  *

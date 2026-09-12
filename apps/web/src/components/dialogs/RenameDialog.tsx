@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useId } from "react";
 import {
   Dialog,
   DialogContent,
@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useEditingSession } from "@/stores/useEditingSession";
 
 interface RenameDialogProps {
   isOpen: boolean;
@@ -29,10 +30,17 @@ export function RenameDialog({
   description,
 }: RenameDialogProps) {
   const [name, setName] = useState(initialName);
+  const inputId = useId();
 
   useEffect(() => {
     setName(initialName);
   }, [initialName, isOpen]);
+
+  // Refresh protection while the dialog is open (CLAUDE.md): an SWR
+  // revalidation or an auth refresh landing mid-type would otherwise be free to
+  // re-render this input out from under a half-typed name. Matches what
+  // `DriveEnvNameDialog` already does for the environment rename beside it.
+  useEditingSession(`rename-dialog-${inputId}`, isOpen, 'form', { componentName: 'RenameDialog' });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

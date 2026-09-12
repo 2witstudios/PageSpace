@@ -48,6 +48,10 @@ import { listShellsBulk, spawnShell } from '@/lib/agent-workspaces/workspace-she
 import { findWorkspaceOfConversation, checkSessionAccess } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { readWorkspaceNodesBulk } from '@/lib/agent-workspaces/workspace-node-runtime';
 import { sessionQuotaExceeded } from '@/lib/agent-workspaces/quota-response';
+import {
+  MAX_SESSION_NAME_LENGTH,
+  nextUniqueSessionName,
+} from '@pagespace/lib/agent-workspaces/session-contract';
 import type { LocalEnvRefusal } from '@pagespace/lib/services/drive-envs/local-env-gate';
 
 /** C1: how a LOCAL env's typed bind refusal maps to a status. Policy ⇒ 403, machine state ⇒ 409. */
@@ -60,24 +64,6 @@ const LOCAL_BIND_REFUSAL_STATUS = {
   not_connected: 409,
   substrate_unsupported: 409,
 } as const satisfies Record<LocalEnvRefusal, number>;
-
-/** Bound on the stored display label — rendered everywhere the session appears. */
-const MAX_SESSION_NAME_LENGTH = 120;
-
-/**
- * A blank-name spawn's auto-label: the first collision-free of `base`,
- * `base 2`, `base 3`, … — mirroring `nextShellLabel`'s "count existing,
- * append a number, scan past collisions" pattern
- * (`plan-spawn-worker.ts:61-68`), but starting at the bare label rather than
- * always suffixing a number: no session is ever born "Shell 1".
- */
-function nextUniqueSessionName(base: string, existingNames: readonly string[]): string {
-  const taken = new Set(existingNames);
-  if (!taken.has(base)) return base;
-  let index = 2;
-  while (taken.has(`${base} ${index}`)) index += 1;
-  return `${base} ${index}`;
-}
 
 /**
  * The `canPrincipalViewPage` gate every agent-permission check in this route

@@ -44,6 +44,7 @@ import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress
 import {
   spawnAgentSession,
   endAgentSession,
+  renameAgentSession,
   listAgentSessions,
   toAgentSessionDTO,
   type SpawnAgentSessionResult,
@@ -75,6 +76,7 @@ import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 import { requestDevPreviewWatch } from '@/lib/dev-preview/detection-trigger';
+import { broadcastSessionUpdated } from '@/lib/websocket/agent-workspace-events';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { emitConversationLifecycle, type BumpedConversationRow } from '@/lib/repositories/conversation-rev';
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
@@ -794,6 +796,34 @@ export async function spawnSession(input: {
       gateLocalEnvBind,
     },
   });
+}
+
+/**
+ * Relabel a session; `null` = no such row.
+ *
+ * WHO may rename is NOT decided here — this file holds no decisions by mandate.
+ * Both callers (the `PATCH` route and the agent's `rename_workspace` tool)
+ * apply the same owner-only rule before reaching this, against the same
+ * `findSessionRecord` read.
+ *
+ * The broadcast lives INSIDE this wrapper rather than at each call site, so an
+ * agent rename and a human rename cannot drift into one notifying open clients
+ * and the other not. Fire-and-forget, like every other broadcast: a realtime
+ * hiccup must not fail the write that already landed.
+ */
+export async function renameSession(input: {
+  workspaceId: string;
+  name: string;
+}): Promise<AgentSessionDTO | null> {
+  const store = await getAgentSessionStore();
+  const result = await renameAgentSession({
+    workspaceId: input.workspaceId,
+    name: input.name,
+    deps: { store, now: () => new Date() },
+  });
+  if (!result.ok) return null;
+  broadcastSessionUpdated({ workspaceId: result.session.id, ownerId: result.session.ownerId });
+  return toSessionDTOWithEnv(result.session);
 }
 
 /** Resolve a conversation's session — how a chat turn finds its working context. Null = a plain chat. */

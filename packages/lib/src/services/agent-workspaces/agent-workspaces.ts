@@ -173,6 +173,44 @@ export async function spawnAgentSession({
   }
 }
 
+export interface RenameAgentSessionDeps {
+  store: Pick<AgentSessionStore, 'rename'>;
+  now: () => Date;
+}
+
+export type RenameAgentSessionResult =
+  | { ok: true; session: AgentSessionRecord }
+  | { ok: false; reason: 'not_found' };
+
+/**
+ * Relabel a session.
+ *
+ * There is deliberately no decision in here beyond "did the row exist": a name
+ * is a label with no addressing role (session-contract invariant 2), so unlike
+ * every other write in this module there is no lifecycle to weigh, no Sprite to
+ * reconcile and no ceiling to enforce. WHO may rename is settled at the
+ * boundary — the route and the tool runtime share one owner-only rule — and
+ * WHAT is a legal name is settled by `sessionNameSchema`, which has already
+ * trimmed and bounded `name` by the time it arrives here.
+ *
+ * Parallel to `renameDriveEnv` (services/drive-envs), minus its `name_taken`
+ * arm: session names carry no uniqueness constraint.
+ */
+export async function renameAgentSession({
+  workspaceId,
+  name,
+  deps,
+}: {
+  workspaceId: string;
+  /** Already validated and trimmed by `sessionNameSchema` at the boundary. */
+  name: string;
+  deps: RenameAgentSessionDeps;
+}): Promise<RenameAgentSessionResult> {
+  const session = await deps.store.rename({ workspaceId, name, now: deps.now() });
+  if (!session) return { ok: false, reason: 'not_found' };
+  return { ok: true, session };
+}
+
 export interface EndAgentSessionDeps {
   store: Pick<AgentSessionStore, 'findById' | 'applyStamps' | 'requestTeardown' | 'stampSpriteTornDown'>;
   host: SandboxHost;

@@ -144,6 +144,43 @@ Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
   lock, and op memory the verbs route uses — and derive their `opId` from the
   tool call id so an SDK retry replays instead of rearranging twice.
 
+- **Naming the workspace itself: SHIPPED.** An agent could label every
+  individual thing it created — a worker (`spawn_session`'s `name`), a shell tab
+  (`spawn_shell`), a page pane (`open_page_pane`'s `title`) — and could not name
+  the workspace holding all of them. A workspace an agent MINTED
+  (`spawn_session` with `workspace: 'new'`) was worse than unnamed: it was
+  created with `name = null`, rendered in its owner's sidebar as the literal
+  fallback "Session", and could never be fixed, because no rename existed at any
+  layer for anyone.
+
+  Three things closed it, and the ORDER of the gates is the load-bearing part:
+  - `rename_workspace` on the session tool family — the fifteenth tool.
+    Deliberately NOT `rename_session`: on this wire a `sessionId` is a WORKER's
+    conversation id, so that name would read as "rename a worker". It follows
+    the same workspace-side vocabulary rule as the layout verbs.
+  - `PATCH /api/agent-workspaces/[workspaceId]`, for the human affordance
+    (a Rename item on the sidebar's session row). **The family's one deliberate
+    403**: the END decision is the wrong gate (renaming is not
+    release-of-compute, and gating a text label on a *compute* capability is a
+    category error), while the plain access check is too wide (it admits any
+    drive member, though `listSessions` filters on `ownerId`). So the family
+    gate runs first — unknown and denied still answer with the same 404 — and
+    ownership is checked only after, where naming the refusal leaks nothing.
+    The tool path applies BOTH gates through the same pair, so the tool surface
+    cannot drift wider than the HTTP one.
+  - Neither spawn path can mint a nameless workspace any more:
+    `nextUniqueSessionName` moved into the shared contract and the agent path
+    calls it, auto-labelling from the agent's own title when the model supplies
+    no `workspaceName`.
+
+  Renaming is safe by construction, not by care: `agent_workspaces.name` carries
+  no uniqueness constraint and nothing looks a session up by it (invariant 2),
+  and pane labels join their target's title at read time — so a rename can
+  neither break a connection nor leave a stale label. `session:updated` is
+  broadcast on every rename; it is the FIRST emitter of the `session:*` family
+  the directory listener has consumed since that plane landed, because until now
+  a session row had no mutable user-visible field.
+
 - **Pane lifecycle (issues #2462, #2469, #2473): SHIPPED.** Three corrections
   from one real working session, all in the same subsystem, all found by USING
   it:
@@ -709,7 +746,7 @@ deliberate exception (the frozen tool wire) and the shims that expire next relea
 | `workspaceId` | An `agent_workspaces` row — the working context / sandbox owner | Everywhere except the tool layer. Renamed in Phase 5: `conversations.sessionId` → `workspaceId`, `agent_session_shells.sessionId` → `agent_workspace_shells.workspaceId`, `/api/agent-sessions/[sessionId]` → `/api/agent-workspaces/[workspaceId]`, `?session=` → `?workspace=` |
 | `conversationId` | A thread (`conversations` row) | The session-tool layer: the `sessionId` param of `send_session` / `read_session` / `kill_session` is a **worker's conversation id** (`apps/web/src/lib/ai/tools/session-tools.ts` — mapped to a `conversationId` local at the zod boundary; internally `WorkerRow.conversationId`, with `WorkerRow.workspaceId` naming the workspace) |
 | *(frozen)* `sessionId` | The model-facing tool param | The wire vocabulary is deliberately frozen at the zod boundary: to the model, a "session" is a worker you talk to and a "workspace" is the environment. Internal renames never touch these schemas |
-| `paneId` / `columnId` | One rectangle of a workspace's grid, and the vertical stack it sits in | The layout tools (`list_panes` / `resize_pane` / `move_pane` / `arrange_panes`, issue #2208). These sit on the WORKSPACE side of the frozen split — panes are furniture of the environment — so they deliberately say "pane"/"column"/"workspace" and never "session". They take no workspaceId at all: the grid is the caller's own, resolved from its conversation |
+| `paneId` / `columnId` | One rectangle of a workspace's grid, and the vertical stack it sits in | The layout tools (`list_panes` / `resize_pane` / `move_pane` / `arrange_panes`, issue #2208) and `rename_workspace`. These sit on the WORKSPACE side of the frozen split — panes are furniture of the environment — so they deliberately say "pane"/"column"/"workspace" and never "session". The layout verbs take no workspaceId at all: the grid is the caller's own, resolved from its conversation. `rename_workspace` is the one that MAY take one, because labelling a workspace you spawned but are not standing in is the whole point of it |
 | `spriteExecId` | The Sprite PTY exec stream a shell reattaches under | `agent_session_shells.streamSessionId` and `TerminalSession.sessionId` (realtime). Both renamed in Phase 5 |
 | `spriteKey` | The opaque HMAC name a workspace's Sprite is provisioned under | `agent_sessions.sessionKey`, renamed in Phase 5. Distinct from realtime's `sessionKey`, which is the PTY map key (`shell:<shellId>`) and keeps its name |
 | — | Auth login sessions (`sessions` table, `packages/db/src/schema/sessions.ts`) | Unrelated. Never mix with any of the above |

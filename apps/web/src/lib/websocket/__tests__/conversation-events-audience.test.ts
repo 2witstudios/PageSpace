@@ -374,7 +374,11 @@ describe('broadcast emit-site registry (repo-wide source scan)', () => {
     // a room has no viewer to redact for. There is deliberately no third room —
     // `drive:<id>` would be a workspace-enumeration oracle, since drive members
     // may reach a workspace they are never shown in a listing.
-    'apps/web/src/lib/websocket/agent-workspace-events.ts': ['workspace:nodes-updated'],
+    // `session:updated` is the DIRECTORY plane's row-changed event (the first
+    // emitter of the `session:*` family the listener has always consumed);
+    // `workspace:nodes-updated` is the layout plane's. Both ride the same two
+    // rooms named above, and both payloads are label-free.
+    'apps/web/src/lib/websocket/agent-workspace-events.ts': ['session:updated', 'workspace:nodes-updated'],
     // --- the pre-epic surfaces ----------------------------------------------
     'apps/web/src/lib/websocket/calendar-events.ts': ['calendar', 'calendar:${payload.operation}'],
     'apps/web/src/lib/websocket/socket-utils.ts': [
