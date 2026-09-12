@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { GET } from '../route';
+// GET is re-imported fresh per test (see beforeEach) because route.ts tracks
+// consecutive DB failures in module-level state — a static import would leak
+// that counter across tests.
+let GET: typeof import('../route').GET;
 const mockExecute = vi.hoisted(() => vi.fn());
 const mockGetPoolStats = vi.hoisted(() => vi.fn());
 const mockGetMonitoringIngestStatus = vi.hoisted(() => vi.fn());
@@ -31,8 +34,10 @@ vi.mock('@/middleware/monitoring', () => ({
 }));
 
 describe('GET /api/health', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    vi.resetModules();
+    ({ GET } = await import('../route'));
     mockGetMonitoringIngestStatus.mockReturnValue('active');
     mockGetPoolStats.mockReturnValue({ total: 0, idle: 0, waiting: 0 });
   });
@@ -112,7 +117,7 @@ describe('GET /api/health', () => {
   });
 
   describe('database failures', () => {
-    it('given database connection fails, should return degraded status', async () => {
+    it('given a single database failure, should report degraded but still return 200 (debounced)', async () => {
       mockExecute.mockRejectedValue(new Error('Connection refused'));
 
       const request = new Request('https://example.com/api/health', {
@@ -125,21 +130,45 @@ describe('GET /api/health', () => {
       expect(response.status).toBe(200);
       expect(body.status).toBe('degraded');
       expect(body.checks.database).toBe('disconnected');
+      expect(body.error).toContain('Database');
     });
 
-    it('given database timeout, should return degraded with error details', async () => {
-      mockExecute.mockRejectedValue(new Error('Query timeout'));
+    it('given two consecutive database failures, should still return 200', async () => {
+      mockExecute.mockRejectedValue(new Error('Connection refused'));
+      const request = new Request('https://example.com/api/health', { method: 'GET' });
 
-      const request = new Request('https://example.com/api/health', {
-        method: 'GET',
-      });
+      await GET(request);
+      const response = await GET(request);
 
+      expect(response.status).toBe(200);
+    });
+
+    it('given three consecutive database failures, should return 503', async () => {
+      mockExecute.mockRejectedValue(new Error('Connection refused'));
+      const request = new Request('https://example.com/api/health', { method: 'GET' });
+
+      await GET(request);
+      await GET(request);
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(503);
+      expect(body.status).toBe('degraded');
+    });
+
+    it('given a recovery after sustained failures, should return to 200', async () => {
+      mockExecute.mockRejectedValue(new Error('Connection refused'));
+      const request = new Request('https://example.com/api/health', { method: 'GET' });
+      await GET(request);
+      await GET(request);
+      await GET(request);
+
+      mockExecute.mockResolvedValue([{ '1': 1 }]);
       const response = await GET(request);
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.status).toBe('degraded');
-      expect(body.error).toContain('Database');
+      expect(body.status).toBe('healthy');
     });
   });
 
