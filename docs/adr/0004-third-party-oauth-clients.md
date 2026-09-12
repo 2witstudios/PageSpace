@@ -435,7 +435,14 @@ always PKCE, never `firstParty`, scope-capped identically to everyone else.
   key-management grant.
 - **[D-8] — build order is 0 → 1 → 2 → 3 → 4 → 5 → 6, sequential.**
 
-## Fail-closed posture (each line is a test)
+## Fail-closed posture (every line is verified)
+
+Each row below maps to a named test in `packages/lib/src/auth/oauth/__tests__/`, audited row by row
+rather than asserted — with one deliberate exception. **G16 is a compile-time guarantee, not a
+test**: the `satisfies` clause on `STEP_UP_CONTRIBUTION` makes a new `ScopeSet` field a type error
+until the table answers for it, verified by adding a probe field and observing
+`step-up-boundary.ts: error TS1360`. A runtime test cannot express it, which is the point of
+expressing it in the type system.
 
 | # | Situation | Behavior |
 |---|---|---|
