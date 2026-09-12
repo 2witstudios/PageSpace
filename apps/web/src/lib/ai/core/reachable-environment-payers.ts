@@ -32,7 +32,13 @@
 import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 
 /** What this needs from the world, injected so it is testable without a database. */
-export interface ReachableEnvironmentPayerDeps {
+/**
+ * NOT exported, and neither is the default binding below: knip ignores
+ * `__tests__`, so an export consumed only by a test reads to it as dead code.
+ * The test derives this shape from the function's own signature instead, which
+ * is stricter anyway — it cannot drift from what the parameter actually takes.
+ */
+interface ReachableEnvironmentPayerDeps {
   /** `LOCAL_ENVS_ENABLED` for this deployment. */
   isEnabled: () => Promise<boolean>;
   /** The environments this user may reach — already filtered for access AND visibility. */
@@ -42,7 +48,7 @@ export interface ReachableEnvironmentPayerDeps {
 }
 
 /** The production wiring, imported lazily so the chat pipeline loads neither store at module load. */
-export const defaultReachableEnvironmentPayerDeps: ReachableEnvironmentPayerDeps = {
+const defaultReachableEnvironmentPayerDeps: ReachableEnvironmentPayerDeps = {
   isEnabled: async () => {
     const { isLocalEnvsEnabled } = await import('@pagespace/lib/services/drive-envs/local-envs-enabled');
     return isLocalEnvsEnabled();

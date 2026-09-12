@@ -10,10 +10,15 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  anyReachableEnvironmentPayerAllows,
-  type ReachableEnvironmentPayerDeps,
-} from '../reachable-environment-payers';
+import { anyReachableEnvironmentPayerAllows } from '../reachable-environment-payers';
+
+/**
+ * Derived from the function's own signature rather than imported: the module
+ * exports only the function (knip ignores `__tests__`, so an export consumed
+ * only here would read as dead code), and deriving it means this fake cannot
+ * drift from what the parameter actually takes.
+ */
+type ReachableEnvironmentPayerDeps = NonNullable<Parameters<typeof anyReachableEnvironmentPayerAllows>[0]['deps']>;
 
 const PRO = { payerId: 'drive-owner', tier: 'pro' as const };
 
