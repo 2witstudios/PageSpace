@@ -913,7 +913,6 @@ async function ensureConversationSession(
     .then((sessions) => sessions.map((session) => session.name))
     .catch((error) => {
       loggers.api.warn('ensureConversationSession: could not read existing session names for the label', {
-        userId,
         error: error instanceof Error ? error.message : String(error),
       });
       return [] as string[];

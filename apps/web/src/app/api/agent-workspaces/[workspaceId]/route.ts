@@ -69,6 +69,7 @@ import {
   MAX_SESSION_NAME_LENGTH,
   renameAgentSessionRequestSchema,
 } from '@pagespace/lib/agent-workspaces/session-contract';
+import { decideAgentSessionRenameAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -234,7 +235,9 @@ export async function PATCH(request: Request, context: RouteContext) {
   // a session does not get to retitle it in its owner's sidebar. A real 403 is
   // safe here and only here: gate 1 already admitted this caller to the row,
   // so naming the refusal tells them nothing they could not already see.
-  if (row.ownerId !== auth.userId) {
+  // ONE decision, shared with the tool path — not an inline comparison repeated
+  // in two places (review — CodeRabbit).
+  if (!decideAgentSessionRenameAccess({ requesterId: auth.userId, session: row }).allowed) {
     auditRequest(request, {
       eventType: 'authz.access.denied',
       userId: auth.userId,

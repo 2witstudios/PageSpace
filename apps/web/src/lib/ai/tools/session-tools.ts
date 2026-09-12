@@ -143,7 +143,7 @@ export const spawnSessionInputSchema = z
      * Omitting it no longer means "nameless": the workspace is auto-labelled
      * from the agent it runs under, the same way the spawn palette labels one.
      */
-    workspaceName: z.string().min(1).max(MAX_SESSION_NAME_LENGTH).optional(),
+    workspaceName: z.string().trim().min(1).max(MAX_SESSION_NAME_LENGTH).optional(),
     /** Block until the worker's first reply and return it here. */
     wait: z.boolean().optional(),
   })
@@ -160,8 +160,16 @@ export const spawnSessionInputSchema = z
  */
 export const renameWorkspaceInputSchema = z
   .object({
-    /** The new display label. Free text; never an address. */
-    name: z.string().min(1).max(MAX_SESSION_NAME_LENGTH),
+    /**
+     * The new display label. Free text; never an address.
+     *
+     * `.trim()` BEFORE the bounds, matching `sessionNameSchema` at the HTTP
+     * boundary. Validating the raw string instead would reject a name that is
+     * exactly at the limit but arrived with surrounding whitespace — the tool
+     * would refuse what the API accepts, for the same name. The emitted JSON
+     * schema is unchanged either way, so the frozen wire contract is untouched.
+     */
+    name: z.string().trim().min(1).max(MAX_SESSION_NAME_LENGTH),
     /**
      * WHICH workspace. Omitted = the one this conversation is in (the common
      * case). Otherwise a workspaceId you OWN — from `list_sessions`, or the one

@@ -44,6 +44,7 @@ import {
   resolveDriveMembership,
 } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { isDriveWithinCredentialScope } from '@pagespace/lib/agent-workspaces/credential-scope';
+import { decideAgentSessionRenameAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import {
   MAX_SESSION_NAME_LENGTH,
   nextUniqueSessionName,
@@ -866,7 +867,6 @@ async function resolveWorkerPlacement(input: {
         .then((sessions) => sessions.map((session) => session.name))
         .catch((error) => {
           loggers.ai.warn('createWorkerSession: could not read existing session names for the label', {
-            ownerId,
             error: error instanceof Error ? error.message : String(error),
           });
           return [] as string[];
@@ -1038,7 +1038,11 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       if (!access.allowed) return { ok: false, reason: 'not_found_or_denied' };
       // Reached is not the same as yours to relabel — a drive member may use a
       // colleague's workspace and still not get to retitle it in their sidebar.
-      if (row.ownerId !== userId) return { ok: false, reason: 'not_found_or_denied' };
+      // THE SAME decision the PATCH route applies, imported rather than
+      // re-implemented, so "one rule with two callers" is literally true.
+      if (!decideAgentSessionRenameAccess({ requesterId: userId, session: row }).allowed) {
+        return { ok: false, reason: 'not_found_or_denied' };
+      }
       // A rename is a WRITE, so the credential ceiling applies exactly as it
       // does to spawn placement: a drive-scoped token must not write to a
       // workspace in a drive it was never granted, however freely its owner

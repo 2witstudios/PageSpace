@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { asSchema } from 'ai';
-import { createSessionTools, type SessionToolsDeps } from '../session-tools';
+import {
+  createSessionTools,
+  renameWorkspaceInputSchema,
+  spawnSessionInputSchema,
+  type SessionToolsDeps,
+} from '../session-tools';
 
 /**
  * The FROZEN WIRE CONTRACT pin (epic Phase 1; `docs/2.0-architecture/
@@ -67,6 +72,29 @@ describe('session + shell + layout tools — frozen wire contract', () => {
       'spawn_session',
       'spawn_shell',
     ]);
+  });
+
+  it('trims a name BEFORE bounding it, so the tool accepts exactly what the API does', () => {
+    // Validating the raw string would reject a name that is at the limit but
+    // arrived padded — the tool refusing what `sessionNameSchema` accepts for
+    // the same name. The emitted JSON schema is identical either way, which is
+    // why the pinned contract below is unaffected.
+    const atLimit = 'x'.repeat(120);
+
+    const renamed = renameWorkspaceInputSchema.safeParse({ name: `  ${atLimit}  ` });
+    expect(renamed.success).toBe(true);
+    expect(renamed.success && renamed.data.name).toBe(atLimit);
+
+    const spawned = spawnSessionInputSchema.safeParse({
+      name: 'w',
+      prompt: 'p',
+      workspaceName: `  ${atLimit}  `,
+    });
+    expect(spawned.success).toBe(true);
+    expect(spawned.success && spawned.data.workspaceName).toBe(atLimit);
+
+    // And whitespace-only is still a refusal, not a stored blank.
+    expect(renameWorkspaceInputSchema.safeParse({ name: '   ' }).success).toBe(false);
   });
 
   it('keeps every description in this family inside the 1024-character budget', () => {
