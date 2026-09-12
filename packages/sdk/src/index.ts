@@ -106,16 +106,24 @@ export { listConversations, readConversation } from './operations/conversations.
 // Documents / content (Phase 3 task 2) — full pagespace-mcp document.js parity.
 export { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
 
-// Sheet rows — the tabular view of a SHEET page (POST /api/mcp/sheets).
+// Sheet rows and sheet formatting (POST /api/mcp/sheets) — a SHEET page as a
+// table, and as a styled document.
 export {
   appendRows,
+  applySheetFormat,
   deleteRows,
   describeSheet,
   getRows,
   queryRows,
+  readSheetFormatting,
   updateCells,
 } from './operations/sheets.js';
-export type { SheetWhereInput } from './operations/sheets.js';
+export type {
+  SheetConditionalRuleInput,
+  SheetFormatOpInput,
+  SheetRegionInput,
+  SheetWhereInput,
+} from './operations/sheets.js';
 
 // Export (Phase 3 task 10) — page -> Markdown, sheet -> CSV text exports.
 export { exportPageMarkdown, exportSheetCsv } from './operations/export.js';

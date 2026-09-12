@@ -104,6 +104,58 @@ per-cell stats but only ever addresses tab 0, while `updateCells` takes `tabInde
 the only way to write to a second tab. `deleteRows` requires both bounds — neither is defaulted,
 because a guessed `count` deletes the wrong rows irreversibly.
 
+### 2.6c Sheet formatting (2 SDK operations)
+
+The presentation half of the same endpoint, and the one that closed a real parity gap: the
+in-process AI tools (`read_sheet` with `includeFormatting`, `format_sheet`,
+`set_conditional_format`) could read and write regions, conditional rules, freezes and cell
+formats, while an SDK or CLI caller could do none of it — so a sheet built programmatically was a
+grid of bare numbers with no call available to change that.
+
+| SDK | CLI | Input | Response (route truth) |
+|---|---|---|---|
+| `sheets.readFormatting` | `sheets formatting` | `pageId*`, `tabIndex`, `ranges[]` | `{pageId, pageTitle, tabIndex, rowCount, columnCount, frozenRows, frozenColumns, columnFormats{}, columnWidths{}, rowHeights{}, conditionalFormats[], regions[], cellFormats{}}` |
+| `sheets.applyFormat` | `sheets format` | `pageId*`, `tabIndex`, `ops*[]` (`SheetFormatOp`) | `{pageId, pageTitle, tabIndex, changed, cellsFormatted, rowsTouched, tabFieldsChanged[], conditionalRules, ruleIdsAdded[], ruleIdsRemoved[], regions, regionIdsAdded[], regionIdsRemoved[], rowCount, columnCount, recomputed[]}` |
+
+`ops` is `SheetFormatOp` from `@pagespace/lib/sheets` verbatim — fifteen members: `setCellFormat`,
+`clearCellFormat`, `setColumnFormat`, `setColumnWidth`, `setRowHeight`, `setFrozen`,
+`addConditionalRule`, `updateConditionalRule`, `removeConditionalRule`, `moveConditionalRule`,
+`clearConditionalRules`, `setConditionalRules`, `setRegions`, `upsertRegion`, `removeRegion`. That
+makes these two strictly MORE capable than the AI tools they bring parity with: a model can only
+add and remove conditional rules, while a programmatic caller can patch one in place or reorder it.
+
+Ops apply **in the order given, in one transaction, all or nothing** — a `clearCellFormat` after a
+`setCellFormat` over the same cells means something different from the reverse. Every refusal comes
+from `planFormatOps` (pure, pre-lock) and names the offending op's INDEX in the list sent, as a 400;
+the route deliberately restates none of that validation as a zod union of its own.
+
+Two shape notes where these differ from the AI tools, both deliberate:
+
+- A conditional rule's `id` is **caller-supplied and required**, where `format_sheet` mints it. The
+  id is the caller's own idempotency key, so a retried `addConditionalRule` after a timeout is
+  refused as a duplicate rather than silently adding the rule a second time.
+- A `cell` rule nests `condition: {operator, value, value2}`. The AI tool flattens those onto the
+  rule because a discriminated union fans out past the schema-size ceiling a model's tool definition
+  can carry; this is the shape the sheet actually stores.
+
+`applyFormat` is **not** flagged `destructive`, though `setRegions: []` discards declared structure:
+the flag makes the CLI demand `--yes` on every call, and gating "bold the header row" behind a
+prompt only trains the habit of passing `--yes` blind. Formatting is presentation, recoverable by
+writing it again — unlike `deleteRows`, where the rows are gone.
+
+Prefer a **region** to per-cell ops for anything table-shaped. A region declares what an area IS
+(header rows, column roles, total rows, theme) and the presentation is derived at render time, so an
+open range (`"A1:F"`, no row end) covers rows that do not exist yet and costs no cell budget however
+tall the sheet is; `setCellFormat` over `A2:A5000` charges 4,999 cells against the per-call ceiling.
+
+The op union is hand-written in the SDK — the published package must never runtime- or type-import
+`@pagespace/lib` — and held to lib by
+`packages/sdk/src/operations/__tests__/sheets-format-drift-guard.test.ts`, which reads lib's
+`OP_FIELDS` and `FIELDS_BY_KIND` so a sixteenth op cannot join the union without failing there.
+`patch`/`format` payloads stay opaque (`z.record`) for the reason `storedCellSchema.format` already
+does: `CellFormat` exists twice with a compile-time assertion holding those two together, and a
+third copy here would be the one with nothing keeping it honest.
+
 `nextFromRow` is a POSITION, not a count. A caller advancing by `rows.length` loops forever on a
 sparse tab (rows 0-9, then 500-509); following `nextFromRow` terminates.
 

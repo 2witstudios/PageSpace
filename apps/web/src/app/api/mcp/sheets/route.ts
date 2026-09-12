@@ -4,7 +4,8 @@ import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { z } from 'zod/v4';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { isSheetType, MAX_FORMAT_OPS, SheetFormatError } from '@pagespace/lib/sheets/sheet';
+import type { SheetFormatOp } from '@pagespace/lib/sheets/sheet';
 import {
   queryRows,
   appendRows,
@@ -14,6 +15,8 @@ import {
   getTab,
   ensureTab,
   listTabs,
+  applyFormatOps,
+  readTabFormatting,
   MAX_ROW_PAGE_SIZE,
 } from '@pagespace/lib/sheets/store';
 import { SHEET_FILTER_OPS, SheetQueryError } from '@pagespace/lib/sheets/query';
@@ -36,6 +39,23 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
  *
  * `edit-cells` stays on `/api/mcp/documents` for spreadsheet-style editing;
  * this route is the tabular view of the same data.
+ *
+ * `read-formatting` and `apply-format` are the other half: how the sheet LOOKS.
+ * They exist because the in-process AI tools (`read_sheet` with
+ * `includeFormatting`, `format_sheet`, `set_conditional_format`) could already
+ * read and write regions, conditional rules, freezes and cell formats, while an
+ * SDK or CLI caller could do none of it — so a sheet built programmatically was
+ * a grid of bare numbers with no call available to change that.
+ *
+ * `apply-format` takes the `SheetFormatOp` union straight through to
+ * `planFormatOps`, which is where EVERY formatting refusal is defined — shape,
+ * unknown field, unknown op type, colour, range, cap — and which refuses naming
+ * the op's index before any lock is taken. This route deliberately does not
+ * restate any of that as a zod union: a second copy would start refusing ops
+ * the store accepts the first time one is added to the union. Its only local
+ * checks are the two the store cannot make cheaply — that `ops` is present and
+ * within `MAX_FORMAT_OPS` — mirroring the payload pre-checks the row writes do
+ * for the same reason (see the materialisation note below).
  */
 
 // Seven letters, matching `assertColumn`. A three-letter cap here silently
@@ -71,7 +91,10 @@ const whereSchema: z.ZodType<WhereInput> = z.lazy(() =>
 );
 
 const requestSchema = z.object({
-  operation: z.enum(['query-rows', 'append-rows', 'update-cells', 'delete-rows', 'get-rows', 'describe']),
+  operation: z.enum([
+    'query-rows', 'append-rows', 'update-cells', 'delete-rows', 'get-rows', 'describe',
+    'read-formatting', 'apply-format',
+  ]),
   pageId: z.string().min(1),
   tabIndex: z.number().int().min(0).optional(),
 
@@ -106,9 +129,33 @@ const requestSchema = z.object({
   fromRow: z.number().int().min(0).optional(),
   /** `delete-rows` only: how many rows to remove. Never a page size. */
   count: z.number().int().min(1).max(100_000).optional(),
+
+  /**
+   * `read-formatting`: A1 rectangles whose PER-CELL formats to return. Omitted,
+   * none are read — they live on the rows, and reading them for a whole sheet
+   * is the O(sheet) read the row store exists to avoid. `readTabFormatting`
+   * bounds the total cells across all of them.
+   */
+  ranges: z.array(z.string().min(1)).max(MAX_FORMAT_OPS).optional(),
+
+  /**
+   * `apply-format`: the ordered `SheetFormatOp` list.
+   *
+   * Deliberately unvalidated HERE beyond its length. `planFormatOps` is the
+   * validator — it refuses a non-object, an op with no `type`, an unknown
+   * `type`, a field the op does not take, a colour that is not one, a range
+   * past the sheet, and every cap, each naming the op's index, all before any
+   * lock is taken. A shape check here would decide a subset of that a second
+   * time, and would be the copy that starts refusing ops the store accepts.
+   *
+   * Order is preserved and load-bearing: a `clearCellFormat` after a
+   * `setCellFormat` over the same cells means something different from the
+   * reverse.
+   */
+  ops: z.array(z.unknown()).max(MAX_FORMAT_OPS).optional(),
 });
 
-const WRITE_OPERATIONS = new Set(['append-rows', 'update-cells', 'delete-rows']);
+const WRITE_OPERATIONS = new Set(['append-rows', 'update-cells', 'delete-rows', 'apply-format']);
 
 export async function POST(req: NextRequest) {
   const auth = await authenticateMCPRequest(req);
@@ -184,6 +231,9 @@ export async function POST(req: NextRequest) {
     }
     if (operation === 'delete-rows' && (input.fromRow === undefined || input.count === undefined)) {
       return NextResponse.json({ error: 'fromRow and count are required for delete-rows' }, { status: 400 });
+    }
+    if (operation === 'apply-format' && (!input.ops || input.ops.length === 0)) {
+      return NextResponse.json({ error: 'ops is required for apply-format' }, { status: 400 });
     }
 
     const ref = { pageId, tabIndex: input.tabIndex ?? 0 };
@@ -358,12 +408,94 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ pageId, pageTitle: page.title, ...result });
       }
 
+      case 'read-formatting': {
+        auditRequest(req, { eventType: 'data.read', userId, resourceType: 'page', resourceId: pageId, details: { source: 'mcp', operation } });
+        // A pure read: `getTab` rather than `ensureTab`, so an unmigrated
+        // sheet is never materialised on the way past. The 409 below should be
+        // unreachable — the tab was already resolved for this same ref above —
+        // but it is the answer if another writer removed the tab in between,
+        // and it matches the 409 the resolution block returns rather than
+        // reading as a 500.
+        const formatting = await readTabFormatting(ref, { ranges: input.ranges });
+        if (!formatting) {
+          return NextResponse.json({
+            error: `Sheet tab ${ref.tabIndex} not found`,
+            message: 'This sheet has not been initialised. Append rows or edit a cell to create it.',
+          }, { status: 409 });
+        }
+        return NextResponse.json({
+          pageId,
+          pageTitle: page.title,
+          tabIndex: ref.tabIndex,
+          ...formatting,
+        });
+      }
+
+      case 'apply-format': {
+        if (!input.ops || input.ops.length === 0) {
+          return NextResponse.json({ error: 'ops is required for apply-format' }, { status: 400 });
+        }
+        const actorInfo = await getActorInfo(userId);
+        // Cast from `unknown[]`, not a narrowing: see the `ops` field's note.
+        // `planFormatOps` inside `applyFormatOps` refuses anything that is not
+        // an op in the union, by name and by index, before any lock is taken.
+        const result = await applyFormatOps(ref, input.ops as readonly SheetFormatOp[], {
+          userId,
+          actorEmail: actorInfo.actorEmail,
+          actorDisplayName: actorInfo.actorDisplayName,
+          driveId: page.driveId,
+          resourceTitle: page.title,
+          metadata: { source: 'mcp', mcpOperation: operation, ops: input.ops.length },
+        });
+
+        // The store reports a request that changed nothing — a retried call, a
+        // bold that was already bold — with no rows touched and no tab field
+        // changed, and deliberately bumps no revision for it. Logging an
+        // activity entry and broadcasting `content-updated` for that would turn
+        // a harmless retry into an observable edit, which is why the AI tool's
+        // `applyPlanned` returns early on the same condition.
+        const changed = result.rowsTouched > 0 || result.tabFieldsChanged.length > 0;
+        if (changed) {
+          await notify(page.driveId, pageId, page.title, page.parentId);
+          await logSheetCellActivity({
+            pageId, driveId: page.driveId, pageTitle: page.title, userId,
+            actorEmail: actorInfo.actorEmail, actorDisplayName: actorInfo.actorDisplayName,
+            metadata: {
+              source: 'mcp', mcpOperation: operation, ops: input.ops.length,
+              cellsFormatted: result.cellsFormatted,
+              tabFieldsChanged: result.tabFieldsChanged,
+              rulesAdded: result.ruleIdsAdded.length,
+              rulesRemoved: result.ruleIdsRemoved.length,
+              regionsAdded: result.regionIdsAdded.length,
+              regionsRemoved: result.regionIdsRemoved.length,
+            },
+          });
+        }
+        // Audited either way: the request was authorised and served, and an
+        // audit trail that omits the no-op cannot show the attempt was made.
+        auditRequest(req, { eventType: 'data.write', userId, resourceType: 'page', resourceId: pageId, details: { source: 'mcp', operation, ops: input.ops.length, changed } });
+        return NextResponse.json({
+          pageId,
+          pageTitle: page.title,
+          tabIndex: ref.tabIndex,
+          changed,
+          ...result,
+        });
+      }
+
       default:
         return NextResponse.json({ error: `Unknown operation: ${operation}` }, { status: 400 });
     }
   } catch (error) {
     // A malformed filter is the caller's problem, not a server fault; saying so
     // lets an agent correct itself instead of retrying the same bad query.
+    // Every formatting refusal — a bad op shape, an unknown field, a colour
+    // that is not one, a range past the sheet, a rule id that does not exist, a
+    // cap — arrives as this one class, carrying the op index the caller sent.
+    // `SheetDuplicateRuleError` is a subclass and is caught here with it.
+    if (error instanceof SheetFormatError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     if (error instanceof SheetQueryError || error instanceof SheetAddressError) {
       // Caller's problem, not a server fault — an agent that gets 500 has no
       // way to correct itself. `A0` and `A9999999999` both clear the route's

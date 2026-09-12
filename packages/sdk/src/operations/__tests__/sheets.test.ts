@@ -2,7 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { buildRequest } from '../../transport/build-request.js';
 import { parseResponse } from '../../transport/parse-response.js';
 import { ResponseValidationError } from '../../errors.js';
-import { appendRows, deleteRows, describeSheet, getRows, queryRows, updateCells } from '../sheets.js';
+import {
+  appendRows,
+  applySheetFormat,
+  deleteRows,
+  describeSheet,
+  getRows,
+  queryRows,
+  readSheetFormatting,
+  updateCells,
+} from '../sheets.js';
 
 const config = { baseUrl: 'https://pagespace.ai' };
 const SHEETS_URL = 'https://pagespace.ai/api/mcp/sheets';
@@ -189,5 +198,199 @@ describe('sheets writes — response contracts', () => {
   it('deleteRows parses its result', () => {
     const fixture = { pageId: 's1', pageTitle: 'Ledger', deleted: 5, rowCount: 5300 };
     expect(parseResponse(deleteRows, 200, new Headers(), JSON.stringify(fixture))).toEqual(fixture);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Formatting — the presentation half
+// ---------------------------------------------------------------------------
+
+/** The minimum a stored `cell` rule needs; `format` is opaque by design. */
+const cellRule = {
+  kind: 'cell' as const,
+  id: 'r1',
+  ranges: ['C2:C40'],
+  condition: { operator: 'lessThan' as const, value: '0' },
+  format: { color: '#b91c1c', bold: true },
+};
+
+describe('sheets formatting — wire operation naming', () => {
+  it('defaults each operation field, so a caller need not repeat it', () => {
+    expect((readSheetFormatting.inputSchema.parse({ pageId: 'p1' }) as { operation: string }).operation)
+      .toBe('read-formatting');
+    expect(
+      (applySheetFormat.inputSchema.parse({
+        pageId: 'p1',
+        ops: [{ type: 'clearConditionalRules' }],
+      }) as { operation: string }).operation,
+    ).toBe('apply-format');
+  });
+
+  it('posts both to the sheets route', () => {
+    for (const operation of [readSheetFormatting, applySheetFormat] as const) {
+      expect(operation.method).toBe('POST');
+      expect(operation.path).toBe('/api/mcp/sheets');
+    }
+  });
+
+  it('leaves applyFormat non-destructive, so the CLI does not demand --yes to bold a header', () => {
+    // Formatting is presentation: writing it again restores it. `deleteRows`
+    // is the flagged one because the rows are gone.
+    expect(applySheetFormat.destructive).toBeUndefined();
+    expect(deleteRows.destructive).toBe(true);
+  });
+});
+
+describe('sheets.readFormatting', () => {
+  it('takes no ranges at all, and reads the declarative layer for free', () => {
+    // The layer a caller about to WRITE formatting needs. Per-cell formats
+    // live on the rows, so they cost a read and are opt-in.
+    expect(() => readSheetFormatting.inputSchema.parse({ pageId: 'p1' })).not.toThrow();
+    expect(() => readSheetFormatting.inputSchema.parse({ pageId: 'p1', ranges: ['A1:F40', 'H2'] })).not.toThrow();
+  });
+
+  it('parses the whole presentation model, rules and regions included', () => {
+    const fixture = {
+      pageId: 's1',
+      pageTitle: 'Budget',
+      tabIndex: 0,
+      rowCount: 40,
+      columnCount: 6,
+      frozenRows: 1,
+      frozenColumns: null,
+      columnFormats: { C: { number: { kind: 'currency', currency: 'USD' } } },
+      columnWidths: { C: 140 },
+      rowHeights: { '1': 32 },
+      conditionalFormats: [
+        cellRule,
+        { kind: 'colorScale', id: 'r2', ranges: ['D2:D40'], min: { type: 'min', color: '#ffffff' }, max: { type: 'max', color: '#1d4ed8' } },
+        { kind: 'dataBar', id: 'r3', ranges: ['E2:E40'], color: '#1d4ed8' },
+        { kind: 'formula', id: 'r4', ranges: ['A2:A40'], formula: '=A2>AVERAGE(A2:A40)', format: { bold: true } },
+      ],
+      regions: [
+        { id: 'g1', name: 'Spend', range: 'A1:F', headerRows: 1, totalRows: [40], columns: [{ column: 'C', role: 'currency', currency: 'USD' }], theme: 'blue' },
+      ],
+      cellFormats: { A1: { bold: true } },
+    };
+    expect(parseResponse(readSheetFormatting, 200, new Headers(), JSON.stringify(fixture))).toEqual(fixture);
+  });
+
+  it('rejects a response whose rule kind is not one of the four', () => {
+    // The read exists so a caller can write what it read straight back. A rule
+    // shape the caller cannot round-trip must not arrive as a valid one.
+    const fixture = {
+      pageId: 's1', pageTitle: 'Budget', tabIndex: 0, rowCount: 1, columnCount: 1,
+      frozenRows: null, frozenColumns: null,
+      columnFormats: {}, columnWidths: {}, rowHeights: {},
+      conditionalFormats: [{ kind: 'gradient', id: 'r1', ranges: ['A1'] }],
+      regions: [], cellFormats: {},
+    };
+    expect(() => parseResponse(readSheetFormatting, 200, new Headers(), JSON.stringify(fixture)))
+      .toThrow(ResponseValidationError);
+  });
+});
+
+describe('sheets.applyFormat — the op union', () => {
+  it('accepts every op in the union', () => {
+    const ops = [
+      { type: 'setCellFormat', range: 'A1:F1', patch: { bold: true } },
+      { type: 'clearCellFormat', range: 'A2:F2' },
+      { type: 'setColumnFormat', column: 'C', patch: { number: { kind: 'currency' } } },
+      { type: 'setColumnWidth', column: 'C', width: 140 },
+      { type: 'setRowHeight', row: 1, height: 32 },
+      { type: 'setFrozen', rows: 1 },
+      { type: 'addConditionalRule', rule: cellRule },
+      { type: 'updateConditionalRule', id: 'r1', patch: { ranges: ['C2:C99'] } },
+      { type: 'removeConditionalRule', id: 'r1' },
+      { type: 'moveConditionalRule', id: 'r1', direction: 1 },
+      { type: 'clearConditionalRules' },
+      { type: 'setConditionalRules', rules: [cellRule] },
+      { type: 'setRegions', regions: [{ id: 'g1', range: 'A1:F' }] },
+      { type: 'upsertRegion', region: { id: 'g1', range: 'A1:F', headerRows: 1 } },
+      { type: 'removeRegion', id: 'g1' },
+    ];
+    expect(() => applySheetFormat.inputSchema.parse({ pageId: 'p1', ops })).not.toThrow();
+    // Every op sent, in the order given: `clearCellFormat` after
+    // `setCellFormat` over the same cells means something different from the
+    // reverse, so a schema that reordered or deduped them would be wrong.
+    const parsed = applySheetFormat.inputSchema.parse({ pageId: 'p1', ops }) as { ops: Array<{ type: string }> };
+    expect(parsed.ops.map((op) => op.type)).toEqual(ops.map((op) => op.type));
+  });
+
+  it('rejects an empty op list and an unknown op type before any request', () => {
+    expect(() => applySheetFormat.inputSchema.parse({ pageId: 'p1', ops: [] })).toThrow();
+    expect(() => applySheetFormat.inputSchema.parse({ pageId: 'p1', ops: [{ type: 'setBorders', range: 'A1' }] })).toThrow();
+  });
+
+  it('rejects a field the op does not take, rather than sending it to be ignored', () => {
+    // A caller that sent `{type: 'setFrozen', rows: 1, range: 'A1:F1'}`
+    // believes it froze AND styled; an op that silently did half of that
+    // reports success for something other than what was asked.
+    expect(() => applySheetFormat.inputSchema.parse({
+      pageId: 'p1',
+      ops: [{ type: 'setFrozen', rows: 1, range: 'A1:F1' }],
+    })).toThrow();
+  });
+
+  it('requires setFrozen to name an axis, and lets null clear one', () => {
+    expect(() => applySheetFormat.inputSchema.parse({ pageId: 'p1', ops: [{ type: 'setFrozen' }] })).toThrow();
+    expect(() => applySheetFormat.inputSchema.parse({ pageId: 'p1', ops: [{ type: 'setFrozen', rows: null }] })).not.toThrow();
+    // An omitted axis keeps whatever the tab holds, under the server's lock —
+    // so "freeze one row" never has to restate a column freeze.
+    const parsed = applySheetFormat.inputSchema.parse({
+      pageId: 'p1', ops: [{ type: 'setFrozen', rows: 1 }],
+    }) as { ops: Array<Record<string, unknown>> };
+    expect('columns' in parsed.ops[0]!).toBe(false);
+  });
+
+  it('lets null clear a width or height, and refuses one below the minimum', () => {
+    expect(() => applySheetFormat.inputSchema.parse({ pageId: 'p1', ops: [{ type: 'setColumnWidth', column: 'C', width: null }] })).not.toThrow();
+    expect(() => applySheetFormat.inputSchema.parse({ pageId: 'p1', ops: [{ type: 'setColumnWidth', column: 'C', width: 1 }] })).toThrow();
+    expect(() => applySheetFormat.inputSchema.parse({ pageId: 'p1', ops: [{ type: 'setRowHeight', row: 1, height: null }] })).not.toThrow();
+    expect(() => applySheetFormat.inputSchema.parse({ pageId: 'p1', ops: [{ type: 'setRowHeight', row: 0, height: 32 }] })).toThrow();
+  });
+
+  it('requires a caller-supplied rule id — the caller\'s own idempotency key', () => {
+    // Unlike the AI tool, which mints ids. Here a retried `addConditionalRule`
+    // after a timeout is refused as a duplicate instead of adding the rule a
+    // second time under a fresh id.
+    const { id: _id, ...withoutId } = cellRule;
+    expect(() => applySheetFormat.inputSchema.parse({ pageId: 'p1', ops: [{ type: 'addConditionalRule', rule: withoutId }] })).toThrow();
+  });
+
+  it('rejects a cell rule sent in the AI tool\'s flat shape', () => {
+    // `format_sheet` flattens `operator`/`value` onto the rule because a
+    // discriminated union blows past the schema-size ceiling a model's tool
+    // definition can carry. The stored shape nests them under `condition`, and
+    // a caller that guessed the flat one must be told, not silently dropped.
+    expect(() => applySheetFormat.inputSchema.parse({
+      pageId: 'p1',
+      ops: [{ type: 'addConditionalRule', rule: { kind: 'cell', id: 'r1', ranges: ['A1'], operator: 'lessThan', value: '0', format: { bold: true } } }],
+    })).toThrow();
+  });
+
+  it('refuses more ops than the server will plan', () => {
+    const op = { type: 'clearCellFormat', range: 'A1' };
+    expect(() => applySheetFormat.inputSchema.parse({ pageId: 'p1', ops: Array.from({ length: 200 }, () => op) })).not.toThrow();
+    expect(() => applySheetFormat.inputSchema.parse({ pageId: 'p1', ops: Array.from({ length: 201 }, () => op) })).toThrow();
+  });
+
+  it('parses a result, including the no-op retry', () => {
+    const fixture = {
+      pageId: 's1', pageTitle: 'Budget', tabIndex: 0,
+      changed: true,
+      cellsFormatted: 6, rowsTouched: 1, tabFieldsChanged: ['frozenRows', 'regions'],
+      conditionalRules: 2, ruleIdsAdded: ['r1'], ruleIdsRemoved: [],
+      regions: 1, regionIdsAdded: ['g1'], regionIdsRemoved: [],
+      rowCount: 40, columnCount: 6, recomputed: [],
+    };
+    expect(parseResponse(applySheetFormat, 200, new Headers(), JSON.stringify(fixture))).toEqual(fixture);
+    // `changed: false` is the sheet already looking like this. A caller must be
+    // able to tell that apart from a write, so the field is not optional.
+    const noop = { ...fixture, changed: false, cellsFormatted: 0, rowsTouched: 0, tabFieldsChanged: [], ruleIdsAdded: [], regionIdsAdded: [] };
+    expect(parseResponse(applySheetFormat, 200, new Headers(), JSON.stringify(noop))).toEqual(noop);
+    const { changed: _changed, ...missing } = fixture;
+    expect(() => parseResponse(applySheetFormat, 200, new Headers(), JSON.stringify(missing))).toThrow(ResponseValidationError);
   });
 });

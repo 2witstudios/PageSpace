@@ -1,5 +1,5 @@
 /**
- * Sheet ROWS — the tabular view of a spreadsheet, over POST `/api/mcp/sheets`
+ * Sheet ROWS and sheet FORMATTING, over POST `/api/mcp/sheets`
  * (`apps/web/src/app/api/mcp/sheets/route.ts`), dispatched by an `operation`
  * field like the documents endpoint.
  *
@@ -14,8 +14,14 @@
  * Filters run against the MATERIALISED value, so a formula column compares as
  * its result: `=B2*C2` filters as `7.5`, not as the formula text.
  *
- * All six are POST, so the client's idempotent-retry path already excludes them
- * (`isIdempotentMethod` is method-based) — no per-operation flag to thread.
+ * The last two — `readFormatting` and `applyFormat` — are the presentation
+ * layer rather than the data: regions, conditional rules, frozen panes, column
+ * and cell formats. They exist because the in-process AI tools could already
+ * format a sheet while an SDK or CLI caller could not, so a sheet built
+ * programmatically stayed a grid of bare numbers.
+ *
+ * All eight are POST, so the client's idempotent-retry path already excludes
+ * them (`isIdempotentMethod` is method-based) — no per-operation flag to thread.
  */
 import { z } from 'zod';
 import { defineOperation } from '../registry/define.js';
@@ -326,4 +332,365 @@ export const deleteRows = defineOperation({
    */
   destructive: true,
   description: 'Delete a contiguous range of rows from a SHEET page, shifting the rows below up.',
+});
+
+// ---------------------------------------------------------------------------
+// Formatting — how a sheet LOOKS
+//
+// Everything above treats a sheet as data. These two treat it as a document
+// with a presentation, and they exist because the in-process AI tools
+// (`format_sheet`, `set_conditional_format`, `read_sheet` with
+// `includeFormatting`) could already do all of this while an SDK or CLI caller
+// could do none of it — a sheet built programmatically was a grid of bare
+// numbers with no call available to change that.
+//
+// The op union below is `SheetFormatOp` from `@pagespace/lib/sheets` verbatim,
+// which makes these strictly MORE capable than the AI tools they bring parity
+// with: a model can only add and remove conditional rules, while a
+// programmatic caller can patch one in place, reorder it, or replace the list.
+// The server validates every op through `planFormatOps` — pure, no I/O — and
+// refuses the WHOLE request naming the offending op's index, so a batch never
+// half-applies.
+//
+// Hand-written here rather than imported, for the reason `operations/roles.ts`
+// and `operations/search.ts` state: the published SDK must never runtime- OR
+// type-import `@pagespace/lib`, whose subpaths a consumer's `tsc` cannot
+// resolve. `__tests__/sheets-format-drift-guard.test.ts` imports `OP_FIELDS`
+// and the caps from lib — a devDependency, test-only — and asserts this union
+// matches op for op and field for field, so a sixteenth op cannot join the
+// union in lib without failing here.
+// ---------------------------------------------------------------------------
+
+/**
+ * Caps mirrored from `@pagespace/lib/sheets`. Wire contract: the server
+ * refuses anything past these regardless, and stating them in the schema means
+ * a caller is refused locally, before a round trip.
+ */
+const MAX_FORMAT_OPS = 200;
+const MAX_CONDITIONAL_RULES = 200;
+const MAX_REGIONS = 50;
+const MAX_REGION_COLUMNS = 256;
+const MAX_REGION_TOTAL_ROWS = 64;
+const MAX_REGION_HEADER_ROWS = 16;
+const MIN_COLUMN_WIDTH = 24;
+const MAX_COLUMN_WIDTH = 2_000;
+const MIN_ROW_HEIGHT = 16;
+const MAX_ROW_HEIGHT = 1_000;
+const MAX_ADDRESSABLE_ROW = 5_000_000;
+const MAX_ADDRESSABLE_COLUMN = 18_277; // ZZZ
+const MAX_DECIMALS = 10;
+
+/**
+ * A format patch, deliberately opaque — the same decision, for the same
+ * reason, as `storedCellSchema.format` above. `CellFormat` already exists twice
+ * (`@pagespace/db`, `@pagespace/lib`) with a compile-time assertion holding
+ * those two together, and the SDK can import neither; a third hand-written copy
+ * would be the one with nothing keeping it honest, and would start refusing
+ * valid requests the first time a format key is added.
+ *
+ * The server validates it field by field against `CELL_FORMAT_FIELDS` and
+ * refuses an unknown key by name, so a typo is a 400 that says which key —
+ * not a silently dropped field.
+ *
+ * Known fields: `number` ({kind, decimals, currency, thousands, dateStyle,
+ * pattern}), `bold`, `italic`, `underline`, `strike`, `align`, `valign`,
+ * `wrap`, `color`, `background`, `fontSize`, `fontFamily`, `borders`.
+ */
+const cellFormatSchema = z.record(z.string(), z.unknown());
+
+/** A1 range — `"B2:D40"`, a single cell, or `"A1:F"` open to the sheet's end. */
+const rangeSchema = z.string().min(1);
+
+/** 1-based, as the sheet labels it: row 417 is where `C417` lives. */
+const rowNumberSchema = z.number().int().min(1).max(MAX_ADDRESSABLE_ROW);
+
+/**
+ * A frozen-pane count. `0` unfreezes that axis; `null` clears it.
+ *
+ * The real bound is the tab's own extent — the server refuses "freeze 5 rows"
+ * on a 3-row sheet naming both numbers — so these ceilings only keep an
+ * absurd value from reaching it at all.
+ */
+const frozenRowCountSchema = z.number().int().min(0).max(MAX_ADDRESSABLE_ROW);
+const frozenColumnCountSchema = z.number().int().min(0).max(MAX_ADDRESSABLE_COLUMN);
+
+const scaleAnchorSchema = z.strictObject({
+  type: z.enum(['min', 'max', 'number', 'percent', 'percentile']),
+  /** Required for `number`, `percent` and `percentile`. */
+  value: z.number().optional(),
+  /** `#rrggbb`. Required on a colour scale's `min`/`max`; unused by a data bar's bounds. */
+  color: z.string().optional(),
+});
+
+/**
+ * A stored conditional rule. Note `condition`, not the flat
+ * `operator`/`value`/`value2` the AI tool takes: that flattening exists because
+ * a discriminated union fans out to `anyOf` past the schema-size ceiling a
+ * model's tool definition can carry. A programmatic caller has no such limit,
+ * so this is the shape the sheet actually stores.
+ *
+ * `id` is REQUIRED and supplied by the caller, unlike the AI tool where it is
+ * minted. That is the better contract here: the id is the caller's own
+ * idempotency key, so retrying `addConditionalRule` after a timeout is refused
+ * as a duplicate rather than silently adding the rule a second time.
+ */
+const conditionalRuleSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('cell'),
+    id: z.string().min(1),
+    ranges: z.array(rangeSchema).min(1),
+    condition: z.strictObject({
+      operator: z.enum([
+        'greaterThan', 'greaterThanOrEqual', 'lessThan', 'lessThanOrEqual',
+        'equal', 'notEqual', 'between', 'notBetween',
+        'contains', 'notContains', 'startsWith', 'endsWith',
+        'isEmpty', 'isNotEmpty', 'isError',
+      ]),
+      /** The operand, as TEXT — a status name and a threshold share this field. Omitted for isEmpty/isNotEmpty/isError. */
+      value: z.string().optional(),
+      /** Upper bound, for `between`/`notBetween`. */
+      value2: z.string().optional(),
+    }),
+    format: cellFormatSchema,
+  }),
+  z.strictObject({
+    kind: z.literal('formula'),
+    id: z.string().min(1),
+    ranges: z.array(rangeSchema).min(1),
+    /** Evaluated per cell, relative references shifted from the range's top-left, as a paste would. */
+    formula: z.string().min(1),
+    format: cellFormatSchema,
+  }),
+  z.strictObject({
+    kind: z.literal('colorScale'),
+    id: z.string().min(1),
+    ranges: z.array(rangeSchema).min(1),
+    min: scaleAnchorSchema,
+    mid: scaleAnchorSchema.optional(),
+    max: scaleAnchorSchema,
+  }),
+  z.strictObject({
+    kind: z.literal('dataBar'),
+    id: z.string().min(1),
+    ranges: z.array(rangeSchema).min(1),
+    /** The bar colour, `#rrggbb`. */
+    color: z.string(),
+    min: scaleAnchorSchema.optional(),
+    max: scaleAnchorSchema.optional(),
+  }),
+]);
+
+export type SheetConditionalRuleInput = z.infer<typeof conditionalRuleSchema>;
+
+/**
+ * A declared table. A region says what an area IS — "A1:F is a table, row 1 is
+ * its header, column C is money, row 40 is a total" — and the presentation is
+ * DERIVED from it at render time.
+ *
+ * Prefer it over per-cell ops for anything table-shaped, for two reasons that
+ * are not cosmetic: an open range (`"A1:F"`, no row end) covers rows that do
+ * not exist yet, so a row appended next week inherits the format with no second
+ * pass; and it costs no cell budget however tall the sheet is, where
+ * `setCellFormat` over `A2:A5000` charges 4,999 cells.
+ *
+ * No `freezeHeader` — frozen panes are tab state, not derived presentation.
+ * Send a `setFrozen` op alongside.
+ */
+const regionSchema = z.strictObject({
+  id: z.string().min(1),
+  /** Shown to people and to agents reading the sheet back; never rendered into it. */
+  name: z.string().optional(),
+  range: rangeSchema,
+  /** Leading rows that are headers rather than data. Defaults to 1. */
+  headerRows: z.number().int().min(0).max(MAX_REGION_HEADER_ROWS).optional(),
+  /** Absolute 1-based row numbers holding totals. */
+  totalRows: z.array(rowNumberSchema).max(MAX_REGION_TOTAL_ROWS).optional(),
+  columns: z.array(z.strictObject({
+    column: columnSchema,
+    /** A MEANING, not a format: which number format renders `currency` is the sheet's decision. */
+    role: z.enum(['text', 'number', 'currency', 'percent', 'date', 'datetime', 'id']),
+    /** ISO 4217, for `role: 'currency'`. */
+    currency: z.string().length(3).optional(),
+    /** Overrides the role's default precision. */
+    decimals: z.number().int().min(0).max(MAX_DECIMALS).optional(),
+  })).max(MAX_REGION_COLUMNS).optional(),
+  /** A hue name from the sheet's shared palette. */
+  theme: z.string().optional(),
+});
+
+export type SheetRegionInput = z.infer<typeof regionSchema>;
+
+/**
+ * One formatting edit. `SheetFormatOp` in `@pagespace/lib/sheets` verbatim.
+ *
+ * ORDER MATTERS and is preserved: a `clearCellFormat` after a `setCellFormat`
+ * over the same cells means something different from the reverse, and the
+ * server applies the list as given, in ONE transaction.
+ *
+ * `null` means "clear this" on the ops that accept it. An OMITTED axis on
+ * `setFrozen` keeps whatever the tab holds at plan time — under the server's
+ * lock — so "freeze one row" never has to restate a column freeze the caller
+ * read a moment ago and cannot know still stands.
+ */
+const formatOpSchema = z.discriminatedUnion('type', [
+  z.strictObject({ type: z.literal('setCellFormat'), range: rangeSchema, patch: cellFormatSchema }),
+  z.strictObject({ type: z.literal('clearCellFormat'), range: rangeSchema }),
+  z.strictObject({ type: z.literal('setColumnFormat'), column: columnSchema, patch: cellFormatSchema }),
+  z.strictObject({
+    type: z.literal('setColumnWidth'),
+    column: columnSchema,
+    /** Pixels. `null` restores the default width. */
+    width: z.number().int().min(MIN_COLUMN_WIDTH).max(MAX_COLUMN_WIDTH).nullable(),
+  }),
+  z.strictObject({
+    type: z.literal('setRowHeight'),
+    row: rowNumberSchema,
+    /** Pixels. `null` restores the default height. */
+    height: z.number().int().min(MIN_ROW_HEIGHT).max(MAX_ROW_HEIGHT).nullable(),
+  }),
+  z.strictObject({
+    type: z.literal('setFrozen'),
+    rows: frozenRowCountSchema.nullable().optional(),
+    columns: frozenColumnCountSchema.nullable().optional(),
+  }).refine(
+    (op) => op.rows !== undefined || op.columns !== undefined,
+    // Both omitted is not "freeze nothing", it is a request that names no
+    // axis: the server refuses it, and refusing it here saves the round trip.
+    { message: 'setFrozen needs "rows" and/or "columns" (a count, or null to clear).' },
+  ),
+  z.strictObject({ type: z.literal('addConditionalRule'), rule: conditionalRuleSchema }),
+  z.strictObject({
+    type: z.literal('updateConditionalRule'),
+    id: z.string().min(1),
+    /** Fields of the rule to merge. Its `kind` cannot be changed. */
+    patch: z.record(z.string(), z.unknown()),
+  }),
+  z.strictObject({ type: z.literal('removeConditionalRule'), id: z.string().min(1) }),
+  z.strictObject({
+    type: z.literal('moveConditionalRule'),
+    id: z.string().min(1),
+    /** `1` later in the list (wins over earlier rules), `-1` earlier. */
+    direction: z.union([z.literal(-1), z.literal(1)]),
+  }),
+  z.strictObject({ type: z.literal('clearConditionalRules') }),
+  /** The FINAL list, in this order. A rule the tab holds and this list omits is removed. */
+  z.strictObject({ type: z.literal('setConditionalRules'), rules: z.array(conditionalRuleSchema).max(MAX_CONDITIONAL_RULES) }),
+  /** The FINAL list. An empty array clears every declared region. */
+  z.strictObject({ type: z.literal('setRegions'), regions: z.array(regionSchema).max(MAX_REGIONS) }),
+  z.strictObject({ type: z.literal('upsertRegion'), region: regionSchema }),
+  z.strictObject({ type: z.literal('removeRegion'), id: z.string().min(1) }),
+]);
+
+export type SheetFormatOpInput = z.infer<typeof formatOpSchema>;
+
+/**
+ * How a tab is styled, in one read — the programmatic equivalent of
+ * `read_sheet`'s `includeFormatting`.
+ *
+ * `ranges` is the one part that costs anything: per-cell formats live on the
+ * rows, so they are read only for the rectangles asked for. Omit it and the
+ * declarative layer (regions, conditional rules, column defaults, freezes)
+ * comes back for free — which is the layer a caller about to WRITE formatting
+ * needs, so it can build on what is there instead of over it.
+ *
+ * Rules and regions come back PARSED, so they can be written straight back
+ * through `applyFormat`; a caller that round-tripped the raw stored jsonb
+ * would resurrect entries the parser drops on every load.
+ *
+ * `cellFormats` is EXPLICIT per-cell formatting only. The format actually in
+ * force for a cell also depends on its column default and its region, and
+ * resolving that precedence has exactly one definition (server-side) — a
+ * second one here is how a grid and an export come to disagree.
+ */
+export const readSheetFormatting = defineOperation({
+  name: 'sheets.readFormatting',
+  method: 'POST',
+  path: SHEETS_PATH,
+  inputSchema: z.strictObject({
+    operation: z.literal('read-formatting').default('read-formatting'),
+    pageId: z.string(),
+    tabIndex: tabIndexSchema,
+    /** A1 rectangles whose per-cell formats to return. Omitted, none are read. */
+    ranges: z.array(rangeSchema).max(MAX_FORMAT_OPS).optional(),
+  }),
+  outputSchema: z.object({
+    pageId: z.string(),
+    pageTitle: z.string().nullable(),
+    tabIndex: z.number(),
+    rowCount: z.number(),
+    columnCount: z.number(),
+    frozenRows: z.number().nullable(),
+    frozenColumns: z.number().nullable(),
+    /** Column defaults, by column letters. */
+    columnFormats: z.record(z.string(), cellFormatSchema),
+    /** Pixels, by column letters. */
+    columnWidths: z.record(z.string(), z.number()),
+    /** Pixels, by 1-based row number as a string, as stored. */
+    rowHeights: z.record(z.string(), z.number()),
+    conditionalFormats: z.array(conditionalRuleSchema),
+    regions: z.array(regionSchema),
+    /** Explicit per-cell formats inside `ranges`, by A1 address. */
+    cellFormats: z.record(z.string(), cellFormatSchema),
+  }),
+  requiredScope: 'drive',
+  description: 'Read how a SHEET page is STYLED: declared regions, conditional rules, frozen panes, column formats and widths, row heights, and per-cell formats within the ranges asked for. Call it before writing formatting, to build on what is there.',
+});
+
+/**
+ * Apply an ordered list of formatting ops, all or nothing.
+ *
+ * Every op is validated before anything is written — against the tab's state,
+ * so a range past the sheet or a rule id that does not exist is refused — and
+ * the refusal names the op's INDEX in the list sent. A request refused for any
+ * reason writes nothing: the ops are order-dependent, so a partial apply would
+ * leave a half-styled sheet whose state the caller cannot infer from the error.
+ *
+ * NOT flagged destructive, though `setRegions: []` and `clearConditionalRules`
+ * do discard declared structure. The flag makes the CLI demand `--yes` on
+ * every call, and gating "bold the header row" behind a confirmation prompt
+ * buys nothing: formatting is presentation, recoverable by writing it again,
+ * unlike `deleteRows`, which destroys data.
+ *
+ * `changed` is false when the sheet already looked like this — a retry, a bold
+ * that was already bold. Nothing was written and no revision bumped, so a
+ * caller must not report it as a change.
+ */
+export const applySheetFormat = defineOperation({
+  name: 'sheets.applyFormat',
+  method: 'POST',
+  path: SHEETS_PATH,
+  inputSchema: z.strictObject({
+    operation: z.literal('apply-format').default('apply-format'),
+    pageId: z.string(),
+    tabIndex: tabIndexSchema,
+    ops: z.array(formatOpSchema).min(1).max(MAX_FORMAT_OPS),
+  }),
+  outputSchema: z.object({
+    pageId: z.string(),
+    pageTitle: z.string().nullable(),
+    tabIndex: z.number(),
+    /** Whether anything was actually written. False for a no-op retry. */
+    changed: z.boolean(),
+    /** Cells whose stored `format` changed. */
+    cellsFormatted: z.number(),
+    /** Stored rows this call wrote — the number that shows the write was O(touched), not O(sheet). */
+    rowsTouched: z.number(),
+    /** Tab-level columns whose stored value changed, by name. */
+    tabFieldsChanged: z.array(z.string()),
+    /** Conditional rules on the tab AFTER the write. */
+    conditionalRules: z.number(),
+    /** What the write actually added and removed, computed under the lock — not from any caller's earlier read. */
+    ruleIdsAdded: z.array(z.string()),
+    ruleIdsRemoved: z.array(z.string()),
+    /** Regions on the tab AFTER the write. */
+    regions: z.number(),
+    regionIdsAdded: z.array(z.string()),
+    regionIdsRemoved: z.array(z.string()),
+    rowCount: z.number(),
+    columnCount: z.number(),
+    /** Formulas re-evaluated because the sheet's extent grew. Empty for every other format write. */
+    recomputed: z.array(z.string()),
+  }),
+  requiredScope: 'drive',
+  description: 'Apply formatting to a SHEET page: declare regions (tables, header rows, column roles, totals), set cell/column formats, column widths, row heights, frozen panes, and conditional formatting rules. Ops apply in order, in one transaction, all or nothing. Prefer a region for anything table-shaped — it covers rows added later and costs no cell budget.',
 });

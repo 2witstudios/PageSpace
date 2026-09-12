@@ -180,6 +180,8 @@ sheets    describe <pageId>                  # tabs and sizes, reads no rows
           update-cells <pageId> [--json-input <json>] [--tab N]
           delete-rows <pageId> --from-row N --count N [--tab N] [--yes]
           edit-cells <pageId> [--json-input <json>]
+          formatting <pageId> [--ranges A1:F40,H2:H9] [--tab N]   # regions, rules, freezes, formats
+          format <pageId> [--json-input <json>] [--tab N]         # apply formatting ops, in order
 
 trash     list --drive <driveId>
 
