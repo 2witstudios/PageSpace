@@ -7,13 +7,21 @@
  * whole of US8's problem: an app that only wants to know who you are should
  * not drag a passkey or email ceremony into signing in.
  *
- * This module is the single place that distinction is computed. The screen
- * that decides whether to OFFER the ceremony and the server that decides
- * whether to REQUIRE one must read the same answer from here; two independent
- * expressions of the rule is exactly how a future scope ends up on a screen
- * that never runs the ceremony — or, worse, on a server that stops demanding
- * one (the drift `isCredentialEscalatingGrant` was written to prevent, one
- * layer down in `./scopes`).
+ * This module is intended to become the single place that distinction is
+ * computed: the screen that decides whether to OFFER the ceremony and the
+ * server that decides whether to REQUIRE one must read the same answer from
+ * here, because two independent expressions of the rule is exactly how a
+ * future scope ends up on a screen that never runs the ceremony — or, worse,
+ * on a server that stops demanding one (the drift
+ * `isCredentialEscalatingGrant` was written to prevent, one layer down in
+ * `./scopes`).
+ *
+ * It is not that yet, and saying so matters. Production still decides step-up
+ * via `isCredentialEscalatingGrant` (`device_authorization/verify/route.ts`,
+ * `device_authorization/decision/route.ts`) and via the unconditional step-up
+ * on `POST /api/oauth/authorize`. **Phase 1 replaces both with this function**
+ * — until it does, the two expressions this module warns about are both live.
+ * See ADR 0004 Decision 4, "Phase 1 obligations", item 2.
  *
  * Pure and total: a plain value in, a boolean out, no throw path.
  *
