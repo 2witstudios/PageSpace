@@ -492,11 +492,46 @@ function validateRedirectUri(
   redirectUri: string,
 ): boolean;
 
+// packages/lib/src/auth/oauth/consent.ts — one new narration input
+interface ConsentNarrationContext {
+  /* … */
+  // Affirms `profile` is the only access-bearing scope in the grant. Opt-in:
+  // absent means the narration drops its "no access to any drive or content"
+  // claim, which only a caller holding the whole set can honestly make.
+  profileIsSoleAccess?: boolean;
+}
+
 // packages/lib/src/auth/oauth/client-registration.ts
+interface ClientRegistration {
+  name: string; redirectUris: string[];
+  description?: string; logoUrl?: string; homepageUrl?: string;
+  allowedScopes?: string[];
+}
+
+// The error CODES are the contract — the console renders the messages.
+type ClientRegistrationError =
+  | { code: 'invalid_input'; field?: string }
+  | { code: 'invalid_name'; field: 'name' }
+  | { code: 'invalid_description'; field: 'description' }
+  | { code: 'invalid_logo_url'; field: 'logoUrl' }
+  | { code: 'invalid_homepage_url'; field: 'homepageUrl' }
+  | { code: 'invalid_redirect_uris'; field: 'redirectUris' }
+  | { code: 'invalid_redirect_uri'; field: string }
+  | { code: 'duplicate_redirect_uri'; field: string }
+  | { code: 'invalid_allowed_scopes'; field: 'allowedScopes' }
+  | { code: 'unknown_scope'; field: string; scope: string }
+  | { code: 'forbidden_scope'; field: string; scope: string }
+  | { code: 'duplicate_scope'; field: string; scope: string };
+
 function validateClientRegistration(input: unknown):
   | { ok: true; value: ClientRegistration }
   | { ok: false; errors: ClientRegistrationError[] };
 ```
+
+Every `field` is the path to the offending entry (`redirectUris[1]`,
+`allowedScopes[0]`), so a console can point at it without re-deriving which one failed. A non-string
+entry reports a fixed `[non-string]` placeholder rather than the value — coercing a caller-supplied
+object is how this module first broke its own never-throw contract.
 
 ## Consequences
 
