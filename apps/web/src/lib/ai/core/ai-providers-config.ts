@@ -582,6 +582,7 @@ export const AI_PROVIDERS = {
     // Models officially supported by that endpoint; bare `glm-*` ids (no vendor prefix).
     models: {
       'glm-5.3':     'GLM-5.3',
+      'glm-5.3-flash': 'GLM-5.3 Flash',
       'glm-5.2':     'GLM-5.2',
       'glm-5.1':     'GLM-5.1',
       'glm-5-turbo': 'GLM-5 Turbo',
