@@ -386,6 +386,24 @@ describe('createWorkerSession — placement', () => {
       );
     });
 
+    test('given the uniqueness read failing, still spawns — with the bare label', async () => {
+      // A cosmetic suffix must never be the reason a spawn fails. Degrading
+      // costs at most a duplicate name (they carry no uniqueness constraint);
+      // refusing would cost the whole workspace.
+      mockListSessions.mockRejectedValue(new Error('database unavailable'));
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      const result = await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
+
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+      expect(mockSpawnSession).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Global Assistant' }),
+      );
+    });
+
     test("the model's own workspaceName wins, trimmed", async () => {
       mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
       mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });

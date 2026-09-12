@@ -846,19 +846,31 @@ async function resolveWorkerPlacement(input: {
     // NAME IT. This path used to pass no name at all, so every workspace an
     // agent minted was born `null` and rendered in the sidebar as the literal
     // fallback "Session" — permanently, since nothing could rename it either.
-    // The model's own label wins; otherwise derive one exactly as the spawn
-    // route does, through the same shared helper. The DEFAULT placement (no
-    // `workspace` argument) mints through `ensureConversationSession` instead
-    // and is named there, for the same reason and with the same helper.
-    // The model's own label is bounded here; a DERIVED one comes back already
-    // bounded from the length-aware helper and must not be cut again (cutting
-    // it is what collapses "<base> 2" back onto "<base>" at the cap).
+    // The DEFAULT placement (no `workspace` argument) mints through
+    // `ensureConversationSession` instead and is named there, the same way.
+    //
+    // The model's own label wins and is bounded HERE; a DERIVED one comes back
+    // already bounded from the length-aware helper and must not be cut again
+    // (cutting it is what collapses "<base> 2" back onto "<base>" at the cap).
+    //
+    // The uniqueness read is FAIL-SAFE, matching `ensureConversationSession`: a
+    // cosmetic suffix must never be the reason a spawn fails. Degrading costs
+    // at most a duplicate label (names carry no uniqueness constraint);
+    // refusing would cost the workspace.
     let name = workspaceName?.trim();
     if (name) {
       name = name.slice(0, MAX_SESSION_NAME_LENGTH);
     } else {
       const baseLabel = agentPageId !== null ? (agentTitleForLabel || 'Agent') : 'Global Assistant';
-      const existingNames = (await listSessions({ ownerId })).map((session) => session.name);
+      const existingNames = await listSessions({ ownerId })
+        .then((sessions) => sessions.map((session) => session.name))
+        .catch((error) => {
+          loggers.ai.warn('createWorkerSession: could not read existing session names for the label', {
+            ownerId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return [] as string[];
+        });
       name = nextUniqueSessionName(baseLabel, existingNames);
     }
     const spawned = await spawnSession({ userId: ownerId, driveId, envId, name });
