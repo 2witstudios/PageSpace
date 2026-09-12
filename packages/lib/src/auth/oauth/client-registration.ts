@@ -39,7 +39,7 @@ import { NAME_CONTROL_CHAR_RE } from './scopes';
  */
 const NON_STRING_PLACEHOLDER = '[non-string]';
 
-/** The three fixed caps plus the four `drive` shape tokens (ADR 0004 Decision 7). */
+/** The two fixed caps plus the four `drive` shape tokens (ADR 0004 Decision 7). */
 const ALLOWED_SCOPE_SHAPES = new Set(['profile', 'offline_access', 'drive', 'drive:admin', 'drive:member', 'drive:role']);
 
 /**
@@ -139,9 +139,18 @@ const NAME = z
   .refine((value) => value.trim().length > 0)
   .refine((value) => value === value.trim())
   .refine(isSafeDisplayText);
-// Same surface, same rule: the description renders on the consent screen
-// directly beneath the name.
-const DESCRIPTION = z.string().max(500).refine(isSafeDisplayText);
+// Same surface, same rule — including the whitespace half, which an earlier
+// pass claimed and did not deliver: the description renders on the consent
+// screen directly beneath the name, so a whitespace-only one is an empty line
+// under a name and a leading-whitespace one renders indented away from it.
+// Send the field or omit it; sending it blank is neither.
+const DESCRIPTION = z
+  .string()
+  .min(1)
+  .max(500)
+  .refine((value) => value.trim().length > 0)
+  .refine((value) => value === value.trim())
+  .refine(isSafeDisplayText);
 const HTTPS_URL = z.string().refine(isHttpsUrl);
 const REDIRECT_URIS = z.array(z.unknown()).min(1).max(10);
 // There are only six legal shapes, so anything longer is a mistake or an

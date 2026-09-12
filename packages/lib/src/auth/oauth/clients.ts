@@ -104,6 +104,10 @@ const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', '[::1]']);
  * follows from it.
  */
 const NEVER_PRIVATE_USE_SCHEMES = new Set([
+  // Unreachable through `classifyRedirect`, which answers for both before
+  // consulting this set. Kept so the set is independently correct — it names
+  // every scheme that is not a private-use scheme, and a future caller that
+  // reaches for it directly should not have to know the ordering.
   'http:',
   'https:',
   'ws:',
@@ -166,6 +170,20 @@ type RedirectKind = 'https' | 'loopback' | 'private_use' | 'reject';
  * "Unverified app" badge are what stand in front of that today; ADR 0004
  * Decision 3 records it as accepted rather than solved.
  */
+/**
+ * The hostname with a single fully-qualified trailing dot removed.
+ * `new URL('https://localhost./cb').hostname` is `'localhost.'`, which resolves
+ * to the same name as `localhost` but is a different string — so an equality
+ * check against `'localhost'` misses it and the refusal below can be walked
+ * straight past. Normalizing for CLASSIFICATION only; matching still compares
+ * the unmodified `href`, so `https://app.example.com./cb` stays distinct from
+ * the registered `https://app.example.com/cb`.
+ */
+function canonicalHostname(url: URL): string {
+  const { hostname } = url;
+  return hostname.endsWith('.') ? hostname.slice(0, -1) : hostname;
+}
+
 function classifyRedirect(url: URL): RedirectKind {
   if (url.protocol === 'https:') {
     // RFC 8252 §8.3: `localhost` can be remapped; only the numeric literals
@@ -177,10 +195,12 @@ function classifyRedirect(url: URL): RedirectKind {
     // never grants. A third party may register an https numeric-IP URI and
     // gets exact matching only — pinned by test and recorded in ADR 0004
     // Decision 3.
-    return url.hostname === 'localhost' ? 'reject' : 'https';
+    return canonicalHostname(url) === 'localhost' ? 'reject' : 'https';
   }
   if (url.protocol === 'http:') {
-    return LOOPBACK_HOSTNAMES.has(url.hostname) ? 'loopback' : 'reject';
+    // `http://localhost./cb` and `http://localhost/cb` both fall here and are
+    // both refused: neither is one of the two numeric literals.
+    return LOOPBACK_HOSTNAMES.has(canonicalHostname(url)) ? 'loopback' : 'reject';
   }
   if (NEVER_PRIVATE_USE_SCHEMES.has(url.protocol)) return 'reject';
   // Anything left is taken as a private-use scheme (see the deny-list note
@@ -203,8 +223,10 @@ function classifyRedirect(url: URL): RedirectKind {
  * | anything else | never |
  *
  * Rejected outright, before any registered URI is consulted: userinfo, query,
- * fragment, `*`, `localhost` in any scheme, non-loopback `http://`, and every
- * script- or content-bearing scheme.
+ * fragment, `*`, `localhost` under `http:`/`https:` (including the
+ * trailing-dot spelling — a private-use scheme is routed by scheme rather than
+ * by host, so its host component is not load-bearing and is not checked),
+ * non-loopback `http://`, and every script- or content-bearing scheme.
  */
 export function validateRedirectUri(
   client: Pick<RegisteredClient, 'redirectUris' | 'firstParty'>,

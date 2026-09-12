@@ -182,6 +182,17 @@ describe('validateClientRegistration — description', () => {
     expect(codes({ ...valid, description: 'd'.repeat(501) })).toContain('invalid_description');
   });
 
+  it('holds the description to the NAME\'s whitespace rule too, not just its character rule', () => {
+    // "Same surface, same rule" was only half true: DESCRIPTION had the
+    // control/invisible-character check but none of NAME's trim refinements,
+    // so a whitespace-only or leading-whitespace description validated and
+    // rendered indented away from the name it sits under.
+    for (const description of ['   ', '\t', '  Sends things', 'Sends things  ', '']) {
+      expect(codes({ ...valid, description })).toContain('invalid_description');
+    }
+    expect(validateClientRegistration({ ...valid, description: 'Sends things by swiping' }).ok).toBe(true);
+  });
+
   it('holds the description to the same display rule as the name — it renders on the same screen', () => {
     for (const description of ['ev\u0000il', 'ev\u202eil', 'ev\u200bil', 'ev\u061cil', 'ev\u007fil']) {
       expect(codes({ ...valid, description })).toContain('invalid_description');

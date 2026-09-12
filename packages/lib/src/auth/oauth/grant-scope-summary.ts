@@ -30,8 +30,15 @@ export function describeGrantScopes(scopes: readonly string[], resolvers: GrantS
   }
   // `profile` reads first among the capability lines: it is the only one that
   // says who the user is rather than what the app may touch.
+  //
+  // This function holds the whole set, so it is the layer that can answer
+  // whether `profile` is the only access in it — `offline_access` and a
+  // `name:` token carry no access of their own, so neither withdraws the
+  // claim; a drive, `account` or `all_drives` does.
   if (parsed.scopes.profile) {
-    descriptions.push(describeScopeForConsent({ kind: 'profile' }, {}));
+    const profileIsSoleAccess =
+      !parsed.scopes.account && !parsed.scopes.allDrives && parsed.scopes.drives.size === 0;
+    descriptions.push(describeScopeForConsent({ kind: 'profile' }, { profileIsSoleAccess }));
   }
   if (parsed.scopes.account) {
     descriptions.push(describeScopeForConsent({ kind: 'account' }, {}));

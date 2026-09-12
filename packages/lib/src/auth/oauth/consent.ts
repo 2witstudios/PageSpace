@@ -14,6 +14,19 @@ export interface ConsentNarrationContext {
   roleSummary?: string;
   /** The display name of the existing key an `update_key` scope re-scopes (caller resolves it; falls back to the token id). */
   keyName?: string;
+  /**
+   * Affirms that `profile` is the ONLY access-bearing scope in the grant being
+   * narrated — no `drive:*`, no `account`, no `all_drives`.
+   *
+   * "No access to any drive or content" is a claim about the SET, and this is a
+   * per-scope formatter, so it cannot learn that on its own; the caller holds
+   * the set and must say so. Deliberately opt-IN: absent means the narration
+   * falls back to the identity sentence alone, which is true of every profile
+   * grant. A caller that forgets the flag therefore under-claims rather than
+   * lying — and the lie is the expensive direction, because the screen this
+   * text renders on is part of the security boundary (ADR 0002 Decision 5).
+   */
+  profileIsSoleAccess?: boolean;
 }
 
 /** Per-scope narration text (ADR 0002 Decision 5, point 3's table). */
@@ -24,9 +37,14 @@ export function describeScopeForConsent(scope: ParsedScope, ctx: ConsentNarratio
     case 'profile':
       // Identity only (ADR 0004 Decision 4). The second sentence is
       // contractual, not decoration: `profile` is the one scope approved
-      // without the step-up ceremony, so the screen must state plainly that
-      // nothing content-bearing is being handed over.
-      return 'See your name, email, and avatar. No access to any drive or content.';
+      // without the step-up ceremony, so when it IS the whole grant the screen
+      // must state plainly that nothing content-bearing is being handed over.
+      // It is withheld otherwise — `profile drive:abc123` is a legal grant, and
+      // rendering the absolute claim above "Act as you in Acme Drive" is a
+      // contradiction on the one surface that has to be trustworthy.
+      return ctx.profileIsSoleAccess
+        ? 'See your name, email, and avatar. No access to any drive or content.'
+        : 'See your name, email, and avatar.';
     case 'offline_access':
       return 'Stay connected until you revoke access (issues a long-lived refresh credential).';
     case 'manage_keys':

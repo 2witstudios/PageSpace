@@ -116,6 +116,17 @@ describe('validateRedirectUri — https exact match', () => {
     const local = client({ redirectUris: ['https://localhost/auth/pagespace/callback'] });
     expect(validateRedirectUri(local, 'https://localhost/auth/pagespace/callback')).toBe(false);
   });
+
+  it('rejects a trailing-dot `localhost.`, which the parser keeps as a distinct hostname but which resolves the same', () => {
+    // `new URL('https://localhost./cb').hostname === 'localhost.'`, so an
+    // equality check against 'localhost' missed it entirely and a third party
+    // could register and use it — the same remappable name RFC 8252 §8.3 is
+    // cited for refusing, reached through a spelling the check did not know.
+    const dotted = client({ redirectUris: ['https://localhost./auth/pagespace/callback'] });
+    expect(validateRedirectUri(dotted, 'https://localhost./auth/pagespace/callback')).toBe(false);
+    const dottedHttp = client({ firstParty: true, redirectUris: ['http://localhost./callback'] });
+    expect(validateRedirectUri(dottedHttp, 'http://localhost.:51234/callback')).toBe(false);
+  });
 });
 
 describe('validateRedirectUri — private-use schemes (RFC 8252 §7.1)', () => {

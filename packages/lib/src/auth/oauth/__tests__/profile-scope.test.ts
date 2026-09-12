@@ -190,33 +190,59 @@ describe('isPureDriveGrant — profile', () => {
 });
 
 describe('describeScopeForConsent — profile', () => {
-  const text = () => describeScopeForConsent({ kind: 'profile' }, {});
-
   it('names exactly the identity fields it releases', () => {
-    expect(text()).toMatch(/name/i);
-    expect(text()).toMatch(/email/i);
-    expect(text()).toMatch(/avatar/i);
+    const text = describeScopeForConsent({ kind: 'profile' }, {});
+    expect(text).toMatch(/name/i);
+    expect(text).toMatch(/email/i);
+    expect(text).toMatch(/avatar/i);
   });
 
-  it('states plainly that it reaches no drive and no content', () => {
-    expect(text()).toMatch(/no access to any drive or content/i);
+  it('states plainly that it reaches no drive and no content when the caller affirms profile is the whole grant', () => {
+    expect(describeScopeForConsent({ kind: 'profile' }, { profileIsSoleAccess: true })).toMatch(
+      /no access to any drive or content/i,
+    );
+  });
+
+  it('does NOT make that absolute claim by default — a per-scope formatter cannot know the rest of the set', () => {
+    // The claim is about the SET, not about this scope. Emitting it
+    // unconditionally made `profile drive:abc123` render "No access to any
+    // drive or content" immediately above "Act as you in Acme Drive".
+    // Defaulting to the weaker sentence means a caller that forgets the flag
+    // gets something true and less informative, never something false.
+    const text = describeScopeForConsent({ kind: 'profile' }, {});
+    expect(text).toMatch(/name/i);
+    expect(text).not.toMatch(/no access to any drive/i);
   });
 });
 
 describe('describeGrantScopes — profile', () => {
   const resolvers = { driveNamesById: new Map<string, string>(), roleNamesById: new Map<string, { name: string; description: string | null }>() };
 
-  it('lists the profile narration for a stored profile grant', () => {
+  it('lists the profile narration for a stored profile grant, with the absolute claim, because it is true there', () => {
     const lines = describeGrantScopes(['profile'], resolvers);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(/no access to any drive or content/i);
   });
 
-  it('lists profile alongside the drive it is combined with', () => {
+  it('keeps the absolute claim for `profile offline_access` — a refresh credential is not drive access', () => {
+    const lines = describeGrantScopes(['profile', 'offline_access'], resolvers);
+    expect(lines[0]).toMatch(/no access to any drive or content/i);
+  });
+
+  it('DROPS the absolute claim when the same grant also carries a drive', () => {
+    // Regression: this rendered "No access to any drive or content." directly
+    // above "Act as you in Acme Drive …" on /api/account/oauth-grants, which is
+    // a live surface. A user skimming reads the reassuring absolute.
     const lines = describeGrantScopes(['profile', 'drive:abc123:member'], resolvers);
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toMatch(/no access to any drive or content/i);
+    expect(lines[0]).toMatch(/name/i);
+    expect(lines[0]).not.toMatch(/no access to any drive/i);
     expect(lines[1]).toMatch(/member access/i);
+  });
+
+  it('no line in a profile+drive grant claims the grant reaches no drive', () => {
+    const lines = describeGrantScopes(['profile', 'drive:abc123'], resolvers);
+    expect(lines.some((line) => /no access to any drive or content/i.test(line))).toBe(false);
   });
 });
 
