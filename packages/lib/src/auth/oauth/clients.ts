@@ -171,17 +171,32 @@ type RedirectKind = 'https' | 'loopback' | 'private_use' | 'reject';
  * Decision 3 records it as accepted rather than solved.
  */
 /**
- * The hostname with a single fully-qualified trailing dot removed.
- * `new URL('https://localhost./cb').hostname` is `'localhost.'`, which resolves
- * to the same name as `localhost` but is a different string — so an equality
- * check against `'localhost'` misses it and the refusal below can be walked
- * straight past. Normalizing for CLASSIFICATION only; matching still compares
- * the unmodified `href`, so `https://app.example.com./cb` stays distinct from
- * the registered `https://app.example.com/cb`.
+ * The hostname with EVERY trailing dot removed.
+ * `new URL('https://localhost./cb').hostname` is `'localhost.'`, which names the
+ * same host as `localhost` but is a different string — so an equality check
+ * against `'localhost'` misses it and the refusal below is walked straight
+ * past. The parser preserves repeats verbatim (`'localhost..'`,
+ * `'localhost...'`), so stripping exactly one is the same bug one keystroke
+ * later; this strips the lot rather than betting on what a given resolver does
+ * with an empty label.
+ *
+ * Normalizing for CLASSIFICATION only — matching still compares the unmodified
+ * `href`, so `https://app.example.com./cb` stays distinct from a registered
+ * `https://app.example.com/cb` and no dotted spelling gains a match it would
+ * not otherwise have.
+ *
+ * Written as a loop rather than `/\.+$/` because a trailing-repetition regex on
+ * attacker-controlled input is the polynomial-backtracking shape static
+ * analysis flags (CodeQL js/polynomial-redos); this is linear by construction,
+ * matching `trimTrailingSlashes` in `./metadata` for the same reason.
  */
 function canonicalHostname(url: URL): string {
   const { hostname } = url;
-  return hostname.endsWith('.') ? hostname.slice(0, -1) : hostname;
+  let end = hostname.length;
+  while (end > 0 && hostname[end - 1] === '.') {
+    end -= 1;
+  }
+  return hostname.slice(0, end);
 }
 
 function classifyRedirect(url: URL): RedirectKind {

@@ -127,6 +127,23 @@ describe('validateRedirectUri — https exact match', () => {
     const dottedHttp = client({ firstParty: true, redirectUris: ['http://localhost./callback'] });
     expect(validateRedirectUri(dottedHttp, 'http://localhost.:51234/callback')).toBe(false);
   });
+
+  it('rejects REPEATED trailing dots too — stripping one is the same bug with one more keystroke', () => {
+    // Caught by probing the single-dot fix rather than trusting it: the parser
+    // keeps `localhost..` and `localhost...` verbatim, so a fix that removed
+    // exactly one dot left the bypass intact for anyone who typed two. Whether
+    // a given resolver maps `localhost..` back to loopback is not a thing this
+    // rule should be betting on.
+    for (const host of ['localhost.', 'localhost..', 'localhost...']) {
+      const c = client({ redirectUris: [`https://${host}/auth/pagespace/callback`] });
+      expect(validateRedirectUri(c, `https://${host}/auth/pagespace/callback`)).toBe(false);
+    }
+  });
+
+  it('a repeated-dot loopback literal is not the registered loopback host either', () => {
+    const cliLike = client({ firstParty: true, redirectUris: ['http://127.0.0.1/callback'] });
+    expect(validateRedirectUri(cliLike, 'http://127.0.0.1../callback')).toBe(false);
+  });
 });
 
 describe('validateRedirectUri — private-use schemes (RFC 8252 §7.1)', () => {
