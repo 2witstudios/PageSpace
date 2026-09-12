@@ -4,9 +4,11 @@
 - **Date:** 2026-09-11
 - **Deciders:** Sign in with PageSpace epic (epic page `yv08hib74nrtmksdzxmf5nkw`, Phase 0 page
   `kb5oh1ngdlwn1aw5rd48ml6g`, ADR task `g6n4aoy2d1ne38uzamvvvaz1`)
-- **Amends:** ADR 0002 Decision 3 (client model) and Decision 4 (dynamic registration posture).
-  Additive only — no rule in ADR 0002 or ADR 0003 is reinterpreted, and every scope token that
-  exists keeps meaning exactly what it meant.
+- **Amends:** ADR 0002 Decision 3 (client model), Decision 4 (dynamic registration posture), and
+  Decision 1 (the grammar: one new token, `profile`, and its interaction rules 14–14c, 15, 10′, 9′).
+  Additive only. No rule is reinterpreted and no previously-valid scope string changes meaning —
+  rules 10 and 13 gain a `profile` term, but `profile` did not exist before this ADR, so every string
+  that parsed yesterday parses identically today and resolves to the same principal.
 - **Consumed by:** Phase 1 (provider opens to third parties), Phase 2 (resource server),
   Phase 3 (SDK sign-in), Phase 4 (platform-managed env clients), Phase 5 (SwipeSend).
 
@@ -459,7 +461,9 @@ function validateClientRegistration(input: unknown):
 
 - ADR 0002's grammar gains a sixth top-level token, `profile` — additive under its own "tokens
   are only ever added, never reinterpreted" rule. Every credential issued before this change
-  keeps working exactly as issued.
+  keeps working exactly as issued. Two existing rules gain a `profile` term (rule 10's
+  principal-shape list, rule 13's mint-shape exclusion); both are vacuous for any string written
+  before `profile` existed, so this is an extension of those rules rather than a change to them.
 - ADR 0002 Decision 3's "loopback only" becomes "loopback only *for first-party clients*", which
   is strictly narrower for everyone who is not the CLI and identical for the CLI. The sixteen
   existing CLI redirect tests pass unchanged.
