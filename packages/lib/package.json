@@ -2665,6 +2665,9 @@
       "sheets/sheet": [
         "./dist/sheets/sheet.d.ts"
       ],
+      "sheets/store": [
+        "./dist/sheets/store.d.ts"
+      ],
       "tags/tag-core": [
         "./dist/tags/tag-core.d.ts"
       ],
