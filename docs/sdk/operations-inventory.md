@@ -148,6 +148,20 @@ Prefer a **region** to per-cell ops for anything table-shaped. A region declares
 open range (`"A1:F"`, no row end) covers rows that do not exist yet and costs no cell budget however
 tall the sheet is; `setCellFormat` over `A2:A5000` charges 4,999 cells against the per-call ceiling.
 
+**Schema size, measured.** `sheets.applyFormat` serialises to ~10.8k characters of JSON Schema —
+the largest of the 85 registry operations by 6.5x (next is `calendar.create` at ~1.7k), and ~25% of
+the whole MCP tool surface, which every MCP client receives per session. The cause is duplication,
+not the op count: `operationToMcpTool` calls `z.toJSONSchema` with the default `reused: 'inline'`,
+so the four-variant rule schema is inlined twice (`addConditionalRule`, `setConditionalRules`), the
+region schema twice (`upsertRegion`, `setRegions`), and the scale anchor ten times — those four
+variants alone are 75% of the union.
+
+Passing `reused: 'ref'` in `packages/cli/src/mcp/tool-convert.ts` was measured at 38% smaller for
+this operation (10.8k -> 6.7k) and 9.4% across the surface. It is deliberately NOT done here: it
+changes the emitted shape of 8 of 85 operations, 7 of them nothing to do with sheets, and `$ref`
+handling varies by provider — so it wants its own change and its own verification against real MCP
+clients rather than riding along in a sheets PR. The tool is correct and usable as it stands.
+
 The op union is hand-written in the SDK — the published package must never runtime- or type-import
 `@pagespace/lib` — and held to lib by
 `packages/sdk/src/operations/__tests__/sheets-format-drift-guard.test.ts`, which reads lib's
