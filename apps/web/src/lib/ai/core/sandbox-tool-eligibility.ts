@@ -18,6 +18,7 @@
  */
 
 import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
+import { anyReachableEnvironmentPayerAllows } from './reachable-environment-payers';
 
 /** `driveId`: the agent page's own drive (null for the global assistant). */
 export async function resolveSandboxToolEligibility(
@@ -71,28 +72,24 @@ export async function resolveSandboxToolEligibilityForConversation(
 
 /**
  * Does this user own any environment, visible to the global assistant, whose
- * PAYER would authorize them? Bounded (owner-scoped, capped by the store's own
- * listing limit) and reached only after the cheap check has already failed.
+ * PAYER would authorize them?
  *
- * The probe has the same shape the run will be gated with: the environment's
- * payer, and NO drive — a local env authorizes on machine ownership, which the
- * listing has already established for every row it returns. `false` on any
- * error: this widens eligibility, so it must fail closed.
+ * The ITERATION — which payers get asked, once per distinct drive, failing
+ * closed — belongs to `anyReachableEnvironmentPayerAllows`, shared with the
+ * discovery gate so the two cannot drift: fixing one without the other changes
+ * nothing, because this strip removes the tool before that gate can allow it.
+ *
+ * What is local to this call site is the AUTHORIZER, deliberately: this stands
+ * where tool REGISTRATION stands, so it asks `canRunCodeForSession` — the same
+ * question the rest of this module asks — while the gate stands where a call
+ * stands and asks the full call-time gate. The probe has the shape the run will
+ * be gated with: the environment's payer, and NO drive, because a local env
+ * authorizes on machine ownership (which the listing has already established
+ * for every row it returns).
  */
-async function hasEligibleReachableEnvironment(userId: string): Promise<boolean> {
-  try {
-    const { isLocalEnvsEnabled } = await import('@pagespace/lib/services/drive-envs/local-envs-enabled');
-    if (!isLocalEnvsEnabled()) return false;
-    const { listGlobalAssistantEnvironments, resolveDriveEnvPayer } = await import('@/lib/drive-envs/drive-envs-runtime');
-    const environments = await listGlobalAssistantEnvironments(userId);
-    // By DRIVE: the payer is the drive's, so several machines in one drive are
-    // one question. Reached only after the cheap check has already refused.
-    for (const driveId of new Set(environments.map((env) => env.driveId))) {
-      const payer = await resolveDriveEnvPayer(driveId);
-      if (payer && (await canRunCodeForSession({ userId, driveId: null, ownerId: payer.payerId }))) return true;
-    }
-    return false;
-  } catch {
-    return false;
-  }
+function hasEligibleReachableEnvironment(userId: string): Promise<boolean> {
+  return anyReachableEnvironmentPayerAllows({
+    userId,
+    authorize: (payer) => canRunCodeForSession({ userId, driveId: null, ownerId: payer.payerId }),
+  });
 }

@@ -54,6 +54,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { createSandboxTools, type ListReachableEnvironments, type ResolveEnvironmentTarget, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
 import { conversationMayReachPersistentEnvironments, decideEnvReach, ENV_UNREACHABLE_MESSAGE } from '@pagespace/lib/env-bridge/decide-env-reach';
+import { anyReachableEnvironmentPayerAllows } from '@/lib/ai/core/reachable-environment-payers';
 import { OWN_SANDBOX_LABEL } from '@pagespace/lib/services/sandbox/environment-directory';
 import type { SandboxEnvironmentTarget } from '@pagespace/lib/services/sandbox/tool-runners';
 import {
@@ -783,31 +784,29 @@ export const productionSandboxDiscoveryGate: SandboxGate = async (ctx) => {
   const direct = await productionSandboxGate(ctx);
   if (direct.ok || direct.reason === 'kill_switch_off') return direct;
 
-  const reachable = await productionListReachableEnvironments(ctx);
-  if (reachable.length === 0) return direct;
-
-  const { resolveDriveEnvPayer } = await import('@/lib/drive-envs/drive-envs-runtime');
-  // By DRIVE, not by environment: the payer is a property of the drive, so
-  // several machines in one drive are one question, not several. A person with
-  // ten machines across two drives costs two lookups here rather than ten, and
-  // this whole path is only reached when the cheap check has already refused.
-  for (const driveId of new Set(reachable.map((env) => env.driveId))) {
-    const payer = await resolveDriveEnvPayer(driveId);
-    if (!payer) continue;
+  // The ITERATION — which payers get asked, once per DISTINCT drive, failing
+  // closed — is shared with the pipeline eligibility strip
+  // (`sandbox-tool-eligibility.ts`) so the two cannot drift: fixing one without
+  // the other changes nothing, because that strip removes the tool before this
+  // gate can allow it. Only the AUTHORIZER below is local to this call site.
+  const allowed = await anyReachableEnvironmentPayerAllows({
+    userId: ctx.userId,
     // The SAME shape `openAt` will gate the run with: the environment's payer,
     // and NO drive — a local env authorizes on machine ownership, which the
     // discovery listing has already established for every row it returned.
-    const verdict = await gateSandboxToolCall({
-      userId: ctx.userId,
-      ownerId: payer.payerId,
-      tenantId: payer.payerId,
-      requestOrigin: ctx.requestOrigin,
-      agentPageId: ctx.agentPageId,
-      tier: payer.tier,
-    });
-    if (verdict.ok) return verdict;
-  }
-  return direct;
+    authorize: async (payer) =>
+      (
+        await gateSandboxToolCall({
+          userId: ctx.userId,
+          ownerId: payer.payerId,
+          tenantId: payer.payerId,
+          requestOrigin: ctx.requestOrigin,
+          agentPageId: ctx.agentPageId,
+          tier: payer.tier,
+        })
+      ).ok,
+  });
+  return allowed ? { ok: true } : direct;
 };
 
 /** The shared call-time gate binding — kill-switch, canRunCode, quota preflight. */
