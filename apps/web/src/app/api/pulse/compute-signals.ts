@@ -293,7 +293,7 @@ export async function computeLeftOffSignal(
   }
 
   const [row] = await db
-    .select({ pageId: pages.id, title: pages.title })
+    .select({ pageId: pages.id, driveId: pages.driveId, title: pages.title })
     .from(userPageViews)
     .innerJoin(pages, eq(pages.id, userPageViews.pageId))
     .where(
@@ -323,7 +323,10 @@ export async function computeLeftOffSignal(
     window: { since: now, kind: 'today' },
     computedAt: now,
     text: { lead: `you left off in ${row.title}`, short: `you left off in ${row.title}` },
-    action: { prompt: `Pick up ${row.title}`, href: `/pages/${row.pageId}` },
+    // The page's real route. There is no `/pages/:id` in the app — that
+    // landed on the not-found page — and `/p/:id` would only redirect here
+    // after a server round trip; the join already has the drive.
+    action: { prompt: `Pick up ${row.title}`, href: `/dashboard/${row.driveId}/${row.pageId}` },
   };
 }
 

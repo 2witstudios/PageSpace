@@ -214,12 +214,20 @@ describe('computeLeftOffSignal', () => {
   // the `isTrashed` filter (the case below) still gets caught.
   it('returns the most recently viewed non-trashed, accessible page', async () => {
     seed(userPageViews, [
-      { userId: USER, viewedAt: new Date('2026-09-10T00:00:00Z'), id: 'p-new', title: 'Trip planning', isTrashed: false },
-      { userId: USER, viewedAt: new Date('2026-09-01T00:00:00Z'), id: 'p-old', title: 'Old page', isTrashed: false },
+      { userId: USER, viewedAt: new Date('2026-09-10T00:00:00Z'), id: 'p-new', driveId: 'd1', title: 'Trip planning', isTrashed: false },
+      { userId: USER, viewedAt: new Date('2026-09-01T00:00:00Z'), id: 'p-old', driveId: 'd1', title: 'Old page', isTrashed: false },
     ]);
     const result = await computeLeftOffSignal(USER, ['p-new', 'p-old'], NOW);
     expect(result.count).toBe(1);
     expect(result.subject?.title).toBe('Trip planning');
+  });
+
+  it('links to the page under its drive, the route that actually exists', async () => {
+    seed(userPageViews, [
+      { userId: USER, viewedAt: NOW, id: 'p-chan', driveId: 'd-team', title: 'Debate', isTrashed: false },
+    ]);
+    const result = await computeLeftOffSignal(USER, ['p-chan'], NOW);
+    expect(result.action.href).toBe('/dashboard/d-team/p-chan');
   });
 
   it('falls back past a trashed most-recent view (control row)', async () => {
