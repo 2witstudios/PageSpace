@@ -223,6 +223,10 @@ describe('ai-tools', () => {
         'send_session',
         'read_session',
         'kill_session',
+        // Relabels the WORKSPACE — chat-only and outside TOOL_MODULES like the
+        // rest of the family, so it is not a workspace tool and does not move
+        // WORKSPACE_TOOL_COUNT.
+        'rename_workspace',
         'list_panes',
         'resize_pane',
         'move_pane',
