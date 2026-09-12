@@ -84,7 +84,7 @@ Every operation hangs off a namespace on the client. Inputs and outputs are sche
 | \`drives\` | \`list\`, \`create\`, \`rename\`, \`updateContext\`, \`setHomePage\`, \`trash\`, \`restore\` |
 | \`pages\` | \`list\`, \`listTrash\`, \`create\`, \`details\`, \`rename\`, \`move\`, \`trash\`, \`restore\` — plus content editing: \`read\`, \`replaceLines\`, \`insertLines\`, \`deleteLines\`, \`editCells\` |
 | \`tasks\` | \`create\`, \`update\`, \`delete\`, \`reorder\`, \`getAssigned\`, \`createStatus\`, \`setTrigger\`, \`deleteTrigger\` |
-| \`sheets\` | \`describe\`, \`queryRows\`, \`getRows\`, \`appendRows\`, \`updateCells\`, \`deleteRows\` — a spreadsheet as queryable rows |
+| \`sheets\` | \`describe\`, \`queryRows\`, \`getRows\`, \`appendRows\`, \`updateCells\`, \`deleteRows\` — a spreadsheet as queryable rows; \`readFormatting\`, \`applyFormat\` — how it looks |
 | \`search\` | \`regex\`, \`glob\`, \`multiDrive\` |
 | \`agents\` | \`list\`, \`listMultiDrive\`, \`ask\`, \`updateConfig\`, \`listModels\` |
 | \`conversations\` | \`list\`, \`read\` — full transcripts of an agent's conversations |
@@ -132,6 +132,45 @@ console.log(\`showing \${rows.length} of \${total}\`);
 \`\`\`
 
 Filters match the values you **see**: a formula column compares as its result, not its \`=\` text. Every cell carries both — \`raw\` is what was authored, \`value\` what it evaluates to.
+
+### Spreadsheets as documents
+
+Rows are the data; \`applyFormat\` is the presentation. The useful move is almost never formatting cells — it is declaring what an area **is**, and letting the sheet derive the rest:
+
+\`\`\`typescript
+// Read first, so you build on the tables and rules already declared
+const current = await client.sheets.readFormatting({ pageId });
+
+await client.sheets.applyFormat({
+  pageId,
+  ops: [
+    {
+      type: 'upsertRegion',
+      region: {
+        id: 'spend',
+        range: 'A1:F',              // open-ended: covers rows you add later
+        headerRows: 1,
+        totalRows: [40],
+        columns: [{ column: 'C', role: 'currency', currency: 'USD' }],
+        theme: 'blue',
+      },
+    },
+    { type: 'setFrozen', rows: 1 },
+    {
+      type: 'addConditionalRule',
+      rule: {
+        kind: 'cell',
+        id: 'overspend',            // your id, so a retry cannot double it
+        ranges: ['C2:C40'],
+        condition: { operator: 'lessThan', value: '0' },
+        format: { color: '#b91c1c', bold: true },
+      },
+    },
+  ],
+});
+\`\`\`
+
+A region covers rows that do not exist yet and costs nothing however tall the sheet is, which is why it beats formatting the fifty rows you happened to read. Ops apply in the order given, in one transaction, all or nothing — one bad op refuses the whole call and names its index, so a batch never half-applies.
 
 Need an endpoint the SDK doesn't wrap? \`defineOperation\` lets you declare one with its own Zod schemas and call it through \`client.invoke\`, keeping the same typing, auth, and retry behaviour.
 

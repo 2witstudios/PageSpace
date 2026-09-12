@@ -2,6 +2,53 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **`sheets.readFormatting` and `sheets.applyFormat` — a sheet as a styled document, not only as
+  rows.** The in-process AI tools (`read_sheet` with `includeFormatting`, `format_sheet`,
+  `set_conditional_format`) could read and write regions, conditional rules, freezes and cell
+  formats; the SDK could do none of it, so a sheet built programmatically was a grid of bare
+  numbers. `readFormatting` returns the whole presentation model in one call — regions, parsed
+  conditional rules, frozen panes, column formats and widths, row heights, and per-cell formats for
+  the `ranges` asked for (omitted, none are read: they live on the rows). `applyFormat` takes
+  `SheetFormatOp` verbatim, all fifteen members, applied **in order, in one transaction, all or
+  nothing** — which makes it strictly more capable than the tools it brings parity with, since a
+  model can only add and remove a conditional rule while a caller here can patch one in place or
+  reorder it. Every refusal names the offending op's index in the list sent.
+- **A conditional rule's `id` is caller-supplied and required**, where `format_sheet` mints one.
+  The id is the caller's own idempotency key: a retried `addConditionalRule` after a timeout is
+  refused as a duplicate rather than silently adding the rule a second time under a fresh id.
+  A `cell` rule nests `condition: {operator, value, value2}` — the shape the sheet actually stores,
+  not the AI tool's flattened form (which exists only because a discriminated union overruns the
+  schema-size ceiling a model's tool definition can carry).
+- **Rule and region schemas tolerate unknown extension fields, and still refuse cross-kind ones.**
+  `readTabFormatting` returns PARSED rules and regions, and lib's parsers spread the stored value
+  (`{...value, id, kind, ...}`) on purpose, so "a rule written by a newer build survives a load/save
+  cycle". A strict schema would have rejected the whole `readFormatting` response the first time a
+  newer same-major server returned a rule carrying an extension field — and then refused to write
+  that rule back, making the read-modify-write round trip impossible against any server newer than
+  the client. The rule, region and region-column schemas are therefore loose. A field belonging to a
+  *different* rule kind is still refused, because that is not an extension: lib's own
+  `ruleRenderProblem` refuses those too, on the same list, since "a colorScale rule does not read
+  format, so it would be stored and never used". Scale anchors stay strict (`readAnchor` rebuilds
+  rather than spreads, so an extra never round-trips), and the format OPS stay strict, as lib's own
+  note says they should: "ops are transient and versioned with the code that sends them, so unlike
+  the stored shapes elsewhere in this module there is no forward-compatibility argument".
+- **`applyFormat` reports `changed: false` for a no-op.** A retry, or a bold that was already bold,
+  writes nothing and bumps no revision; a caller must not present that as an edit.
+
+`applyFormat` is deliberately **not** `destructive`: the flag makes the CLI demand `--yes` on every
+call, and gating "bold the header row" behind a prompt only trains the habit of passing `--yes`
+blind. Formatting is presentation, recoverable by writing it again — unlike `deleteRows`.
+
+The op union is hand-written here, because the published SDK must never runtime- or type-import
+`@pagespace/lib`; a test-only drift guard reads lib's `OP_FIELDS` and `FIELDS_BY_KIND` so an op
+added there cannot go missing here. `patch`/`format` payloads stay opaque for the reason a stored
+cell's `format` already is: `CellFormat` exists twice with a compile-time assertion holding those
+two together, and a third copy would be the one with nothing keeping it honest.
+
 ## [2.3.0] — 2026-09-06
 
 ### Added

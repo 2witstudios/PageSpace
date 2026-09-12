@@ -121,6 +121,34 @@ pagespace sheets delete-rows <pageId> --from-row 10 --count 5 --yes
 
 Filters match the values you **see** — a formula column compares as its result, not its \`=\` text. \`delete-rows\` is the one irreversible verb, so it confirms first; \`--yes\` skips the prompt, and with no TTY and no \`--yes\` it refuses rather than assuming consent.
 
+**Sheet formatting** — how it looks, not what it holds. Read before you write, so you build on the tables and rules already declared instead of over them.
+
+\`\`\`bash
+# regions, conditional rules, freezes, column formats — no rows read
+pagespace sheets formatting <pageId>
+
+# add --ranges to also read the per-cell formats in those rectangles
+pagespace sheets formatting <pageId> --ranges A1:F40,H2:H9 --json
+
+# declare the table, and the presentation is derived from it
+pagespace sheets format <pageId> --json-input '[
+  {"type":"upsertRegion","region":{"id":"spend","range":"A1:F","headerRows":1,
+    "totalRows":[40],"columns":[{"column":"C","role":"currency","currency":"USD"}],"theme":"blue"}},
+  {"type":"setFrozen","rows":1},
+  {"type":"setColumnWidth","column":"C","width":140}
+]'
+
+# highlight by value; the rule id is yours, and retrying will not double it
+pagespace sheets format <pageId> --json-input '[
+  {"type":"addConditionalRule","rule":{"kind":"cell","id":"overspend","ranges":["C2:C40"],
+    "condition":{"operator":"lessThan","value":"0"},"format":{"color":"#b91c1c","bold":true}}}
+]'
+\`\`\`
+
+Prefer a **region** to per-cell formatting for anything table-shaped: a region says what an area *is* — header rows, what each column means, where the totals are — and an open range like \`A1:F\` covers rows you add next week, at no cost however tall the sheet gets. The other ops (\`setCellFormat\`, \`clearCellFormat\`, \`setColumnFormat\`, \`setRowHeight\`, \`updateConditionalRule\`, \`moveConditionalRule\`, \`removeConditionalRule\`, \`clearConditionalRules\`, \`setConditionalRules\`, \`setRegions\`, \`removeRegion\`) are the escape hatch.
+
+Ops apply **in order, in one transaction, all or nothing** — one bad op refuses the whole call and nothing is written, naming the index of the op that was wrong.
+
 **Search**
 
 \`\`\`bash
