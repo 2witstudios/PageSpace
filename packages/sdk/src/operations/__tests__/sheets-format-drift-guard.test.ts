@@ -50,6 +50,11 @@ import {
   parseRegion,
 } from '@pagespace/lib/sheets/sheet';
 import type { ColumnRole, ConditionalOperator, ConditionalRule } from '@pagespace/lib/sheets/sheet';
+// Type-only, so nothing from the store (and no database) is imported at
+// runtime — these are the two result shapes the ROUTE spreads into its
+// responses, and the only way to check the SDK against what it will actually
+// receive rather than against a fixture written by the same hand.
+import type { ApplyFormatOpsResult, TabFormatting } from '@pagespace/lib/sheets/store';
 import { applySheetFormat, readSheetFormatting } from '../sheets.js';
 import type { SheetConditionalRuleInput, SheetRegionInput } from '../sheets.js';
 
@@ -72,6 +77,39 @@ type SdkCellRule = Extract<SheetConditionalRuleInput, { kind: 'cell' }>;
 type SdkOperator = SdkCellRule['condition']['operator'];
 type SdkRuleKind = SheetConditionalRuleInput['kind'];
 type SdkColumnRole = NonNullable<SheetRegionInput['columns']>[number]['role'];
+
+/**
+ * The RESPONSE contract, which nothing else checks.
+ *
+ * Both sides of it are otherwise tested against fixtures written by the same
+ * hand: the SDK's `outputSchema` against a literal in `sheets.test.ts`, and the
+ * route against nothing. So a field the schema REQUIRES and the route never
+ * sends would pass every test and then fail every real call with a
+ * `ResponseValidationError` — the worst possible place to find out.
+ *
+ * `/api/mcp/sheets` answers `read-formatting` with `{pageId, pageTitle,
+ * tabIndex, ...readTabFormatting(...)}` and `apply-format` with `{pageId,
+ * pageTitle, tabIndex, changed, ...applyFormatOps(...)}`, so the keys the route
+ * can possibly produce are exactly those three or four plus the keys of lib's
+ * two result types. These assertions fail if the SDK ever requires one that is
+ * not in that set.
+ *
+ * Key-level, not type-level, on purpose: `format` and `patch` payloads are
+ * deliberately opaque here (`z.record`) where lib types them as `CellFormat`,
+ * so a full structural comparison would fail on a difference that is intended.
+ * What actually breaks in production is a MISSING key, and that is what this
+ * catches.
+ */
+type RouteReadFormattingKeys = 'pageId' | 'pageTitle' | 'tabIndex' | keyof TabFormatting;
+type RouteApplyFormatKeys = 'pageId' | 'pageTitle' | 'tabIndex' | 'changed' | keyof ApplyFormatOpsResult;
+
+type SdkReadFormattingKeys = keyof z.infer<typeof readSheetFormatting.outputSchema>;
+type SdkApplyFormatKeys = keyof z.infer<typeof applySheetFormat.outputSchema>;
+
+const _readFormattingKeysAreSent: [SdkReadFormattingKeys] extends [RouteReadFormattingKeys] ? true : false = true;
+const _applyFormatKeysAreSent: [SdkApplyFormatKeys] extends [RouteApplyFormatKeys] ? true : false = true;
+void _readFormattingKeysAreSent;
+void _applyFormatKeysAreSent;
 
 const _operatorsMatch: MutuallyAssignable<SdkOperator, ConditionalOperator> = true;
 const _ruleKindsMatch: MutuallyAssignable<SdkRuleKind, ConditionalRule['kind']> = true;
