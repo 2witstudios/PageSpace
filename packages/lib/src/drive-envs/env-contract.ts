@@ -143,6 +143,14 @@ const driveEnvDtoBase = {
   driveId: z.string().min(1),
   /** Unique within the drive — an address humans use, not a label. */
   name: z.string().min(1),
+  /**
+   * Whether the GLOBAL ASSISTANT may reach this environment (`drive_envs.
+   * visibleToGlobalAssistant`). On the BASE, not on one substrate's arm: one
+   * question, one answer, however the environment is run. Default false —
+   * absence is never a grant — and it is visibility only, never authority:
+   * for a local env, who may drive the machine is still its owner alone.
+   */
+  visibleToGlobalAssistant: z.boolean(),
   createdAt: isoTimestamp,
 };
 
@@ -335,20 +343,23 @@ export const localEnvEnrollmentIssueSchema = z.object({
 });
 
 /**
- * PATCH body — exactly ONE of three fields, because they answer to three
+ * PATCH body — exactly ONE of four fields, because they answer to four
  * rules: `name` is the rename (drive owner or admin), `serverPolicy` is the
  * OWNER-ONLY write of what PageSpace may ask the machine to do ([D-6]; GA wave
- * 1), and `paused` is the OWNER-ONLY Stop / Resume of its grants (GA wave 3).
- * A body carrying more than one could not be answered with one status code
- * without a partial write, so it is refused at the boundary.
+ * 1), `paused` is the OWNER-ONLY Stop / Resume of its grants (GA wave 3), and
+ * `visibleToGlobalAssistant` is the OWNER-ONLY choice of whether the global
+ * assistant may reach this environment at all. A body carrying more than one
+ * could not be answered with one status code without a partial write, so it is
+ * refused at the boundary.
  */
 export const patchDriveEnvRequestSchema = z
   .object({
     name: driveEnvNameSchema.optional(),
     serverPolicy: driveEnvServerPolicySchema.optional(),
     paused: z.boolean().optional(),
+    visibleToGlobalAssistant: z.boolean().optional(),
   })
   .strict()
-  .refine((body) => [body.name, body.serverPolicy, body.paused].filter((field) => field !== undefined).length === 1, { message: 'Exactly one of name, serverPolicy or paused is required' });
+  .refine((body) => [body.name, body.serverPolicy, body.paused, body.visibleToGlobalAssistant].filter((field) => field !== undefined).length === 1, { message: 'Exactly one of name, serverPolicy, paused or visibleToGlobalAssistant is required' });
 
 export type PatchDriveEnvRequest = z.infer<typeof patchDriveEnvRequestSchema>;

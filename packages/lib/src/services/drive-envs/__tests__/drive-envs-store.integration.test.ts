@@ -921,6 +921,45 @@ describe('the local-env connection slice (t07) — recordHello / recordHeartbeat
     });
   });
 
+  describe('setGlobalAssistantVisibility (leaf A, D-6): ONE UPDATE on drive_envs whose owner predicate reaches into drive_env_local', () => {
+    it('given the OWNER, should flip the flag on the ENV row and answer true — and the default before that is false', async () => {
+      const envId = await createLocal(true);
+      const [before] = await db.select({ v: driveEnvs.visibleToGlobalAssistant }).from(driveEnvs).where(eq(driveEnvs.id, envId)).limit(1);
+      expect(before?.v).toBe(false);
+      const at = new Date(NOW.getTime() + 5_000);
+      expect(await store.setGlobalAssistantVisibility({ envId, ownerId: payerId, visible: true, now: at })).toBe(true);
+      const [after] = await db.select({ v: driveEnvs.visibleToGlobalAssistant, updatedAt: driveEnvs.updatedAt }).from(driveEnvs).where(eq(driveEnvs.id, envId)).limit(1);
+      expect(after?.v).toBe(true);
+      expect(after?.updatedAt.getTime()).toBe(at.getTime());
+      // Off again, by the same owner, through the same one statement.
+      expect(await store.setGlobalAssistantVisibility({ envId, ownerId: payerId, visible: false, now: at })).toBe(true);
+      const [off] = await db.select({ v: driveEnvs.visibleToGlobalAssistant }).from(driveEnvs).where(eq(driveEnvs.id, envId)).limit(1);
+      expect(off?.v).toBe(false);
+    });
+
+    it('given a user who is NOT the enrolling owner, should answer false and leave the env row BYTE-IDENTICAL — no drive role is consulted', async () => {
+      const envId = await createLocal(true);
+      const before = JSON.stringify((await db.select().from(driveEnvs).where(eq(driveEnvs.id, envId)).limit(1))[0]);
+      expect(await store.setGlobalAssistantVisibility({ envId, ownerId: otherPayerId, visible: true, now: new Date(NOW.getTime() + 5_000) })).toBe(false);
+      expect(JSON.stringify((await db.select().from(driveEnvs).where(eq(driveEnvs.id, envId)).limit(1))[0])).toBe(before);
+    });
+
+    it('given a REVOKED env, should answer false for the owner too and leave the env row byte-identical', async () => {
+      const envId = await createLocal(true);
+      expect(await store.revokeLocal({ envId, now: NOW })).toBe(true);
+      const before = JSON.stringify((await db.select().from(driveEnvs).where(eq(driveEnvs.id, envId)).limit(1))[0]);
+      expect(await store.setGlobalAssistantVisibility({ envId, ownerId: payerId, visible: true, now: new Date(NOW.getTime() + 5_000) })).toBe(false);
+      expect(JSON.stringify((await db.select().from(driveEnvs).where(eq(driveEnvs.id, envId)).limit(1))[0])).toBe(before);
+    });
+
+    it('given an env with NO local sibling (a Sprite env) or no env at all, should answer false — there is no owner to check against', async () => {
+      const [sprite] = await db.insert(driveEnvs).values({ driveId, name: `cloud-${createId()}` }).returning();
+      expect(await store.setGlobalAssistantVisibility({ envId: sprite!.id, ownerId: payerId, visible: true, now: NOW })).toBe(false);
+      expect((await db.select({ v: driveEnvs.visibleToGlobalAssistant }).from(driveEnvs).where(eq(driveEnvs.id, sprite!.id)).limit(1))[0]?.v).toBe(false);
+      expect(await store.setGlobalAssistantVisibility({ envId: `env_${createId()}`, ownerId: payerId, visible: true, now: NOW })).toBe(false);
+    });
+  });
+
   it('revokeLocal: should stamp revokedAt exactly once (CAS on revokedAt IS NULL) and keep the FIRST stamp on a repeat', async () => {
     const envId = await createLocal(true);
     expect(await store.revokeLocal({ envId, now: NOW })).toBe(true);

@@ -46,6 +46,7 @@ import {
   renameDriveEnv,
   setLocalEnvServerPolicy,
   setLocalEnvPaused,
+  setGlobalAssistantVisibility,
   deleteDriveEnv,
   rebuildDriveEnv,
   toDriveEnvDTO,
@@ -53,6 +54,7 @@ import {
   type RenameDriveEnvResult,
   type SetLocalEnvServerPolicyResult,
   type SetLocalEnvPausedResult,
+  type SetGlobalAssistantVisibilityResult,
   type DeleteDriveEnvResult,
   type RebuildDriveEnvResult,
 } from '@pagespace/lib/services/drive-envs/drive-envs';
@@ -396,6 +398,16 @@ export async function setEnvPaused(input: { envId: string; requesterId: string; 
   getEnvBridgeClient().pauseEnv(input.envId);
   const delivered = await pauseLocalEnvMachine({ envId: input.envId });
   return { ok: true, paused: true, machine: delivered.ok ? delivered.machine : { kind: 'no_live_socket' } };
+}
+
+/**
+ * Turn an environment's visibility to the GLOBAL ASSISTANT on or off — the
+ * account settings toggle and the drive settings toggle both land here. Null
+ * plumbing only: the owner-only decision is the store's compare-and-set.
+ */
+export async function setEnvGlobalAssistantVisibility(input: { envId: string; requesterId: string; visible: boolean }): Promise<SetGlobalAssistantVisibilityResult> {
+  const store = await getDriveEnvStore();
+  return setGlobalAssistantVisibility({ envId: input.envId, requesterId: input.requesterId, visible: input.visible, deps: { store, now: () => new Date() } });
 }
 
 /**

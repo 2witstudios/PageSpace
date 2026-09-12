@@ -29,6 +29,8 @@ export function makeEnvRecord(over: Partial<DriveEnvRecord> = {}): DriveEnvRecor
     driveId: DRIVE_ID,
     name: 'staging',
     createdBy: 'user-1',
+    // Default OFF — the absence of a value is never a grant (leaf A).
+    visibleToGlobalAssistant: false,
     spriteKey: null,
     sandboxId: null,
     spriteInstanceId: null,
@@ -233,6 +235,17 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       if (!sibling || sibling.ownerId !== ownerId || sibling.revokedAt !== null) return false;
       if (paused && sibling.pausedAt !== null) return true;
       local.set(envId, { ...sibling, pausedAt: paused ? at : null, updatedAt: at });
+      return true;
+    },
+
+    async setGlobalAssistantVisibility({ envId, ownerId, visible, now: at }) {
+      // The real store's CAS predicate, verbatim: the env exists, the SIBLING's
+      // owner is the caller, and it is not revoked. The column lives on the env
+      // row; the owner lives on the sibling.
+      const row = rows.get(envId);
+      const sibling = local.get(envId);
+      if (!row || !sibling || sibling.ownerId !== ownerId || sibling.revokedAt !== null) return false;
+      rows.set(envId, { ...row, visibleToGlobalAssistant: visible, updatedAt: at });
       return true;
     },
 

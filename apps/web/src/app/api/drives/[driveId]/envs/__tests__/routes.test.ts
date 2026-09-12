@@ -28,6 +28,7 @@ vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
   readEnvDTO: vi.fn(async (row: { id: string; driveId: string; name: string; substrate?: string }) => ({ id: row.id, driveId: row.driveId, name: row.name, substrate: row.substrate ?? 'sprite', status: row.substrate === 'local' ? 'disconnected' : 'none', createdAt: '2026-08-17T12:00:00.000Z' })),
   setEnvServerPolicy: vi.fn(),
   setEnvPaused: vi.fn(),
+  setEnvGlobalAssistantVisibility: vi.fn(),
   deleteEnv: vi.fn(),
   revokeEnv: vi.fn(),
   rebuildEnv: vi.fn(),
@@ -60,6 +61,7 @@ import {
   revokeEnv,
   setEnvServerPolicy,
   setEnvPaused,
+  setEnvGlobalAssistantVisibility,
   toDriveEnvDTO,
 } from '@/lib/drive-envs/drive-envs-runtime';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -737,5 +739,70 @@ describe('POST /envs/[envId]/enrollment-code — a fresh one-time code for a mac
     vi.mocked(reissueEnvEnrollmentCode).mockResolvedValue({ ok: false, reason: 'not_found' });
     const response = await reissueCodeRoute(codeReq(), envParams);
     expect(response.status).toBe(404);
+  });
+});
+
+describe('PATCH /envs/[envId] — visibleToGlobalAssistant is OWNER-ONLY too (leaf A; D-6: admins keep Delete, never the toggle)', () => {
+  const localRow = { ...envRow, substrate: 'local' as const };
+
+  it('given the env OWNER (a plain member), should set visibility through the service, audit it, and answer the written value', async () => {
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(false);
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+    vi.mocked(setEnvGlobalAssistantVisibility).mockResolvedValue({ ok: true, visibleToGlobalAssistant: true } as never);
+    const response = await patchEnv(jsonReq({ visibleToGlobalAssistant: true }), envParams);
+    expect(response.status).toBe(200);
+    expect(setEnvGlobalAssistantVisibility).toHaveBeenCalledWith({ envId: ENV_ID, requesterId: USER_ID, visible: true });
+    expect(await response.json()).toMatchObject({ env: { id: ENV_ID, substrate: 'local' }, visibleToGlobalAssistant: true });
+    expect(setEnvPaused).not.toHaveBeenCalled();
+    expect(setEnvServerPolicy).not.toHaveBeenCalled();
+    expect(renameEnv).not.toHaveBeenCalled();
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', userId: USER_ID, resourceType: 'drive_env', resourceId: ENV_ID, details: expect.objectContaining({ operation: 'set_global_assistant_visibility', visibleToGlobalAssistant: true }) }));
+  });
+
+  it('turning it OFF is the same verb and is audited with the value written', async () => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+    vi.mocked(setEnvGlobalAssistantVisibility).mockResolvedValue({ ok: true, visibleToGlobalAssistant: false } as never);
+    const response = await patchEnv(jsonReq({ visibleToGlobalAssistant: false }), envParams);
+    expect(response.status).toBe(200);
+    expect(setEnvGlobalAssistantVisibility).toHaveBeenCalledWith({ envId: ENV_ID, requesterId: USER_ID, visible: false });
+    expect(await response.json()).toMatchObject({ visibleToGlobalAssistant: false });
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ details: expect.objectContaining({ operation: 'set_global_assistant_visibility', visibleToGlobalAssistant: false }) }));
+  });
+
+  it('given a drive ADMIN who did not enrol the machine, should refuse 403 naming the owner, audit it, and write nothing', async () => {
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+    vi.mocked(setEnvGlobalAssistantVisibility).mockResolvedValue({ ok: false, reason: 'not_owner', ownerId: 'user-owner' } as never);
+    const response = await patchEnv(jsonReq({ visibleToGlobalAssistant: true }), envParams);
+    expect(response.status).toBe(403);
+    const body = (await response.json()) as { error: string; reason: string; ownerId: string };
+    expect(body).toMatchObject({ reason: 'not_owner', ownerId: 'user-owner' });
+    expect(body.error).toMatch(/owner/i);
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ operation: 'set_global_assistant_visibility', ownerId: 'user-owner' }) }));
+  });
+
+  it('given a revoked env, should answer 409; given a SPRITE env, 409 not_local without calling the service — a Sprite env has no enrolling owner to check against', async () => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+    vi.mocked(setEnvGlobalAssistantVisibility).mockResolvedValue({ ok: false, reason: 'revoked' } as never);
+    expect((await patchEnv(jsonReq({ visibleToGlobalAssistant: true }), envParams)).status).toBe(409);
+    vi.mocked(setEnvGlobalAssistantVisibility).mockClear();
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(envRow as never);
+    const response = await patchEnv(jsonReq({ visibleToGlobalAssistant: true }), envParams);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ reason: 'not_local' });
+    expect(setEnvGlobalAssistantVisibility).not.toHaveBeenCalled();
+  });
+
+  it('given an unknown env, 404; given the field alongside another, or a non-boolean, 400 — and nothing is called', async () => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(null as never);
+    expect((await patchEnv(jsonReq({ visibleToGlobalAssistant: true }), envParams)).status).toBe(404);
+    vi.mocked(setEnvGlobalAssistantVisibility).mockClear();
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+    for (const body of [{ visibleToGlobalAssistant: true, name: 'x' }, { visibleToGlobalAssistant: true, paused: true }, { visibleToGlobalAssistant: 'yes' }]) {
+      expect((await patchEnv(jsonReq(body), envParams)).status).toBe(400);
+    }
+    expect(setEnvGlobalAssistantVisibility).not.toHaveBeenCalled();
+    expect(setEnvPaused).not.toHaveBeenCalled();
+    expect(renameEnv).not.toHaveBeenCalled();
   });
 });

@@ -183,6 +183,11 @@
       "import": "./dist/env-bridge/index.js",
       "require": "./dist/env-bridge/index.js"
     },
+    "./env-bridge/decide-env-reach": {
+      "types": "./dist/env-bridge/decide-env-reach.d.ts",
+      "import": "./dist/env-bridge/decide-env-reach.js",
+      "require": "./dist/env-bridge/decide-env-reach.js"
+    },
     "./env-bridge/grant": {
       "types": "./dist/env-bridge/grant.d.ts",
       "import": "./dist/env-bridge/grant.js",

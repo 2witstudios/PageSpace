@@ -1,0 +1,1 @@
+ALTER TABLE "drive_envs" ADD COLUMN "visibleToGlobalAssistant" boolean DEFAULT false NOT NULL;

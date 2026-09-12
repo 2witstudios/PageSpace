@@ -60,6 +60,12 @@ export interface DriveEnvRecord {
   name: string;
   /** AUDIT ONLY: who asked for this env. Nothing resolves payment, permission or lifecycle through it. */
   createdBy: string | null;
+  /**
+   * May the global assistant reach this env? Default false; absence is never a
+   * grant. See the `drive_envs` column docblock for why the flag lives on the
+   * substrate-independent table.
+   */
+  visibleToGlobalAssistant: boolean;
 
   spriteKey: string | null;
   sandboxId: string | null;
@@ -292,6 +298,17 @@ export interface DriveEnvStore {
    * the row is in the requested state. False = not written.
    */
   setPaused(input: { envId: string; ownerId: string; paused: boolean; now: Date }): Promise<boolean>;
+  /**
+   * Set `drive_envs.visibleToGlobalAssistant` IFF the caller OWNS the local
+   * machine behind this env and it is not revoked — ONE guarded `UPDATE`,
+   * exactly as `setPaused` and `setServerPolicy` are, so ownership is the
+   * write's own predicate rather than a pre-read a caller could skip.
+   *
+   * The predicate reaches ACROSS the two tables on purpose: the column lives
+   * on `drive_envs` (one question, both substrates) while the owner lives on
+   * `drive_env_local` ([D-6] — never a drive role). False = not written.
+   */
+  setGlobalAssistantVisibility(input: { envId: string; ownerId: string; visible: boolean; now: Date }): Promise<boolean>;
   /**
    * Revoke: stamp `revokedAt` IFF `revokedAt IS NULL` (Codex C4). False means
    * it was already revoked — the caller still completes the other two legs
@@ -830,6 +847,23 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
         .set({ revokedAt: at, updatedAt: at })
         .where(and(eq(driveEnvLocal.envId, envId), isNull(driveEnvLocal.revokedAt)))
         .returning({ envId: driveEnvLocal.envId });
+      return updated.length === 1;
+    },
+
+    async setGlobalAssistantVisibility({ envId, ownerId, visible, now: at }) {
+      // The owner predicate is a correlated EXISTS on the sibling, so the
+      // write is still ONE statement: a non-owner (a drive admin included)
+      // matches no row and changes nothing.
+      const updated = await db
+        .update(driveEnvs)
+        .set({ visibleToGlobalAssistant: visible, updatedAt: at })
+        .where(
+          and(
+            eq(driveEnvs.id, envId),
+            sql`EXISTS (SELECT 1 FROM ${driveEnvLocal} WHERE ${driveEnvLocal.envId} = ${driveEnvs.id} AND ${driveEnvLocal.ownerId} = ${ownerId} AND ${driveEnvLocal.revokedAt} IS NULL)`,
+          ),
+        )
+        .returning({ id: driveEnvs.id });
       return updated.length === 1;
     },
 
