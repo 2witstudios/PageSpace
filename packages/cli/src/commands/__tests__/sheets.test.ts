@@ -578,6 +578,24 @@ describe('sheets format', () => {
     expect(applyFormat).not.toHaveBeenCalled();
   });
 
+  it('reports a failed stdin read as a runtime error, and sends nothing', async () => {
+    // A read that throws is not a malformed payload: it exits 1, not 2, and
+    // must say why rather than surfacing as "Invalid JSON". Nothing else in
+    // this file covers that branch for any of the payload verbs, so the rule
+    // it encodes — a transport failure never reaches the network — was
+    // untested until now.
+    const applyFormat = vi.fn(async () => APPLY_RESULT);
+    const stderr = createRecordingSink();
+    const handler = createSheetsFormatHandler({
+      readStdin: async () => { throw new Error('stdin closed'); },
+    });
+    const ctx = createFakeContext({ stderr, sdk: fakeSdk({ sheets: { applyFormat } }) });
+
+    expect(await handler(ctx, commandIntent(['pg_1']))).toBe(EXIT_RUNTIME_ERROR);
+    expect(stderr.lines.join('')).toContain('Failed to read input: stdin closed');
+    expect(applyFormat).not.toHaveBeenCalled();
+  });
+
   it('does not gate on --yes, unlike delete-rows', async () => {
     // Formatting is presentation, recoverable by writing it again. Prompting
     // for "bold the header row" would only train the habit of passing --yes
