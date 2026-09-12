@@ -143,6 +143,10 @@ describe('list_sessions', () => {
     expect(result).toEqual({
       success: true,
       workspaceId: WORKSPACE_ID,
+      // The caller's own workspace reports its label too — every other section
+      // already carried one, so an agent could read every name except the one
+      // it was standing in.
+      name: 'Workspace',
       ...listing,
       otherWorkspaces: [],
       sharedWorkspaces: [],

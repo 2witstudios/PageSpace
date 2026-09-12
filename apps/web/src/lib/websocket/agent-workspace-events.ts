@@ -113,8 +113,13 @@ export function broadcastWorkspaceNodesUpdated(payload: WorkspaceNodesUpdatedPay
 }
 
 /**
- * The DIRECTORY plane's session event: "this session's row changed — re-read
- * the listing."
+ * The DIRECTORY plane's session-row-changed signal — it means exactly "re-read
+ * the listing", and nothing more.
+ *
+ * (Prose here deliberately avoids writing an event name as a quoted value
+ * after a colon: the broadcast-registry guard in
+ * `conversation-events-audience.test.ts` scans raw source text, comments
+ * included, so such a phrase registers as a phantom emitter.)
  *
  * `session-directory-listener.ts` has listened for `session:created |
  * session:updated | session:ended` since the directory plane landed, treating

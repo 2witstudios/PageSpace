@@ -1155,8 +1155,12 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       );
     },
 
-    createWorkerSession: async ({ conversationId, callerConversationId, ownerId, agentPageId, name, workspace, allowedDriveIds }) => {
-      const placement = await resolveWorkerPlacement({ workspace, callerConversationId, ownerId, agentPageId, allowedDriveIds });
+    createWorkerSession: async ({ conversationId, callerConversationId, ownerId, agentPageId, name, workspace, allowedDriveIds, workspaceName }) => {
+      // `workspaceName` must be forwarded, not just accepted: this destructure
+      // is an explicit field list, so a new input silently vanishes here
+      // otherwise — which is exactly what happened on the first cut, leaving
+      // `spawn_session`'s workspaceName inert while every type still checked.
+      const placement = await resolveWorkerPlacement({ workspace, callerConversationId, ownerId, agentPageId, allowedDriveIds, workspaceName });
       if (!placement.ok) return placement;
       const { workspaceId, unwind } = placement;
 
