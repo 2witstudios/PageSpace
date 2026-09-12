@@ -7,6 +7,25 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Local Environments: your assistant on the dashboard can work on a machine you switch on for
+  it — and it is off for every machine until you do (opt-in).** The assistant you talk to from
+  the dashboard works across every drive you belong to, and until now it could only ever touch
+  one cloud sandbox of its own. Now it can also work on a computer you enrolled, once you switch
+  that computer on for it. **You have to turn it on, per machine:** open **Settings → Local
+  environments** and use *Let your global assistant use this machine*. Every machine starts off,
+  and an environment with the switch off is invisible to that assistant — it cannot list it,
+  cannot name it, and cannot run anything on it. Switch it off again mid-conversation and the
+  very next thing it tries is refused; it does not ride an earlier reach.
+  When it does run something, the result tells you which machine, by the name you gave it, so a
+  wrong one shows up immediately instead of only in a log.
+  Two things this does **not** do, deliberately. It does not widen who may drive the machine —
+  that is still only you, and a command or a write that could become one still waits for your
+  passkey-verified click on that computer. And it does not reach your team's cloud
+  environments: only machines you enrolled and switched on, plus the conversation's own sandbox.
+  The reason it ships off is worth saying plainly: this is the agent that reads the most of other
+  people's writing, so what it can reach should be a decision you made, not a consequence of
+  owning the machine.
+
 - **Local Environments: a file write that could become a command now asks you first (opt-in).**
   Writing files inside the folders you declared runs without a prompt, because that is the point
   of declaring them. But a file's contents can be a command something else runs later: a
