@@ -603,7 +603,16 @@ const regionSchema = z.looseObject({
     /** Overrides the role's default precision. */
     decimals: z.number().int().min(0).max(MAX_DECIMALS).optional(),
   })).max(MAX_REGION_COLUMNS).optional(),
-  /** A hue name from the sheet's shared palette. */
+  /**
+   * A hue name from the sheet's shared palette: `slate`, `blue`, `cyan`,
+   * `teal`, `green`, `amber`, `orange`, `red`, `pink`, `purple`, `violet`,
+   * `indigo`.
+   *
+   * Named here rather than enumerated in the schema, for the same reason
+   * `columnSchema` stays wide: an enum would refuse a hue a newer build adds,
+   * while the server already refuses an unknown one by name ("... is not a hue
+   * this build has, and would render as ..."), which is the more useful error.
+   */
   theme: z.string().optional(),
 });
 
