@@ -1,5 +1,8 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { SERVER_POLICY_TOGGLES } from '@/components/settings/EnvironmentEditor';
 
 const {
   mockAuthenticateRequest,
@@ -956,6 +959,7 @@ describe('POST /api/agent-workspaces — spawn ceiling (review M6/F4)', () => {
     ['not_connected', 409],
     ['revoked', 409],
     ['substrate_unsupported', 409],
+    ['no_server_ops', 409],
   ] as const)('given a LOCAL env refuses the bind with %s (C1), should answer %i naming the refusal, audit it, and start no conversation', async (refusal, status) => {
     mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
     mockCountActiveSessionsForOwner.mockResolvedValue(0);
@@ -964,6 +968,29 @@ describe('POST /api/agent-workspaces — spawn ceiling (review M6/F4)', () => {
     expect(response.status).toBe(status);
     expect(await response.json()).toMatchObject({ reason: 'env_bind_refused', refusal });
     expect(mockCreateConversationInSession).not.toHaveBeenCalled();
+  });
+
+  it('given no_server_ops, should answer 409 with a message that states the fact and points at Drive settings → Environments — a page that EXISTS in this tree — naming only the toggles that page renders (GA wave 3 restores the pointer Codex P1 on #2582 removed)', async () => {
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
+    mockSpawnSession.mockResolvedValue({ ok: false, reason: 'env_bind_refused', refusal: 'no_server_ops' });
+    const response = await spawn({ driveId: 'drive-1', envId: 'env-local' });
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { error: string; refusal: string };
+    expect(body.refusal).toBe('no_server_ops');
+    expect(body.error).toMatch(/owner/i);
+    expect(body.error).toMatch(/not allowed it to run anything/);
+    // The pointer names a route, and that route has a page file in this tree.
+    const routeMatch = body.error.match(/\(\/dashboard\/\{driveId\}\/settings\/([a-z-]+)\)/);
+    expect(routeMatch).not.toBeNull();
+    const pageFile = path.join(__dirname, '..', '..', '..', 'dashboard', '[driveId]', 'settings', routeMatch![1]!, 'page.tsx');
+    expect(existsSync(pageFile), `the message names a page that does not exist: ${pageFile}`).toBe(true);
+    expect(body.error).toMatch(/Drive settings → Environments/);
+    // Only the toggles that page renders may be named.
+    for (const label of SERVER_POLICY_TOGGLES.map((toggle) => toggle.label)) expect(body.error).toContain(label);
+    const named = body.error.match(/turn on (.+?) for the machine/)![1]!.split(/,| or /).map((part) => part.trim()).filter(Boolean);
+    expect(new Set(named)).toEqual(new Set(SERVER_POLICY_TOGGLES.map((toggle) => toggle.label)));
+    expect(body.error).not.toContain('serverPolicy');
   });
 
   it('429s on the ATOMIC backstop when a concurrent spawn wins the race the pre-check missed (review #2261/2)', async () => {

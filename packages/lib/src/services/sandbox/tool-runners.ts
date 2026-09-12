@@ -46,6 +46,7 @@ import {
 import { getValidatedEnv } from '../../config/env-validation';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import { LocalEnvUnsupportedError } from './sandbox-host';
+import { LocalEnvGrantDeniedError, LocalEnvServerDeniedError } from './sandbox-client/local-env-sandbox-host';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
 
@@ -426,15 +427,33 @@ export type SandboxToolDenialReason =
   | 'local_not_connected'
   /** The machine owner's bind policy denies this actor. See `local_not_connected` for why the two are separate reasons. */
   | 'local_bind_denied'
+  /**
+   * PageSpace refused to SIGN the grant (GA wave 1): the op is not in the
+   * env's `serverPolicy`, or the env is revoked, paused or the feature is off.
+   * A third word because a third party owns the fix — neither `pagespace env
+   * connect` on the machine nor the machine's local policy file changes it;
+   * only the machine's owner, on the environment's settings page.
+   */
+  | 'local_server_denied'
+  /**
+   * The MACHINE froze this request under a challenge and is waiting for its
+   * owner's click in the chat (GA wave 2, Tier B). Not a refusal to retry
+   * around: the agent must call `request_env_approval` with the challenge
+   * id and stop. `challengeId` rides the failure so the model has it.
+   */
+  | 'local_approval_required'
   | 'error';
+
+/** A failure that carries the daemon's challenge id (only `local_approval_required` does). */
+export type SandboxToolFailure = { success: false; error: string; reason: SandboxToolDenialReason; challengeId?: string };
 
 export type BashToolResult =
   | { success: true; stdout: string; stderr: string; exitCode: number; truncated: boolean }
-  | { success: false; error: string; reason: SandboxToolDenialReason };
+  | SandboxToolFailure;
 
 export type WriteFileToolResult =
   | { success: true; path: string; bytesWritten: number }
-  | { success: false; error: string; reason: SandboxToolDenialReason };
+  | SandboxToolFailure;
 
 export type ReadFileToolResult =
   | {
@@ -458,7 +477,7 @@ export type ReadFileToolResult =
       /** Present iff `truncated`: says what is missing and how to get it. */
       notice?: string;
     }
-  | { success: false; error: string; reason: SandboxToolDenialReason };
+  | SandboxToolFailure;
 
 /**
  * `readSandboxFileForCopy`'s result. Deliberately NOT ReadFileToolResult: there
@@ -520,8 +539,25 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   local_bind_denied:
     "The machine owner's policy does not allow you to run code on this local environment. "
     + 'Retrying will not help — the environment owner has to change its bind policy.',
+  local_server_denied:
+    'PageSpace refused to sign this request: the operation is not enabled in this local environment\'s server policy '
+    + '(or the environment is revoked or paused). Retrying will not help — the machine\'s owner enables it on the environment\'s settings page.',
+  local_approval_required:
+    'This request needs the machine owner\'s approval in the chat before it runs. The machine has frozen the exact request under a challenge. '
+    + 'Call request_env_approval with this challengeId and STOP; when the owner answers, the outcome (and the command\'s output, if it ran) is returned as that tool\'s result. '
+    + 'Do not retry the command and do not rephrase it — the owner approves exactly what was frozen.',
   error: 'Code execution could not be completed.',
 };
+
+/** The reason prefix the daemon answers with while a request waits for the owner's click (`ask_pending:<challengeId>`). */
+export const ASK_PENDING_PREFIX = 'ask_pending:';
+
+/** The challenge id inside a daemon's `ask_pending:<id>` refusal, or null for any other refusal. */
+export function pendingChallengeIdOf(reason: string): string | null {
+  if (!reason.startsWith(ASK_PENDING_PREFIX)) return null;
+  const id = reason.slice(ASK_PENDING_PREFIX.length);
+  return id.length > 0 ? id : null;
+}
 
 /**
  * How a LOCAL env's server-side refusal reaches the AGENT.
@@ -546,13 +582,33 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
 export function localRefusalToToolDenial(refusal: string | undefined): SandboxToolDenialReason | null {
   if (refusal === 'not_connected') return 'local_not_connected';
   if (refusal === 'bind_policy') return 'local_bind_denied';
+  if (refusal === 'server_denied' || refusal === 'no_server_ops') return 'local_server_denied';
   return null;
 }
 
 function fail(
   reason: SandboxToolDenialReason,
-): { success: false; error: string; reason: SandboxToolDenialReason } {
+): SandboxToolFailure {
   return { success: false, error: DENIAL_MESSAGES[reason], reason };
+}
+
+/**
+ * How a LOCAL env's refusal that reached the runner as a thrown error becomes
+ * the agent's answer. Three words, three owners: the SERVER refused to sign
+ * (`local_server_denied`, fixed on the settings page); the MACHINE is waiting
+ * for its owner's click (`local_approval_required`, fixed by the owner in the
+ * chat — the challenge id rides along so the agent can ask); anything else is
+ * the generic execution failure it always was.
+ */
+function localFailureFor(error: unknown): SandboxToolFailure {
+  if (error instanceof LocalEnvServerDeniedError) return fail('local_server_denied');
+  if (error instanceof LocalEnvGrantDeniedError) {
+    const challengeId = pendingChallengeIdOf(error.reason);
+    if (challengeId !== null) {
+      return { success: false, reason: 'local_approval_required', error: `${DENIAL_MESSAGES.local_approval_required} challengeId: ${challengeId}`, challengeId };
+    }
+  }
+  return fail('execution_failed');
 }
 
 function acquireRequest(ctx: SandboxActorContext): AcquireSandboxRequest {
@@ -1033,7 +1089,10 @@ export async function runBashInSandbox({
         durationMs,
         anomaly: 'timeout',
       });
-      return fail('execution_failed');
+      // The server refused to SIGN (GA wave 1): typed all the way to the
+      // agent, because "PageSpace's policy for this machine excludes this"
+      // and "the command died" have different owners and different fixes.
+      return localFailureFor(error);
     }
 
     const durationMs = deps.now().getTime() - startedAt.getTime();
@@ -1120,7 +1179,7 @@ export async function writeSandboxFile({
     const startedAt = deps.now();
     try {
       await session.sandbox.writeFiles([{ path: resolved, content }]);
-    } catch {
+    } catch (error) {
       const durationMs = deps.now().getTime() - startedAt.getTime();
       await safeAudit(deps, ctx, {
         code: `writeFile ${path}`,
@@ -1128,7 +1187,7 @@ export async function writeSandboxFile({
         durationMs,
         anomaly: 'nonzero_exit',
       });
-      return fail('execution_failed');
+      return localFailureFor(error);
     }
     const durationMs = deps.now().getTime() - startedAt.getTime();
     await safeAudit(deps, ctx, {
@@ -1288,7 +1347,7 @@ export async function readSandboxFile({
       // stat nor a ranged/streamed read); enforcing it is tracked as an
       // enablement-gate hardening item before the feature is flagged on.
       buffer = await session.sandbox.readFileToBuffer({ path: resolved });
-    } catch {
+    } catch (error) {
       const durationMs = deps.now().getTime() - startedAt.getTime();
       await safeAudit(deps, ctx, {
         code: `readFile ${path}`,
@@ -1296,7 +1355,7 @@ export async function readSandboxFile({
         durationMs,
         anomaly: 'nonzero_exit',
       });
-      return fail('execution_failed');
+      return localFailureFor(error);
     }
     const durationMs = deps.now().getTime() - startedAt.getTime();
     if (buffer === null) {
@@ -1413,7 +1472,7 @@ export async function readSandboxFileForCopy({
       let buffer: Buffer | null;
       try {
         buffer = await session.sandbox.readFileToBuffer({ path: resolved });
-      } catch {
+      } catch (error) {
         const durationMs = deps.now().getTime() - startedAt.getTime();
         await safeAudit(deps, ctx, {
           code: `copyRead ${path}`,
@@ -1421,7 +1480,7 @@ export async function readSandboxFileForCopy({
           durationMs,
           anomaly: 'nonzero_exit',
         });
-        return fail('execution_failed');
+        return localFailureFor(error);
       }
       const durationMs = deps.now().getTime() - startedAt.getTime();
       if (buffer === null) {
@@ -1512,10 +1571,10 @@ export async function editSandboxFile({
     let buffer: Buffer | null;
     try {
       buffer = await session.sandbox.readFileToBuffer({ path: resolved });
-    } catch {
+    } catch (error) {
       const durationMs = deps.now().getTime() - startedAt.getTime();
       await safeAudit(deps, ctx, { code: `editFile ${path}`, exitCode: null, durationMs, anomaly: 'nonzero_exit' });
-      return fail('execution_failed');
+      return localFailureFor(error);
     }
     if (buffer === null) {
       const durationMs = deps.now().getTime() - startedAt.getTime();
@@ -1535,10 +1594,10 @@ export async function editSandboxFile({
 
     try {
       await session.sandbox.writeFiles([{ path: resolved, content: edit.content }]);
-    } catch {
+    } catch (error) {
       const durationMs = deps.now().getTime() - startedAt.getTime();
       await safeAudit(deps, ctx, { code: `editFile ${path}`, exitCode: null, durationMs, anomaly: 'nonzero_exit' });
-      return fail('execution_failed');
+      return localFailureFor(error);
     }
     const durationMs = deps.now().getTime() - startedAt.getTime();
     await safeAudit(deps, ctx, {

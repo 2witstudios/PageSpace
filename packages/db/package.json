@@ -311,6 +311,14 @@
       "types": "./dist/schema/drive-env-local.d.ts",
       "default": "./dist/schema/drive-env-local.js"
     },
+    "./schema/drive-env-grant-audit": {
+      "types": "./dist/schema/drive-env-grant-audit.d.ts",
+      "default": "./dist/schema/drive-env-grant-audit.js"
+    },
+    "./schema/drive-env-approvals": {
+      "types": "./dist/schema/drive-env-approvals.d.ts",
+      "default": "./dist/schema/drive-env-approvals.js"
+    },
     "./schema/machine-sprite-reclaims": {
       "types": "./dist/schema/machine-sprite-reclaims.d.ts",
       "default": "./dist/schema/machine-sprite-reclaims.js"

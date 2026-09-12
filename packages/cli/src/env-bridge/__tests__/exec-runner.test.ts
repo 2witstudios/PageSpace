@@ -129,7 +129,7 @@ describe('exec-runner — the ONLY child_process call site; runs a NormalizedReq
     const ra = runner.run(REQUEST);
     const rb = runner.run(REQUEST);
     expect(runner.liveCount()).toBe(2);
-    runner.killAll();
+    expect(runner.killAll()).toBe(2);
     expect(d.killGroup).toHaveBeenCalledWith(1, 'SIGKILL');
     expect(d.killGroup).toHaveBeenCalledWith(2, 'SIGKILL');
     for (const child of [a, b]) {

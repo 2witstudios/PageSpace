@@ -6,7 +6,9 @@
  * (`enrollment.ts`, `challenge.ts`) have their own adversarial matrices, so
  * what this suite pins is the ORDERING and the STATE each step leaves behind.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createHash, generateKeyPairSync, randomBytes, sign as nodeSign, verify as nodeVerify, createPublicKey } from 'node:crypto';
 import {
   createDriveEnv,
@@ -46,6 +48,22 @@ const identity: LocalEnvIdentityDeps = {
 
 const resolvePayer = async () => ({ payerId: PAYER_ID, tier: 'pro' as const });
 
+/**
+ * The owner's passkeys, as the enrolment reads them (hardening B, leaf B1).
+ * A mutable list so a test can enrol an owner with none, with two, or make
+ * the read fail.
+ */
+const ownerPasskeys: { credentialId: string; publicKeyCose: string }[] = [];
+let ownerPasskeysFail = false;
+const ownerCredentialSource = {
+  rpId: 'pagespace.test',
+  origin: 'https://pagespace.test',
+  list: async (_ownerId: string) => {
+    if (ownerPasskeysFail) throw new Error('passkey store unavailable');
+    return [...ownerPasskeys];
+  },
+};
+
 function harness(now: Date = NOW) {
   const fake = makeDriveEnvStore([], () => now);
   const minted: Array<{ type: string; scopes: string[]; ttlMs: number; claims: Record<string, string> }> = [];
@@ -57,6 +75,7 @@ function harness(now: Date = NOW) {
     resolvePayer,
     now: () => now,
     identity,
+    ownerCredentials: ownerCredentialSource,
     mintToken: async (policy: { type: string; scopes: string[]; ttlMs: number; claims: Record<string, string> }) => {
       minted.push(policy);
       order.push('mint');
@@ -71,7 +90,7 @@ function harness(now: Date = NOW) {
 }
 
 async function createLocal(h: ReturnType<typeof harness>) {
-  const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'jono-macstudio', ownerId: 'user-1' }, deps: h.deps });
+  const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'jono-macstudio', ownerId: 'user-1', serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } }, deps: h.deps });
   if (!result.ok || !result.enrollment) throw new Error(`create failed: ${JSON.stringify(result)}`);
   return { env: result.env, enrollment: result.enrollment };
 }
@@ -111,7 +130,7 @@ describe('createDriveEnv with local facts — env + sibling + one-time code in O
   it('should meter a local env against the same per-payer ceiling as a Sprite env (an env is an env)', async () => {
     const h = harness();
     h.fake.ownedEnvs.set(PAYER_ID, 1_000);
-    const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'm', ownerId: 'user-1' }, deps: h.deps });
+    const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'm', ownerId: 'user-1', serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } }, deps: h.deps });
     expect(result.ok).toBe(false);
     expect(!result.ok && result.reason).toBe('quota_exceeded');
     expect(h.fake.local.size).toBe(0);
@@ -119,6 +138,20 @@ describe('createDriveEnv with local facts — env + sibling + one-time code in O
 });
 
 describe('enrollLocalDriveEnv — the machine presents the code and its public key', () => {
+  it('given a valid code and key, should answer the machine\'s OWNER id too — the enroller writes it into the scaffolded policy so the machine refuses everyone else even if the server is wrong (D-6, defence in depth)', async () => {
+    const h = harness();
+    const created = await createLocal(h);
+    const result = await enrollLocalDriveEnv({ enrollmentId: created.enrollment.enrollmentId, code: created.enrollment.code, machinePublicKey, deps: h.deps });
+    expect(result).toMatchObject({ ok: true, ownerId: 'user-1' });
+  });
+
+  it('GA wave 2 · leaf 3: should answer the env\'s serverPolicy too, so the enroller can scaffold the file ops it allows (and never exec) into the machine policy', async () => {
+    const h = harness();
+    const created = await createLocal(h);
+    const result = await enrollLocalDriveEnv({ enrollmentId: created.enrollment.enrollmentId, code: created.enrollment.code, machinePublicKey, deps: h.deps });
+    expect(result).toMatchObject({ ok: true, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } });
+  });
+
   it('given the right code before expiry and a valid Ed25519 SPKI key, should pin key + fingerprint + server keyId, consume the code, and hand back the server public key to pin', async () => {
     const h = harness();
     const { env, enrollment } = await createLocal(h);
@@ -129,6 +162,10 @@ describe('enrollLocalDriveEnv — the machine presents the code and its public k
       enrollmentId: 'enr-1',
       serverKeyId: 'srv-k1',
       serverPublicKey: Buffer.from(identity.signingKey.publicKey).toString('base64'),
+      ownerId: 'user-1',
+      serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false },
+      // The owner's passkeys to pin (hardening B); this owner has none registered, so an empty set.
+      ownerCredentials: { rpId: 'pagespace.test', origin: 'https://pagespace.test', credentials: [] },
     });
     const sibling = h.fake.local.get(env.id)!;
     expect(sibling.machinePublicKey).toBe(machinePublicKey);
@@ -538,5 +575,93 @@ describe('deriveLocalEnvStatus — a reading of the row plus the live registry, 
   it('given a row that never enrolled, or was revoked, should be disconnected even with a fresh heartbeat or a live socket', () => {
     expect(deriveLocalEnvStatus({ enrolledAt: null, revokedAt: null, lastSeenAt: NOW, liveConnection: 'connected', now })).toBe('disconnected');
     expect(deriveLocalEnvStatus({ enrolledAt: NOW, revokedAt: NOW, lastSeenAt: NOW, liveConnection: 'connected', now })).toBe('disconnected');
+  });
+});
+
+/**
+ * B1 — the owner's passkeys are PINNED at enrolment: trust on first use, at
+ * the one moment the owner is provably at the keyboard, exactly as the server
+ * signing key is pinned in the other direction.
+ */
+describe('hardening B — pinning the owner credentials at enrolment', () => {
+  beforeEach(() => {
+    ownerPasskeys.length = 0;
+    ownerPasskeysFail = false;
+  });
+
+  it('given an owner with registered passkeys, the enroll answer carries EVERY credential id and COSE public key, plus the rpId and origin', async () => {
+    ownerPasskeys.push({ credentialId: 'cred-a', publicKeyCose: 'cose-a' }, { credentialId: 'cred-b', publicKeyCose: 'cose-b' });
+    const h = harness();
+    const created = await createLocal(h);
+    const result = await enrollLocalDriveEnv({ enrollmentId: created.enrollment.enrollmentId, code: created.enrollment.code, machinePublicKey, deps: h.deps });
+    expect(result.ok && result.ownerCredentials).toEqual({
+      rpId: 'pagespace.test',
+      origin: 'https://pagespace.test',
+      credentials: [
+        { credentialId: 'cred-a', publicKeyCose: 'cose-a' },
+        { credentialId: 'cred-b', publicKeyCose: 'cose-b' },
+      ],
+    });
+  });
+
+  it('should store the pinned set on the row, in the SAME write that pins the machine key', async () => {
+    ownerPasskeys.push({ credentialId: 'cred-a', publicKeyCose: 'cose-a' });
+    const h = harness();
+    const created = await createLocal(h);
+    expect(h.fake.local.get(created.env.id)?.ownerCredentials ?? null).toBeNull();
+    await enrollLocalDriveEnv({ enrollmentId: created.enrollment.enrollmentId, code: created.enrollment.code, machinePublicKey, deps: h.deps });
+    const sibling = h.fake.local.get(created.env.id)!;
+    expect(sibling.ownerCredentials).toEqual({ rpId: 'pagespace.test', origin: 'https://pagespace.test', credentials: [{ credentialId: 'cred-a', publicKeyCose: 'cose-a' }] });
+    // Same write: the row could not be enrolled without a pinned set beside the key.
+    expect(sibling.enrolledAt).not.toBeNull();
+    expect(sibling.machinePublicKey).not.toBeNull();
+  });
+
+  it('given an owner with NO passkey, should enrol successfully and pin an EMPTY set — not a missing one, so the machine can tell the two apart', async () => {
+    const h = harness();
+    const created = await createLocal(h);
+    const result = await enrollLocalDriveEnv({ enrollmentId: created.enrollment.enrollmentId, code: created.enrollment.code, machinePublicKey, deps: h.deps });
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.ownerCredentials.credentials).toEqual([]);
+    expect(h.fake.local.get(created.env.id)?.ownerCredentials).toEqual({ rpId: 'pagespace.test', origin: 'https://pagespace.test', credentials: [] });
+  });
+
+  it('given the passkey store cannot be read, should REFUSE the enrolment without spending the code — pinning an empty set on a hiccup would silently cost the owner chat approvals forever', async () => {
+    ownerPasskeysFail = true;
+    const h = harness();
+    const created = await createLocal(h);
+    const result = await enrollLocalDriveEnv({ enrollmentId: created.enrollment.enrollmentId, code: created.enrollment.code, machinePublicKey, deps: h.deps });
+    expect(result).toEqual({ ok: false, reason: 'owner_credentials_unavailable' });
+    const sibling = h.fake.local.get(created.env.id)!;
+    expect(sibling.enrolledAt).toBeNull();
+    expect(sibling.enrollmentCodeUsedAt).toBeNull();
+    expect(sibling.machinePublicKey).toBeNull();
+    // The same code still works once the store is back.
+    ownerPasskeysFail = false;
+    expect((await enrollLocalDriveEnv({ enrollmentId: created.enrollment.enrollmentId, code: created.enrollment.code, machinePublicKey, deps: h.deps })).ok).toBe(true);
+  });
+
+  it('THE TRUST BOUNDARY: a REPLAY of the enrol call later cannot widen the pinned set — the row is already enrolled and refuses, whatever passkeys the owner has since added', async () => {
+    ownerPasskeys.push({ credentialId: 'cred-a', publicKeyCose: 'cose-a' });
+    const h = harness();
+    const created = await createLocal(h);
+    expect((await enrollLocalDriveEnv({ enrollmentId: created.enrollment.enrollmentId, code: created.enrollment.code, machinePublicKey, deps: h.deps })).ok).toBe(true);
+
+    ownerPasskeys.push({ credentialId: 'cred-attacker', publicKeyCose: 'cose-attacker' });
+    const replay = await enrollLocalDriveEnv({ enrollmentId: created.enrollment.enrollmentId, code: created.enrollment.code, machinePublicKey, deps: h.deps });
+    expect(replay).toEqual({ ok: false, reason: 'used' });
+    expect(h.fake.local.get(created.env.id)?.ownerCredentials?.credentials).toEqual([{ credentialId: 'cred-a', publicKeyCose: 'cose-a' }]);
+  });
+
+  it('no OTHER store method writes the pinned set — `pinMachineKey` is the only path, so nothing the server can be asked to do adds a credential', () => {
+    const source = readFileSync(join(import.meta.dirname, '..', 'drive-envs-store.ts'), 'utf8');
+    // Every drizzle UPDATE in the store; exactly ONE of them may touch the column.
+    const updates = source.split('\n').filter((line) => line.includes('.set({'));
+    expect(updates.length).toBeGreaterThan(1);
+    const writers = updates.filter((line) => line.includes('ownerCredentials'));
+    expect(writers).toHaveLength(1);
+    // …and it is the one inside pinMachineKey.
+    const pin = source.slice(source.indexOf('async pinMachineKey'));
+    expect(pin.slice(0, pin.indexOf('.returning('))).toContain(writers[0]!.trim());
   });
 });

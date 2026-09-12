@@ -603,7 +603,7 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
   // each write is ONE guarded UPDATE, so two replicas enrolling or redeeming
   // the same machine resolve to exactly one winner.
   const NOW = new Date('2026-09-05T10:00:00.000Z');
-  const facts = (enrollmentId: string) => ({ ownerId: payerId, label: 'jono-macstudio', enrollmentId, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(NOW.getTime() + 600_000) });
+  const facts = (enrollmentId: string) => ({ ownerId: payerId, label: 'jono-macstudio', enrollmentId, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(NOW.getTime() + 600_000), serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } });
 
   async function createLocal(name = 'mac') {
     const enrollmentId = `enr_${createId()}`;
@@ -638,7 +638,7 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
 
   it('findLocalByEnrollmentId / listLocalFacts: should join the drive id and scope the listing to the drive', async () => {
     const { envId, enrollmentId } = await createLocal('a');
-    await store.createIfUnderLimit({ driveId: otherDriveId, name: 'theirs', createdBy: otherPayerId, now: NOW, payerId: otherPayerId, maxEnvs: 10, local: { ...facts(`enr_${createId()}`), ownerId: otherPayerId } });
+    await store.createIfUnderLimit({ driveId: otherDriveId, name: 'theirs', createdBy: otherPayerId, now: NOW, payerId: otherPayerId, maxEnvs: 10, local: { ...facts(`enr_${createId()}`), ownerId: otherPayerId, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } } });
     expect((await store.findLocalByEnrollmentId(enrollmentId))?.envId).toBe(envId);
     expect(await store.findLocalByEnrollmentId('enr_nope')).toBeNull();
     expect((await store.listLocalFacts(driveId)).map((r) => r.envId)).toEqual([envId]);
@@ -646,10 +646,10 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
 
   it('pinMachineKey: should enroll ONCE — the second attempt loses the compare-and-set, and a revoked row cannot be enrolled at all', async () => {
     const { envId } = await createLocal();
-    const pin = { envId, machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:fp', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW };
+    const pin = { envId, machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: NOW };
     expect(await store.pinMachineKey(pin)).toBe(true);
     const [row] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
-    expect(row).toMatchObject({ machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:fp', serverKeyId: 'k1', enrollmentCodeHash: null });
+    expect(row).toMatchObject({ machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: null });
     expect(row?.enrolledAt?.getTime()).toBe(NOW.getTime());
     expect(row?.enrollmentCodeUsedAt?.getTime()).toBe(NOW.getTime());
     expect(await store.pinMachineKey({ ...pin, machinePublicKey: 'pk2' })).toBe(false);
@@ -674,7 +674,7 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
   it('pinMachineKey: given the code was RE-ISSUED after an enrollment verified the old one, the pin bound to the OLD hash must lose and change nothing; the new hash pins (Codex P1 on #2564)', async () => {
     const { envId } = await createLocal();
     expect(await store.reissueEnrollmentCode({ envId, enrollmentCodeHash: 'hash2', enrollmentCodeExpiresAt: new Date(NOW.getTime() + 600_000), now: NOW })).toBe(true);
-    const stale = { envId, machinePublicKey: 'pk-old', machineKeyFingerprint: 'fp-old', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW };
+    const stale = { envId, machinePublicKey: 'pk-old', machineKeyFingerprint: 'fp-old', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: NOW };
     expect(await store.pinMachineKey(stale)).toBe(false);
     const [row] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
     expect(row).toMatchObject({ enrolledAt: null, machinePublicKey: null, enrollmentCodeHash: 'hash2', enrollmentCodeUsedAt: null });
@@ -684,7 +684,7 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
 
   it('reissueEnrollmentCode: given an ENROLLED row, should lose the compare-and-set and change nothing — a pinned machine is never re-opened to a second key', async () => {
     const { envId } = await createLocal();
-    expect(await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW })).toBe(true);
+    expect(await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: NOW })).toBe(true);
     const [before] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
     expect(await store.reissueEnrollmentCode({ envId, enrollmentCodeHash: 'hash2', enrollmentCodeExpiresAt: new Date(NOW.getTime() + 600_000), now: new Date(NOW.getTime() + 1) })).toBe(false);
     const [after] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
@@ -703,7 +703,7 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
   it('setChallenge: should refuse before enrollment, then store the nonce, replacing a previous one and clearing its consumption', async () => {
     const { envId } = await createLocal();
     expect(await store.setChallenge({ envId, nonce: 'n1', expiresAt: NOW, now: NOW })).toBe(false);
-    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW });
+    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: NOW });
     expect(await store.setChallenge({ envId, nonce: 'n1', expiresAt: NOW, now: NOW })).toBe(true);
     expect(await store.consumeChallenge({ envId, nonce: 'n1', now: NOW })).toBe(true);
     expect(await store.setChallenge({ envId, nonce: 'n2', expiresAt: NOW, now: NOW })).toBe(true);
@@ -717,7 +717,7 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
   // cluster whose session timezone is not UTC, where a `now()` would drift.
   async function enrolledLocal() {
     const { envId } = await createLocal();
-    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW });
+    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: NOW });
     return envId;
   }
   const LIVE = new Date(NOW.getTime() + 60_000);
@@ -794,7 +794,7 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
 
   it('consumeChallenge: given the enrollment was REVOKED after the challenge was issued, should lose the compare-and-set — revocation wins the race, nothing mints', async () => {
     const { envId } = await createLocal();
-    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW });
+    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: NOW });
     await store.setChallenge({ envId, nonce: 'n1', expiresAt: NOW, now: NOW });
     await db.update(driveEnvLocal).set({ revokedAt: NOW }).where(eq(driveEnvLocal.envId, envId));
     expect(await store.consumeChallenge({ envId, nonce: 'n1', now: NOW })).toBe(false);
@@ -805,7 +805,7 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
 
   it('consumeChallenge: should consume exactly the outstanding nonce ONCE, stamping lastSeenAt; a wrong nonce or a replay loses', async () => {
     const { envId } = await createLocal();
-    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW });
+    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: NOW });
     await store.setChallenge({ envId, nonce: 'n1', expiresAt: NOW, now: NOW });
     expect(await store.consumeChallenge({ envId, nonce: 'wrong', now: NOW })).toBe(false);
     const later = new Date(NOW.getTime() + 5_000);
@@ -829,26 +829,41 @@ describe('the local-env connection slice (t07) — recordHello / recordHeartbeat
       now: NOW,
       payerId,
       maxEnvs: 10,
-      local: { ownerId: payerId, label: 'jono-macstudio', enrollmentId, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(NOW.getTime() + 600_000) },
+      local: { ownerId: payerId, label: 'jono-macstudio', enrollmentId, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(NOW.getTime() + 600_000), serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } },
     });
     if (!created.ok) throw new Error(created.reason);
-    if (enroll) await store.pinMachineKey({ envId: created.env.id, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', enrollmentCodeHash: 'hash', now: NOW });
+    if (enroll) await store.pinMachineKey({ envId: created.env.id, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: NOW });
     return created.env.id;
   }
   const rowOf = async (envId: string) => (await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId)))[0];
 
+  it('createIfUnderLimit: should write the explicit serverPolicy onto the sibling in the same transaction as the code hash (GA wave 1) — the deny-all column default is never what a minted row carries', async () => {
+    const envId = await createLocal(false);
+    const row = await rowOf(envId);
+    expect(row?.serverPolicy).toEqual({ ops: ['fs_read', 'fs_write'], checkpoint: false });
+    expect(row?.enrollmentCodeHash).toBe('hash');
+  });
+
   it('recordHello: given an enrolled, unrevoked machine, should persist capabilities + lastSeenAt (UTC wall-clock, non-UTC session) and answer true', async () => {
     const envId = await createLocal(true);
     const at = new Date(NOW.getTime() + 5_000);
-    expect(await store.recordHello({ envId, capabilities: CAPS, now: at })).toBe(true);
+    expect(await store.recordHello({ envId, capabilities: CAPS, daemonEpoch: 'ep_1', now: at })).toBe(true);
     const row = await rowOf(envId);
     expect(row?.capabilities).toEqual(CAPS);
     expect(row?.lastSeenAt?.getTime()).toBe(at.getTime());
   });
 
+  it('recordHello (Codex P2 #7): persists the daemon epoch the machine attested, and a later hello replaces it', async () => {
+    const envId = await createLocal(true);
+    await store.recordHello({ envId, capabilities: CAPS, daemonEpoch: 'ep_boot_1', now: NOW });
+    expect((await store.findLocalByEnvId(envId))?.daemonEpoch).toBe('ep_boot_1');
+    await store.recordHello({ envId, capabilities: CAPS, daemonEpoch: 'ep_boot_2', now: NOW });
+    expect((await store.findLocalByEnvId(envId))?.daemonEpoch).toBe('ep_boot_2');
+  });
+
   it('recordHello: given a machine that never enrolled, should change nothing and answer false', async () => {
     const envId = await createLocal(false);
-    expect(await store.recordHello({ envId, capabilities: CAPS, now: NOW })).toBe(false);
+    expect(await store.recordHello({ envId, capabilities: CAPS, daemonEpoch: 'ep_1', now: NOW })).toBe(false);
     const row = await rowOf(envId);
     expect(row?.capabilities).toBeNull();
     expect(row?.lastSeenAt).toBeNull();
@@ -857,7 +872,7 @@ describe('the local-env connection slice (t07) — recordHello / recordHeartbeat
   it('recordHello / recordHeartbeat: given a REVOKED machine, should change nothing and answer false (a revoked hello is not a heartbeat)', async () => {
     const envId = await createLocal(true);
     expect(await store.revokeLocal({ envId, now: NOW })).toBe(true);
-    expect(await store.recordHello({ envId, capabilities: CAPS, now: NOW })).toBe(false);
+    expect(await store.recordHello({ envId, capabilities: CAPS, daemonEpoch: 'ep_1', now: NOW })).toBe(false);
     expect(await store.recordHeartbeat({ envId, now: NOW })).toBe(false);
     const row = await rowOf(envId);
     expect(row?.capabilities).toBeNull();
@@ -866,12 +881,44 @@ describe('the local-env connection slice (t07) — recordHello / recordHeartbeat
 
   it('recordHeartbeat: should move lastSeenAt forward and nothing else', async () => {
     const envId = await createLocal(true);
-    await store.recordHello({ envId, capabilities: CAPS, now: NOW });
+    await store.recordHello({ envId, capabilities: CAPS, daemonEpoch: 'ep_1', now: NOW });
     const later = new Date(NOW.getTime() + 60_000);
     expect(await store.recordHeartbeat({ envId, now: later })).toBe(true);
     const row = await rowOf(envId);
     expect(row?.lastSeenAt?.getTime()).toBe(later.getTime());
     expect(row?.capabilities).toEqual(CAPS);
+  });
+
+  describe('setServerPolicy (GA wave 1, D-6): ONE UPDATE … WHERE envId AND ownerId AND revokedAt IS NULL', () => {
+    const POLICY = { ops: ['fs_read', 'exec'], checkpoint: false };
+
+    it('given the OWNER, should write the policy and updatedAt (UTC wall-clock on a non-UTC session) and answer true', async () => {
+      const envId = await createLocal(true);
+      const at = new Date(NOW.getTime() + 5_000);
+      expect(await store.setServerPolicy({ envId, ownerId: payerId, serverPolicy: POLICY, now: at })).toBe(true);
+      const row = await rowOf(envId);
+      expect(row?.serverPolicy).toEqual(POLICY);
+      expect(row?.updatedAt.getTime()).toBe(at.getTime());
+    });
+
+    it('given a user who is NOT the owner (a drive admin with every other right), should answer false and leave the row BYTE-IDENTICAL', async () => {
+      const envId = await createLocal(true);
+      const before = JSON.stringify(await rowOf(envId));
+      expect(await store.setServerPolicy({ envId, ownerId: otherPayerId, serverPolicy: POLICY, now: new Date(NOW.getTime() + 5_000) })).toBe(false);
+      expect(JSON.stringify(await rowOf(envId))).toBe(before);
+    });
+
+    it('given a REVOKED env, should answer false for the owner too and leave the row byte-identical', async () => {
+      const envId = await createLocal(true);
+      expect(await store.revokeLocal({ envId, now: NOW })).toBe(true);
+      const before = JSON.stringify(await rowOf(envId));
+      expect(await store.setServerPolicy({ envId, ownerId: payerId, serverPolicy: POLICY, now: new Date(NOW.getTime() + 5_000) })).toBe(false);
+      expect(JSON.stringify(await rowOf(envId))).toBe(before);
+    });
+
+    it('given an env that does not exist, should answer false', async () => {
+      expect(await store.setServerPolicy({ envId: `env_${createId()}`, ownerId: payerId, serverPolicy: POLICY, now: NOW })).toBe(false);
+    });
   });
 
   it('revokeLocal: should stamp revokedAt exactly once (CAS on revokedAt IS NULL) and keep the FIRST stamp on a repeat', async () => {

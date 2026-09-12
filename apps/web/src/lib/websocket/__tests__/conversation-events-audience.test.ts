@@ -375,6 +375,13 @@ describe('broadcast emit-site registry (repo-wide source scan)', () => {
     // `drive:<id>` would be a workspace-enumeration oracle, since drive members
     // may reach a workspace they are never shown in a listing.
     'apps/web/src/lib/websocket/agent-workspace-events.ts': ['workspace:nodes-updated'],
+    // --- the local-environment activity plane (GA wave 3) -------------------
+    // ONE audience: `user:<ownerId>:sessions`, the machine OWNER's own room.
+    // The payload names a COMMAND (the audit row's summary), so it can never
+    // go to a drive room — a member who did not enrol the machine would learn
+    // what ran on the owner's laptop. Owner-only, like the routes that serve
+    // the same rows ([D-6], invariant 13).
+    'apps/web/src/lib/websocket/env-activity-events.ts': ['env:activity'],
     // --- the pre-epic surfaces ----------------------------------------------
     'apps/web/src/lib/websocket/calendar-events.ts': ['calendar', 'calendar:${payload.operation}'],
     'apps/web/src/lib/websocket/socket-utils.ts': [

@@ -7,11 +7,13 @@
  *
  * This module is IO-thin and decision-free: it reads the facts the two pure
  * planners need — the `drive_env_local` sibling, the live-socket reading, the
- * code-execution verdict, the actor's drive role, the cloud flag — and hands
- * them over. Every "may" and "is" is theirs:
+ * code-execution verdict, the cloud flag — and hands them over. There is NO
+ * role lookup here any more ([D-6]): binding is the env owner's alone, so the
+ * requester's drive role is not an input to anything and is never fetched.
+ * Every "may" and "is" is the planners':
  *
  *   decideBind        flag_disabled → code_exec_denied → not_local → revoked
- *                     → not_connected → bind_policy
+ *                     → not_connected → bind_policy → no_server_ops
  *   planLocalProvision  revoked → not_connected → attach_local
  *
  * A sibling that is missing means the owner was erased (Art 17 cascades the
@@ -25,8 +27,9 @@
  * the local `SandboxHost` lands (t09) it answers `substrate_unsupported`, and
  * NEVER falls through to the Sprite host.
  */
-import { decideBind, type ActorRole, type BindDenyReason, type BindPolicy } from '../../env-bridge/decide-bind';
+import { decideBind, type BindDenyReason, type BindPolicy } from '../../env-bridge/decide-bind';
 import { planLocalProvision } from '../../env-bridge/plan-local-provision';
+import { parseServerPolicy } from '../../env-bridge/policy-types';
 import type { CanRunCodeResult, CodeExecutionDenialReason } from '../sandbox/can-run-code';
 import { deriveLocalEnvStatus } from './drive-envs';
 import type { DriveEnvRecord, DriveEnvStore } from './drive-envs-store';
@@ -44,8 +47,6 @@ export interface LocalEnvGateDeps {
   store: Pick<DriveEnvStore, 'findLocalByEnvId'>;
   /** The centralized code-execution gate, already bound to this requester, drive and payer. */
   canRunCode: () => Promise<CanRunCodeResult>;
-  /** The requester's role in the env's drive (owner/admin vs member) — the centralized helper in production. */
-  resolveActorRole: () => Promise<ActorRole>;
   liveConnection: LiveConnectionReader;
   /** `LOCAL_ENVS_ENABLED` for this deployment. */
   flagEnabled: boolean;
@@ -89,32 +90,25 @@ export async function gateLocalEnv({
     bindPolicy: sibling.bindPolicy as BindPolicy,
     actorId: requesterId,
     env: { ownerId: sibling.ownerId, substrate: row.substrate, revokedAt: sibling.revokedAt },
+    // The sibling already in hand — no second read (GA wave 1). Parsed
+    // strictly: a stored value the parser refuses is `null`, which the
+    // planner denies as `no_server_ops`.
+    serverPolicy: parseServerPolicy(sibling.serverPolicy),
     connected,
     flagEnabled: deps.flagEnabled,
   };
 
-  // `decideBind` is consulted in stages so that NO IO runs that cannot change
-  // its verdict, and its documented deny order is what the caller observes
-  // (Codex P2 on #2537). Each stage supplies the not-yet-fetched inputs as
-  // the values under which the planner would be MOST permissive — an `ok`
-  // code-exec verdict, the least-privileged role — so any refusal a stage
-  // returns is independent of those inputs and final; an `ok` from a stage
-  // is never returned until every input is real.
-  //
-  //   1. flag only — a disabled deployment does no authorization work at all;
-  //   2. the code-exec gate — the role cannot rescue a refusal here, and with
-  //      the least-privileged role an `ok` means every role passes;
-  //   3. the role — fetched only when the verdict was `bind_policy`, the one
-  //      refusal the role can flip.
-  const flagProbe = decideBind({ ...facts, canRunCode: { ok: true }, actorRole: 'member' });
+  // `decideBind` is consulted in two stages so that NO IO runs that cannot
+  // change its verdict, and its documented deny order is what the caller
+  // observes (Codex P2 on #2537): the flag alone first — a disabled deployment
+  // does no authorization work at all — then the code-exec gate. The flag
+  // probe supplies an `ok` code-exec verdict, the value under which the
+  // planner is MOST permissive, so any refusal it returns is independent of
+  // that input and final; an `ok` is never returned until every input is real.
+  const flagProbe = decideBind({ ...facts, canRunCode: { ok: true } });
   if (!flagProbe.ok && flagProbe.reason === 'flag_disabled') return { ok: false, refusal: flagProbe.reason };
 
-  const canRunCode = await deps.canRunCode();
-  const memberVerdict = decideBind({ ...facts, canRunCode, actorRole: 'member' });
-  let bind = memberVerdict;
-  if (!memberVerdict.ok && memberVerdict.reason === 'bind_policy') {
-    bind = decideBind({ ...facts, canRunCode, actorRole: await deps.resolveActorRole() });
-  }
+  const bind = decideBind({ ...facts, canRunCode: await deps.canRunCode() });
   if (!bind.ok) return { ok: false, refusal: bind.reason, cause: bind.cause };
 
   const plan = planLocalProvision({ env: { id: row.id, substrate: row.substrate, revokedAt: sibling.revokedAt }, connected });
@@ -128,15 +122,4 @@ export async function gateLocalEnv({
       // Unreachable after decideBind's `not_local`, kept so the switch is total.
       return { ok: false, refusal: 'substrate_unsupported' };
   }
-}
-
-/**
- * The production role resolver: the centralized owner-or-admin helper, loaded
- * lazily so a caller that injects a fake never loads the permissions module
- * (and its database) at all. `decideBind` treats owner and admin alike, so
- * the helper's single boolean is exactly the distinction it needs.
- */
-export async function resolveDriveActorRole({ userId, driveId }: { userId: string; driveId: string }): Promise<ActorRole> {
-  const { isDriveOwnerOrAdmin } = await import('../../permissions/permissions');
-  return (await isDriveOwnerOrAdmin(userId, driveId)) ? 'admin' : 'member';
 }

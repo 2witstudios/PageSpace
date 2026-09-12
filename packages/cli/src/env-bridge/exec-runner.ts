@@ -63,7 +63,8 @@ export interface ExecOutcome {
 export interface ExecRunner {
   run(request: NormalizedRequest): Promise<ExecOutcome>;
   /** Ctrl-C / disconnect: SIGKILL every live process group. */
-  killAll(): void;
+  /** SIGKILL every live process group (Ctrl-C, and a verified STOP from the server). @returns how many were signalled. */
+  killAll(): number;
   liveCount(): number;
 }
 
@@ -117,7 +118,12 @@ export function createExecRunner(deps: ExecRunnerDeps): ExecRunner {
   return {
     liveCount: () => live.size,
     killAll() {
-      for (const pid of live) kill(pid);
+      let killed = 0;
+      for (const pid of live) {
+        kill(pid);
+        killed += 1;
+      }
+      return killed;
     },
     async run(request) {
       if (request.op !== 'exec' || typeof request.cmd !== 'string' || request.cmd.length === 0) {

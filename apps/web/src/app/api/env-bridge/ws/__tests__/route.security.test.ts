@@ -14,14 +14,15 @@ import type { NextRequest } from 'next/server';
 import { generateKeyPairSync, createPrivateKey, createPublicKey, createHash, sign as nodeSign } from 'node:crypto';
 
 vi.mock('@pagespace/lib/auth/session-service', () => ({ sessionService: { validateSession: vi.fn() } }));
-vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn(), audit: vi.fn() }));
 vi.mock('@pagespace/lib/services/drive-envs/local-envs-enabled', () => ({ isLocalEnvsEnabled: vi.fn(() => true) }));
 vi.mock('@/lib/websocket/ws-security', () => ({
   getConnectionFingerprint: vi.fn(() => 'fp-1'),
   validateMessageSize: vi.fn(() => ({ valid: true })),
   isSecureConnection: vi.fn(() => true),
 }));
-vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn() }));
+vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn(), getGrantAuditStore: vi.fn(), listUnacknowledgedEnvApprovalRevokes: vi.fn(async () => []), markEnvApprovalAcknowledged: vi.fn(async () => null), expireSessionEnvApprovalsForOtherEpoch: vi.fn(async () => 0) }));
+vi.mock('@/lib/websocket/env-activity-events', () => ({ broadcastEnvActivity: vi.fn() }));
 vi.mock('@pagespace/lib/auth/env-bridge-signing-key', () => ({ loadServerSigningKeyring: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) },
@@ -31,16 +32,20 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { getConnectionFingerprint, isSecureConnection, validateMessageSize } from '@/lib/websocket/ws-security';
-import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
+import { expireSessionEnvApprovalsForOtherEpoch, getDriveEnvStore, getGrantAuditStore, listUnacknowledgedEnvApprovalRevokes, markEnvApprovalAcknowledged } from '@/lib/drive-envs/drive-envs-runtime';
+import { createGrantAuditFake } from '@/test/grant-audit-fake';
+import { broadcastEnvActivity } from '@/lib/websocket/env-activity-events';
 import { loadServerSigningKeyring } from '@pagespace/lib/auth/env-bridge-signing-key';
 import { LOCAL_ENV_HEARTBEAT_WINDOW_MS } from '@pagespace/lib/services/drive-envs/drive-envs';
 import { decodeFrame, encodeFrame, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
-import { encodeHelloForSigning, encodeResultForSigning, resultHashForFrame, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
+import { encodeHelloForSigning, encodeResultForSigning, machineResultBindingId, resultHashForFrame, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
 import { parseServerSigningKeyring, type SigningKeyPrimitives } from '@pagespace/lib/env-bridge/server-signing-key';
 import { clearAllEnvConnectionsForTesting, getEnvConnection, readEnvLiveConnection, ENV_SUPERSEDED_CLOSE_CODE, ENV_SUPERSEDED_CLOSE_REASON } from '@/lib/websocket/ws-env-connections';
 import { getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { envBridgeHash } from '@/lib/env-bridge/crypto';
 import { ENV_BRIDGE_HELLO_TIMEOUT_MS, ENV_BRIDGE_PING_INTERVAL_MS } from '@/lib/env-bridge/ws-route-config';
+import { APPROVAL_REVOKE_ACK_TIMEOUT_MS } from '@/lib/env-bridge/revoke';
+import { PAUSE_ACK_TIMEOUT_MS } from '@/lib/env-bridge/pause';
 import { UPGRADE, GET } from '../route';
 
 // ---- keys -------------------------------------------------------------------
@@ -70,9 +75,10 @@ function claimsFor(over: Record<string, unknown> = {}) {
   return { sessionId: 'sess-1', userId: USER, userRole: 'user', tokenVersion: 1, adminRoleVersion: 0, type: 'mcp', scopes: ['env:bridge'], expiresAt: new Date(NOW.getTime() + 3600_000), resourceType: 'drive_env', resourceId: ENV, ...over };
 }
 
-type LocalRow = { envId: string; ownerId: string; enrollmentId: string; machinePublicKey: string | null; serverKeyId: string | null; enrolledAt: Date | null; revokedAt: Date | null };
+type LocalRow = { envId: string; ownerId: string; enrollmentId: string; machinePublicKey: string | null; serverKeyId: string | null; enrolledAt: Date | null; revokedAt: Date | null; pausedAt: Date | null; serverPolicy: { ops: string[]; checkpoint: boolean } };
 function rowFor(over: Partial<LocalRow> = {}): LocalRow {
-  return { envId: ENV, ownerId: USER, enrollmentId: 'enr_a', machinePublicKey: spkiB64(machine), serverKeyId: ring.current.keyId, enrolledAt: NOW, revokedAt: null, ...over };
+  // `serverPolicy` is what `sendGrant` consults (decideSign) before a frame goes out: allow every implemented op unless a row says otherwise.
+  return { envId: ENV, ownerId: USER, enrollmentId: 'enr_a', machinePublicKey: spkiB64(machine), serverKeyId: ring.current.keyId, enrolledAt: NOW, revokedAt: null, pausedAt: null, serverPolicy: { ops: ['exec', 'fs_read', 'fs_write'], checkpoint: false }, ...over };
 }
 
 type FakeSocket = WebSocket & { readyState: number; sent: string[]; handlers: Record<string, (...args: unknown[]) => void>; emit: (event: string, ...args: unknown[]) => void };
@@ -102,8 +108,8 @@ function request(over: { headers?: Record<string, string>; url?: string } = {}):
   } as unknown as NextRequest;
 }
 
-function signedHello(envId = ENV, key = machine, over: Partial<{ capabilities: typeof CAPS; policyDigest: string }> = {}): string {
-  const body = { envId, capabilities: over.capabilities ?? CAPS, policyDigest: over.policyDigest ?? 'sha256:policy' };
+function signedHello(envId = ENV, key = machine, over: Partial<{ capabilities: typeof CAPS; policyDigest: string; daemonEpoch: string }> = {}): string {
+  const body = { envId, capabilities: over.capabilities ?? CAPS, policyDigest: over.policyDigest ?? 'sha256:policy', daemonEpoch: over.daemonEpoch ?? 'ep_1' };
   return encodeFrame({ type: 'hello', ...body, sig: Buffer.from(nodeSign(null, encodeHelloForSigning(body), key.privateKey)).toString('base64') });
 }
 
@@ -112,10 +118,17 @@ type UnsignedResult<T = MachineResultFrame> = T extends unknown ? Omit<T, 'sig'>
 
 function signedResult(body: UnsignedResult, key = machine): string {
   const resultHash = resultHashForFrame({ ...body, sig: '' } as MachineResultFrame, envBridgeHash);
-  return encodeFrame({ ...body, sig: Buffer.from(nodeSign(null, encodeResultForSigning({ grantId: body.grantId, resultHash }), key.privateKey)).toString('base64') } as MachineResultFrame);
+  return encodeFrame({ ...body, sig: Buffer.from(nodeSign(null, encodeResultForSigning({ grantId: machineResultBindingId({ ...body, sig: '' } as MachineResultFrame), resultHash }), key.privateKey)).toString('base64') } as MachineResultFrame);
 }
 
 const events = () => vi.mocked(auditRequest).mock.calls.map((call) => (call[1] as { details?: { originalEvent?: string } }).details?.originalEvent);
+/** `sendGrant` awaits the sibling read (decideSign) before it sends; under fake timers only microtasks are needed to settle it. */
+const settleGate = async () => {
+  // The production client reaches the store through a dynamic import, which the module loader resolves outside the microtask queue.
+  await vi.dynamicImportSettled();
+  for (let i = 0; i < 8; i += 1) await Promise.resolve();
+};
+
 const lastSent = (ws: FakeSocket): Frame => {
   const decoded = decodeFrame(ws.sent[ws.sent.length - 1]!, { maxFrameBytes: 1024 * 1024 });
   if (!decoded.ok) throw new Error(decoded.reason);
@@ -148,6 +161,10 @@ describe('env-bridge ws route', () => {
       }),
     };
     vi.mocked(getDriveEnvStore).mockResolvedValue(store as never);
+    vi.mocked(getGrantAuditStore).mockResolvedValue(createGrantAuditFake());
+    // Nothing owed unless a test says so: the replay's read must not leak between tests (a leaked owed row holds every grant).
+    vi.mocked(listUnacknowledgedEnvApprovalRevokes).mockResolvedValue([]);
+    vi.mocked(markEnvApprovalAcknowledged).mockResolvedValue(null);
     vi.mocked(sessionService.validateSession).mockResolvedValue(claimsFor() as never);
     vi.mocked(isLocalEnvsEnabled).mockReturnValue(true);
     vi.mocked(isSecureConnection).mockReturnValue(true);
@@ -389,7 +406,7 @@ describe('env-bridge ws route', () => {
   describe('the signed hello', () => {
     it('given a hello signed by the pinned machine key for THIS env, should authorize: recordHello(capabilities), state connected, and the first server frame is a ping (the ack)', async () => {
       const ws = await connectAuthorized();
-      expect(store.recordHello).toHaveBeenCalledWith({ envId: ENV, capabilities: CAPS, now: NOW });
+      expect(store.recordHello).toHaveBeenCalledWith({ envId: ENV, capabilities: CAPS, daemonEpoch: 'ep_1', now: NOW });
       expect(readEnvLiveConnection(ENV)).toBe('connected');
       expect(events()).toContain('env_bridge_connection_established');
       expect(ws.sent).toHaveLength(1);
@@ -498,6 +515,204 @@ describe('env-bridge ws route', () => {
     });
   });
 
+  describe('GA wave 3 · leaf 5 — a revoke made while the machine was away is replayed on its hello, BEFORE the first grant is signed', () => {
+    const ackFor = (approvalId: string, removed: number) => signedResult({ type: 'approval_revoke_result', approvalId, removed });
+    const framesOf = (ws: FakeSocket, from = 0) => ws.sent.slice(from).map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).filter((d) => d.ok).map((d) => (d as { frame: Frame }).frame);
+
+    it('EXIT CRITERION — revoke offline → reconnect: the owed revoke goes out on the hello, a grant issued meanwhile WAITS, and is signed only after the machine\'s signed ack; the mirror is stamped on that ack', async () => {
+      vi.mocked(listUnacknowledgedEnvApprovalRevokes).mockResolvedValue([{ id: 'ch_owed' }] as never);
+      const ws = socket();
+      const upgrade = UPGRADE(ws, server, request());
+      await flush();
+      ws.emit('message', Buffer.from(signedHello()));
+      await flush();
+      await settleGate();
+      // The ping (hello_ack) and the owed revoke went out — before any grant.
+      const before = framesOf(ws);
+      expect(before.map((f) => f.type)).toEqual(['ping', 'revoke']);
+      expect((before[1] as Extract<Frame, { type: 'revoke' }>).approvalId).toBe('ch_owed');
+      // A grant asked for DURING the replay is held: nothing more on the socket.
+      const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal: { userId: USER, sessionId: 'sess-1', conversationId: 'conv-1' } });
+      pending.catch(() => {});
+      await settleGate();
+      expect(framesOf(ws).map((f) => f.type)).toEqual(['ping', 'revoke']);
+      // The machine's signed ack releases the hold: the ping, then the grant.
+      ws.emit('message', Buffer.from(ackFor('ch_owed', 1)));
+      await flush();
+      await settleGate();
+      await upgrade;
+      await settleGate();
+      const after = framesOf(ws).map((f) => f.type);
+      expect(after.indexOf('revoke')).toBeLessThan(after.indexOf('grant_exec'));
+      expect(markEnvApprovalAcknowledged).toHaveBeenCalledWith({ id: 'ch_owed', removed: 1 });
+      expect(events()).toContain('env_bridge_approval_revokes_replayed');
+    });
+
+    it('Codex P1 (review round 1) — given an owed revoke the machine does NOT ack, the env stays BLOCKED: the socket is closed 1008 revoke_pending, a later grant is refused typed revoke_pending with a refusal audit row (never hangs), and only a hello whose replay is acked opens the env again', async () => {
+      vi.mocked(listUnacknowledgedEnvApprovalRevokes).mockResolvedValue([{ id: 'ch_owed' }] as never);
+      const audit = createGrantAuditFake();
+      vi.mocked(getGrantAuditStore).mockResolvedValue(audit);
+      const ws = socket();
+      const upgrade = UPGRADE(ws, server, request());
+      await flush();
+      ws.emit('message', Buffer.from(signedHello()));
+      await flush();
+      await settleGate();
+      expect(framesOf(ws).map((f) => f.type)).toEqual(['ping', 'revoke']);
+      // No ack: the replay's deadline passes.
+      await vi.advanceTimersByTimeAsync(APPROVAL_REVOKE_ACK_TIMEOUT_MS + 1);
+      await upgrade;
+      await settleGate();
+      expect(ws.close).toHaveBeenCalledWith(1008, 'revoke_pending');
+      expect(events()).toContain('env_bridge_revoke_pending');
+      ws.emit('close', 1008, Buffer.from('revoke_pending'));
+      await flush();
+      // A grant while blocked: refused at once, typed, and audited as a refusal — not hung, not signed.
+      await expect(getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal: { userId: USER, sessionId: 'sess-1', conversationId: 'conv-1' } })).rejects.toMatchObject({ kind: 'revoke_pending', detail: { envId: ENV } });
+      expect(audit.rows.map((row) => row.verdict)).toEqual(['refused:revoke_pending']);
+      // The daemon reconnects (its own backoff): this hello's replay is ACKED, and the env opens.
+      const ws2 = socket();
+      const upgrade2 = UPGRADE(ws2, server, request());
+      await flush();
+      ws2.emit('message', Buffer.from(signedHello()));
+      await flush();
+      await settleGate();
+      expect(framesOf(ws2).map((f) => f.type)).toEqual(['ping', 'revoke']);
+      ws2.emit('message', Buffer.from(ackFor('ch_owed', 1)));
+      await flush();
+      await upgrade2;
+      await settleGate();
+      vi.mocked(listUnacknowledgedEnvApprovalRevokes).mockResolvedValue([]);
+      const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal: { userId: USER, sessionId: 'sess-1', conversationId: 'conv-1' } });
+      pending.catch(() => {});
+      await settleGate();
+      expect(framesOf(ws2).map((f) => f.type)).toContain('grant_exec');
+      expect(ws2.close).not.toHaveBeenCalled();
+    });
+
+    it('given nothing owed, the hello proceeds straight to the ping and no revoke is sent', async () => {
+      const ws = await connectAuthorized();
+      expect(framesOf(ws).map((f) => f.type)).toEqual(['ping']);
+      expect(events()).not.toContain('env_bridge_approval_revokes_replayed');
+    });
+  });
+
+  describe('Codex P2 #7 (review round 1) — the hello attests the daemon process; its epoch is stored and expires other processes\' session approvals', () => {
+    it('records daemonEpoch with the hello and asks the mirror to expire session rows of any OTHER epoch — once per hello, with the epoch the machine signed', async () => {
+      vi.mocked(expireSessionEnvApprovalsForOtherEpoch).mockResolvedValueOnce(2);
+      await connectAuthorized();
+      expect(store.recordHello).toHaveBeenCalledWith(expect.objectContaining({ envId: ENV, daemonEpoch: 'ep_1' }));
+      expect(expireSessionEnvApprovalsForOtherEpoch).toHaveBeenCalledWith({ envId: ENV, epoch: 'ep_1' });
+      expect(events()).toContain('env_bridge_session_approvals_expired');
+    });
+
+    it('a hello whose daemonEpoch was edited after signing is refused — the epoch is a fact the MACHINE attests', async () => {
+      const ws = socket();
+      await UPGRADE(ws, server, request());
+      const decoded = decodeFrame(signedHello(), { maxFrameBytes: 1 << 20 });
+      if (!decoded.ok || decoded.frame.type !== 'hello') throw new Error('hello');
+      ws.emit('message', Buffer.from(encodeFrame({ ...decoded.frame, daemonEpoch: 'ep_forged' })));
+      await flush();
+      expect(ws.close).toHaveBeenCalledWith(1008, 'Invalid hello');
+      expect(store.recordHello).not.toHaveBeenCalled();
+      expect(expireSessionEnvApprovalsForOtherEpoch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GA wave 3 — Stop reaches the replica that holds the socket', () => {
+    /**
+     * A PATCH `{paused:true}` lands on whichever replica served it; the grants
+     * in flight live on the replica holding the machine's socket. The heartbeat
+     * that already persists `lastSeenAt` once per window is where THIS replica
+     * re-reads the row: a `pausedAt` it finds fails the env's in-flight
+     * requests typed `paused` — bounded by the heartbeat window, well inside
+     * any exec timeout — so Stop never leaves a request to time out.
+     */
+    it("given the row was paused elsewhere, the next persisted heartbeat fails this replica's in-flight grants typed paused", async () => {
+      const ws = await connectAuthorized();
+      const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'sleep', args: ['100'], timeoutMs: 120_000 }, principal: { userId: USER, sessionId: 'sess-1', conversationId: 'conv-1' } });
+      await settleGate();
+      expect(lastSent(ws).type).toBe('grant_exec');
+      // The handler is attached BEFORE the pong: `cancelGroup` rejects synchronously inside `onPong`, and a rejection
+      // with no handler at that instant is an Unhandled Rejection that fails the CI job (its `Errors` line) while every test passes.
+      const rejection = expect(pending).rejects.toMatchObject({ kind: 'paused', detail: { envId: ENV } });
+      rows.set(ENV, rowFor({ pausedAt: new Date(NOW.getTime() + 1000) }));
+      await vi.advanceTimersByTimeAsync(LOCAL_ENV_HEARTBEAT_WINDOW_MS);
+      ws.emit('message', Buffer.from(encodeFrame({ type: 'pong', ts: Date.now() })));
+      await flush();
+      await settleGate();
+      await rejection;
+      expect(store.recordHeartbeat).toHaveBeenCalledTimes(1);
+      // The socket stays: Stop pauses grants, it does not disconnect the machine.
+      expect(ws.close).not.toHaveBeenCalled();
+    });
+
+    it('given a pause made elsewhere, the next pong delivers the signed pause frame to the machine ONCE (a later pong does not resend), audits it, and the machine\'s signed ack is correlated', async () => {
+      const ws = await connectAuthorized();
+      const pausedAt = new Date(NOW.getTime() + 1000);
+      rows.set(ENV, rowFor({ pausedAt }));
+      const before = ws.sent.length;
+      ws.emit('message', Buffer.from(encodeFrame({ type: 'pong', ts: Date.now() })));
+      await flush();
+      await settleGate();
+      const frames = ws.sent.slice(before).map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).filter((d) => d.ok).map((d) => (d as { frame: Frame }).frame);
+      const pause = frames.find((f) => f.type === 'pause');
+      expect(pause).toMatchObject({ type: 'pause', pausedAt: pausedAt.getTime() });
+      // Bounded by ONE ping interval: no heartbeat window had to elapse.
+      expect(store.recordHeartbeat).not.toHaveBeenCalled();
+      // The machine's signed ack lands on the correlator; the audit names the delivery.
+      const ack = { type: 'pause_result' as const, envId: ENV, pausedAt: pausedAt.getTime(), killed: 1 };
+      ws.emit('message', Buffer.from(signedResult(ack)));
+      await flush();
+      await settleGate();
+      expect(events()).toContain('env_bridge_pause_delivered');
+      // A second pong for the SAME pause sends nothing more.
+      const after = ws.sent.length;
+      ws.emit('message', Buffer.from(encodeFrame({ type: 'pong', ts: Date.now() })));
+      await flush();
+      await settleGate();
+      expect(ws.sent.slice(after).map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).filter((d) => d.ok && (d as { frame: Frame }).frame.type === 'pause')).toHaveLength(0);
+      expect(ws.close).not.toHaveBeenCalled();
+    });
+
+    it('Codex P1 (review round 1) — an UNACKNOWLEDGED pause is resent on the next pong; once the machine\'s signed ack lands, a later pong sends nothing', async () => {
+      const ws = await connectAuthorized();
+      const pausedAt = new Date(NOW.getTime() + 1000);
+      rows.set(ENV, rowFor({ pausedAt }));
+      const pauses = () => ws.sent.map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).filter((d) => d.ok && (d as { frame: Frame }).frame.type === 'pause').length;
+      ws.emit('message', Buffer.from(encodeFrame({ type: 'pong', ts: Date.now() })));
+      await flush();
+      await settleGate();
+      expect(pauses()).toBe(1);
+      // No ack before the deadline.
+      await vi.advanceTimersByTimeAsync(PAUSE_ACK_TIMEOUT_MS + 1);
+      await settleGate();
+      ws.emit('message', Buffer.from(encodeFrame({ type: 'pong', ts: Date.now() })));
+      await flush();
+      await settleGate();
+      expect(pauses()).toBe(2);
+      ws.emit('message', Buffer.from(signedResult({ type: 'pause_result', envId: ENV, pausedAt: pausedAt.getTime(), killed: 0 })));
+      await flush();
+      await settleGate();
+      ws.emit('message', Buffer.from(encodeFrame({ type: 'pong', ts: Date.now() })));
+      await flush();
+      await settleGate();
+      expect(pauses()).toBe(2);
+    });
+
+    it('given the row is NOT paused, the heartbeat leaves in-flight grants alone', async () => {
+      const ws = await connectAuthorized();
+      const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'sleep', args: ['100'], timeoutMs: 120_000 }, principal: { userId: USER, sessionId: 'sess-1', conversationId: 'conv-1' } });
+      await settleGate();
+      await vi.advanceTimersByTimeAsync(LOCAL_ENV_HEARTBEAT_WINDOW_MS);
+      ws.emit('message', Buffer.from(encodeFrame({ type: 'pong', ts: Date.now() })));
+      await flush();
+      await settleGate();
+      expect(getEnvBridgeClient().pendingCountForEnv(ENV)).toBe(1);
+      pending.catch(() => {});
+    });
+  });
+
   describe('invariant 6 — direction and unknown frames', () => {
     it('given a server→machine frame type arriving FROM the machine (grant_exec), should drop + audit and keep the socket', async () => {
       const ws = await connectAuthorized();
@@ -520,6 +735,7 @@ describe('env-bridge ws route', () => {
     it('given a pending grant and an exec_result signed by the pinned machine key, should deliver it', async () => {
       const ws = await connectAuthorized();
       const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+      await settleGate();
       const grantFrame = lastSent(ws);
       if (grantFrame.type !== 'grant_exec') throw new Error('grant not sent');
       const grantId = (grantFrame.grant as { grantId: string }).grantId;
@@ -527,9 +743,36 @@ describe('env-bridge ws route', () => {
       await expect(pending).resolves.toMatchObject({ type: 'exec_result', grantId, exitCode: 0 });
     });
 
+    it('GA wave 3 — given a grant signed through the production client, the audit row reaches the machine OWNER\'s room at sign time and again with the verdict at result time', async () => {
+      const ws = await connectAuthorized();
+      const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'sh', args: ['-c', 'git status'] }, principal: { ...principal, userId: 'user-agent-runner' } });
+      await settleGate();
+      const grantFrame = lastSent(ws);
+      if (grantFrame.type !== 'grant_exec') throw new Error('grant not sent');
+      const grantId = (grantFrame.grant as { grantId: string }).grantId;
+      expect(vi.mocked(broadcastEnvActivity)).toHaveBeenCalledTimes(1);
+      // The OWNER of the row (USER), not the principal who asked: the room is the machine owner's.
+      expect(vi.mocked(broadcastEnvActivity).mock.calls[0]![0]).toMatchObject({ ownerId: USER, activity: { envId: ENV, grantId, op: 'exec', verdict: 'signed', resultAt: null, summary: "exec: sh -c 'git status'" } });
+      ws.emit('message', Buffer.from(signedResult({ type: 'exec_result', grantId, exitCode: 2, stdoutB64: '', stderrB64: '', truncated: false })));
+      await expect(pending).resolves.toMatchObject({ type: 'exec_result' });
+      await settleGate();
+      expect(vi.mocked(broadcastEnvActivity)).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(broadcastEnvActivity).mock.calls[1]![0]).toMatchObject({ ownerId: USER, activity: { grantId, verdict: 'completed', exitCode: 2 } });
+      expect(vi.mocked(broadcastEnvActivity).mock.calls[1]![0].activity.resultAt).not.toBeNull();
+    });
+
+    it('GA wave 1 — given a sibling whose serverPolicy EXCLUDES exec, sendGrant should reject server_denied and NO frame should reach the socket', async () => {
+      const ws = await connectAuthorized();
+      rows.set(ENV, rowFor({ serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } }));
+      const before = ws.sent.length;
+      await expect(getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal })).rejects.toMatchObject({ kind: 'server_denied', detail: { reason: 'server_denied', op: 'exec' } });
+      expect(ws.sent.length).toBe(before);
+    });
+
     it('given an exec_result whose machine signature does not verify, should NOT deliver it: typed unverified_result to the caller and a high-risk audit', async () => {
       const ws = await connectAuthorized();
       const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+      await settleGate();
       const grantFrame = lastSent(ws);
       if (grantFrame.type !== 'grant_exec') throw new Error('grant not sent');
       const grantId = (grantFrame.grant as { grantId: string }).grantId;
@@ -543,6 +786,7 @@ describe('env-bridge ws route', () => {
       vi.mocked(sessionService.validateSession).mockResolvedValue(claimsFor({ resourceId: ENV_B, sessionId: 'sess-2' }) as never);
       const wsB = await connectAuthorized(ENV_B, machineB);
       const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+      await settleGate();
       let state = 'pending';
       pending.then(() => (state = 'resolved'), () => (state = 'rejected'));
       const grantFrame = lastSent(wsA);
@@ -579,6 +823,7 @@ describe('env-bridge ws route', () => {
     it('given a second socket for the same env, the newer wins, the older closes env_superseded, and its late close cancels nothing', async () => {
       const older = await connectAuthorized();
       const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+      await settleGate();
       let state = 'pending';
       pending.then(() => (state = 'resolved'), () => (state = 'rejected'));
       const newer = await connectAuthorized();
@@ -593,6 +838,7 @@ describe('env-bridge ws route', () => {
     it('given the LIVE socket closes, its in-flight requests fail with typed disconnected and the env reads disconnected', async () => {
       const ws = await connectAuthorized();
       const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+      await settleGate();
       ws.emit('close', 1006, Buffer.from(''));
       await expect(pending).rejects.toMatchObject({ kind: 'disconnected' });
       expect(readEnvLiveConnection(ENV)).toBeNull();

@@ -106,6 +106,7 @@ describe('the label table against the real registry', () => {
     const registry = new Set(Object.keys(buildPageSpaceTools({ codeExecutionEnabled: true })));
     const outsideRegistry = Object.keys(TOOL_NAME_MAP).filter((name) => !registry.has(name));
 
-    expect(outsideRegistry.sort()).toEqual(['ask_agent', 'ask_user']);
+    // `request_env_approval` is merged in per-route too (GA wave 2), only when the session is bound to a local env.
+    expect(outsideRegistry.sort()).toEqual(['ask_agent', 'ask_user', 'request_env_approval']);
   });
 });

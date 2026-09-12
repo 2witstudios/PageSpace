@@ -33,6 +33,16 @@ function load(idx: number) {
   return { file, code };
 }
 
+/** The migration whose SQL matches `needle` — by content, so a renumber cannot silently retarget it. */
+function loadContaining(needle: RegExp) {
+  for (const file of readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()) {
+    const sql = readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
+    const code = sql.split('\n').filter((line) => !line.trimStart().startsWith('--')).join('\n');
+    if (needle.test(code)) return { file, code };
+  }
+  return { file: undefined, code: '' };
+}
+
 const first = load(281);
 const second = load(282);
 const both = `${first.code}\n${second.code}`;
@@ -151,5 +161,43 @@ describe('drizzle/0281 + 0282 local environments (substrate, then drive_env_loca
     expect(both).not.toMatch(/^\s*UPDATE\s+"/m);
     expect(both).not.toMatch(/^\s*DELETE\s+FROM\b/m);
     expect(both).not.toMatch(/^\s*INSERT\s+INTO\b/m);
+  });
+
+  /**
+   * The GA schema delta, as ONE migration. Waves 1-3 were authored as five
+   * separate migrations; when master landed its own `0291` the whole chain was
+   * re-derived with `db:generate` onto master's, which collapses them into a
+   * single file. So this block no longer asserts "one migration, one change" —
+   * it asserts that the migration carrying the `bindPolicy` narrowing carries
+   * the WHOLE delta and nothing beyond it, which is the property that actually
+   * matters and is strictly more than the old block checked.
+   *
+   * It finds the file by CONTENT, not by number, so the next collision with
+   * master renumbers it without touching this test.
+   */
+  describe('the GA local-environments migration ([D-6] plus waves 2-3)', () => {
+    const ga = loadContaining(/ALTER TABLE "drive_env_local" ADD CONSTRAINT "drive_env_local_bind_policy_check"/);
+
+    it('should exist — run db:generate if it does not', () => {
+      expect(ga.file, 'no migration carries the bindPolicy CHECK — run db:generate').toBeDefined();
+    });
+
+    it('should DROP the old bindPolicy CHECK and ADD one that admits only owner', () => {
+      expect(ga.code).toMatch(/ALTER TABLE "drive_env_local" DROP CONSTRAINT "drive_env_local_bind_policy_check";/);
+      expect(ga.code).toMatch(/ADD CONSTRAINT "drive_env_local_bind_policy_check" CHECK \("drive_env_local"\."bindPolicy" IN \('owner'\)\)/);
+      expect(ga.code).not.toMatch(/'admins'|'members'/);
+    });
+
+    it('should add the two tables the audit and the approval mirror need', () => {
+      expect(ga.code).toMatch(/CREATE TABLE "drive_env_grant_audit"/);
+      expect(ga.code).toMatch(/CREATE TABLE "drive_env_approvals"/);
+    });
+
+    it('should add exactly the three columns waves 3 and B need on drive_env_local, and no others', () => {
+      const added = [...ga.code.matchAll(/ALTER TABLE "drive_env_local" ADD COLUMN "([^"]+)"/g)].map((m) => m[1]).sort();
+      expect(added).toEqual(['daemonEpoch', 'ownerCredentials', 'pausedAt']);
+      expect(ga.code).not.toMatch(/ALTER TABLE "drive_env_local" DROP COLUMN/);
+      expect(ga.code).not.toMatch(/ALTER TABLE "drive_env_local" ALTER COLUMN/);
+    });
   });
 });

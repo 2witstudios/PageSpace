@@ -7,6 +7,108 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Local Environments: a file write that could become a command now asks you first (opt-in).**
+  Writing files inside the folders you declared runs without a prompt, because that is the point
+  of declaring them. But a file's contents can be a command something else runs later: a
+  `.git/hooks/pre-commit` file, made executable, runs at your next `git commit`, as you, with no
+  approval anywhere. So a write your machine recognises as one of those — inside `.git/`, `.hg/`
+  or `.svn/`; a shell startup file; a `Makefile`, `justfile` or `.vscode/tasks.json`; a package
+  manifest like `package.json` or `Cargo.toml`; a CI config; `.pre-commit-config.yaml`,
+  `.gitattributes` or `conftest.py`; or *any* file that will be executable once the write lands —
+  now stops and asks you on the same approval card commands use, naming the file and why. That
+  includes files that are executable *already*: a write naming no permissions leaves the existing
+  ones alone, so overwriting `bin/tool` or `scripts/deploy.sh` asks too. Nothing is written
+  until you click, approving one covers that **file** rather than the whole folder, and ordinary
+  writes are unaffected. Setuid, setgid and sticky modes are refused outright rather than put in
+  front of you, and one write can no longer carry an unbounded number of files. Be clear about
+  the limit: this list can never be complete — a write to ordinary source code you later build or
+  run is still a command — so it raises the cost of the obvious attack and puts you in front of
+  it, and it is not a sandbox.
+- **Local Environments: your machine's audit log now says which files were touched**, on both
+  allowed and refused file operations, so `~/.pagespace/env-audit.jsonl` can answer "what did it
+  write" and not only "what was allowed".
+- **Local Environments: enrolling from your home directory now says so, loudly.** The starter
+  policy uses the directory you ran `pagespace env enroll` in, so enrolling from `$HOME` scopes an
+  agent to `~/.ssh`, your shell startup files and every project at once. `enroll`, `pagespace env
+  connect` and `pagespace env policy` all warn, naming the consequence and how to narrow it — and
+  honour it anyway: it is your machine.
+- **Local Environments: approving a command in the chat now needs your passkey, and your computer
+  checks it itself (opt-in).** When you answer an approval card, your browser asks your
+  authenticator — Touch ID, Windows Hello, a security key — to sign, and your machine verifies
+  that signature before it runs anything. The signature covers the exact request your machine
+  froze and how long you chose to remember it, so it cannot be moved to a different command, a
+  different question or a different computer, nor turned into a longer-lasting approval than the
+  one you gave, and PageSpace cannot produce one. Until now your machine took our word that the click
+  had come from you: the owner-only check ran on our servers, which your computer has no way to
+  observe. It no longer has to. The passkeys your machine trusts are pinned when you enrol it,
+  while you are at the keyboard; `pagespace env owner-keys` prints them, `pagespace env enroll`
+  and `pagespace env connect` each say in one line what was pinned and what happens without it.
+  Two consequences, both deliberate: **nothing can add a key to a machine afterwards** — not us,
+  not the CLI, not any message on the bridge — so register a new passkey and **re-enrol** the
+  machine to use it; and if you had no passkey when you enrolled, approvals in the chat are
+  refused and requests prompt in the terminal running `pagespace env connect` instead. Nothing
+  here is weaker than before: where your machine cannot prove a human clicked, it asks somewhere
+  it can.
+
+- **Local Environments: you can see what your computer is doing, and you can stop it (opt-in).**
+  Every request PageSpace signs for a local Environment — and every one it refuses — is now
+  recorded on the server under the same id the machine writes to its own audit log, so the two
+  finally join. The Environment's owner sees it live: **Running now** and **Recent** appear under
+  the Environment in the sidebar, on its settings page, and on the new account page, updating the
+  moment a command starts and the moment it ends. **Stop** pauses the Environment without deleting
+  it or revoking the machine: PageSpace signs nothing more for it, anything waiting fails at once
+  with a plain reason instead of timing out, and the machine kills what it was already running and
+  confirms it did — you are told exactly what the machine confirmed and nothing it did not.
+  **Resume** picks up where you left off. Only the person who enrolled the machine can stop it;
+  drive admins keep Delete and Revoke.
+
+- **Local Environments: two new settings pages (opt-in).** **Drive settings → Environments**
+  lists every environment; a local one opens to its status, who owns it, the three switches
+  (Read files, Write files, Run commands — the owner's alone; anyone else sees them read-only with
+  the owner named), what can *actually* run (the machine's advertised abilities ∩ your switches,
+  with the machine's own policy file stated as unknown to the server), its live activity, and
+  Stop / Resume and Revoke. An Environment that refuses a session because nothing is allowed now
+  points at this page. **Settings → Local environments** is yours across every drive: each of your
+  machines with its status and activity, and every approval you gave in the chat — what a machine
+  will run without asking — each revocable. A revoke the machine could not receive is delivered the
+  next time it connects, before it runs anything, and you are told when the machine has confirmed.
+  **Your data export** (Settings → Privacy → Export) now carries two more files:
+  `local-environment-activity.json` (what your agent asked local machines to run, and how each
+  answered) and `local-environment-approvals.json` (approvals you gave, or that stand on a machine
+  you own, revoked and expired ones included).
+
+- **Local Environments: a security page that says exactly what you are agreeing to.**
+  [docs/security/local-environments](https://pagespace.ai/docs/security/local-environments) states
+  each guarantee the bridge makes when an agent runs on your own computer and, beside each one,
+  exactly where it stops — no sandbox around a command, approvals remembered per program, content
+  other people wrote steering your agent, no network control on your machine, and the log on your
+  own machine still being best-effort. Derived from the internal posture document
+  (`docs/security/local-environment-bridge.md`); it never reads better than that document does.
+
+- **Local Environments: commands need your click in the chat; file work runs on its own
+  (opt-in).** Two tiers now. **Reading and writing files** inside the folders you allowed runs
+  without asking from the moment you enrol — no terminal to babysit. **Running a command** always
+  asks: the first time an agent wants to run a program on your computer, a card appears in the
+  chat showing the exact command, working directory, environment and limits the machine froze,
+  and only you — the person who enrolled it, never a drive admin — can click Allow or Deny. Your
+  click is checked by the machine itself against what it froze, so a click can never run something
+  other than what you saw. Choose how long to remember an approval: this once, until the daemon
+  stops, 30 days, or until you revoke it — remembered per program (approving `git status` covers
+  `git push` from a new chat tomorrow, and never covers `rm`). Approvals live on your machine; a
+  drive admin or you can revoke one from PageSpace, and PageSpace can never add one.
+
+- **Local Environments: PageSpace now has a say in what runs on your computer — and only you
+  can drive it (opt-in).** When you create a local Environment you now choose what PageSpace may
+  ask that computer to do: **Read files** and **Write files** are on by default; **Run commands**
+  is off, behind its own switch, with what it means spelled out beside it (a command runs as you,
+  on your computer, with no sandbox). That choice is enforced where it matters: PageSpace refuses
+  to sign a request for anything you did not enable, so the machine never even sees it — an agent
+  asked to run a command on an Environment with commands off is told plainly that the server
+  declined, which is a different message from "your computer is not connected". Only the person
+  who enrolled the machine can change that policy, or start a session in it; drive admins can
+  still delete or revoke the Environment but cannot drive it, and the settings that would have let
+  other members drive it are gone rather than hidden. An Environment whose policy allows nothing
+  refuses new sessions up front with a message that says where to turn things on.
 - **The Home screen now tells you what's actually waiting for you** — opening the dashboard used
   to show a generic "How can I help you today?" with no sign of what changed across your drives,
   and the only place that context lived (the sidebar's Pulse note) disappeared the moment you

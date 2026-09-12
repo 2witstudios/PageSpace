@@ -12,6 +12,8 @@
  * this is a zero-behavior-change migration for existing users.
  */
 
+import type { PinnedOwnerApproval } from '../env-bridge/lib-core.js';
+
 export const DEFAULT_PROFILE_NAME = 'default';
 
 /**
@@ -57,6 +59,19 @@ export interface MachineHostCredential {
   /** Base64 SPKI DER of the server signing key this machine pinned at enrollment. */
   readonly serverPublicKey: string;
   readonly serverKeyId: string;
+  /**
+   * The OWNER'S passkeys, pinned at enrollment beside the server key
+   * (hardening B, leaf B1) — trust on first use, at the one moment the owner
+   * is provably at the keyboard. Public keys only, so this adds no secret to
+   * a store that already holds the machine's private key.
+   *
+   * Written ONCE, by `env enroll`. Nothing else writes it: `env connect` only
+   * reads it, and no frame can reach it (leaf B5). Absent (or unreadable, in
+   * which case it is dropped on read rather than trusted) means the machine
+   * cannot prove a human clicked, and it refuses chat approvals rather than
+   * accepting the server's word for one.
+   */
+  readonly ownerApproval?: PinnedOwnerApproval;
   readonly scopes: readonly string[];
   readonly createdAt: string;
 }
@@ -163,10 +178,35 @@ function normalizeHostCredential(value: unknown): HostCredential | null {
       return null;
     }
     const [privateKey, enrollmentId, envId, serverPublicKey, serverKeyId] = strings as [string, string, string, string, string];
-    return { kind: 'machine', privateKey, enrollmentId, envId, serverPublicKey, serverKeyId, scopes: [...candidate.scopes], createdAt: candidate.createdAt };
+    const ownerApproval = normalizePinnedOwnerApproval(candidate.ownerApproval);
+    return { kind: 'machine', privateKey, enrollmentId, envId, serverPublicKey, serverKeyId, ...(ownerApproval !== null && { ownerApproval }), scopes: [...candidate.scopes], createdAt: candidate.createdAt };
   }
 
   return null;
+}
+
+/**
+ * Validates + copies the pinned owner credentials, or `null` for anything that
+ * is not exactly the expected shape. FAIL CLOSED and total: a malformed or
+ * tampered pinning is DROPPED rather than trusted, which makes the machine
+ * refuse chat approvals — strictly stricter, never weaker. An empty
+ * `credentials` array is legitimate (the owner had no passkey at enrollment)
+ * and is preserved, because it is what the machine reports to the owner.
+ */
+function normalizePinnedOwnerApproval(value: unknown): PinnedOwnerApproval | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const candidate = value as Record<string, unknown>;
+  const { rpId, origin, credentials } = candidate;
+  if (typeof rpId !== 'string' || rpId.length === 0 || typeof origin !== 'string' || origin.length === 0) return null;
+  if (!Array.isArray(credentials)) return null;
+  const pinned: { credentialId: string; publicKeyCose: string }[] = [];
+  for (const entry of credentials) {
+    if (typeof entry !== 'object' || entry === null) return null;
+    const { credentialId, publicKeyCose } = entry as Record<string, unknown>;
+    if (typeof credentialId !== 'string' || credentialId.length === 0 || typeof publicKeyCose !== 'string' || publicKeyCose.length === 0) return null;
+    pinned.push({ credentialId, publicKeyCose });
+  }
+  return { rpId, origin, credentials: pinned };
 }
 
 /** Pure copy — the caller already holds a well-typed `HostCredential` (in-memory, this session). */
@@ -184,6 +224,9 @@ function toHostCredential(value: HostCredential): HostCredential {
         envId: value.envId,
         serverPublicKey: value.serverPublicKey,
         serverKeyId: value.serverKeyId,
+        ...(value.ownerApproval !== undefined && {
+          ownerApproval: { rpId: value.ownerApproval.rpId, origin: value.ownerApproval.origin, credentials: value.ownerApproval.credentials.map((credential) => ({ credentialId: credential.credentialId, publicKeyCose: credential.publicKeyCose })) },
+        }),
         scopes: [...value.scopes],
         createdAt: value.createdAt,
       };

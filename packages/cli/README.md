@@ -235,10 +235,36 @@ second surprises people:
   read any file you can read, change any file you can change, reach anything on your network that
   you can reach, and use any credential sitting in your home directory. There is no sandbox
   around it.
-- You see the **first** command of each kind, and approving it covers **every later command of
-  that kind for the rest of that session, unseen**. The approval is remembered per user, session
-  and operation — not per command — so after you approve one `exec`, the next `exec` from that
-  same user and session runs with no prompt at all, whatever it is.
+- Approving a command is remembered **per program, not per session**. The approval is keyed on
+  you, this environment, the operation, and the *program* that ran (`/usr/bin/git` — for a shell
+  command line, every program it names), for the time you choose: once, until the daemon stops,
+  30 days (the default), or until you revoke it. So approving `git status` lets `git push` run
+  from a new chat tomorrow with no prompt, and does **not** let `rm` run: `rm` asks. A command
+  line whose programs cannot be pinned down (`$(…)`, `eval`, a nested `sh -c`, `find -exec`,
+  `sudo`) is never remembered and asks every time. Approvals live in
+  `~/.pagespace/env-approvals.json` (yours, 0600; a file anybody else can write is ignored), and
+  PageSpace can revoke one (from the environment's settings, over a signed frame the daemon checks
+  against its pinned key) but never add one.
+
+**A file write can become a command.** `fs_write` inside your roots runs without a prompt, because
+writing a file looks like the harmless half of this. It is not: a file's *contents* can be a
+command that something else runs later. Writing `.git/hooks/pre-commit` and making it executable
+means your next ordinary `git commit` runs it, as you, with no approval anywhere. So a write the
+daemon can recognise as one of those — anything inside `.git/`, `.hg/` or `.svn/`; a shell startup
+file; a `Makefile`, `justfile` or `.vscode/tasks.json`; a package manifest like `package.json` or
+`Cargo.toml`; a CI config; `.pre-commit-config.yaml`, `.gitattributes` or `conftest.py`; or *any*
+file that will be executable once the write lands — stops and asks you, in this terminal or on the
+chat card, naming the file and why. "Will be executable" is the resulting mode, not the requested
+one: a write that names no mode does not change permissions, so overwriting a file that is
+*already* executable (`bin/tool`, `scripts/deploy.sh`) asks too — the replacement would run as you
+the next time anything invokes it. A write that explicitly asks for a non-executable mode over an
+executable file does not ask: the permission bit is being removed, not kept. Approving one covers **that file**, never the whole root. Ordinary writes
+are unaffected and still run without a prompt.
+
+Know the limit of that, because it is a real one: **the list can never be complete.** A write to
+ordinary source code that you later build or run is still a command, and no list of filenames
+catches it. This raises the cost of the obvious attack and puts you in front of it; it is not a
+boundary. Only operating-system sandboxing would be, and this daemon does not do that.
 
 The `roots` in your policy file confine the paths an agent can **name** — the working directory it
 asks for, and the files it asks to read or write. They do **not** confine what a program does once
@@ -247,9 +273,9 @@ it has started. A command approved with a working directory inside a root can st
 daemon to open them. Actually confining a running process needs operating-system sandboxing,
 which this daemon does not do.
 
-So the question at the prompt is not "may this touch that folder". It is "may this, and everything
-like it for the rest of this session, run as me". Answer it the way you would answer a stranger
-asking for your shell for the afternoon. Two practical consequences:
+So the question at the prompt is not "may this touch that folder". It is "may this program, run
+with any arguments, from any of my chats, run as me for the time I pick". Answer it the way you
+would answer a stranger asking for your shell for the afternoon. Two practical consequences:
 
 - Run the daemon as an ordinary user, never as root, and prefer a machine — or a separate account —
   that does not hold secrets you would not hand to whoever is driving the agent.
@@ -272,21 +298,28 @@ What the daemon does guarantee is narrower than "safe", and worth knowing exactl
 One consequence of the two facts above, worth seeing once before you pick a mode: an agent that
 reads a file on this machine can be *steered* by what that file says — a README, a dependency's
 source, a downloaded document can all contain text aimed at the agent rather than at you. If the
-agent then runs a command, and you have already approved an `exec` in that session, **that command
-runs without a prompt**. This is inherent to agents reading content nobody vetted, not a defect in
-this daemon; the defences that apply here are the ordinary ones — keep `principals` short, keep
-`ops` narrow, stop the daemon when you are not using it, and read
-`~/.pagespace/env-audit.jsonl` when you want to know what actually ran.
+agent then runs a command whose program you have already approved, **that command runs without a
+prompt** — with whatever arguments the steered agent chose. This is inherent to agents reading
+content nobody vetted, not a defect in this daemon; the defences that apply here are the ordinary
+ones — approve programs, not shells or interpreters, when you can; pick the shortest scope that
+does the job; keep `principals` short and `ops` narrow; stop the daemon when you are not using it;
+revoke approvals you no longer need; and read `~/.pagespace/env-audit.jsonl` when you want to
+know what actually ran.
 
 ### The three modes, in practice
 
 - **`deny`** — nothing runs, ever. The daemon still connects, so the Environment shows as connected.
 - **`ask`** — the safe default to start with. An operation listed in `ops` runs without asking;
   anything else stops and prompts you in this terminal, showing the exact command, working
-  directory, paths, environment and limits. As above, approving covers further requests for that
-  same operation from the same user and session while the daemon runs — those later commands are
-  never shown to you — but not forever, and not for other people. Declining refuses that request
-  and asks again next time. `ask` needs a terminal: a headless machine cannot use it.
+  directory, paths, environment and limits — and which programs an approval would cover. Approving
+  remembers those programs (for you, on this environment) for the scope you pick; later commands
+  that run only remembered programs are never shown to you, others ask. Declining refuses that
+  request and asks again next time. Without a terminal (or with `PAGESPACE_ENV_ASK=chat`), the
+  daemon does not deny: it freezes the exact request under a challenge and the question is put to
+  you **in the PageSpace chat**, on a card showing that exact command, directory, environment and
+  limits; the machine compares your click against what it froze before anything runs, and the
+  challenge dies with the request's one-minute grant. Answering that card requires **your
+  passkey** — see below.
 - **`allowlist`** — only the operations in `ops` run; everything else is denied with no prompt.
 
 **`allowlist` allowlists operations, not executables.** `ops` holds `exec`, `fs_read` and
@@ -295,6 +328,35 @@ unprompted, not some approved list of programs. There is deliberately no executa
 one was considered for this release and not adopted, because a list of program names is easy to
 walk around (`sh -c …`, an interpreter, a script inside a root) and would suggest a guarantee the
 daemon cannot keep. If you want per-command review, use `ask` and leave `exec` out of `ops`.
+Because that one edit silently removes the click, the daemon is loud about it: `env connect` and
+`env policy` print `exec is allowlisted: commands run on this machine without a click — remove
+exec from ops to restore the approval prompt`, and `env connect` writes one audit line
+(`policy_warning:exec_allowlisted`) at start.
+
+### A chat approval needs your passkey
+
+When you answer an approval card **in the PageSpace chat**, your browser asks your authenticator
+(Touch ID, Windows Hello, a security key) to sign, and the machine verifies that signature itself
+before it runs anything. The signature is over a challenge derived from the exact request the
+machine froze AND the scope you chose, so it cannot be moved to a different command, a different
+question, a different machine, or relayed as a longer-lasting approval than the one you gave —
+and PageSpace cannot produce one. That is the point: without it, anyone able to sign
+grants *and* stand where the server stands could answer your card for you, and the machine would
+have no way to tell.
+
+The passkeys the machine will accept are pinned **at enrolment**, from your PageSpace account,
+while you are at the keyboard — the same trust-on-first-use as the server signing key the machine
+pins in the other direction. `pagespace env owner-keys <enrollmentId>` prints them.
+
+Two consequences, both deliberate:
+
+- **Nothing can add a key to a machine afterwards.** Not PageSpace, not this CLI, not any message
+  on the bridge. If you register a new passkey and want this machine to trust it, **re-enrol the
+  machine**. A set that could be extended remotely would be worth nothing.
+- **If you had no passkey when you enrolled, chat approvals are refused.** The machine says so at
+  `env enroll` and at `env connect`, and asks in the terminal running `env connect` instead — the
+  terminal prompt never involved the server, so it was never exposed to this. Register a passkey
+  and re-enrol to use the chat.
 
 A drive owner or admin creates a local Environment from the ordinary "New environment" step (choose
 **This computer** and name the machine) and is shown a **one-time enrollment code** (valid ten
@@ -308,13 +370,15 @@ pagespace env token <enrollmentId> [--host <url>]
 pagespace env connect <enrollmentId> [--host <url>]
 pagespace env disconnect <enrollmentId>
 pagespace env policy [--json]
+pagespace env owner-keys <enrollmentId> [--json]
 ```
 
 `env enroll` generates an Ed25519 keypair **on this machine**, sends the server the public half
 with the code, and stores the private half — plus the server signing key it pinned in return — in
 this machine's credential store under the profile `env:<enrollmentId>`. The private key is never
 printed (not even with `--json`) and never leaves the machine. A refused enrollment discards the
-key. `env token` proves possession of that key (the server issues a nonce, the machine signs it)
+key. `env enroll` also pins **your passkeys** at the same moment — see "A chat approval needs your
+passkey" below; `env owner-keys` prints what it pinned. `env token` proves possession of that key (the server issues a nonce, the machine signs it)
 and prints a short-lived bridge token — the round trip `env connect` performs on every
 reconnect. Neither command needs a login: the code, then the key, are the machine's credentials,
 and the machine credential is never used to authenticate ordinary commands (`logout` and
@@ -331,7 +395,9 @@ env, single-use nonce and that the grant is bound to exactly this request **befo
 your policy, and runs nothing unless the policy allows it. Results are signed with the machine key
 so the server can verify them. Everything is appended to `~/.pagespace/env-audit.jsonl`
 (`PAGESPACE_ENV_AUDIT_LOG` to move it) as one JSON line per decision with the `grantId` the server
-also audits. Ctrl-C, `env disconnect` (which signals the running daemon's pid from
+also audits — the server keeps one row per grant it signs or refuses (`drive_env_grant_audit`),
+under the same id, and shows it to the Environment's owner as the machine's activity in
+PageSpace. Ctrl-C, `env disconnect` (which signals the running daemon's pid from
 `~/.pagespace/env-connect.<enrollmentId>.pid`), or a server-signed revoke stops it; a revoke also
 deletes the machine key. After a server restart it reconnects with exponential backoff.
 
@@ -348,6 +414,16 @@ and a short-lived bearer token, and the socket is `wss://`). Plain `http://` is 
 the loopback hosts used in local development (`localhost`, `127.0.0.1`, `::1`), matching the CLI's
 OAuth loopback policy. Token redemption refuses to follow redirects.
 
+**Stop, from PageSpace:** the Environment's owner can press **Stop** in PageSpace (the
+Environment's settings, or their account's Local environments page). The server then refuses to
+sign any grant for the Environment, and sends the daemon a server-signed `pause` frame — under its
+own signing domain, so it can never be replayed as a revoke. On a verified pause the daemon
+SIGKILLs every process group it started, forgets every request it had frozen for a click, writes
+`paused:killed:<n>` to the audit log, answers with a machine-signed `pause_result` carrying that
+count, and **stays connected** — the machine is not what is being stopped. **Resume** needs no
+frame: grants simply sign again, and a click for a request frozen before the Stop matches nothing.
+If the daemon was away when Stop was pressed, the pause is delivered on its next heartbeat.
+
 **Stopping it:** `env connect` writes its process identity (pid, start time, `argv0`) to
 `~/.pagespace/env-connect.<enrollmentId>.pid` and refreshes it periodically. `env disconnect`
 validates that record — it must be ours, recent, and the process must still be alive — before
@@ -361,6 +437,18 @@ and must not be writable by group or world (`chmod 600`) — otherwise it is ign
 or one that is unreadable, invalid, wrongly owned or writable by others, means every request is
 denied** (`no_policy`); the daemon still connects so you can see the Environment and fix the file.
 `pagespace env policy` prints what is in force, or why the file is being ignored.
+
+**`env enroll` writes a starter policy for you** if none exists: `mode: ask`, the **file**
+operations the environment's server policy allows (`fs_read`, `fs_write`) pre-approved so file
+work inside the root runs without asking — **never `exec`**, however the environment is
+configured: every command reaches the prompt, and each program needs your approval the first time
+— the directory you ran `enroll` in as the only root, and — the part that matters — `principals`
+set to **your user id and nobody else's**. A machine is driven by its owner only: PageSpace will
+only ever bind the environment owner's sessions to it, and this file makes the machine refuse
+everyone else on its own, even if the server were wrong. An existing policy is never overwritten;
+`enroll` prints the diff of what it would have written, and if the file does not name you it says so. Naming other users in `principals` is honoured (it is
+your file), but `env policy` and `env connect` warn about it, because each user listed there can
+run commands as you.
 
 ```json
 {
@@ -386,7 +474,10 @@ denied** (`no_policy`); the daemon still connects so you can see the Environment
 - `roots` — absolute directories every working directory and every file path must resolve inside
   (symlinks are resolved; `..` is refused). Roots confine the paths an agent can *name*. They do
   not confine a command once it is running: an approved `exec` with its cwd inside a root still
-  runs as you and can read anything you can read. See "What you are agreeing to" above.
+  runs as you and can read anything you can read. See "What you are agreeing to" above. A root
+  that is your **home directory** — or any directory above it — covers `~/.ssh`, your shell
+  startup files and every project at once; `enroll`, `connect` and `pagespace env policy` all say
+  so out loud, and honour it anyway: it is your machine. Name the project directories you meant.
 - `envAllowlist` — environment variable names the server may set for a command. Loader and
   interpreter hooks (`LD_*`, `DYLD_*`, `PATH`, `NODE_OPTIONS`, …) are refused even if listed.
 - `maxBytes` / `maxTimeoutMs` — caps on captured output and wall-clock per command; a request that

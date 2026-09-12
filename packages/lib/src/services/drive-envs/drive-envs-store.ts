@@ -94,7 +94,16 @@ export interface DriveEnvLocalRecord {
   machineKeyFingerprint: string | null;
   serverKeyId: string | null;
   capabilities: { shell: boolean; pty: boolean; fs: boolean; checkpoint: boolean } | null;
+  /** The daemon process the last hello came from (attested in the signed hello); NULL before the first. */
+  daemonEpoch: string | null;
   serverPolicy: { ops: string[]; checkpoint: boolean };
+  /**
+   * The owner's passkeys as pinned at enrolment (hardening B). NULL for a row
+   * enrolled before the column existed, and `{ credentials: [] }` for an owner
+   * who had none — both mean the machine cannot prove a human clicked, so it
+   * refuses chat approvals (leaf B5). Public keys only.
+   */
+  ownerCredentials: { rpId: string; origin: string; credentials: { credentialId: string; publicKeyCose: string }[] } | null;
   bindPolicy: string;
   enrollmentCodeHash: string | null;
   enrollmentCodeExpiresAt: Date | null;
@@ -107,6 +116,8 @@ export interface DriveEnvLocalRecord {
   lastSeenAt: Date | null;
   enrolledAt: Date | null;
   revokedAt: Date | null;
+  /** Stop (GA wave 3): set while the OWNER has paused the env's grants; NULL = running. */
+  pausedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -118,6 +129,13 @@ export interface NewDriveEnvLocalFacts {
   enrollmentId: string;
   enrollmentCodeHash: string;
   enrollmentCodeExpiresAt: Date;
+  /**
+   * The owner's explicit allow-set, written in the SAME transaction as the
+   * code hash (GA wave 1). Required: the column's deny-all default is the
+   * fail-closed backstop for a row minted by some path that forgot, not a
+   * value this store ever chooses on a caller's behalf.
+   */
+  serverPolicy: { ops: string[]; checkpoint: boolean };
 }
 
 export interface NewDriveEnvInput {
@@ -203,6 +221,8 @@ export interface DriveEnvStore {
   findLocalByEnvId(envId: string): Promise<DriveEnvLocalRecord | null>;
   /** Every sibling in the drive — what the listing joins. */
   listLocalFacts(driveId: string): Promise<DriveEnvLocalRecord[]>;
+  /** Every machine a user OWNS, across drives, with its env row — the account page's read (GA wave 3). Owner, never requester. */
+  listLocalByOwner(ownerId: string): Promise<Array<{ env: DriveEnvRecord; local: DriveEnvLocalRecord }>>;
   /**
    * Enroll: pin the machine key and consume the code, IFF the row is pending
    * (`enrolledAt IS NULL AND enrollmentCodeUsedAt IS NULL AND revokedAt IS
@@ -213,7 +233,14 @@ export interface DriveEnvStore {
    * and silently invalidate the code the owner was just shown (Codex P1 on
    * #2564). Clears the code hash — a consumed code is not kept around.
    */
-  pinMachineKey(input: { envId: string; machinePublicKey: string; machineKeyFingerprint: string; serverKeyId: string; enrollmentCodeHash: string; now: Date }): Promise<boolean>;
+  /**
+   * Pin the machine's key AND the owner's passkeys, in ONE update — trust on
+   * first use for both directions of the bridge at the single moment the owner
+   * is provably at the keyboard (hardening B, leaf B1). `ownerCredentials` is
+   * written here and nowhere else: no other store method sets that column, so
+   * no server-mintable path can add a credential later.
+   */
+  pinMachineKey(input: { envId: string; machinePublicKey: string; machineKeyFingerprint: string; serverKeyId: string; ownerCredentials: DriveEnvLocalRecord['ownerCredentials']; enrollmentCodeHash: string; now: Date }): Promise<boolean>;
   /**
    * Replace the one-time code (hash + expiry, used stamp cleared) IFF the row
    * is still pending: `enrolledAt IS NULL AND revokedAt IS NULL`. The
@@ -243,9 +270,28 @@ export interface DriveEnvStore {
    * the machine's advertised capabilities and a heartbeat, IFF enrolled and
    * not revoked — a revoked machine's hello changes nothing.
    */
-  recordHello(input: { envId: string; capabilities: NonNullable<DriveEnvLocalRecord['capabilities']>; now: Date }): Promise<boolean>;
+  recordHello(input: { envId: string; capabilities: NonNullable<DriveEnvLocalRecord['capabilities']>; daemonEpoch: string; now: Date }): Promise<boolean>;
   /** Heartbeat from the live socket (throttled by the route to once per heartbeat window). Same CAS as `recordHello`. */
   recordHeartbeat(input: { envId: string; now: Date }): Promise<boolean>;
+  /**
+   * Replace the server policy IFF the caller is the row's OWNER and the env is
+   * not revoked: ONE `UPDATE … WHERE envId = ? AND ownerId = ? AND revokedAt IS
+   * NULL` returning the row count — a compare-and-set, never a read-then-write
+   * ([D-6]: a machine's policy is the enrolling human's alone; GA wave 1). A
+   * drive admin who did not enrol the machine loses the predicate exactly as a
+   * stranger does, and the row is left byte-identical. False = not written;
+   * the service reads the row afterwards only to choose the honest answer.
+   */
+  setServerPolicy(input: { envId: string; ownerId: string; serverPolicy: { ops: string[]; checkpoint: boolean }; now: Date }): Promise<boolean>;
+  /**
+   * STOP / RESUME (GA wave 3): stamp or clear `pausedAt` IFF the caller is the
+   * row's OWNER and the env is not revoked — the same compare-and-set shape as
+   * `setServerPolicy` ([D-6]: Stop is the enrolling human's alone; drive
+   * admins keep Delete). Stop on an already-paused row keeps the FIRST stamp
+   * (the predicate excludes it from re-stamping) and still answers true —
+   * the row is in the requested state. False = not written.
+   */
+  setPaused(input: { envId: string; ownerId: string; paused: boolean; now: Date }): Promise<boolean>;
   /**
    * Revoke: stamp `revokedAt` IFF `revokedAt IS NULL` (Codex C4). False means
    * it was already revoked — the caller still completes the other two legs
@@ -309,6 +355,25 @@ export interface DriveEnvStore {
   deleteIfUnoccupied(input: {
     envId: string;
     force: boolean;
+    /**
+     * Runs INSIDE the transaction, under the row lock, after the guard has
+     * passed and before the row is deleted — the seam a caller uses to make an
+     * irreversible act conditional on the delete actually happening.
+     *
+     * A local env's machine revoke is the only user (`DELETE .../envs/[envId]`).
+     * It used to run in the route BEFORE this method was even called, so a
+     * delete refused `live_sessions` had already stamped `revokedAt`, revoked
+     * every session, closed the socket and made the daemon delete its key —
+     * while the caller was told nothing happened, and (posture doc R-8) was
+     * left with an env that can never take a new machine because the row it
+     * would have to be recreated from is still there. Passing it here means
+     * the guard decides first and there is no window in which a REFUSAL has
+     * revoked anything.
+     *
+     * A throw propagates and rolls the transaction back: the row survives, and
+     * the caller sees the error rather than a delete it did not get.
+     */
+    beforeDelete?: () => Promise<void>;
   }): Promise<{ ok: true } | { ok: false; reason: 'not_found' } | { ok: false; reason: 'live_sessions'; liveSessionCount: number }>;
   /**
    * Sessions still LIVE inside this env — rows carrying this `envId` with no
@@ -586,7 +651,9 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     machineKeyFingerprint: driveEnvLocal.machineKeyFingerprint,
     serverKeyId: driveEnvLocal.serverKeyId,
     capabilities: driveEnvLocal.capabilities,
+    daemonEpoch: driveEnvLocal.daemonEpoch,
     serverPolicy: driveEnvLocal.serverPolicy,
+    ownerCredentials: driveEnvLocal.ownerCredentials,
     bindPolicy: driveEnvLocal.bindPolicy,
     enrollmentCodeHash: driveEnvLocal.enrollmentCodeHash,
     enrollmentCodeExpiresAt: driveEnvLocal.enrollmentCodeExpiresAt,
@@ -598,6 +665,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     lastSeenAt: driveEnvLocal.lastSeenAt,
     enrolledAt: driveEnvLocal.enrolledAt,
     revokedAt: driveEnvLocal.revokedAt,
+    pausedAt: driveEnvLocal.pausedAt,
     createdAt: driveEnvLocal.createdAt,
     updatedAt: driveEnvLocal.updatedAt,
   };
@@ -648,10 +716,21 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       return rows as DriveEnvLocalRecord[];
     },
 
-    async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, enrollmentCodeHash, now: at }) {
+    async listLocalByOwner(ownerId) {
+      const rows = await db
+        .select({ env: driveEnvs, local: localSelection })
+        .from(driveEnvLocal)
+        .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId))
+        .where(eq(driveEnvLocal.ownerId, ownerId))
+        .orderBy(asc(driveEnvs.createdAt))
+        .limit(MAX_DRIVE_ENVS_LISTED);
+      return rows.map((row) => ({ env: row.env as DriveEnvRecord, local: row.local as DriveEnvLocalRecord }));
+    },
+
+    async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, ownerCredentials, enrollmentCodeHash, now: at }) {
       const updated = await db
         .update(driveEnvLocal)
-        .set({ machinePublicKey, machineKeyFingerprint, serverKeyId, enrolledAt: at, enrollmentCodeUsedAt: at, enrollmentCodeHash: null, updatedAt: at })
+        .set({ machinePublicKey, machineKeyFingerprint, serverKeyId, ownerCredentials: ownerCredentials ?? undefined, enrolledAt: at, enrollmentCodeUsedAt: at, enrollmentCodeHash: null, updatedAt: at })
         .where(
           and(
             eq(driveEnvLocal.envId, envId),
@@ -706,10 +785,10 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       return updated.length === 1;
     },
 
-    async recordHello({ envId, capabilities, now: at }) {
+    async recordHello({ envId, capabilities, daemonEpoch, now: at }) {
       const updated = await db
         .update(driveEnvLocal)
-        .set({ capabilities, lastSeenAt: at, updatedAt: at })
+        .set({ capabilities, daemonEpoch, lastSeenAt: at, updatedAt: at })
         .where(and(eq(driveEnvLocal.envId, envId), sql`${driveEnvLocal.enrolledAt} IS NOT NULL`, isNull(driveEnvLocal.revokedAt)))
         .returning({ envId: driveEnvLocal.envId });
       return updated.length === 1;
@@ -724,11 +803,41 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       return updated.length === 1;
     },
 
+    async setPaused({ envId, ownerId, paused, now: at }) {
+      if (paused) {
+        // Stamp only a RUNNING row; an already-paused one keeps its first stamp.
+        const updated = await db
+          .update(driveEnvLocal)
+          .set({ pausedAt: at, updatedAt: at })
+          .where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.ownerId, ownerId), isNull(driveEnvLocal.revokedAt), isNull(driveEnvLocal.pausedAt)))
+          .returning({ envId: driveEnvLocal.envId });
+        if (updated.length === 1) return true;
+        // Lost the CAS: already paused by this owner is still "paused" — answer from the row.
+        const [row] = await db.select({ pausedAt: driveEnvLocal.pausedAt }).from(driveEnvLocal).where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.ownerId, ownerId), isNull(driveEnvLocal.revokedAt))).limit(1);
+        return row !== undefined && row.pausedAt !== null;
+      }
+      const updated = await db
+        .update(driveEnvLocal)
+        .set({ pausedAt: null, updatedAt: at })
+        .where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.ownerId, ownerId), isNull(driveEnvLocal.revokedAt)))
+        .returning({ envId: driveEnvLocal.envId });
+      return updated.length === 1;
+    },
+
     async revokeLocal({ envId, now: at }) {
       const updated = await db
         .update(driveEnvLocal)
         .set({ revokedAt: at, updatedAt: at })
         .where(and(eq(driveEnvLocal.envId, envId), isNull(driveEnvLocal.revokedAt)))
+        .returning({ envId: driveEnvLocal.envId });
+      return updated.length === 1;
+    },
+
+    async setServerPolicy({ envId, ownerId, serverPolicy, now: at }) {
+      const updated = await db
+        .update(driveEnvLocal)
+        .set({ serverPolicy, updatedAt: at })
+        .where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.ownerId, ownerId), isNull(driveEnvLocal.revokedAt)))
         .returning({ envId: driveEnvLocal.envId });
       return updated.length === 1;
     },
@@ -756,7 +865,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
           // without its lifecycle row, and the composite FK holds both ways.
           const [sibling] = await tx
             .insert(driveEnvLocal)
-            .values({ envId: row!.id, ownerId: local.ownerId, label: local.label, enrollmentId: local.enrollmentId, enrollmentCodeHash: local.enrollmentCodeHash, enrollmentCodeExpiresAt: local.enrollmentCodeExpiresAt, createdAt: at, updatedAt: at })
+            .values({ envId: row!.id, ownerId: local.ownerId, label: local.label, enrollmentId: local.enrollmentId, enrollmentCodeHash: local.enrollmentCodeHash, enrollmentCodeExpiresAt: local.enrollmentCodeExpiresAt, serverPolicy: local.serverPolicy, createdAt: at, updatedAt: at })
             .returning();
           return { ok: true as const, env: row as DriveEnvRecord, local: { ...(sibling as Omit<DriveEnvLocalRecord, 'driveId'>), driveId } as DriveEnvLocalRecord };
         });
@@ -784,7 +893,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       }
     },
 
-    async deleteIfUnoccupied({ envId, force }) {
+    async deleteIfUnoccupied({ envId, force, beforeDelete }) {
       return db.transaction(async (tx) => {
         // The row lock FIRST — see the interface doc for why it, and not the
         // count, is what makes this guard sound.
@@ -806,6 +915,10 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
             return { ok: false as const, reason: 'live_sessions' as const, liveSessionCount };
           }
         }
+
+        // The guard has passed and the row is locked: only now may anything
+        // irreversible happen. A throw here rolls the delete back.
+        if (beforeDelete) await beforeDelete();
 
         await tx.delete(driveEnvs).where(eq(driveEnvs.id, envId));
         return { ok: true as const };

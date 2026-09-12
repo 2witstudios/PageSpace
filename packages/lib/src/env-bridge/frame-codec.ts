@@ -19,6 +19,7 @@
  * (a structurally valid frame whose only defect is a `*B64`/`sig` field).
  */
 import { z } from 'zod';
+import { SENSITIVE_WRITE_REASONS } from './classify-write';
 
 /** Strict base64 (standard alphabet, correct padding); the empty string is allowed. */
 const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
@@ -28,6 +29,14 @@ const b64 = z.string().refine((value) => BASE64_RE.test(value), { message: BAD_B
 const nonEmpty = z.string().min(1);
 const nonNegInt = z.number().int().nonnegative();
 const posInt = z.number().int().positive();
+/**
+ * How many files one write grant may carry (hardening A4). A write is a single
+ * agent tool call, so a handful is the real shape; the cap exists so that a
+ * request the owner may be asked to approve is always one a person can read,
+ * and so that no single grant can rewrite a tree. Over the cap the frame is
+ * refused whole — never truncated, never partially written.
+ */
+export const MAX_FS_WRITE_FILES = 32;
 /** The grant travels opaque; `verifyGrant` is the strict parser. */
 const opaqueGrant = z.record(z.string(), z.unknown());
 
@@ -40,15 +49,60 @@ const capabilitiesSchema = z.object({
 
 // ---- machine → server -----------------------------------------------------
 
-const hello = z.object({ type: z.literal('hello'), envId: nonEmpty, capabilities: capabilitiesSchema, policyDigest: z.string(), sig: b64 });
+/** `daemonEpoch` (GA wave 3, Codex P2 #7): a random id per daemon PROCESS, attested inside the signed hello bytes — a restart changes it, a reconnect does not. */
+const hello = z.object({ type: z.literal('hello'), envId: nonEmpty, capabilities: capabilitiesSchema, policyDigest: z.string(), daemonEpoch: nonEmpty, sig: b64 });
 const execResult = z.object({ type: z.literal('exec_result'), grantId: nonEmpty, exitCode: z.number().int(), stdoutB64: b64, stderrB64: b64, truncated: z.boolean(), sig: b64 });
 const fsReadResult = z.object({ type: z.literal('fs_read_result'), grantId: nonEmpty, found: z.boolean(), contentB64: b64.optional(), sig: b64 });
 const fsWriteResult = z.object({ type: z.literal('fs_write_result'), grantId: nonEmpty, ok: z.boolean(), error: z.string().optional(), sig: b64 });
-const grantDenied = z.object({ type: z.literal('grant_denied'), grantId: nonEmpty, reason: nonEmpty, sig: b64 });
+/**
+ * The request a daemon FROZE under a pending chat approval (GA wave 2): the
+ * exact normalised request the owner's card shows and the machine will
+ * byte-compare a click against. Carried on a `grant_denied` whose reason is
+ * `ask_pending:<challengeId>`; covered by the result signature like every
+ * other payload field, so the card shows what the machine signed.
+ */
+const pendingRequest = z
+  .object({
+    op: z.enum(['exec', 'fs_read', 'fs_write', 'pty_open']),
+    cmd: z.string().optional(),
+    args: z.array(z.string()).optional(),
+    cwd: nonEmpty,
+    paths: z.array(z.string()),
+    /** Index-aligned with `paths`, for `fs_write` only (hardening A1) — part of the normalised request, so the card shows the mode that was actually signed for. */
+    writeModes: z.array(nonNegInt.nullable()).optional(),
+    env: z.record(z.string(), z.string()),
+    timeoutMs: posInt,
+    maxBytes: posInt,
+    clamped: z.boolean(),
+  })
+  .strict();
+/**
+ * What the machine determined about each file of a pending WRITE (hardening
+ * A7): its size, the mode it would be given, and — in the machine's OWN
+ * vocabulary, from the closed set `classify-write.ts` mints — why it was
+ * escalated, or `null` for an ordinary file in a mixed request. The card
+ * renders these rather than any paraphrase, and the CONTENT never travels:
+ * a byte count says what will be written without making the bytes themselves
+ * something a browser has to render. Covered by the result signature like
+ * every other payload field.
+ */
+const pendingWriteFile = z.object({ path: nonEmpty, mode: nonNegInt.nullable(), bytes: nonNegInt, reason: z.enum(SENSITIVE_WRITE_REASONS).nullable() }).strict();
+const pendingApproval = z.object({ challengeId: nonEmpty, expiresAt: nonNegInt, request: pendingRequest, files: z.array(pendingWriteFile).max(MAX_FS_WRITE_FILES).optional() }).strict();
+const grantDenied = z.object({ type: z.literal('grant_denied'), grantId: nonEmpty, reason: nonEmpty, pending: pendingApproval.optional(), sig: b64 });
 const ptyOpened = z.object({ type: z.literal('pty_opened'), grantId: nonEmpty, sessionId: nonEmpty });
 const ptyData = z.object({ type: z.literal('pty_data'), sessionId: nonEmpty, seq: nonNegInt, dataB64: b64 });
 const ptyExit = z.object({ type: z.literal('pty_exit'), sessionId: nonEmpty, code: z.number().int() });
 const pong = z.object({ type: z.literal('pong'), ts: nonNegInt });
+/** The machine's signed acknowledgement of an approval revoke (GA wave 2): exactly this many rows were deleted for this id. */
+const approvalRevokeResult = z.object({ type: z.literal('approval_revoke_result'), approvalId: nonEmpty, removed: nonNegInt, sig: b64 });
+/**
+ * The machine's signed acknowledgement of a STOP (GA wave 3): for the pause
+ * stamped at `pausedAt` on `envId`, this many in-flight process groups were
+ * killed. Carries the env so its binding id (`pause:<envId>:<pausedAt>`) is
+ * derivable from the frame alone; the server still refuses one arriving on
+ * another env's socket.
+ */
+const pauseResult = z.object({ type: z.literal('pause_result'), envId: nonEmpty, pausedAt: nonNegInt, killed: nonNegInt, sig: b64 });
 
 // ---- server → machine -----------------------------------------------------
 
@@ -64,11 +118,20 @@ const grantExec = z.object({
   maxBytes: z.number().optional(),
 });
 const grantFsRead = z.object({ type: z.literal('grant_fs_read'), grant: opaqueGrant, sig: b64, paths: z.array(z.string()) });
+/**
+ * A POSIX permission mode, and no more (hardening A4). `mode` is chosen by
+ * whoever composed the frame and is applied to EXISTING files, so setuid,
+ * setgid and the sticky bit (`0o7000`) are refused outright here rather than
+ * escalated: they are not a thing an owner should be asked to adjudicate in a
+ * chat card. `0o755` stays legal at this layer — the executable bit is a
+ * question for the owner (`classify-write.ts`), not an envelope error.
+ */
+const fileMode = nonNegInt.refine((mode) => (mode & ~0o777) === 0, { message: 'mode must be within 0o777; setuid, setgid and sticky are refused' });
 const grantFsWrite = z.object({
   type: z.literal('grant_fs_write'),
   grant: opaqueGrant,
   sig: b64,
-  files: z.array(z.object({ path: z.string(), contentB64: b64, mode: nonNegInt.optional() })),
+  files: z.array(z.object({ path: z.string(), contentB64: b64, mode: fileMode.optional() })).max(MAX_FS_WRITE_FILES),
 });
 const grantPtyOpen = z.object({
   type: z.literal('grant_pty_open'),
@@ -83,21 +146,33 @@ const grantPtyOpen = z.object({
 const ptyInput = z.object({ type: z.literal('pty_input'), sessionId: nonEmpty, seq: nonNegInt, dataB64: b64 });
 const ptyResize = z.object({ type: z.literal('pty_resize'), sessionId: nonEmpty, cols: posInt, rows: posInt });
 const ptyKill = z.object({ type: z.literal('pty_kill'), sessionId: nonEmpty, signal: z.string().optional() });
-const revoke = z.object({ type: z.literal('revoke'), sig: b64, issuedAt: nonNegInt, reason: z.string().optional() });
+/** `approvalId` present ⇒ revoke ONE durable approval on the machine (GA wave 2); absent ⇒ revoke the enrollment (delete the key). Signed under different domains, so neither can be turned into the other. */
+const revoke = z.object({ type: z.literal('revoke'), sig: b64, issuedAt: nonNegInt, reason: z.string().optional(), approvalId: nonEmpty.optional() });
 const ping = z.object({ type: z.literal('ping'), ts: nonNegInt });
+/**
+ * STOP (GA wave 3): server → machine, signed under its OWN domain
+ * (`pause/v1`) over `{envId, enrollmentId, keyId, issuedAt, pausedAt}` by the
+ * key the enrollment pinned — so a pause can never be replayed as a revoke
+ * nor a revoke as a pause. Carries no approval id and can add nothing: on a
+ * verified pause the daemon kills what it is running, drops its pending
+ * challenges, acks with `pause_result`, and STAYS connected.
+ */
+const pause = z.object({ type: z.literal('pause'), sig: b64, issuedAt: nonNegInt, pausedAt: nonNegInt });
 
 const frameSchema = z.discriminatedUnion('type', [
-  hello, execResult, fsReadResult, fsWriteResult, grantDenied, ptyOpened, ptyData, ptyExit, pong,
-  grantExec, grantFsRead, grantFsWrite, grantPtyOpen, ptyInput, ptyResize, ptyKill, revoke, ping,
+  hello, execResult, fsReadResult, fsWriteResult, grantDenied, approvalRevokeResult, pauseResult, ptyOpened, ptyData, ptyExit, pong,
+  grantExec, grantFsRead, grantFsWrite, grantPtyOpen, ptyInput, ptyResize, ptyKill, revoke, pause, ping,
 ]);
 
 export type Frame = z.infer<typeof frameSchema>;
+/** The frozen request a `grant_denied ask_pending:<id>` carries. */
+export type PendingApproval = z.infer<typeof pendingApproval>;
 export type FrameType = Frame['type'];
 
 /** The closed set. A `type` outside it is `unknown_type`, full stop. */
 export const FRAME_TYPES: ReadonlySet<FrameType> = new Set<FrameType>([
-  'hello', 'exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'pty_opened', 'pty_data', 'pty_exit', 'pong',
-  'grant_exec', 'grant_fs_read', 'grant_fs_write', 'grant_pty_open', 'pty_input', 'pty_resize', 'pty_kill', 'revoke', 'ping',
+  'hello', 'exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'approval_revoke_result', 'pause_result', 'pty_opened', 'pty_data', 'pty_exit', 'pong',
+  'grant_exec', 'grant_fs_read', 'grant_fs_write', 'grant_pty_open', 'pty_input', 'pty_resize', 'pty_kill', 'revoke', 'pause', 'ping',
 ]);
 
 /**
@@ -107,10 +182,10 @@ export const FRAME_TYPES: ReadonlySet<FrameType> = new Set<FrameType>([
  * `exec_result` arriving from the server. Every frame type is in exactly one.
  */
 export const MACHINE_TO_SERVER_FRAME_TYPES: ReadonlySet<FrameType> = new Set<FrameType>([
-  'hello', 'exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'pty_opened', 'pty_data', 'pty_exit', 'pong',
+  'hello', 'exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'approval_revoke_result', 'pause_result', 'pty_opened', 'pty_data', 'pty_exit', 'pong',
 ]);
 export const SERVER_TO_MACHINE_FRAME_TYPES: ReadonlySet<FrameType> = new Set<FrameType>([
-  'grant_exec', 'grant_fs_read', 'grant_fs_write', 'grant_pty_open', 'pty_input', 'pty_resize', 'pty_kill', 'revoke', 'ping',
+  'grant_exec', 'grant_fs_read', 'grant_fs_write', 'grant_pty_open', 'pty_input', 'pty_resize', 'pty_kill', 'revoke', 'pause', 'ping',
 ]);
 
 export function isMachineToServerFrame(frame: Frame): boolean {

@@ -163,6 +163,16 @@
       "import": "./dist/services/drive-envs/drive-envs-store.js",
       "require": "./dist/services/drive-envs/drive-envs-store.js"
     },
+    "./services/drive-envs/grant-audit-store": {
+      "types": "./dist/services/drive-envs/grant-audit-store.d.ts",
+      "import": "./dist/services/drive-envs/grant-audit-store.js",
+      "require": "./dist/services/drive-envs/grant-audit-store.js"
+    },
+    "./services/drive-envs/approval-mirror-store": {
+      "types": "./dist/services/drive-envs/approval-mirror-store.d.ts",
+      "import": "./dist/services/drive-envs/approval-mirror-store.js",
+      "require": "./dist/services/drive-envs/approval-mirror-store.js"
+    },
     "./drive-envs/env-sprite-key": {
       "types": "./dist/drive-envs/env-sprite-key.d.ts",
       "import": "./dist/drive-envs/env-sprite-key.js",
@@ -198,6 +208,11 @@
       "import": "./dist/env-bridge/confine-path.js",
       "require": "./dist/env-bridge/confine-path.js"
     },
+    "./env-bridge/classify-write": {
+      "types": "./dist/env-bridge/classify-write.d.ts",
+      "import": "./dist/env-bridge/classify-write.js",
+      "require": "./dist/env-bridge/classify-write.js"
+    },
     "./env-bridge/decide-execution": {
       "types": "./dist/env-bridge/decide-execution.d.ts",
       "import": "./dist/env-bridge/decide-execution.js",
@@ -223,6 +238,21 @@
       "import": "./dist/env-bridge/decide-bind.js",
       "require": "./dist/env-bridge/decide-bind.js"
     },
+    "./env-bridge/decide-approval": {
+      "types": "./dist/env-bridge/decide-approval.d.ts",
+      "import": "./dist/env-bridge/decide-approval.js",
+      "require": "./dist/env-bridge/decide-approval.js"
+    },
+    "./env-bridge/decide-sign": {
+      "types": "./dist/env-bridge/decide-sign.d.ts",
+      "import": "./dist/env-bridge/decide-sign.js",
+      "require": "./dist/env-bridge/decide-sign.js"
+    },
+    "./env-bridge/policy-warnings": {
+      "types": "./dist/env-bridge/policy-warnings.d.ts",
+      "import": "./dist/env-bridge/policy-warnings.js",
+      "require": "./dist/env-bridge/policy-warnings.js"
+    },
     "./env-bridge/plan-local-provision": {
       "types": "./dist/env-bridge/plan-local-provision.d.ts",
       "import": "./dist/env-bridge/plan-local-provision.js",
@@ -242,6 +272,11 @@
       "types": "./dist/env-bridge/grant-args.d.ts",
       "import": "./dist/env-bridge/grant-args.js",
       "require": "./dist/env-bridge/grant-args.js"
+    },
+    "./env-bridge/owner-approval": {
+      "types": "./dist/env-bridge/owner-approval.d.ts",
+      "import": "./dist/env-bridge/owner-approval.js",
+      "require": "./dist/env-bridge/owner-approval.js"
     },
     "./env-bridge/machine-signatures": {
       "types": "./dist/env-bridge/machine-signatures.d.ts",

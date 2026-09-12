@@ -1,0 +1,201 @@
+/**
+ * Is this file write one the owner should look at before it lands?
+ * (Hardening A, leaf A2.)
+ *
+ * WHY THIS EXISTS. The bridge's two tiers rest on `exec` being the dangerous
+ * op: a command needs the owner's click (Tier B), while file writes inside a
+ * declared root run headless (Tier A). That is not true on its own, because
+ * confinement answers WHERE a write may land and never WHAT it says. An agent
+ * that writes `.git/hooks/pre-commit` with mode 0o755 inside the enrolled root
+ * has broken nothing and stolen nothing — and the owner's next ordinary
+ * `git commit` runs it as them, with no click anywhere. This module is what
+ * lets `decideExecution` see that coming.
+ *
+ * ESCALATE, DO NOT REFUSE. A sensitive write becomes an `ask` — the same card
+ * `exec` already uses — never a denial. Ordinary writes stay headless, so no
+ * workflow breaks; and because a false positive costs one click rather than a
+ * breach, this classifier may be generous. A refusal list would have to be
+ * COMPLETE to be safe, and it never can be.
+ *
+ * WHAT IT DOES NOT DO — the honest limit, repeated in the posture doc. A write
+ * to ordinary source code that the owner later builds or runs is still
+ * execution, and no list of filenames changes that. This raises the cost and
+ * puts a human in front of the obvious vectors; it is not a boundary. Only OS
+ * confinement would be one.
+ *
+ * THE MODE THAT MATTERS IS THE RESULTING ONE. `fs-runner.ts` chmods only when
+ * the request NAMES a mode, so a mode-less write to an existing file leaves
+ * that file's permissions untouched. Classifying on the requested mode alone
+ * therefore left the whole bypass open by a second door: overwrite a file that
+ * is ALREADY `0o755` — `bin/tool`, `scripts/deploy.sh`, a hook that exists —
+ * name no mode, and the replacement runs as the owner at its next invocation
+ * with no click anywhere. So the question this module asks is "will this file
+ * be executable AFTER the write?": the requested mode when there is one,
+ * otherwise the mode the file already has. Note the direction — an explicit
+ * non-executable mode over an existing executable file is NOT escalated,
+ * because the chmod will strip the bit. (Codex P1 on the first cut of this
+ * module.)
+ *
+ * The existing mode is INJECTED (`sensitiveWrites`' third argument), never
+ * looked up here: this module has no I/O, and the probe is the one thing in
+ * its neighbourhood that touches a filesystem. The caller is responsible for
+ * calling it only on a CONFINED real path, never on one an attacker named.
+ * A probe that throws or returns `null` means "no existing file" — it can only
+ * ever add knowledge, and is never what makes a write look safe.
+ *
+ * MATCHING RULES.
+ *   - By path SEGMENT, never substring: `my-package.json.bak` and `notMakefile`
+ *     are ordinary files with unlucky names.
+ *   - Case-INSENSITIVELY. macOS (by default) and Windows resolve `MAKEFILE` and
+ *     `Makefile` to the same file, so a case-sensitive match would be a hole on
+ *     exactly the platforms most owners run. On a case-sensitive filesystem the
+ *     cost of the same rule is one extra click on a file genuinely named
+ *     `MAKEFILE` — the trade this whole module is built on.
+ *   - Path reasons are checked before `executable_bit`, so the owner is told
+ *     the most specific true thing about the file ("this is a git hook", not
+ *     "this is executable").
+ *
+ * Pure and total: plain data in, a closed union out. No I/O, no clock, no
+ * throw — the path comes off the wire.
+ */
+
+/** Why a write was escalated, in the order `classifyWrite` checks them. */
+export const SENSITIVE_WRITE_REASONS = ['vcs_metadata', 'shell_startup', 'build_or_task', 'package_manifest', 'ci_config', 'tool_config', 'executable_bit'] as const;
+export type SensitiveWriteReason = (typeof SENSITIVE_WRITE_REASONS)[number];
+
+export type WriteClassification = { readonly sensitive: false } | { readonly sensitive: true; readonly reason: SensitiveWriteReason };
+
+export interface ClassifyWriteInput {
+  /** The CONFINED real path the runner would write — never the path as requested. */
+  readonly path: string;
+  /** The POSIX mode requested for it, or `null` when the request named none. */
+  readonly mode: number | null;
+  /**
+   * The mode the file ALREADY has on disk, or `null` when it does not exist or
+   * could not be read. Consulted only when the request names no mode, because
+   * that is exactly when the runner leaves the existing permissions alone.
+   */
+  readonly existingMode?: number | null;
+}
+
+/** Directories whose contents are VCS internals: hooks, config, filters. Nothing legitimate needs an agent in here. */
+const VCS_DIRS = new Set(['.git', '.hg', '.svn']);
+/** Read by every login or interactive shell — the classic persistence target. */
+const SHELL_STARTUP = new Set(['.bashrc', '.zshrc', '.zshenv', '.profile', '.bash_profile', '.zprofile', '.envrc']);
+/** Files an editor or a developer runs by name, whose contents ARE commands. */
+const BUILD_OR_TASK = new Set(['makefile', 'gnumakefile', 'justfile', 'rakefile']);
+/** Editor/IDE directories whose files configure tasks that run on open or on save. */
+const TASK_DIRS = new Set(['.idea']);
+/** Manifests that all carry script or build hooks (`scripts`, `build.rs`, `setup.py` itself). */
+const PACKAGE_MANIFESTS = new Set(['package.json', 'cargo.toml', 'pyproject.toml', 'setup.py', 'gemfile', 'composer.json']);
+/** CI definitions: code that runs on a push, off this machine but as this owner. */
+const CI_DIRS = new Set(['.circleci']);
+const CI_FILES = new Set(['.gitlab-ci.yml']);
+/** Configuration that hands another tool a command to run (filter drivers, hooks, test fixtures). */
+const TOOL_CONFIG = new Set(['.pre-commit-config.yaml', '.gitattributes', '.gitmodules', 'conftest.py']);
+
+/** Any executable bit — owner, group or other. */
+const EXECUTABLE_BITS = 0o111;
+
+const sensitive = (reason: SensitiveWriteReason): WriteClassification => ({ sensitive: true, reason });
+
+/** Lowercased, empty segments dropped (`a//b` and a trailing slash are the same path). */
+function segmentsOf(path: string): string[] {
+  return path.split('/').filter((segment) => segment.length > 0).map((segment) => segment.toLowerCase());
+}
+
+/** Is `first` immediately followed by `second` anywhere in the path? */
+function hasAdjacent(segments: readonly string[], first: string, second: string): boolean {
+  for (let i = 0; i + 1 < segments.length; i += 1) if (segments[i] === first && segments[i + 1] === second) return true;
+  return false;
+}
+
+/**
+ * Classify one written file.
+ * @returns `{ sensitive: false }` for an ordinary write (it runs headless), or
+ * the single most specific reason the owner should be asked about it.
+ */
+export function classifyWrite(input: ClassifyWriteInput): WriteClassification {
+  const segments = segmentsOf(input.path);
+  const name = segments[segments.length - 1];
+
+  if (segments.some((segment) => VCS_DIRS.has(segment))) return sensitive('vcs_metadata');
+  if (name !== undefined && SHELL_STARTUP.has(name)) return sensitive('shell_startup');
+  if (name !== undefined && BUILD_OR_TASK.has(name)) return sensitive('build_or_task');
+  if (segments.some((segment) => TASK_DIRS.has(segment)) || hasAdjacent(segments, '.vscode', 'tasks.json')) return sensitive('build_or_task');
+  if (name !== undefined && PACKAGE_MANIFESTS.has(name)) return sensitive('package_manifest');
+  if (segments.some((segment) => CI_DIRS.has(segment)) || hasAdjacent(segments, '.github', 'workflows') || (name !== undefined && CI_FILES.has(name))) return sensitive('ci_config');
+  if (name !== undefined && TOOL_CONFIG.has(name)) return sensitive('tool_config');
+  // The EFFECTIVE resulting mode: what the request asks for, or — when it asks
+  // for nothing — what the file already is, because the runner will not chmod.
+  const effectiveMode = input.mode ?? input.existingMode ?? null;
+  if (effectiveMode !== null && (effectiveMode & EXECUTABLE_BITS) !== 0) return sensitive('executable_bit');
+  return { sensitive: false };
+}
+
+/** One sensitive file in a write request: which file, and why the owner is being asked. */
+export interface SensitiveWrite {
+  readonly path: string;
+  readonly reason: SensitiveWriteReason;
+}
+
+/**
+ * Every sensitive file in one `fs_write` request, in path order — the answer
+ * both the escalation (`decideExecution`) and the approval subject
+ * (`approvalSubjects`) are derived from, so the two can never disagree about
+ * what "sensitive" meant for a given request.
+ *
+ * `modes` is index-aligned with `paths` (A1); a path with no entry is treated
+ * as having named no mode. `statMode` answers "what mode does this file have
+ * already" for the paths that named none — injected, called only here, and a
+ * throw is caught and read as "no existing file" so a broken or unreadable
+ * probe can never crash a decision nor make an executable write look ordinary.
+ */
+export function sensitiveWrites(paths: readonly string[], modes: readonly (number | null)[] | undefined, statMode?: (path: string) => number | null): SensitiveWrite[] {
+  const found: SensitiveWrite[] = [];
+  for (let index = 0; index < paths.length; index += 1) {
+    const path = paths[index] as string;
+    const mode = modes?.[index] ?? null;
+    // Only ask about a file whose mode the write would LEAVE ALONE.
+    const existingMode = mode === null ? existingModeOf(path, statMode) : null;
+    const verdict = classifyWrite({ path, mode, existingMode });
+    if (verdict.sensitive) found.push({ path, reason: verdict.reason });
+  }
+  return found;
+}
+
+/** The probe's answer, or `null` for "no existing file" — a throw is the same answer, never a crash. */
+function existingModeOf(path: string, statMode: ((path: string) => number | null) | undefined): number | null {
+  if (statMode === undefined) return null;
+  try {
+    return statMode(path);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One reason as a plain clause the owner can act on. It lives here, beside the
+ * union it describes, because BOTH surfaces that show it — the daemon's
+ * terminal prompt and the chat approval card — must say the same words: what
+ * the owner reads is the machine's own vocabulary, never a paraphrase composed
+ * by a model or by a server.
+ */
+export function describeSensitiveWrite(reason: SensitiveWriteReason): string {
+  switch (reason) {
+    case 'vcs_metadata':
+      return 'writes inside version-control metadata (a hook here runs at your next commit)';
+    case 'shell_startup':
+      return 'is a shell startup file (it runs at your next shell)';
+    case 'build_or_task':
+      return 'is a build or task file whose contents are commands';
+    case 'package_manifest':
+      return 'is a package manifest, which carries build and script hooks';
+    case 'ci_config':
+      return 'is a CI configuration, which runs at your next push';
+    case 'tool_config':
+      return 'configures a tool to run commands for you';
+    case 'executable_bit':
+      return 'would be made executable';
+  }
+}

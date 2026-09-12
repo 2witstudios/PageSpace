@@ -100,6 +100,8 @@ vi.mock('@pagespace/db/schema/auth', () => ({ users: mockTable('users') }));
 // other schema module so the real declarations never load under the mocked drizzle-orm.
 vi.mock('@pagespace/db/schema/drive-envs', () => ({ driveEnvs: mockTable('driveEnvs') }));
 vi.mock('@pagespace/db/schema/drive-env-local', () => ({ driveEnvLocal: mockTable('driveEnvLocal') }));
+vi.mock('@pagespace/db/schema/drive-env-grant-audit', () => ({ driveEnvGrantAudit: mockTable('driveEnvGrantAudit') }));
+vi.mock('@pagespace/db/schema/drive-env-approvals', () => ({ driveEnvApprovals: mockTable('driveEnvApprovals') }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: mockTable('drives'),
   pages: mockTable('pages'),
@@ -972,6 +974,10 @@ describe('collectAllUserData', () => {
     // Same rule again for the content-tags category: a collector that
     // `collectAllUserData` never calls reaches nobody's export.
     expect(Array.isArray(result!.contentTags)).toBe(true);
+    // The local-environment categories (GA wave 3): the machine, what ran on it, what it may run unasked.
+    expect(Array.isArray(result!.localEnvironments)).toBe(true);
+    expect(Array.isArray(result!.localEnvironmentActivity)).toBe(true);
+    expect(Array.isArray(result!.localEnvironmentApprovals)).toBe(true);
     expect(result!.personalization).toBeNull();
   });
 });

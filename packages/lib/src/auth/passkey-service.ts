@@ -516,6 +516,31 @@ export async function userHasPasskey(userId: string): Promise<boolean> {
   return passkey !== undefined;
 }
 
+/**
+ * The user's registered credentials as PUBLIC KEYS — credential id and the
+ * base64url COSE key exactly as stored.
+ *
+ * This is the ONE place `passkeys.publicKey` leaves the server, and it exists
+ * for one caller: pinning the owner's credentials onto their machine at
+ * local-environment enrolment (hardening B, leaf B1). Everywhere else in this
+ * file an assertion is verified server-side and the key never moves; the
+ * bridge is different because the party that has to be convinced a human
+ * clicked is the MACHINE, and it cannot be convinced by a server it does not
+ * trust. A COSE public key is not a secret — it verifies signatures, it
+ * cannot make them.
+ *
+ * Bounded by the same per-user ceiling registration enforces.
+ */
+export async function listPasskeyPublicKeys(userId: string): Promise<{ credentialId: string; publicKeyCose: string }[]> {
+  if (!userId) return [];
+  const rows = await db.query.passkeys.findMany({
+    where: eq(passkeys.userId, userId),
+    columns: { credentialId: true, publicKey: true },
+    limit: PASSKEY_CONFIG.maxPasskeysPerUser,
+  });
+  return rows.map((row) => ({ credentialId: row.credentialId, publicKeyCose: row.publicKey }));
+}
+
 export async function verifyAuthentication(input: unknown): Promise<VerifyAuthResult> {
   const parsed = verifyAuthSchema.safeParse(input);
   if (!parsed.success) {

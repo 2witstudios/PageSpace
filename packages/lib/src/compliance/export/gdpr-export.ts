@@ -3,7 +3,9 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { users } from '@pagespace/db/schema/auth';
 import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
-import { driveEnvLocal, type DriveEnvLocalCapabilities } from '@pagespace/db/schema/drive-env-local';
+import { driveEnvLocal, type DriveEnvLocalCapabilities, type DriveEnvLocalOwnerCredentials } from '@pagespace/db/schema/drive-env-local';
+import { driveEnvGrantAudit } from '@pagespace/db/schema/drive-env-grant-audit';
+import { driveEnvApprovals } from '@pagespace/db/schema/drive-env-approvals';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { aiStreamSessions, aiStreamFrames } from '@pagespace/db/schema/ai-streams';
 import { drives, pages, tags } from '@pagespace/db/schema/core';
@@ -495,6 +497,10 @@ export interface AllUserData {
   contentTags: UserContentTagExport[];
   /** Machines the subject enrolled as local environments — their own devices. */
   localEnvironments: UserLocalEnvironmentExport[];
+  /** What the subject's agent ran (or was refused) on local machines — `drive_env_grant_audit` rows where `userId` is the subject. */
+  localEnvironmentActivity: UserLocalEnvActivityExport[];
+  /** Approvals the subject gave in the chat, or that stand on a machine the subject owns — `drive_env_approvals`. */
+  localEnvironmentApprovals: UserLocalEnvApprovalExport[];
 }
 
 export async function collectUserProfile(database: DB, userId: string): Promise<UserProfileExport | null> {
@@ -1619,6 +1625,8 @@ export interface UserLocalEnvironmentExport {
   serverKeyId: string | null;
   bindPolicy: string;
   capabilities: DriveEnvLocalCapabilities | null;
+  /** The subject's own passkey public keys, as their machine pinned them at enrolment (hardening B). Device data of the same kind as `machinePublicKey`, which this collector already carries. */
+  ownerCredentials: DriveEnvLocalOwnerCredentials | null;
   enrolledAt: Date | null;
   lastSeenAt: Date | null;
   revokedAt: Date | null;
@@ -1638,6 +1646,7 @@ export async function collectUserLocalEnvironments(database: DB, userId: string)
       serverKeyId: driveEnvLocal.serverKeyId,
       bindPolicy: driveEnvLocal.bindPolicy,
       capabilities: driveEnvLocal.capabilities,
+      ownerCredentials: driveEnvLocal.ownerCredentials,
       enrolledAt: driveEnvLocal.enrolledAt,
       lastSeenAt: driveEnvLocal.lastSeenAt,
       revokedAt: driveEnvLocal.revokedAt,
@@ -1651,7 +1660,124 @@ export async function collectUserLocalEnvironments(database: DB, userId: string)
   // does not model `orderBy`, and this collector's rows are few (one per
   // enrolled machine), so sorting after the fetch costs nothing.
   return rows
-    .map((row) => ({ ...row, capabilities: row.capabilities ?? null }))
+    .map((row) => ({ ...row, capabilities: row.capabilities ?? null, ownerCredentials: row.ownerCredentials ?? null }))
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+}
+
+/**
+ * What the subject's agent asked local machines to do (`drive_env_grant_audit`,
+ * selected by `userId`, GA wave 3). Every row is a decision about a request
+ * the SUBJECT made through their session — the command or path (`summary`,
+ * as the server rendered it for a person), what the server and then the
+ * machine said about it (`verdict`, `exitCode`), and when. That is personal
+ * data in the plain sense: it is the record of what this person had run on a
+ * computer. Carried whole, refusals included — a refusal is a fact about the
+ * subject's request, not a reason to hide it. Rows are selected by the
+ * REQUESTER, not the machine owner: a request the subject made on someone
+ * else's machine is the subject's activity (and the owner's audit, which the
+ * owner-only routes serve — but this bundle is Art 15, not the activity
+ * panel). Nothing here is output: `summary` is the request, `argsHash` is the
+ * daemon's join key for the exact bytes (invariant 10), never the bytes.
+ */
+export interface UserLocalEnvActivityExport {
+  id: string;
+  envId: string;
+  /** NULL for a refusal — the server never mints a grant id it does not sign. */
+  grantId: string | null;
+  sessionId: string;
+  conversationId: string;
+  op: string;
+  argsHash: string;
+  summary: string;
+  verdict: string;
+  exitCode: number | null;
+  challengeId: string | null;
+  approvalScope: string | null;
+  ts: Date;
+  resultAt: Date | null;
+}
+
+export async function collectUserLocalEnvActivity(database: DB, userId: string): Promise<UserLocalEnvActivityExport[]> {
+  const rows = await database
+    .select({
+      id: driveEnvGrantAudit.id,
+      envId: driveEnvGrantAudit.envId,
+      grantId: driveEnvGrantAudit.grantId,
+      sessionId: driveEnvGrantAudit.sessionId,
+      conversationId: driveEnvGrantAudit.conversationId,
+      op: driveEnvGrantAudit.op,
+      argsHash: driveEnvGrantAudit.argsHash,
+      summary: driveEnvGrantAudit.summary,
+      verdict: driveEnvGrantAudit.verdict,
+      exitCode: driveEnvGrantAudit.exitCode,
+      challengeId: driveEnvGrantAudit.challengeId,
+      approvalScope: driveEnvGrantAudit.approvalScope,
+      ts: driveEnvGrantAudit.ts,
+      resultAt: driveEnvGrantAudit.resultAt,
+    })
+    .from(driveEnvGrantAudit)
+    .where(eq(driveEnvGrantAudit.userId, userId));
+  // Ordered in JS for the same reason as `collectUserLocalEnvironments`: the unit suite's query-chain mock does not model `orderBy`.
+  return rows.sort((a, b) => a.ts.getTime() - b.ts.getTime());
+}
+
+/**
+ * The approvals a local machine will honour without asking (`drive_env_approvals`,
+ * GA wave 3 — the server's mirror of the machine's own file). A row is the
+ * subject's personal data on either of two grounds, and both select it: the
+ * subject CLICKED it (`userId`, the principal the approval is for), or it
+ * stands on a machine the subject OWNS (`drive_env_local.ownerId`) — a
+ * standing permission on someone's own computer is a fact about them
+ * whoever clicked. `subject` says which ground (or both) applied. Revoked and
+ * expired rows are carried too: what was once allowed to run is part of the
+ * record. The row holds no private material: the file on the machine is the
+ * authority for allow, and this table cannot widen it.
+ */
+export interface UserLocalEnvApprovalExport {
+  id: string;
+  envId: string;
+  /** The env's owner-facing address, as the local-environments file names it. */
+  driveId: string;
+  envName: string;
+  /** Why this row is the subject's: they clicked it, they own the machine, or both. */
+  subject: 'clicker' | 'owner' | 'both';
+  op: string;
+  summary: string;
+  scope: string;
+  createdAt: Date;
+  expiresAt: Date | null;
+  revokedAt: Date | null;
+  revokeAcknowledgedAt: Date | null;
+  revokeRemoved: number | null;
+}
+
+export async function collectUserLocalEnvApprovals(database: DB, userId: string): Promise<UserLocalEnvApprovalExport[]> {
+  const rows = await database
+    .select({
+      id: driveEnvApprovals.id,
+      envId: driveEnvApprovals.envId,
+      driveId: driveEnvs.driveId,
+      envName: driveEnvs.name,
+      approvalUserId: driveEnvApprovals.userId,
+      ownerId: driveEnvLocal.ownerId,
+      op: driveEnvApprovals.op,
+      summary: driveEnvApprovals.summary,
+      scope: driveEnvApprovals.scope,
+      createdAt: driveEnvApprovals.createdAt,
+      expiresAt: driveEnvApprovals.expiresAt,
+      revokedAt: driveEnvApprovals.revokedAt,
+      revokeAcknowledgedAt: driveEnvApprovals.revokeAcknowledgedAt,
+      revokeRemoved: driveEnvApprovals.revokeRemoved,
+    })
+    .from(driveEnvApprovals)
+    .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvApprovals.envId))
+    .innerJoin(driveEnvLocal, eq(driveEnvLocal.envId, driveEnvApprovals.envId))
+    .where(or(eq(driveEnvApprovals.userId, userId), eq(driveEnvLocal.ownerId, userId)));
+  return rows
+    .map(({ approvalUserId, ownerId, ...row }) => ({
+      ...row,
+      subject: (approvalUserId === userId && ownerId === userId ? 'both' : ownerId === userId ? 'owner' : 'clicker') as UserLocalEnvApprovalExport['subject'],
+    }))
     .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 }
 
@@ -1665,7 +1791,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
   // Positional: this destructuring order must exactly match the Promise.all array
   // order below (each collector returns a differently-shaped array, so TypeScript
   // cannot catch a reorder/insert mismatch here).
-  const [userPages, userSheets, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userStreamState, userContentTags, userLocalEnvironments] = await Promise.all([
+  const [userPages, userSheets, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userStreamState, userContentTags, userLocalEnvironments, userLocalEnvActivity, userLocalEnvApprovals] = await Promise.all([
     collectUserPages(database, userId, driveIds),
     collectUserSheets(database, userId, driveIds),
     collectUserMessages(database, userId),
@@ -1686,6 +1812,8 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     collectUserStreamState(database, userId),
     collectUserContentTags(database, userId, driveIds),
     collectUserLocalEnvironments(database, userId),
+    collectUserLocalEnvActivity(database, userId),
+    collectUserLocalEnvApprovals(database, userId),
   ]);
 
   return {
@@ -1711,5 +1839,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     streamState: userStreamState,
     contentTags: userContentTags,
     localEnvironments: userLocalEnvironments,
+    localEnvironmentActivity: userLocalEnvActivity,
+    localEnvironmentApprovals: userLocalEnvApprovals,
   };
 }

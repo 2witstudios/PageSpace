@@ -5,18 +5,24 @@
  *
  * - **hello** (machine → server, invariant 2): the first frame on every
  *   socket, signed by the machine key pinned at enrollment. Covers
- *   `{envId, capabilities, policyDigest}` — so a captured hello cannot be
+ *   `{envId, capabilities, policyDigest, daemonEpoch}` — so a captured hello cannot be
  *   replayed for another env, and neither the advertised capabilities nor the
  *   policy digest can be altered in flight.
  * - **result** (machine → server, invariant 7): every `exec_result`,
- *   `fs_read_result`, `fs_write_result` and `grant_denied` is signed over
- *   `{grantId, resultHash}` where `resultHash` covers EVERY payload field of
- *   the frame (`resultHashForFrame`). A result cannot be moved onto another
+ *   `fs_read_result`, `fs_write_result`, `grant_denied` and (GA wave 2)
+ *   `approval_revoke_result` is signed over `{grantId, resultHash}` — the
+ *   binding id is the grant, or the namespaced approval id for an ack
+ *   (`machineResultBindingId`) — where `resultHash` covers EVERY payload
+ *   field of the frame (`resultHashForFrame`). A result cannot be moved onto another
  *   grant, and no field of it can be edited between the machine and the agent.
  * - **revoke** (server → machine, invariant 8): signed over
  *   `{envId, enrollmentId, keyId, issuedAt}` — a revoke for one enrollment
  *   cannot revoke another, and it must be signed by the key that enrollment
  *   pinned (`keyId`), so a rotated-out key cannot be used to revoke.
+ * - **pause** (server → machine, GA wave 3 — STOP): signed under its own
+ *   domain over `{envId, enrollmentId, keyId, issuedAt, pausedAt}`; the
+ *   machine acks with a signed `pause_result` bound to
+ *   `pause:<envId>:<pausedAt>`.
  *
  * Every encoding is domain-separated (a fixed leading `domain` string) and
  * built from the TYPED value in a fixed key order, so insertion order can never
@@ -38,14 +44,51 @@ import { canonicalizeArgs, constantTimeEqual, decodeBase64, type Ed25519Verify, 
 export const HELLO_SIGNING_DOMAIN = 'pagespace-env-bridge/hello/v1';
 export const RESULT_SIGNING_DOMAIN = 'pagespace-env-bridge/result/v1';
 export const REVOKE_SIGNING_DOMAIN = 'pagespace-env-bridge/revoke/v1';
+/** A revoke of ONE durable approval (GA wave 2): its own domain, so an approval revoke can never be replayed as an enrollment revoke by dropping the id, nor the reverse. */
+export const REVOKE_APPROVAL_SIGNING_DOMAIN = 'pagespace-env-bridge/revoke-approval/v1';
+/** STOP (GA wave 3): its own domain, so a pause can never be replayed as a revoke (of anything) nor a revoke as a pause. */
+export const PAUSE_SIGNING_DOMAIN = 'pagespace-env-bridge/pause/v1';
+/**
+ * The OWNER'S CLICK (hardening B): the domain the WebAuthn challenge a Tier B
+ * approval is signed over is derived under (`owner-approval.ts`). Distinct
+ * from the five above, so an assertion the owner produced for a click can
+ * never be replayed as a hello, a result, a revoke (of either kind) or a
+ * pause — nor any of those as a click. This one is not an Ed25519 message
+ * the server or the machine signs: it is the binding the OWNER'S
+ * authenticator signs, which is the whole point (the machine stops taking
+ * the server's word that a human was there).
+ */
+export const OWNER_APPROVAL_SIGNING_DOMAIN = 'pagespace-env-bridge/owner-approval/v1';
 
 export type { HelloFrame };
 export type RevokeFrame = Extract<Frame, { type: 'revoke' }>;
-export type MachineResultFrame = Extract<Frame, { type: 'exec_result' | 'fs_read_result' | 'fs_write_result' | 'grant_denied' }>;
+export type PauseFrame = Extract<Frame, { type: 'pause' }>;
+export type MachineResultFrame = Extract<Frame, { type: 'exec_result' | 'fs_read_result' | 'fs_write_result' | 'grant_denied' | 'approval_revoke_result' | 'pause_result' }>;
 export type MachineResultFrameType = MachineResultFrame['type'];
 
 /** The machine frames that answer a grant and therefore MUST be signed (invariant 7). */
-export const MACHINE_RESULT_FRAME_TYPES: ReadonlySet<MachineResultFrameType> = new Set<MachineResultFrameType>(['exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied']);
+export const MACHINE_RESULT_FRAME_TYPES: ReadonlySet<MachineResultFrameType> = new Set<MachineResultFrameType>(['exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'approval_revoke_result', 'pause_result']);
+
+/** The correlation id an approval-revoke ack is bound to — namespaced so it can never collide with a grant id. */
+export function approvalRevokeBindingId(approvalId: string): string {
+  return `approval-revoke:${approvalId}`;
+}
+
+/** The correlation id a pause ack is bound to (GA wave 3): the env AND the pause it answers, so a stale ack for an earlier pause matches nothing. */
+export function pauseBindingId(envId: string, pausedAt: number): string {
+  return `pause:${envId}:${pausedAt}`;
+}
+
+/**
+ * What a machine result is BOUND to in its signature and correlated by on
+ * the server: the grant it answers, or — for an approval-revoke ack (GA
+ * wave 2) — the namespaced approval id.
+ */
+export function machineResultBindingId(frame: MachineResultFrame): string {
+  if (frame.type === 'approval_revoke_result') return approvalRevokeBindingId(frame.approvalId);
+  if (frame.type === 'pause_result') return pauseBindingId(frame.envId, frame.pausedAt);
+  return frame.grantId;
+}
 
 export function isMachineResultFrame(frame: Frame): frame is MachineResultFrame {
   return (MACHINE_RESULT_FRAME_TYPES as ReadonlySet<string>).has(frame.type);
@@ -59,7 +102,7 @@ const encode = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.str
 // ---- hello -----------------------------------------------------------------
 
 /** Canonical bytes the machine signs for its hello; rebuilt field by field from the typed value. */
-export function encodeHelloForSigning(hello: Pick<HelloFrame, 'envId' | 'capabilities' | 'policyDigest'>): Uint8Array {
+export function encodeHelloForSigning(hello: Pick<HelloFrame, 'envId' | 'capabilities' | 'policyDigest' | 'daemonEpoch'>): Uint8Array {
   return encode({
     domain: HELLO_SIGNING_DOMAIN,
     envId: hello.envId,
@@ -70,6 +113,8 @@ export function encodeHelloForSigning(hello: Pick<HelloFrame, 'envId' | 'capabil
       checkpoint: hello.capabilities.checkpoint,
     },
     policyDigest: hello.policyDigest,
+    // The daemon's process epoch is a fact the MACHINE attests: under the signature, so the server may act on it.
+    daemonEpoch: hello.daemonEpoch,
   });
 }
 
@@ -106,7 +151,15 @@ export function resultPayloadForFrame(frame: MachineResultFrame): Record<string,
     case 'fs_write_result':
       return { type: frame.type, grantId: frame.grantId, ok: frame.ok, error: frame.error ?? null };
     case 'grant_denied':
-      return { type: frame.type, grantId: frame.grantId, reason: frame.reason };
+      // `pending` (a frozen request awaiting a chat click, GA wave 2) is
+      // signed too: the card renders what the MACHINE said it froze.
+      return { type: frame.type, grantId: frame.grantId, reason: frame.reason, pending: frame.pending ?? null };
+    case 'approval_revoke_result':
+      // The ack covers the id AND the count: the server may only claim what the machine signed.
+      return { type: frame.type, approvalId: frame.approvalId, removed: frame.removed };
+    case 'pause_result':
+      // The env, the pause it answers, and how many process groups died: the server may only claim what the machine signed.
+      return { type: frame.type, envId: frame.envId, pausedAt: frame.pausedAt, killed: frame.killed };
   }
 }
 
@@ -144,7 +197,7 @@ export function verifyMachineResult(input: VerifyMachineResultInput): MachineRes
   } catch {
     return { ok: false, reason: 'malformed' };
   }
-  const verdict = safeVerify(input.verify, encodeResultForSigning({ grantId: input.frame.grantId, resultHash }), signature, input.machinePublicKey);
+  const verdict = safeVerify(input.verify, encodeResultForSigning({ grantId: machineResultBindingId(input.frame), resultHash }), signature, input.machinePublicKey);
   return verdict.ok ? { ok: true, resultHash } : verdict;
 }
 
@@ -159,9 +212,19 @@ export interface RevokeBinding {
   readonly issuedAt: number;
 }
 
-/** Canonical bytes the server signs for a revoke. */
+/** Canonical bytes the server signs for a revoke of the ENROLLMENT (unchanged by GA wave 2: an approval revoke uses its own domain and function). */
 export function encodeRevokeForSigning(binding: RevokeBinding): Uint8Array {
   return encode({ domain: REVOKE_SIGNING_DOMAIN, envId: binding.envId, enrollmentId: binding.enrollmentId, keyId: binding.keyId, issuedAt: binding.issuedAt });
+}
+
+export interface ApprovalRevokeBinding extends RevokeBinding {
+  /** The durable approval to delete — the challenge id the click was answered under. */
+  readonly approvalId: string;
+}
+
+/** Canonical bytes the server signs to revoke ONE approval on the machine. The server may only ever REVOKE an approval this way; nothing on the wire can add one. */
+export function encodeApprovalRevokeForSigning(binding: ApprovalRevokeBinding): Uint8Array {
+  return encode({ domain: REVOKE_APPROVAL_SIGNING_DOMAIN, envId: binding.envId, enrollmentId: binding.enrollmentId, keyId: binding.keyId, issuedAt: binding.issuedAt, approvalId: binding.approvalId });
 }
 
 export interface VerifyRevokeInput extends RevokeBinding {
@@ -171,13 +234,53 @@ export interface VerifyRevokeInput extends RevokeBinding {
   readonly verify: Ed25519Verify;
 }
 
-/** The daemon's check before it honours a revoke (t08). `issuedAt` is taken from the binding the daemon supplies, and must equal the frame's. */
+/**
+ * The daemon's check before it honours a revoke (t08). `issuedAt` is taken
+ * from the binding the daemon supplies, and must equal the frame's. A frame
+ * carrying `approvalId` is verified under the approval-revoke domain over
+ * THAT id; one without it under the enrollment-revoke domain — so a captured
+ * approval revoke with the id stripped is `bad_signature`, never a key
+ * deletion, and an enrollment revoke with an id added is `bad_signature`
+ * too.
+ */
 export function verifyRevoke(input: VerifyRevokeInput): MachineSignatureVerdict {
   if (input.frame.issuedAt !== input.issuedAt) return { ok: false, reason: 'bad_signature' };
   const signature = decodeBase64(input.frame.sig);
   if (signature === null) return { ok: false, reason: 'malformed' };
-  const bytes = encodeRevokeForSigning({ envId: input.envId, enrollmentId: input.enrollmentId, keyId: input.keyId, issuedAt: input.issuedAt });
+  const binding = { envId: input.envId, enrollmentId: input.enrollmentId, keyId: input.keyId, issuedAt: input.issuedAt };
+  const bytes = input.frame.approvalId !== undefined ? encodeApprovalRevokeForSigning({ ...binding, approvalId: input.frame.approvalId }) : encodeRevokeForSigning(binding);
   return safeVerify(input.verify, bytes, signature, input.serverPublicKey);
+}
+
+// ---- pause (STOP, GA wave 3) ----------------------------------------------
+
+export interface PauseBinding extends RevokeBinding {
+  /** ms since epoch — `drive_env_local.pausedAt` as stamped by the owner's Stop; carried in the frame. */
+  readonly pausedAt: number;
+}
+
+/**
+ * Canonical bytes the server signs for a STOP. Its own domain: a pause can
+ * never be verified as an enrollment revoke or an approval revoke, and
+ * neither of those can be verified as a pause. Binds the enrollment, the
+ * pinned key, the issue time AND the pause it delivers.
+ */
+export function encodePauseForSigning(binding: PauseBinding): Uint8Array {
+  return encode({ domain: PAUSE_SIGNING_DOMAIN, envId: binding.envId, enrollmentId: binding.enrollmentId, keyId: binding.keyId, issuedAt: binding.issuedAt, pausedAt: binding.pausedAt });
+}
+
+export interface VerifyPauseInput extends RevokeBinding {
+  readonly frame: PauseFrame;
+  readonly serverPublicKey: Uint8Array;
+  readonly verify: Ed25519Verify;
+}
+
+/** The daemon's check before it honours a STOP: `issuedAt` from the daemon's binding must equal the frame's; the frame's `pausedAt` is under the signature. */
+export function verifyPause(input: VerifyPauseInput): MachineSignatureVerdict {
+  if (input.frame.issuedAt !== input.issuedAt) return { ok: false, reason: 'bad_signature' };
+  const signature = decodeBase64(input.frame.sig);
+  if (signature === null) return { ok: false, reason: 'malformed' };
+  return safeVerify(input.verify, encodePauseForSigning({ envId: input.envId, enrollmentId: input.enrollmentId, keyId: input.keyId, issuedAt: input.issuedAt, pausedAt: input.frame.pausedAt }), signature, input.serverPublicKey);
 }
 
 // ---- shared ----------------------------------------------------------------

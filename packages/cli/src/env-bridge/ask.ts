@@ -1,17 +1,26 @@
 /**
- * The owner's prompt for `ask` mode (invariant 5). The daemon asks once per
- * new (principal, session) and per op that is not pre-approved in the
- * policy; an approval is remembered for the life of the process, a decline is
- * not (the next request asks again). What the owner sees is EXACTLY the
- * `NormalizedRequest` the `ask` verdict carried — confined cwd and paths,
- * scrubbed env, clamped caps — because that is what `decideExecution` will
- * re-normalize and compare against on approval (`approval_mismatch`).
+ * The owner's terminal prompt for `ask` mode (invariant 5). The daemon asks
+ * about a request whose op is not pre-approved in the policy AND that no
+ * durable approval covers (`decide-approval.ts`). What the owner sees is
+ * EXACTLY the `NormalizedRequest` the `ask` verdict carried — confined cwd
+ * and paths, scrubbed env, clamped caps — because that is what
+ * `decideExecution` will re-normalize and compare against on approval
+ * (`approval_mismatch`).
  *
- * The prompt primitive is injected: `env connect` supplies `@clack/prompts`'
- * confirm; tests supply a function. A prompt that throws (stdin closed) is
- * a decline.
+ * THIS MODULE REMEMBERS NOTHING (GA wave 2, leaf 1). It used to keep a `Set`
+ * keyed `(userId, sessionId, op)`, which is why approving `git status` once
+ * covered every later `exec` in that session unseen. An approval is now
+ * remembered by the dispatcher, in the approvals store, keyed on the
+ * SUBJECTS the verdict carried (`exec:/usr/bin/git`, `root:/home/u/proj`)
+ * and for the scope the owner chose here — `once`, `session`, `30d` (the
+ * default) or `until_revoked`. The prompt says which subjects an approval
+ * would cover, or that this request cannot be remembered at all.
+ *
+ * The prompt primitives are injected: `env connect` supplies
+ * `@clack/prompts`' confirm and select; tests supply functions. A prompt
+ * that throws (stdin closed) is a decline.
  */
-import type { GrantOp, GrantPrincipal } from './lib-core.js';
+import { DEFAULT_APPROVAL_SCOPE, describeSensitiveWrite, type ApprovalScope, type GrantOp, type GrantPrincipal, type SensitiveWrite } from './lib-core.js';
 import type { NormalizedRequest } from './lib-core.js';
 
 export interface AskInput {
@@ -19,20 +28,47 @@ export interface AskInput {
   readonly principal: GrantPrincipal;
   readonly op: GrantOp;
   readonly request: NormalizedRequest;
+  /** What an approval would be remembered under; `null` = it cannot be remembered, the owner is asked every time. */
+  readonly subjects: readonly string[] | null;
+  /** Why a WRITE was escalated (hardening A7): which files, in the classifier's own words. Empty for every other ask. */
+  readonly sensitive?: readonly SensitiveWrite[];
 }
 
+export type AskAnswer = { readonly approved: false } | { readonly approved: true; readonly scope: ApprovalScope };
+
 export interface AskPrompter {
-  ask(input: AskInput): Promise<boolean>;
+  ask(input: AskInput): Promise<AskAnswer>;
 }
 
 export interface AskPrompterDeps {
   readonly confirm: (message: string) => Promise<boolean>;
+  /** How long to remember an approval; omitted ⇒ `DEFAULT_APPROVAL_SCOPE`. Only asked when the request has subjects. */
+  readonly chooseScope?: (subjects: readonly string[]) => Promise<ApprovalScope>;
   readonly write: (chunk: string) => void;
 }
 
-/** One approval covers one (user, session, op); the conversation is not part of the key. */
-export function approvalKey(principal: GrantPrincipal, op: GrantOp): string {
-  return `${principal.userId} ${principal.sessionId} ${op}`;
+/** A subject as the owner reads it. */
+export function describeSubject(subject: string): string {
+  if (subject.startsWith('exec:')) return subject.slice('exec:'.length);
+  if (subject.startsWith('builtin:')) return `${subject.slice('builtin:'.length)} (shell builtin)`;
+  if (subject.startsWith('root:')) return `files under ${subject.slice('root:'.length)}`;
+  // A sensitive write is keyed on the FILE, not the root (hardening A3), so
+  // approving one git hook never covers the next one.
+  if (subject.startsWith('file:')) return `the file ${subject.slice('file:'.length)}`;
+  return subject;
+}
+
+export function describeScope(scope: ApprovalScope): string {
+  switch (scope) {
+    case 'once':
+      return 'this request only';
+    case 'session':
+      return 'until this daemon stops';
+    case '30d':
+      return 'for 30 days';
+    case 'until_revoked':
+      return 'until you revoke it';
+  }
 }
 
 export function renderAskPrompt(input: AskInput): string {
@@ -48,16 +84,20 @@ export function renderAskPrompt(input: AskInput): string {
   const env = Object.entries(request.env).map(([name, value]) => `${name}=${value}`);
   lines.push(`  env        ${env.length > 0 ? env.join(' ') : '(none)'}`);
   lines.push(`  limits     timeout ${request.timeoutMs} ms, output ${request.maxBytes} bytes${request.clamped ? ' (clamped to your policy)' : ''}`);
-  lines.push('Approving also covers further requests for this op from the same user and session while this daemon runs.');
+  // A write that can become a command says WHICH file and WHY, in the
+  // classifier's own vocabulary — never a paraphrase (hardening A7).
+  for (const found of input.sensitive ?? []) lines.push(`  ⚠ ${found.path} — ${describeSensitiveWrite(found.reason)}`);
+  if (input.subjects === null) {
+    lines.push('This request cannot be remembered (its programs cannot be pinned down): approving covers this request only, and you will be asked again next time.');
+  } else {
+    lines.push(`Approving covers ${input.op} of: ${input.subjects.map(describeSubject).join(', ')} — for user ${input.principal.userId}, from any chat, for the time you choose next. It never covers other programs.`);
+  }
   return lines.join('\n');
 }
 
 export function createAskPrompter(deps: AskPrompterDeps): AskPrompter {
-  const approved = new Set<string>();
   return {
     async ask(input) {
-      const key = approvalKey(input.principal, input.op);
-      if (approved.has(key)) return true;
       deps.write(`${renderAskPrompt(input)}\n`);
       let answer = false;
       try {
@@ -65,8 +105,17 @@ export function createAskPrompter(deps: AskPrompterDeps): AskPrompter {
       } catch {
         answer = false;
       }
-      if (answer) approved.add(key);
-      return answer;
+      if (!answer) return { approved: false };
+      if (input.subjects === null) return { approved: true, scope: 'once' };
+      let scope: ApprovalScope = DEFAULT_APPROVAL_SCOPE;
+      if (deps.chooseScope !== undefined) {
+        try {
+          scope = await deps.chooseScope(input.subjects);
+        } catch {
+          return { approved: false };
+        }
+      }
+      return { approved: true, scope };
     },
   };
 }

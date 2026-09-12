@@ -212,6 +212,9 @@ interface EnvFixture {
  * Default empty, so every pre-environments test in this file keeps describing a
  * drive that has none and its flat session list is unchanged.
  */
+/** What `GET …/envs/<id>/activity` answers — the audit rows a machine's OWNER sees on its row. */
+let activityRows: Array<Record<string, unknown>> = [];
+
 const respondWithSessions = (
   sessions: SessionFixture[],
   envs: EnvFixture[] = [],
@@ -223,6 +226,10 @@ const respondWithSessions = (
   envsFail: () => boolean = () => false,
 ) => {
   mockFetchWithAuth.mockImplementation(async (url: string, init?: { method?: string }) => {
+    // The owner-only activity read (GA wave 3): answered from `activityRows`, and matched BEFORE the listing so it is never mistaken for one.
+    if (typeof url === 'string' && url.endsWith('/activity')) {
+      return { ok: true, status: 200, json: async () => ({ activity: activityRows }) };
+    }
     if (typeof url === 'string' && url.includes('/envs')) {
       if (envsFail()) return { ok: false, status: 500, json: async () => ({}) };
       return {
@@ -2565,7 +2572,7 @@ describe('AgentsSidebar', () => {
     });
     const CODE = 'ABCDEFGHJKMNPQRSTVWX';
     const expiresAt = () => new Date(Date.now() + 10 * 60 * 1000).toISOString();
-    const localEnv = { id: 'env-mac', name: 'mac', driveId: 'drive-1', substrate: 'local' as const, status: 'disconnected' as const, label: 'jono-macstudio', enrolled: false };
+    const localEnv = { id: 'env-mac', name: 'mac', driveId: 'drive-1', substrate: 'local' as const, status: 'disconnected' as const, label: 'jono-macstudio', enrolled: false, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false }, ownerId: 'user-owner', capabilities: null, paused: false };
     const enableLocalEnvs = () =>
       mockUsePageAgents.mockImplementation((driveId?: string, options?: { enabled?: boolean }) => {
         const base = defaultPageAgents(driveId, options);
@@ -2616,7 +2623,94 @@ describe('AgentsSidebar', () => {
       await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
       await user.click(screen.getByRole('button', { name: 'Create environment' }));
       await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', { name: 'mac', substrate: 'local', label: 'jono-macstudio' }),
+        expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', {
+          name: 'mac',
+          substrate: 'local',
+          label: 'jono-macstudio',
+          // The dialog's default: files in, commands OUT. The server writes exactly this.
+          serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false },
+        }),
+      );
+    });
+
+    test('"This computer" preselects reading and writing files, keeps "Run commands" OFF behind its own toggle with the boundary copy, and never offers a terminal or a checkpoint', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      renderSidebar();
+      await openCreateStep(user);
+      // Nothing policy-shaped is on screen for a cloud sandbox.
+      expect(screen.queryByLabelText('Run commands')).toBeNull();
+      await user.click(screen.getByLabelText('This computer'));
+      expect((await screen.findByLabelText('Read files')) as HTMLInputElement).toBeChecked();
+      expect(screen.getByLabelText('Write files') as HTMLInputElement).toBeChecked();
+      const exec = screen.getByLabelText('Run commands') as HTMLInputElement;
+      expect(exec).not.toBeChecked();
+      // The README's words for what exec means, beside the toggle that turns it on.
+      expect(screen.getByText(/runs as you/i)).toBeDefined();
+      expect(screen.getByText(/no sandbox/i)).toBeDefined();
+      // Not offered at all: a terminal, a checkpoint.
+      expect(screen.queryByLabelText(/terminal/i)).toBeNull();
+      expect(screen.queryByLabelText(/checkpoint/i)).toBeNull();
+    });
+
+    test('every policy toggle resets to the safe default when a create step OPENS: enable Run commands, cancel, reopen ⇒ off (Codex P1)', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.click(await screen.findByLabelText('Run commands'));
+      await user.click(screen.getByLabelText('Write files'));
+      expect(screen.getByLabelText('Run commands') as HTMLInputElement).toBeChecked();
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      await user.click(await screen.findByText('New environment'));
+      await user.click(await screen.findByLabelText('This computer'));
+      expect((await screen.findByLabelText('Run commands')) as HTMLInputElement).not.toBeChecked();
+      expect(screen.getByLabelText('Write files') as HTMLInputElement).toBeChecked();
+      expect(screen.getByLabelText('Read files') as HTMLInputElement).toBeChecked();
+    });
+
+    test('enable Run commands, create, then open another create step ⇒ commands are off again', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByLabelText('Run commands'));
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', expect.objectContaining({ serverPolicy: { ops: ['fs_read', 'fs_write', 'exec'], checkpoint: false } })));
+      await user.click(await screen.findByRole('button', { name: 'Done' }));
+      await user.click(await screen.findByText('New environment'));
+      await user.click(await screen.findByLabelText('This computer'));
+      expect((await screen.findByLabelText('Run commands')) as HTMLInputElement).not.toBeChecked();
+    });
+
+    test('turning "Run commands" on posts exec in the serverPolicy; turning "Write files" off leaves it out', async () => {
+      const user = userEvent.setup();
+      enableLocalEnvs();
+      respondWithSessions([], []);
+      mockPost.mockResolvedValue({ env: localEnv, enrollment: { enrollmentId: 'enr_1', code: CODE, expiresAt: expiresAt() } });
+      renderSidebar();
+      await openCreateStep(user);
+      await user.click(screen.getByLabelText('This computer'));
+      await user.type(screen.getByLabelText('Environment name'), 'mac');
+      await user.type(await screen.findByLabelText('Machine label'), 'jono-macstudio');
+      await user.click(screen.getByLabelText('Run commands'));
+      await user.click(screen.getByLabelText('Write files'));
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', {
+          name: 'mac',
+          substrate: 'local',
+          label: 'jono-macstudio',
+          serverPolicy: { ops: ['fs_read', 'exec'], checkpoint: false },
+        }),
       );
     });
 
@@ -2754,6 +2848,47 @@ describe('AgentsSidebar', () => {
       expect(screen.getByTestId('enrollment-commands').textContent).toContain(`pagespace env enroll enr_1 ${CODE}`);
       await user.click(screen.getByRole('button', { name: 'Done' }));
       await waitFor(() => expect(screen.queryByTestId('enrollment-code')).toBeNull());
+    });
+
+    /**
+     * THE ACTIVITY PANEL IS THE OWNER'S (GA wave 3, leaf 2; [D-6]). What the
+     * agent is running on a person's computer is shown to the person who
+     * enrolled it and to nobody else — not to a drive admin who can delete
+     * it, and not before a machine has enrolled. A non-owner's sidebar never
+     * even asks the route, so it never fills with 403s.
+     */
+    describe('live activity on the row', () => {
+      const enrolledMac = (ownerId: string) => ({ id: 'env-mac', name: 'mac', status: 'connected' as const, substrate: 'local' as const, label: 'jono-macstudio', enrolled: true, ownerId, capabilities: null, paused: false, serverPolicy: { ops: ['exec'], checkpoint: false } });
+      const running = { id: 'row-1', envId: 'env-mac', grantId: 'g-1', userId: 'user-owner', sessionId: 's', conversationId: 'c', op: 'exec', summary: "exec: sh -c 'bun test'", verdict: 'signed', exitCode: null, challengeId: null, approvalScope: null, ts: '2026-09-09T12:00:00.000Z', resultAt: null };
+
+      test('the machine OWNER sees "Running now" with the command under the row, read from the owner-only route', async () => {
+        mockUseAuth.mockReturnValue({ user: { id: 'user-owner', role: 'user' }, isLoading: false });
+        activityRows = [running];
+        respondWithSessions([], [enrolledMac('user-owner') as unknown as EnvFixture]);
+        renderSidebar();
+        const panel = await screen.findByTestId('env-activity-panel-env-mac');
+        expect(panel).toHaveTextContent('Running now (1)');
+        expect(panel).toHaveTextContent("exec: sh -c 'bun test'");
+        expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/drives/drive-1/envs/env-mac/activity');
+      });
+
+      test('a drive ADMIN who did not enrol the machine gets no panel and the route is never asked', async () => {
+        mockUseAuth.mockReturnValue({ user: { id: 'user-admin', role: 'user' }, isLoading: false });
+        activityRows = [running];
+        respondWithSessions([], [enrolledMac('user-owner') as unknown as EnvFixture]);
+        renderSidebar();
+        await screen.findByTestId('sidebar-env-env-mac');
+        expect(screen.queryByTestId('env-activity-panel-env-mac')).toBeNull();
+        expect(mockFetchWithAuth.mock.calls.some(([url]) => typeof url === 'string' && url.endsWith('/activity'))).toBe(false);
+      });
+
+      test('before the machine has enrolled there is nothing to watch: no panel even for the owner', async () => {
+        mockUseAuth.mockReturnValue({ user: { id: 'user-owner', role: 'user' }, isLoading: false });
+        respondWithSessions([], [{ ...enrolledMac('user-owner'), enrolled: false, status: 'disconnected' } as unknown as EnvFixture]);
+        renderSidebar();
+        await screen.findByTestId('sidebar-env-env-mac');
+        expect(screen.queryByTestId('env-activity-panel-env-mac')).toBeNull();
+      });
     });
 
     test('"Show a new code" is withheld once a machine has enrolled, and from a member', async () => {

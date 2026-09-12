@@ -8,7 +8,7 @@
 import { homedir as osHomedir, userInfo } from 'node:os';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS } from '../../exit-codes.js';
 import type { CommandHandler } from '../../router/router.js';
-import { defaultPolicyPath, describePolicyRefusal, loadMachinePolicy, openPolicyFile, type OpenedPolicyFile } from '../../env-bridge/policy.js';
+import { defaultPolicyPath, describePolicyRefusal, describePolicyWarnings, loadMachinePolicy, openPolicyFile, type OpenedPolicyFile } from '../../env-bridge/policy.js';
 
 export interface EnvPolicyHandlerDeps {
   readonly homedir: string;
@@ -42,6 +42,7 @@ export function createEnvPolicyHandler(deps: EnvPolicyHandlerDeps): CommandHandl
         '',
       ].join('\n'),
     );
+    for (const warning of describePolicyWarnings(policy, { homedir: deps.homedir })) ctx.stderr.write(`${warning.message}\n`);
     return EXIT_SUCCESS;
   };
 }

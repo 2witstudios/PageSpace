@@ -9,12 +9,14 @@ import {
   CHECKPOINT_TIMEOUT_MS,
   DENIAL_MESSAGES,
   localRefusalToToolDenial,
+  pendingChallengeIdOf,
   type SandboxActorContext,
   type SandboxRunDeps,
 } from '../tool-runners';
 import type { ExecutableSandbox, SandboxRunResult } from '../sandbox-client/types';
 import type { CodeExecutionAuditInput } from '../audit';
 import { SANDBOX_ROOT } from '../sandbox-paths';
+import { LocalEnvGrantDeniedError, LocalEnvServerDeniedError } from '../sandbox-client/local-env-sandbox-host';
 import { DEFAULT_READ_LINES, SANDBOX_MAX_OUTPUT_BYTES, MAX_LINE_BYTES } from '../execution-policy';
 import { LINE_ELISION_MARKER } from '../output-limit';
 import { LocalEnvUnsupportedError } from '../sandbox-host';
@@ -1960,6 +1962,113 @@ describe('a LOCAL environment\'s two refusals stay distinguishable all the way t
     expect(localRefusalToToolDenial('not_connected')).toBe('local_not_connected');
     expect(localRefusalToToolDenial('bind_policy')).toBe('local_bind_denied');
     expect(localRefusalToToolDenial('not_connected')).not.toBe(localRefusalToToolDenial('bind_policy'));
+  });
+
+  it('should map server_denied to a reason of its own — PageSpace refused to sign, which neither the requester nor the machine fixes', () => {
+    expect(localRefusalToToolDenial('server_denied')).toBe('local_server_denied');
+    // The bind-time twin: a machine whose server policy allows nothing (GA wave 1) — same owner, same fix.
+    expect(localRefusalToToolDenial('no_server_ops')).toBe('local_server_denied');
+    expect(localRefusalToToolDenial('server_denied')).not.toBe(localRefusalToToolDenial('not_connected'));
+    expect(localRefusalToToolDenial('server_denied')).not.toBe(localRefusalToToolDenial('bind_policy'));
+  });
+
+  it('given exec throws the typed LocalEnvServerDeniedError (the server refused to sign), the agent should receive local_server_denied — not execution_failed', async () => {
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async () => {
+            throw new LocalEnvServerDeniedError('env-1', 'server_denied');
+          },
+        }),
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toEqual({ success: false, reason: 'local_server_denied', error: DENIAL_MESSAGES.local_server_denied });
+  });
+
+  it.each([
+    ['writeSandboxFile', (deps: SandboxRunDeps) => writeSandboxFile({ path: 'a.txt', content: 'hi', ctx: makeCtx(), deps })],
+    ['readSandboxFile', (deps: SandboxRunDeps) => readSandboxFile({ path: 'a.txt', ctx: makeCtx(), deps })],
+    ['readSandboxFileForCopy', (deps: SandboxRunDeps) => readSandboxFileForCopy({ path: 'a.txt', ctx: makeCtx(), deps })],
+    ['editSandboxFile (read leg)', (deps: SandboxRunDeps) => editSandboxFile({ path: 'a.txt', oldString: 'x', newString: 'y', ctx: makeCtx(), deps })],
+  ] as const)('given the server policy excludes the op, %s should answer local_server_denied — not execution_failed (Codex P2: every runner, not only bash)', async (_name, run) => {
+    const denied = async () => {
+      throw new LocalEnvServerDeniedError('env-1', 'server_denied');
+    };
+    const { deps } = makeDeps({ reconnect: async () => makeSandbox({ writeFiles: denied, readFileToBuffer: denied }) });
+    const result = await run(deps);
+    expect(result).toEqual({ success: false, reason: 'local_server_denied', error: DENIAL_MESSAGES.local_server_denied });
+  });
+
+  it('GA wave 2 · leaf 5: given the MACHINE answers ask_pending:<id> (frozen for the owner\'s click), bash should answer local_approval_required carrying the challengeId — never execution_failed', async () => {
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async () => {
+            throw new LocalEnvGrantDeniedError('env-1', 'ask_pending:ch_42');
+          },
+        }),
+    });
+    const result = await runBashInSandbox({ command: 'git status', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'local_approval_required', challengeId: 'ch_42' });
+    expect((result as { error: string }).error).toContain('ch_42');
+    expect((result as { error: string }).error).toContain('request_env_approval');
+  });
+
+  it.each([
+    ['writeSandboxFile', (deps: SandboxRunDeps) => writeSandboxFile({ path: 'a.txt', content: 'hi', ctx: makeCtx(), deps })],
+    ['readSandboxFile', (deps: SandboxRunDeps) => readSandboxFile({ path: 'a.txt', ctx: makeCtx(), deps })],
+    ['readSandboxFileForCopy', (deps: SandboxRunDeps) => readSandboxFileForCopy({ path: 'a.txt', ctx: makeCtx(), deps })],
+    ['editSandboxFile (read leg)', (deps: SandboxRunDeps) => editSandboxFile({ path: 'a.txt', oldString: 'x', newString: 'y', ctx: makeCtx(), deps })],
+  ] as const)('GA wave 2 · leaf 5: %s answers local_approval_required with the challengeId when the machine froze the request', async (_name, run) => {
+    const pending = async () => {
+      throw new LocalEnvGrantDeniedError('env-1', 'ask_pending:ch_7');
+    };
+    const { deps } = makeDeps({ reconnect: async () => makeSandbox({ writeFiles: pending, readFileToBuffer: pending }) });
+    expect(await run(deps)).toMatchObject({ success: false, reason: 'local_approval_required', challengeId: 'ch_7' });
+  });
+
+  it('GA wave 2 · leaf 5: any OTHER machine refusal stays execution_failed, and a bare or malformed ask_pending carries no id', async () => {
+    const { deps } = makeDeps({ reconnect: async () => makeSandbox({ runCommand: async () => { throw new LocalEnvGrantDeniedError('env-1', 'declined'); } }) });
+    expect(await runBashInSandbox({ command: 'x', ctx: makeCtx(), deps })).toEqual({ success: false, reason: 'execution_failed', error: DENIAL_MESSAGES.execution_failed });
+    expect(pendingChallengeIdOf('ask_pending:')).toBeNull();
+    expect(pendingChallengeIdOf('approval_mismatch')).toBeNull();
+    expect(pendingChallengeIdOf('ask_pending:ch_1')).toBe('ch_1');
+  });
+
+  it('given the server policy allows reading but not WRITING, editSandboxFile should read fine and answer local_server_denied on the write leg', async () => {
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          readFileToBuffer: async () => Buffer.from('hello x'),
+          writeFiles: async () => {
+            throw new LocalEnvServerDeniedError('env-1', 'server_denied');
+          },
+        }),
+    });
+    const result = await editSandboxFile({ path: 'a.txt', oldString: 'x', newString: 'y', ctx: makeCtx(), deps });
+    expect(result).toEqual({ success: false, reason: 'local_server_denied', error: DENIAL_MESSAGES.local_server_denied });
+  });
+
+  it('given exec throws an ORDINARY error, the agent should still receive execution_failed (the typed mapping is narrow)', async () => {
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async () => {
+            throw new Error('socket closed');
+          },
+        }),
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'execution_failed' });
+  });
+
+  it('local_server_denied copy should name the settings page and say retrying will not help; never the same sentence as its siblings', () => {
+    const serverDenied = DENIAL_MESSAGES.local_server_denied;
+    expect(serverDenied).toContain('settings');
+    expect(serverDenied).toContain('Retrying will not help');
+    expect(serverDenied).not.toBe(DENIAL_MESSAGES.local_not_connected);
+    expect(serverDenied).not.toBe(DENIAL_MESSAGES.local_bind_denied);
+    expect(serverDenied).not.toBe(DENIAL_MESSAGES.provision_failed);
   });
 
   it.each(['flag_disabled', 'code_exec_denied', 'not_local', 'revoked', 'substrate_unsupported', undefined])(

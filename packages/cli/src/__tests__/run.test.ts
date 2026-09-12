@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CLI_VERSION, credentialSecret, EXIT_SUCCESS, EXIT_USAGE_ERROR, isLongRunningCommand, run } from '@pagespace/cli';
 import type { HostCredential, RunDependencies } from '@pagespace/cli';
 import { createFakeActiveKeyStore, createFakeCredentialStore, createRecordingSink } from './fake-context.js';
@@ -15,6 +15,42 @@ function makeDeps(argv: string[], env: Record<string, string | undefined> = {}):
     credentialStore: createFakeCredentialStore(),
   };
 }
+
+/**
+ * NO UNIT TEST HERE TOUCHES THE NETWORK.
+ *
+ * `makeDeps` fakes the credential store but nothing faked `fetch`, so every
+ * row that resolved a credential and then ran a command made REAL outbound
+ * requests to `https://pagespace.ai` — `whoami` alone did two
+ * (`/api/auth/me`, `/api/drives`). Locally that is ~235 ms and invisible;
+ * on a CI runner where egress to that host is blocked or slow it hangs until
+ * the socket gives up, which is what made
+ * "folds the legacy PAGESPACE_AUTH_TOKEN env var…" fail with
+ * `Test timed out in 5000ms` — intermittently, on whichever branch drew an
+ * unlucky runner.
+ *
+ * So `fetch` is stubbed for the whole file and every call is RECORDED: these
+ * tests are about argv parsing, credential resolution and the messages
+ * printed, none of which need a server. The row below pins that the stub is
+ * load-bearing — it names the exact production URL this file used to hit —
+ * so that removing it fails a test with a readable reason instead of
+ * becoming a timeout somebody blames on flake.
+ */
+const fetchCalls: string[] = [];
+
+beforeEach(() => {
+  fetchCalls.length = 0;
+  vi.stubGlobal('fetch', async (url: string | URL | Request) => {
+    fetchCalls.push(String(url instanceof Request ? url.url : url));
+    // Unauthenticated is the honest answer for a fake credential: every row
+    // here asserts on what the CLI SAYS, never on a server's payload.
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+  });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('run', () => {
   it('exits 0 and prints usage for "help"', async () => {
@@ -393,6 +429,14 @@ describe('run', () => {
       await run(deps);
       expect(deps.stderr.lines.join('')).not.toContain('No explicit credential found');
     });
+  });
+
+  it('makes NO real network request: the calls a resolved credential triggers go through the stub (this file used to hit https://pagespace.ai for real)', async () => {
+    const deps = makeDeps(['whoami'], { PAGESPACE_AUTH_TOKEN: 'ps_legacy_secret_value' });
+    await run(deps);
+    // Non-empty proves the stub is on the path that WOULD have gone out, and
+    // names the host, so the hazard is visible to whoever reads this next.
+    expect(fetchCalls).toContain('https://pagespace.ai/api/auth/me');
   });
 
   it('folds the legacy PAGESPACE_AUTH_TOKEN env var into the single auth-resolution path with a deprecation notice, never echoing the token', async () => {

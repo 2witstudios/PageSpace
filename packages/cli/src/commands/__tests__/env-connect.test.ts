@@ -3,11 +3,12 @@ import { EventEmitter } from 'node:events';
 import { createHash, generateKeyPairSync, sign as nodeSign } from 'node:crypto';
 import { encodeFrame, decodeFrame, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
 import { encodeRevokeForSigning, verifyHello } from '@pagespace/lib/env-bridge/machine-signatures';
-import { decodeBase64 } from '@pagespace/lib/env-bridge/grant';
+import { canonicalizeArgs, decodeBase64, encodeGrant, type Grant } from '@pagespace/lib/env-bridge/grant';
+import { grantRequestForFrame, type GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 import { createEnvConnectHandler, PID_HEARTBEAT_MS, pidFilePath, type EnvConnectHandlerDeps, type PidRecord } from '../env/connect.js';
 import { bridgeSocketUrl } from '../../env-bridge/secure-host.js';
 import { generateMachineKeypair, signWithMachineKey } from '../../env-bridge/keypair.js';
-import { ed25519Verify } from '../../env-bridge/crypto.js';
+import { ed25519Verify, envBridgeHash } from '../../env-bridge/crypto.js';
 import type { BridgeSocket } from '../../env-bridge/ws-client.js';
 import type { ExecRunner } from '../../env-bridge/exec-runner.js';
 import { machineProfileName, type HostCredential, type MachineHostCredential } from '../../credentials/serialize.js';
@@ -26,7 +27,9 @@ const serverPublicKeyB64 = serverPair.publicKey.export({ type: 'spki', format: '
 const serverKeyId = createHash('sha256').update(decodeBase64(serverPublicKeyB64)!).digest('hex').slice(0, 16);
 const machine = generateMachineKeypair();
 
-const CREDENTIAL: MachineHostCredential = { kind: 'machine', privateKey: machine.privateKey, enrollmentId: 'enr_1', envId: 'env_1', serverPublicKey: serverPublicKeyB64, serverKeyId, scopes: [], createdAt: '2026-09-05T09:00:00.000Z' };
+/** The owner's passkeys as pinned at enrolment (hardening B) — without these the daemon refuses every chat approval. */
+const OWNER_APPROVAL = { rpId: 'pagespace.test', origin: 'https://pagespace.test', credentials: [{ credentialId: 'cred-a', publicKeyCose: 'cose-a' }] };
+const CREDENTIAL: MachineHostCredential = { kind: 'machine', privateKey: machine.privateKey, enrollmentId: 'enr_1', envId: 'env_1', serverPublicKey: serverPublicKeyB64, serverKeyId, ownerApproval: OWNER_APPROVAL, scopes: [], createdAt: '2026-09-05T09:00:00.000Z' };
 const POLICY = JSON.stringify({ mode: 'allowlist', principals: ['u1'], ops: ['exec'], roots: ['/home/me/proj'], envAllowlist: [] });
 
 class FakeSocket extends EventEmitter implements BridgeSocket {
@@ -109,9 +112,10 @@ function harness(overrides: Partial<EnvConnectHandlerDeps> & { policy?: string |
   const pidWrites: Array<{ path: string; record: PidRecord }> = [];
   const pidRemoves: string[] = [];
   const auditLines: string[] = [];
+  const approvalWrites: Array<{ path: string; content: string }> = [];
   const signals: Array<(signal: string) => void> = [];
   const exit = vi.fn<(code: number) => void>();
-  const execRunner: ExecRunner & { killed: number } = { killed: 0, run: async () => ({ exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), truncated: false, timedOut: false }), killAll() { this.killed += 1; }, liveCount: () => 0 };
+  const execRunner: ExecRunner & { killed: number } = { killed: 0, run: async () => ({ exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), truncated: false, timedOut: false }), killAll() { this.killed += 1; return 0; }, liveCount: () => 0 };
   const store = fakeStore();
   const deps: EnvConnectHandlerDeps = {
     createCredentialStore: () => store,
@@ -123,22 +127,28 @@ function harness(overrides: Partial<EnvConnectHandlerDeps> & { policy?: string |
     pid: 4242,
     argv0: 'pagespace',
     platform: 'darwin',
-    openPolicy: () => {
+    openPolicy: (path) => {
+      if (path.endsWith('env-approvals.json')) return null;
       if (policyStat === null || policy === null) return null;
       return { uid: policyStat.uid, mode: policyStat.mode, content: policy };
     },
     appendAuditLine: async (_path, line) => void auditLines.push(line),
     pidFile: { write: async (path, record) => void pidWrites.push({ path, record }), remove: async (path) => void pidRemoves.push(path) },
     probe: { realpath: (path) => (path === '/home/me/proj' ? path : null), isSymlink: () => false },
+    statMode: () => null,
     createExecRunner: () => execRunner,
     createFsRunner: () => ({ read: async () => ({ kind: 'read', found: false }), write: async () => ({ kind: 'write', ok: true }) }),
     createSocket: (url, headers) => { const s = new FakeSocket(url, headers); sockets.push(s); return s; },
     confirm: async () => false,
+    writeApprovals: async (path, content) => void approvalWrites.push({ path, content }),
+    approvalId: () => 'ap_test',
+    challengeId: () => 'ch_test',
     onSignal: (handler) => void signals.push(handler),
+    daemonEpoch: 'ep_test',
     exit,
     ...rest,
   };
-  return { deps, store, sockets, pidWrites, pidRemoves, auditLines, signals, exit, execRunner, handler: createEnvConnectHandler(deps), socket: () => sockets[sockets.length - 1]! };
+  return { deps, store, sockets, pidWrites, pidRemoves, auditLines, approvalWrites, signals, exit, execRunner, handler: createEnvConnectHandler(deps), socket: () => sockets[sockets.length - 1]! };
 }
 
 const flush = () => vi.advanceTimersByTimeAsync(0);
@@ -178,12 +188,157 @@ describe('pagespace env connect <enrollmentId>', () => {
     expect(h.sockets).toHaveLength(0);
   });
 
-  it('R5: given policy mode "ask" without a TTY, should refuse to start with a clear message', async () => {
+  it('R5 (GA wave 2): given policy mode "ask" without a TTY, should START and say asks will wait for a click in the chat; a non-pre-approved grant is answered ask_pending:<id> with the frozen request, nothing runs', async () => {
     const h = harness({ policy: JSON.stringify({ mode: 'ask', principals: ['u1'], ops: [], roots: ['/home/me/proj'], envAllowlist: [] }) });
     const c = ctx(false);
-    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_RUNTIME_ERROR);
-    expect(c.err.text()).toMatch(/"ask" needs an interactive terminal/);
-    expect(h.sockets).toHaveLength(0);
+    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+    expect(c.err.text()).toMatch(/wait for your click in the PageSpace chat/);
+    await flush();
+    h.socket().open();
+    await flush();
+    h.socket().receive({ type: 'ping', ts: 1 });
+    await flush();
+    const unsigned = { type: 'grant_exec' as const, cmd: '/usr/bin/true', args: [], cwd: '/home/me/proj', env: {} };
+    const request = grantRequestForFrame({ ...unsigned, grant: {}, sig: '' } as GrantFrame);
+    const grant: Grant = { grantId: 'g_chat', envId: 'env_1', principal: { userId: 'u1', sessionId: 's', conversationId: 'c' }, op: 'exec', argsHash: envBridgeHash(canonicalizeArgs(request.args)), iat: NOW - 1000, exp: NOW + 30_000, nonce: 'n_chat' };
+    h.socket().receive({ ...unsigned, grant: { ...grant, principal: { ...grant.principal } }, sig: Buffer.from(nodeSign(null, encodeGrant(grant), serverPair.privateKey)).toString('base64') } as unknown as Frame);
+    await flush();
+    const replies = h.socket().sent.map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).filter((d) => d.ok && d.frame.type === 'grant_denied');
+    expect(replies).toHaveLength(1);
+    expect((replies[0] as { frame: Extract<Frame, { type: 'grant_denied' }> }).frame).toMatchObject({ grantId: 'g_chat', reason: 'ask_pending:ch_test', pending: { challengeId: 'ch_test', expiresAt: NOW + 30_000, request: { cmd: '/usr/bin/true', cwd: '/home/me/proj' } } });
+  });
+
+  it('Codex P1 wiring: a mode-less fs_write over an ALREADY executable file reaches the chat as an ask — the existing-mode probe is actually threaded from connect to the decision', async () => {
+    const target = '/home/me/proj/bin/tool';
+    const h = harness({
+      policy: JSON.stringify({ mode: 'allowlist', principals: ['u1'], ops: ['fs_read', 'fs_write'], roots: ['/home/me/proj'], envAllowlist: [] }),
+      probe: { realpath: (path: string) => (path === '/home/me/proj' || path === '/home/me/proj/bin' || path === target ? path : null), isSymlink: () => false },
+      statMode: (path: string) => (path === target ? 0o755 : null),
+    });
+    const c = ctx(false);
+    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+    await flush();
+    h.socket().open();
+    await flush();
+    h.socket().receive({ type: 'ping', ts: 1 });
+    await flush();
+    const unsigned = { type: 'grant_fs_write' as const, files: [{ path: target, contentB64: Buffer.from('#!/bin/sh\nid').toString('base64') }] };
+    const request = grantRequestForFrame({ ...unsigned, grant: {}, sig: '' } as GrantFrame);
+    const grant: Grant = { grantId: 'g_write', envId: 'env_1', principal: { userId: 'u1', sessionId: 's', conversationId: 'c' }, op: 'fs_write', argsHash: envBridgeHash(canonicalizeArgs(request.args)), iat: NOW - 1000, exp: NOW + 30_000, nonce: 'n_write' };
+    h.socket().receive({ ...unsigned, grant: { ...grant, principal: { ...grant.principal } }, sig: Buffer.from(nodeSign(null, encodeGrant(grant), serverPair.privateKey)).toString('base64') } as unknown as Frame);
+    await flush();
+    const sent = h.socket().sent.map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 }));
+    const denied = sent.filter((d) => d.ok && d.frame.type === 'grant_denied');
+    expect(denied, JSON.stringify(sent)).toHaveLength(1);
+    expect((denied[0] as { frame: Extract<Frame, { type: 'grant_denied' }> }).frame).toMatchObject({
+      grantId: 'g_write',
+      reason: 'ask_pending:ch_test',
+      pending: { files: [{ path: target, mode: null, reason: 'executable_bit' }] },
+    });
+  });
+
+  /**
+   * HARDENING B, LEAF B5 — end to end on the daemon: with nothing pinned the
+   * machine says so at start and refuses the chat path entirely, rather than
+   * accepting the server's word that a human clicked.
+   */
+  describe('hardening B — what this machine will accept as proof of your click', () => {
+    const ASK = JSON.stringify({ mode: 'ask', principals: ['u1'], ops: [], roots: ['/home/me/proj'], envAllowlist: [] });
+    const chatGrant = (socket: ReturnType<ReturnType<typeof harness>['socket']>) => {
+      const unsigned = { type: 'grant_exec' as const, cmd: '/usr/bin/true', args: [], cwd: '/home/me/proj', env: {} };
+      const request = grantRequestForFrame({ ...unsigned, grant: {}, sig: '' } as GrantFrame);
+      const grant: Grant = { grantId: 'g_b5', envId: 'env_1', principal: { userId: 'u1', sessionId: 's', conversationId: 'c' }, op: 'exec', argsHash: envBridgeHash(canonicalizeArgs(request.args)), iat: NOW - 1000, exp: NOW + 30_000, nonce: 'n_b5' };
+      socket.receive({ ...unsigned, grant: { ...grant, principal: { ...grant.principal } }, sig: Buffer.from(nodeSign(null, encodeGrant(grant), serverPair.privateKey)).toString('base64') } as unknown as Frame);
+    };
+    const denials = (h: ReturnType<typeof harness>) =>
+      h.socket().sent.map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).flatMap((d) => (d.ok && d.frame.type === 'grant_denied' ? [d.frame] : []));
+
+    it('with passkeys pinned, names how many and says PageSpace cannot produce or add one', async () => {
+      const h = harness({ policy: ASK });
+      const c = ctx(false);
+      await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']));
+      expect(c.err.text()).toMatch(/Owner credentials: 1 passkey pinned \(https:\/\/pagespace\.test\)/);
+      expect(c.err.text()).toMatch(/PageSpace cannot produce one, and cannot add a key to this list/);
+    });
+
+    it('with NOTHING pinned and no terminal, says so in one line at start and REFUSES the chat path — nothing is even frozen', async () => {
+      const { ownerApproval: _dropped, ...withoutPasskeys } = CREDENTIAL;
+      const h = harness({ policy: ASK, createCredentialStore: () => fakeStore(withoutPasskeys) });
+      const c = ctx(false);
+      expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+      expect(c.err.text()).toMatch(/Owner credentials: NONE pinned/);
+      expect(c.err.text()).toMatch(/approvals in the PageSpace chat will be REFUSED/i);
+      expect(c.err.text()).toMatch(/RE-ENROL this machine/);
+      await flush();
+      h.socket().open();
+      await flush();
+      h.socket().receive({ type: 'ping', ts: 1 });
+      await flush();
+      chatGrant(h.socket());
+      await flush();
+      // Refused outright — never `ask_pending`, so no question the server could answer for the owner.
+      expect(denials(h).map((frame) => frame.reason)).toEqual(['ask_unavailable']);
+    });
+
+    it('with nothing pinned but a TERMINAL attached, the ask goes to the terminal instead — the prompt was never exposed to this forgery', async () => {
+      const { ownerApproval: _dropped, ...withoutPasskeys } = CREDENTIAL;
+      const confirm = vi.fn(async () => false);
+      const h = harness({ policy: ASK, confirm, createCredentialStore: () => fakeStore(withoutPasskeys) });
+      const c = ctx(true);
+      await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']));
+      expect(c.err.text()).toMatch(/prompt in this terminal instead/);
+      await flush();
+      h.socket().open();
+      await flush();
+      h.socket().receive({ type: 'ping', ts: 1 });
+      await flush();
+      chatGrant(h.socket());
+      await flush();
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(denials(h).map((frame) => frame.reason)).toEqual(['declined']);
+    });
+  });
+
+  it('GA wave 2 · leaf 1: at start the daemon names the approvals file and how many approvals are in force (none ⇒ 0)', async () => {
+    const h = harness();
+    const c = ctx(false);
+    await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']));
+    expect(c.err.text()).toMatch(/Approvals \/home\/me\/\.pagespace\/env-approvals\.json: 0 in force/);
+  });
+
+  it('GA wave 2 · leaf 1: in ask mode, a durable approval in ~/.pagespace/env-approvals.json runs a covered command from a NEW session with NO terminal prompt; an uncovered one prompts', async () => {
+    const ASK = JSON.stringify({ mode: 'ask', principals: ['u1'], ops: [], roots: ['/home/me/proj'], envAllowlist: [] });
+    const APPROVALS = JSON.stringify({ version: 1, approvals: [{ approvalId: 'old', envId: 'env_1', userId: 'u1', op: 'exec', subject: 'exec:/usr/bin/true', scope: 'until_revoked', createdAt: 1, expiresAt: null }] });
+    const confirm = vi.fn(async () => false);
+    const runs: string[] = [];
+    const h = harness({
+      policy: ASK,
+      confirm,
+      openPolicy: (path) => ({ uid: UID, mode: 0o100600, content: path.endsWith('env-approvals.json') ? APPROVALS : ASK }),
+      createExecRunner: () => ({ run: async (request) => { runs.push(request.cmd ?? ''); return { exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), truncated: false, timedOut: false }; }, killAll: () => 0, liveCount: () => 0 }),
+    });
+    const c = ctx(true);
+    await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']));
+    expect(c.err.text()).toMatch(/Approvals .*: 1 in force/);
+    await flush();
+    h.socket().open();
+    await flush();
+    h.socket().receive({ type: 'ping', ts: 1 }); // the ack
+    await flush();
+    const grantFor = (cmd: string, n: number) => {
+      const unsigned = { type: 'grant_exec' as const, cmd, args: [], cwd: '/home/me/proj', env: {} };
+      const request = grantRequestForFrame({ ...unsigned, grant: {}, sig: '' } as GrantFrame);
+      const grant: Grant = { grantId: `g${n}`, envId: 'env_1', principal: { userId: 'u1', sessionId: `brand-new-session-${n}`, conversationId: `new-chat-${n}` }, op: 'exec', argsHash: envBridgeHash(canonicalizeArgs(request.args)), iat: NOW - 1000, exp: NOW + 30_000, nonce: `n${n}` };
+      return { ...unsigned, grant: { ...grant, principal: { ...grant.principal } }, sig: Buffer.from(nodeSign(null, encodeGrant(grant), serverPair.privateKey)).toString('base64') } as unknown as Frame;
+    };
+    h.socket().receive(grantFor('/usr/bin/true', 1));
+    await flush();
+    expect(runs).toEqual(['/usr/bin/true']);
+    expect(confirm).not.toHaveBeenCalled();
+    h.socket().receive(grantFor('/usr/bin/false', 2));
+    await flush();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(runs).toEqual(['/usr/bin/true']);
   });
 
   it('R1: given NO policy file, should START anyway (deny-all), say why, write the pid file, mint a token and send a signed hello with an empty policy digest', async () => {
@@ -258,6 +413,115 @@ describe('pagespace env connect <enrollmentId>', () => {
     expect(h.execRunner.killed).toBe(1);
     expect(h.pidRemoves).toEqual([pidFilePath(HOME, 'enr_1')]);
     expect(h.exit).toHaveBeenCalledWith(EXIT_SUCCESS);
+  });
+
+  /**
+   * STOP reaches the process (GA wave 3, leaf 3 amendment). The REAL exec
+   * runner spawns a real `sh -c 'exec sleep 30'` under a real temp root; a
+   * server-signed `pause` arrives; the daemon must SIGKILL the process group
+   * before it acks. Proof, in order: the pause_result is sent before the
+   * exec_result; that exec_result carries exit 137 (128 + SIGKILL) — the
+   * sleep did not finish on its own; and `kill -0` on the pid fails once the
+   * parent has reaped it. Real timers: a real child process is involved.
+   */
+  it('GA wave 3 · Stop: a running command is killed by a verified pause — exit 137 from SIGKILL, the pid gone, the signed pause_result sent before the exec_result', async () => {
+    vi.useRealTimers();
+    const { mkdtempSync, existsSync, readFileSync, realpathSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { createNodeExecRunner } = await import('../../env-bridge/exec-runner.js');
+    const { encodePauseForSigning } = await import('@pagespace/lib/env-bridge/machine-signatures');
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'ps-pause-')));
+    const pidFile = join(root, 'child.pid');
+    try {
+      const h = harness({
+        policy: JSON.stringify({ mode: 'allowlist', principals: ['u1'], ops: ['exec'], roots: [root], envAllowlist: [] }),
+        probe: { realpath: (path) => (existsSync(path) ? realpathSync(path) : null), isSymlink: () => false },
+        createExecRunner: (resolver) => createNodeExecRunner(resolver),
+      });
+      const c = ctx(false);
+      expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+      await new Promise((r) => setTimeout(r, 10));
+      h.socket().open();
+      await new Promise((r) => setTimeout(r, 10));
+      h.socket().receive({ type: 'ping', ts: 1 });
+      await new Promise((r) => setTimeout(r, 10));
+      const unsigned = { type: 'grant_exec' as const, cmd: '/bin/sh', args: ['-c', `echo $$ > ${pidFile}; exec sleep 30`], cwd: root, env: {}, timeoutMs: 60_000 };
+      const request = grantRequestForFrame({ ...unsigned, grant: {}, sig: '' } as GrantFrame);
+      const grant: Grant = { grantId: 'g_sleep', envId: 'env_1', principal: { userId: 'u1', sessionId: 's', conversationId: 'c' }, op: 'exec', argsHash: envBridgeHash(canonicalizeArgs(request.args)), iat: NOW - 1000, exp: NOW + 30_000, nonce: 'n_sleep' };
+      h.socket().receive({ ...unsigned, grant: { ...grant, principal: { ...grant.principal } }, sig: Buffer.from(nodeSign(null, encodeGrant(grant), serverPair.privateKey)).toString('base64') } as unknown as Frame);
+      const deadline = Date.now() + 5_000;
+      while (!existsSync(pidFile) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+      const pid = Number(readFileSync(pidFile, 'utf8').trim());
+      expect(Number.isInteger(pid) && pid > 0).toBe(true);
+      expect(() => process.kill(pid, 0)).not.toThrow();
+
+      const pausedAt = NOW + 500;
+      h.socket().receive({ type: 'pause', issuedAt: NOW, pausedAt, sig: Buffer.from(nodeSign(null, encodePauseForSigning({ envId: 'env_1', enrollmentId: 'enr_1', keyId: serverKeyId, issuedAt: NOW, pausedAt }), serverPair.privateKey)).toString('base64') });
+      const types = () => h.socket().sent.map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).filter((d) => d.ok).map((d) => (d as { frame: Frame }).frame);
+      const until = Date.now() + 5_000;
+      while (!types().some((f) => f.type === 'exec_result') && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+      const frames = types();
+      const ack = frames.findIndex((f) => f.type === 'pause_result');
+      const result = frames.findIndex((f) => f.type === 'exec_result');
+      expect(ack).toBeGreaterThanOrEqual(0);
+      expect(result).toBeGreaterThan(ack);
+      expect(frames[ack]).toMatchObject({ type: 'pause_result', envId: 'env_1', pausedAt, killed: 1 });
+      expect(frames[result]).toMatchObject({ type: 'exec_result', grantId: 'g_sleep', exitCode: 137 });
+      // Reaped by the daemon's own close handler: the pid no longer exists.
+      expect(() => process.kill(pid, 0)).toThrow();
+      expect(h.auditLines.some((line) => line.includes('"verdict":"paused:killed:1"'))).toBe(true);
+      // Still connected: Stop pauses grants, not the machine.
+      expect(h.socket().closed).toBeNull();
+      h.signals[0]!('SIGINT');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      vi.useFakeTimers();
+    }
+  }, 20_000);
+
+  it('Codex P2 #7 (review round 1): the hello carries this process\'s daemonEpoch under the signature, and a RECONNECT sends the same epoch', async () => {
+    const h = harness();
+    const c = ctx(false);
+    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+    await flush();
+    h.socket().open();
+    const first = decodeFrame(h.socket().sent[0]!, { maxFrameBytes: 1 << 20 });
+    expect(first).toMatchObject({ ok: true, frame: { type: 'hello', daemonEpoch: 'ep_test' } });
+    expect(verifyHello({ hello: (first as { frame: Extract<Frame, { type: 'hello' }> }).frame, expectedEnvId: 'env_1', machinePublicKey: decodeBase64(machine.publicKey)!, verify: ed25519Verify })).toEqual({ ok: true });
+    h.socket().emit('close', 1006, Buffer.from(''));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.sockets.length).toBeGreaterThan(1);
+    h.socket().open();
+    const again = decodeFrame(h.socket().sent[0]!, { maxFrameBytes: 1 << 20 });
+    expect(again).toMatchObject({ ok: true, frame: { type: 'hello', daemonEpoch: 'ep_test' } });
+    h.signals[0]!('SIGINT');
+  });
+
+  it('GA wave 3 · leaf 7: given mode allowlist with exec in ops (the harness default), the daemon prints the exec-allowlisted line at start and audits policy_warning:exec_allowlisted once; with exec absent it prints and audits nothing of the kind', async () => {
+    const h = harness();
+    const c = ctx(false);
+    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+    await flush();
+    expect(c.err.text()).toMatch(/exec is allowlisted: commands run on this machine without a click — remove exec from ops to restore the approval prompt/);
+    expect(h.auditLines.filter((line) => line.includes('"verdict":"policy_warning:exec_allowlisted"'))).toHaveLength(1);
+    const quiet = harness({ policy: JSON.stringify({ mode: 'allowlist', principals: ['u1'], ops: ['fs_read'], roots: ['/home/me/proj'], envAllowlist: [] }) });
+    const q = ctx(false);
+    expect(await quiet.handler(q.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+    await flush();
+    expect(q.err.text()).not.toMatch(/exec is allowlisted/);
+    expect(quiet.auditLines.some((line) => line.includes('policy_warning'))).toBe(false);
+  });
+
+  it('A6: given a policy rooted at the home directory, connect prints the root_is_home line AND audits policy_warning:root_is_home — the audit loops over CODES, it does not special-case one', async () => {
+    const h = harness({ policy: JSON.stringify({ mode: 'allowlist', principals: ['u1'], ops: ['fs_read', 'exec'], roots: [HOME], envAllowlist: [] }), probe: { realpath: (path: string) => (path === HOME ? path : null), isSymlink: () => false } });
+    const c = ctx(false);
+    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
+    await flush();
+    expect(c.err.text()).toMatch(/covers your whole home directory/);
+    expect(h.auditLines.filter((line) => line.includes('"verdict":"policy_warning:root_is_home"'))).toHaveLength(1);
+    // The pre-existing code is still printed and still audited exactly once.
+    expect(h.auditLines.filter((line) => line.includes('"verdict":"policy_warning:exec_allowlisted"'))).toHaveLength(1);
   });
 
   it('R7: a server-signed revoke deletes the machine key from the credential store, stops reconnecting, and exits non-zero with a message', async () => {

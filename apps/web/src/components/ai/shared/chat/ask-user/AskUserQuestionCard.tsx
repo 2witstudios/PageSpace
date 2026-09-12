@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { useAskUserAnswerContext } from './AskUserAnswerContext';
-import type { AskUserInput, AskUserAnswer } from '@/lib/ai/tools/ask-user-tools';
+import type { AskUserInput, AskUserAnswer, AskUserOutput } from '@/lib/ai/tools/ask-user-tools';
 
 interface ToolPart {
   type: string;
@@ -33,9 +33,7 @@ const tryJson = (value: string): unknown => {
   }
 };
 
-type AskUserOutputShape =
-  | { answers: AskUserAnswer[] }
-  | { dismissed: true; reason: string };
+type AskUserOutputShape = AskUserOutput;
 
 const safeParseOutput = (value: unknown): AskUserOutputShape | null => {
   const parsed = typeof value === 'string' ? tryJson(value) : value;

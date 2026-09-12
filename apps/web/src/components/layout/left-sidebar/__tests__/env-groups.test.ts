@@ -22,7 +22,7 @@ const session = (workspaceId: string, envId: string | null) => ({ workspaceId, e
 
 describe('partitionSessionsByEnv — the substrate rides along', () => {
   it('given a local env, should carry substrate local on its group so the row can withhold Sprite-only actions; an orphan carries null', () => {
-    const local: DriveEnvDTO = { id: 'env-l', driveId: 'drive-1', name: 'mac', substrate: 'local', status: 'disconnected', label: 'jono-macstudio', enrolled: false, createdAt: '2026-08-01T00:00:00.000Z' };
+    const local: DriveEnvDTO = { id: 'env-l', driveId: 'drive-1', name: 'mac', substrate: 'local', status: 'disconnected', label: 'jono-macstudio', enrolled: false, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false }, ownerId: 'user-owner', capabilities: null, paused: false, createdAt: '2026-08-01T00:00:00.000Z' };
     const r = partitionSessionsByEnv([session('x', 'env-ghost')], [env({ id: 'env-s', name: 'cloud' }), local]);
     expect(r.envGroups.map((g) => [g.envId, g.substrate])).toEqual([
       ['env-s', 'sprite'],
@@ -32,7 +32,7 @@ describe('partitionSessionsByEnv — the substrate rides along', () => {
   });
 
   it('given a local env, should carry its machine label and enrollment fact; a Sprite env and an orphan carry null for both', () => {
-    const local: DriveEnvDTO = { id: 'env-l', driveId: 'drive-1', name: 'mac', substrate: 'local', status: 'disconnected', label: 'jono-macstudio', enrolled: false, createdAt: '2026-08-01T00:00:00.000Z' };
+    const local: DriveEnvDTO = { id: 'env-l', driveId: 'drive-1', name: 'mac', substrate: 'local', status: 'disconnected', label: 'jono-macstudio', enrolled: false, serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false }, ownerId: 'user-owner', capabilities: null, paused: false, createdAt: '2026-08-01T00:00:00.000Z' };
     const r = partitionSessionsByEnv([session('x', 'env-ghost')], [env({ id: 'env-s', name: 'cloud' }), local]);
     expect(r.envGroups.map((g) => [g.envId, g.machineLabel, g.enrolled])).toEqual([
       ['env-s', null, null],
@@ -78,5 +78,15 @@ describe('partitionSessionsByEnv', () => {
   it('carries each environment’s derived status through, so the row can render a dot without a second lookup', () => {
     const r = partitionSessionsByEnv([], [env({ id: 'env-1', name: 'staging', status: 'running' })]);
     expect(r.envGroups[0].status).toBe('running');
+  });
+});
+
+describe('ownerId — who sees the activity panel (GA wave 3)', () => {
+  const sprite: DriveEnvDTO = { id: 'env-s', driveId: 'drive-1', name: 'cloud', substrate: 'sprite', status: 'none', createdAt: '2026-08-01T00:00:00.000Z' };
+  const local: DriveEnvDTO = { id: 'env-l', driveId: 'drive-1', name: 'mac', substrate: 'local', status: 'connected', label: 'm', enrolled: true, serverPolicy: { ops: [], checkpoint: false }, ownerId: 'user-owner', capabilities: null, paused: false, createdAt: '2026-08-01T00:00:00.000Z' };
+
+  it('carries a LOCAL env\'s ownerId onto its group and null for a Sprite env and an orphan', () => {
+    const { envGroups } = partitionSessionsByEnv([{ id: 's', envId: 'env-ghost' }], [sprite, local]);
+    expect(envGroups.map((g) => [g.envId, g.ownerId])).toEqual([[ 'env-s', null ], [ 'env-l', 'user-owner' ], [ 'env-ghost', null ]]);
   });
 });

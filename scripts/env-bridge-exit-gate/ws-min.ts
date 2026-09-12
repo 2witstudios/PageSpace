@@ -66,11 +66,18 @@ export class MinSocket extends EventEmitter {
   private fragmentOpcode = 0;
   private closed = false;
 
-  constructor(
-    private readonly socket: Socket,
-    private readonly masked: boolean,
-  ) {
+  private readonly socket: Socket;
+  private readonly masked: boolean;
+
+  // Written out rather than declared as TypeScript parameter properties: the
+  // harness runs under `node --experimental-strip-types`, whose strip-only
+  // mode refuses them, and the proxy MUST run under node (Bun 1.3.14's
+  // node:http emits `upgrade` with a socket whose writes never reach the
+  // client, so the 101 is swallowed and the daemon sees a hang-up).
+  constructor(socket: Socket, masked: boolean) {
     super();
+    this.socket = socket;
+    this.masked = masked;
     socket.on('data', (chunk: Buffer) => this.ingest(chunk));
     socket.on('close', () => this.finish(1006, 'transport closed'));
     socket.on('error', (error: Error) => this.emit('error', error));

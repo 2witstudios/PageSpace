@@ -50,6 +50,19 @@ on:
       # `apps/web/src/lib/ai/tools/**`, already listed above.
       - 'packages/lib/src/services/agent-workspaces/**'
       - 'packages/lib/src/agent-workspaces/**'
+      # The local-environment layer (GA wave 3). Its real-Postgres suites
+      # (`grant-audit-store.integration.test.ts` — the invariant-10 join of the
+      # server's grant rows to the daemon's JSONL — and the later CAS suites)
+      # are NOT excluded from @pagespace/lib's default config, so ci.yml's unit
+      # and `test:integration` steps run them too; the `test:db` step below is
+      # the runner that is NAMED, so a later exclude-list edit cannot silently
+      # orphan them. The path filter covers the code under test.
+      - 'packages/lib/src/services/drive-envs/**'
+      - 'packages/lib/src/compliance/export/**'
+      - 'packages/lib/src/env-bridge/**'
+      - 'packages/db/src/schema/drive-env-*.ts'
+      - 'apps/web/src/lib/env-bridge/**'
+      - 'apps/web/src/app/api/env-bridge/**'
       - 'apps/web/src/lib/agent-workspaces/**'
       # The published-app hosting layer, same story. Its claim/transition suite
       # (`provisioner-claim.integration.test.ts`) is excluded from
@@ -70,7 +83,9 @@ on:
     # Removed rather than left as a line that provably does nothing in a
     # security workflow. See test.yml, where the same misreading cost real
     # capacity rather than merely being inert.
-    branches: [master, pu/flash-sandbox]
+    # `pu/local-env-ga` IS such a branch: the Local Environments GA waves are
+    # PRs targeting it, and they touch the sandbox and drizzle paths below.
+    branches: [master, pu/flash-sandbox, pu/local-env-ga]
     paths:
       - 'packages/lib/src/security/**'
       - 'packages/lib/src/services/sandbox/**'
@@ -118,6 +133,18 @@ on:
       # `apps/web/src/lib/ai/tools/**`, already listed above.
       - 'packages/lib/src/services/agent-workspaces/**'
       - 'packages/lib/src/agent-workspaces/**'
+      # The local-environment layer (GA wave 3). Its real-Postgres suites
+      # (`grant-audit-store.integration.test.ts` — the invariant-10 join of the
+      # server's grant rows to the daemon's JSONL — and the later CAS suites)
+      # are NOT excluded from @pagespace/lib's default config, so ci.yml's unit
+      # and `test:integration` steps run them too; the `test:db` step below is
+      # the runner that is NAMED, so a later exclude-list edit cannot silently
+      # orphan them. The path filter covers the code under test.
+      - 'packages/lib/src/services/drive-envs/**'
+      - 'packages/lib/src/env-bridge/**'
+      - 'packages/db/src/schema/drive-env-*.ts'
+      - 'apps/web/src/lib/env-bridge/**'
+      - 'apps/web/src/app/api/env-bridge/**'
       - 'apps/web/src/lib/agent-workspaces/**'
       # The published-app hosting layer, same story. Its claim/transition suite
       # (`provisioner-claim.integration.test.ts`) is excluded from
@@ -227,6 +254,51 @@ jobs:
       # CAS from one that silently matches nothing. This runs them for real.
       - name: Run agent-session store integration tests
         run: bun run --filter '@pagespace/lib' test:db -- src/services/agent-workspaces/__tests__/agent-sessions-store.integration.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
+      # The Art 15 collectors for the local-environment tables (GA wave 3):
+      # `drive_env_grant_audit` (what the subject's agent ran) and
+      # `drive_env_approvals` (what their machines run unasked). Selection is
+      # `userId = subject` for the first and `clicker OR machine owner` for the
+      # second — a join with an OR that a mocked query chain cannot tell from
+      # one that matches everything. This is the NAMED runner for that suite.
+      - name: Run local-environment Art 15 collector tests
+        run: bun run --filter '@pagespace/lib' test:db -- src/compliance/export/__tests__/local-environment-activity-export.integration.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
+      # The local-environment grant audit (GA wave 3, invariant 10): the server's
+      # `drive_env_grant_audit` rows must JOIN the daemon's JSONL on grantId, and
+      # the CHECK that ties "no grant id" to "refused" is Postgres's guarantee. A
+      # fake cannot prove a join across two sides; a real table and a fixture in
+      # the daemon's exact line shape can. Named here so it always has a runner.
+      - name: Run local-env grant audit integration tests
+        run: bun run --filter '@pagespace/lib' test:db -- src/services/drive-envs/__tests__/grant-audit-store.integration.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
+      # Stop / Resume (GA wave 3): the owner-only compare-and-set on
+      # `drive_env_local.pausedAt` — `WHERE envId AND ownerId AND revokedAt IS
+      # NULL` — is Postgres's guarantee; a fake's `===` cannot tell a correct
+      # CAS from one that silently matches nothing. Named here so it always has
+      # a runner.
+      - name: Run local-env Stop/Resume integration tests
+        run: bun run --filter '@pagespace/lib' test:db -- src/services/drive-envs/__tests__/local-env-pause.integration.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
+      # The approval MIRROR (GA wave 3): `revokedAt` without `revokeAcknowledgedAt`
+      # is a revoke owed to the machine and replayed on its next hello; the CHECK
+      # that an ack cannot exist without a revoke, the idempotent stamps, and the
+      # owner-join listing are Postgres's guarantees. Named here so it always has
+      # a runner.
+      - name: Run local-env approval mirror integration tests
+        run: bun run --filter '@pagespace/lib' test:db -- src/services/drive-envs/__tests__/approval-mirror-store.integration.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test

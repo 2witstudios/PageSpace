@@ -15,6 +15,9 @@ const machine = generateKeyPairSync('ed25519');
 const server = generateKeyPairSync('ed25519');
 const machinePublicKey = machine.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
 
+/** The owner's passkeys as enrolment reads them (hardening B, leaf B1); these suites enrol an owner with none, so an empty set is pinned. */
+const ownerCredentials = { rpId: 'pagespace.test', origin: 'https://pagespace.test', list: async () => [] };
+
 const identity: LocalEnvIdentityDeps = {
   random: (length) => new Uint8Array(randomBytes(length)),
   hash: (bytes) => createHash('sha3-256').update(bytes).digest('hex'),
@@ -35,6 +38,7 @@ function harness(machineOutcome: RevokeMachineNotifyOutcome = 'sent_and_closed')
     resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'pro' as const }),
     now: () => NOW,
     identity,
+    ownerCredentials,
     mintToken: async () => {
       order.push('mint');
       return 'tok';
@@ -67,7 +71,7 @@ function harness(machineOutcome: RevokeMachineNotifyOutcome = 'sent_and_closed')
 }
 
 async function enrolledEnv(h: ReturnType<typeof harness>) {
-  const created = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'mac', ownerId: 'user-1' }, deps: h.identityDeps });
+  const created = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'mac', ownerId: 'user-1', serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } }, deps: h.identityDeps });
   if (!created.ok || !created.enrollment) throw new Error('create failed');
   const enrolled = await enrollLocalDriveEnv({ enrollmentId: 'enr-1', code: created.enrollment.code, machinePublicKey, deps: h.identityDeps });
   if (!enrolled.ok) throw new Error(`enroll failed: ${enrolled.reason}`);
@@ -127,7 +131,7 @@ describe('revokeLocalDriveEnv — all three legs, in order', () => {
 
   it('given a machine that never enrolled (pending code), should still revoke: the code can no longer be redeemed', async () => {
     const h = harness('no_live_socket');
-    const created = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'mac', ownerId: 'user-1' }, deps: h.identityDeps });
+    const created = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'user-1', local: { label: 'mac', ownerId: 'user-1', serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } }, deps: h.identityDeps });
     if (!created.ok || !created.enrollment) throw new Error('create failed');
     const result = await revokeLocalDriveEnv({ envId: created.env.id, reason: 'owner_revoked', deps: h.revokeDeps });
     expect(result).toMatchObject({ ok: true, alreadyRevoked: false, machine: 'no_live_socket' });

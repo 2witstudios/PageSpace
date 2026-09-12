@@ -27,6 +27,7 @@ import { GeneratedImageRenderer } from './GeneratedImageRenderer';
 import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { AskUserQuestionCard } from '../ask-user/AskUserQuestionCard';
+import { EnvApprovalCard } from '../env-approval/EnvApprovalCard';
 import { renderToolContent } from './registry';
 import { dispatchToolCall, resolveIntegrationToolLabel } from './tool-call-dispatch';
 
@@ -90,6 +91,7 @@ const getSendChannelMessagePreview = (
 export const TOOL_NAME_MAP: Record<string, string> = {
   'ask_agent': 'Ask Agent',
   'ask_user': 'Question',
+  'request_env_approval': 'Approval',
   'list_drives': 'List Drives',
   'list_pages': 'List Pages',
   'read_page': 'Read',
@@ -384,6 +386,8 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = m
       return <PageAgentConversationRenderer part={dispatch.part} />;
     case 'question':
       return <AskUserQuestionCard part={dispatch.part} />;
+    case 'env_approval':
+      return <EnvApprovalCard part={dispatch.part} />;
     case 'image':
       return <GeneratedImageRenderer part={dispatch.part} />;
     case 'generic':

@@ -34,10 +34,17 @@ export { DRIVE_ENV_SUBSTRATES };
  *   (`{ ops, checkpoint }`), intersected on the server with what the machine
  *   advertised and — independently — re-checked by the machine's own policy;
  *   the server is necessary, never sufficient (invariant 4).
- * - **`bindPolicy` defaults to `'owner'`.** Who may bind a session to this env:
- *   only the enrolling user, or drive admins too, or any member who passes the
- *   code-execution gate. RCE on personal hardware warrants the strictest
- *   default (invariant 11); the pure gate is `decideBind` in `env-bridge`.
+ * - **`bindPolicy` is `'owner'`, and that is the whole closed set.** A machine
+ *   is driven by its OWNER only ([D-6], invariant 13) — the enrolling user
+ *   binds, approves, stops and edits policy; drive admins keep Delete and
+ *   Revoke and never get Bind. The values that would have widened it
+ *   (`admins`, `members`) were REMOVED from the CHECK in 0291 rather than
+ *   hidden, so the row cannot hold them; the pure gate is `decideBind` in
+ *   `env-bridge`, which denies any other value as drift.
+ * - **Stop is a stamp, not a deletion.** `pausedAt` (GA wave 3) pauses the
+ *   env's GRANTS at the signing gate (`decideSign` → `paused`) and nothing
+ *   else: identity, policy and connection survive, and Resume clears it. It
+ *   is the owner's alone, like the policy.
  * - **No stored connection status.** `connected|connecting|disconnected` is
  *   derived from `lastSeenAt` plus the live socket registry, the way an env's
  *   Sprite status is derived from its pointers — a cached status is a lie
@@ -47,7 +54,7 @@ export { DRIVE_ENV_SUBSTRATES };
  * this module (it already imports the other way for the FK; see its docblock
  * on the sessions edge for the same rule).
  */
-export const DRIVE_ENV_BIND_POLICIES = ['owner', 'admins', 'members'] as const;
+export const DRIVE_ENV_BIND_POLICIES = ['owner'] as const;
 export type DriveEnvBindPolicy = (typeof DRIVE_ENV_BIND_POLICIES)[number];
 
 /** What the machine advertised in its last `hello`. Mirrors `AdvertisedCapabilities` in `env-bridge`. */
@@ -62,6 +69,26 @@ export interface DriveEnvLocalCapabilities {
 export interface DriveEnvLocalServerPolicy {
   ops: string[];
   checkpoint: boolean;
+}
+
+/**
+ * The owner's passkeys as PINNED at enrolment (hardening B). Mirrors
+ * `PinnedOwnerApproval` in `env-bridge/owner-approval.ts`; `publicKeyCose` is
+ * the same base64url COSE key `passkeys.publicKey` stores.
+ *
+ * WHY THE SERVER KEEPS A COPY of something the machine is the real holder of:
+ * the card must offer the owner exactly the credentials their MACHINE will
+ * accept. Offering a passkey registered after enrolment would have the owner
+ * touch a key the daemon then refuses (`unknown_credential`) with nothing to
+ * explain it. Public keys only — a leaked row is worth nothing here, as
+ * everywhere else on this table.
+ */
+export interface DriveEnvLocalOwnerCredentials {
+  /** The WebAuthn relying-party id assertions must be made under. */
+  rpId: string;
+  /** The origin assertions must be made from. */
+  origin: string;
+  credentials: { credentialId: string; publicKeyCose: string }[];
 }
 
 export const driveEnvLocal = pgTable('drive_env_local', {
@@ -140,6 +167,29 @@ export const driveEnvLocal = pgTable('drive_env_local', {
   /** Last advertised capabilities (from `hello`). NULL until the first handshake. */
   capabilities: jsonb('capabilities').$type<DriveEnvLocalCapabilities>(),
 
+  /**
+   * The daemon PROCESS the last hello came from — a random id the daemon mints
+   * once per process and attests inside its signed hello (GA wave 3, Codex P2
+   * #7). A reconnect without a restart keeps it; a restart changes it, and a
+   * changed epoch is what expires the mirror's `session`-scoped approvals for
+   * this env (the daemon's own session rows died with the process). NULL until
+   * the first hello.
+   */
+  daemonEpoch: text('daemonEpoch'),
+
+  /**
+   * The owner's passkeys, PINNED at enrolment — trust on first use, at the one
+   * moment the owner is provably at the keyboard, exactly as the server
+   * signing key is pinned in the other direction (hardening B, leaf B1).
+   *
+   * Written ONCE, in the same update that pins the machine key, and never
+   * again: nothing on the wire and no later request may add a credential, or
+   * the property this exists for collapses (leaf B5). An owner with no passkey
+   * pins an empty set and the machine refuses chat approvals until they
+   * re-enrol with one. NULL means enrolled before this column existed.
+   */
+  ownerCredentials: jsonb('ownerCredentials').$type<DriveEnvLocalOwnerCredentials>(),
+
   /** The drive's allow-set for this env. Deny-by-default. */
   serverPolicy: jsonb('serverPolicy')
     .$type<DriveEnvLocalServerPolicy>()
@@ -155,6 +205,16 @@ export const driveEnvLocal = pgTable('drive_env_local', {
   enrolledAt: timestamp('enrolledAt', { mode: 'date' }),
   /** When the machine's enrollment was revoked. NULL = live. A revoked env refuses every bind and token mint. */
   revokedAt: timestamp('revokedAt', { mode: 'date' }),
+  /**
+   * STOP (GA wave 3). When the OWNER paused this environment's grants; NULL =
+   * running. While set, `decideSign` refuses every grant with the typed reason
+   * `paused` — the key stays pinned, the policy stays, the socket stays, the
+   * row stays: Resume clears it and nothing has to be re-enrolled. Written
+   * only through the owner-only compare-and-set (`setPaused`, [D-6]); drive
+   * admins keep Delete and Revoke and never get Stop. Distinct from
+   * `revokedAt`, which is terminal.
+   */
+  pausedAt: timestamp('pausedAt', { mode: 'date' }),
 
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),

@@ -20,7 +20,10 @@ on:
   push:
     branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent]
   pull_request:
-    branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent]
+    # BASE branches. `pu/local-env-ga` is the Local Environments GA stack:
+    # its wave PRs target it, not master, and without this entry they get no
+    # CI at all (PR #2582 opened to a silent, check-less rollup).
+    branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent, pu/local-env-ga]
   workflow_dispatch:
 
 jobs:

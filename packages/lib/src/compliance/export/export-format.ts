@@ -88,6 +88,8 @@ export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
     { name: 'sheets.json', description: 'Your spreadsheets — every tab, with each cell as you wrote it and as it evaluated', recordCount: data.sheets.length, data: data.sheets },
     { name: 'agent-workspaces.json', description: 'Agent workspaces (working contexts) and the shells you opened in them', recordCount: data.agentWorkspaces.length, data: data.agentWorkspaces },
     { name: 'local-environments.json', description: 'Machines you enrolled as local environments: their labels, public keys and fingerprints, and when they connected', recordCount: data.localEnvironments.length, data: data.localEnvironments },
+    { name: 'local-environment-activity.json', description: 'What your agent asked local machines to run: each request, whether PageSpace signed it and how the machine answered, and when', recordCount: data.localEnvironmentActivity.length, data: data.localEnvironmentActivity },
+    { name: 'local-environment-approvals.json', description: 'Approvals you gave in the chat for local machines to run without asking, and approvals standing on machines you own — including revoked and expired ones', recordCount: data.localEnvironmentApprovals.length, data: data.localEnvironmentApprovals },
     { name: 'stream-state.json', description: 'Checkpointed AI generation state, including content from generations that were interrupted', recordCount: data.streamState.length, data: data.streamState },
     // Inferences the memory cron drew about the subject, with the quotes of
     // their own messages it kept as justification. Shipped unconditionally
@@ -214,6 +216,8 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
       { '@type': 'PropertyValue', name: 'streamState', value: data.streamState },
       { '@type': 'PropertyValue', name: 'contentTags', value: data.contentTags },
       { '@type': 'PropertyValue', name: 'localEnvironments', value: data.localEnvironments },
+      { '@type': 'PropertyValue', name: 'localEnvironmentActivity', value: data.localEnvironmentActivity },
+      { '@type': 'PropertyValue', name: 'localEnvironmentApprovals', value: data.localEnvironmentApprovals },
     ],
   };
 }

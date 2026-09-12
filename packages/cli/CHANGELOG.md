@@ -22,6 +22,70 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   unlike `delete-rows`: formatting is presentation, recoverable by writing it again, and prompting
   to bold a header row would only train the habit of passing `--yes` blind.
 
+### Added
+
+- **Stop reaches the process.** A server-signed `pause` frame (its own signing domain — never
+  confusable with a revoke) makes the daemon SIGKILL every process group it started, drop every
+  request frozen for a click, write `paused:killed:<n>` to the audit log, and answer with a
+  machine-signed `pause_result { envId, pausedAt, killed }`. The socket stays open and the key
+  stays; Resume needs no frame. A pause that fails to verify is dropped and kills nothing.
+- **The daemon is loud when `exec` is allowlisted.** Under `mode: allowlist`, `exec` in `ops`
+  means every command runs without your click. `env connect` and `env policy` now print one
+  line saying so and how to undo it (`remove exec from ops to restore the approval prompt`), and
+  `env connect` audits `policy_warning:exec_allowlisted` once at start. The wave 1 warning about
+  extra principals now comes from the same place, so both surfaces say the same words.
+- **The audit trail has its other half.** Each line in `~/.pagespace/env-audit.jsonl` joins a
+  server-side row under the same `grantId` (the server records what it signs and what it refuses),
+  and the Environment's owner sees that side as the machine's live activity in PageSpace.
+
+- **PageSpace can revoke one remembered approval on your machine — and can never add one.** A
+  revoke of a single approval rides the existing signed `revoke` frame with an `approvalId`,
+  signed under its own domain by the key this machine pinned at enrolment, so it can never be
+  turned into an enrolment revoke (your key stays). The daemon deletes exactly that approval's
+  rows from `~/.pagespace/env-approvals.json` and stays connected. Nothing on the wire can write
+  an approval: the file on this machine is the only source of allow.
+- **Chat approvals.** A request the machine froze for your click arrives as a card in the
+  PageSpace chat; your Allow re-issues the identical request with a server-signed intent that
+  the daemon verifies with the key it already holds, byte-compares against what it froze, and
+  only then remembers (under the scope you picked) and runs. A click can only ever unblock a
+  request this machine framed itself; anything else is refused as `approval_mismatch` or
+  `approval_expired` and written to the audit log with the grant id.
+
+- **`ask` mode works without a terminal: the question goes to the PageSpace chat.** A request that
+  is not pre-approved and not covered by a remembered approval is frozen under a challenge and
+  answered `ask_pending:<id>` together with the exact normalised request (signed by the machine),
+  so the chat can show precisely what would run. The challenge lives as long as the request's
+  grant (at most a minute), the daemon holds at most 64 at once, and a repeat of the same program
+  while one is pending reuses it. `PAGESPACE_ENV_ASK=chat` sends questions to the chat even when a
+  terminal is attached. `env connect` no longer refuses to start in `ask` mode without a TTY.
+
+- **`pagespace env enroll` pre-approves the file operations the environment allows — and never
+  `exec`.** The starter policy's `ops` is now the server policy's file operations (`fs_read`,
+  `fs_write`), so file work inside the root runs without asking from the start; `exec` is never
+  written into it, whatever the environment allows, so every command reaches the prompt and each
+  program needs your approval the first time. When a policy file already exists, `enroll` keeps
+  it and prints the diff of what it would have written.
+
+- **Approvals are remembered per program, with a scope you choose, in
+  `~/.pagespace/env-approvals.json`.** An `ask`-mode approval used to live in the daemon's memory
+  under (you, session, operation): a new chat asked again, and approving `git status` silently
+  covered every later `exec` in that session. It is now keyed on (environment, you, operation,
+  program) — for a shell command line, every program it names — for `once`, until the daemon
+  stops, `30 days` (the default) or `until revoked`. Approving `git status` covers `git push` from
+  a new chat tomorrow and never covers `rm`. A command line whose programs cannot be pinned down
+  (`$(…)`, `eval`, a nested `sh -c`, `find -exec`, `sudo`) is never remembered. The file follows the
+  policy file's trust rules (yours, not writable by others, read through one descriptor) and any
+  defect in it makes the daemon ask more, never less. `PAGESPACE_ENV_APPROVALS` overrides the path.
+
+- **`pagespace env enroll` writes a starter policy naming you as the only principal.** If
+  `~/.pagespace/env-policy.json` (or `PAGESPACE_ENV_POLICY`) does not exist, enrolling creates it:
+  `mode: ask`, no pre-approved operations, the directory you ran `enroll` in as the only root, and
+  `principals` set to your own user id — so this machine refuses every other user on its own,
+  whatever the server says. An existing file is never overwritten; if it does not name you,
+  `enroll` warns that your own requests would be denied. Naming other users in `principals` is
+  still honoured (it is your file), but `env policy` and `env connect` now warn that each of them
+  can run commands as you. `--json` reports the policy path and whether it was scaffolded.
+
 ### Changed
 
 - **The `pagespace env` documentation now states, in plain words and before the commands, what

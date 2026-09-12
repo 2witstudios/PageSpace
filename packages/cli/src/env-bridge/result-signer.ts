@@ -15,6 +15,7 @@
 import {
   encodeHelloForSigning,
   encodeResultForSigning,
+  machineResultBindingId,
   resultHashForFrame,
   type HelloFrame,
   type MachineResultFrame,
@@ -40,7 +41,8 @@ export function signResultFrame(unsigned: UnsignedMachineResultFrame, deps: Mach
   // a placeholder changes nothing (mirrors the server signer's provisional frame).
   const provisional = { ...unsigned, sig: '' } as MachineResultFrame;
   const resultHash = resultHashForFrame(provisional, deps.hash);
-  const sig = deps.sign(deps.privateKey, encodeResultForSigning({ grantId: unsigned.grantId, resultHash }));
+  // Bound to the grant it answers — or, for an approval-revoke ack, the namespaced approval id (the same rule the server verifies).
+  const sig = deps.sign(deps.privateKey, encodeResultForSigning({ grantId: machineResultBindingId(provisional), resultHash }));
   return { ...unsigned, sig } as MachineResultFrame;
 }
 

@@ -307,3 +307,106 @@ describe('createMemoryNonceStore', () => {
     expect(s.has('n')).toBe(true);
   });
 });
+
+describe('GA wave 2 — approvalIntent: the owner\'s click rides the re-issued grant, signed under the pinned key', () => {
+  const INTENT = { challengeId: 'ch_1', scope: '30d' as const, expiresAt: NOW + 30_000 };
+  const request = { op: 'exec' as const, args: ARGS };
+  const nonces = () => createMemoryNonceStore();
+
+  it('given a grant carrying a well-formed approvalIntent signed by the server, should verify and hand the intent back on the Grant', () => {
+    const grant = makeGrant({ approvalIntent: INTENT });
+    const verdict = verifyGrant({ grant, signature: signWith(server.privateKey, grant), serverPublicKey, now: NOW, nonces: nonces(), expectedEnvId: ENV, request, verify, hash });
+    expect(verdict).toEqual({ ok: true, grant });
+  });
+
+  it('a grant WITHOUT an intent keeps the bytes it always had (no approvalIntent key is ever added)', () => {
+    expect(Buffer.from(encodeGrant(makeGrant())).toString()).not.toContain('approvalIntent');
+    expect(Buffer.from(encodeGrant(makeGrant({ approvalIntent: INTENT }))).toString()).toContain('"approvalIntent":{"challengeId":"ch_1","scope":"30d","expiresAt":');
+  });
+
+  it.each([
+    ['added after signing', makeGrant(), makeGrant({ approvalIntent: INTENT })],
+    ['removed after signing', makeGrant({ approvalIntent: INTENT }), makeGrant()],
+    ['challengeId altered', makeGrant({ approvalIntent: INTENT }), makeGrant({ approvalIntent: { ...INTENT, challengeId: 'ch_other' } })],
+    ['scope widened', makeGrant({ approvalIntent: INTENT }), makeGrant({ approvalIntent: { ...INTENT, scope: 'until_revoked' } })],
+    ['expiry extended', makeGrant({ approvalIntent: INTENT }), makeGrant({ approvalIntent: { ...INTENT, expiresAt: INTENT.expiresAt + 1 } })],
+  ])('given the intent %s, should deny bad_signature — a click cannot be forged or edited in flight', (_label, signed, presented) => {
+    const verdict = verifyGrant({ grant: presented, signature: signWith(server.privateKey, signed), serverPublicKey, now: NOW, nonces: nonces(), expectedEnvId: ENV, request, verify, hash });
+    expect(verdict).toEqual({ ok: false, reason: 'bad_signature' });
+  });
+
+  it.each([
+    ['an unknown scope', { ...INTENT, scope: 'forever' }],
+    ['an extra field', { ...INTENT, isAdmin: true }],
+    ['an empty challengeId', { ...INTENT, challengeId: '' }],
+    ['a missing expiry', { challengeId: 'ch_1', scope: '30d' }],
+  ])('given an intent with %s, should deny malformed', (_label, approvalIntent) => {
+    const grant = { ...makeGrant(), approvalIntent } as unknown as Grant;
+    const verdict = verifyGrant({ grant, signature: signWith(server.privateKey, grant), serverPublicKey, now: NOW, nonces: nonces(), expectedEnvId: ENV, request, verify, hash });
+    expect(verdict).toEqual({ ok: false, reason: 'malformed' });
+  });
+});
+
+/**
+ * B3 — the assertion the owner's click carries rides INSIDE `approvalIntent`,
+ * which is already inside `encodeGrant`'s canonical bytes, so the server's
+ * signature covers it and it cannot be swapped or stripped in flight.
+ */
+describe('hardening B — the approval intent carries the assertion', () => {
+  const ASSERTION = { credentialId: 'cred-a', authenticatorData: 'YXV0aA', clientDataJSON: 'Y2xpZW50', signature: 'c2ln' };
+  const intentOf = (extra: Record<string, unknown> = {}) => ({ challengeId: 'chal_1', scope: 'once' as const, expiresAt: 1_000, ...extra }) as NonNullable<Grant['approvalIntent']>;
+
+  it('NO REGRESSION: a grant with no approvalIntent encodes to exactly the bytes it always had', () => {
+    const grant = makeGrant();
+    const encoded = new TextDecoder().decode(encodeGrant(grant));
+    expect(encoded).not.toContain('approvalIntent');
+    expect(JSON.parse(encoded)).toEqual({
+      grantId: grant.grantId,
+      envId: grant.envId,
+      principal: grant.principal,
+      op: grant.op,
+      argsHash: grant.argsHash,
+      iat: grant.iat,
+      exp: grant.exp,
+      nonce: grant.nonce,
+    });
+  });
+
+  it('an intent WITHOUT an assertion encodes exactly as it did before the field existed', () => {
+    const encoded = new TextDecoder().decode(encodeGrant({ ...makeGrant(), approvalIntent: intentOf() }));
+    expect(JSON.parse(encoded).approvalIntent).toEqual({ challengeId: 'chal_1', scope: 'once', expiresAt: 1_000 });
+    expect(encoded).not.toContain('assertion');
+  });
+
+  it('an intent WITH an assertion puts all four fields under the signature, in a fixed order', () => {
+    const encoded = new TextDecoder().decode(encodeGrant({ ...makeGrant(), approvalIntent: intentOf({ assertion: ASSERTION }) }));
+    expect(JSON.parse(encoded).approvalIntent.assertion).toEqual(ASSERTION);
+    // Rebuilt field by field, so the caller's insertion order cannot change the signed message.
+    const shuffled = { signature: 'c2ln', clientDataJSON: 'Y2xpZW50', authenticatorData: 'YXV0aA', credentialId: 'cred-a' };
+    expect(encodeGrant({ ...makeGrant(), approvalIntent: intentOf({ assertion: shuffled }) })).toEqual(encodeGrant({ ...makeGrant(), approvalIntent: intentOf({ assertion: ASSERTION }) }));
+  });
+
+  it('changing ONE byte of the assertion changes the signed bytes — it cannot be swapped in flight', () => {
+    const withAssertion = encodeGrant({ ...makeGrant(), approvalIntent: intentOf({ assertion: ASSERTION }) });
+    const tampered = encodeGrant({ ...makeGrant(), approvalIntent: intentOf({ assertion: { ...ASSERTION, signature: 'c2lo' } }) });
+    expect(withAssertion).not.toEqual(tampered);
+    // …and stripping it is a different message too, so a captured click cannot be downgraded to an unproven one.
+    expect(withAssertion).not.toEqual(encodeGrant({ ...makeGrant(), approvalIntent: intentOf() }));
+  });
+
+  it.each<[string, unknown]>([
+    ['a non-object assertion', 'nope'],
+    ['a missing signature', { credentialId: 'a', authenticatorData: 'b', clientDataJSON: 'c' }],
+    ['an empty credential id', { ...ASSERTION, credentialId: '' }],
+    ['an extra field riding along', { ...ASSERTION, isAdmin: true }],
+  ])('verifyGrant refuses a grant whose assertion is %s as MALFORMED — the schema is strict', (_label, assertion) => {
+    const grant = { ...makeGrant(), approvalIntent: intentOf({ assertion }) };
+    expect(run(grant)).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('verifies a grant whose intent carries a well-formed assertion, and hands the assertion back untouched', () => {
+    const grant = { ...makeGrant(), approvalIntent: intentOf({ assertion: ASSERTION }) };
+    const verdict = run(grant);
+    expect(verdict.ok && verdict.grant.approvalIntent?.assertion).toEqual(ASSERTION);
+  });
+});
