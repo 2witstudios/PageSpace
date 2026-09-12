@@ -23,6 +23,47 @@
  * says in words that there is nothing to copy.
  */
 
+import { z } from 'zod';
+import { isCuid } from '@paralleldrive/cuid2';
+
+/**
+ * What a badly-SHAPED environment id is told. Same instruction as every other
+ * refusal: copy an id, never construct one.
+ */
+export const ENVIRONMENT_ID_SHAPE_MESSAGE =
+  'environmentId must be an id copied from list_environments, not a name, a path, a branch or any other description. Call list_environments and copy an id from its output exactly.';
+
+/**
+ * An environment ADDRESS at the zod boundary (leaf C).
+ *
+ * Constrained to the opaque id SHAPE rather than accepting free text, because
+ * free text is exactly what July's removed `target` accepted and exactly what
+ * the model filled with a plausible invention (`branch: "main"`). Every id this
+ * system can legitimately produce is a cuid2 — a `drive_envs.id` or a
+ * conversation id — so anything else is refused before a lookup, and the
+ * message says what to do instead.
+ *
+ * **The length floor is the load-bearing half.** `isCuid` is a loose
+ * heuristic — it accepts any lowercase alphanumeric string of 2 to 32
+ * characters — so on its own it would accept `main`, `staging` and `prod`,
+ * which are precisely the values July's post-mortem saw the model invent.
+ * Every id this system mints is a 24-character cuid2, so requiring at least
+ * 20 characters rejects every plausible invention while accepting every real
+ * id.
+ *
+ * The shape check is necessary and never sufficient: a well-shaped id that
+ * names nothing the caller may reach is still refused, by `decideEnvReach`, and
+ * with the SAME sentence.
+ */
+export const MIN_ENVIRONMENT_ID_LENGTH = 20;
+export const MAX_ENVIRONMENT_ID_LENGTH = 32;
+
+export const environmentIdSchema = z
+  .string()
+  .min(MIN_ENVIRONMENT_ID_LENGTH, ENVIRONMENT_ID_SHAPE_MESSAGE)
+  .max(MAX_ENVIRONMENT_ID_LENGTH, ENVIRONMENT_ID_SHAPE_MESSAGE)
+  .refine(isCuid, { message: ENVIRONMENT_ID_SHAPE_MESSAGE });
+
 /** One addressable environment as the model sees it. */
 export interface EnvironmentListing {
   /**

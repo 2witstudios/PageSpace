@@ -28,6 +28,7 @@ import { canActorViewPage, canActorEditPage } from './actor-permissions';
 import { buildAiMutationContext } from './page-write-tools';
 import {
   buildRealSandboxRunDeps,
+  ownSandboxTarget,
   resolveSandboxActorContext,
   productionSandboxGate,
 } from './sandbox-tools-runtime';
@@ -45,7 +46,10 @@ async function openSandbox(context: ToolExecutionContext) {
   if ('error' in ctx) return { ok: false as const, error: ctx.error };
   const decision = await productionSandboxGate(ctx);
   if (!decision.ok) return { ok: false as const, error: decision.error };
-  return { ok: true as const, ctx };
+  // `copy_content` is deliberately NOT addressed: its file arms work on the
+  // conversation's own sandbox, so they name that target explicitly rather than
+  // relying on a fallback — `acquireSandbox` has none (leaf C).
+  return { ok: true as const, ctx: { ...ctx, environment: ownSandboxTarget(ctx) } };
 }
 
 /**

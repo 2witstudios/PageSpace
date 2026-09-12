@@ -41,6 +41,7 @@
 
 import { tool, type Tool } from 'ai';
 import { z } from 'zod';
+import type { SandboxEnvironmentTarget } from '@pagespace/lib/services/sandbox/tool-runners';
 import {
   runBashInSandbox,
   writeSandboxFile,
@@ -53,6 +54,7 @@ import {
 import { MAX_COMMAND_BYTES } from '@pagespace/lib/services/sandbox/command-policy';
 import {
   buildEnvironmentDirectory,
+  environmentIdSchema,
   type EnvironmentDirectory,
 } from '@pagespace/lib/services/sandbox/environment-directory';
 import { DEFAULT_READ_LINES } from '@pagespace/lib/services/sandbox/execution-policy';
@@ -61,8 +63,39 @@ import type { ToolExecutionContext } from '../core/types';
 
 export const MAX_PATH_LENGTH = 1024;
 
+/**
+ * The MANDATORY address on every code-execution tool (leaf C).
+ *
+ * Three properties, and each of them is the fix for a different way July's
+ * removed `target` went wrong:
+ *
+ *  - **Mandatory.** `environmentId` is required, so omitting it is a schema
+ *    error the model sees and can correct — never a silent fallback to the
+ *    conversation's own sandbox. A tool that quietly picks a default when the
+ *    address is missing is a tool that runs in the wrong place without saying
+ *    so.
+ *  - **Opaque.** It is an id copied from `list_environments`, not a name, a
+ *    path or a branch. A model cannot invent a cuid2 that happens to exist, so
+ *    a guess fails closed.
+ *  - **Described.** The `.describe()` below is read by the model and says to
+ *    copy rather than construct — July's post-mortem records that the prompt
+ *    and the descriptions actively encouraged the bad value, so the wording is
+ *    part of the mechanism.
+ */
+/** Prefixed to every execution tool's description — the instruction the model must read BEFORE it fills the field. */
+const COPY_AN_ID =
+  'Requires environmentId: an id copied EXACTLY from the output of list_environments, never constructed, guessed or described. Call list_environments first if you do not have one. ';
+
+const environmentIdField = environmentIdSchema.describe(
+  'REQUIRED. The id of the environment to run in, copied EXACTLY from the output of list_environments. ' +
+    'Never construct, guess, shorten or infer this value, and never pass a name, a path, a branch or a description — ' +
+    'an id that did not come from list_environments does not exist and the call will be refused. ' +
+    "This conversation's own sandbox has an id in that list like every other environment; there is no default.",
+);
+
 export const bashInputSchema = z
   .object({
+    environmentId: environmentIdField,
     command: z
       .string()
       .min(1, 'command is required')
@@ -76,6 +109,7 @@ export const bashInputSchema = z
 
 export const writeFileInputSchema = z
   .object({
+    environmentId: environmentIdField,
     path: z.string().min(1, 'path is required').max(MAX_PATH_LENGTH),
     content: z.string().max(MAX_WRITE_BYTES, 'content is too large'),
   })
@@ -83,6 +117,7 @@ export const writeFileInputSchema = z
 
 export const readFileInputSchema = z
   .object({
+    environmentId: environmentIdField,
     path: z.string().min(1, 'path is required').max(MAX_PATH_LENGTH),
     // Line-addressed paging. A file longer than the default window is not an
     // error and not a dead end: the result says how many lines exist and which
@@ -103,6 +138,7 @@ export const readFileInputSchema = z
 
 export const editFileInputSchema = z
   .object({
+    environmentId: environmentIdField,
     path: z.string().min(1, 'path is required').max(MAX_PATH_LENGTH),
     oldString: z.string().min(1, 'oldString is required'),
     newString: z.string(),
@@ -131,11 +167,26 @@ export type ListReachableEnvironments = (
   ctx: SandboxActorContext,
 ) => Promise<readonly { id: string; label: string; substrate: 'sprite' | 'local'; driveId: string }[]>;
 
+/**
+ * Resolve the mandatory `environmentId` into the server's own record of WHERE
+ * this call goes, or refuse (leaf C).
+ *
+ * The refusal is ONE sentence for every reason — no such environment, not the
+ * caller's, not visible — because telling the caller which of those applies is
+ * itself a probe. It names `list_environments`, because a model that has just
+ * been refused an id has to be told where a real one comes from.
+ */
+export type ResolveEnvironmentTarget = (input: {
+  ctx: SandboxActorContext;
+  environmentId: string;
+}) => Promise<{ ok: true; target: SandboxEnvironmentTarget } | { ok: false; error: string }>;
+
 export interface SandboxToolsDeps {
   runDeps: SandboxRunDeps;
   resolveContext: ResolveSandboxContext;
   gate: SandboxGate;
   listEnvironments: ListReachableEnvironments;
+  resolveEnvironment: ResolveEnvironmentTarget;
 }
 
 function readContext(options: unknown): ToolExecutionContext | undefined {
@@ -164,7 +215,7 @@ export const SANDBOX_CORE_TOOL_NAMES: readonly string[] = ['list_environments', 
 /** The discovery tool's name, so callers name it rather than spelling it. */
 export const LIST_ENVIRONMENTS_TOOL_NAME = 'list_environments';
 
-export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironments }: SandboxToolsDeps): {
+export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironments, resolveEnvironment }: SandboxToolsDeps): {
   list_environments: Tool;
   bash: Tool;
   writeFile: Tool;
@@ -191,6 +242,25 @@ export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironm
     return { ok: true, ctx };
   };
 
+  // The addressed form: everything `open` does, and then the mandatory
+  // `environmentId` resolved into the server's own target. The context handed
+  // to a runner ALWAYS carries `ctx.environment`, so no runner can be reached
+  // without one — omission is a schema error above this line and a refusal
+  // below it, never a default.
+  const openAt = async (
+    environmentId: string,
+    options: unknown,
+  ): Promise<
+    | { ok: true; ctx: SandboxActorContext }
+    | { ok: false; error: { success: false; error: string; retryAfter?: number } }
+  > => {
+    const opened = await open(options);
+    if (!opened.ok) return opened;
+    const resolved = await resolveEnvironment({ ctx: opened.ctx, environmentId });
+    if (!resolved.ok) return { ok: false, error: { success: false, error: resolved.error } };
+    return { ok: true, ctx: { ...opened.ctx, environment: resolved.target } };
+  };
+
   return {
     list_environments: tool({
       description:
@@ -215,10 +285,12 @@ export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironm
 
     bash: tool({
       description:
-        'Run a shell command in this conversation\'s isolated sandbox. Returns stdout, stderr, and the exit code. The filesystem is scoped to the sandbox and persists across turns in this conversation.',
+        COPY_AN_ID +
+        'Run a shell command in the named environment. Returns stdout, stderr, the exit code, and the environment it actually ran in. ' +
+        "The filesystem is that environment's own and persists across turns.",
       inputSchema: bashInputSchema,
-      execute: async ({ command, cwd, timeoutMs }, options) => {
-        const opened = await open(options);
+      execute: async ({ environmentId, command, cwd, timeoutMs }, options) => {
+        const opened = await openAt(environmentId, options);
         if (!opened.ok) return opened.error;
         return runBashInSandbox({ command, cwd, timeoutMs, ctx: opened.ctx, deps: runDeps });
       },
@@ -226,10 +298,11 @@ export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironm
 
     writeFile: tool({
       description:
-        'Write a file inside this conversation\'s sandbox. A relative path resolves from the sandbox root and cannot escape it.',
+        COPY_AN_ID +
+        'Write a file inside the named environment. A relative path resolves from that environment\'s root and cannot escape it.',
       inputSchema: writeFileInputSchema,
-      execute: async ({ path, content }, options) => {
-        const opened = await open(options);
+      execute: async ({ environmentId, path, content }, options) => {
+        const opened = await openAt(environmentId, options);
         if (!opened.ok) return opened.error;
         return writeSandboxFile({ path, content, ctx: opened.ctx, deps: runDeps });
       },
@@ -237,13 +310,14 @@ export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironm
 
     readFile: tool({
       description:
-        `Read a file from this conversation's sandbox. A relative path resolves from the sandbox root and cannot escape it. ` +
+        COPY_AN_ID +
+        `Read a file from the named environment. A relative path resolves from that environment's root and cannot escape it. ` +
         `Returns at most ${DEFAULT_READ_LINES} lines per call (override with limit); when a file is longer the result reports totalLines and a notice naming the offset that returns the next page, so page through rather than assuming the file ended. ` +
         `Very long individual lines are shown clipped and marked, so do not build an editFile anchor from a clipped line. ` +
         `Note editFile matches against the whole file, including lines outside the window you read.`,
       inputSchema: readFileInputSchema,
-      execute: async ({ path, offset, limit }, options) => {
-        const opened = await open(options);
+      execute: async ({ environmentId, path, offset, limit }, options) => {
+        const opened = await openAt(environmentId, options);
         if (!opened.ok) return opened.error;
         return readSandboxFile({ path, offset, limit, ctx: opened.ctx, deps: runDeps });
       },
@@ -251,10 +325,11 @@ export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironm
 
     editFile: tool({
       description:
-        'Edit a file in this conversation\'s sandbox by replacing oldString with newString. oldString must be unique in the file unless replaceAll is set. Prefer this over writeFile for targeted changes — it does not rewrite the whole file. A relative path resolves from the sandbox root and cannot escape it.',
+        COPY_AN_ID +
+        'Edit a file in the named environment by replacing oldString with newString. oldString must be unique in the file unless replaceAll is set. Prefer this over writeFile for targeted changes — it does not rewrite the whole file. A relative path resolves from that environment\'s root and cannot escape it.',
       inputSchema: editFileInputSchema,
-      execute: async ({ path, oldString, newString, replaceAll }, options) => {
-        const opened = await open(options);
+      execute: async ({ environmentId, path, oldString, newString, replaceAll }, options) => {
+        const opened = await openAt(environmentId, options);
         if (!opened.ok) return opened.error;
         return editSandboxFile({ path, oldString, newString, replaceAll, ctx: opened.ctx, deps: runDeps });
       },

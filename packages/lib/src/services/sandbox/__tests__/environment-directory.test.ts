@@ -6,6 +6,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildEnvironmentDirectory,
+  environmentIdSchema,
+  ENVIRONMENT_ID_SHAPE_MESSAGE,
   COPY_THE_ID_NOTICE,
   NO_VISIBLE_ENVIRONMENTS_NOTICE,
   OWN_SANDBOX_LABEL,
@@ -63,5 +65,37 @@ describe('buildEnvironmentDirectory', () => {
     const second = { id: 'env_2', label: 'office-linux', substrate: 'local' as const, driveId: 'drive_2' };
     const { environments } = buildEnvironmentDirectory({ conversation: CONVERSATION, environments: [MAC, second] });
     expect(environments.map((row) => row.id)).toEqual([CONVERSATION.id, MAC.id, second.id]);
+  });
+});
+
+describe('environmentIdSchema — the opaque id SHAPE at the zod boundary (leaf C)', () => {
+  it('accepts a real id and REFUSES every value July saw the model invent', () => {
+    expect(environmentIdSchema.safeParse('a78aoz3je2ycbofz79zgez9q').success).toBe(true);
+    for (const invented of ['main', 'staging', 'prod', 'develop', 'HEAD', 'my-machine', 'jono-macstudio', '/workspace/repo', 'localhost', '', 'a']) {
+      expect(environmentIdSchema.safeParse(invented).success, invented).toBe(false);
+    }
+  });
+
+  it('the length floor is what does the work — isCuid alone accepts a branch name', () => {
+    // Documented so a future reader does not "simplify" the floor away: `isCuid`
+    // is a loose heuristic over lowercase alphanumerics, and every id this
+    // system mints is a 24-character cuid2.
+    expect(environmentIdSchema.safeParse('abcdefghij').success).toBe(false);
+    expect(environmentIdSchema.safeParse('a'.repeat(20)).success).toBe(true);
+    expect(environmentIdSchema.safeParse('a'.repeat(33)).success).toBe(false);
+  });
+
+  it('refuses uppercase, punctuation and whitespace outright — an id is not a description', () => {
+    for (const bad of ['A78AOZ3JE2YCBOFZ79ZGEZ9Q', 'a78aoz3je2ycbofz79zgez9q ', 'env_a78aoz3je2ycbofz79zge', 'a78aoz3je2ycbofz79zgez9q!']) {
+      expect(environmentIdSchema.safeParse(bad).success, bad).toBe(false);
+    }
+  });
+
+  it('says what to do instead, in the same register as every other refusal', () => {
+    const parsed = environmentIdSchema.safeParse('main');
+    expect(parsed.success).toBe(false);
+    expect(ENVIRONMENT_ID_SHAPE_MESSAGE).toContain('list_environments');
+    expect(ENVIRONMENT_ID_SHAPE_MESSAGE).toMatch(/copy an id from its output exactly/i);
+    if (!parsed.success) expect(parsed.error.issues[0]!.message).toBe(ENVIRONMENT_ID_SHAPE_MESSAGE);
   });
 });

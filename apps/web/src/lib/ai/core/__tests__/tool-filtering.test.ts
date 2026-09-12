@@ -646,6 +646,7 @@ describe('SANDBOX_TOOL_NAMES', () => {
       resolveContext: (() => {}) as never,
       gate: (() => {}) as never,
       listEnvironments: (() => {}) as never,
+      resolveEnvironment: (() => {}) as never,
     });
     expect(Object.keys(built).sort()).toEqual([...SANDBOX_CORE_TOOL_NAMES].sort());
   });

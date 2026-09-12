@@ -52,7 +52,10 @@ import { gateSandboxToolCall } from '@pagespace/lib/services/sandbox/tool-gate';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
-import { createSandboxTools, type ListReachableEnvironments, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
+import { createSandboxTools, type ListReachableEnvironments, type ResolveEnvironmentTarget, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
+import { decideEnvReach, ENV_UNREACHABLE_MESSAGE } from '@pagespace/lib/env-bridge/decide-env-reach';
+import { OWN_SANDBOX_LABEL } from '@pagespace/lib/services/sandbox/environment-directory';
+import type { SandboxEnvironmentTarget } from '@pagespace/lib/services/sandbox/tool-runners';
 import {
   findSessionForConversation,
   provisionSessionSandbox,
@@ -179,6 +182,19 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     // then ensure its Sprite — both through the shared agent-sessions runtime,
     // never a local copy (the CAS only serializes provisioners that all run it).
     acquireSandbox: async (input) => {
+      // Omission is never a default, at any layer. The schema makes a missing
+      // `environmentId` a validation error the model sees, and this makes a
+      // missing TARGET a refusal rather than a quiet fall-back to the
+      // conversation's own sandbox — the exact shape July's `target` got wrong
+      // in the other direction.
+      const target = input.environment;
+      if (!target) return { ok: false, reason: 'provision_failed', cause: 'missing_environment' };
+      if (target.kind === 'environment') {
+        // Leaf D routes a named environment to its own session. Until it does,
+        // refuse rather than run somewhere the caller did not name.
+        return { ok: false, reason: 'provision_failed', cause: 'environment_routing_not_enabled' };
+      }
+
       const conversationId = input.conversationId;
       if (!conversationId) {
         // No conversation, nothing to resolve a session through.
@@ -577,6 +593,71 @@ export const productionListReachableEnvironments: ListReachableEnvironments = as
   return listGlobalAssistantEnvironments(ctx.userId);
 };
 
+/**
+ * Resolve the mandatory `environmentId` into the server's own target (leaf C).
+ *
+ * Two addresses, one namespace, and neither is guessable:
+ *
+ *  - the CONVERSATION's own id addresses its own sandbox — the address this
+ *    runtime already resolves a session through (contract.ts invariant 1) —
+ *    which is why the conversation's default sandbox is named exactly like any
+ *    other environment and has no implicit path of its own;
+ *  - any other id must be a `drive_envs.id` the caller may reach, decided by
+ *    the pure `decideEnvReach`: it exists, they OWN it, and its owner has made
+ *    it visible to the global assistant. All three refusals surface the SAME
+ *    sentence, so an id that does not exist and one the caller may not see are
+ *    indistinguishable from outside.
+ *
+ * Visibility is re-read HERE, on every call, rather than remembered from a
+ * bind: switching it off refuses the next call instead of honouring an earlier
+ * reach.
+ *
+ * The `label` on the returned target comes from the ROW, never from the model's
+ * input, so leaf E's "every result names where it ran" cannot be steered by
+ * what the model said.
+ */
+/**
+ * The conversation's OWN sandbox as a resolved target (leaf C).
+ *
+ * Exported because the tools that are NOT addressed — the git/gh toolkit and
+ * `copy_content`, which are deliberately fixed to the conversation's own
+ * sandbox — share `buildRealSandboxRunDeps`, and `acquireSandbox` refuses
+ * without a target. They say so explicitly here rather than relying on a
+ * fallback: the whole point of leaf C is that no layer has one.
+ */
+export function ownSandboxTarget(ctx: { conversationId: string; driveId?: string }): SandboxEnvironmentTarget {
+  return { id: ctx.conversationId, kind: 'conversation', label: OWN_SANDBOX_LABEL, driveId: ctx.driveId ?? null };
+}
+
+export const productionResolveEnvironmentTarget: ResolveEnvironmentTarget = async ({ ctx, environmentId }) => {
+  if (environmentId === ctx.conversationId) {
+    return {
+      ok: true,
+      target: { id: environmentId, kind: 'conversation', label: OWN_SANDBOX_LABEL, driveId: ctx.driveId ?? null },
+    };
+  }
+  const { isLocalEnvsEnabled } = await import('@pagespace/lib/services/drive-envs/local-envs-enabled');
+  // With the flag off there are no reachable environments at all, and saying so
+  // any other way would tell the caller whether the id exists.
+  if (!isLocalEnvsEnabled()) return { ok: false, error: ENV_UNREACHABLE_MESSAGE };
+
+  const { getDriveEnvStore } = await import('@/lib/drive-envs/drive-envs-runtime');
+  const store = await getDriveEnvStore();
+  const env = await store.findById(environmentId);
+  // A local env's owner lives on the sibling; a Sprite env has none, which
+  // `decideEnvReach` refuses (`not_owner`) rather than falling back to a role.
+  const sibling = env === null ? null : await store.findLocalByEnvId(environmentId);
+  const verdict = decideEnvReach({
+    actorId: ctx.userId,
+    env: env === null ? null : { visibleToGlobalAssistant: env.visibleToGlobalAssistant, ownerId: sibling?.ownerId ?? null },
+  });
+  if (!verdict.ok) return { ok: false, error: ENV_UNREACHABLE_MESSAGE };
+  return {
+    ok: true,
+    target: { id: env!.id, kind: 'environment', label: sibling?.label ?? env!.name, driveId: env!.driveId },
+  };
+};
+
 /** The shared call-time gate binding — kill-switch, canRunCode, quota preflight. */
 export const productionSandboxGate: SandboxGate = (ctx) =>
   gateSandboxToolCall({
@@ -606,5 +687,6 @@ export function buildSandboxTools(): {
     resolveContext: resolveSandboxActorContext,
     gate: productionSandboxGate,
     listEnvironments: productionListReachableEnvironments,
+    resolveEnvironment: productionResolveEnvironmentTarget,
   });
 }

@@ -17,6 +17,7 @@ import {
   buildRealSandboxRunDeps,
   resolveSandboxActorContext,
   productionSandboxGate,
+  ownSandboxTarget,
 } from './sandbox-tools-runtime';
 import { createSandboxGitTools } from './sandbox-git-tools';
 
@@ -33,7 +34,13 @@ function buildGitSandboxRunDeps(): GitSandboxRunDeps {
 export function buildGitSandboxTools(): Record<string, Tool> {
   return createSandboxGitTools({
     gitRunDeps: buildGitSandboxRunDeps(),
-    resolveContext: resolveSandboxActorContext,
+    // The git toolkit is deliberately NOT addressed: it works on the
+    // conversation's own sandbox, so it says that explicitly rather than
+    // relying on a fallback — `acquireSandbox` has none (leaf C).
+    resolveContext: async (context) => {
+      const ctx = await resolveSandboxActorContext(context);
+      return 'error' in ctx ? ctx : { ...ctx, environment: ownSandboxTarget(ctx) };
+    },
     gate: productionSandboxGate,
   });
 }

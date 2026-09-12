@@ -54,6 +54,30 @@ import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
 export const MAX_WRITE_BYTES = 1024 * 1024;
 
 /** Everything the runners need about the actor + AI attribution for a turn. */
+/**
+ * The RESOLVED target of one code-execution call (leaf C/D).
+ *
+ * Every execution tool takes a mandatory, opaque `environmentId` and the server
+ * resolves it — existence, access and visibility — into this. It is the
+ * SERVER's record of where the call goes, never the model's input echoed back:
+ * `label` in particular is read from the row, so a result that names where it
+ * ran cannot be steered by what the model said.
+ */
+export interface SandboxEnvironmentTarget {
+  /** The opaque id the call named, as resolved. */
+  readonly id: string;
+  /**
+   * `conversation` = this conversation's own sandbox, addressed by the
+   * conversation's own id; `environment` = a persistent environment
+   * (`drive_envs.id`).
+   */
+  readonly kind: 'conversation' | 'environment';
+  /** The label as the SERVER holds it — what a result names. Never echoed from the model's input. */
+  readonly label: string;
+  /** The owning drive; `null` for a global-assistant conversation's own sandbox. */
+  readonly driveId: string | null;
+}
+
 export interface SandboxActorContext {
   userId: string;
   tenantId: string;
@@ -92,6 +116,15 @@ export interface SandboxActorContext {
    * for that call rather than guessed at.
    */
   turnId?: string;
+  /**
+   * WHERE this call runs, resolved by the server from the mandatory
+   * `environmentId` (leaf C). Optional on the TYPE only because the chat-context
+   * resolver builds the actor half before any target is known; the tool factory
+   * always sets it before a runner sees the context, and `acquireSandbox` fails
+   * CLOSED when it is absent rather than falling back to the conversation's own
+   * sandbox — omission must never be a silent default, at any layer.
+   */
+  environment?: SandboxEnvironmentTarget;
 }
 
 export interface SandboxQuotaDeps {
@@ -220,6 +253,12 @@ export interface AcquireSandboxRequest {
    * id, never off this one.
    */
   conversationId?: string;
+  /**
+   * The resolved target for this call. Absent is a FAULT, not a default: an
+   * implementation must refuse rather than pick the conversation's own sandbox
+   * (leaf C — omission is never a silent fallback).
+   */
+  environment?: SandboxEnvironmentTarget;
 }
 
 export type SandboxAcquireResult =
@@ -619,6 +658,7 @@ function acquireRequest(ctx: SandboxActorContext): AcquireSandboxRequest {
     requestOrigin: ctx.requestOrigin,
     agentPageId: ctx.agentPageId,
     conversationId: ctx.conversationId,
+    environment: ctx.environment,
   };
 }
 
