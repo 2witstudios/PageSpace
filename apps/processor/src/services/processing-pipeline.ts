@@ -12,7 +12,8 @@ import {
   type DetectedContentType,
 } from './content-detector';
 import { IMAGE_PRESETS } from '../types';
-import type { PDFLoadingTask, PDFTextItem } from '../types/pdfjs';
+import type { PDFLoadingTask } from '../types/pdfjs';
+import { composePageText, composeDocumentText } from './pdf-text-layout';
 
 const execFileAsync = promisify(execFile);
 
@@ -119,9 +120,9 @@ async function extractPdfText(bytes: Buffer): Promise<string> {
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
-    parts.push(textContent.items.map((item: PDFTextItem) => item.str).join(' '));
+    parts.push(composePageText(textContent.items));
   }
-  return cleanText(parts.join('\n\n'));
+  return cleanText(composeDocumentText(parts));
 }
 
 /** Resize+re-encode the image into every standard preset. Bytes in, bytes per preset out. */
