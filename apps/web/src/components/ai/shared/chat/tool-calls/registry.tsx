@@ -271,6 +271,17 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     />
   ),
 
+  // The agent SESSION's label (agent_workspaces), not a drive's — see
+  // `tool-labels.ts` on why the two read differently in a transcript.
+  rename_workspace: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="rename"
+      success={parsedOutput.success !== false}
+      title={parsedOutput.name as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
   update_drive_context: ({ parsedOutput }) => (
     <ActionResultRenderer
       actionType="update"

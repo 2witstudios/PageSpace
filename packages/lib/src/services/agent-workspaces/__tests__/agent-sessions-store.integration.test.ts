@@ -237,6 +237,90 @@ describe('create + findByConversation', () => {
   });
 });
 
+describe('rename — the one write with no CAS', () => {
+  it('persists the new label and bumps updatedAt, touching nothing else', async () => {
+    // The real Drizzle path, against real Postgres. Everything else in this
+    // store is CAS-guarded; rename deliberately is not, because a name has no
+    // addressing role — so what has to be proven here is that it disturbs none
+    // of the identity it sits beside.
+    const created = await store.create({
+      ownerId,
+      driveId,
+      name: 'before',
+      envId: null,
+      now: new Date('2026-01-01T00:00:00Z'),
+    });
+    workspaceIds.push(created.id);
+    await store.updateSpriteIdentity({
+      workspaceId: created.id,
+      previousSandboxId: null,
+      spriteKey: `key-${created.id}`,
+      sandboxId: `sb-${created.id}`,
+      spriteInstanceId: 'inst-1',
+      egressPolicyToken: null,
+      stamps: {},
+      now: new Date(),
+    });
+    sandboxIds.add(`sb-${created.id}`);
+
+    const at = new Date('2026-02-02T00:00:00Z');
+    const renamed = await store.rename({ workspaceId: created.id, name: 'after', now: at });
+
+    expect(renamed?.name).toBe('after');
+    expect(renamed?.updatedAt).toEqual(at);
+    // Identity survives untouched — the whole reason a rename needs no CAS.
+    expect(renamed?.sandboxId).toBe(`sb-${created.id}`);
+    expect(renamed?.spriteInstanceId).toBe('inst-1');
+    expect(renamed?.spriteKey).toBe(`key-${created.id}`);
+    expect(renamed?.createdAt).toEqual(created.createdAt);
+
+    const [row] = await db.select().from(agentWorkspaces).where(eq(agentWorkspaces.id, created.id));
+    expect(row?.name).toBe('after');
+  });
+
+  it('renames an ENDED session — a retained row is still labellable history', async () => {
+    const workspaceId = await seedSession({ endedAt: new Date('2026-01-01T00:00:00Z') });
+
+    const renamed = await store.rename({ workspaceId, name: 'last week', now: new Date() });
+
+    expect(renamed?.name).toBe('last week');
+    // Ending is not freezing: the row is retained so its conversations stay
+    // readable, and labelling that history is exactly as useful.
+    expect(renamed?.endedAt).toEqual(new Date('2026-01-01T00:00:00Z'));
+  });
+
+  it('lets two sessions hold the SAME name — there is no uniqueness constraint to violate', async () => {
+    // The invariant the whole rename design rests on. If a UNIQUE index ever
+    // appeared on this column, this is the test that would catch it.
+    const first = await seedSession();
+    const second = await seedSession();
+
+    await store.rename({ workspaceId: first, name: 'shared label', now: new Date() });
+    const renamed = await store.rename({ workspaceId: second, name: 'shared label', now: new Date() });
+
+    expect(renamed?.name).toBe('shared label');
+    const rows = await db
+      .select({ name: agentWorkspaces.name })
+      .from(agentWorkspaces)
+      .where(inArray(agentWorkspaces.id, [first, second]));
+    expect(rows.map((r) => r.name)).toEqual(['shared label', 'shared label']);
+  });
+
+  it('answers null for an unknown id rather than upserting one into existence', async () => {
+    const missingId = createId();
+
+    expect(await store.rename({ workspaceId: missingId, name: 'nope', now: new Date() })).toBeNull();
+
+    // Asserted on THAT id, not on a table-wide row count: a count is a
+    // cross-test coupling that other rows in this suite can move.
+    const rows = await db
+      .select({ id: agentWorkspaces.id })
+      .from(agentWorkspaces)
+      .where(eq(agentWorkspaces.id, missingId));
+    expect(rows).toEqual([]);
+  });
+});
+
 describe('updateSpriteIdentity — CAS on the previous pointer', () => {
   it('given the expected NULL pointer, should persist identity', async () => {
     const conversationId = await seedSession();

@@ -44,6 +44,7 @@ import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress
 import {
   spawnAgentSession,
   endAgentSession,
+  renameAgentSession,
   listAgentSessions,
   toAgentSessionDTO,
   type SpawnAgentSessionResult,
@@ -70,11 +71,16 @@ import {
   resolveDriveMembership,
   canRunCodeForSession,
 } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
-import { MAX_ACTIVE_WORKSPACES_PER_OWNER, type AgentSessionDTO } from '@pagespace/lib/agent-workspaces/session-contract';
+import {
+  MAX_ACTIVE_WORKSPACES_PER_OWNER,
+  nextUniqueSessionName,
+  type AgentSessionDTO,
+} from '@pagespace/lib/agent-workspaces/session-contract';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 import { requestDevPreviewWatch } from '@/lib/dev-preview/detection-trigger';
+import { broadcastSessionUpdated } from '@/lib/websocket/agent-workspace-events';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { emitConversationLifecycle, type BumpedConversationRow } from '@/lib/repositories/conversation-rev';
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
@@ -796,6 +802,34 @@ export async function spawnSession(input: {
   });
 }
 
+/**
+ * Relabel a session; `null` = no such row.
+ *
+ * WHO may rename is NOT decided here — this file holds no decisions by mandate.
+ * Both callers (the `PATCH` route and the agent's `rename_workspace` tool)
+ * apply the same owner-only rule before reaching this, against the same
+ * `findSessionRecord` read.
+ *
+ * The broadcast lives INSIDE this wrapper rather than at each call site, so an
+ * agent rename and a human rename cannot drift into one notifying open clients
+ * and the other not. Fire-and-forget, like every other broadcast: a realtime
+ * hiccup must not fail the write that already landed.
+ */
+export async function renameSession(input: {
+  workspaceId: string;
+  name: string;
+}): Promise<AgentSessionDTO | null> {
+  const store = await getAgentSessionStore();
+  const result = await renameAgentSession({
+    workspaceId: input.workspaceId,
+    name: input.name,
+    deps: { store, now: () => new Date() },
+  });
+  if (!result.ok) return null;
+  broadcastSessionUpdated({ workspaceId: result.session.id, ownerId: result.session.ownerId });
+  return toSessionDTOWithEnv(result.session);
+}
+
 /** Resolve a conversation's session — how a chat turn finds its working context. Null = a plain chat. */
 export async function findSessionForConversation(conversationId: string): Promise<AgentSessionRecord | null> {
   return (await getAgentSessionStore()).findByConversation(conversationId);
@@ -828,8 +862,10 @@ export type EnsureGlobalSandboxSessionResult =
 export async function ensureGlobalSandboxSession(
   conversationId: string,
   userId: string,
+  /** Label to derive the workspace's name from; defaults to "Global Assistant". */
+  baseLabel?: string,
 ): Promise<EnsureGlobalSandboxSessionResult> {
-  return ensureConversationSession(conversationId, userId, null);
+  return ensureConversationSession(conversationId, userId, null, baseLabel);
 }
 
 /**
@@ -843,16 +879,46 @@ export async function ensureDriveSessionForConversation(
   conversationId: string,
   userId: string,
   driveId: string,
+  /** Label to derive the workspace's name from — normally the agent's title. */
+  baseLabel?: string,
 ): Promise<EnsureGlobalSandboxSessionResult> {
-  return ensureConversationSession(conversationId, userId, driveId);
+  return ensureConversationSession(conversationId, userId, driveId, baseLabel);
 }
 
 async function ensureConversationSession(
   conversationId: string,
   userId: string,
   driveId: string | null,
+  baseLabel?: string,
 ): Promise<EnsureGlobalSandboxSessionResult> {
-  const spawned = await spawnSession({ userId, driveId });
+  // NAME IT. This is the THIRD minting path and by far the most travelled one:
+  // it is what a plain `spawn_session` (no `workspace` argument) reaches, and
+  // what the first `bash`/file tool call in a global chat reaches. The other
+  // two paths were taught to name their workspaces and this one was not, so it
+  // went on minting rows that render as the literal fallback "Session" in their
+  // owner's sidebar.
+  //
+  // Same derivation as the HTTP spawn route, through the same shared helper, so
+  // there is one rule rather than three. A caller that knows the agent passes
+  // its title; otherwise the drive tells us which generic label fits.
+  //
+  // The uniqueness read is FAIL-SAFE. This path provisions the sandbox behind a
+  // user's first tool call; a cosmetic suffix must never be the reason that
+  // fails. A read fault costs at most a duplicate label — names carry no
+  // uniqueness constraint anywhere — where refusing would cost the whole
+  // session. (Same "degrade, don't refuse" rule the spawn tool's tool-surface
+  // diagnostic follows.)
+  const fallbackLabel = baseLabel?.trim() || (driveId === null ? 'Global Assistant' : 'Agent');
+  const existingNames = await listSessions({ ownerId: userId })
+    .then((sessions) => sessions.map((session) => session.name))
+    .catch((error) => {
+      loggers.api.warn('ensureConversationSession: could not read existing session names for the label', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [] as string[];
+    });
+  const name = nextUniqueSessionName(fallbackLabel, existingNames);
+  const spawned = await spawnSession({ userId, driveId, name });
   if (!spawned.ok) {
     // `session_limit_reached` is a distinct, actionable denial ("end an
     // existing session first") the caller already knows how to surface —

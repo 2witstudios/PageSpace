@@ -42,6 +42,7 @@ import {
   findWorkspaceOfConversation,
   reopenConversationInSession,
   ensureGlobalSandboxSession,
+  renameSession,
   MAX_ACTIVE_SESSIONS_PER_OWNER,
 } from '../agent-workspaces-runtime';
 import { SessionFullError } from '../create-conversation-in-workspace';
@@ -600,6 +601,62 @@ describe('every admission is PLACED — there is no unplaced membership', () => 
   }, 20_000);
 });
 
+describe('renameSession — the ONE wrapper both rename surfaces call', () => {
+  beforeAll(connect);
+
+  /**
+   * The route and the agent tool each apply their own authorization and then
+   * converge here, so this is the only place the whole chain — store write,
+   * service result, env-aware DTO — is exercised as one thing. Everything above
+   * it is mocked in its own suite; nothing above it would catch a broken DTO
+   * mapping or a write that silently did not land.
+   */
+  it('writes the new label and returns the DTO a client is served', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const [seeded] = await db
+      .insert(agentWorkspaces)
+      .values({ id: createId(), driveId: null, ownerId: owner.id, name: 'before' })
+      .returning();
+
+    const dto = await renameSession({ workspaceId: seeded.id, name: 'after' });
+
+    expect(dto?.name).toBe('after');
+    expect(dto?.workspaceId).toBe(seeded.id);
+    // The ROW, because the DTO could be right while the write was not.
+    const [row] = await db
+      .select({ name: agentWorkspaces.name })
+      .from(agentWorkspaces)
+      .where(eq(agentWorkspaces.id, seeded.id));
+    expect(row?.name).toBe('after');
+  });
+
+  it('answers null for an unknown id — what both surfaces map to a 404', async () => {
+    if (!dbAvailable) return;
+
+    expect(await renameSession({ workspaceId: createId(), name: 'nope' })).toBeNull();
+  });
+
+  it('renames a session that was never named, which is the whole point', async () => {
+    if (!dbAvailable) return;
+
+    // The rows this feature exists for: minted by an agent before any path
+    // named them, so they render as the bare fallback "Session" and nothing
+    // could ever change that.
+    const owner = await factories.createUser();
+    const [legacy] = await db
+      .insert(agentWorkspaces)
+      .values({ id: createId(), driveId: null, ownerId: owner.id })
+      .returning();
+    expect(legacy.name).toBeNull();
+
+    const dto = await renameSession({ workspaceId: legacy.id, name: 'Deploy work' });
+
+    expect(dto?.name).toBe('Deploy work');
+  });
+});
+
 describe('ensureGlobalSandboxSession — auto-provisioning the default Global Assistant conversation', () => {
   beforeAll(connect);
 
@@ -623,6 +680,57 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
     expect(result.session.ownerId).toBe(owner.id);
     expect(result.session.driveId).toBeNull();
     expect((await nodeFor(conversationId))?.rootId).toBe(result.session.id);
+    // BORN NAMED. This is the DEFAULT minting path — a plain `spawn_session`
+    // and the first sandbox tool call in a global chat both reach it — and it
+    // used to write `name = null`, which the sidebar renders as the bare
+    // fallback "Session" with nothing able to change it.
+    expect(result.session.name).toBe('Global Assistant');
+  });
+
+  it('given a caller-supplied label, names the minted workspace after it', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const conversationId = createId();
+    await db.insert(conversations).values({
+      id: conversationId,
+      userId: owner.id,
+      type: 'global',
+      contextId: null,
+      isActive: true,
+    });
+
+    const result = await ensureGlobalSandboxSession(conversationId, owner.id, 'Release Bot');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.session.name).toBe('Release Bot');
+  });
+
+  it('given an owner who already has a same-named workspace, scans past it rather than colliding', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    await db
+      .insert(agentWorkspaces)
+      .values({ id: createId(), driveId: null, ownerId: owner.id, name: 'Global Assistant' });
+
+    const conversationId = createId();
+    await db.insert(conversations).values({
+      id: conversationId,
+      userId: owner.id,
+      type: 'global',
+      contextId: null,
+      isActive: true,
+    });
+
+    const result = await ensureGlobalSandboxSession(conversationId, owner.id);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Cosmetic, not structural — names carry no uniqueness constraint — but a
+    // sidebar of identical rows is unreadable.
+    expect(result.session.name).toBe('Global Assistant 2');
   });
 
   it('given a conversation that already has a home, resolves to THAT workspace rather than failing', async () => {

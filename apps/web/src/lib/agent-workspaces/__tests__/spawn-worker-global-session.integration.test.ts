@@ -98,6 +98,18 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
     const ensured = await ensureGlobalSandboxSession(callerConversationId, owner.id);
     if (!ensured.ok) throw new Error(`ensureGlobalSandboxSession failed: ${ensured.reason}`);
 
+    // BORN NAMED. This is the DEFAULT minting path — what a plain
+    // `spawn_session` and the first sandbox tool call in a global chat both
+    // reach — and it used to write `name = null`, which renders in the sidebar
+    // as the literal fallback "Session" with no way to fix it. Asserted against
+    // the ROW, not the return value, because the column is what the sidebar
+    // reads.
+    const [mintedRow] = await db
+      .select({ name: agentWorkspaces.name })
+      .from(agentWorkspaces)
+      .where(eq(agentWorkspaces.id, ensured.session.id));
+    expect(mintedRow?.name).toBe('Global Assistant');
+
     // 3. The worker conversation itself — createWorkerSession's inner call.
     const workerConversationId = createId();
     await createConversationInSession({

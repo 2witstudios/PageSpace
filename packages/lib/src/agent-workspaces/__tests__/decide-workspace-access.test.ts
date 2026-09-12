@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest';
 import {
   decideAgentSessionAccess,
   decideAgentSessionEndAccess,
+  decideAgentSessionRenameAccess,
   type AgentSessionAccessSubject,
 } from '../decide-workspace-access';
 
@@ -119,5 +120,39 @@ describe('decideAgentSessionEndAccess', () => {
     expect(
       decideAgentSessionEndAccess({ requesterId: '', session: { ...driveSession, ownerId: '' }, driveMembership: 'owner', canRunCode: true }),
     ).toEqual({ allowed: false, reason: 'invalid_requester' });
+  });
+});
+
+describe('decideAgentSessionRenameAccess — owner-only, and its own decision', () => {
+  it('allows the session owner', () => {
+    expect(decideAgentSessionRenameAccess({ requesterId: 'u1', session: { ownerId: 'u1' } })).toEqual({
+      allowed: true,
+    });
+  });
+
+  it('refuses a non-owner, naming the reason', () => {
+    // A drive member may REACH a colleague's session — `decideAgentSessionAccess`
+    // admits them — and still must not relabel it in that colleague's sidebar.
+    expect(decideAgentSessionRenameAccess({ requesterId: 'u2', session: { ownerId: 'u1' } })).toEqual({
+      allowed: false,
+      reason: 'not_owner',
+    });
+  });
+
+  it('refuses an EMPTY requester even against an empty owner', () => {
+    // The same guard the end decision carries: an unresolved requester must
+    // never match an unresolved owner into a grant.
+    expect(decideAgentSessionRenameAccess({ requesterId: '', session: { ownerId: '' } })).toEqual({
+      allowed: false,
+      reason: 'not_owner',
+    });
+  });
+
+  it('does NOT carry the end decision\'s capability gate', () => {
+    // Renaming destroys nothing and costs nothing, so it takes no `canRunCode`
+    // input at all — gating a text label on a COMPUTE capability would be a
+    // category error. Proven structurally: the owner is allowed with no
+    // capability or membership information supplied.
+    expect(decideAgentSessionRenameAccess({ requesterId: 'u1', session: { ownerId: 'u1' } }).allowed).toBe(true);
   });
 });

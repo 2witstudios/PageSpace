@@ -21,6 +21,7 @@ import { toast } from 'sonner';
 import useSWR, { useSWRConfig } from 'swr';
 
 import EndSessionDialog from '@/components/agents/EndSessionDialog';
+import { RenameDialog } from '@/components/dialogs/RenameDialog';
 import { useSpawnSession } from '@/components/agents/useSpawnSession';
 import DrivePickerDialog from '@/components/agents/DrivePickerDialog';
 import { Input } from '@/components/ui/input';
@@ -1154,6 +1155,7 @@ function SessionRow({
 
   const [expanded, setExpanded] = useState(false);
   const [confirmingEnd, setConfirmingEnd] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   const isSelected = selectedSessionId === session.workspaceId;
   const isRunning = session.sandboxStatus === 'running' || session.sandboxStatus === 'starting';
 
@@ -1417,6 +1419,7 @@ function SessionRow({
 
   const menuItems: RowMenuItem[] = useMemo(
     () => [
+      { label: 'Rename', icon: Pencil, onSelect: () => setRenaming(true) },
       {
         label: 'End session',
         icon: X,
@@ -1425,6 +1428,42 @@ function SessionRow({
       },
     ],
     [],
+  );
+
+  /**
+   * Relabel this session. A label only — it touches nothing running inside.
+   *
+   * Until now a session's name was written once at spawn and never again, so a
+   * session an AGENT minted (which passed no name at all) sat in this sidebar
+   * as the literal fallback "Session", permanently and with no way to fix it.
+   *
+   * The empty-name guard is ours, not the server's: the API refuses a blank
+   * with a 400, and there is no reason to spend a round trip learning that.
+   */
+  const renameSession = useCallback(
+    async (name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed || trimmed === session.name) {
+        setRenaming(false);
+        return;
+      }
+      try {
+        await patch(`/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}`, { name: trimmed });
+      } catch (error) {
+        toast.error('Could not rename this session', {
+          description: error instanceof Error ? error.message : 'Please try again.',
+        });
+        return;
+      }
+      setRenaming(false);
+      // The same prefix predicate `closeConversation` above revalidates with,
+      // which covers every `/api/agent-workspaces*` listing this row's name is
+      // drawn from. The rename ALSO broadcasts `session:updated`, which is what
+      // refreshes other tabs; this is what refreshes the one that made the
+      // change, without waiting for its own echo to come back.
+      void mutate(isAgentWorkspacesKey);
+    },
+    [mutate, session.workspaceId, session.name],
   );
 
   const openArtifact = useCallback(
@@ -1487,6 +1526,15 @@ function SessionRow({
         onOpenChange={setConfirmingEnd}
         sessionName={session.name}
         onConfirm={() => void endSession()}
+      />
+
+      <RenameDialog
+        isOpen={renaming}
+        onClose={() => setRenaming(false)}
+        onRename={(name) => void renameSession(name)}
+        initialName={session.name || ''}
+        title="Rename session"
+        description="A label only — renaming never affects the sandbox, its shells, or anything running inside."
       />
 
       {expanded && (
