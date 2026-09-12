@@ -272,6 +272,12 @@ export async function computeMeetingTodaySignal(
   };
 }
 
+/**
+ * "Where you left off": the single most recently viewed page the user can
+ * still open, as a fact plus a link straight to it. Scoped to
+ * `accessiblePageIds`, so a view that outlived its access discloses neither
+ * the title nor the link.
+ */
 export async function computeLeftOffSignal(
   userId: string,
   accessiblePageIds: string[],

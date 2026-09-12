@@ -915,6 +915,13 @@ const GlobalAssistantView: React.FC = () => {
       <div className="flex items-center justify-between gap-2 p-4 border-[var(--separator)]">
         <div className="flex min-w-0 items-center space-x-2">
           <AISelector
+            // `shrink` overrides the shared button variant's own `shrink-0`
+            // (twMerge, later class wins), and `min-w-0` lets it fall below
+            // its intrinsic width. Without both, a long agent title keeps the
+            // button at full width and pushes the actions off the row — the
+            // truncate on the label inside can only act once the button
+            // itself is allowed to narrow.
+            className="min-w-0 shrink"
             selectedAgent={selectedAgent}
             onSelectAgent={handleSelectAgentForVoice}
             // The CONVERSATION's own liveness, not a raw chat status. Switching agent while
