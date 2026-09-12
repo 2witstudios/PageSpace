@@ -121,11 +121,18 @@ describe('validateClientRegistration — name', () => {
     }
   });
 
+  it('rejects leading or trailing whitespace rather than trimming it, so what is stored is what renders', () => {
+    for (const name of ['  SwipeSend', 'SwipeSend  ', '\tSwipeSend', 'SwipeSend\n']) {
+      expect(codes({ ...valid, name })).toContain('invalid_name');
+    }
+    expect(validateClientRegistration({ ...valid, name: 'Swipe Send' }).ok).toBe(true);
+  });
+
   it('rejects control characters and bidi/zero-width overrides in a name (parity with mcp key names, scopes.ts NAME_CONTROL_CHAR_RE)', () => {
     // The consent screen renders this string beside the trust badge, which is
     // exactly where a spoofed name pays off: an RTL override can visually
     // reorder the text around the badge it is meant to undercut.
-    for (const name of ['ev\u0000il', 'ev\u001bil', 'ev\u007fil', 'ev\u202eil', 'ev\u200bil', 'ev\ufeffil']) {
+    for (const name of ['ev\u0000il', 'ev\u001bil', 'ev\u007fil', 'ev\u202eil', 'ev\u200bil', 'ev\ufeffil', 'ev\u061cil', 'ev\u2066il']) {
       expect(codes({ ...valid, name })).toContain('invalid_name');
     }
   });
@@ -150,6 +157,13 @@ describe('validateClientRegistration — description', () => {
 
   it('rejects a description over 500 characters', () => {
     expect(codes({ ...valid, description: 'd'.repeat(501) })).toContain('invalid_description');
+  });
+
+  it('holds the description to the same display rule as the name — it renders on the same screen', () => {
+    for (const description of ['ev\u0000il', 'ev\u202eil', 'ev\u200bil', 'ev\u061cil', 'ev\u007fil']) {
+      expect(codes({ ...valid, description })).toContain('invalid_description');
+    }
+    expect(validateClientRegistration({ ...valid, description: 'Envía cosas — deslizando' }).ok).toBe(true);
   });
 });
 

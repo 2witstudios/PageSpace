@@ -303,8 +303,11 @@ one.
 
 Validation is `validateClientRegistration`
 (`packages/lib/src/auth/oauth/client-registration.ts`): `unknown` in, a typed error union out,
-never throws, every problem reported at once with the field that caused it. Name 1–100,
-description ≤500, `logoUrl`/`homepageUrl` https-only (an `http:` logo is a mixed-content
+never throws, every problem reported at once with the field that caused it. Name 1–100 and description ≤500, both held to the display-text rule mcp key names already
+meet (no control characters, no bidi overrides or directional isolates, no zero-width characters
+— they render beside the "Unverified app" badge, and ADR 0002 Decision 5 makes what the screen says
+part of the security boundary; the name additionally may not be whitespace-only or carry leading or
+trailing whitespace, and is rejected rather than silently trimmed). `logoUrl`/`homepageUrl` https-only (an `http:` logo is a mixed-content
 downgrade on the consent screen; `javascript:`/`data:` on a rendered link or image is the whole
 attack), 1–10 redirect URIs each passing Decision 3's rules **as a non-first-party client**, no
 duplicates. The accepted value is rebuilt field by field, so `firstParty`, `verified` or an id
@@ -419,7 +422,7 @@ always PKCE, never `firstParty`, scope-capped identically to everyone else.
 | G17 | Unknown, disabled, or foreign-redirect client | Identical `invalid_client`; no oracle |
 | G18 | `name:` on a profile-bearing grant | Reject, `name_without_mint_grant` — the consent screen never promises a key nothing mints |
 | G19 | A URL-wrapping or platform-handled scheme (`filesystem:`, `view-source:`, `jar:`, `chrome:`, `content:`, `intent:`, `mailto:`, …) | Never a private-use scheme, registered or not |
-| G20 | A client name carrying control characters, bidi overrides, zero-width characters, or only whitespace | Reject — it renders beside the "Unverified app" badge |
+| G20 | A client name or description carrying control characters, bidi overrides, directional isolates, zero-width characters, or (for the name) leading/trailing/only whitespace | Reject — both render beside the "Unverified app" badge, and ADR 0002 Decision 5 makes the consent screen part of the security boundary |
 | G21 | Two registered redirect URIs that normalize to the same `href` (default port, host case) | Reject as duplicates — the stored list matches what authorize honours |
 | G22 | A non-string `allowedScopes` / `redirectUris` entry, including one with a poisoned `toString`/`valueOf` | Typed error with a FIXED placeholder; never coerced, never thrown |
 

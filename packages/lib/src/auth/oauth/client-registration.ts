@@ -101,26 +101,45 @@ function isHttpsUrl(value: string): boolean {
  * `classifyScopeShape`'s job below, so the two rejections stay distinguishable.
  */
 /**
- * Bidi controls, zero-width characters and the BOM. Not control characters by
- * the `\x00-\x1F\x7F` definition, but they reorder or hide rendered text,
- * which is the same attack against the same surface.
+ * Bidi controls, directional isolates, zero-width characters, the Arabic
+ * letter mark and the BOM. Not control characters by the `\x00-\x1F\x7F`
+ * definition, but they reorder or hide rendered text, which is the same attack
+ * against the same surface.
  */
-const NAME_INVISIBLE_CHAR_RE = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/;
+const INVISIBLE_CHAR_RE = /[\u061C\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/;
+
+/**
+ * Text that will be rendered on the consent screen, held to the rule mcp key
+ * names already meet (`scopes.ts`, `NAME_CONTROL_CHAR_RE` + the length and
+ * control-char check in `parseScopeList`).
+ *
+ * The consent screen is part of the security boundary — ADR 0002 Decision 5
+ * opens by saying zero trust includes the user being able to trust what the
+ * screen says. These strings render beside the "Unverified app" badge, which
+ * is precisely where a spoofed one pays off: an RTL override can visually
+ * reorder the text around the badge that is the whole trust signal, and
+ * zero-width characters can hide part of a name that would otherwise look
+ * wrong. Deliberately NOT an ASCII rule — `归档` and `Café App` are ordinary
+ * names and stay valid.
+ */
+const isSafeDisplayText = (value: string): boolean =>
+  !NAME_CONTROL_CHAR_RE.test(value) && !INVISIBLE_CHAR_RE.test(value);
 
 const NAME = z
   .string()
   .min(1)
   .max(100)
-  // Parity with mcp key names (`scopes.ts`, `NAME_CONTROL_CHAR_RE` + the
-  // length/control-char check in `parseScopeList`). This string renders on the
-  // consent screen beside the "Unverified app" badge, so a bidi override,
-  // zero-width joiner or trailing whitespace can visually undercut the one
-  // trust signal the screen has. Whitespace-only is rejected for the same
-  // reason: it renders as an unnamed app.
+  // Whitespace-only renders as an unnamed app; leading or trailing whitespace
+  // lets a name push itself away from the badge it sits beside. Requiring the
+  // stored name to equal its own trim means what is stored is what renders —
+  // rejected rather than silently trimmed, because silently rewriting a
+  // developer's input is its own kind of surprise.
   .refine((value) => value.trim().length > 0)
-  .refine((value) => !NAME_CONTROL_CHAR_RE.test(value))
-  .refine((value) => !NAME_INVISIBLE_CHAR_RE.test(value));
-const DESCRIPTION = z.string().max(500);
+  .refine((value) => value === value.trim())
+  .refine(isSafeDisplayText);
+// Same surface, same rule: the description renders on the consent screen
+// directly beneath the name.
+const DESCRIPTION = z.string().max(500).refine(isSafeDisplayText);
 const HTTPS_URL = z.string().refine(isHttpsUrl);
 const REDIRECT_URIS = z.array(z.unknown()).min(1).max(10);
 // There are only six legal shapes, so anything longer is a mistake or an
