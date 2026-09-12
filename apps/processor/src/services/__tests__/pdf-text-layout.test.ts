@@ -31,22 +31,87 @@ describe('composePageText — hasEOL', () => {
     });
   });
 
-  it('ignores baseline movement once the page reports EOL', () => {
+  it('still breaks on geometry where a page is only partly annotated', () => {
     assert({
-      given: 'a superscript that shifts the baseline mid-line on an EOL page',
-      should: 'keep the line whole — only the EOL marker breaks it',
+      given: 'a page where pdf.js marked one line end and left two to geometry',
+      should: 'break on all three, not treat one marker as proof the page is annotated',
       actual: composePageText([
-        { str: 'PageSpace', hasEOL: false, transform: [1, 0, 0, 1, 0, 700] },
-        { str: 'TM', hasEOL: false, transform: [1, 0, 0, 1, 0, 704] },
-        { str: 'workspace', hasEOL: true, transform: [1, 0, 0, 1, 0, 700] },
+        { str: 'EXPERIENCE', hasEOL: true, transform: [1, 0, 0, 1, 0, 700], height: 10 },
+        { str: 'Founder & Creator', transform: [1, 0, 0, 1, 0, 688], height: 10 },
+        { str: 'Feb 2025 - Present', transform: [1, 0, 0, 1, 0, 676], height: 10 },
       ]),
-      expected: 'PageSpace TM workspace',
+      expected: 'EXPERIENCE\nFounder & Creator\nFeb 2025 - Present',
     });
   });
 });
 
-describe('composePageText — baseline fallback', () => {
-  it('starts a new line when the baseline moves and no item reports EOL', () => {
+describe('composePageText — inline baseline shifts are not line breaks', () => {
+  it('keeps a superscript on its line', () => {
+    assert({
+      given: 'a run that rises above the baseline and returns',
+      should: 'keep the line whole — only a DOWNWARD move starts a line',
+      actual: composePageText([
+        { str: 'PageSpace', transform: [1, 0, 0, 1, 0, 700], height: 10 },
+        { str: 'TM', transform: [1, 0, 0, 1, 0, 704], height: 6 },
+        { str: 'workspace', transform: [1, 0, 0, 1, 0, 700], height: 10 },
+      ]),
+      expected: 'PageSpace TM workspace',
+    });
+  });
+
+  it('keeps a subscript on its line', () => {
+    assert({
+      given: 'a run dipping 3 units below a 10-unit-tall line',
+      should: 'keep the line whole — the dip is under half the glyph height',
+      actual: composePageText([
+        { str: 'H', transform: [1, 0, 0, 1, 0, 700], height: 10 },
+        { str: '2', transform: [1, 0, 0, 1, 0, 697], height: 6 },
+        { str: 'O is water', transform: [1, 0, 0, 1, 0, 700], height: 10 },
+      ]),
+      expected: 'H 2 O is water',
+    });
+  });
+
+  it('measures the drop from the line baseline, not the run before it', () => {
+    assert({
+      given: 'a superscript followed by a genuine new line',
+      should: 'break once, at the new line — not at the return from the superscript',
+      actual: composePageText([
+        { str: 'title', transform: [1, 0, 0, 1, 0, 700], height: 10 },
+        { str: 'TM', transform: [1, 0, 0, 1, 0, 706], height: 6 },
+        { str: 'body text', transform: [1, 0, 0, 1, 0, 688], height: 10 },
+      ]),
+      expected: 'title TM\nbody text',
+    });
+  });
+
+  it('scales the tolerance to the glyph height', () => {
+    assert({
+      given: 'a 6-unit dip inside display text 30 units tall',
+      should: 'keep it on one line, where the same dip in body text would break',
+      actual: composePageText([
+        { str: 'PAGE', transform: [1, 0, 0, 1, 0, 700], height: 30 },
+        { str: 'SPACE', transform: [1, 0, 0, 1, 0, 694], height: 30 },
+      ]),
+      expected: 'PAGE SPACE',
+    });
+  });
+
+  it('breaks that same dip in body text', () => {
+    assert({
+      given: 'a 6-unit drop between runs 10 units tall',
+      should: 'break — it clears half the glyph height',
+      actual: composePageText([
+        { str: 'PAGE', transform: [1, 0, 0, 1, 0, 700], height: 10 },
+        { str: 'SPACE', transform: [1, 0, 0, 1, 0, 694], height: 10 },
+      ]),
+      expected: 'PAGE\nSPACE',
+    });
+  });
+});
+
+describe('composePageText — baseline geometry', () => {
+  it('starts a new line when the baseline drops', () => {
     assert({
       given: 'runs on three descending baselines with no hasEOL',
       should: 'break on the baseline changes',
@@ -75,21 +140,35 @@ describe('composePageText — tidying', () => {
     });
   });
 
-  it('collapses a vertical gap to one blank line', () => {
+  it('emits no blank line for the empty markers pdf.js ends lines with', () => {
     assert({
-      given: 'several empty lines between two blocks of text',
-      should: 'keep exactly one blank line as the paragraph break',
+      given: 'empty EOL items between two blocks of text',
+      should: 'emit two lines, not a blank line per marker',
       actual: composePageText([
         eol('EXPERIENCE', true), eol('', true), eol('', true), eol('', true), eol('Founder', true),
       ]),
-      expected: 'EXPERIENCE\n\nFounder',
+      expected: 'EXPERIENCE\nFounder',
     });
   });
 
-  it('drops leading and trailing blank lines', () => {
+  it('emits no blank line when a marker carries the next line\'s baseline', () => {
     assert({
-      given: 'blank lines around the page content',
-      should: 'return the content with no surrounding blank lines',
+      given: 'the real pdf.js shape — an empty EOL item positioned on the line below',
+      should: 'break once, with no blank line between the two lines',
+      actual: composePageText([
+        { str: 'SUMMARY', transform: [1, 0, 0, 1, 0, 700], height: 10 },
+        { str: '', hasEOL: true, transform: [1, 0, 0, 1, 0, 688], height: 10 },
+        { str: 'Founder and self-taught', transform: [1, 0, 0, 1, 0, 688], height: 10 },
+        { str: '', hasEOL: true, transform: [1, 0, 0, 1, 0, 676], height: 10 },
+      ]),
+      expected: 'SUMMARY\nFounder and self-taught',
+    });
+  });
+
+  it('drops leading and trailing empty markers', () => {
+    assert({
+      given: 'empty markers around the page content',
+      should: 'return the content alone',
       actual: composePageText([eol('', true), eol('EDUCATION', true), eol('', true)]),
       expected: 'EDUCATION',
     });

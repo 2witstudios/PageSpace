@@ -7,12 +7,23 @@
  * paragraph per page: a resume's every heading, bullet and table row ran
  * together, and `pages read` reported a two-page document as three lines.
  *
- * pdf.js marks the end of a visual line on the item that ends it (`hasEOL`),
- * and where it doesn't, the item's Y coordinate (`transform[5]`) still moves
- * between lines. Prefer the explicit marker and fall back to geometry, but
- * never both at once: a superscript shifts the baseline a few units without
- * starting a new line, so honouring Y on a document that already reports EOL
- * would split lines the producer never broke.
+ * Two signals say where a line ended, and both are used on every page:
+ *
+ *  - `hasEOL`, which pdf.js sets on the item that ends a visual line.
+ *  - the item's baseline Y (`transform[5]`) dropping below the baseline of the
+ *    line being built.
+ *
+ * They are combined rather than selected between. A page can be annotated only
+ * in places — pdf.js marks the line ends it recognises, not necessarily all of
+ * them — so treating one marker as proof the whole page is annotated would
+ * re-flatten every unmarked line on a mixed-content page.
+ *
+ * The geometry half only ever breaks on DOWNWARD movement, measured against
+ * the baseline of the current line rather than the previous run, and only past
+ * a tolerance scaled to the glyph height. A superscript rises above the
+ * baseline and a subscript dips a fraction of an em below it, so neither can
+ * split a line the producer never broke — while real line spacing (~1.2em)
+ * clears the tolerance easily.
  */
 
 /** The subset of a pdf.js `TextItem` this module reads. */
@@ -22,14 +33,25 @@ export interface PdfTextItem {
   hasEOL?: boolean;
   /** pdf.js text-item matrix; index 5 is the baseline Y in PDF units. */
   transform?: number[];
+  /** Glyph height of the run, in the same units as the baseline. */
+  height?: number;
 }
 
 /**
- * Baseline movement (PDF units, 1/72") that counts as a new line when no item
- * on the page reports `hasEOL`. Line spacing for body text is ~12 units, so 2
- * separates lines without breaking on float noise along one baseline.
+ * Floor for the downward baseline movement (PDF units, 1/72") that starts a new
+ * line, used when a run reports no height. Body text sets its lines ~12 units
+ * apart, so 2 separates lines without breaking on float noise along one
+ * baseline.
  */
-const Y_TOLERANCE = 2;
+const Y_TOLERANCE_FLOOR = 2;
+
+/**
+ * Fraction of the glyph height a baseline must drop to count as a new line. A
+ * subscript sits roughly 0.2-0.3em below the baseline and a line of text sits
+ * ~1.2em below the one above it, so half the glyph height separates the two
+ * with room on either side.
+ */
+const Y_TOLERANCE_HEIGHT_RATIO = 0.5;
 
 function itemY(item: PdfTextItem): number | undefined {
   return item.transform?.[5];
@@ -40,52 +62,53 @@ function tidy(line: string): string {
   return line.replace(/[ \t]+/g, ' ').trim();
 }
 
-/**
- * Drop leading and trailing blank lines and collapse any run of blank lines to
- * a single one — vertical whitespace in a PDF is a paragraph break, not N of
- * them.
- */
-function squeezeBlankLines(lines: readonly string[]): string[] {
-  const out: string[] = [];
-  for (const line of lines) {
-    if (line === '' && (out.length === 0 || out[out.length - 1] === '')) continue;
-    out.push(line);
-  }
-  while (out.length > 0 && out[out.length - 1] === '') out.pop();
-  return out;
-}
-
 /** One page of pdf.js items → text with its line breaks intact. */
 export function composePageText(items: readonly PdfTextItem[]): string {
-  const usesEol = items.some((item) => item.hasEOL === true);
-
   const lines: string[] = [];
   let current: string[] = [];
-  let prevY: number | undefined;
+  // Baseline and glyph height of the line being built — NOT of the previous
+  // run, so an inline baseline shift cannot be mistaken for a line break.
+  let lineY: number | undefined;
+  let lineHeight: number | undefined;
 
+  // Both signals can fire for the same break — pdf.js often ends a line with
+  // an empty item that carries the NEXT line's baseline, so the geometry check
+  // flushes and the EOL marker on that same item would flush again. A flush
+  // with nothing buffered emits nothing rather than a blank line.
   const flush = () => {
-    lines.push(tidy(current.join(' ')));
+    const line = tidy(current.join(' '));
     current = [];
+    lineY = undefined;
+    lineHeight = undefined;
+    if (line === '') return;
+    lines.push(line);
   };
 
   for (const item of items) {
     const y = itemY(item);
 
-    if (!usesEol && current.length > 0 && y !== undefined && prevY !== undefined
-        && Math.abs(y - prevY) > Y_TOLERANCE) {
+    if (current.length > 0 && y !== undefined && lineY !== undefined
+        && lineY - y > lineTolerance(lineHeight)) {
       flush();
     }
 
     if (item.str !== '') current.push(item.str);
-    if (y !== undefined) prevY = y;
+    if (y !== undefined && lineY === undefined) {
+      lineY = y;
+      lineHeight = item.height;
+    }
 
-    // No `usesEol` guard needed: when it is false, no item reports hasEOL at
-    // all, and the Y branch above is the only thing breaking lines.
     if (item.hasEOL === true) flush();
   }
   if (current.length > 0) flush();
 
-  return squeezeBlankLines(lines).join('\n');
+  return lines.join('\n');
+}
+
+/** How far a baseline must drop, below a line of this glyph height, to break. */
+function lineTolerance(height: number | undefined): number {
+  if (height === undefined) return Y_TOLERANCE_FLOOR;
+  return Math.max(Y_TOLERANCE_FLOOR, height * Y_TOLERANCE_HEIGHT_RATIO);
 }
 
 /** Page texts → the document body. A page break is a blank line. */
