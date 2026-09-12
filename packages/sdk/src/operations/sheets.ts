@@ -775,12 +775,22 @@ export const applySheetFormat = defineOperation({
     rowsTouched: z.number(),
     /** Tab-level columns whose stored value changed, by name. */
     tabFieldsChanged: z.array(z.string()),
-    /** Conditional rules on the tab AFTER the write. */
+    /**
+     * How many conditional rules the tab holds AFTER the write — a COUNT, not
+     * the rules. `readFormatting` is the call that returns them, under
+     * `conditionalFormats`.
+     */
     conditionalRules: z.number(),
     /** What the write actually added and removed, computed under the lock — not from any caller's earlier read. */
     ruleIdsAdded: z.array(z.string()),
     ruleIdsRemoved: z.array(z.string()),
-    /** Regions on the tab AFTER the write. */
+    /**
+     * How many regions the tab holds AFTER the write — a COUNT, where
+     * `readFormatting.regions` is an ARRAY of them. The asymmetry is lib's
+     * (`ApplyFormatOpsResult.regions` is a number, `TabFormatting.regions` a
+     * list) and the route spreads both verbatim, so renaming either here would
+     * put the SDK out of step with what the server actually sends.
+     */
     regions: z.number(),
     regionIdsAdded: z.array(z.string()),
     regionIdsRemoved: z.array(z.string()),
