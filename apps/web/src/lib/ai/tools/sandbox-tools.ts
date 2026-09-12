@@ -41,7 +41,7 @@
 
 import { tool, type Tool } from 'ai';
 import { z } from 'zod';
-import type { SandboxEnvironmentTarget } from '@pagespace/lib/services/sandbox/tool-runners';
+import { nameEnvironmentOnResult, type SandboxEnvironmentTarget } from '@pagespace/lib/services/sandbox/tool-runners';
 import {
   runBashInSandbox,
   writeSandboxFile,
@@ -297,9 +297,19 @@ export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironm
     // entitlement.
     const ctx: SandboxActorContext = { ...actor.ctx, ...resolved.payer, environment: resolved.target };
     const decision = await gate(ctx);
-    if (!decision.ok) return { ok: false, error: gateDenial(decision) };
+    // A refusal names the environment that refused (leaf E), so a wrong target
+    // reads as a wrong target rather than as a broken tool. Only AFTER
+    // resolution: a refusal that never resolved an environment has none to
+    // name, and naming one would be inventing it.
+    if (!decision.ok) return { ok: false, error: nameEnvironmentOnResult(resolved.target, gateDenial(decision)) };
     return { ok: true, ctx };
   };
+
+  // Every result — a run's and a refusal's alike — says where it happened,
+  // from the SERVER's resolved target and never from the model's input. One
+  // place, so no runner can be added later that forgets.
+  const named = <T extends object>(ctx: SandboxActorContext, result: T) =>
+    ctx.environment ? nameEnvironmentOnResult(ctx.environment, result) : result;
 
   return {
     list_environments: tool({
@@ -332,7 +342,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironm
       execute: async ({ environmentId, command, cwd, timeoutMs }, options) => {
         const opened = await openAt(environmentId, options);
         if (!opened.ok) return opened.error;
-        return runBashInSandbox({ command, cwd, timeoutMs, ctx: opened.ctx, deps: runDeps });
+        return named(opened.ctx, await runBashInSandbox({ command, cwd, timeoutMs, ctx: opened.ctx, deps: runDeps }));
       },
     }),
 
@@ -344,7 +354,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironm
       execute: async ({ environmentId, path, content }, options) => {
         const opened = await openAt(environmentId, options);
         if (!opened.ok) return opened.error;
-        return writeSandboxFile({ path, content, ctx: opened.ctx, deps: runDeps });
+        return named(opened.ctx, await writeSandboxFile({ path, content, ctx: opened.ctx, deps: runDeps }));
       },
     }),
 
@@ -359,7 +369,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironm
       execute: async ({ environmentId, path, offset, limit }, options) => {
         const opened = await openAt(environmentId, options);
         if (!opened.ok) return opened.error;
-        return readSandboxFile({ path, offset, limit, ctx: opened.ctx, deps: runDeps });
+        return named(opened.ctx, await readSandboxFile({ path, offset, limit, ctx: opened.ctx, deps: runDeps }));
       },
     }),
 
@@ -371,7 +381,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironm
       execute: async ({ environmentId, path, oldString, newString, replaceAll }, options) => {
         const opened = await openAt(environmentId, options);
         if (!opened.ok) return opened.error;
-        return editSandboxFile({ path, oldString, newString, replaceAll, ctx: opened.ctx, deps: runDeps });
+        return named(opened.ctx, await editSandboxFile({ path, oldString, newString, replaceAll, ctx: opened.ctx, deps: runDeps }));
       },
     }),
   };

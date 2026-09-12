@@ -483,6 +483,45 @@ export type SandboxToolDenialReason =
   | 'local_approval_required'
   | 'error';
 
+/**
+ * The environment a code-execution result actually happened in (leaf E).
+ *
+ * With a mandatory id the remaining failure mode is copying a REAL id for the
+ * WRONG environment — a call that succeeds, somewhere nobody meant. Naming the
+ * target on every result puts it in the model's context each turn and makes a
+ * wrong one visible to the person immediately, rather than only to whoever
+ * opens the audit log afterwards.
+ *
+ * **Both fields come from the SERVER's record**, via the resolved
+ * `SandboxEnvironmentTarget` — never echoed from the tool's input. If they were
+ * echoed, a mis-addressed call would confirm the address the model already
+ * believed, which is the opposite of what this is for.
+ *
+ * It RECORDS nothing new: `drive_env_grant_audit` already carries `envId` for
+ * every grant, and `id` here is that same environment id. This surfaces what is
+ * recorded.
+ */
+export interface SandboxResultEnvironment {
+  /** The environment id — the same id `drive_env_grant_audit.envId` carries. */
+  readonly id: string;
+  /** The human label, for speaking to the person. Read from the row. */
+  readonly label: string;
+}
+
+/**
+ * Stamp the environment onto a tool result — success or refusal alike, which is
+ * the point of doing it in ONE place at the tool boundary rather than at each
+ * of the several dozen sites that build a result. A refusal that does not name
+ * the environment reads as a broken tool; one that does reads as a wrong
+ * target, which is the thing the person can actually act on.
+ */
+export function nameEnvironmentOnResult<T extends object>(
+  target: SandboxEnvironmentTarget,
+  result: T,
+): T & { environment: SandboxResultEnvironment } {
+  return { ...result, environment: { id: target.id, label: target.label } };
+}
+
 /** A failure that carries the daemon's challenge id (only `local_approval_required` does). */
 export type SandboxToolFailure = { success: false; error: string; reason: SandboxToolDenialReason; challengeId?: string };
 

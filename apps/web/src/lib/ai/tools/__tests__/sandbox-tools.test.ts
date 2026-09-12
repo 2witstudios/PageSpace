@@ -147,7 +147,7 @@ describe('createSandboxTools', () => {
       gate: async () => ({ ok: false, reason: 'concurrency_limit', error: 'too many runs', retryAfter: 30 }),
     });
     const result = await exec(tools.bash, { environmentId: CONVERSATION_ID, command: 'echo hi' }, {});
-    expect(result).toEqual({ success: false, error: 'too many runs', retryAfter: 30 });
+    expect(result).toEqual({ success: false, error: 'too many runs', retryAfter: 30, environment: { id: CONVERSATION_ID, label: "This conversation's own sandbox" } });
     expect(acquired).toBe(false);
   });
 
@@ -157,7 +157,8 @@ describe('createSandboxTools', () => {
       gate: async () => ({ ok: false, reason: 'kill_switch_off', error: 'disabled' }),
     });
     const result = await exec(tools.bash, { environmentId: CONVERSATION_ID, command: 'echo hi' }, {});
-    expect(result).toEqual({ success: false, error: 'disabled' });
+    // A refusal names the environment that refused (leaf E).
+    expect(result).toEqual({ success: false, error: 'disabled', environment: { id: CONVERSATION_ID, label: "This conversation's own sandbox" } });
   });
 
   it('writeFile: given the gate denies, should not write', async () => {
@@ -178,7 +179,8 @@ describe('createSandboxTools', () => {
       gate: async () => ({ ok: false, reason: 'kill_switch_off', error: 'disabled' }),
     });
     const result = await exec(tools.writeFile, { environmentId: CONVERSATION_ID, path: 'a.txt', content: 'x' }, {});
-    expect(result).toEqual({ success: false, error: 'disabled' });
+    // A refusal names the environment that refused (leaf E).
+    expect(result).toEqual({ success: false, error: 'disabled', environment: { id: CONVERSATION_ID, label: "This conversation's own sandbox" } });
     expect(wrote).toBe(false);
   });
 
@@ -241,7 +243,8 @@ describe('createSandboxTools', () => {
       gate: async () => ({ ok: false, reason: 'kill_switch_off', error: 'disabled' }),
     });
     const result = await exec(tools.readFile, { environmentId: CONVERSATION_ID, path: 'a.txt' }, {});
-    expect(result).toEqual({ success: false, error: 'disabled' });
+    // A refusal names the environment that refused (leaf E).
+    expect(result).toEqual({ success: false, error: 'disabled', environment: { id: CONVERSATION_ID, label: "This conversation's own sandbox" } });
     expect(read).toBe(false);
   });
 
@@ -305,7 +308,8 @@ describe('createSandboxTools', () => {
       gate: async () => ({ ok: false, reason: 'kill_switch_off', error: 'disabled' }),
     });
     const result = await exec(tools.editFile, { environmentId: CONVERSATION_ID, path: 'a.txt', oldString: 'data', newString: 'X' }, {});
-    expect(result).toEqual({ success: false, error: 'disabled' });
+    // A refusal names the environment that refused (leaf E).
+    expect(result).toEqual({ success: false, error: 'disabled', environment: { id: CONVERSATION_ID, label: "This conversation's own sandbox" } });
     expect(wrote).toBe(false);
   });
 
@@ -570,5 +574,98 @@ describe('the MANDATORY, OPAQUE environmentId (leaf C)', () => {
       expect(description, name).toMatch(/copied EXACTLY from the output of list_environments/);
       expect(description, name).toMatch(/never constructed, guessed or described/i);
     }
+  });
+});
+
+describe('every result names the environment it ran in (leaf E)', () => {
+  const ENV_ID = 'dw9jthqyaza6ga3b6m5nmpqw';
+  /** The server's own record of the target — a DIFFERENT label from anything the model could pass. */
+  const macResolver: ResolveEnvironmentTarget = async ({ environmentId }) => ({
+    ok: true,
+    target: { id: ENV_ID, kind: 'environment', label: 'jono-macstudio', driveId: 'drive_1' },
+    payer: { driveId: 'drive_1', ownerId: 'drive-owner', tenantId: 'drive-owner', tier: 'pro' },
+    // `environmentId` is deliberately unused: the label is the row's, not the input's.
+    ...(environmentId ? {} : {}),
+  });
+
+  it('given any code-execution result, should state the environment LABEL it actually ran in', async () => {
+    const tools = createSandboxTools({ resolveEnvironment: macResolver, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    for (const call of [
+      () => exec(tools.bash, { environmentId: OTHER_ID, command: 'ls' }, {}),
+      () => exec(tools.writeFile, { environmentId: OTHER_ID, path: 'a.txt', content: 'x' }, {}),
+      () => exec(tools.readFile, { environmentId: OTHER_ID, path: 'a.txt' }, {}),
+      () => exec(tools.editFile, { environmentId: OTHER_ID, path: 'a.txt', oldString: 'data', newString: 'X' }, {}),
+    ]) {
+      const result = (await call()) as { success: boolean; environment?: { id: string; label: string } };
+      expect(result.success).toBe(true);
+      expect(result.environment).toEqual({ id: ENV_ID, label: 'jono-macstudio' });
+    }
+  });
+
+  it('the label is resolved from the SERVER\'s record and never echoed from the model\'s input', async () => {
+    const tools = createSandboxTools({ resolveEnvironment: macResolver, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    // The model named a DIFFERENT id; the result names the row the server
+    // resolved, which is the whole point — a mis-addressed call must not have
+    // its own belief read back to it.
+    const result = (await exec(tools.bash, { environmentId: CONVERSATION_ID, command: 'ls' }, {})) as { environment: { id: string; label: string } };
+    expect(result.environment).toEqual({ id: ENV_ID, label: 'jono-macstudio' });
+    expect(result.environment.id).not.toBe(CONVERSATION_ID);
+  });
+
+  it('given a REFUSAL after the environment resolved, should also name the environment that refused — a wrong target reads as a wrong target, not a broken tool', async () => {
+    const tools = createSandboxTools({
+      resolveEnvironment: macResolver,
+      listEnvironments: noEnvironments,
+      runDeps: fakeRunDeps(),
+      resolveContext: okResolve,
+      gate: async () => ({ ok: false, reason: 'tier_ineligible', error: 'Running code requires a Pro plan or above.' }),
+    });
+    const result = (await exec(tools.bash, { environmentId: OTHER_ID, command: 'ls' }, {})) as { success: boolean; error: string; environment?: { label: string } };
+    expect(result.success).toBe(false);
+    expect(result.environment).toEqual({ id: ENV_ID, label: 'jono-macstudio' });
+  });
+
+  it('given a RUNNER refusal, should name the environment too', async () => {
+    const runDeps = fakeRunDeps();
+    runDeps.acquireSandbox = async () => ({ ok: false, reason: 'local_not_connected' });
+    const tools = createSandboxTools({ resolveEnvironment: macResolver, listEnvironments: noEnvironments, runDeps, resolveContext: okResolve, gate: okGate });
+    const result = (await exec(tools.bash, { environmentId: OTHER_ID, command: 'ls' }, {})) as { success: boolean; environment?: { label: string } };
+    expect(result.success).toBe(false);
+    expect(result.environment).toEqual({ id: ENV_ID, label: 'jono-macstudio' });
+  });
+
+  it('given a refusal BEFORE any environment resolved, should name none — there is nothing to name, and naming one would be inventing it', async () => {
+    const tools = createSandboxTools({
+      resolveEnvironment: async () => ({ ok: false, error: ENV_UNREACHABLE_MESSAGE }),
+      listEnvironments: noEnvironments,
+      runDeps: fakeRunDeps(),
+      resolveContext: okResolve,
+      gate: okGate,
+    });
+    const result = (await exec(tools.bash, { environmentId: OTHER_ID, command: 'ls' }, {})) as Record<string, unknown>;
+    expect(result).toEqual({ success: false, error: ENV_UNREACHABLE_MESSAGE });
+    expect(result).not.toHaveProperty('environment');
+  });
+
+  it("the conversation's OWN sandbox is named too — there is no unnamed place to run", async () => {
+    const tools = createSandboxTools({ resolveEnvironment: ownSandbox, listEnvironments: noEnvironments, runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const result = (await exec(tools.bash, { environmentId: CONVERSATION_ID, command: 'ls' }, {})) as { environment: { id: string; label: string } };
+    expect(result.environment).toEqual({ id: CONVERSATION_ID, label: "This conversation's own sandbox" });
+  });
+
+  it('surfaces the SAME environment id the grant audit keys on — it reports what is already recorded, it records nothing new', async () => {
+    const audits: Array<{ envId?: string }> = [];
+    const runDeps = fakeRunDeps();
+    runDeps.audit = async (input) => {
+      audits.push(input as { envId?: string });
+    };
+    const tools = createSandboxTools({ resolveEnvironment: macResolver, listEnvironments: noEnvironments, runDeps, resolveContext: okResolve, gate: okGate });
+    const result = (await exec(tools.bash, { environmentId: OTHER_ID, command: 'ls' }, {})) as { environment: { id: string } };
+    // The id the result names IS the environment id — the same value
+    // `drive_env_grant_audit.envId` carries for this grant.
+    expect(result.environment.id).toBe(ENV_ID);
+    // And no extra audit write was introduced by naming it: the code-execution
+    // audit fires exactly once, as it did before.
+    expect(audits).toHaveLength(1);
   });
 });
