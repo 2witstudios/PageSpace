@@ -378,8 +378,27 @@ function buildSandboxInstructions(availableTools?: string[]): string {
     }
   }
 
+  // WHERE a call runs, and how to know. Gated on actually holding one of the
+  // four addressed tools, because the addressing field is theirs alone (the
+  // git/gh toolkit and the shell family are fixed to this conversation's own
+  // sandbox and take no environmentId).
+  //
+  // This bullet exists because of July's removed `target` (`cf576fbc1`): the
+  // model habitually invented a plausible value and every call was refused,
+  // and the post-mortem's finding was that the PROMPT and the tool
+  // descriptions actively encouraged it. The descriptions were fixed with the
+  // field; this is the other half. It says the one thing that makes the
+  // mandatory field succeed on the first call rather than fail on it — where
+  // an id comes from — and the one thing that makes a wrong one recoverable:
+  // read back the environment the result names.
+  const addressedToolNames = namesPresent(['bash', 'writeFile', 'readFile', 'editFile']);
+  const addressingBullet = addressedToolNames.length
+    ? `• ${addressedToolNames.join('/')} each take a REQUIRED environmentId saying where to run. Call list_environments first and copy an id from its output exactly — never construct, guess or shorten one, and never reuse an id from an earlier conversation; an id that did not come from that list does not exist and the call is refused. This conversation's own sandbox is in that list like any other environment; there is no default. Every result names the environment it actually ran in — read it back, and if it is not the one you meant, say so rather than continuing.`
+    : null;
+
   const bullets: (string | null)[] = [
     openingBullet,
+    addressingBullet,
     // Paths: state the universal rule, then only the family clauses (and the
     // cross-family warning, which only makes sense with two families present)
     // for tool families the agent actually holds.
