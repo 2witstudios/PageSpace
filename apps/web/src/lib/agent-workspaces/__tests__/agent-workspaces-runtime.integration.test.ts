@@ -623,6 +623,57 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
     expect(result.session.ownerId).toBe(owner.id);
     expect(result.session.driveId).toBeNull();
     expect((await nodeFor(conversationId))?.rootId).toBe(result.session.id);
+    // BORN NAMED. This is the DEFAULT minting path — a plain `spawn_session`
+    // and the first sandbox tool call in a global chat both reach it — and it
+    // used to write `name = null`, which the sidebar renders as the bare
+    // fallback "Session" with nothing able to change it.
+    expect(result.session.name).toBe('Global Assistant');
+  });
+
+  it('given a caller-supplied label, names the minted workspace after it', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const conversationId = createId();
+    await db.insert(conversations).values({
+      id: conversationId,
+      userId: owner.id,
+      type: 'global',
+      contextId: null,
+      isActive: true,
+    });
+
+    const result = await ensureGlobalSandboxSession(conversationId, owner.id, 'Release Bot');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.session.name).toBe('Release Bot');
+  });
+
+  it('given an owner who already has a same-named workspace, scans past it rather than colliding', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    await db
+      .insert(agentWorkspaces)
+      .values({ id: createId(), driveId: null, ownerId: owner.id, name: 'Global Assistant' });
+
+    const conversationId = createId();
+    await db.insert(conversations).values({
+      id: conversationId,
+      userId: owner.id,
+      type: 'global',
+      contextId: null,
+      isActive: true,
+    });
+
+    const result = await ensureGlobalSandboxSession(conversationId, owner.id);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Cosmetic, not structural — names carry no uniqueness constraint — but a
+    // sidebar of identical rows is unreadable.
+    expect(result.session.name).toBe('Global Assistant 2');
   });
 
   it('given a conversation that already has a home, resolves to THAT workspace rather than failing', async () => {

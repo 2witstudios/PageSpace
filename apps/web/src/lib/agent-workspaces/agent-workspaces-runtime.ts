@@ -901,11 +901,24 @@ async function ensureConversationSession(
   // Same derivation as the HTTP spawn route, through the same shared helper, so
   // there is one rule rather than three. A caller that knows the agent passes
   // its title; otherwise the drive tells us which generic label fits.
-  const existingNames = (await listSessions({ ownerId: userId })).map((session) => session.name);
-  const name = nextUniqueSessionName(
-    baseLabel?.trim() || (driveId === null ? 'Global Assistant' : 'Agent'),
-    existingNames,
-  );
+  //
+  // The uniqueness read is FAIL-SAFE. This path provisions the sandbox behind a
+  // user's first tool call; a cosmetic suffix must never be the reason that
+  // fails. A read fault costs at most a duplicate label — names carry no
+  // uniqueness constraint anywhere — where refusing would cost the whole
+  // session. (Same "degrade, don't refuse" rule the spawn tool's tool-surface
+  // diagnostic follows.)
+  const fallbackLabel = baseLabel?.trim() || (driveId === null ? 'Global Assistant' : 'Agent');
+  const existingNames = await listSessions({ ownerId: userId })
+    .then((sessions) => sessions.map((session) => session.name))
+    .catch((error) => {
+      loggers.api.warn('ensureConversationSession: could not read existing session names for the label', {
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [] as string[];
+    });
+  const name = nextUniqueSessionName(fallbackLabel, existingNames);
   const spawned = await spawnSession({ userId, driveId, name });
   if (!spawned.ok) {
     // `session_limit_reached` is a distinct, actionable denial ("end an
