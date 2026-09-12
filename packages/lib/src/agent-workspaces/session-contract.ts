@@ -125,14 +125,20 @@ export function nextUniqueSessionName(base: string, existingNames: readonly stri
   // made BEFORE the candidate is tested, not taken away after.
   const bounded = base.slice(0, MAX_SESSION_NAME_LENGTH);
   if (!taken.has(bounded)) return bounded;
-  for (let index = 2; ; index += 1) {
+  // Each candidate is built by CUTTING the base to leave room for its own
+  // suffix, so the result is bounded by construction and the suffix always
+  // survives.
+  const withSuffix = (index: number): string => {
     const suffix = ` ${index}`;
-    const candidate = bounded.slice(0, MAX_SESSION_NAME_LENGTH - suffix.length) + suffix;
-    // A pathological cap (shorter than the suffix itself) would make every
-    // candidate identical; there is no such cap, and the slice above keeps the
-    // result bounded regardless.
-    if (!taken.has(candidate)) return candidate;
+    return bounded.slice(0, MAX_SESSION_NAME_LENGTH - suffix.length) + suffix;
+  };
+  let index = 2;
+  let candidate = withSuffix(index);
+  while (taken.has(candidate)) {
+    index += 1;
+    candidate = withSuffix(index);
   }
+  return candidate;
 }
 
 /**
