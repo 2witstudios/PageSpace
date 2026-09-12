@@ -16,8 +16,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   quick prompts underneath that put the same thing straight into the composer without sending it.
   Nothing is invented: the line only ever says what it can back up, and on a quiet day it just says
   you're caught up. Once you start a conversation the line tucks into a small strip under the
-  header instead of taking up the page, and you can still expand it. Collapse the left sidebar and
-  a small drive switcher stays next to the title, so you always know what the assistant can see.
+  header instead of taking up the page, and you can still expand it. On desktop, collapse the left
+  sidebar and a small drive switcher stays next to the title, so you always know what the assistant
+  can see; on a phone the sidebar sheet's own switcher covers that, so the header row stays one row.
 - **Channels, Files, Tasks and Calendar are one page each, with a drive focus** — each of those
   views used to exist twice: a dashboard version and a drive version, with different titles and a
   sidebar that only ever linked to whichever one you were in. Now "All drives" is a focus like any

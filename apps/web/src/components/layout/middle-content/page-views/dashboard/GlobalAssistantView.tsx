@@ -912,8 +912,8 @@ const GlobalAssistantView: React.FC = () => {
     <AskUserAnswerProvider value={askUserAnswering}>
     <div data-testid="global-assistant-view" className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-[var(--separator)]">
-        <div className="flex items-center space-x-2">
+      <div className="flex items-center justify-between gap-2 p-4 border-[var(--separator)]">
+        <div className="flex min-w-0 items-center space-x-2">
           <AISelector
             selectedAgent={selectedAgent}
             onSelectAgent={handleSelectAgentForVoice}
@@ -922,15 +922,21 @@ const GlobalAssistantView: React.FC = () => {
             // longer reports "streaming" at all, because this client does not read a body.
             disabled={effectiveIsStreaming}
           />
-          {/* When the left sidebar (and its drive switcher) is hidden, the
-              scope the assistant can see would otherwise be invisible. */}
+          {/* When the left sidebar (and its drive switcher) is collapsed, the
+              scope the assistant can see would otherwise be invisible.
+
+              Desktop only (lg+), the same gate as DashboardCrumb's drive
+              crumb: below lg the sidebar is a sheet whatever `leftSidebarOpen`
+              says, its DriveSwitcher opens this same picker, and a phone
+              header row has no room for a second wordy control — it pushed
+              the New button off the right edge. */}
           {!leftSidebarOpen && isGlobalMode && (
-            <div className="rounded-lg bg-primary-soft">
+            <div className="hidden rounded-lg bg-primary-soft lg:block">
               <DriveSwitcher />
             </div>
           )}
         </div>
-        <div className="flex items-center space-x-2">
+        <div className="flex shrink-0 items-center space-x-2">
           <PlanChip conversationId={currentConversationId} messages={plainMessages} />
           <TasksDropdown messages={plainMessages} driveId={selectedAgent?.driveId || locationContext?.currentDrive?.id} />
           <Button
