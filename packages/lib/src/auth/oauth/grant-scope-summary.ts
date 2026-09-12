@@ -28,6 +28,11 @@ export function describeGrantScopes(scopes: readonly string[], resolvers: GrantS
   if (parsed.scopes.newKeyName !== null) {
     descriptions.push(describeScopeForConsent({ kind: 'name', name: parsed.scopes.newKeyName }, {}));
   }
+  // `profile` reads first among the capability lines: it is the only one that
+  // says who the user is rather than what the app may touch.
+  if (parsed.scopes.profile) {
+    descriptions.push(describeScopeForConsent({ kind: 'profile' }, {}));
+  }
   if (parsed.scopes.account) {
     descriptions.push(describeScopeForConsent({ kind: 'account' }, {}));
   }

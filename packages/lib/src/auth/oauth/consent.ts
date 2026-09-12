@@ -21,6 +21,12 @@ export function describeScopeForConsent(scope: ParsedScope, ctx: ConsentNarratio
   switch (scope.kind) {
     case 'account':
       return 'Full access to your PageSpace account — everything you can see and do, in every drive, now and in the future.';
+    case 'profile':
+      // Identity only (ADR 0004 Decision 4). The second sentence is
+      // contractual, not decoration: `profile` is the one scope approved
+      // without the step-up ceremony, so the screen must state plainly that
+      // nothing content-bearing is being handed over.
+      return 'See your name, email, and avatar. No access to any drive or content.';
     case 'offline_access':
       return 'Stay connected until you revoke access (issues a long-lived refresh credential).';
     case 'manage_keys':
