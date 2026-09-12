@@ -112,6 +112,31 @@ Three details are load-bearing and each is mutation-checked:
   scheme), which means a registered loopback URI carrying a query, fragment or userinfo grants
   nothing rather than quietly acting as a clean one.
 
+**Scheme classification is a deny-list, deliberately.** `https:` and `http:` are allow-listed — each
+has one accepting condition and everything else is refused. Private-use schemes cannot be: RFC 8252
+§7.1 says the scheme is one the app itself chose, so an allow-list would have to enumerate every app
+that will ever exist. A scheme that is neither http(s) nor on the deny-list therefore classifies as
+private-use and is registrable. The deny-list covers three groups: script- and content-bearing
+(`javascript:`, `vbscript:`, `data:`, `blob:`, `about:`, `file:`), URL-wrapping (`filesystem:`,
+`view-source:`, `jar:` — each carries a second URL inside it, so accepting one hands the
+authorization code to whatever that inner URL addresses), and platform-handled (`chrome:`,
+`chrome-extension:`, `resource:`, `content:`, `intent:`, `android-app:`, `mailto:`, `tel:`, `sms:`).
+
+**The residual exposure is scheme squatting, and it is accepted rather than solved.** Nothing stops
+a registration claiming `slack://oauth`; on a shared device the OS hands the code to whichever app
+claimed the scheme. Requiring a reverse-DNS scheme (`scheme.includes('.')`, per RFC 8252 §7.1's
+recommendation) would blunt it, and is rejected for now only because it would refuse the shape this
+epic's reference app uses (`swipesend://callback`, US5). What stands in front of it today: exact-match
+registration, per-client scope caps (Decision 7), and the "Unverified app" badge (Decision 8). Phase 1
+should decide whether registration nudges or requires reverse-DNS; the decision belongs with the
+console UI that would have to explain it.
+
+**`https://` on a numeric loopback host is ordinary https, not loopback.** `loopback` in this rule
+means CLEARTEXT loopback. A third party may register `https://127.0.0.1/callback` and gets exact
+matching only — the port wildcard, which is the whole thing the first-party gate protects, is not
+granted. Raised as a possible bypass in review and pinned by test in both directions rather than left
+unasserted.
+
 ADR 0002's statement that the desktop app's `pagespace://auth-exchange` handoff
 (`packages/lib/src/auth/exchange-codes.ts`) stays as-is is unchanged; a future
 `pagespace-desktop` first-party client may now register that private-use URI under this rule
@@ -136,6 +161,7 @@ Grammar rules, extending ADR 0002 Decision 1 (each is a test in
 | 14 | `profile` is mutually exclusive with `account` | `profile_account_conflict` |
 | 14a | `profile` with `manage_keys` or `all_drives` | the existing `manage_keys_conflict` / `all_drives_conflict` |
 | 14b | `profile` with `update_key:*` / `activate_key:*` | the existing `update_key_conflict` / `activate_key_not_alone` |
+| 14c | `name:*` alongside `profile` — rule 13's mint-shape exclusion gains `profile`, because a profile-bearing set is no longer mint-shaped | `name_without_mint_grant` |
 | 15 | `profile` combines with any `drive:*` set and with `offline_access` | — |
 | 10′ | rule 10 (`offline_access` alone → reject) is **extended**: `profile` is a principal shape, so `profile offline_access` is valid. `offline_access` alone is still rejected | `offline_access_alone` |
 | 9′ | canonical order (rule 9) keeps the top-level flags alphabetical — `account`, `all_drives`, `manage_keys`, `offline_access`, `profile` — so `profile` emits after `offline_access` and before `drive:*`. `parse ∘ format` is still the identity | — |
@@ -165,6 +191,14 @@ structurally cannot deliver the identity half of a `profile drive:*` grant. With
 `profile drive:abc123` request would fall into the `applyKeyGrant` branch
 (`oauth-repository.ts:250`) and silently mint a long-lived `mcp_` key where the user consented
 to a sign-in.
+
+That exclusion has a second consequence, caught in review: `validateAuthorizeRequest`'s "a
+mint-shaped grant requires a `name:`" guard fires only for `isPureDriveGrant || isAllDrivesGrant`, so
+`profile drive:abc123 name:ci` would have sailed past it and then minted nothing — a consent screen
+narrating "create a key named ci" over an exchange that produces an ordinary OAuth pair. It fails in
+the safe direction (less is minted than promised) but it is still the consent screen lying, which is
+the one thing US10 forbids. Rule 13 therefore excludes `profile` outright: the promise is rejected,
+not the grant, and the same set without `name:` still parses.
 
 Consent narration (ADR 0002 Decision 5 point 3, one more row): *"See your name, email, and
 avatar. No access to any drive or content."* The second sentence is contractual, not decoration
@@ -210,6 +244,37 @@ The decision is expressed as a per-field map closed by
 `ScopeSet` field fails to compile here** until someone states whether it can be approved without
 a second factor. The fail-closed default for that statement is `true`. Verified by adding a
 probe field to `ScopeSet` and observing `step-up-boundary.ts:64: error TS1360`.
+
+### Phase 1 obligations this decision creates
+
+Recorded here because Phase 0 ships the contract and Phase 1 ships the enforcement; the gap between
+them is designed, not accidental, and it must not become the thing everyone assumed someone else did.
+
+1. **`profile` is advertised before it is enforced.** This phase puts `profile` into
+   `SCOPES_SUPPORTED` (the live RFC 8414 document) and into the accepting path of `parseScopeList` →
+   `validateAuthorizeRequest` → exchange, while "short-circuits the same way `manage_keys` does" is
+   implemented nowhere. A `profile`-only principal resolves to `allowedDriveIds: []`, and
+   `checkMCPDriveScope` (`apps/web/src/lib/auth/index.ts:785`) reads an empty list as "unscoped", i.e.
+   **allowed for any drive** — the exact shape `validateOAuthAccessToken:349-360` refuses to issue for
+   `all_drives`, and the reason `manage_keys` got the `manageKeysNoDriveAccess` sentinel
+   (`index.ts:750`). 93 route files call `checkMCPDriveScope`. **Phase 1 acceptance line:**
+   `checkMCPDriveScope` and `getAllowedDriveIds` deny a profile-only OAuth principal, via an
+   `isProfileOnly` sentinel beside `manageKeysNoDriveAccess` — mutation-checked. Until that lands, the
+   consent copy this phase adds ("No access to any drive or content") is a promise about Phase 1, not
+   a description of today.
+2. **`requiresStepUp` is not yet the single place step-up is decided.** Production still decides it
+   via `isCredentialEscalatingGrant` (`device_authorization/verify/route.ts:82`,
+   `device_authorization/decision/route.ts:98`) and via the unconditional step-up on `POST
+   /api/oauth/authorize`. Phase 1 replaces both with this function; until then there are two
+   expressions of the rule, which is the drift this decision exists to prevent.
+3. **`isHttpsUrl` is not an SSRF guard.** It checks protocol and userinfo only, so
+   `https://169.254.169.254/` and `https://localhost/logo.png` both pass. That is correct today —
+   `logoUrl` is rendered by the browser and never fetched server-side. The moment anything proxies,
+   caches or screenshots that logo it becomes an SSRF, and
+   `packages/lib/src/security/url-validator.ts` already has `isBlockedIP`/`validateExternalURL`/
+   `safeFetch` for it.
+4. **Registration rejections are an abuse signal.** Phase 1's route should emit a security-audit
+   event on rejection; repeated `forbidden_scope` from one owner is worth seeing.
 
 ## Decision 7 — Per-client scope caps
 
@@ -352,6 +417,11 @@ always PKCE, never `firstParty`, scope-capped identically to everyone else.
 | G15 | Untrusted input of any shape into `validateClientRegistration` | Typed errors, never a throw |
 | G16 | A new `ScopeSet` field added without a step-up decision | Fails to compile in `step-up-boundary.ts` |
 | G17 | Unknown, disabled, or foreign-redirect client | Identical `invalid_client`; no oracle |
+| G18 | `name:` on a profile-bearing grant | Reject, `name_without_mint_grant` — the consent screen never promises a key nothing mints |
+| G19 | A URL-wrapping or platform-handled scheme (`filesystem:`, `view-source:`, `jar:`, `chrome:`, `content:`, `intent:`, `mailto:`, …) | Never a private-use scheme, registered or not |
+| G20 | A client name carrying control characters, bidi overrides, zero-width characters, or only whitespace | Reject — it renders beside the "Unverified app" badge |
+| G21 | Two registered redirect URIs that normalize to the same `href` (default port, host case) | Reject as duplicates — the stored list matches what authorize honours |
+| G22 | A non-string `allowedScopes` / `redirectUris` entry, including one with a poisoned `toString`/`valueOf` | Typed error with a FIXED placeholder; never coerced, never thrown |
 
 ## Pure-function signatures (Phase 0 implements these; Phases 1–4 consume them)
 

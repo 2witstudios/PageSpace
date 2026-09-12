@@ -79,10 +79,24 @@ export function getRegisteredClient(clientId: string): RegisteredClient | null {
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', '[::1]']);
 
 /**
- * Schemes that must never be treated as a private-use redirect no matter what
- * is registered. `http:`/`https:` have their own rules below; the rest are
- * script- or content-bearing schemes where "redirect with the code in the
- * URL" means something very different from opening an app.
+ * Schemes that must never be treated as a private-use redirect, no matter what
+ * is registered. `http:`/`https:` have their own rules below; the rest fall
+ * into three groups, each for its own reason:
+ *
+ *  - **script- and content-bearing** (`javascript:`, `vbscript:`, `data:`,
+ *    `blob:`, `about:`, `file:`) — "redirect with the code in the URL" means
+ *    something very different from opening an app.
+ *  - **URL-wrapping** (`filesystem:`, `view-source:`, `jar:`) — these carry a
+ *    second URL inside them, so accepting one hands the authorization code to
+ *    whatever that inner URL addresses.
+ *  - **platform-handled** (`chrome:`, `chrome-extension:`, `resource:`,
+ *    `content:`, `intent:`, `android-app:`, `mailto:`, `tel:`, `sms:`) — the
+ *    OS or browser routes these, so they belong to no registered app.
+ *
+ * This is a DENY-list, and `classifyRedirect` says so: a scheme nobody thought
+ * of is treated as private-use and is registrable. See that function's note
+ * for why, and ADR 0004 Decision 3 for the scheme-squatting exposure that
+ * follows from it.
  */
 const NEVER_PRIVATE_USE_SCHEMES = new Set([
   'http:',
@@ -95,30 +109,64 @@ const NEVER_PRIVATE_USE_SCHEMES = new Set([
   'about:',
   'javascript:',
   'vbscript:',
+  'filesystem:',
+  'view-source:',
+  'jar:',
+  'chrome:',
+  'chrome-extension:',
+  'resource:',
+  'content:',
+  'intent:',
+  'android-app:',
+  'mailto:',
+  'tel:',
+  'sms:',
 ]);
 
 type RedirectKind = 'https' | 'loopback' | 'private_use' | 'reject';
 
 /**
- * Which rule, if any, this URI plays by. Deliberately total and
- * allow-listed: anything that is not recognizably one of the three shapes is
- * `reject`, so a scheme nobody thought about is refused rather than
- * defaulting into the most permissive branch.
+ * Which rule this URI plays by. Total — every input gets one of the four
+ * answers.
+ *
+ * `https:` and `http:` are allow-listed: each has one explicit accepting
+ * condition and everything else about them is `reject`. **Private-use schemes
+ * are DENY-listed**: a scheme that is neither http(s) nor on
+ * `NEVER_PRIVATE_USE_SCHEMES` classifies as `private_use`, so an unfamiliar
+ * scheme is registrable rather than refused.
+ *
+ * That asymmetry is deliberate and it is the one place this module does not
+ * fail closed. RFC 8252 §7.1 says a native app's redirect scheme is one the
+ * app itself chose, so the set is open by construction — an allow-list would
+ * have to be a list of every app that will ever exist. The exposure it leaves
+ * is scheme squatting: nothing stops a registration claiming `slack://oauth`,
+ * and on a shared device the OS hands the code to whichever app claimed the
+ * scheme. Exact-match registration, per-client scope caps, and the
+ * "Unverified app" badge are what stand in front of that today; ADR 0004
+ * Decision 3 records it as accepted rather than solved.
  */
 function classifyRedirect(url: URL): RedirectKind {
   if (url.protocol === 'https:') {
     // RFC 8252 §8.3: `localhost` can be remapped; only the numeric literals
     // are trustworthy, and those live on the loopback branch.
+    //
+    // `https://127.0.0.1/callback` is deliberately ordinary https, NOT
+    // loopback: `loopback` here means CLEARTEXT loopback, and the first-party
+    // gate below exists to protect the PORT WILDCARD, which exact-match https
+    // never grants. A third party may register an https numeric-IP URI and
+    // gets exact matching only — pinned by test and recorded in ADR 0004
+    // Decision 3.
     return url.hostname === 'localhost' ? 'reject' : 'https';
   }
   if (url.protocol === 'http:') {
     return LOOPBACK_HOSTNAMES.has(url.hostname) ? 'loopback' : 'reject';
   }
   if (NEVER_PRIVATE_USE_SCHEMES.has(url.protocol)) return 'reject';
-  // Anything left is a private-use scheme. No further shape check: the URL
-  // parser has already enforced RFC 3986's scheme production (leading ALPHA,
-  // then ALPHA/DIGIT/`+`/`-`/`.`) — a string that failed it never parsed, and
-  // a redundant re-check here would be a branch no input can reach.
+  // Anything left is taken as a private-use scheme (see the deny-list note
+  // above). No further shape check: the URL parser has already enforced RFC
+  // 3986's scheme production (leading ALPHA, then ALPHA/DIGIT/`+`/`-`/`.`) — a
+  // string that failed it never parsed, and a redundant re-check here would be
+  // a branch no input can reach.
   return 'private_use';
 }
 

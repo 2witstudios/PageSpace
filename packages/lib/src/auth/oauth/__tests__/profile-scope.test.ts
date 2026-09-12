@@ -2,13 +2,19 @@
  * `profile` — the identity-only scope (ADR 0004 Decision 4; epic
  * `yv08hib74nrtmksdzxmf5nkw` architecture decision 4).
  *
- * `profile` grants exactly one thing: the identity fields `/api/auth/me`
- * returns (name, email, avatar). It carries ZERO content access, so it is the
- * only scope in the grammar that can be approved without the consent step-up
- * ceremony (`requiresStepUp`, `./step-up-boundary`). Every assertion below is
- * a fail-closed rule: `profile` never widens, never satisfies a drive or
- * account request, and never combines with a scope whose principal shape
- * contradicts "identity, nothing else".
+ * `profile` is defined to grant exactly one thing: the identity fields
+ * `/api/auth/me` returns (name, email, avatar). Because it carries no content
+ * access, it is the only scope in the grammar that can be approved without the
+ * consent step-up ceremony (`requiresStepUp`, `./step-up-boundary`).
+ *
+ * Scope of these tests: the GRAMMAR — that `profile` never widens, never
+ * satisfies a drive or account request, and never combines with a scope whose
+ * principal shape contradicts "identity, nothing else". The RESOLUTION half —
+ * that a profile-only principal is denied by `checkMCPDriveScope` /
+ * `getAllowedDriveIds` the way a `manage_keys` principal already is — is
+ * Phase 1's `isProfileOnly` sentinel and is deliberately not asserted here.
+ * See ADR 0004 Decision 4, "Phase 1 obligations". Nothing below should be read
+ * as evidence that content access is enforced today; it is not.
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -90,6 +96,26 @@ describe('parseScopeList — profile', () => {
       ok: false,
       error: { code: 'all_drives_conflict' },
     });
+  });
+
+  it('rejects `name:` on a profile-bearing drive grant — the consent screen would promise a key that nothing mints (rule 13)', () => {
+    // Reported by Codex on PR #2612. `isPureDriveGrant` excludes profile-bearing
+    // sets, so `validateAuthorizeRequest`'s mint-name guard (which fires only for
+    // `isPureDriveGrant || isAllDrivesGrant`) never sees this shape, and exchange
+    // falls through to `not_a_key_grant`. The user would approve "create a key
+    // named ci" and receive an OAuth pair instead. `profile` therefore joins
+    // `update_key`/`activate_key` in rule 13's exclusion.
+    expect(parseScopeList('profile drive:abc123 name:ci')).toEqual({
+      ok: false,
+      error: { code: 'name_without_mint_grant' },
+    });
+    expect(parseScopeList('profile drive:abc123:member offline_access name:ci')).toEqual({
+      ok: false,
+      error: { code: 'name_without_mint_grant' },
+    });
+    // …and the same set without `name:` still parses, so the rule rejects the
+    // promise, not the grant.
+    expect(parseScopeList('profile drive:abc123').ok).toBe(true);
   });
 
   it('rejects profile alongside activate_key (activate_key must be the only scope)', () => {

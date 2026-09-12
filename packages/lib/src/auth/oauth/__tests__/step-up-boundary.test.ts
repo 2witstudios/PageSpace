@@ -87,6 +87,65 @@ describe('requiresStepUp — each field is load-bearing on its own', () => {
   });
 });
 
+describe('requiresStepUp — the body is derived from the guarded table, not hand-enumerated', () => {
+  // Raised on PR #2612: the `satisfies` clause closes the TABLE, but a
+  // hand-written body that calls each entry can silently omit one — the new
+  // scope compiles, gets a table entry, and never steps up. That is the
+  // fail-open direction. This sweeps every combination of the nine fields and
+  // compares against a reference predicate written from ADR 0004 Decision 6
+  // rather than from the implementation, so a dropped term shows up as a
+  // concrete failing combination rather than as nothing at all.
+  const FIELDS = [
+    'drives', 'allDrives', 'account', 'manageKeys', 'updateKeyId',
+    'activateKeyId', 'profile', 'offlineAccess', 'newKeyName',
+  ] as const;
+
+  function setFor(on: ReadonlySet<string>): ScopeSet {
+    return emptySet({
+      drives: on.has('drives')
+        ? new Map([['abc123', { kind: 'drive' as const, driveId: 'abc123', role: { kind: 'inherit' as const } }]])
+        : new Map(),
+      allDrives: on.has('allDrives'),
+      account: on.has('account'),
+      manageKeys: on.has('manageKeys'),
+      updateKeyId: on.has('updateKeyId') ? 'tok123' : null,
+      activateKeyId: on.has('activateKeyId') ? 'tok123' : null,
+      profile: on.has('profile'),
+      offlineAccess: on.has('offlineAccess'),
+      newKeyName: on.has('newKeyName') ? 'ci' : null,
+    });
+  }
+
+  /** ADR 0004 Decision 6, restated independently of the implementation. */
+  function referenceRequiresStepUp(on: ReadonlySet<string>): boolean {
+    return ['drives', 'allDrives', 'account', 'manageKeys', 'updateKeyId', 'activateKeyId'].some((field) =>
+      on.has(field),
+    );
+  }
+
+  it('agrees with the ADR for all 512 field combinations', () => {
+    const disagreements: string[] = [];
+    for (let mask = 0; mask < 1 << FIELDS.length; mask += 1) {
+      const on = new Set(FIELDS.filter((_field, index) => (mask & (1 << index)) !== 0));
+      const actual = requiresStepUp(setFor(on));
+      const expected = referenceRequiresStepUp(on);
+      if (actual !== expected) {
+        disagreements.push(`{${[...on].join(', ') || '<empty>'}} → ${actual}, expected ${expected}`);
+      }
+    }
+    expect(disagreements).toEqual([]);
+  });
+
+  it('the sweep is real: every field is exercised in both states', () => {
+    // Guards the guard — a typo'd field name above would silently shrink the
+    // sweep to a subset and the previous test would still pass.
+    expect(FIELDS).toHaveLength(Object.keys(setFor(new Set())).length);
+    for (const field of FIELDS) {
+      expect(Object.keys(setFor(new Set([field])))).toContain(field);
+    }
+  });
+});
+
 describe('requiresStepUp — total', () => {
   it('never throws on any parseable scope string', () => {
     for (const raw of ['profile', 'account', 'manage_keys', 'all_drives name:ci', 'drive:abc123 name:ci', 'activate_key:tok123']) {

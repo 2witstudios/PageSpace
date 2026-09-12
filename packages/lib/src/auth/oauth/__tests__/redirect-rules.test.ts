@@ -126,6 +126,37 @@ describe('validateRedirectUri — private-use schemes (RFC 8252 §7.1)', () => {
     }
   });
 
+  it('never treats a browser-internal or URL-wrapping scheme as private-use, even if registered', () => {
+    // Reported on PR #2612: the classifier is a DENY-list, so anything the
+    // parser accepts and the list omits fell through to `private_use` and was
+    // registrable. These are the ones a real browser or OS will act on —
+    // `filesystem:`/`jar:`/`view-source:` wrap another URL, and the rest are
+    // platform-handled schemes that do not belong to any registered app.
+    for (const uri of [
+      'filesystem:https://evil.example.com/temporary/x',
+      'view-source:https://evil.example.com',
+      'jar:https://evil.example.com!/x',
+      'chrome://settings',
+      'chrome-extension://abcdef/x',
+      'content://com.evil/x',
+      'resource://evil/x',
+      'intent://evil',
+      'android-app://com.evil',
+      'mailto:evil@example.com',
+      'tel:+15550100',
+      'sms:+15550100',
+    ]) {
+      const dangerous = client({ redirectUris: [uri] });
+      expect(validateRedirectUri(dangerous, uri)).toBe(false);
+    }
+  });
+
+  it('rejects a scheme that wraps another URL even when the wrapped URL is otherwise registrable', () => {
+    const wrapped = client({ redirectUris: ['https://app.example.com/auth/pagespace/callback'] });
+    expect(validateRedirectUri(wrapped, 'view-source:https://app.example.com/auth/pagespace/callback')).toBe(false);
+    expect(validateRedirectUri(wrapped, 'filesystem:https://app.example.com/auth/pagespace/callback')).toBe(false);
+  });
+
   it('rejects a private-use redirect carrying query or fragment', () => {
     expect(validateRedirectUri(native, 'swipesend://callback?code=x')).toBe(false);
     expect(validateRedirectUri(native, 'swipesend://callback#x')).toBe(false);
@@ -175,6 +206,23 @@ describe('validateRedirectUri — loopback is first-party only', () => {
   it('non-loopback http is rejected for the first party too', () => {
     const firstPartyWeb = client({ firstParty: true, redirectUris: ['http://app.example.com/callback'] });
     expect(validateRedirectUri(firstPartyWeb, 'http://app.example.com/callback')).toBe(false);
+  });
+
+  it('https on a numeric loopback host is ordinary exact-match https for a third party — accepted, but with NO port wildcard', () => {
+    // Raised by Codex on PR #2612 as a first-party-gate bypass. It is not: the
+    // gate exists to protect the PORT WILDCARD, and that is what the second and
+    // third assertions pin. `loopback` in this module means CLEARTEXT loopback;
+    // an https numeric-IP registration is an exact-match https URI like any
+    // other, and it is https, so it carries none of the cleartext risk the
+    // first-party rule is about. Previously unasserted in either direction —
+    // this test locks the behaviour down. See ADR 0004 Decision 3.
+    const thirdPartyHttpsLoopback = client({ redirectUris: ['https://127.0.0.1/callback'] });
+    expect(validateRedirectUri(thirdPartyHttpsLoopback, 'https://127.0.0.1/callback')).toBe(true);
+    expect(validateRedirectUri(thirdPartyHttpsLoopback, 'https://127.0.0.1:8443/callback')).toBe(false);
+    expect(validateRedirectUri(thirdPartyHttpsLoopback, 'http://127.0.0.1/callback')).toBe(false);
+    const thirdPartyHttpsV6 = client({ redirectUris: ['https://[::1]/callback'] });
+    expect(validateRedirectUri(thirdPartyHttpsV6, 'https://[::1]/callback')).toBe(true);
+    expect(validateRedirectUri(thirdPartyHttpsV6, 'https://[::1]:8443/callback')).toBe(false);
   });
 
   it('a first party may still register https and private-use URIs, matched exactly', () => {

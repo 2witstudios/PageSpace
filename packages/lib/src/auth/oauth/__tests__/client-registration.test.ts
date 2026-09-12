@@ -10,6 +10,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { validateClientRegistration, type ClientRegistrationError } from '../client-registration';
+import { validateRedirectUri } from '../clients';
 
 const valid = {
   name: 'SwipeSend',
@@ -65,6 +66,13 @@ describe('validateClientRegistration — never throws on untrusted input', () =>
     ['an array', []],
     ['an empty object', {}],
     ['a nested junk object', { name: { toString: 'no' }, redirectUris: { length: 1 } }],
+    // A plain JSON body can shadow `toString` with a non-callable, which makes
+    // `String(value)` throw `TypeError: Cannot convert object to primitive
+    // value`. Reported by Codex on PR #2612: the validator must never coerce a
+    // caller-controlled value, or an untrusted registration body becomes a 500.
+    ['a scope entry with a poisoned toString', JSON.parse('{"name":"x","redirectUris":["https://a.example.com/cb"],"allowedScopes":[{"toString":"no"}]}')],
+    ['a scope entry with a poisoned valueOf', JSON.parse('{"name":"x","redirectUris":["https://a.example.com/cb"],"allowedScopes":[{"valueOf":"no","toString":"no"}]}')],
+    ['a redirect entry with a poisoned toString', JSON.parse('{"name":"x","redirectUris":[{"toString":"no"}]}')],
   ])('returns errors for %s instead of throwing', (_label, input) => {
     let result: ReturnType<typeof validateClientRegistration> | undefined;
     expect(() => {
@@ -72,6 +80,28 @@ describe('validateClientRegistration — never throws on untrusted input', () =>
     }).not.toThrow();
     expect(result?.ok).toBe(false);
     expect(result?.ok === false && result.errors.length).toBeGreaterThan(0);
+  });
+});
+
+describe('validateClientRegistration — non-string entries report a constant shape', () => {
+  it('never invokes caller-controlled coercion on a non-string scope entry', () => {
+    const poisoned = JSON.parse('{"name":"x","redirectUris":["https://a.example.com/cb"],"allowedScopes":[{"toString":"no"}]}');
+    const result = validateClientRegistration(poisoned);
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.errors).toEqual([
+      { code: 'unknown_scope', field: 'allowedScopes[0]', scope: '[non-string]' },
+    ]);
+  });
+
+  it('uses the same fixed placeholder for every non-string scope entry, so the error leaks nothing about the input', () => {
+    for (const entry of [7, null, true, [], {}] as unknown[]) {
+      const result = validateClientRegistration({ ...valid, allowedScopes: [entry] });
+      expect(result.ok === false && result.errors[0]).toEqual({
+        code: 'unknown_scope',
+        field: 'allowedScopes[0]',
+        scope: '[non-string]',
+      });
+    }
   });
 });
 
@@ -83,6 +113,27 @@ describe('validateClientRegistration — name', () => {
   it('rejects a name over 100 characters', () => {
     expect(codes({ ...valid, name: 'a'.repeat(101) })).toContain('invalid_name');
     expect(validateClientRegistration({ ...valid, name: 'a'.repeat(100) }).ok).toBe(true);
+  });
+
+  it('rejects a whitespace-only name — it renders as blank next to the "Unverified app" badge', () => {
+    for (const name of ['   ', '\t', '\n', ' \u00a0 ']) {
+      expect(codes({ ...valid, name })).toContain('invalid_name');
+    }
+  });
+
+  it('rejects control characters and bidi/zero-width overrides in a name (parity with mcp key names, scopes.ts NAME_CONTROL_CHAR_RE)', () => {
+    // The consent screen renders this string beside the trust badge, which is
+    // exactly where a spoofed name pays off: an RTL override can visually
+    // reorder the text around the badge it is meant to undercut.
+    for (const name of ['ev\u0000il', 'ev\u001bil', 'ev\u007fil', 'ev\u202eil', 'ev\u200bil', 'ev\ufeffil']) {
+      expect(codes({ ...valid, name })).toContain('invalid_name');
+    }
+  });
+
+  it('still accepts ordinary non-ASCII names — this is a control-character rule, not an ASCII rule', () => {
+    for (const name of ['Sw\u00efpeSend', '\u5f52\u6863', 'Caf\u00e9 App', 'App \u2014 One']) {
+      expect(validateClientRegistration({ ...valid, name }).ok).toBe(true);
+    }
   });
 
   it('rejects a missing or non-string name', () => {
@@ -183,6 +234,35 @@ describe('validateClientRegistration — redirect URIs', () => {
       'duplicate_redirect_uri',
     );
   });
+
+  it('invariant: every uri validateRedirectUri accepts is parseable, so registration can normalize it unguarded', () => {
+    // `validateClientRegistration` calls `new URL(uri).href` without a
+    // try/catch after `validateRedirectUri` returns true. That is only sound
+    // while this holds, so it is asserted rather than assumed.
+    for (const uri of [
+      'https://app.example.com/auth/pagespace/callback',
+      'https://app.example.com:8443/cb',
+      'swipesend://callback',
+      'com.example.app://oauth/callback',
+      'https://127.0.0.1/callback',
+    ]) {
+      expect(validateRedirectUri({ redirectUris: [uri], firstParty: false }, uri)).toBe(true);
+      expect(() => new URL(uri)).not.toThrow();
+    }
+  });
+
+  it('dedupes on the NORMALIZED uri, because that is what authorize matches on', () => {
+    // `validateRedirectUri` compares `candidate.href === pattern.href`, and the
+    // URL parser drops the default port and lowercases the host. A raw-string
+    // dedupe would store two entries the authorize endpoint treats as one.
+    for (const pair of [
+      ['https://app.example.com/cb', 'https://app.example.com:443/cb'],
+      ['https://app.example.com/cb', 'https://APP.example.com/cb'],
+      ['https://app.example.com/cb', 'HTTPS://app.example.com/cb'],
+    ]) {
+      expect(codes({ ...valid, redirectUris: pair })).toContain('duplicate_redirect_uri');
+    }
+  });
 });
 
 describe('validateClientRegistration — allowedScopes are shapes, and only three kinds', () => {
@@ -218,6 +298,13 @@ describe('validateClientRegistration — allowedScopes are shapes, and only thre
 
   it('rejects an empty allowedScopes array — declaring a cap of nothing is a mistake, not a grant of everything', () => {
     expect(codes({ ...valid, allowedScopes: [] })).toContain('invalid_allowed_scopes');
+  });
+
+  it('caps the list — there are only six legal shapes, so a longer array is a mistake or an abuse', () => {
+    const twenty = Array.from({ length: 20 }, (_unused, index) => (index === 0 ? 'profile' : `bogus${index}`));
+    expect(codes({ ...valid, allowedScopes: twenty })).not.toContain('invalid_allowed_scopes');
+    const twentyOne = Array.from({ length: 21 }, (_unused, index) => (index === 0 ? 'profile' : `bogus${index}`));
+    expect(codes({ ...valid, allowedScopes: twentyOne })).toContain('invalid_allowed_scopes');
   });
 
   it('rejects duplicates', () => {

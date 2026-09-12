@@ -10,7 +10,13 @@
  */
 
 const RESOURCE_ID_RE = /^[a-z0-9]{1,32}$/;
-const NAME_CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
+/**
+ * Control characters that must never reach a rendered name. Exported so
+ * `./client-registration` applies the identical rule to a CLIENT name, which
+ * renders on the consent screen beside the "Unverified app" badge — the one
+ * place a spoofed name pays off.
+ */
+export const NAME_CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
 
 export type ParsedScope =
   | { kind: 'account' }
@@ -83,7 +89,9 @@ export type ScopeSet = {
   // grant shape that doesn't mint a NEW `mcp_tokens` row (`account`/
   // `manage_keys`/`update_key`/`activate_key` — attaching a name there would
   // either be meaningless, since no row is minted, or spoof a "creating a
-  // key" consent line when no key is actually being created), enforced by
+  // key" consent line when no key is actually being created, or — for a
+  // `profile`-bearing set — promise a key that `isPureDriveGrant`'s exclusion
+  // guarantees is never minted), enforced by
   // this parser's `name_without_mint_grant` rule below. Deliberately NOT
   // enforced as *required* on a mint-shaped grant (pure `drive:*`/
   // `all_drives`) at this layer — this parser is reused by flows (e.g.
@@ -334,7 +342,15 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
   // The requirement is enforced instead at the one call site that actually mints from this shape:
   // `POST /api/oauth/authorize`'s consent decision (`hasNewKeyName` check, mirroring its
   // update_key/activate_key ownership gates) — see that route for the real enforcement.
-  if (newKeyName !== null && !((allDrives || drives.size > 0) && updateKeyId === null && activateKeyId === null)) {
+  // `profile` joins the exclusion (PR #2612 review): a profile-bearing set is
+  // no longer mint-shaped — `isPureDriveGrant` excludes it — so `name:` here
+  // would narrate "create a key named X" on a consent screen while exchange
+  // produces an ordinary OAuth pair and mints nothing. Rejecting the promise,
+  // not the grant: the same set without `name:` still parses.
+  if (
+    newKeyName !== null &&
+    !((allDrives || drives.size > 0) && !profile && updateKeyId === null && activateKeyId === null)
+  ) {
     return { ok: false, error: { code: 'name_without_mint_grant' } };
   }
 

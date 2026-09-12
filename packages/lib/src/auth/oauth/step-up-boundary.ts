@@ -69,19 +69,18 @@ const STEP_UP_CONTRIBUTION = {
  * touches key material (`manage_keys`, `update_key:*`, `activate_key:*`).
  *
  * False only for identity-alone grants: `profile` and `profile
- * offline_access`. Every field is listed below so that dropping one is a
- * visible deletion rather than an invisible omission.
+ * offline_access`.
+ *
+ * The body is DERIVED from the table rather than enumerating it. That is the
+ * half of the guarantee the `satisfies` clause cannot give on its own: the
+ * clause closes the table, but a hand-written body that calls each entry can
+ * silently omit one, and a new scope would then compile, carry a table entry,
+ * and never step up — the fail-open direction (PR #2612 review). With the body
+ * derived, adding a `ScopeSet` field is a compile error until the table
+ * answers for it, and the answer is then honoured automatically.
  */
 export function requiresStepUp(scopes: ScopeSet): boolean {
-  return (
-    STEP_UP_CONTRIBUTION.drives(scopes.drives) ||
-    STEP_UP_CONTRIBUTION.allDrives(scopes.allDrives) ||
-    STEP_UP_CONTRIBUTION.account(scopes.account) ||
-    STEP_UP_CONTRIBUTION.manageKeys(scopes.manageKeys) ||
-    STEP_UP_CONTRIBUTION.updateKeyId(scopes.updateKeyId) ||
-    STEP_UP_CONTRIBUTION.activateKeyId(scopes.activateKeyId) ||
-    STEP_UP_CONTRIBUTION.profile() ||
-    STEP_UP_CONTRIBUTION.offlineAccess() ||
-    STEP_UP_CONTRIBUTION.newKeyName()
+  return (Object.keys(STEP_UP_CONTRIBUTION) as Array<keyof ScopeSet>).some((field) =>
+    (STEP_UP_CONTRIBUTION[field] as (value: ScopeSet[typeof field]) => boolean)(scopes[field]),
   );
 }

@@ -26,6 +26,18 @@
 
 import { z } from 'zod';
 import { validateRedirectUri } from './clients';
+import { NAME_CONTROL_CHAR_RE } from './scopes';
+
+/**
+ * What a non-string entry is reported as. A FIXED placeholder: `String(value)`
+ * on a caller-supplied object invokes `toString`/`valueOf`, and a plain JSON
+ * body can shadow either with a non-callable — `{"toString":"no"}` makes
+ * coercion throw `TypeError: Cannot convert object to primitive value`, which
+ * would turn an untrusted registration body into a 500 and break this module's
+ * never-throw contract (reported by Codex on PR #2612). `field` already
+ * locates the entry, so nothing is lost by not echoing it.
+ */
+const NON_STRING_PLACEHOLDER = '[non-string]';
 
 /** The three fixed caps plus the four `drive` shape tokens (ADR 0004 Decision 7). */
 const ALLOWED_SCOPE_SHAPES = new Set(['profile', 'offline_access', 'drive', 'drive:admin', 'drive:member', 'drive:role']);
@@ -88,11 +100,32 @@ function isHttpsUrl(value: string): boolean {
  * `allowedScopes` entries are `string` here; which strings are declarable is
  * `classifyScopeShape`'s job below, so the two rejections stay distinguishable.
  */
-const NAME = z.string().min(1).max(100);
+const NAME = z
+  .string()
+  .min(1)
+  .max(100)
+  // Parity with mcp key names (`scopes.ts`, `NAME_CONTROL_CHAR_RE` + the
+  // length/control-char check in `parseScopeList`). This string renders on the
+  // consent screen beside the "Unverified app" badge, so a bidi override,
+  // zero-width joiner or trailing whitespace can visually undercut the one
+  // trust signal the screen has. Whitespace-only is rejected for the same
+  // reason: it renders as an unnamed app.
+  .refine((value) => value.trim().length > 0)
+  .refine((value) => !NAME_CONTROL_CHAR_RE.test(value))
+  .refine((value) => !NAME_INVISIBLE_CHAR_RE.test(value));
 const DESCRIPTION = z.string().max(500);
 const HTTPS_URL = z.string().refine(isHttpsUrl);
 const REDIRECT_URIS = z.array(z.unknown()).min(1).max(10);
-const ALLOWED_SCOPES = z.array(z.unknown()).min(1);
+// There are only six legal shapes, so anything longer is a mistake or an
+// attempt to make the error list itself the payload.
+const ALLOWED_SCOPES = z.array(z.unknown()).min(1).max(20);
+
+/**
+ * Bidi controls, zero-width characters and the BOM. Not control characters by
+ * the `\x00-\x1F\x7F` definition, but they reorder or hide rendered text,
+ * which is the same attack against the same surface.
+ */
+const NAME_INVISIBLE_CHAR_RE = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/;
 
 /** Classify one `allowedScopes` entry. `null` means it is a legal cap. */
 function classifyScopeShape(scope: string): 'unknown' | 'forbidden' | null {
@@ -152,11 +185,21 @@ export function validateClientRegistration(input: unknown): ClientRegistrationRe
         errors.push({ code: 'invalid_redirect_uri', field });
         return;
       }
-      if (seen.has(uri)) {
+      // Dedupe on the NORMALIZED uri, because that is what authorize matches
+      // on (`validateRedirectUri` compares `href`, and the URL parser drops the
+      // default port and lowercases scheme and host). A raw-string dedupe would
+      // store two entries the authorize endpoint treats as one.
+      // Safe to parse unguarded: `validateRedirectUri` returned true, and it
+      // only does that for a string it parsed itself. A try/catch here would be
+      // a branch no input can reach, and the invariant is pinned directly by
+      // `every uri validateRedirectUri accepts is parseable` in the test file —
+      // so if that contract ever changes, a test says so rather than a 500.
+      const normalized = new URL(uri).href;
+      if (seen.has(normalized)) {
         errors.push({ code: 'duplicate_redirect_uri', field });
         return;
       }
-      seen.add(uri);
+      seen.add(normalized);
     });
   }
 
@@ -171,7 +214,7 @@ export function validateClientRegistration(input: unknown): ClientRegistrationRe
     allowedScopes.forEach((scope: unknown, index: number) => {
       const field = `allowedScopes[${index}]`;
       if (typeof scope !== 'string') {
-        errors.push({ code: 'unknown_scope', field, scope: String(scope) });
+        errors.push({ code: 'unknown_scope', field, scope: NON_STRING_PLACEHOLDER });
         return;
       }
       const problem = classifyScopeShape(scope);
