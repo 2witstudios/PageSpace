@@ -179,7 +179,27 @@ export type ListReachableEnvironments = (
 export type ResolveEnvironmentTarget = (input: {
   ctx: SandboxActorContext;
   environmentId: string;
-}) => Promise<{ ok: true; target: SandboxEnvironmentTarget } | { ok: false; error: string }>;
+}) => Promise<{ ok: true; target: SandboxEnvironmentTarget; payer: SandboxPayerCoordinates } | { ok: false; error: string }>;
+
+/**
+ * WHO PAYS for this call, resolved from the TARGET rather than from the
+ * conversation (leaf D).
+ *
+ * A named environment is billed and authorized against its own drive, so
+ * acting on a drive environment bills that drive's owner exactly as it does
+ * when a session is spawned into it from the sidebar — the conversation that
+ * happens to be driving it does not change who pays, and must not change who
+ * is entitled to run. The gate therefore runs on THESE coordinates, not on the
+ * conversation's; resolving them is the runtime's job, because that is where
+ * the database is.
+ */
+export interface SandboxPayerCoordinates {
+  /** The payer's drive; absent for a driveless target (a global conversation's own sandbox). */
+  readonly driveId?: string;
+  readonly ownerId: string;
+  readonly tenantId: string;
+  readonly tier: SandboxActorContext['tier'];
+}
 
 export interface SandboxToolsDeps {
   runDeps: SandboxRunDeps;
@@ -228,18 +248,28 @@ export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironm
   // defence-in-depth chokepoint at the tool boundary. The session sandbox needs
   // no resolution step: the ctx's conversationId IS its address, and the
   // injected acquireSandbox does the rest lazily.
+  const resolveActor = async (
+    options: unknown,
+  ): Promise<
+    | { ok: true; ctx: SandboxActorContext }
+    | { ok: false; error: { success: false; error: string; retryAfter?: number } }
+  > => {
+    const ctx = await resolveContext(readContext(options));
+    if ('error' in ctx) return { ok: false, error: { success: false, error: ctx.error } };
+    return { ok: true, ctx };
+  };
+
   const open = async (
     options: unknown,
   ): Promise<
     | { ok: true; ctx: SandboxActorContext }
     | { ok: false; error: { success: false; error: string; retryAfter?: number } }
   > => {
-    const rawContext = readContext(options);
-    const ctx = await resolveContext(rawContext);
-    if ('error' in ctx) return { ok: false, error: { success: false, error: ctx.error } };
-    const decision = await gate(ctx);
+    const actor = await resolveActor(options);
+    if (!actor.ok) return actor;
+    const decision = await gate(actor.ctx);
     if (!decision.ok) return { ok: false, error: gateDenial(decision) };
-    return { ok: true, ctx };
+    return { ok: true, ctx: actor.ctx };
   };
 
   // The addressed form: everything `open` does, and then the mandatory
@@ -254,11 +284,21 @@ export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironm
     | { ok: true; ctx: SandboxActorContext }
     | { ok: false; error: { success: false; error: string; retryAfter?: number } }
   > => {
-    const opened = await open(options);
-    if (!opened.ok) return opened;
-    const resolved = await resolveEnvironment({ ctx: opened.ctx, environmentId });
+    const actor = await resolveActor(options);
+    if (!actor.ok) return actor;
+    const resolved = await resolveEnvironment({ ctx: actor.ctx, environmentId });
     if (!resolved.ok) return { ok: false, error: { success: false, error: resolved.error } };
-    return { ok: true, ctx: { ...opened.ctx, environment: resolved.target } };
+    // The gate runs on the TARGET's payer coordinates, not the conversation's.
+    // A free-tier person's dashboard conversation acting in a Pro drive's
+    // environment is entitled by that drive's owner — the same rule
+    // `canRunCode` and billing already apply — and gating on the conversation
+    // would refuse a call the payer has already paid for. It narrows as often
+    // as it widens: naming an environment never inherits the conversation's
+    // entitlement.
+    const ctx: SandboxActorContext = { ...actor.ctx, ...resolved.payer, environment: resolved.target };
+    const decision = await gate(ctx);
+    if (!decision.ok) return { ok: false, error: gateDenial(decision) };
+    return { ok: true, ctx };
   };
 
   return {

@@ -229,10 +229,13 @@ describe('binding a session to an environment', () => {
     expect(await sessionStore.list({ driveId })).toEqual([]);
   });
 
-  it('given a GLOBAL-assistant spawn, should refuse an env — no session may hold an env without a drive', async () => {
-    // `drive_envs.driveId` is NOT NULL, so this falls out of the same
-    // comparison with no branch of its own — and the database forbids the row
-    // outright via `agent_workspaces_env_needs_drive_check`.
+  it('given a GLOBAL-assistant spawn and a SPRITE env, should refuse — a drive env has no owner of its own to bind against', async () => {
+    // `seedEnv` mints a SPRITE env, and `drive_envs.driveId` is NOT NULL, so
+    // this falls out of the same comparison with no branch of its own. Leaf D
+    // relaxed that comparison for LOCAL envs only, where [D-6]'s owner-only
+    // bind gate is the ownership check; the database CHECK that used to say
+    // the same thing is gone (0296), so this service-level refusal is now the
+    // whole of the guarantee for this substrate.
     const envId = await seedEnv();
     expect(await trySpawn({ envId, driveId: null })).toEqual({ ok: false, reason: 'env_not_found' });
   });
@@ -587,10 +590,13 @@ describe('the database\'s own guard', () => {
     expect(violated).toBe('agent_workspaces_env_no_sprite_check');
   });
 
-  it('should REFUSE an env-bound session with no drive', async () => {
-    // `agent_workspaces_env_needs_drive_check` — a row with an env and no drive
-    // would route work into a drive's shared filesystem through an access path
-    // that only ever reads `driveId`.
+  it('should ACCEPT an env-bound session with no drive — the CHECK is gone, and the guarantee moved to spawnAgentSession (leaf D)', async () => {
+    // `agent_workspaces_env_needs_drive_check` was dropped in 0296 so a
+    // driveless global-assistant session can bind the user's OWN machine,
+    // where [D-6]'s owner-only bind gate is the real ownership check. The
+    // database no longer forbids the shape; `spawnAgentSession` is what
+    // refuses a SPRITE env to a driveless session, and its own suite pins
+    // that negative directly.
     const envId = await seedEnv();
     const violated = await constraintViolatedBy(
       db.insert(agentWorkspaces).values({
@@ -601,7 +607,7 @@ describe('the database\'s own guard', () => {
         updatedAt: new Date(),
       }),
     );
-    expect(violated).toBe('agent_workspaces_env_needs_drive_check');
+    expect(violated).toBeUndefined();
   });
 });
 

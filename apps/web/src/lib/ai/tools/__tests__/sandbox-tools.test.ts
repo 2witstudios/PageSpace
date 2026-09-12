@@ -51,9 +51,10 @@ const CONVERSATION_ID = 'a78aoz3je2ycbofz79zgez9q';
 const OTHER_ID = 'dw9jthqyaza6ga3b6m5nmpqw';
 
 /** The default resolver: the conversation's own sandbox, resolved from the server's record. */
-const ownSandbox: ResolveEnvironmentTarget = async ({ environmentId }) => ({
+const ownSandbox: ResolveEnvironmentTarget = async ({ ctx, environmentId }) => ({
   ok: true,
   target: { id: environmentId, kind: 'conversation', label: "This conversation's own sandbox", driveId: 'd1' },
+  payer: { driveId: ctx.driveId, ownerId: ctx.ownerId ?? ctx.userId, tenantId: ctx.tenantId, tier: ctx.tier },
 });
 
 /** No persistent environments reachable — the default for every case that is not about discovery. */
@@ -547,7 +548,11 @@ describe('the MANDATORY, OPAQUE environmentId (leaf C)', () => {
     const t = createSandboxTools({
       resolveEnvironment: async ({ environmentId }) => {
         asked.push(environmentId);
-        return { ok: true, target: { id: environmentId, kind: 'environment', label: 'jono-macstudio', driveId: 'drive_1' } };
+        return {
+          ok: true,
+          target: { id: environmentId, kind: 'environment', label: 'jono-macstudio', driveId: 'drive_1' },
+          payer: { driveId: 'drive_1', ownerId: 'drive-owner', tenantId: 'drive-owner', tier: 'pro' },
+        };
       },
       listEnvironments: noEnvironments,
       runDeps: fakeRunDeps(),

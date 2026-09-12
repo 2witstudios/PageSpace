@@ -61,6 +61,7 @@ import {
   provisionSessionSandbox,
   measureWarmSessionStorage,
   ensureGlobalSandboxSession,
+  ensureEnvironmentSession,
   type AgentSessionRecord,
   type EnsureGlobalSandboxSessionFailureReason,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
@@ -190,9 +191,57 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       const target = input.environment;
       if (!target) return { ok: false, reason: 'provision_failed', cause: 'missing_environment' };
       if (target.kind === 'environment') {
-        // Leaf D routes a named environment to its own session. Until it does,
-        // refuse rather than run somewhere the caller did not name.
-        return { ok: false, reason: 'provision_failed', cause: 'environment_routing_not_enabled' };
+        // A named environment runs in ITS OWN session — found or spawned once
+        // per (owner, environment), never this conversation's session
+        // re-pointed at it. The spawn carries the owner-only bind gate for a
+        // local env, so a refusal happens before any row exists.
+        const ensured = await ensureEnvironmentSession({ ownerId: input.userId, envId: target.id });
+        if (!ensured.ok) {
+          // A refused BIND keeps its own typed word all the way to the agent —
+          // "your computer is not connected" and "the machine owner's bind
+          // policy denies you" are different problems with different owners.
+          // This path adds no refusal vocabulary of its own.
+          const refusal = ensured.refusal;
+          if (refusal && !refusal.ok && refusal.reason === 'env_bind_refused') {
+            const denial = localRefusalToToolDenial(refusal.refusal);
+            if (denial) return { ok: false, reason: denial };
+            return { ok: false, reason: 'provision_failed', cause: refusal.refusal };
+          }
+          return { ok: false, reason: 'provision_failed', cause: ensured.reason };
+        }
+        const row = ensured.session;
+        const nowMs = Date.now();
+        const guardrail = checkSessionRuntimeGuardrail({ workspaceId: row.id, now: nowMs });
+        if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
+
+        // The SAME provisioning path an env-bound session spawned from the
+        // sidebar takes: the router inside `ensureAgentSessionSandbox` sees
+        // `envId` and provisions the ENVIRONMENT, resolving the payer from the
+        // env's own drive. A paused, revoked or policy-refusing environment
+        // refuses here, through the existing sign/provision gate, with its
+        // existing typed reason.
+        const provisioned = await provisionSessionSandbox(row, input.userId);
+        if (!provisioned.ok) {
+          if (provisioned.reason === 'denied') {
+            return provisioned.denial === 'not_authorized'
+              ? { ok: false, reason: 'no_drive_access' }
+              : { ok: false, reason: 'provision_failed', cause: provisioned.denial };
+          }
+          if (provisioned.reason === 'local_refused') {
+            const denial = localRefusalToToolDenial(provisioned.refusal);
+            if (denial) return { ok: false, reason: denial };
+          }
+          return { ok: false, reason: 'provision_failed', cause: provisioned.detail ?? provisioned.reason };
+        }
+
+        recordSessionActivity({ workspaceId: row.id, now: nowMs });
+        return {
+          ok: true,
+          sandboxId: provisioned.sandboxId,
+          resumed: provisioned.resumed,
+          workspaceId: row.id,
+          pageId: input.agentPageId,
+        };
       }
 
       const conversationId = input.conversationId;
@@ -383,6 +432,21 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     // findings — P1, PR #2314, both rounds: session_limit_reached fell
     // through unmetered first, then spawn_failed did too).
     resolveBillingSession: async (ctx) => {
+      // A NAMED environment bills the ENVIRONMENT's drive, not the
+      // conversation's (leaf D). That keeps a drive environment billed to that
+      // drive's owner exactly as it is today when a session is spawned into it
+      // from the sidebar — the conversation that happens to be driving it does
+      // not change who pays. Resolved through the SAME find-or-spawn
+      // `acquireSandbox` is about to use, so billing can never see a different
+      // session from the one that runs.
+      const target = ctx.environment;
+      if (target?.kind === 'environment') {
+        const ensured = await ensureEnvironmentSession({ ownerId: ctx.userId, envId: target.id });
+        if (!ensured.ok) {
+          return { deny: ensured.reason === 'session_limit_reached' ? 'session_limit_reached' : 'provision_failed' };
+        }
+        return { workspaceId: ensured.session.id, driveId: target.driveId, ownerId: ensured.session.ownerId };
+      }
       if (!ctx.conversationId) return null;
       const resolved = await resolveOrProvisionSession(ctx.conversationId, ctx.userId);
       if (resolved.ok) {
@@ -631,9 +695,13 @@ export function ownSandboxTarget(ctx: { conversationId: string; driveId?: string
 
 export const productionResolveEnvironmentTarget: ResolveEnvironmentTarget = async ({ ctx, environmentId }) => {
   if (environmentId === ctx.conversationId) {
+    // The conversation's own sandbox keeps the conversation's own payer — the
+    // coordinates `resolveSandboxActorContext` already resolved. Identity, not
+    // a second resolution that could disagree with the first.
     return {
       ok: true,
       target: { id: environmentId, kind: 'conversation', label: OWN_SANDBOX_LABEL, driveId: ctx.driveId ?? null },
+      payer: { driveId: ctx.driveId, ownerId: ctx.ownerId ?? ctx.userId, tenantId: ctx.tenantId, tier: ctx.tier },
     };
   }
   const { isLocalEnvsEnabled } = await import('@pagespace/lib/services/drive-envs/local-envs-enabled');
@@ -652,9 +720,19 @@ export const productionResolveEnvironmentTarget: ResolveEnvironmentTarget = asyn
     env: env === null ? null : { visibleToGlobalAssistant: env.visibleToGlobalAssistant, ownerId: sibling?.ownerId ?? null },
   });
   if (!verdict.ok) return { ok: false, error: ENV_UNREACHABLE_MESSAGE };
+
+  // The PAYER is the ENVIRONMENT's drive owner, with no fallback — the same
+  // rule `resolveDriveEnvPayer` applies to provisioning, so the gate, the
+  // credit check and the provision cannot disagree about who is paying. A
+  // vanished drive fails the call closed rather than charging the caller for a
+  // machine the drive was going to pay for.
+  const { resolveDriveEnvPayer } = await import('@/lib/drive-envs/drive-envs-runtime');
+  const payer = await resolveDriveEnvPayer(env!.driveId);
+  if (!payer) return { ok: false, error: ENV_UNREACHABLE_MESSAGE };
   return {
     ok: true,
     target: { id: env!.id, kind: 'environment', label: sibling?.label ?? env!.name, driveId: env!.driveId },
+    payer: { driveId: env!.driveId, ownerId: payer.payerId, tenantId: payer.payerId, tier: payer.tier },
   };
 };
 

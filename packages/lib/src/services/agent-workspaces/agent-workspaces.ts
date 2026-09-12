@@ -105,14 +105,21 @@ export type SpawnAgentSessionResult =
  * to check: envs carry no kind and no substrate, so there is no shape of env
  * that refuses sessions.
  *
- * The drive agreement is what makes that sufficient. `drive_envs.driveId` is NOT
- * NULL, so requiring `env.driveId === driveId` also refuses a global-assistant
- * spawn (`driveId === null`) into any env at all — structurally, with no
- * separate branch — which is the same state
- * `agent_workspaces_env_needs_drive_check` forbids in the database. A session
- * that could carry an env and no drive would route work into a drive's shared
- * filesystem through `decideAgentSessionAccess`, which derives access from
- * `driveId` alone and would therefore never look at that drive.
+ * **The drive agreement holds for every substrate EXCEPT `local`, and that
+ * exception is the whole of leaf D.** `drive_envs.driveId` is NOT NULL, so
+ * requiring `env.driveId === driveId` refuses a global-assistant spawn
+ * (`driveId === null`) into any env at all — which is exactly right for a
+ * Sprite env, whose only access answer is a drive one, and exactly wrong for
+ * the user's own machine. A local env is gated by `gateLocalEnvBind` instead:
+ * [D-6] made binding structurally owner-only, so the ownership check already
+ * exists, is load-bearing, and is what a driveless session passes or fails on.
+ * Relaxing the comparison for that substrate removed a redundant scoping check
+ * rather than introducing a new ownership one ([D-4]).
+ *
+ * The database CHECK that used to say the same thing
+ * (`agent_workspaces_env_needs_drive_check`) is dropped in migration 0296 for
+ * this reason; its schema docblock records where the guarantee now lives, which
+ * is here.
  *
  * Nothing here touches the env's Sprite: an env provisions LAZILY, on the first
  * ensure of a session inside it, so spawning into an environment stays as
@@ -140,17 +147,40 @@ export async function spawnAgentSession({
   const boundEnvId = envId ?? null;
   if (boundEnvId !== null) {
     const env = await deps.findEnv(boundEnvId);
-    // Both misses collapse to one answer — see `SpawnAgentSessionResult`. Note
-    // that `driveId === null` can never satisfy this comparison, because
-    // `drive_envs.driveId` is NOT NULL: a global-assistant session is refused
-    // an env here without a branch of its own.
-    if (!env || env.driveId !== driveId) return { ok: false, reason: 'env_not_found' };
-    // C1: binding to the user's own machine is gated at the server BEFORE the
-    // row exists — a refused bind never leaves a session pointing at hardware
-    // it may not use.
+    // No such env. Collapsed with the wrong-drive answer below — see
+    // `SpawnAgentSessionResult`.
+    if (!env) return { ok: false, reason: 'env_not_found' };
     if (env.substrate === 'local') {
+      // A LOCAL env is one person's own computer, and [D-6] made binding it
+      // structurally owner-only: `decideBind` compares the requester to
+      // `drive_env_local.ownerId` and there is no actor role in its input at
+      // all. So the ownership check ALREADY exists here, is load-bearing, and
+      // is what a driveless global-assistant session passes or fails on — the
+      // drive comparison below would only have been a redundant scoping check
+      // on top of it ([D-4]).
+      //
+      // This is the one branch that permits `driveId === null` with an env.
+      // It must never become the ONLY ownership check by accident: if this
+      // gate is ever removed, a driveless session would reach someone's
+      // hardware with nothing standing in the way, which is why the service's
+      // test matrix pins the non-owner refusal directly rather than inferring
+      // it from the drive comparison.
+      //
+      // C1: the bind is gated at the server BEFORE the row exists — a refused
+      // bind never leaves a session pointing at hardware it may not use.
       const verdict = await deps.gateLocalEnvBind({ envId: boundEnvId, requesterId: ownerId });
       if (!verdict.ok) return { ok: false, reason: 'env_bind_refused', refusal: verdict.refusal, cause: verdict.cause };
+    } else if (env.driveId !== driveId) {
+      // Every OTHER substrate keeps the drive agreement, unchanged and for the
+      // original reason: a Sprite env is drive-owned, drive-paid and
+      // drive-shared, it has no owner of its own to check against, and
+      // `decideAgentSessionAccess` derives access from `driveId` alone — so a
+      // driveless session bound to one would route work into a drive's shared
+      // filesystem through an authorization path that never looked at that
+      // drive. `drive_envs.driveId` is NOT NULL, so `driveId === null` can
+      // never satisfy this comparison: a global-assistant session is still
+      // refused a Sprite env, structurally, with no branch of its own.
+      return { ok: false, reason: 'env_not_found' };
     }
   }
   try {

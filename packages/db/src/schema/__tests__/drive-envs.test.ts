@@ -226,16 +226,15 @@ describe('drive_envs schema — the CHECKs on the session side', () => {
     expect(schemaSql).not.toMatch(/VALIDATE CONSTRAINT/);
   });
 
-  it('given a box is drive-owned, should refuse a box-bound session that has no drive', () => {
-    const sql = checkSql(sessionsConfig, 'agent_workspaces_env_needs_drive_check');
-    expect(sql).toContain('envId');
-    expect(sql).toContain('driveId');
-    // The other half of drive-agreement — that the box belongs to THIS
-    // session's drive — is Phase 3's `spawnAgentSession`, deliberately (see the
-    // constraint's docblock). This test is the marker for that follow-up.
-    expect(schemaSql).toMatch(
-      /ADD CONSTRAINT "agent_workspaces_env_needs_drive_check"[\s\S]*?NOT VALID/,
-    );
+  it('should carry NO env-needs-drive CHECK — a driveless global-assistant session may bind the user\'s own machine (leaf D)', () => {
+    // `agent_workspaces_env_needs_drive_check` is deliberately GONE (0296).
+    // It was right about a SPRITE env — drive-owned, drive-paid, with no owner
+    // of its own — and wrong about a LOCAL one, where [D-6] already makes
+    // binding structurally owner-only. Both halves now live in
+    // `spawnAgentSession`, as two branches that cannot both be forgotten.
+    expect(() => checkSql(sessionsConfig, 'agent_workspaces_env_needs_drive_check')).toThrow();
+    // The SPRITE half must not have gone with it: the service still refuses an
+    // env whose drive is not the session's, and its own suite pins that.
   });
 
 });

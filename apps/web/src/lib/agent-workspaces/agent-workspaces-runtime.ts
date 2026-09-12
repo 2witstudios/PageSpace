@@ -796,6 +796,56 @@ export async function spawnSession(input: {
   });
 }
 
+/**
+ * The SESSION a named ENVIRONMENT runs in for this owner — found, or spawned
+ * once (leaf D).
+ *
+ * **One session per environment, never one session re-pointed.** A conversation
+ * that names two environments across successive calls ends up holding two
+ * sessions, which is what two environments mean. Mutating a live session's
+ * `envId` would be the predecessor's `switch_machine`: it races every
+ * concurrent call in the same session and silently moves work a previous call
+ * believed was elsewhere.
+ *
+ * **The session is DRIVELESS.** `session-contract.ts` invariant 1: a null
+ * `driveId` means a global-assistant session whose access and billing fall back
+ * to `ownerId`, and `decideAgentSessionAccess` keeps such a session private to
+ * that owner — the same person `decideBind` already restricted the machine to
+ * ([D-6]). The drive that owns the ENV is still what pays: provisioning routes
+ * through `ensureEnvSandboxForSession`, which resolves the payer from the env's
+ * own drive, and the caller's billing resolution keys on the env's drive too.
+ *
+ * **It holds no conversation, deliberately.** A session normally gets its first
+ * conversation in the same user-visible act that spawns it; this one is a
+ * working context a conversation BORROWS by naming it, not a thread container,
+ * and the conversation stays bound to its own session throughout. That is why
+ * this never claims a conversation and never ends one.
+ *
+ * Racing first-touches can mint two rows; the store's lookup orders them so
+ * every later call resolves the same one, and the loser is an idle, unprovisioned
+ * row that the owner's session list shows and they can end.
+ */
+export type EnsureEnvironmentSessionResult =
+  | { ok: true; session: AgentSessionRecord }
+  | { ok: false; reason: 'session_limit_reached' | 'spawn_failed'; refusal?: SpawnAgentSessionResult };
+
+export async function ensureEnvironmentSession(input: {
+  ownerId: string;
+  envId: string;
+}): Promise<EnsureEnvironmentSessionResult> {
+  const store = await getAgentSessionStore();
+  const existing = await store.findActiveByOwnerAndEnv({ ownerId: input.ownerId, envId: input.envId });
+  if (existing) return { ok: true, session: existing };
+
+  // `spawnSession` runs the env lookup AND — for a local env — the owner-only
+  // bind gate, so a refused bind never leaves a row pointing at hardware the
+  // caller may not use. Nothing here re-decides that; it only maps.
+  const spawned = await spawnSession({ userId: input.ownerId, driveId: null, envId: input.envId });
+  if (spawned.ok) return { ok: true, session: spawned.session };
+  if (spawned.reason === 'session_limit_reached') return { ok: false, reason: 'session_limit_reached', refusal: spawned };
+  return { ok: false, reason: 'spawn_failed', refusal: spawned };
+}
+
 /** Resolve a conversation's session — how a chat turn finds its working context. Null = a plain chat. */
 export async function findSessionForConversation(conversationId: string): Promise<AgentSessionRecord | null> {
   return (await getAgentSessionStore()).findByConversation(conversationId);
