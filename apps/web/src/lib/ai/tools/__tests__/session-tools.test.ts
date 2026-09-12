@@ -1226,6 +1226,56 @@ describe('spawn_session: honouring the agent\'s configured tool surface', () => 
     expect(deps.dispatch).toHaveBeenCalled();
   });
 
+  /**
+   * The ignored-workspaceName note must SURVIVE the tool-surface pass.
+   *
+   * Both surface branches used to ASSIGN this list, which was harmless only
+   * while they were its sole writer. Once an ignored `workspaceName` started
+   * being recorded before them, an assignment silently swallowed it — so the
+   * common page-agent path promised a note and delivered none, leaving the
+   * model free to believe the existing workspace had been renamed (review, P2).
+   */
+  it('given workspaceName on a non-new spawn AND surface notes, should report BOTH', async () => {
+    const deps = makeDeps({
+      describeAgentToolSurface: vi.fn(async () => ({
+        configured: ['read_page'],
+        granted: ['read_page'],
+        blocked: [],
+        conditional: [],
+        deferred: [],
+        notes: ['no tool named read_file'],
+      })),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p', agent: 'scraper-runner', workspaceName: 'ignored label' },
+      contextOptions(),
+    );
+
+    const warnings = result.toolSurfaceWarnings as string[];
+    expect(warnings.some((w) => w.includes('workspaceName was ignored'))).toBe(true);
+    expect(warnings).toContain('no tool named read_file');
+  });
+
+  it('given workspaceName on a non-new spawn AND an unreadable surface, should report BOTH', async () => {
+    const deps = makeDeps({
+      describeAgentToolSurface: vi.fn(async () => {
+        throw new Error('database unavailable');
+      }),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p', agent: 'scraper-runner', workspaceName: 'ignored label' },
+      contextOptions(),
+    );
+
+    const warnings = result.toolSurfaceWarnings as string[];
+    expect(warnings.some((w) => w.includes('workspaceName was ignored'))).toBe(true);
+    expect(warnings.some((w) => w.includes('not checked'))).toBe(true);
+  });
+
   it('given the check itself failing, should still spawn — and say the surface was NOT checked', async () => {
     const deps = makeDeps({
       describeAgentToolSurface: vi.fn(async () => {

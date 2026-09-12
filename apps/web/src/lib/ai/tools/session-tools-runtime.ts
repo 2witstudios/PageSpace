@@ -847,13 +847,17 @@ async function resolveWorkerPlacement(input: {
     // The model's own label wins; otherwise derive one exactly as the spawn
     // route does, through the same shared helper, so neither spawn path can
     // produce a nameless workspace.
+    // The model's own label is bounded here; a DERIVED one comes back already
+    // bounded from the length-aware helper and must not be cut again (cutting
+    // it is what collapses "<base> 2" back onto "<base>" at the cap).
     let name = workspaceName?.trim();
-    if (!name) {
+    if (name) {
+      name = name.slice(0, MAX_SESSION_NAME_LENGTH);
+    } else {
       const baseLabel = agentPageId !== null ? (agentTitleForLabel || 'Agent') : 'Global Assistant';
       const existingNames = (await listSessions({ ownerId })).map((session) => session.name);
       name = nextUniqueSessionName(baseLabel, existingNames);
     }
-    name = name.slice(0, MAX_SESSION_NAME_LENGTH);
     const spawned = await spawnSession({ userId: ownerId, driveId, envId, name });
     if (!spawned.ok) {
       return spawned.reason === 'session_limit_reached'

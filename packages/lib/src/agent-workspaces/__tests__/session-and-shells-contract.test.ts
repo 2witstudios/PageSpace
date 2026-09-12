@@ -347,4 +347,38 @@ describe('nextUniqueSessionName — the label a nameless spawn gets', () => {
   it('given unrelated names, should ignore them', () => {
     expect(nextUniqueSessionName('Agent', ['Global Assistant', 'Shell'])).toBe('Agent');
   });
+
+  /**
+   * The suffix has to fit INSIDE the cap, not be appended and then cut off.
+   *
+   * The first cut appended `" 2"` and left both callers to truncate the result,
+   * which for a base already at the cap produced exactly the base back — so the
+   * "unique" name collided with the one it was generated to avoid.
+   */
+  it('given a colliding base already at the length cap, should still return a DIFFERENT bounded name', () => {
+    const base = 'x'.repeat(MAX_SESSION_NAME_LENGTH);
+
+    const result = nextUniqueSessionName(base, [base]);
+
+    expect(result).not.toBe(base);
+    expect(result.length).toBeLessThanOrEqual(MAX_SESSION_NAME_LENGTH);
+    expect(result.endsWith(' 2')).toBe(true);
+  });
+
+  it('given an over-long base, should bound it even when nothing collides', () => {
+    // Callers no longer truncate, so the helper owns the bound outright.
+    const result = nextUniqueSessionName('y'.repeat(MAX_SESSION_NAME_LENGTH + 50), []);
+
+    expect(result).toHaveLength(MAX_SESSION_NAME_LENGTH);
+  });
+
+  it('given repeated collisions at the cap, should keep producing distinct bounded names', () => {
+    const base = 'z'.repeat(MAX_SESSION_NAME_LENGTH);
+    const taken = [base, base.slice(0, MAX_SESSION_NAME_LENGTH - 2) + ' 2'];
+
+    const result = nextUniqueSessionName(base, taken);
+
+    expect(taken).not.toContain(result);
+    expect(result.length).toBeLessThanOrEqual(MAX_SESSION_NAME_LENGTH);
+  });
 });

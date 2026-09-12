@@ -114,10 +114,23 @@ export type RenameAgentSessionRequest = z.infer<typeof renameAgentSessionRequest
  */
 export function nextUniqueSessionName(base: string, existingNames: readonly string[]): string {
   const taken = new Set(existingNames);
-  if (!taken.has(base)) return base;
-  let index = 2;
-  while (taken.has(`${base} ${index}`)) index += 1;
-  return `${base} ${index}`;
+  // LENGTH-AWARE, and the result is already bounded — callers must NOT truncate
+  // it afterwards (review). Appending a suffix and letting the caller cut the
+  // result back to the cap destroys the very thing the suffix was for: a
+  // 120-character base yields "<base> 2", which truncates back to exactly
+  // `base`, so every "unique" candidate collapses onto the name it was meant to
+  // avoid and the loop hands back a duplicate. Room for the suffix has to be
+  // made BEFORE the candidate is tested, not taken away after.
+  const bounded = base.slice(0, MAX_SESSION_NAME_LENGTH);
+  if (!taken.has(bounded)) return bounded;
+  for (let index = 2; ; index += 1) {
+    const suffix = ` ${index}`;
+    const candidate = bounded.slice(0, MAX_SESSION_NAME_LENGTH - suffix.length) + suffix;
+    // A pathological cap (shorter than the suffix itself) would make every
+    // candidate identical; there is no such cap, and the slice above keeps the
+    // result bounded regardless.
+    if (!taken.has(candidate)) return candidate;
+  }
 }
 
 /**

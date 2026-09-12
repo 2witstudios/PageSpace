@@ -498,7 +498,10 @@ export async function POST(request: Request) {
           : 'Global Assistant';
     const existingSessions = await listSessions({ ownerId: auth.userId });
     const existingNames = existingSessions.map((session) => session.name);
-    name = nextUniqueSessionName(baseLabel, existingNames).slice(0, MAX_SESSION_NAME_LENGTH);
+    // No `.slice` here: the helper is length-aware and already returns a
+    // bounded name. Truncating afterwards is what destroys its uniqueness
+    // suffix when the base is at the cap.
+    name = nextUniqueSessionName(baseLabel, existingNames);
   }
 
   const spawned = await spawnSession({ userId: auth.userId, driveId, envId, name });

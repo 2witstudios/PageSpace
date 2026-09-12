@@ -1547,7 +1547,14 @@ export function createSessionTools(deps: SessionToolsDeps): {
             .describeAgentToolSurface(agentPageId)
             .catch(() => 'unavailable' as const);
           if (surface === 'unavailable') {
+            // APPEND. These used to be plain assignments, which was harmless
+            // only while this was the sole writer of the list. It is not any
+            // more: an ignored `workspaceName` is recorded above, and an
+            // assignment here silently swallowed it — so the common page-agent
+            // path promised a note and delivered none, leaving the model free
+            // to believe the existing workspace had been renamed (review, P2).
             toolSurfaceWarnings = [
+              ...toolSurfaceWarnings,
               "Could not read this agent's tool configuration before spawning, so its tool surface was not checked. " +
                 'If the worker reports missing tools, call update_agent_config to see what it is actually granted.',
             ];
@@ -1577,7 +1584,8 @@ export function createSessionTools(deps: SessionToolsDeps): {
                 ...(surface.notes.length > 0 ? { toolSurfaceWarnings: surface.notes } : {}),
               };
             }
-            toolSurfaceWarnings = surface.notes;
+            // Append, for the same reason as the branch above.
+            toolSurfaceWarnings = [...toolSurfaceWarnings, ...surface.notes];
             grantedForComputeCheck = surface.configured === null ? null : surface.granted;
           }
         }
