@@ -417,6 +417,21 @@ describe('renderFormatting', () => {
     expect(renderFormatting(FORMATTING)).toContain('A1: bold');
   });
 
+  it('says none were FOUND when ranges were asked for and hold nothing', () => {
+    // The response is an empty `cellFormats` in both cases, so the distinction
+    // can only come from what the caller asked for. This is the branch that
+    // licenses "these cells carry no per-cell format of their own".
+    const rendered = renderFormatting({ ...FORMATTING, cellFormats: {} }, ['A1:F40', 'H2:H9']);
+    expect(rendered).toContain('none found in A1:F40, H2:H9');
+    expect(rendered).not.toContain('none read');
+  });
+
+  it('still says none were read when an empty range list survives parsing', () => {
+    // `--ranges ,,` parses to undefined and nothing is sent, so the answer is
+    // the same as omitting the flag — not a false "none found in ".
+    expect(renderFormatting({ ...FORMATTING, cellFormats: {} }, [])).toContain('none read');
+  });
+
   it('omits a section that is empty rather than printing an empty heading', () => {
     const bare = {
       ...FORMATTING,
@@ -475,6 +490,21 @@ describe('sheets formatting', () => {
     expect(readFormatting).toHaveBeenCalledWith({
       operation: 'read-formatting', pageId: 'pg_1', tabIndex: 2, ranges: ['A1:F40', 'H2:H9'],
     });
+  });
+
+  it('reports empty ranges as none FOUND, not as none read, end to end', async () => {
+    // The handler is what knows `--ranges` was passed; the response cannot
+    // say. Asserted through the handler rather than the renderer alone,
+    // because the wiring between them is the part that can be dropped.
+    const stdout = createRecordingSink();
+    const readFormatting = async () => ({ ...FORMATTING, cellFormats: {} });
+    const ctx = createFakeContext({ stdout, sdk: fakeSdk({ sheets: { readFormatting } }) });
+
+    await sheetsFormattingHandler(ctx, commandIntent(['pg_1', '--ranges', 'A1:F40']));
+
+    const out = stdout.lines.join('');
+    expect(out).toContain('none found in A1:F40');
+    expect(out).not.toContain('none read');
   });
 
   it('exits 2 without a pageId, and on an unknown argument, never calling the SDK', async () => {

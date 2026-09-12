@@ -23,6 +23,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   A `cell` rule nests `condition: {operator, value, value2}` — the shape the sheet actually stores,
   not the AI tool's flattened form (which exists only because a discriminated union overruns the
   schema-size ceiling a model's tool definition can carry).
+- **Rule and region schemas tolerate unknown extension fields, and still refuse cross-kind ones.**
+  `readTabFormatting` returns PARSED rules and regions, and lib's parsers spread the stored value
+  (`{...value, id, kind, ...}`) on purpose, so "a rule written by a newer build survives a load/save
+  cycle". A strict schema would have rejected the whole `readFormatting` response the first time a
+  newer same-major server returned a rule carrying an extension field — and then refused to write
+  that rule back, making the read-modify-write round trip impossible against any server newer than
+  the client. The rule, region and region-column schemas are therefore loose. A field belonging to a
+  *different* rule kind is still refused, because that is not an extension: lib's own
+  `ruleRenderProblem` refuses those too, on the same list, since "a colorScale rule does not read
+  format, so it would be stored and never used". Scale anchors stay strict (`readAnchor` rebuilds
+  rather than spreads, so an extra never round-trips), and the format OPS stay strict, as lib's own
+  note says they should: "ops are transient and versioned with the code that sends them, so unlike
+  the stored shapes elsewhere in this module there is no forward-compatibility argument".
 - **`applyFormat` reports `changed: false` for a no-op.** A retry, or a bold that was already bold,
   writes nothing and bumps no revision; a caller must not present that as an edit.
 

@@ -285,8 +285,17 @@ function summarizeRegion(region: ReadFormattingResult['regions'][number]): strin
   return `${region.id}${name} ${region.range} — ${bits.join(', ')}${columns.length > 0 ? `\n    ${columns.join(', ')}` : ''}`;
 }
 
-/** Pure: no I/O. A section is omitted entirely when empty, so what IS set stands out. */
-export function renderFormatting(value: ReadFormattingResult): string {
+/**
+ * Pure: no I/O. A section is omitted entirely when empty, so what IS set stands
+ * out.
+ *
+ * `requestedRanges` is the caller's `--ranges`, not anything the response
+ * carries: the SDK returns an empty `cellFormats` both when no ranges were
+ * asked for and when the ranges asked for hold no explicit formats, and those
+ * are different answers. Reading the first as the second would tell someone
+ * their cells are unformatted when nothing was ever read.
+ */
+export function renderFormatting(value: ReadFormattingResult, requestedRanges?: readonly string[]): string {
   const lines: string[] = [
     `tab ${value.tabIndex}: ${value.rowCount} rows x ${value.columnCount} columns`,
   ];
@@ -317,10 +326,13 @@ export function renderFormatting(value: ReadFormattingResult): string {
   const cellFormats = Object.entries(value.cellFormats);
   if (cellFormats.length > 0) {
     lines.push('cell formats:', ...cellFormats.map(([address, format]) => `  ${address}: ${summarizeFormat(format)}`));
+  } else if (requestedRanges !== undefined && requestedRanges.length > 0) {
+    // Ranges WERE read and hold nothing explicit. A real answer, and the only
+    // one that licenses "these cells carry no per-cell format of their own".
+    lines.push(`cell formats: none found in ${requestedRanges.join(', ')}`);
   } else {
-    // Absence here means one of two very different things, and a caller that
-    // reads it as "no cell formatting" when it only ever asked for the
-    // declarative layer would format straight over what is there.
+    // Nothing was read at all. Not the same as "none", and a caller that read
+    // it as "no cell formatting" would format straight over what is there.
     lines.push('cell formats: none read (pass --ranges to read per-cell formats)');
   }
   return `${lines.join('\n')}\n`;
@@ -767,6 +779,10 @@ export const sheetsFormattingHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
+  // Bound before the call, because the renderer needs to know whether ranges
+  // were ASKED for — the response cannot say.
+  const ranges = parseCommaList(scan.values.get('--ranges'));
+
   const result = await callSdk(ctx.stderr, () =>
     ctx.sdk.sheets.readFormatting({
       operation: 'read-formatting',
@@ -775,12 +791,12 @@ export const sheetsFormattingHandler: CommandHandler = async (ctx, intent) => {
       // Per-cell formats live on the rows, so they are read only for the
       // rectangles asked for. Without `--ranges` the declarative layer —
       // regions, rules, column defaults, freezes — comes back on its own.
-      ...optional('ranges', parseCommaList(scan.values.get('--ranges'))),
+      ...optional('ranges', ranges),
     }),
   );
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
-  ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderFormatting(result.value));
+  ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderFormatting(result.value, ranges));
   return EXIT_SUCCESS;
 };
 

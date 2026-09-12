@@ -276,6 +276,47 @@ describe('sheets.readFormatting', () => {
     expect(parseResponse(readSheetFormatting, 200, new Headers(), JSON.stringify(fixture))).toEqual(fixture);
   });
 
+  it('parses a response whose rules and regions carry unknown extension fields', () => {
+    // `readTabFormatting` returns PARSED rules and regions, and lib's parsers
+    // spread the stored value — so a sheet written by a newer same-major
+    // server hands back fields this SDK has never heard of. Rejecting those
+    // would fail the whole read, and then refuse to write the rule back:
+    // the read-modify-write round trip would be impossible against any server
+    // newer than the client.
+    const fixture = {
+      pageId: 's1', pageTitle: 'Budget', tabIndex: 0, rowCount: 1, columnCount: 1,
+      frozenRows: null, frozenColumns: null,
+      columnFormats: {}, columnWidths: {}, rowHeights: {},
+      conditionalFormats: [{ ...cellRule, futureRuleField: { nested: true } }],
+      regions: [{ id: 'g1', range: 'A1:F', columns: [{ column: 'C', role: 'currency', futureColumnField: 1 }], futureRegionField: 'x' }],
+      cellFormats: {},
+    };
+    const parsed = parseResponse(readSheetFormatting, 200, new Headers(), JSON.stringify(fixture));
+    expect(parsed).not.toBeInstanceOf(ResponseValidationError);
+    // Carried through, not stripped: the caller writes this straight back.
+    expect(parsed).toEqual(fixture);
+  });
+
+  it('still rejects a field belonging to a DIFFERENT rule kind', () => {
+    // Not an extension — lib's own `ruleRenderProblem` refuses these too,
+    // because "a colorScale rule does not read format, so it would be stored
+    // and never used". Accepting one silently would store half the caller's
+    // instruction and report success.
+    const fixture = {
+      pageId: 's1', pageTitle: 'Budget', tabIndex: 0, rowCount: 1, columnCount: 1,
+      frozenRows: null, frozenColumns: null,
+      columnFormats: {}, columnWidths: {}, rowHeights: {},
+      conditionalFormats: [{
+        kind: 'colorScale', id: 'r1', ranges: ['A1:A9'],
+        min: { type: 'min', color: '#ffffff' }, max: { type: 'max', color: '#000000' },
+        format: { bold: true },
+      }],
+      regions: [], cellFormats: {},
+    };
+    expect(parseResponse(readSheetFormatting, 200, new Headers(), JSON.stringify(fixture)))
+      .toBeInstanceOf(ResponseValidationError);
+  });
+
   it('rejects a response whose rule kind is not one of the four', () => {
     // The read exists so a caller can write what it read straight back. A rule
     // shape the caller cannot round-trip must not arrive as a valid one.
@@ -286,8 +327,12 @@ describe('sheets.readFormatting', () => {
       conditionalFormats: [{ kind: 'gradient', id: 'r1', ranges: ['A1'] }],
       regions: [], cellFormats: {},
     };
-    expect(() => parseResponse(readSheetFormatting, 200, new Headers(), JSON.stringify(fixture)))
-      .toThrow(ResponseValidationError);
+    // `parseResponse` RETURNS the error rather than throwing it — the whole
+    // transport layer is pure, so a bad response is a value a caller branches
+    // on, not an exception. Asserted with `toBeInstanceOf`, like every other
+    // response-validation test in this package.
+    expect(parseResponse(readSheetFormatting, 200, new Headers(), JSON.stringify(fixture)))
+      .toBeInstanceOf(ResponseValidationError);
   });
 });
 
@@ -391,6 +436,7 @@ describe('sheets.applyFormat — the op union', () => {
     const noop = { ...fixture, changed: false, cellsFormatted: 0, rowsTouched: 0, tabFieldsChanged: [], ruleIdsAdded: [], regionIdsAdded: [] };
     expect(parseResponse(applySheetFormat, 200, new Headers(), JSON.stringify(noop))).toEqual(noop);
     const { changed: _changed, ...missing } = fixture;
-    expect(() => parseResponse(applySheetFormat, 200, new Headers(), JSON.stringify(missing))).toThrow(ResponseValidationError);
+    expect(parseResponse(applySheetFormat, 200, new Headers(), JSON.stringify(missing)))
+      .toBeInstanceOf(ResponseValidationError);
   });
 });

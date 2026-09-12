@@ -46,6 +46,7 @@ import {
   FIELDS_BY_KIND,
   SCALE_ANCHOR_TYPES,
 } from '@pagespace/lib/sheets/sheet';
+import { parseConditionalRule, parseRegion } from '@pagespace/lib/sheets/sheet';
 import type { ColumnRole, ConditionalOperator, ConditionalRule } from '@pagespace/lib/sheets/sheet';
 import { applySheetFormat, readSheetFormatting } from '../sheets.js';
 import type { SheetConditionalRuleInput, SheetRegionInput } from '../sheets.js';
@@ -82,7 +83,7 @@ void _columnRolesMatch;
  * out of a `z.discriminatedUnion` without exporting its internals. `io:
  * 'input'` because that is what a caller sends.
  */
-const opsSchema = z.toJSONSchema(applySheetFormat.inputSchema, { io: 'input' }) as {
+const opsSchema = z.toJSONSchema(applySheetFormat.inputSchema, { io: 'input' }) as unknown as {
   properties: { ops: { items: { anyOf?: JsonSchemaObject[]; oneOf?: JsonSchemaObject[] } } };
 };
 
@@ -175,6 +176,45 @@ describe('conditional rule shapes — drift guard vs @pagespace/lib', () => {
         expect(accepts({ ...base!, [foreign]: base!['format'] ?? '#000000' }), `${kind} must refuse "${foreign}"`).toBe(false);
       }
     }
+  });
+
+  it('accepts an unknown extension field, because lib hands one back', () => {
+    // Not a guess about forward compatibility — the round trip is executed.
+    // lib's parsers spread the stored value, so a field written by a newer
+    // same-major server survives parsing; a strict schema here would reject
+    // the whole `readFormatting` response and then refuse to write the rule
+    // back, breaking exactly the read-modify-write these operations exist for.
+    for (const [kind, base] of Object.entries(byKind)) {
+      const stored = { ...base, futureField: { nested: 1 } };
+      const parsed = parseConditionalRule(stored);
+      expect(parsed, `lib dropped the ${kind} rule entirely`).not.toBeNull();
+      // The premise: lib really does carry the unknown field through. If this
+      // ever stops being true, the looseness below is no longer required and
+      // this test should fail rather than quietly over-permit.
+      expect((parsed as Record<string, unknown>).futureField, `lib stopped preserving unknown fields on a ${kind} rule`)
+        .toEqual({ nested: 1 });
+      // And the conclusion: what lib hands back, the SDK accepts.
+      expect(accepts(parsed), `SDK rejected a ${kind} rule lib returned`).toBe(true);
+    }
+  });
+
+  it('accepts an unknown extension field on a region and on a region column', () => {
+    const stored = {
+      id: 'g1',
+      range: 'A1:F',
+      headerRows: 1,
+      columns: [{ column: 'C', role: 'currency', currency: 'USD', futureColumnField: 'x' }],
+      futureRegionField: 'y',
+    };
+    const parsed = parseRegion(stored) as Record<string, unknown> | null;
+    expect(parsed).not.toBeNull();
+    expect(parsed!.futureRegionField, 'lib stopped preserving unknown region fields').toBe('y');
+    expect((parsed!.columns as Record<string, unknown>[])[0]!.futureColumnField, 'lib stopped preserving unknown column fields')
+      .toBe('x');
+    expect(
+      applySheetFormat.inputSchema.safeParse({ pageId: 'p1', ops: [{ type: 'upsertRegion', region: parsed }] }).success,
+      'SDK rejected a region lib returned',
+    ).toBe(true);
   });
 
   it('accepts exactly lib\'s scale anchor types', () => {

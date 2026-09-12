@@ -414,6 +414,57 @@ const rowNumberSchema = z.number().int().min(1).max(MAX_ADDRESSABLE_ROW);
 const frozenRowCountSchema = z.number().int().min(0).max(MAX_ADDRESSABLE_ROW);
 const frozenColumnCountSchema = z.number().int().min(0).max(MAX_ADDRESSABLE_COLUMN);
 
+/**
+ * Fields that belong to SOME rule kind, and so may be foreign to another —
+ * lib's `KIND_FIELDS`, which is `FIELDS_BY_KIND` flattened.
+ *
+ * The rule schemas below are LOOSE, because lib's `parseConditionalRule` and
+ * `parseRegion` spread the stored value (`{...value, id, kind, ...}`) and
+ * deliberately carry unknown fields through untouched: "a rule written by a
+ * newer build survives a load/save cycle here". A strict schema would reject
+ * the whole `readFormatting` response the first time a newer same-major server
+ * returned a rule carrying an extension field, and would then refuse to write
+ * that rule back — breaking the read-modify-write round trip these two
+ * operations exist to support.
+ *
+ * Cross-kind fields stay refused, because those are not extensions: lib's
+ * `ruleRenderProblem` refuses them too, on exactly this list, since "a
+ * `${kind}` rule does not read ${field}, so it would be stored and never
+ * used". Accepting one silently would store half a caller's instruction and
+ * report success.
+ */
+const FIELDS_BY_KIND = {
+  cell: ['condition', 'format'],
+  formula: ['formula', 'format'],
+  colorScale: ['min', 'mid', 'max'],
+  dataBar: ['color', 'min', 'max'],
+} as const satisfies Record<string, readonly string[]>;
+
+const KIND_FIELDS = [...new Set(Object.values(FIELDS_BY_KIND).flat())];
+
+/**
+ * Refuses only the fields that belong to a DIFFERENT kind, leaving genuinely
+ * unknown ones alone. Mirrors `ruleRenderProblem`'s loop, including reading
+ * what the caller sent rather than a merged rule.
+ */
+const noForeignKindFields = (kind: string, own: readonly string[]) =>
+  (rule: Record<string, unknown>, ctx: z.RefinementCtx): void => {
+    for (const field of KIND_FIELDS) {
+      if (rule[field] === undefined || own.includes(field)) continue;
+      ctx.addIssue({
+        code: 'custom',
+        path: [field],
+        message: `A ${kind} rule does not read ${field}, so it would be stored and never used.`,
+      });
+    }
+  };
+
+/**
+ * Strict, unlike the rule and region schemas above it. `readAnchor` builds a
+ * FRESH object rather than spreading, so an extension field on an anchor is
+ * dropped server-side and never comes back in a response — accepting one here
+ * would promise a round trip that does not happen.
+ */
 const scaleAnchorSchema = z.strictObject({
   type: z.enum(['min', 'max', 'number', 'percent', 'percentile']),
   /** Required for `number`, `percent` and `percentile`. */
@@ -435,11 +486,11 @@ const scaleAnchorSchema = z.strictObject({
  * as a duplicate rather than silently adding the rule a second time.
  */
 const conditionalRuleSchema = z.discriminatedUnion('kind', [
-  z.strictObject({
+  z.looseObject({
     kind: z.literal('cell'),
     id: z.string().min(1),
     ranges: z.array(rangeSchema).min(1),
-    condition: z.strictObject({
+    condition: z.looseObject({
       operator: z.enum([
         'greaterThan', 'greaterThanOrEqual', 'lessThan', 'lessThanOrEqual',
         'equal', 'notEqual', 'between', 'notBetween',
@@ -452,24 +503,24 @@ const conditionalRuleSchema = z.discriminatedUnion('kind', [
       value2: z.string().optional(),
     }),
     format: cellFormatSchema,
-  }),
-  z.strictObject({
+  }).superRefine(noForeignKindFields('cell', FIELDS_BY_KIND.cell)),
+  z.looseObject({
     kind: z.literal('formula'),
     id: z.string().min(1),
     ranges: z.array(rangeSchema).min(1),
     /** Evaluated per cell, relative references shifted from the range's top-left, as a paste would. */
     formula: z.string().min(1),
     format: cellFormatSchema,
-  }),
-  z.strictObject({
+  }).superRefine(noForeignKindFields('formula', FIELDS_BY_KIND.formula)),
+  z.looseObject({
     kind: z.literal('colorScale'),
     id: z.string().min(1),
     ranges: z.array(rangeSchema).min(1),
     min: scaleAnchorSchema,
     mid: scaleAnchorSchema.optional(),
     max: scaleAnchorSchema,
-  }),
-  z.strictObject({
+  }).superRefine(noForeignKindFields('colorScale', FIELDS_BY_KIND.colorScale)),
+  z.looseObject({
     kind: z.literal('dataBar'),
     id: z.string().min(1),
     ranges: z.array(rangeSchema).min(1),
@@ -477,7 +528,7 @@ const conditionalRuleSchema = z.discriminatedUnion('kind', [
     color: z.string(),
     min: scaleAnchorSchema.optional(),
     max: scaleAnchorSchema.optional(),
-  }),
+  }).superRefine(noForeignKindFields('dataBar', FIELDS_BY_KIND.dataBar)),
 ]);
 
 export type SheetConditionalRuleInput = z.infer<typeof conditionalRuleSchema>;
@@ -496,7 +547,7 @@ export type SheetConditionalRuleInput = z.infer<typeof conditionalRuleSchema>;
  * No `freezeHeader` — frozen panes are tab state, not derived presentation.
  * Send a `setFrozen` op alongside.
  */
-const regionSchema = z.strictObject({
+const regionSchema = z.looseObject({
   id: z.string().min(1),
   /** Shown to people and to agents reading the sheet back; never rendered into it. */
   name: z.string().optional(),
@@ -505,7 +556,10 @@ const regionSchema = z.strictObject({
   headerRows: z.number().int().min(0).max(MAX_REGION_HEADER_ROWS).optional(),
   /** Absolute 1-based row numbers holding totals. */
   totalRows: z.array(rowNumberSchema).max(MAX_REGION_TOTAL_ROWS).optional(),
-  columns: z.array(z.strictObject({
+  // Loose for the same reason the region itself is: `readColumns` spreads the
+  // stored entry, so an extension field on a column travels through untouched
+  // and must survive a round trip rather than fail the read.
+  columns: z.array(z.looseObject({
     column: columnSchema,
     /** A MEANING, not a format: which number format renders `currency` is the sheet's decision. */
     role: z.enum(['text', 'number', 'currency', 'percent', 'date', 'datetime', 'id']),
