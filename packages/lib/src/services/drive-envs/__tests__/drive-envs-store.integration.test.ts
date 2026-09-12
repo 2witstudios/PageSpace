@@ -960,6 +960,40 @@ describe('the local-env connection slice (t07) — recordHello / recordHeartbeat
     });
   });
 
+  describe('listVisibleToGlobalAssistantByOwner (leaf B): TWO conditions in SQL, and OWNERSHIP is the access filter', () => {
+    it('given a visible machine the caller OWNS, should list it; an invisible one, a revoked one and SOMEONE ELSE\'S are all absent', async () => {
+      const mine = await createLocal(true);
+      const invisible = await createLocal(true);
+      const revoked = await createLocal(true);
+      await db.update(driveEnvs).set({ visibleToGlobalAssistant: true }).where(inArray(driveEnvs.id, [mine, revoked]));
+      await store.revokeLocal({ envId: revoked, now: NOW });
+
+      // Another user's machine, in their own drive, visible: still not the caller's.
+      const [theirEnv] = await db.insert(driveEnvs).values({ driveId: otherDriveId, name: `theirs-${createId()}`, substrate: 'local', visibleToGlobalAssistant: true }).returning();
+      await db.insert(driveEnvLocal).values({ envId: theirEnv!.id, ownerId: otherPayerId, label: 'their-box', enrollmentId: `enr_${createId()}`, updatedAt: NOW });
+
+      const listed = await store.listVisibleToGlobalAssistantByOwner(payerId);
+      expect(listed.map((row) => row.env.id)).toEqual([mine]);
+      expect(listed[0]!.local.label).toBe('jono-macstudio');
+      expect(listed.map((row) => row.env.id)).not.toContain(invisible);
+      expect(listed.map((row) => row.env.id)).not.toContain(revoked);
+      expect(listed.map((row) => row.env.id)).not.toContain(theirEnv!.id);
+    });
+
+    it('given a machine in a drive the owner is NOT a member of, should STILL list it — it is their computer, and a drive relationship is not the filter', async () => {
+      // `payerId` owns this machine but has no membership row in `otherDriveId`.
+      const [env] = await db.insert(driveEnvs).values({ driveId: otherDriveId, name: `left-${createId()}`, substrate: 'local', visibleToGlobalAssistant: true }).returning();
+      await db.insert(driveEnvLocal).values({ envId: env!.id, ownerId: payerId, label: 'old-laptop', enrollmentId: `enr_${createId()}`, updatedAt: NOW });
+      const listed = await store.listVisibleToGlobalAssistantByOwner(payerId);
+      expect(listed.map((row) => row.env.id)).toContain(env!.id);
+      expect(listed.find((row) => row.env.id === env!.id)!.env.driveId).toBe(otherDriveId);
+    });
+
+    it('given a caller who owns nothing visible, should answer an empty array (the WORDS are the tool\'s job, not the store\'s)', async () => {
+      expect(await store.listVisibleToGlobalAssistantByOwner(otherPayerId)).toEqual([]);
+    });
+  });
+
   it('revokeLocal: should stamp revokedAt exactly once (CAS on revokedAt IS NULL) and keep the FIRST stamp on a repeat', async () => {
     const envId = await createLocal(true);
     expect(await store.revokeLocal({ envId, now: NOW })).toBe(true);

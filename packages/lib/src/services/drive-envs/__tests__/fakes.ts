@@ -238,6 +238,19 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       return true;
     },
 
+    async listVisibleToGlobalAssistantByOwner(ownerId) {
+      // The real store's predicate, verbatim: the caller OWNS the machine, it
+      // is not revoked, AND the env is visible to the global assistant.
+      const out: Array<{ env: DriveEnvRecord; local: DriveEnvLocalRecord }> = [];
+      for (const sibling of local.values()) {
+        const row = rows.get(sibling.envId);
+        if (!row) continue;
+        if (sibling.ownerId !== ownerId || sibling.revokedAt !== null || !row.visibleToGlobalAssistant) continue;
+        out.push({ env: row, local: sibling });
+      }
+      return out;
+    },
+
     async setGlobalAssistantVisibility({ envId, ownerId, visible, now: at }) {
       // The real store's CAS predicate, verbatim: the env exists, the SIBLING's
       // owner is the caller, and it is not revoked. The column lives on the env

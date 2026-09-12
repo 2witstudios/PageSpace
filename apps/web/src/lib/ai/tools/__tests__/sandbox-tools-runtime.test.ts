@@ -773,7 +773,7 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
 });
 
 describe('buildSandboxTools', () => {
-  it('should return exactly the four session tools', () => {
-    expect(Object.keys(buildSandboxTools()).sort()).toEqual(['bash', 'editFile', 'readFile', 'writeFile']);
+  it('should return exactly the four execution tools plus the discovery tool they take their id from', () => {
+    expect(Object.keys(buildSandboxTools()).sort()).toEqual(['bash', 'editFile', 'list_environments', 'readFile', 'writeFile']);
   });
 });

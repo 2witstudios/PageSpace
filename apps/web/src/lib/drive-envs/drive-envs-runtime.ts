@@ -170,6 +170,24 @@ export async function listOwnerMachines(ownerId: string): Promise<Array<{ env: D
   return rows.map(({ env, local }) => ({ env: toDriveEnvDTO(env, localFactsFor(env, local, liveConnection(env.id), now)), driveId: env.driveId }));
 }
 
+/**
+ * Every environment the GLOBAL ASSISTANT may reach for this user — the backing
+ * read for `list_environments` and for `GET /api/env-bridge/environments`
+ * (leaf B).
+ *
+ * BOTH conditions are the store's, in SQL: the caller owns the machine AND the
+ * environment is visible to the global assistant. Ownership is the real access
+ * filter and is deliberately NOT drive membership — a drive relationship is not
+ * an entitlement to every row inside it (PR #2609) — which is also why a
+ * machine in a drive the owner has since left is still listed: it is their
+ * computer.
+ */
+export async function listGlobalAssistantEnvironments(ownerId: string): Promise<Array<{ id: string; label: string; substrate: 'sprite' | 'local'; driveId: string }>> {
+  const store = await getDriveEnvStore();
+  const rows = await store.listVisibleToGlobalAssistantByOwner(ownerId);
+  return rows.map(({ env, local }) => ({ id: env.id, label: local.label, substrate: env.substrate, driveId: env.driveId }));
+}
+
 /** Activity across every machine a user OWNS, newest first — the account page's read. */
 export async function listOwnerActivity(input: { ownerId: string; limit?: number }): Promise<DriveEnvActivityDTO[]> {
   const rows = await (await getGrantAuditStore()).listForOwner({ ownerId: input.ownerId, limit: input.limit ?? GRANT_AUDIT_LIST_LIMIT });

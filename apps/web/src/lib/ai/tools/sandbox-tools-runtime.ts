@@ -52,7 +52,7 @@ import { gateSandboxToolCall } from '@pagespace/lib/services/sandbox/tool-gate';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
-import { createSandboxTools, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
+import { createSandboxTools, type ListReachableEnvironments, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
 import {
   findSessionForConversation,
   provisionSessionSandbox,
@@ -559,6 +559,24 @@ export function createResolveSandboxActorContext(
 export const resolveSandboxActorContext: ResolveSandboxContext =
   createResolveSandboxActorContext();
 
+/**
+ * The discovery read behind `list_environments` — both conditions (the caller
+ * OWNS the machine, and it is visible to the global assistant) applied in SQL
+ * by the store, never here. Loaded lazily so the chat pipeline does not import
+ * the drive-env store at module load.
+ *
+ * **The environment gate is only consulted when local environments are
+ * enabled.** With the flag off there are no reachable environments at all, so
+ * the list is the conversation's own sandbox and nothing else — the same
+ * answer the route gives as a 404, expressed as a list a model can read.
+ */
+export const productionListReachableEnvironments: ListReachableEnvironments = async (ctx) => {
+  const { isLocalEnvsEnabled } = await import('@pagespace/lib/services/drive-envs/local-envs-enabled');
+  if (!isLocalEnvsEnabled()) return [];
+  const { listGlobalAssistantEnvironments } = await import('@/lib/drive-envs/drive-envs-runtime');
+  return listGlobalAssistantEnvironments(ctx.userId);
+};
+
 /** The shared call-time gate binding — kill-switch, canRunCode, quota preflight. */
 export const productionSandboxGate: SandboxGate = (ctx) =>
   gateSandboxToolCall({
@@ -577,6 +595,7 @@ export const productionSandboxGate: SandboxGate = (ctx) =>
  * by itself.
  */
 export function buildSandboxTools(): {
+  list_environments: Tool;
   bash: Tool;
   writeFile: Tool;
   readFile: Tool;
@@ -586,5 +605,6 @@ export function buildSandboxTools(): {
     runDeps: buildRealSandboxRunDeps(),
     resolveContext: resolveSandboxActorContext,
     gate: productionSandboxGate,
+    listEnvironments: productionListReachableEnvironments,
   });
 }

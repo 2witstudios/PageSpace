@@ -230,6 +230,22 @@ export interface DriveEnvStore {
   /** Every machine a user OWNS, across drives, with its env row — the account page's read (GA wave 3). Owner, never requester. */
   listLocalByOwner(ownerId: string): Promise<Array<{ env: DriveEnvRecord; local: DriveEnvLocalRecord }>>;
   /**
+   * Every environment the GLOBAL ASSISTANT may reach for this user — the
+   * discovery read behind `list_environments` (leaf B).
+   *
+   * TWO conditions in SQL, not one: the caller OWNS the machine
+   * (`drive_env_local.ownerId`) AND the environment is visible to the global
+   * assistant (`drive_envs.visibleToGlobalAssistant`). Ownership is the real
+   * access filter — deliberately NOT drive membership, which is a relationship
+   * and not an entitlement to every row inside it (the trap PR #2609 hit).
+   * That is also why a machine in a drive the owner has since LEFT still
+   * appears: it is their computer.
+   *
+   * A REVOKED machine is excluded: it can never take a grant again, so listing
+   * it would offer the model an id that is guaranteed to refuse.
+   */
+  listVisibleToGlobalAssistantByOwner(ownerId: string): Promise<Array<{ env: DriveEnvRecord; local: DriveEnvLocalRecord }>>;
+  /**
    * Enroll: pin the machine key and consume the code, IFF the row is pending
    * (`enrolledAt IS NULL AND enrollmentCodeUsedAt IS NULL AND revokedAt IS
    * NULL`) AND the stored code hash is still the one the caller VERIFIED
@@ -739,6 +755,17 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
         .from(driveEnvLocal)
         .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId))
         .where(eq(driveEnvLocal.ownerId, ownerId))
+        .orderBy(asc(driveEnvs.createdAt))
+        .limit(MAX_DRIVE_ENVS_LISTED);
+      return rows.map((row) => ({ env: row.env as DriveEnvRecord, local: row.local as DriveEnvLocalRecord }));
+    },
+
+    async listVisibleToGlobalAssistantByOwner(ownerId) {
+      const rows = await db
+        .select({ env: driveEnvs, local: localSelection })
+        .from(driveEnvLocal)
+        .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId))
+        .where(and(eq(driveEnvLocal.ownerId, ownerId), isNull(driveEnvLocal.revokedAt), eq(driveEnvs.visibleToGlobalAssistant, true)))
         .orderBy(asc(driveEnvs.createdAt))
         .limit(MAX_DRIVE_ENVS_LISTED);
       return rows.map((row) => ({ env: row.env as DriveEnvRecord, local: row.local as DriveEnvLocalRecord }));

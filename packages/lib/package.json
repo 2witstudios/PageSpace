@@ -1113,6 +1113,11 @@
       "import": "./dist/services/sandbox/machine-diff.js",
       "require": "./dist/services/sandbox/machine-diff.js"
     },
+    "./services/sandbox/environment-directory": {
+      "types": "./dist/services/sandbox/environment-directory.d.ts",
+      "import": "./dist/services/sandbox/environment-directory.js",
+      "require": "./dist/services/sandbox/environment-directory.js"
+    },
     "./services/sandbox/tool-runners": {
       "types": "./dist/services/sandbox/tool-runners.d.ts",
       "import": "./dist/services/sandbox/tool-runners.js",
