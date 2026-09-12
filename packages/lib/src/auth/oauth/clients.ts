@@ -89,14 +89,16 @@ const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', '[::1]']);
  *  - **URL-wrapping** (`filesystem:`, `view-source:`, `jar:`) — these carry a
  *    second URL inside them, so accepting one hands the authorization code to
  *    whatever that inner URL addresses.
- *  - **platform-handled** (`chrome:`, `chrome-extension:`, `resource:`,
- *    `content:`, `intent:`, `android-app:`, `mailto:`, `tel:`, `sms:`) — the
- *    OS or browser routes these, so they belong to no registered app.
+ *  - **platform-handled** (`chrome:`, `edge:`, `devtools:`, `resource:`, the
+ *    four browser-extension schemes, `content:`, `intent:`, `android-app:`,
+ *    `mailto:`, `tel:`, `sms:`) — the OS or browser routes these, so they
+ *    belong to no registered app.
  *  - **network/transport** (`ftp:`, `ftps:`, `telnet:`, `ssh:`, `gopher:`,
  *    `ldap:`, `ldaps:`) — these address a server, not a program on the user's
  *    device, so a code delivered to one has left the device entirely.
  *
- * This is a DENY-list, and `classifyRedirect` says so: a scheme nobody thought
+ * The list is best-effort by construction and makes no claim to be exhaustive:
+ * this is a DENY-list, and `classifyRedirect` says so — a scheme nobody thought
  * of is treated as private-use and is registrable. See that function's note
  * for why, and ADR 0004 Decision 3 for the scheme-squatting exposure that
  * follows from it.
@@ -117,6 +119,12 @@ const NEVER_PRIVATE_USE_SCHEMES = new Set([
   'jar:',
   'chrome:',
   'chrome-extension:',
+  'moz-extension:',
+  'safari-extension:',
+  'safari-web-extension:',
+  'ms-browser-extension:',
+  'edge:',
+  'devtools:',
   'resource:',
   'content:',
   'intent:',
