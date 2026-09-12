@@ -351,12 +351,18 @@ export function createSandboxTools({ runDeps, resolveContext, gate, gateDiscover
     // would refuse a call the payer has already paid for. It narrows as often
     // as it widens: naming an environment never inherits the conversation's
     // entitlement.
-    const ctx: SandboxActorContext = { ...actor.ctx, ...resolved.payer, environment: resolved.target };
+    // `gateDriveId` is split OFF rather than spread onto the context: it is an
+    // input to the GATE, not a fact about the actor, and a stray undeclared
+    // field riding a context this widely passed is a trap for the first person
+    // who writes `...ctx`. Nothing spreads it wholesale today; this keeps that
+    // true by construction rather than by habit.
+    const { gateDriveId, ...payer } = resolved.payer;
+    const ctx: SandboxActorContext = { ...actor.ctx, ...payer, environment: resolved.target };
     // The gate sees `gateDriveId`, which is the env's drive for everything
     // except a LOCAL environment — where the entitlement is machine ownership
     // and the drive-role leg does not apply. `ctx.driveId` keeps the billing
     // coordinate either way. See `SandboxPayerCoordinates.gateDriveId`.
-    const decision = await gate({ ...ctx, driveId: resolved.payer.gateDriveId });
+    const decision = await gate({ ...ctx, driveId: gateDriveId });
     // A refusal names the environment that refused (leaf E), so a wrong target
     // reads as a wrong target rather than as a broken tool. Only AFTER
     // resolution: a refusal that never resolved an environment has none to
