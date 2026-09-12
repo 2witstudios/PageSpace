@@ -85,8 +85,10 @@ async function hasEligibleReachableEnvironment(userId: string): Promise<boolean>
     if (!isLocalEnvsEnabled()) return false;
     const { listGlobalAssistantEnvironments, resolveDriveEnvPayer } = await import('@/lib/drive-envs/drive-envs-runtime');
     const environments = await listGlobalAssistantEnvironments(userId);
-    for (const env of environments) {
-      const payer = await resolveDriveEnvPayer(env.driveId);
+    // By DRIVE: the payer is the drive's, so several machines in one drive are
+    // one question. Reached only after the cheap check has already refused.
+    for (const driveId of new Set(environments.map((env) => env.driveId))) {
+      const payer = await resolveDriveEnvPayer(driveId);
       if (payer && (await canRunCodeForSession({ userId, driveId: null, ownerId: payer.payerId }))) return true;
     }
     return false;

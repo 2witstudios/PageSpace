@@ -787,8 +787,12 @@ export const productionSandboxDiscoveryGate: SandboxGate = async (ctx) => {
   if (reachable.length === 0) return direct;
 
   const { resolveDriveEnvPayer } = await import('@/lib/drive-envs/drive-envs-runtime');
-  for (const env of reachable) {
-    const payer = await resolveDriveEnvPayer(env.driveId);
+  // By DRIVE, not by environment: the payer is a property of the drive, so
+  // several machines in one drive are one question, not several. A person with
+  // ten machines across two drives costs two lookups here rather than ten, and
+  // this whole path is only reached when the cheap check has already refused.
+  for (const driveId of new Set(reachable.map((env) => env.driveId))) {
+    const payer = await resolveDriveEnvPayer(driveId);
     if (!payer) continue;
     // The SAME shape `openAt` will gate the run with: the environment's payer,
     // and NO drive — a local env authorizes on machine ownership, which the
