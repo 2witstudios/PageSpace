@@ -131,13 +131,17 @@ vi.mock('@pagespace/db/schema/storage', () => ({
   filePages: mockTable('filePages'),
 }));
 vi.mock('@pagespace/db/schema/members', () => ({ driveMembers: mockTable('driveMembers') }));
-vi.mock('@pagespace/db/schema/chat', () => ({ channelMessages: mockTable('channelMessages') }));
+vi.mock('@pagespace/db/schema/chat', () => ({
+  channelMessages: mockTable('channelMessages'),
+  channelMessageAttachments: mockTable('channelMessageAttachments'),
+}));
 vi.mock('@pagespace/db/schema/conversations', () => ({
   conversations: mockTable('conversations'),
   messages: mockTable('messages'),
 }));
 vi.mock('@pagespace/db/schema/social', () => ({
   directMessages: mockTable('directMessages'),
+  directMessageAttachments: mockTable('directMessageAttachments'),
   dmConversations: mockTable('dmConversations'),
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
@@ -301,9 +305,11 @@ describe('collectUserPages', () => {
 
 describe('collectUserMessages', () => {
   /**
-   * The ladder is now FOUR queries, not five: channel, unified conversation
-   * messages, sent DMs, dm-conversation ids (+ a fifth for received DMs when
-   * that lookup is non-empty). The legacy `chat_messages` query is GONE —
+   * The ladder is channel, unified conversation messages, sent DMs,
+   * dm-conversation ids (+ one more for received DMs when that lookup is
+   * non-empty), with a batched attachment lookup inserted after the channel
+   * and sent-DM queries — each skipped entirely when its message list is
+   * empty, so a queue position only exists when the branch has rows. The legacy `chat_messages` query is GONE —
    * Phase 4 PR 13 cut the export over to the unified `messages` table alone,
    * because the dual-write + backfill made it a superset under the same
    * primary keys and reading both duplicated every page-chat row.
@@ -313,8 +319,11 @@ describe('collectUserMessages', () => {
     const pageChatMsg = { id: 'm1', content: 'Page chat msg', role: 'user', conversationId: 'c1', createdAt: new Date(), conversationType: 'page', conversationContextId: 'p1' };
     const globalMsg = { id: 'm3', content: 'Conv msg', role: 'user', conversationId: 'c2', createdAt: new Date(), conversationType: 'global', conversationContextId: null };
     const dmMsg = { id: 'm4', content: 'DM msg', conversationId: 'c3', createdAt: new Date() };
-    // 4th call: dmConversations lookup returns [] so no 5th call for received DMs
-    const db = createChainDb([[channelMsg], [pageChatMsg, globalMsg], [dmMsg], []]);
+    // Ladder: channel, channel attachments, conv, sent DMs, sent-DM
+    // attachments, dmConversations. The two attachment lookups only run when
+    // their message list is non-empty, which it is on both branches here. The
+    // dmConversations lookup returns [] so there is no received-DM query.
+    const db = createChainDb([[channelMsg], [], [pageChatMsg, globalMsg], [dmMsg], [], []]);
 
     const result = await collectUserMessages(db as never, 'user-1');
 
@@ -342,6 +351,51 @@ describe('collectUserMessages', () => {
 
     expect(result[0].source).toBe('ai_chat');
     expect(result[0].pageId).toBeUndefined();
+  });
+
+  it('exports every attachment on a channel message, in display order', async () => {
+    const channelMsg = { id: 'm1', content: '', pageId: 'p1', createdAt: new Date() };
+    // The rows come back in whatever order the index hands them over; the
+    // subject's copy must be in the order they sent them.
+    const attachmentRows = [
+      { messageId: 'm1', fileId: 'f-2', attachmentMeta: { originalName: 'second.png', mimeType: 'image/png', size: 20 }, position: 1 },
+      { messageId: 'm1', fileId: 'f-1', attachmentMeta: { originalName: 'first.png', mimeType: 'image/png', size: 10 }, position: 0 },
+    ];
+    // channel msgs, channel attachments, conv, sentDms, dmConvIds
+    const db = createChainDb([[channelMsg], attachmentRows, [], [], []]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result[0].attachments).toEqual([
+      { fileId: 'f-1', originalName: 'first.png', mimeType: 'image/png', size: 10 },
+      { fileId: 'f-2', originalName: 'second.png', mimeType: 'image/png', size: 20 },
+    ]);
+  });
+
+  it('never binds more message ids in one attachment lookup than Postgres allows', async () => {
+    // Drizzle expands each inArray value into its own bind parameter and
+    // Postgres caps a statement at 65535 of them. A subject prolific enough to
+    // cross that would get an opaque 08P01 protocol error instead of their
+    // Art 15 export, so the lookup is chunked — and this observes the binds
+    // themselves, not just the result, because the ceiling is invisible in the
+    // returned rows.
+    const channelMsgs = Array.from({ length: 1200 }, (_, i) => ({
+      id: `m-${i}`, content: '', pageId: 'p1', createdAt: new Date(),
+    }));
+    const db = createChainDb([channelMsgs, [], [], [], []]);
+
+    await collectUserMessages(db as never, 'user-1');
+
+    // `where` is a bare vi.fn(), so its recorded args are an empty tuple type.
+    const calls = db.where.mock.calls as unknown as unknown[][];
+    const boundIdCounts = calls
+      .map((call) => call[0] as { _op?: string; vals?: unknown[] } | undefined)
+      .filter((predicate) => predicate?._op === 'inArray')
+      .map((predicate) => predicate?.vals?.length ?? 0);
+
+    expect(boundIdCounts.length).toBeGreaterThan(1);
+    expect(Math.max(...boundIdCounts)).toBeLessThanOrEqual(500);
+    expect(boundIdCounts.reduce((sum, n) => sum + n, 0)).toBe(1200);
   });
 
   it('given_noMessages_returnsEmptyArray', async () => {
@@ -408,8 +462,9 @@ describe('collectUserMessages', () => {
     const sentDm = { id: 'm4', content: 'Sent DM', conversationId: 'conv-1', createdAt: new Date() };
     const convId = { id: 'conv-1' };
     const receivedDm = { id: 'm5', content: 'Received DM', conversationId: 'conv-1', createdAt: new Date() };
-    // channel=[], conv=[], sentDms=[sentDm], dmConvIds=[convId], receivedDms=[receivedDm]
-    const db = createChainDb([[], [], [sentDm], [convId], [receivedDm]]);
+    // channel=[], conv=[], sentDms=[sentDm], sent-DM attachments=[],
+    // dmConvIds=[convId], receivedDms=[receivedDm]
+    const db = createChainDb([[], [], [sentDm], [], [convId], [receivedDm]]);
 
     const result = await collectUserMessages(db as never, 'user-1');
 

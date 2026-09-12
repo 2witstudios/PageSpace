@@ -10,15 +10,17 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, asc, desc, eq, gt, isNull, lt, or, sql, type InferSelectModel } from '@pagespace/db/operators';
+import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql, type InferSelectModel } from '@pagespace/db/operators';
 import {
   channelMessages,
+  channelMessageAttachments,
   channelMessageReactions,
   channelReadStatus,
   channelThreadFollowers,
   type ChannelMessageAiMeta,
 } from '@pagespace/db/schema/chat';
-import { files, type AttachmentMeta } from '@pagespace/db/schema/storage';
+import { files } from '@pagespace/db/schema/storage';
+import { MAX_MESSAGE_ATTACHMENTS, type MessageAttachmentInput } from './attachment-upload-core';
 import { decryptField } from '../encryption/field-crypto';
 import { deriveLatestTimestamp } from './message-derived-state';
 
@@ -64,11 +66,29 @@ const messageWith = {
       image: true,
     },
   },
+  // Legacy single-attachment relation. Still read so a row written by a pod on
+  // the previous build (which set only channel_messages.fileId) still renders;
+  // goes away with the columns themselves.
   file: {
     columns: {
       id: true,
       mimeType: true,
       sizeBytes: true,
+    },
+  },
+  // Shaped exactly like `reactions` above — a bare nested `with`. The rows
+  // carry `position`; ordering is applied where they are consumed rather than
+  // in this shared clause, which is `as const` and so cannot contextually type
+  // an orderBy callback.
+  attachments: {
+    with: {
+      file: {
+        columns: {
+          id: true,
+          mimeType: true,
+          sizeBytes: true,
+        },
+      },
     },
   },
   reactions: {
@@ -154,8 +174,7 @@ export interface InsertChannelMessageInput {
   pageId: string;
   userId: string;
   content: string;
-  fileId: string | null;
-  attachmentMeta: AttachmentMeta | null;
+  attachments: MessageAttachmentInput[];
   quotedMessageId?: string | null;
   // Optional aiMeta passthrough — the channel webhook publisher (and any future
   // top-level non-human-authored post) needs this the same way
@@ -165,39 +184,73 @@ export interface InsertChannelMessageInput {
 
 export type InsertChannelMessageResult =
   | { kind: 'ok'; message: ChannelMessageRow }
-  | { kind: 'not_found' };
+  | { kind: 'not_found' }
+  | { kind: 'too_many_attachments' };
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 type ChannelAttachmentLockResult = { kind: 'ok' } | { kind: 'not_found' };
 
 /**
- * Lock the file row with SELECT ... FOR UPDATE. Shared by
- * insertChannelMessageWithAttachment and insertChannelThreadReply (the
- * top-level and thread-reply attachment paths) so the two call sites can't
- * drift out of sync with each other — mirrors the `lockDriveRolesInOrder`
- * shared-lock-helper pattern in drive-role-service.ts. Channels have no
- * `fileConversations`-equivalent link table, so this only locks `files`,
- * unlike the DM side's `lockAndValidateDmAttachment`.
+ * Lock every attached file row with SELECT ... FOR UPDATE, in one statement
+ * ordered by id. Shared by insertChannelMessageWithAttachment and
+ * insertChannelThreadReply (the top-level and thread-reply attachment paths)
+ * so the two call sites can't drift out of sync with each other — mirrors the
+ * `lockDriveRolesInOrder` shared-lock-helper pattern in drive-role-service.ts.
+ * Channels have no `fileConversations`-equivalent link table, so this only
+ * locks `files`, unlike the DM side's `lockAndValidateDmAttachments`.
  *
- * Callers without a fileId should skip calling this entirely — it always
- * locks, so it must stay conditional on `input.fileId` at the call site.
+ * The ORDER BY is load-bearing now that a message can carry several files: two
+ * concurrent sends sharing files {A, B} would otherwise be free to take
+ * A-then-B and B-then-A and deadlock. Every path that locks these rows uses the
+ * same global order — message rows, then `files` by id asc, then (on the DM
+ * side) `file_conversations` by fileId asc.
+ *
+ * Callers with no attachments should skip calling this entirely — it always
+ * locks, so it must stay conditional on a non-empty list at the call site.
  */
-async function lockAndValidateChannelAttachment(
+async function lockAndValidateChannelAttachments(
   tx: Tx,
-  fileId: string
+  fileIds: string[]
 ): Promise<ChannelAttachmentLockResult> {
-  const [file] = await tx
+  // The same file may legitimately appear twice in one message: files.id is a
+  // content hash, so attaching the same photo twice yields one id. Lock the
+  // distinct set, but compare against that same distinct set.
+  const unique = [...new Set(fileIds)].sort();
+
+  const rows = await tx
     .select({ id: files.id })
     .from(files)
-    .where(eq(files.id, fileId))
+    .where(inArray(files.id, unique))
+    .orderBy(asc(files.id))
     .for('update');
 
-  if (!file) {
+  if (rows.length !== unique.length) {
     return { kind: 'not_found' };
   }
 
   return { kind: 'ok' };
+}
+
+/**
+ * Write the attachment rows for a just-inserted message, in the order the
+ * client supplied them (which is the display order, and is unrelated to the
+ * sorted order the file rows were locked in).
+ */
+async function insertChannelAttachmentRows(
+  tx: Tx,
+  messageId: string,
+  attachments: MessageAttachmentInput[]
+): Promise<void> {
+  if (attachments.length === 0) return;
+  await tx.insert(channelMessageAttachments).values(
+    attachments.map((attachment, position) => ({
+      messageId,
+      fileId: attachment.fileId,
+      attachmentMeta: attachment.attachmentMeta,
+      position,
+    }))
+  );
 }
 
 /**
@@ -209,9 +262,16 @@ async function lockAndValidateChannelAttachment(
 async function insertChannelMessageWithAttachment(
   input: InsertChannelMessageInput
 ): Promise<InsertChannelMessageResult> {
+  if (input.attachments.length > MAX_MESSAGE_ATTACHMENTS) {
+    return { kind: 'too_many_attachments' };
+  }
+
   return db.transaction(async (tx) => {
-    if (input.fileId) {
-      const check = await lockAndValidateChannelAttachment(tx, input.fileId);
+    if (input.attachments.length > 0) {
+      const check = await lockAndValidateChannelAttachments(
+        tx,
+        input.attachments.map((a) => a.fileId)
+      );
       if (check.kind !== 'ok') {
         return check;
       }
@@ -223,12 +283,19 @@ async function insertChannelMessageWithAttachment(
         pageId: input.pageId,
         userId: input.userId,
         content: input.content,
-        fileId: input.fileId,
-        attachmentMeta: input.attachmentMeta,
+        // Legacy columns keep carrying the first attachment so readers we have
+        // not migrated yet (SDK, CLI, processor) keep working. Note this does
+        // NOT protect attachments 1..N from the file reaper — the `file_pages`
+        // link written at upload time does. Dropping these columns is a
+        // separate, later change.
+        fileId: input.attachments[0]?.fileId ?? null,
+        attachmentMeta: input.attachments[0]?.attachmentMeta ?? null,
         quotedMessageId: input.quotedMessageId ?? null,
         aiMeta: input.aiMeta ?? undefined,
       })
       .returning();
+
+    await insertChannelAttachmentRows(tx, row.id, input.attachments);
 
     return { kind: 'ok', message: row };
   });
@@ -501,8 +568,7 @@ export interface InsertChannelThreadReplyInput {
   pageId: string;
   userId: string;
   content: string;
-  fileId: string | null;
-  attachmentMeta: AttachmentMeta | null;
+  attachments: MessageAttachmentInput[];
   alsoSendToParent?: boolean;
   // Optional aiMeta passthrough — agent-authored replies (mention responder)
   // need senderType + senderName so the rendered row reads "AgentTitle (User)"
@@ -524,21 +590,26 @@ export type InsertChannelThreadReplyResult =
   | { kind: 'parent_not_found' }
   | { kind: 'parent_wrong_page' }
   | { kind: 'parent_not_top_level' }
-  | { kind: 'not_found' };
+  | { kind: 'not_found' }
+  | { kind: 'too_many_attachments' };
 
 /**
- * Locks the parent row, then (if a fileId is attached) the file row via
- * `lockAndValidateChannelAttachment`, before inserting the reply and its
+ * Locks the parent row, then (if anything is attached) the file rows via
+ * `lockAndValidateChannelAttachments`, before inserting the reply and its
  * optional `alsoSendToParent` mirror — all inside one transaction. Mirrors
  * `insertDmThreadReply`'s lock ordering (parent -> files); channels have no
  * `fileConversations`-equivalent link table, so there's nothing to lock
- * beyond the file itself. The lock is taken once and covers both the reply
- * and the mirror row, since both reference the same input.fileId inside this
- * same transaction.
+ * beyond the files themselves. The lock is taken once and covers both the
+ * reply and the mirror row, since both reference the same input.attachments
+ * inside this same transaction.
  */
 async function insertChannelThreadReply(
   input: InsertChannelThreadReplyInput
 ): Promise<InsertChannelThreadReplyResult> {
+  if (input.attachments.length > MAX_MESSAGE_ATTACHMENTS) {
+    return { kind: 'too_many_attachments' };
+  }
+
   return db.transaction(async (tx) => {
     // SELECT ... FOR UPDATE locks the parent row for the rest of this tx so a
     // concurrent softDeleteChannelMessage(parentId) blocks until our INSERT and
@@ -567,8 +638,11 @@ async function insertChannelThreadReply(
       return { kind: 'parent_not_top_level' };
     }
 
-    if (input.fileId) {
-      const check = await lockAndValidateChannelAttachment(tx, input.fileId);
+    if (input.attachments.length > 0) {
+      const check = await lockAndValidateChannelAttachments(
+        tx,
+        input.attachments.map((a) => a.fileId)
+      );
       if (check.kind !== 'ok') {
         return check;
       }
@@ -580,12 +654,14 @@ async function insertChannelThreadReply(
         pageId: input.pageId,
         userId: input.userId,
         content: input.content,
-        fileId: input.fileId,
-        attachmentMeta: input.attachmentMeta,
+        fileId: input.attachments[0]?.fileId ?? null,
+        attachmentMeta: input.attachments[0]?.attachmentMeta ?? null,
         parentId: input.parentId,
         aiMeta: input.aiMeta ?? undefined,
       })
       .returning();
+
+    await insertChannelAttachmentRows(tx, reply.id, input.attachments);
 
     const [updatedParent] = await tx
       .update(channelMessages)
@@ -623,11 +699,14 @@ async function insertChannelThreadReply(
           pageId: input.pageId,
           userId: input.userId,
           content: input.content,
-          fileId: input.fileId,
-          attachmentMeta: input.attachmentMeta,
+          fileId: input.attachments[0]?.fileId ?? null,
+          attachmentMeta: input.attachments[0]?.attachmentMeta ?? null,
           mirroredFromId: reply.id,
         })
         .returning();
+      // The mirror is a distinct message row, so it needs its own attachment
+      // rows — the same files, in the same display order.
+      await insertChannelAttachmentRows(tx, mirrorRow.id, input.attachments);
       mirror = mirrorRow;
     }
 

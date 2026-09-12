@@ -264,6 +264,57 @@ describe('triggerMentionedAgentResponses — image attachment plumbing', () => {
     expect(askArgs.imageAttachments).toBeUndefined();
   });
 
+  it('given an old photo batch and a newer photo, keeps the newer one', async () => {
+    // The 5-slot cap keeps the LAST candidates, and the responder hands the
+    // resolver its context oldest-first — that pairing is what makes the cap
+    // keep the NEWEST images. It only started mattering when one message could
+    // carry a whole batch: reverse either half and a single old batch fills
+    // every slot and evicts everything posted since.
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Vision Agent', enabledTools: ['send_channel_message'], aiProvider: 'anthropic', aiModel: 'claude-sonnet-4.5' },
+    ]);
+    const batchFileIds = ['file-b1', 'file-b2', 'file-b3', 'file-b4', 'file-b5'];
+    // Newest first, exactly as the query returns it.
+    mockChannelMessagesFindMany.mockResolvedValue([
+      {
+        ...imageMessage,
+        fileId: 'file-new',
+        createdAt: new Date('2026-07-01T01:00:00.000Z'),
+        attachmentMeta: { ...imageMessage.attachmentMeta, originalName: 'newest.png' },
+      },
+      {
+        ...imageMessage,
+        fileId: batchFileIds[0],
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        attachments: batchFileIds.map((fileId, position) => ({
+          fileId,
+          attachmentMeta: { ...imageMessage.attachmentMeta, originalName: `${fileId}.png` },
+          position,
+        })),
+      },
+    ]);
+    mockFilesFindMany.mockResolvedValue([
+      { ...fileRow, id: 'file-new', storagePath: `files/${'c'.repeat(64)}/original` },
+      ...batchFileIds.map((id, i) => ({
+        ...fileRow,
+        id,
+        storagePath: `files/${String(i).repeat(64)}/original`,
+      })),
+    ]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: '@[Vision Agent](agent-1:page) look at this',
+    });
+
+    const askArgs = mockAskAgentExecute.mock.calls[0][0];
+    expect(askArgs.imageAttachments).toHaveLength(5);
+    // The newest message's photo survives the cap; the old batch gives up a slot.
+    expect(
+      (askArgs.imageAttachments as Array<{ filename: string }>).map((part) => part.filename),
+    ).toContain('newest.png');
+  });
+
   it('given the same fileId attached to multiple recent messages, access-checks and signs it only once', async () => {
     mockPagesFindMany.mockResolvedValue([
       { id: 'agent-1', title: 'Vision Agent', enabledTools: ['send_channel_message'], aiProvider: 'anthropic', aiModel: 'claude-sonnet-4.5' },

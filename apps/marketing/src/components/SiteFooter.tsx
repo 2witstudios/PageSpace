@@ -65,7 +65,7 @@ export function SiteFooter() {
               <span className="font-semibold text-foreground">PageSpace</span>
             </Link>
             <p className="mt-3 text-sm text-muted-foreground max-w-[220px]">
-              The AI for working. Get on the same page.
+              The workspace that keeps working. Get on the same page.
             </p>
             <a
               href="https://github.com/2witstudios/PageSpace"

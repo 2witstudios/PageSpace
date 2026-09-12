@@ -2,7 +2,6 @@
 
 import { type MouseEvent } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
 import {
   Activity,
   ChevronDown,
@@ -33,11 +32,11 @@ import { shouldOpenInNewTab } from "@/lib/tabs/tab-navigation-utils";
 import { cn } from "@/lib/utils";
 
 interface DriveFooterProps {
+  driveId: string;
   canManage: boolean;
 }
 
-export default function DriveFooter({ canManage }: DriveFooterProps) {
-  const params = useParams();
+export default function DriveFooter({ driveId, canManage }: DriveFooterProps) {
   const driveFooterCollapsed = useLayoutStore((state) => state.driveFooterCollapsed);
   const setDriveFooterCollapsed = useLayoutStore((state) => state.setDriveFooterCollapsed);
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
@@ -47,10 +46,6 @@ export default function DriveFooter({ canManage }: DriveFooterProps) {
   const isTablet = useIsTablet();
   const hideTabActions = isNative && !isTablet;
 
-  const { driveId: driveIdParams } = params;
-  const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
-
-  if (!driveId) return null;
 
   const handleLinkClick = (e: MouseEvent<HTMLAnchorElement>, href: string) => {
     if (shouldOpenInNewTab(e)) {

@@ -109,6 +109,30 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   still delete or revoke the Environment but cannot drive it, and the settings that would have let
   other members drive it are gone rather than hidden. An Environment whose policy allows nothing
   refuses new sessions up front with a message that says where to turn things on.
+- **The Home screen now tells you what's actually waiting for you** — opening the dashboard used
+  to show a generic "How can I help you today?" with no sign of what changed across your drives,
+  and the only place that context lived (the sidebar's Pulse note) disappeared the moment you
+  collapsed the sidebar. Home now leads with one line above the composer naming the single most
+  important thing that needs you — someone mentioning you, an overdue task, invites waiting on an
+  RSVP, a finished agent session, or what changed since you were last here — with a couple of
+  quick prompts underneath that put the same thing straight into the composer without sending it.
+  Nothing is invented: the line only ever says what it can back up, and on a quiet day it just says
+  you're caught up. Once you start a conversation the line tucks into a small strip under the
+  header instead of taking up the page, and you can still expand it. Collapse the left sidebar and
+  a small drive switcher stays next to the title, so you always know what the assistant can see.
+- **Channels, Files, Tasks and Calendar are one page each, with a drive focus** — each of those
+  views used to exist twice: a dashboard version and a drive version, with different titles and a
+  sidebar that only ever linked to whichever one you were in. Now "All drives" is a focus like any
+  drive. The sidebar's drive switcher names the focus ("All drives" or the drive), and the drive
+  picker it opens lists All drives as its first row; choosing either keeps you in the section you
+  are in, so a drive's tasks become every drive's tasks and back. Page titles stop encoding scope
+  ("Tasks", not "My Tasks" and "Drive Tasks"); the line under each title names the focus and
+  opens the same picker, and on a phone it is the only control added to the row. Files across all
+  drives is the drives browser, and opening a drive there lands in its files. Tasks loses its
+  separate Drive filter and Back button (the focus is the drive, Home is one tap away), withholds
+  the per-list Status filter across all drives where it would merge unrelated lists, and names the
+  drive before the list on every row. The calendar's sidebar now labels the calendar new events go
+  to. The first navigation item is "Home" whichever focus you are in.
 - **AI agents can format spreadsheets** — two new workspace tools, **Format Sheet** and
   **Conditional Formatting**, let an agent make a SHEET page presentable instead of leaving a grid
   of bare numbers. An agent declares what a table *is* (its range, header rows, which columns are
@@ -120,6 +144,22 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   tables declared, ranges touched and rules added, with a swatch per colour, so you can see what
   changed without opening the sheet. The spreadsheets skill now teaches all of this; the
   workspace-tool count in the docs goes from 81 to 83.
+- **The SDK and CLI can now format a spreadsheet, not just fill it** — the AI agent tools could
+  already declare a table's structure and style it (that shipped just above); an SDK or CLI caller
+  could not, so a sheet built by a script stayed a grid of bare numbers with no call available to
+  change that. Two additions close it. `pagespace sheets formatting <pageId>` shows how a sheet is
+  styled today — the tables it declares, its conditional rules and their ids, frozen rows and
+  columns, column formats and widths, row heights, and (with `--ranges`) the formats on individual
+  cells. `pagespace sheets format <pageId>` applies changes: declare a table's range, header rows,
+  what each column means, where the totals are and an accent colour, and the presentation is derived
+  from that, so rows you add next week inherit it. Everything the grid itself can do is reachable —
+  cell and column formats, widths, heights, freezes, and conditional rules you can add, edit,
+  reorder or remove by id. In fact more than the agent tools can do: an agent can only add and
+  remove a rule, while a script can patch one in place. Changes apply in the order you send them,
+  in one transaction, all or nothing: one bad instruction refuses the whole call, tells you which
+  one was wrong, and writes nothing. The same two operations are available to the TypeScript SDK as
+  `client.sheets.readFormatting` / `client.sheets.applyFormat`, and to any MCP client
+  (ChatGPT, Codex, Claude Desktop) through `pagespace mcp`.
 - **iPhone and iPad: sign-in no longer tells you Google is blocked when it isn't, and an emailed
   sign-in link now signs you in inside the app** — two things were wrong on the app's sign-in
   screen. It showed a warning saying "Google sign-in is blocked in this app" and pushed you toward
@@ -536,16 +576,20 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
-- **The header now says "Dashboard" instead of showing a house and a slash** — the way back out of
-  a drive used to be a small house icon followed by a `/`, and nothing on screen said where it
-  went. That made it easy to miss entirely, and easy to misread when you did notice it: drives have
-  their own home page, and the sidebar calls that "Drive Home", so a house in the header looked like
-  it meant the drive you were already in. It now reads **Dashboard** in words. Inside a drive it
-  becomes a bordered button with a back arrow, followed by the name of the drive you are in, so the
-  header tells you both where you can go and where you are standing; on the dashboard itself it
-  stops being a button, because you are already there. On narrower windows, where the header has
-  other things to fit, the button keeps its word wherever it is a way out — that being the whole
-  point — and the drive name and the you-are-here marker are the parts that give way.
+- **The header now says "Home", and the drive name next to it opens a proper drive picker** —
+  the way back out of a drive used to be a small house icon followed by a `/`, and nothing on
+  screen said where it went, so it was easy to miss entirely. It now reads **Home** in words, next
+  to the house, as the one outlined button in the header so it is clearly the place to go. Inside a
+  drive it is followed by the name of the drive you are standing in, and that name is now a button:
+  click it and a drive picker opens — a wide, searchable dialog with your favourite drives, the
+  ones you opened most recently, and everything else, plus **All drives** and **Create drive**
+  right under the search box. It replaces the narrow dropdown the sidebar used to open for the
+  same job, which had to squeeze search, sections and actions into one thin scrolling column; the
+  sidebar's drive button now opens this same dialog, and on a phone the dialog sits at the top of
+  the screen so the keyboard never covers the search box. On the dashboard itself the word stops
+  being a button, because you are already there. On a phone the header fits on one row again with
+  every control still present, including recent pages: the search button moves in with the other
+  actions, and the spacing tightens a little below tablet width.
 
 - **Android app: first internal-testing version identity, and the Android/iOS shell configs are now
   checked in CI (still not distributed)** — the Android build now identifies itself as version 1.4
@@ -591,6 +635,26 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   OpenRouter's live data, and a handful of models OpenRouter no longer serves were removed.
 
 ### Fixed
+
+- **Sending several photos at once now makes one message with one gallery, and stops them appearing
+  twice** — attaching a batch of photos used to send them as separate messages, one per file: the
+  channel or DM filled with a column of single-photo bubbles, the typed text sat on the first one,
+  and until you refreshed the page each photo also appeared a second time. The doubling and the
+  splitting were the same bug. A batch is now a single message carrying every file, stacked into a
+  grid you can click into: the viewer opens on the photo you picked and pages through the rest with
+  the arrow keys or the on-screen arrows. Text and photos sent together stay in one bubble. Mixed
+  batches put the images in the grid and any videos or documents beneath it, a single photo looks
+  exactly as it did before, and a message sent before this change still renders the way it always
+  has. Channels and DMs both work this way, and the other person sees the batch arrive as one
+  message rather than as several. Thread replies display a batch as one gallery too, though
+  attaching a file while writing a thread reply is still not possible — that part has never worked
+  and is unchanged here. A message can carry up to ten files; the composer says so rather than
+  silently dropping the extras.
+
+- **Phone: opening a side panel no longer pops the keyboard** — on a phone or in the iOS and
+  Android apps, tapping the menu button to open the navigation panel (or the assistant panel)
+  immediately focused the search box inside it, so the keyboard slid up over the panel you had just
+  opened. The panel now opens with nothing focused; tap the search box when you want it.
 
 - **The account menu no longer labels free accounts "Billing (Business)"** — the plan name in the
   avatar dropdown fell through to "Business" whenever the subscription lookup had not answered yet

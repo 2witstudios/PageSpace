@@ -38,6 +38,7 @@ CREATE TABLE "drive_env_approvals" (
 --> statement-breakpoint
 ALTER TABLE "drive_env_local" DROP CONSTRAINT "drive_env_local_bind_policy_check";--> statement-breakpoint
 ALTER TABLE "drive_env_local" ADD COLUMN "daemonEpoch" text;--> statement-breakpoint
+ALTER TABLE "drive_env_local" ADD COLUMN "ownerCredentials" jsonb;--> statement-breakpoint
 ALTER TABLE "drive_env_local" ADD COLUMN "pausedAt" timestamp;--> statement-breakpoint
 ALTER TABLE "drive_env_grant_audit" ADD CONSTRAINT "drive_env_grant_audit_envId_drive_envs_id_fk" FOREIGN KEY ("envId") REFERENCES "public"."drive_envs"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "drive_env_grant_audit" ADD CONSTRAINT "drive_env_grant_audit_userId_users_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint

@@ -91,6 +91,7 @@ vi.mock('@/hooks/useAttachmentUpload', () => ({
     uploadFiles: vi.fn(),
     clearAttachment: vi.fn(),
     removeAttachment: vi.fn(),
+    restoreAttachments: vi.fn(),
   }),
 }));
 
@@ -162,12 +163,12 @@ describe('MessageInput', () => {
       given: 'a channel-source compose with content',
       should: 'call onSubmit with content + alsoSendToParent=false',
       actual: onSubmit.mock.calls[0]?.[0],
-      expected: { content: 'hello channel', attachment: undefined, alsoSendToParent: false },
+      expected: { content: 'hello channel', attachments: [], alsoSendToParent: false },
     }).toEqual({
       given: 'a channel-source compose with content',
       should: 'call onSubmit with content + alsoSendToParent=false',
-      actual: { content: 'hello channel', attachment: undefined, alsoSendToParent: false },
-      expected: { content: 'hello channel', attachment: undefined, alsoSendToParent: false },
+      actual: { content: 'hello channel', attachments: [], alsoSendToParent: false },
+      expected: { content: 'hello channel', attachments: [], alsoSendToParent: false },
     });
   });
 

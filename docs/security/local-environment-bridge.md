@@ -96,7 +96,7 @@ written so the verdict is quoted rather than re-derived:
 
 - **"Who can drive it."** Closed by [D-6]. `bindPolicy` is the single value `'owner'` in the
   type (`packages/lib/src/env-bridge/decide-bind.ts`), in the row CHECK
-  (`packages/db/src/schema/drive-env-local.ts`, migration `packages/db/drizzle/0292_round_robbie_robertson.sql`)
+  (`packages/db/src/schema/drive-env-local.ts`, migration `packages/db/drizzle/0294_secret_moira_mactaggert.sql`)
   and in the gate (`decideBind` has no actor role in its input at all). The bridge is now
   single-user on this axis, like the four comparison tools. Section "Owner-only binding" below
   says what this does and does not close.
@@ -430,7 +430,7 @@ the repository root on the commit being deployed.
    `.git/hooks/pre-commit` write must produce a Tier B card naming that file and its reason, and
    the file must **not exist** afterwards until the owner clicks — while an ordinary write inside
    the same root still lands with no card (gate rows `P23a`/`P23b`).
-3. Migration 0292 applied on the target database:
+3. Migration 0294 applied on the target database:
    `psql "$DATABASE_URL" -c "\d drive_env_local" | grep bind_policy_check` shows
    `CHECK ("bindPolicy" IN ('owner'))`.
 4. Signing key present on `pagespace-web`:

@@ -2,7 +2,25 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.10.0] — 2026-09-12
+
+### Added
+
+- **`pagespace sheets formatting` and `pagespace sheets format` — read and write how a sheet
+  looks.** The row verbs could fill a sheet but not style it, so a sheet built from a script stayed
+  a grid of bare numbers. `formatting <pageId>` prints the declared tables, the conditional rules
+  **with their ids** (the only way to get an id you can later remove), frozen rows and columns,
+  column formats and widths, and row heights; add `--ranges A1:F40,H2:H9` to also read the formats
+  on individual cells, which are not read otherwise because they live on the rows. `format
+  <pageId>` takes a JSON array of ops on stdin or `--json-input` and applies them **in order, in
+  one transaction, all or nothing** — one bad op refuses the whole call, names its index, and
+  writes nothing. Both take `--tab <n>` and `--json` like every other sheet verb.
+
+  Prefer declaring a **region** to formatting cells: a region says what an area *is* (header rows,
+  what each column means, where the totals are, an accent hue) and an open range like `A1:F` covers
+  rows added later at no cost however tall the sheet gets. `format` is not gated behind `--yes`,
+  unlike `delete-rows`: formatting is presentation, recoverable by writing it again, and prompting
+  to bold a header row would only train the habit of passing `--yes` blind.
 
 ### Added
 

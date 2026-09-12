@@ -123,6 +123,13 @@ const mockConversation = (overrides: Partial<{
   participant2Id: overrides.participant2Id ?? RECIPIENT_ID,
 });
 
+/**
+ * The row the repository returns. `attachments` is what the route is given
+ * now, and the repository DUAL-WRITES the first of them into the legacy
+ * fileId/attachmentMeta columns — so this factory does the same, or the
+ * broadcast assertions below would be checking the fixture's omission rather
+ * than the route's behaviour.
+ */
 const mockInsertedRow = (overrides: Partial<{
   id: string;
   conversationId: string;
@@ -130,13 +137,14 @@ const mockInsertedRow = (overrides: Partial<{
   content: string;
   fileId: string | null;
   attachmentMeta: AttachmentMeta | null;
+  attachments: Array<{ fileId: string; attachmentMeta: AttachmentMeta }>;
 }> = {}) => ({
   id: overrides.id ?? 'msg_1',
   conversationId: overrides.conversationId ?? CONVERSATION_ID,
   senderId: overrides.senderId ?? SENDER_ID,
   content: overrides.content ?? '',
-  fileId: overrides.fileId ?? null,
-  attachmentMeta: overrides.attachmentMeta ?? null,
+  fileId: overrides.fileId ?? overrides.attachments?.[0]?.fileId ?? null,
+  attachmentMeta: overrides.attachmentMeta ?? overrides.attachments?.[0]?.attachmentMeta ?? null,
   isRead: false,
   readAt: null,
   isEdited: false,
@@ -235,8 +243,7 @@ describe('POST /api/messages/[conversationId]', () => {
           conversationId: CONVERSATION_ID,
           senderId: SENDER_ID,
           content: 'hello world',
-          fileId: null,
-          attachmentMeta: null,
+          attachments: [],
         })
       );
       const broadcasts = captureRealtimeBroadcasts(fetchMock);
@@ -254,8 +261,7 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(mockInsertDmMessageWithAttachment).toHaveBeenCalledWith(
         expect.objectContaining({
           content: '',
-          fileId: FILE_ID,
-          attachmentMeta: imageMeta,
+          attachments: [{ fileId: FILE_ID, attachmentMeta: imageMeta }],
         })
       );
       const broadcasts = captureRealtimeBroadcasts(fetchMock);
@@ -276,8 +282,7 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(mockInsertDmMessageWithAttachment).toHaveBeenCalledWith(
         expect.objectContaining({
           content: 'see attached',
-          fileId: FILE_ID,
-          attachmentMeta: pdfMeta,
+          attachments: [{ fileId: FILE_ID, attachmentMeta: pdfMeta }],
         })
       );
       const broadcasts = captureRealtimeBroadcasts(fetchMock);
@@ -285,6 +290,48 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(payload.content).toBe('see attached');
       expect(payload.fileId).toBe(FILE_ID);
       expect(payload.attachmentMeta).toEqual(pdfMeta);
+    });
+
+    it('broadcasts every attachment row, not just the legacy first pair', async () => {
+      // The DM asymmetry this change had to close. The channel route re-loads
+      // the row through the shared `with` clause and gets the relation for
+      // free; the DM insert returns the bare `.returning()` row, so the route
+      // has to put the attachment rows back by hand. Miss that and the
+      // recipient's socket payload names only the legacy first file — an
+      // empty-looking bubble until they refresh, which is the same class of
+      // bug as the one being fixed. Asserting the RESPONSE alone would not
+      // catch it: only the broadcast reaches the other participant.
+      const rows = [
+        { id: 'att-1', fileId: 'file-1', attachmentMeta: imageMeta, position: 0 },
+        { id: 'att-2', fileId: 'file-2', attachmentMeta: pdfMeta, position: 1 },
+      ];
+      mockInsertDmMessageWithAttachment.mockImplementationOnce(async (input) => ({
+        kind: 'ok',
+        message: mockInsertedRow(input),
+        attachments: rows,
+      }));
+
+      const res = await callRoute({
+        content: 'two files',
+        attachments: [
+          { fileId: 'file-1', attachmentMeta: imageMeta },
+          { fileId: 'file-2', attachmentMeta: pdfMeta },
+        ],
+      });
+
+      expect(res.status).toBe(200);
+      const payload = captureRealtimeBroadcasts(fetchMock)[0].payload as {
+        attachments?: Array<{ fileId: string; position: number }>;
+      };
+      expect(payload.attachments?.map((a) => [a.fileId, a.position])).toEqual([
+        ['file-1', 0],
+        ['file-2', 1],
+      ]);
+
+      const body = (await res.json()) as {
+        message: { attachments?: Array<{ fileId: string }> };
+      };
+      expect(body.message.attachments?.map((a) => a.fileId)).toEqual(['file-1', 'file-2']);
     });
 
     it('returns 400 when both content is empty and no fileId provided', async () => {
@@ -393,7 +440,7 @@ describe('POST /api/messages/[conversationId]', () => {
         fileId: FILE_ID,
         attachmentMeta: imageMeta,
       });
-      mockInsertDmMessageWithAttachment.mockResolvedValue({ kind: 'ok', message: inserted });
+      mockInsertDmMessageWithAttachment.mockResolvedValue({ kind: 'ok', message: inserted, attachments: [] });
 
       const res = await callRoute({ fileId: FILE_ID, attachmentMeta: imageMeta });
 
@@ -505,7 +552,7 @@ describe('POST /api/messages/[conversationId]', () => {
   describe('realtime fanout', () => {
     it('broadcasts new_dm_message with fileId and attachmentMeta in the payload', async () => {
       const inserted = mockInsertedRow({ fileId: FILE_ID, attachmentMeta: pdfMeta });
-      mockInsertDmMessageWithAttachment.mockResolvedValue({ kind: 'ok', message: inserted });
+      mockInsertDmMessageWithAttachment.mockResolvedValue({ kind: 'ok', message: inserted, attachments: [] });
 
       await callRoute({ fileId: FILE_ID, attachmentMeta: pdfMeta });
 
@@ -932,6 +979,8 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
         createdAt: replyCreatedAt,
       },
       mirror: null,
+      replyAttachments: [],
+      mirrorAttachments: [],
       rootId: PARENT_ID,
       replyCount: 1,
       lastReplyAt: replyCreatedAt,
@@ -986,6 +1035,8 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
       kind: 'ok',
       reply: { id: 'reply-1', parentId: PARENT_ID, conversationId: CONVERSATION_ID, senderId: SENDER_ID, content: 'echo', createdAt: t },
       mirror: { id: 'mirror-1', mirroredFromId: 'reply-1', conversationId: CONVERSATION_ID, senderId: SENDER_ID, content: 'echo', createdAt: t },
+      replyAttachments: [],
+      mirrorAttachments: [],
       rootId: PARENT_ID,
       replyCount: 1,
       lastReplyAt: t,
@@ -1086,6 +1137,32 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
     );
   });
 
+  it('does not name one file as the denied resource when a batch is rejected', async () => {
+    // The repository reports which check failed, not which file failed it.
+    // Pinning resourceId to the first attachment would put an innocent file's
+    // id in an authz.access.denied record.
+    mockInsertDmThreadReply.mockResolvedValueOnce({ kind: 'wrong_owner' });
+    const meta = { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) };
+
+    const res = await callRoute({
+      content: 'x',
+      parentId: PARENT_ID,
+      attachments: [
+        { fileId: 'file-1', attachmentMeta: meta },
+        { fileId: 'file-2', attachmentMeta: meta },
+        { fileId: 'file-3', attachmentMeta: meta },
+      ],
+    });
+
+    expect(res.status).toBe(403);
+    const audited = mockAuditRequest.mock.calls.at(-1)?.[1] as {
+      resourceId?: string;
+      details?: { fileIds?: string[] };
+    };
+    expect(audited.resourceId).toBeUndefined();
+    expect(audited.details?.fileIds).toEqual(['file-1', 'file-2', 'file-3']);
+  });
+
   it('returns 403 + authz.access.denied audit when the reply fileId is not linked to this conversation', async () => {
     mockInsertDmThreadReply.mockResolvedValueOnce({ kind: 'not_linked' });
 
@@ -1114,6 +1191,8 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
         createdAt: replyCreatedAt,
       },
       mirror: null,
+      replyAttachments: [],
+      mirrorAttachments: [],
       rootId: PARENT_ID,
       replyCount: 1,
       lastReplyAt: replyCreatedAt,
@@ -1145,6 +1224,8 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
         createdAt: replyCreatedAt,
       },
       mirror: null,
+      replyAttachments: [],
+      mirrorAttachments: [],
       rootId: PARENT_ID,
       replyCount: 2,
       lastReplyAt: replyCreatedAt,
@@ -1180,6 +1261,8 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
         createdAt: replyCreatedAt,
       },
       mirror: null,
+      replyAttachments: [],
+      mirrorAttachments: [],
       rootId: PARENT_ID,
       replyCount: 1,
       lastReplyAt: replyCreatedAt,

@@ -1,6 +1,6 @@
 {
-  "id": "3df44be3-b5df-4ab9-86b1-73158f70723d",
-  "prevId": "095d8c33-2071-48ec-8779-6fcb623b22f5",
+  "id": "795618d6-6ff3-4007-8753-512e9a996dfa",
+  "prevId": "bacd1577-68d6-471d-8c5e-21eecd837d36",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -3586,6 +3586,125 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.channel_message_attachments": {
+      "name": "channel_message_attachments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "messageId": {
+          "name": "messageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fileId": {
+          "name": "fileId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attachmentMeta": {
+          "name": "attachmentMeta",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "position": {
+          "name": "position",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "channel_message_attachments_message_position_idx": {
+          "name": "channel_message_attachments_message_position_idx",
+          "columns": [
+            {
+              "expression": "messageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "position",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "channel_message_attachments_file_id_idx": {
+          "name": "channel_message_attachments_file_id_idx",
+          "columns": [
+            {
+              "expression": "fileId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "channel_message_attachments_messageId_channel_messages_id_fk": {
+          "name": "channel_message_attachments_messageId_channel_messages_id_fk",
+          "tableFrom": "channel_message_attachments",
+          "tableTo": "channel_messages",
+          "columnsFrom": [
+            "messageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "channel_message_attachments_fileId_files_id_fk": {
+          "name": "channel_message_attachments_fileId_files_id_fk",
+          "tableFrom": "channel_message_attachments",
+          "tableTo": "files",
+          "columnsFrom": [
+            "fileId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "channel_message_attachments_position_range": {
+          "name": "channel_message_attachments_position_range",
+          "value": "\"channel_message_attachments\".\"position\" >= 0 AND \"channel_message_attachments\".\"position\" < 10"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.channel_message_reactions": {
@@ -8786,6 +8905,125 @@
       },
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.direct_message_attachments": {
+      "name": "direct_message_attachments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "messageId": {
+          "name": "messageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fileId": {
+          "name": "fileId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attachmentMeta": {
+          "name": "attachmentMeta",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "position": {
+          "name": "position",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "direct_message_attachments_message_position_idx": {
+          "name": "direct_message_attachments_message_position_idx",
+          "columns": [
+            {
+              "expression": "messageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "position",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "direct_message_attachments_file_id_idx": {
+          "name": "direct_message_attachments_file_id_idx",
+          "columns": [
+            {
+              "expression": "fileId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "direct_message_attachments_messageId_direct_messages_id_fk": {
+          "name": "direct_message_attachments_messageId_direct_messages_id_fk",
+          "tableFrom": "direct_message_attachments",
+          "tableTo": "direct_messages",
+          "columnsFrom": [
+            "messageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "direct_message_attachments_fileId_files_id_fk": {
+          "name": "direct_message_attachments_fileId_files_id_fk",
+          "tableFrom": "direct_message_attachments",
+          "tableTo": "files",
+          "columnsFrom": [
+            "fileId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "direct_message_attachments_position_range": {
+          "name": "direct_message_attachments_position_range",
+          "value": "\"direct_message_attachments\".\"position\" >= 0 AND \"direct_message_attachments\".\"position\" < 10"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.direct_messages": {

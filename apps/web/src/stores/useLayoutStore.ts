@@ -25,7 +25,6 @@ interface LayoutState {
   tasksDashboardFilters: Record<string, StoredDashboardFilters>;
   driveFooterCollapsed: boolean;
   dashboardFooterCollapsed: boolean;
-  pulseCollapsed: boolean;
   favoritesCollapsed: boolean;
   recentsCollapsed: boolean;
 
@@ -70,7 +69,6 @@ interface LayoutState {
   setTasksDashboardFilter: (scopeKey: string, filters: StoredDashboardFilters) => void;
   setDriveFooterCollapsed: (collapsed: boolean) => void;
   setDashboardFooterCollapsed: (collapsed: boolean) => void;
-  setPulseCollapsed: (collapsed: boolean) => void;
   setFavoritesCollapsed: (collapsed: boolean) => void;
   setRecentsCollapsed: (collapsed: boolean) => void;
 }
@@ -88,7 +86,6 @@ export const useLayoutStore = create<LayoutState>()(
       tasksDashboardFilters: {},
       driveFooterCollapsed: true,
       dashboardFooterCollapsed: true,
-      pulseCollapsed: false,
       favoritesCollapsed: false,
       recentsCollapsed: false,
       rehydrated: false,
@@ -165,10 +162,6 @@ export const useLayoutStore = create<LayoutState>()(
         set({ dashboardFooterCollapsed: collapsed });
       },
 
-      setPulseCollapsed: (collapsed: boolean) => {
-        set({ pulseCollapsed: collapsed });
-      },
-
       setFavoritesCollapsed: (collapsed: boolean) => {
         set({ favoritesCollapsed: collapsed });
       },
@@ -189,7 +182,6 @@ export const useLayoutStore = create<LayoutState>()(
         tasksDashboardFilters: state.tasksDashboardFilters,
         driveFooterCollapsed: state.driveFooterCollapsed,
         dashboardFooterCollapsed: state.dashboardFooterCollapsed,
-        pulseCollapsed: state.pulseCollapsed,
         favoritesCollapsed: state.favoritesCollapsed,
         recentsCollapsed: state.recentsCollapsed,
       }),

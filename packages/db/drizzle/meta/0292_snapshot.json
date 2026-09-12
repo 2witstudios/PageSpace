@@ -1,5 +1,5 @@
 {
-  "id": "095d8c33-2071-48ec-8779-6fcb623b22f5",
+  "id": "bacd1577-68d6-471d-8c5e-21eecd837d36",
   "prevId": "f58398cf-f397-4947-9e9f-1a2e605a08c1",
   "version": "7",
   "dialect": "postgresql",
@@ -3586,6 +3586,125 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.channel_message_attachments": {
+      "name": "channel_message_attachments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "messageId": {
+          "name": "messageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fileId": {
+          "name": "fileId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attachmentMeta": {
+          "name": "attachmentMeta",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "position": {
+          "name": "position",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "channel_message_attachments_message_position_idx": {
+          "name": "channel_message_attachments_message_position_idx",
+          "columns": [
+            {
+              "expression": "messageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "position",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "channel_message_attachments_file_id_idx": {
+          "name": "channel_message_attachments_file_id_idx",
+          "columns": [
+            {
+              "expression": "fileId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "channel_message_attachments_messageId_channel_messages_id_fk": {
+          "name": "channel_message_attachments_messageId_channel_messages_id_fk",
+          "tableFrom": "channel_message_attachments",
+          "tableTo": "channel_messages",
+          "columnsFrom": [
+            "messageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "channel_message_attachments_fileId_files_id_fk": {
+          "name": "channel_message_attachments_fileId_files_id_fk",
+          "tableFrom": "channel_message_attachments",
+          "tableTo": "files",
+          "columnsFrom": [
+            "fileId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "channel_message_attachments_position_range": {
+          "name": "channel_message_attachments_position_range",
+          "value": "\"channel_message_attachments\".\"position\" >= 0 AND \"channel_message_attachments\".\"position\" < 10"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.channel_message_reactions": {
@@ -8786,6 +8905,125 @@
       },
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.direct_message_attachments": {
+      "name": "direct_message_attachments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "messageId": {
+          "name": "messageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fileId": {
+          "name": "fileId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attachmentMeta": {
+          "name": "attachmentMeta",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "position": {
+          "name": "position",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "direct_message_attachments_message_position_idx": {
+          "name": "direct_message_attachments_message_position_idx",
+          "columns": [
+            {
+              "expression": "messageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "position",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "direct_message_attachments_file_id_idx": {
+          "name": "direct_message_attachments_file_id_idx",
+          "columns": [
+            {
+              "expression": "fileId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "direct_message_attachments_messageId_direct_messages_id_fk": {
+          "name": "direct_message_attachments_messageId_direct_messages_id_fk",
+          "tableFrom": "direct_message_attachments",
+          "tableTo": "direct_messages",
+          "columnsFrom": [
+            "messageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "direct_message_attachments_fileId_files_id_fk": {
+          "name": "direct_message_attachments_fileId_files_id_fk",
+          "tableFrom": "direct_message_attachments",
+          "tableTo": "files",
+          "columnsFrom": [
+            "fileId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "direct_message_attachments_position_range": {
+          "name": "direct_message_attachments_position_range",
+          "value": "\"direct_message_attachments\".\"position\" >= 0 AND \"direct_message_attachments\".\"position\" < 10"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.direct_messages": {
@@ -23193,12 +23431,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "daemonEpoch": {
-          "name": "daemonEpoch",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "serverPolicy": {
           "name": "serverPolicy",
           "type": "jsonb",
@@ -23227,12 +23459,6 @@
         },
         "revokedAt": {
           "name": "revokedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "pausedAt": {
-          "name": "pausedAt",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
@@ -23320,376 +23546,7 @@
         },
         "drive_env_local_bind_policy_check": {
           "name": "drive_env_local_bind_policy_check",
-          "value": "\"drive_env_local\".\"bindPolicy\" IN ('owner')"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.drive_env_grant_audit": {
-      "name": "drive_env_grant_audit",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "envId": {
-          "name": "envId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "grantId": {
-          "name": "grantId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sessionId": {
-          "name": "sessionId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "conversationId": {
-          "name": "conversationId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "op": {
-          "name": "op",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "argsHash": {
-          "name": "argsHash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "summary": {
-          "name": "summary",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "verdict": {
-          "name": "verdict",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "exitCode": {
-          "name": "exitCode",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "challengeId": {
-          "name": "challengeId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "approvalScope": {
-          "name": "approvalScope",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ts": {
-          "name": "ts",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "resultAt": {
-          "name": "resultAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "drive_env_grant_audit_env_ts_idx": {
-          "name": "drive_env_grant_audit_env_ts_idx",
-          "columns": [
-            {
-              "expression": "envId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "ts",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "drive_env_grant_audit_user_ts_idx": {
-          "name": "drive_env_grant_audit_user_ts_idx",
-          "columns": [
-            {
-              "expression": "userId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "ts",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "drive_env_grant_audit_grant_id_unique": {
-          "name": "drive_env_grant_audit_grant_id_unique",
-          "columns": [
-            {
-              "expression": "grantId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"drive_env_grant_audit\".\"grantId\" IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "drive_env_grant_audit_envId_drive_envs_id_fk": {
-          "name": "drive_env_grant_audit_envId_drive_envs_id_fk",
-          "tableFrom": "drive_env_grant_audit",
-          "tableTo": "drive_envs",
-          "columnsFrom": [
-            "envId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "drive_env_grant_audit_userId_users_id_fk": {
-          "name": "drive_env_grant_audit_userId_users_id_fk",
-          "tableFrom": "drive_env_grant_audit",
-          "tableTo": "users",
-          "columnsFrom": [
-            "userId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "drive_env_grant_audit_op_check": {
-          "name": "drive_env_grant_audit_op_check",
-          "value": "\"drive_env_grant_audit\".\"op\" IN ('exec', 'fs_read', 'fs_write', 'pty_open')"
-        },
-        "drive_env_grant_audit_grant_id_refused_check": {
-          "name": "drive_env_grant_audit_grant_id_refused_check",
-          "value": "(\"drive_env_grant_audit\".\"grantId\" IS NULL) = (\"drive_env_grant_audit\".\"verdict\" LIKE 'refused:%')"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.drive_env_approvals": {
-      "name": "drive_env_approvals",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "envId": {
-          "name": "envId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "op": {
-          "name": "op",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "summary": {
-          "name": "summary",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "scope": {
-          "name": "scope",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "daemonEpoch": {
-          "name": "daemonEpoch",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expiresAt": {
-          "name": "expiresAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revokedAt": {
-          "name": "revokedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revokedBy": {
-          "name": "revokedBy",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revokeAcknowledgedAt": {
-          "name": "revokeAcknowledgedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revokeRemoved": {
-          "name": "revokeRemoved",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "drive_env_approvals_env_idx": {
-          "name": "drive_env_approvals_env_idx",
-          "columns": [
-            {
-              "expression": "envId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "createdAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "drive_env_approvals_user_idx": {
-          "name": "drive_env_approvals_user_idx",
-          "columns": [
-            {
-              "expression": "userId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "createdAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "drive_env_approvals_envId_drive_envs_id_fk": {
-          "name": "drive_env_approvals_envId_drive_envs_id_fk",
-          "tableFrom": "drive_env_approvals",
-          "tableTo": "drive_envs",
-          "columnsFrom": [
-            "envId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "drive_env_approvals_userId_users_id_fk": {
-          "name": "drive_env_approvals_userId_users_id_fk",
-          "tableFrom": "drive_env_approvals",
-          "tableTo": "users",
-          "columnsFrom": [
-            "userId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "drive_env_approvals_scope_check": {
-          "name": "drive_env_approvals_scope_check",
-          "value": "\"drive_env_approvals\".\"scope\" IN ('session', '30d', 'until_revoked')"
-        },
-        "drive_env_approvals_ack_needs_revoke_check": {
-          "name": "drive_env_approvals_ack_needs_revoke_check",
-          "value": "\"drive_env_approvals\".\"revokeAcknowledgedAt\" IS NULL OR \"drive_env_approvals\".\"revokedAt\" IS NOT NULL"
+          "value": "\"drive_env_local\".\"bindPolicy\" IN ('owner', 'admins', 'members')"
         }
       },
       "isRLSEnabled": false

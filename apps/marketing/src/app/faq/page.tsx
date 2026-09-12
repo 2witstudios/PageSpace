@@ -161,7 +161,7 @@ const faqs: FAQItem[] = [
     id: "ai-access-to-content",
     question: "Will the AI touch content I haven't given it access to?",
     answer:
-      "No. Agents act as the user who asked them — they can only see and edit what you can see and edit.",
+      "No. Each agent is a permission-scoped principal with its own drive membership and access level — bound the same way a person is. Agents only see and edit content they've been granted access to through their own role in the drive. If you want an agent to inherit your access instead, you can enable user-scoped access per agent, but that's opt-in; the default is stricter and more secure.",
     category: "Working with AI",
   },
   {

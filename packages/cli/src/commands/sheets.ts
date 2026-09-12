@@ -22,13 +22,19 @@
  * these verbs print is what you can feed back in — translating for display
  * would make the printed number and the accepted flag disagree.
  *
- * JSON-bearing flags (`--where`, and the row/cell payloads) are parsed here
+ * `formatting`/`format` are a third family, over the same endpoint but about
+ * PRESENTATION rather than data: declared regions, conditional rules, frozen
+ * panes, column and cell formats. `formatting` reads (a noun: what the sheet
+ * looks like now), `format` writes (a verb: apply these ops). Read before you
+ * write — a region or rule you did not read is one you are about to replace.
+ *
+ * JSON-bearing flags (`--where`, and the row/cell/op payloads) are parsed here
  * only far enough to reject malformed JSON as a usage error (exit 2) before any
  * network call; the per-item shape is left to the SDK's zod schemas and the
  * server, matching every other thin verb.
  */
 import process from 'node:process';
-import type { PageSpaceClient } from '@pagespace/sdk';
+import type { PageSpaceClient, SheetFormatOpInput } from '@pagespace/sdk';
 import { confirmationFailureMessage, confirmDestructive } from '../confirm.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../exit-codes.js';
 import type { CommandHandler } from '../router/router.js';
@@ -37,6 +43,8 @@ import { callSdk } from './sdk-error.js';
 type QueryRowsResult = Awaited<ReturnType<PageSpaceClient['sheets']['queryRows']>>;
 type GetRowsResult = Awaited<ReturnType<PageSpaceClient['sheets']['getRows']>>;
 type DescribeResult = Awaited<ReturnType<PageSpaceClient['sheets']['describe']>>;
+type ReadFormattingResult = Awaited<ReturnType<PageSpaceClient['sheets']['readFormatting']>>;
+type ApplyFormatResult = Awaited<ReturnType<PageSpaceClient['sheets']['applyFormat']>>;
 
 /** Pure: no I/O. */
 function extractJsonInputFlag(
@@ -110,11 +118,18 @@ function optional<K extends string, V>(key: K, value: V | undefined): Partial<Re
   return value === undefined ? {} : ({ [key]: value } as Record<K, V>);
 }
 
-/** Pure: no I/O. `A,B,C` -> `['A','B','C']`; empty entries dropped so a trailing comma is not an error. */
-function parseColumnList(raw: string | undefined): string[] | undefined {
+/**
+ * Pure: no I/O. `A,B,C` -> `['A','B','C']`; empty entries dropped so a trailing
+ * comma is not an error.
+ *
+ * Serves `--select` (column letters) and `--ranges` (A1 rectangles) alike: a
+ * column letter and an A1 range both exclude the comma, so splitting on one is
+ * unambiguous for either.
+ */
+function parseCommaList(raw: string | undefined): string[] | undefined {
   if (raw === undefined) return undefined;
-  const columns = raw.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0);
-  return columns.length > 0 ? columns : undefined;
+  const entries = raw.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  return entries.length > 0 ? entries : undefined;
 }
 
 /**
@@ -208,6 +223,135 @@ export function renderDescribe(value: DescribeResult): string {
   return `${value.tabs
     .map((tab) => `tab ${tab.tabIndex}: ${tab.name} — ${tab.rowCount} rows x ${tab.columnCount} columns${tab.frozenRows ? ` (${tab.frozenRows} frozen)` : ''}`)
     .join('\n')}\n`;
+}
+
+/** Pure: no I/O. `{bold: true, number: {kind: 'currency'}}` -> `bold, number=currency`. */
+function summarizeFormat(format: Readonly<Record<string, unknown>>): string {
+  const parts = Object.entries(format).map(([key, value]) => {
+    if (value === true) return key;
+    if (value !== null && typeof value === 'object') {
+      const kind = (value as { kind?: unknown }).kind;
+      return typeof kind === 'string' ? `${key}=${kind}` : key;
+    }
+    return `${key}=${String(value)}`;
+  });
+  return parts.length > 0 ? parts.join(', ') : '(empty)';
+}
+
+/** Pure: no I/O. `{type: 'number', value: 5}` -> `5`; `{type: 'min'}` -> `min`. */
+function summarizeAnchor(anchor: { type: string; value?: number; color?: string }): string {
+  const base = anchor.value === undefined ? anchor.type : `${anchor.type} ${anchor.value}`;
+  return anchor.color === undefined ? base : `${base} ${anchor.color}`;
+}
+
+/** Pure: no I/O. One line per rule, enough to tell two rules apart and to pick an id to remove. */
+function summarizeRule(rule: ReadFormattingResult['conditionalFormats'][number]): string {
+  const where = rule.ranges.join(',');
+  switch (rule.kind) {
+    case 'cell': {
+      const { operator, value, value2 } = rule.condition;
+      const operand = [value, value2].filter((entry) => entry !== undefined).join('..');
+      return `${rule.id}: cell ${where} ${operator}${operand ? ` ${operand}` : ''} -> ${summarizeFormat(rule.format)}`;
+    }
+    case 'formula':
+      return `${rule.id}: formula ${where} ${rule.formula} -> ${summarizeFormat(rule.format)}`;
+    case 'colorScale': {
+      const mid = rule.mid === undefined ? '' : ` .. ${summarizeAnchor(rule.mid)}`;
+      return `${rule.id}: colorScale ${where} ${summarizeAnchor(rule.min)}${mid} .. ${summarizeAnchor(rule.max)}`;
+    }
+    case 'dataBar': {
+      const bounds = [rule.min, rule.max].filter((entry) => entry !== undefined).map(summarizeAnchor).join(' .. ');
+      return `${rule.id}: dataBar ${where} ${rule.color}${bounds ? ` (${bounds})` : ''}`;
+    }
+  }
+}
+
+/** Pure: no I/O. */
+function summarizeRegion(region: ReadFormattingResult['regions'][number]): string {
+  const name = region.name === undefined ? '' : ` "${region.name}"`;
+  const bits = [
+    // Stated even at its default, because a reader deciding whether to
+    // re-declare the region needs to know what it will be compared against.
+    `${region.headerRows ?? 1} header row(s)`,
+    ...(region.totalRows && region.totalRows.length > 0 ? [`totals ${region.totalRows.join(',')}`] : []),
+    ...(region.theme === undefined ? [] : [`theme ${region.theme}`]),
+  ];
+  const columns = (region.columns ?? []).map((column) => {
+    const detail = [column.currency, column.decimals === undefined ? undefined : `${column.decimals}dp`]
+      .filter((entry) => entry !== undefined)
+      .join(' ');
+    return `${column.column}=${column.role}${detail ? ` (${detail})` : ''}`;
+  });
+  return `${region.id}${name} ${region.range} — ${bits.join(', ')}${columns.length > 0 ? `\n    ${columns.join(', ')}` : ''}`;
+}
+
+/**
+ * Pure: no I/O. A section is omitted entirely when empty, so what IS set stands
+ * out.
+ *
+ * `requestedRanges` is the caller's `--ranges`, not anything the response
+ * carries: the SDK returns an empty `cellFormats` both when no ranges were
+ * asked for and when the ranges asked for hold no explicit formats, and those
+ * are different answers. Reading the first as the second would tell someone
+ * their cells are unformatted when nothing was ever read.
+ */
+export function renderFormatting(value: ReadFormattingResult, requestedRanges?: readonly string[]): string {
+  const lines: string[] = [
+    `tab ${value.tabIndex}: ${value.rowCount} rows x ${value.columnCount} columns`,
+  ];
+  if (value.frozenRows !== null || value.frozenColumns !== null) {
+    lines.push(`frozen: ${value.frozenRows ?? 0} row(s), ${value.frozenColumns ?? 0} column(s)`);
+  }
+  if (value.regions.length > 0) {
+    lines.push(`regions (${value.regions.length}):`, ...value.regions.map((region) => `  ${summarizeRegion(region)}`));
+  }
+  if (value.conditionalFormats.length > 0) {
+    lines.push(
+      `conditional rules (${value.conditionalFormats.length}):`,
+      ...value.conditionalFormats.map((rule) => `  ${summarizeRule(rule)}`),
+    );
+  }
+  const columnFormats = Object.entries(value.columnFormats);
+  if (columnFormats.length > 0) {
+    lines.push('column formats:', ...columnFormats.map(([column, format]) => `  ${column}: ${summarizeFormat(format)}`));
+  }
+  const columnWidths = Object.entries(value.columnWidths);
+  if (columnWidths.length > 0) {
+    lines.push(`column widths: ${columnWidths.map(([column, width]) => `${column}=${width}`).join(', ')}`);
+  }
+  const rowHeights = Object.entries(value.rowHeights);
+  if (rowHeights.length > 0) {
+    lines.push(`row heights: ${rowHeights.map(([row, height]) => `${row}=${height}`).join(', ')}`);
+  }
+  const cellFormats = Object.entries(value.cellFormats);
+  if (cellFormats.length > 0) {
+    lines.push('cell formats:', ...cellFormats.map(([address, format]) => `  ${address}: ${summarizeFormat(format)}`));
+  } else if (requestedRanges !== undefined && requestedRanges.length > 0) {
+    // Ranges WERE read and hold nothing explicit. A real answer, and the only
+    // one that licenses "these cells carry no per-cell format of their own".
+    lines.push(`cell formats: none found in ${requestedRanges.join(', ')}`);
+  } else {
+    // Nothing was read at all. Not the same as "none", and a caller that read
+    // it as "no cell formatting" would format straight over what is there.
+    lines.push('cell formats: none read (pass --ranges to read per-cell formats)');
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/** Pure: no I/O. */
+export function renderApplyFormat(value: ApplyFormatResult): string {
+  if (!value.changed) {
+    return 'No change — the sheet already had this formatting.\n';
+  }
+  const bits = [
+    ...(value.cellsFormatted > 0 ? [`${value.cellsFormatted} cell(s) restyled`] : []),
+    ...(value.tabFieldsChanged.length > 0 ? [`changed ${value.tabFieldsChanged.join(', ')}`] : []),
+    ...(value.regionIdsAdded.length > 0 ? [`+${value.regionIdsAdded.length} region(s)`] : []),
+    ...(value.regionIdsRemoved.length > 0 ? [`-${value.regionIdsRemoved.length} region(s)`] : []),
+    ...(value.ruleIdsAdded.length > 0 ? [`+${value.ruleIdsAdded.length} rule(s)`] : []),
+    ...(value.ruleIdsRemoved.length > 0 ? [`-${value.ruleIdsRemoved.length} rule(s)`] : []),
+  ];
+  return `Formatted ${value.pageId} (tab ${value.tabIndex}): ${bits.join('; ')}. ${value.regions} region(s) and ${value.conditionalRules} rule(s) now on the tab.\n`;
 }
 
 /**
@@ -325,7 +469,7 @@ export const sheetsQueryHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const select = parseColumnList(scan.values.get('--select'));
+  const select = parseCommaList(scan.values.get('--select'));
 
   const rawWhere = scan.values.get('--where');
   let where: unknown;
@@ -612,6 +756,132 @@ export const sheetsDeleteRowsHandler: CommandHandler = async (ctx, intent) => {
   return EXIT_SUCCESS;
 };
 
+export const sheetsFormattingHandler: CommandHandler = async (ctx, intent) => {
+  const usage = 'Usage: pagespace sheets formatting <pageId> [--ranges A1:F40,H2:H9] [--tab <n>]\n';
+  const [pageId, ...rest0] = intent.args;
+  if (!pageId) {
+    ctx.stderr.write(usage);
+    return EXIT_USAGE_ERROR;
+  }
+
+  const scan = scanValueFlags(rest0, ['--ranges', '--tab']);
+  if (!scan.ok) {
+    ctx.stderr.write(`${scan.message}\n`);
+    return EXIT_USAGE_ERROR;
+  }
+  if (scan.rest.length > 0) {
+    ctx.stderr.write(`Unknown argument: ${scan.rest[0]}\n`);
+    return EXIT_USAGE_ERROR;
+  }
+  const tabIndex = parseIntFlag(scan.values.get('--tab'), '--tab', 0);
+  if (!tabIndex.ok) {
+    ctx.stderr.write(`${tabIndex.message}\n`);
+    return EXIT_USAGE_ERROR;
+  }
+
+  // Bound before the call, because the renderer needs to know whether ranges
+  // were ASKED for — the response cannot say.
+  const ranges = parseCommaList(scan.values.get('--ranges'));
+
+  const result = await callSdk(ctx.stderr, () =>
+    ctx.sdk.sheets.readFormatting({
+      operation: 'read-formatting',
+      pageId,
+      ...optional('tabIndex', tabIndex.value),
+      // Per-cell formats live on the rows, so they are read only for the
+      // rectangles asked for. Without `--ranges` the declarative layer —
+      // regions, rules, column defaults, freezes — comes back on its own.
+      ...optional('ranges', ranges),
+    }),
+  );
+  if (!result.ok) return EXIT_RUNTIME_ERROR;
+
+  ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderFormatting(result.value, ranges));
+  return EXIT_SUCCESS;
+};
+
+/**
+ * `sheets format` — apply an ordered list of `SheetFormatOp`s.
+ *
+ * The payload is the op array itself rather than a flag per kind of formatting,
+ * because the ops are order-dependent and applied in ONE transaction: a
+ * `clearCellFormat` after a `setCellFormat` over the same cells means something
+ * different from the reverse, and there is no flag ordering that expresses that
+ * reliably. One flag per op kind would also have to grow every time the union
+ * does, while this verb does not.
+ *
+ * No `--yes` gate, unlike `delete-rows`. Formatting is presentation: writing it
+ * again restores it, so demanding a confirmation for "bold the header row"
+ * would buy nothing and train the habit of passing `--yes` blind.
+ */
+export function createSheetsFormatHandler(deps: SheetsStdinDeps): CommandHandler {
+  return async (ctx, intent) => {
+    const usage = 'Usage: pagespace sheets format <pageId> [--json-input <json>] [--tab <n>]\n';
+    const [pageId, ...rest0] = intent.args;
+    if (!pageId) {
+      ctx.stderr.write(usage);
+      return EXIT_USAGE_ERROR;
+    }
+
+    const scan = scanValueFlags(rest0, ['--json-input', '--tab']);
+    if (!scan.ok) {
+      ctx.stderr.write(`${scan.message}\n`);
+      return EXIT_USAGE_ERROR;
+    }
+    if (scan.rest.length > 0) {
+      ctx.stderr.write(`Unknown argument: ${scan.rest[0]}\n`);
+      return EXIT_USAGE_ERROR;
+    }
+    const tabIndex = parseIntFlag(scan.values.get('--tab'), '--tab', 0);
+    if (!tabIndex.ok) {
+      ctx.stderr.write(`${tabIndex.message}\n`);
+      return EXIT_USAGE_ERROR;
+    }
+
+    let raw: string;
+    try {
+      const inline = scan.values.get('--json-input');
+      raw = inline !== undefined ? inline : await deps.readStdin();
+    } catch (error) {
+      ctx.stderr.write(`Failed to read input: ${error instanceof Error ? error.message : String(error)}\n`);
+      return EXIT_RUNTIME_ERROR;
+    }
+
+    let ops: unknown;
+    try {
+      ops = JSON.parse(raw);
+    } catch {
+      ctx.stderr.write('Invalid JSON in --json-input/stdin.\n');
+      return EXIT_USAGE_ERROR;
+    }
+    if (!Array.isArray(ops)) {
+      ctx.stderr.write(
+        'Input must be a JSON array of format ops, e.g. ' +
+        '[{"type":"upsertRegion","region":{"id":"r1","range":"A1:F","headerRows":1}}].\n',
+      );
+      return EXIT_USAGE_ERROR;
+    }
+
+    const result = await callSdk(ctx.stderr, () =>
+      ctx.sdk.sheets.applyFormat({
+        operation: 'apply-format',
+        pageId,
+        ...optional('tabIndex', tabIndex.value),
+        // Cast, not validation. The SDK's zod union refuses an op that is not
+        // in it, and the server's `planFormatOps` refuses one it cannot plan —
+        // naming the index. Re-deciding either here would give this verb a
+        // third opinion about what a valid op is, and it would be the one that
+        // goes stale.
+        ops: ops as SheetFormatOpInput[],
+      }),
+    );
+    if (!result.ok) return EXIT_RUNTIME_ERROR;
+
+    ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderApplyFormat(result.value));
+    return EXIT_SUCCESS;
+  };
+}
+
 async function readStdinToString(): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
@@ -623,3 +893,4 @@ async function readStdinToString(): Promise<string> {
 export const sheetsEditCellsHandler: CommandHandler = createSheetsEditCellsHandler({ readStdin: readStdinToString });
 export const sheetsAppendHandler: CommandHandler = createSheetsAppendHandler({ readStdin: readStdinToString });
 export const sheetsUpdateCellsHandler: CommandHandler = createSheetsUpdateCellsHandler({ readStdin: readStdinToString });
+export const sheetsFormatHandler: CommandHandler = createSheetsFormatHandler({ readStdin: readStdinToString });

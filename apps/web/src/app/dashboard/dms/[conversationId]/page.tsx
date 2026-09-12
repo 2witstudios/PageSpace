@@ -15,7 +15,10 @@ import { type ChannelInputRef } from '@/components/layout/middle-content/page-vi
 import { MessageInput } from '@/components/shared/MessageInput';
 import { MessageDropZone } from '@/components/layout/middle-content/page-views/channel/MessageDropZone';
 import type { FileAttachment } from '@/hooks/useAttachmentUpload';
-import { MessageAttachment } from '@/components/shared/MessageAttachment';
+import { MessageAttachments } from '@/components/shared/MessageAttachments';
+import type { MessageAttachmentLike } from '@/lib/attachment-utils';
+import { createId } from '@paralleldrive/cuid2';
+import { reconcileOptimistic, sameAttachmentBatch } from '@/lib/messages/reconcile-optimistic';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { RichText, addHardLineBreaks } from '@/components/messages/RichText';
@@ -40,6 +43,30 @@ import { isFirstInGroup, formatMessageDate } from '@/lib/messages/grouping';
 import { MessageDateSeparator } from '@/components/messages/MessageDateSeparator';
 import { cn } from '@/lib/utils';
 
+interface MessageAttachmentBearing {
+  conversationId?: string;
+  content?: string;
+  fileId?: string | null;
+  attachments?: Array<{ fileId?: string | null; position?: number }> | null;
+}
+
+const senderOf = (m: { senderId?: string | null }) => m.senderId;
+
+/**
+ * Fallback used ONLY when a confirmation carries no `clientNonce` — which is
+ * what a pod that predates the nonce broadcasts, so it is reachable during a
+ * rolling deploy. Same conversation, same text, same first file: the matcher
+ * this surface used before the nonce existed.
+ */
+const looksLikeSameSend = (
+  pending: MessageAttachmentBearing,
+  confirmed: MessageAttachmentBearing,
+) =>
+  pending.conversationId === confirmed.conversationId &&
+  pending.content === confirmed.content &&
+  sameAttachmentBatch(pending, confirmed);
+
+
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
   if (!response.ok) {
@@ -60,6 +87,12 @@ interface Message {
   createdAt: string;
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
+  attachments?: MessageAttachmentLike[] | null;
+  /**
+   * Correlation id for an in-flight send — set on the optimistic row, echoed
+   * by the server on the response and broadcast, never persisted.
+   */
+  clientNonce?: string;
   reactions?: Reaction[];
   parentId?: string | null;
   replyCount?: number;
@@ -84,28 +117,6 @@ interface DmConversation {
     avatarUrl: string | null;
   };
 }
-
-const isMatchingOptimisticMessage = (optimistic: Message, message: Message) =>
-  optimistic.id.startsWith('temp-') &&
-  optimistic.conversationId === message.conversationId &&
-  optimistic.senderId === message.senderId &&
-  optimistic.content === message.content &&
-  (optimistic.fileId ?? null) === (message.fileId ?? null);
-
-const reconcileMessage = (prev: Message[], message: Message) => {
-  const optimisticIndex = prev.findIndex((m) => isMatchingOptimisticMessage(m, message));
-
-  if (optimisticIndex !== -1) {
-    return prev.reduce<Message[]>((next, current, index) => {
-      if (current.id === message.id) return next;
-      next.push(index === optimisticIndex ? message : current);
-      return next;
-    }, []);
-  }
-
-  if (prev.find((m) => m.id === message.id)) return prev;
-  return [...prev, message];
-};
 
 export default function InboxDMPage() {
   const params = useParams();
@@ -195,7 +206,9 @@ export default function InboxDMPage() {
       // pollute the live DM view of older clients.
       if (message.parentId) return;
       if (message.conversationId === conversationId) {
-        setMessages((prev) => reconcileMessage(prev, message));
+        setMessages((prev) =>
+          reconcileOptimistic(prev, message, senderOf, looksLikeSameSend),
+        );
 
         if (message.senderId !== user.id) {
           patch<{ success: boolean; notificationsMarkedRead: number }>(`/api/messages/${conversationId}`)
@@ -290,7 +303,7 @@ export default function InboxDMPage() {
 
     // Track this request's temp id so a rollback after a 409 race can't remove
     // a confirmed reaction that already arrived via reaction_added.
-    const tempReactionId = `temp-${Date.now()}`;
+    const tempReactionId = `temp-${createId()}`;
     const optimisticReaction: Reaction = {
       id: tempReactionId,
       emoji,
@@ -408,10 +421,10 @@ export default function InboxDMPage() {
 
   const handleTopLevelSubmit = async ({
     content,
-    attachment,
+    attachments,
   }: {
     content: string;
-    attachment?: FileAttachment;
+    attachments: FileAttachment[];
   }) => {
     if (!user || !conversationId) return;
 
@@ -420,16 +433,20 @@ export default function InboxDMPage() {
     clearInputDraft();
     clearQuote();
 
-    const attachmentMeta: AttachmentMeta | null = attachment
-      ? {
-          originalName: attachment.originalName,
-          size: attachment.size,
-          mimeType: attachment.mimeType,
-          contentHash: attachment.contentHash,
-        }
-      : null;
+    const attachmentPayload = attachments.map((attachment) => ({
+      fileId: attachment.id,
+      attachmentMeta: {
+        originalName: attachment.originalName,
+        size: attachment.size,
+        mimeType: attachment.mimeType,
+        contentHash: attachment.contentHash,
+      },
+    }));
 
-    const tempId = `temp-${Date.now()}`;
+    // createId(), not Date.now(): two sends can start in the same millisecond,
+    // and a duplicate id here is a duplicate React key.
+    const clientNonce = createId();
+    const tempId = `temp-${clientNonce}`;
     const optimistic: Message = {
       id: tempId,
       conversationId,
@@ -440,8 +457,17 @@ export default function InboxDMPage() {
       isEdited: false,
       editedAt: null,
       createdAt: new Date().toISOString(),
-      fileId: attachment?.id ?? null,
-      attachmentMeta,
+      fileId: attachmentPayload[0]?.fileId ?? null,
+      attachmentMeta: attachmentPayload[0]?.attachmentMeta ?? null,
+      // Carry position on the optimistic rows too, so the gallery's ordering
+      // never has to lean on sort stability to look right before the server
+      // echo replaces them.
+      attachments: attachmentPayload.map(({ fileId, attachmentMeta }, position) => ({
+        fileId,
+        attachmentMeta,
+        position,
+      })),
+      clientNonce,
       quotedMessageId: activeQuoteId,
       // Carry the snapshot through the optimistic phase so the embed renders
       // immediately; the server's enriched payload will replace it.
@@ -450,26 +476,34 @@ export default function InboxDMPage() {
     setMessages((prev) => [...prev, optimistic]);
 
     try {
-      const body: { content: string; fileId?: string; attachmentMeta?: AttachmentMeta; quotedMessageId?: string } = {
+      const body: {
+        content: string;
+        attachments: Array<{ fileId: string; attachmentMeta: AttachmentMeta }>;
+        quotedMessageId?: string;
+        clientNonce: string;
+      } = {
         content,
+        attachments: attachmentPayload,
+        clientNonce,
       };
-      if (attachment) {
-        body.fileId = attachment.id;
-        body.attachmentMeta = attachmentMeta!;
-      }
       if (activeQuoteId) {
         body.quotedMessageId = activeQuoteId;
       }
       const response = await post<{ message?: Message }>(`/api/messages/${conversationId}`, body);
       const persistedMessage = response.message;
       if (persistedMessage) {
-        setMessages((prev) => reconcileMessage(prev, persistedMessage));
+        setMessages((prev) =>
+          reconcileOptimistic(prev, persistedMessage, senderOf, looksLikeSameSend),
+        );
       }
     } catch (error) {
       toast.error('Failed to send message');
       console.error('Error sending message:', error);
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setInputValue(content);
+      // Put the files back too — the composer cleared them on send, and they
+      // would otherwise have to be picked and re-uploaded.
+      chatInputRef.current?.restoreAttachments(attachments);
       // Restore the quote chip so the user's retry still carries the quote
       // they originally selected; without this the failed-send recovery would
       // silently strip the quote context.
@@ -531,7 +565,7 @@ export default function InboxDMPage() {
             </div>
           )}
           {m.content && <MessageLinkPreviews content={m.content} />}
-          <MessageAttachment message={m} />
+          <MessageAttachments message={m} />
         </div>
       </div>
     );
@@ -711,7 +745,7 @@ export default function InboxDMPage() {
                           </div>
                         )}
                         {message.content && <MessageLinkPreviews content={message.content} />}
-                        <MessageAttachment message={message} />
+                        <MessageAttachments message={message} />
                         {!isFirst && (message.isEdited || (isLastRead && isOwnMessage)) && (
                           <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                             {message.isEdited && (

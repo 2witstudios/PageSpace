@@ -14,6 +14,10 @@ import { resolvePulseEnabled } from '@pagespace/lib/billing/automation-preferenc
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getStartOfTodayInTimezone, normalizeTimezone } from '@/lib/ai/core/timestamp-utils';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { SINCE_LAST_VISIT_THRESHOLD_MS } from '@pagespace/lib/home-signals/composer';
+import type { HomeContext, Signal } from '@pagespace/lib/home-signals/types';
+import { computeAllSignals, computeFootprint } from './compute-signals';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -52,6 +56,12 @@ export type PulseResponse = {
 
   // Should the client request a new summary?
   shouldRefresh: boolean;
+
+  // Ranked, permission-scoped facts behind the Home "signal line" (see
+  // packages/lib/src/home-signals). Additive: existing clients (the sidebar
+  // Pulse widget) can ignore this and keep reading `summary`/`stats`.
+  signals: Signal[];
+  context: HomeContext;
 };
 
 export async function GET(req: Request) {
@@ -64,8 +74,14 @@ export async function GET(req: Request) {
     const sixHoursAgo = new Date(now.getTime() - 6 * 60 * 60 * 1000);
 
     // Get user timezone for accurate "today" boundaries
-    const [user] = await db.select({ timezone: users.timezone }).from(users).where(eq(users.id, userId));
+    const [user] = await db.select({ timezone: users.timezone, name: users.name }).from(users).where(eq(users.id, userId));
     const userTimezone = normalizeTimezone(user?.timezone);
+    // users.name is field-level encrypted when PII encryption is on;
+    // decryptField is a no-op on already-plaintext values. Trim before
+    // splitting so a whitespace-only or whitespace-prefixed stored name
+    // (passkey signup allows both) can't produce "Good morning, .".
+    const userNamePlain = user?.name ? (await decryptField(user.name)).trim() : '';
+    const displayName = userNamePlain.split(/\s+/)[0] || 'there';
 
     // Whether the user has Pulse enabled (opt-out: no row ⇒ enabled). When off, we
     // never tell the client to auto-generate, so no credits are spent on Pulse.
@@ -287,6 +303,36 @@ export async function GET(req: Request) {
     // Determine if client should refresh — never when the user disabled Pulse.
     const shouldRefresh = pulseEnabled && (!latestSummary || isStale);
 
+    // Footprint (drives actually used, last visit) drives whether the signal
+    // line frames itself as "today" or "since you were last here".
+    const { drivesInUse, lastVisitAt } = await computeFootprint(userId, driveIds, now);
+    const sinceLastVisit =
+      lastVisitAt !== null && now.getTime() - lastVisitAt.getTime() > SINCE_LAST_VISIT_THRESHOLD_MS;
+    const signalWindowStart = sinceLastVisit ? lastVisitAt! : startOfToday;
+
+    const context: HomeContext = {
+      userId,
+      displayName,
+      timezone: userTimezone,
+      driveIds,
+      drivesInUse,
+      lastVisitAt,
+      pulseEnabled,
+    };
+
+    const signals = await computeAllSignals({
+      userId,
+      accessiblePageIds: accessiblePagesList,
+      driveIds,
+      drivesInUse,
+      unreadDmCount: unreadCount,
+      summary: latestSummary ? { text: latestSummary.summary, isStale } : null,
+      now,
+      startOfToday,
+      endOfToday,
+      sinceWindowStart: signalWindowStart,
+    });
+
     const response: PulseResponse = {
       summary: latestSummary
         ? {
@@ -318,6 +364,8 @@ export async function GET(req: Request) {
         },
       },
       shouldRefresh,
+      signals,
+      context,
     };
 
     return NextResponse.json(response);

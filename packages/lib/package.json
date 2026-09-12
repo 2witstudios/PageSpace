@@ -23,6 +23,16 @@
       "import": "./dist/client-safe.js",
       "default": "./dist/client-safe.js"
     },
+    "./home-signals/types": {
+      "types": "./dist/home-signals/types.d.ts",
+      "import": "./dist/home-signals/types.js",
+      "require": "./dist/home-signals/types.js"
+    },
+    "./home-signals/composer": {
+      "types": "./dist/home-signals/composer.d.ts",
+      "import": "./dist/home-signals/composer.js",
+      "require": "./dist/home-signals/composer.js"
+    },
     "./commands/command-core": {
       "types": "./dist/commands/command-core.d.ts",
       "import": "./dist/commands/command-core.js",
@@ -2689,6 +2699,9 @@
       ],
       "sheets/sheet": [
         "./dist/sheets/sheet.d.ts"
+      ],
+      "sheets/store": [
+        "./dist/sheets/store.d.ts"
       ],
       "tags/tag-core": [
         "./dist/tags/tag-core.d.ts"

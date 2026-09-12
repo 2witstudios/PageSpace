@@ -65,6 +65,8 @@ export interface ChannelInputRef {
   insertText: (text: string) => void;
   /** Upload one or more files into the composer's attachment slot (used for drops outside the composer) */
   uploadFiles: (files: File[]) => void;
+  /** Put files back after a send failed, so the user need not re-upload them */
+  restoreAttachments: (restored: FileAttachment[]) => void;
   /** Whether the composer can currently accept a new attachment */
   canAcceptDrop: () => boolean;
 }
@@ -129,7 +131,14 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
         : null;
     const hasUploadTarget = !!uploadUrl;
 
-    const { attachments, isUploading, uploadFiles, clearAttachment, removeAttachment } = useAttachmentUpload({
+    const {
+      attachments,
+      isUploading,
+      uploadFiles,
+      clearAttachment,
+      removeAttachment,
+      restoreAttachments,
+    } = useAttachmentUpload({
       uploadUrl,
       onUploaded: () => textareaRef.current?.focus(),
     });
@@ -147,6 +156,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
         void uploadFiles(files);
       },
       canAcceptDrop: () => canUpload,
+      restoreAttachments,
     }));
 
     const handleSend = () => {

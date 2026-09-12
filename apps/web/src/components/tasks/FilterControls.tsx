@@ -2,14 +2,13 @@
 
 import { useMemo } from 'react';
 import { Button } from '@/components/ui/button';
-import type { Drive, StatusConfigsByTaskList } from './types';
+import type { StatusConfigsByTaskList } from './types';
 import { aggregateStatuses } from './task-helpers';
 import {
   type DueDateFilter,
   type AssigneeFilter,
   type StatusGroupFilter,
   type FilterValues,
-  DriveSelect,
   StatusSelect,
   PrioritySelect,
   DueDateSelect,
@@ -21,26 +20,25 @@ export type { DueDateFilter, AssigneeFilter, StatusGroupFilter, FilterValues };
 
 export interface FilterControlsProps {
   layout: 'mobile' | 'desktop';
-  isLocked: boolean;
-  drives: Drive[];
-  selectedDriveId: string | undefined;
+  /**
+   * In a drive, statuses come from that drive's lists and the slug-level
+   * Status filter makes sense. Across all drives it would merge unrelated
+   * lists' statuses in an arbitrary order, so only the status group is offered.
+   */
+  scopedToDrive: boolean;
   filters: FilterValues;
   hasActiveFilters: boolean;
   statusConfigsByTaskList?: StatusConfigsByTaskList;
-  onDriveChange: (driveId: string) => void;
   onFiltersChange: (filters: Partial<FilterValues>) => void;
   onClearFilters: () => void;
 }
 
 export function FilterControls({
   layout,
-  isLocked,
-  drives,
-  selectedDriveId,
+  scopedToDrive,
   filters,
   hasActiveFilters,
   statusConfigsByTaskList,
-  onDriveChange,
   onFiltersChange,
   onClearFilters,
 }: FilterControlsProps) {
@@ -65,20 +63,14 @@ export function FilterControls({
           aria-label="Filter options"
         >
           <div className="flex w-max min-w-full gap-2">
-            <DriveSelect
-              isLocked={isLocked}
-              drives={drives}
-              selectedDriveId={selectedDriveId}
-              driveFilterId={filters.driveId}
-              onDriveChange={onDriveChange}
-              triggerClassName="h-10 min-w-[170px]"
-            />
-            <StatusSelect
-              value={filters.status}
-              statuses={aggregatedStatuses}
-              onChange={(s) => onFiltersChange({ status: s })}
-              triggerClassName="h-10 min-w-[145px]"
-            />
+            {scopedToDrive && (
+              <StatusSelect
+                value={filters.status}
+                statuses={aggregatedStatuses}
+                onChange={(s) => onFiltersChange({ status: s })}
+                triggerClassName="h-10 min-w-[145px]"
+              />
+            )}
             <PrioritySelect
               value={filters.priority}
               onChange={(p) => onFiltersChange({ priority: p })}
@@ -119,20 +111,14 @@ export function FilterControls({
         value={filters.statusGroup || 'active'}
         onChange={(g) => onFiltersChange({ statusGroup: g })}
       />
-      <DriveSelect
-        isLocked={isLocked}
-        drives={drives}
-        selectedDriveId={selectedDriveId}
-        driveFilterId={filters.driveId}
-        onDriveChange={onDriveChange}
-        triggerClassName="w-[180px]"
-      />
-      <StatusSelect
-        value={filters.status}
-        statuses={aggregatedStatuses}
-        onChange={(s) => onFiltersChange({ status: s })}
-        triggerClassName="w-[140px]"
-      />
+      {scopedToDrive && (
+        <StatusSelect
+          value={filters.status}
+          statuses={aggregatedStatuses}
+          onChange={(s) => onFiltersChange({ status: s })}
+          triggerClassName="w-[140px]"
+        />
+      )}
       <PrioritySelect
         value={filters.priority}
         onChange={(p) => onFiltersChange({ priority: p })}
