@@ -94,13 +94,6 @@ function isHttpsUrl(value: string): boolean {
 }
 
 /**
- * Per-field schemas, checked independently so one bad field never masks
- * another — a registration form should show every problem at once, and an API
- * caller should not have to fix errors one round trip at a time. The
- * `allowedScopes` entries are `string` here; which strings are declarable is
- * `classifyScopeShape`'s job below, so the two rejections stay distinguishable.
- */
-/**
  * Bidi controls, directional isolates, zero-width characters, the Arabic
  * letter mark and the BOM. Not control characters by the `\x00-\x1F\x7F`
  * definition, but they reorder or hide rendered text, which is the same attack
@@ -124,6 +117,15 @@ const INVISIBLE_CHAR_RE = /[\u061C\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]
  */
 const isSafeDisplayText = (value: string): boolean =>
   !NAME_CONTROL_CHAR_RE.test(value) && !INVISIBLE_CHAR_RE.test(value);
+
+/*
+ * Per-field schemas below, checked independently so one bad field never masks
+ * another — a registration form should show every problem at once, and an API
+ * caller should not have to fix errors one round trip at a time. Array
+ * ENTRIES stay `unknown` here; which values are declarable is
+ * `classifyScopeShape`'s and `validateRedirectUri`'s job, so a malformed entry
+ * and a forbidden one keep distinct error codes.
+ */
 
 const NAME = z
   .string()
@@ -190,12 +192,18 @@ export function validateClientRegistration(input: unknown): ClientRegistrationRe
     errors.push({ code: 'invalid_homepage_url', field: 'homepageUrl' });
   }
 
-  const redirectUris = candidate.redirectUris;
-  if (!REDIRECT_URIS.safeParse(redirectUris).success || !Array.isArray(redirectUris)) {
+  // The parse RESULT carries the narrowed array, so there is no second
+  // `Array.isArray` check to keep in step with the schema.
+  const redirectParse = REDIRECT_URIS.safeParse(candidate.redirectUris);
+  // Collected in the accepting branch so the success value is carried forward
+  // directly. Only read once `errors` is empty, which cannot happen unless
+  // that branch ran — so no re-check, and no branch a test could not reach.
+  let acceptedRedirectUris: string[] = [];
+  if (!redirectParse.success) {
     errors.push({ code: 'invalid_redirect_uris', field: 'redirectUris' });
   } else {
     const seen = new Set<string>();
-    redirectUris.forEach((uri: unknown, index: number) => {
+    redirectParse.data.forEach((uri: unknown, index: number) => {
       const field = `redirectUris[${index}]`;
       // The authorize-time rules, applied as the least-privileged client
       // there is: nothing registered here can claim the first-party loopback
@@ -220,17 +228,20 @@ export function validateClientRegistration(input: unknown): ClientRegistrationRe
       }
       seen.add(normalized);
     });
+    acceptedRedirectUris = redirectParse.data as string[];
   }
 
-  const allowedScopes = candidate.allowedScopes;
-  if (allowedScopes !== undefined && (!ALLOWED_SCOPES.safeParse(allowedScopes).success || !Array.isArray(allowedScopes))) {
-    // An explicit cap of nothing is a form mistake, and rejecting it is the
-    // fail-closed reading: treating `[]` as "no cap" would silently turn the
-    // safest-looking input into the widest one.
+  // `undefined` means "no cap declared" and is legal; anything else must be a
+  // well-formed array. An explicit `[]` is a form mistake, and rejecting it is
+  // the fail-closed reading — treating it as "no cap" would silently turn the
+  // safest-looking input into the widest one.
+  const allowedScopesParse =
+    candidate.allowedScopes === undefined ? null : ALLOWED_SCOPES.safeParse(candidate.allowedScopes);
+  if (allowedScopesParse !== null && !allowedScopesParse.success) {
     errors.push({ code: 'invalid_allowed_scopes', field: 'allowedScopes' });
-  } else if (allowedScopes !== undefined) {
+  } else if (allowedScopesParse !== null) {
     const seen = new Set<string>();
-    allowedScopes.forEach((scope: unknown, index: number) => {
+    allowedScopesParse.data.forEach((scope: unknown, index: number) => {
       const field = `allowedScopes[${index}]`;
       if (typeof scope !== 'string') {
         errors.push({ code: 'unknown_scope', field, scope: NON_STRING_PLACEHOLDER });
@@ -259,11 +270,13 @@ export function validateClientRegistration(input: unknown): ClientRegistrationRe
   // ask for — `firstParty`, `verified`, an id — can ride in on the object.
   const value: ClientRegistration = {
     name: candidate.name as string,
-    redirectUris: redirectUris as string[],
+    redirectUris: acceptedRedirectUris,
   };
   if (candidate.description !== undefined) value.description = candidate.description as string;
   if (candidate.logoUrl !== undefined) value.logoUrl = candidate.logoUrl as string;
   if (candidate.homepageUrl !== undefined) value.homepageUrl = candidate.homepageUrl as string;
-  if (allowedScopes !== undefined) value.allowedScopes = allowedScopes as string[];
+  if (allowedScopesParse !== null && allowedScopesParse.success) {
+    value.allowedScopes = allowedScopesParse.data as string[];
+  }
   return { ok: true, value };
 }
