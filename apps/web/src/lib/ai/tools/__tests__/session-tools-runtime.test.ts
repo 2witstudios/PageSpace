@@ -197,7 +197,11 @@ describe('resolveCallerSessionForWorker', () => {
       ownerId: 'user-1',
       driveId: 'drive-1',
     });
-    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', 'user-1', 'drive-1');
+    // The agent's TITLE rides along so the lazily minted workspace is labelled
+    // with the agent rather than the generic fallback. This is the DEFAULT
+    // placement — the most travelled minting path, and the one that went on
+    // producing nameless "Session" rows after the other two were fixed.
+    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', 'user-1', 'drive-1', 'Agent');
   });
 
   test('a PAGE conversation whose agent the caller cannot view refuses with not_permitted — RBAC is the gate, not binding state', async () => {

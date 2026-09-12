@@ -750,7 +750,9 @@ export async function resolveCallerSessionForWorker(
       driveId: agent.driveId,
     });
     if (!access.allowed) return { ok: false, reason: 'not_permitted' };
-    return mapEnsured(await ensureDriveSessionForConversation(callerConversationId, ownerId, agent.driveId));
+    return mapEnsured(
+      await ensureDriveSessionForConversation(callerConversationId, ownerId, agent.driveId, agent.title),
+    );
   }
 
   // 'client' (API-managed) rows have no in-app viewer — same policy the
@@ -845,8 +847,9 @@ async function resolveWorkerPlacement(input: {
     // agent minted was born `null` and rendered in the sidebar as the literal
     // fallback "Session" — permanently, since nothing could rename it either.
     // The model's own label wins; otherwise derive one exactly as the spawn
-    // route does, through the same shared helper, so neither spawn path can
-    // produce a nameless workspace.
+    // route does, through the same shared helper. The DEFAULT placement (no
+    // `workspace` argument) mints through `ensureConversationSession` instead
+    // and is named there, for the same reason and with the same helper.
     // The model's own label is bounded here; a DERIVED one comes back already
     // bounded from the length-aware helper and must not be cut again (cutting
     // it is what collapses "<base> 2" back onto "<base>" at the cap).

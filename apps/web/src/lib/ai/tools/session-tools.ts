@@ -1829,7 +1829,13 @@ export function createSessionTools(deps: SessionToolsDeps): {
           // credential), never "allow nothing".
           allowedDriveIds: context?.mcpAllowedDriveIds ?? [],
         });
-        if (!renamed.ok) return noWorkspaceToRename(workspaceId);
+        // `targetId`, NOT the original `workspaceId` (review). When the caller
+        // omitted the id, the binding DID resolve — the refusal came from the
+        // write, not from having no workspace — so reporting the
+        // no-workspace-at-all arm would tell the model something false and,
+        // worse, point it at spawn_session: a spurious workspace against its
+        // owner's cap, for a conversation that already has one.
+        if (!renamed.ok) return noWorkspaceToRename(targetId);
 
         // Report the STORED name, not the requested one: it was trimmed at the
         // boundary, so echoing the input could differ from what a human sees.

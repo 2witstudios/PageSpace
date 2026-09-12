@@ -163,6 +163,34 @@ describe('rename_workspace: the workspace this conversation is in', () => {
     expect(deps.renameWorkspace).not.toHaveBeenCalled();
   });
 
+  /**
+   * Resolution SUCCEEDED, the write was refused — a different thing from
+   * having no workspace, and the refusal must say so.
+   *
+   * Reachable whenever the conversation is bound to a workspace the caller may
+   * use but not relabel: a worker spawned into a colleague's shared workspace,
+   * or a drive-scoped credential whose ceiling excludes that workspace's drive.
+   * The first cut reported the no-workspace-at-all arm here, which told the
+   * model something false AND pointed it at spawn_session — a spurious
+   * workspace against its owner's cap, for a conversation that already has one.
+   */
+  it('given a resolved own workspace whose rename is refused, does NOT claim there is no workspace', async () => {
+    const deps = makeDeps({
+      renameWorkspace: vi.fn(async () => ({ ok: false as const, reason: 'not_found_or_denied' as const })),
+    });
+    const result = await runWith(deps, { name: 'Deploy work' });
+
+    const error = String(result.error);
+    assert({
+      given: 'a refused rename of the conversation\'s own workspace',
+      should: 'name the workspace it could not rename rather than denying one exists',
+      actual: { success: result.success, mentionsId: error.includes(OWN_WORKSPACE) },
+      expected: { success: false, mentionsId: true },
+    });
+    // The harmful half: never send the model to spawn a workspace it has.
+    expect(error).not.toContain('spawn_session');
+  });
+
   it('refuses without an authenticated actor', async () => {
     const deps = makeDeps();
     const result = await runWith(deps, { name: 'Deploy work' }, { userId: undefined as unknown as string });
@@ -206,37 +234,48 @@ describe('rename_workspace: a workspace addressed by id', () => {
   });
 });
 
-describe('rename_workspace: every refusal reads the same (anti-enumeration)', () => {
-  const refusal = async () => {
+describe('rename_workspace: a refusal names nothing the caller did not already supply', () => {
+  /**
+   * The anti-enumeration property itself lives one layer down, in the runtime
+   * dep, because that is where the three causes (no such row / not yours / out
+   * of credential scope) are distinguishable at all — and it is asserted there,
+   * against genuinely different inputs, by `session-tools-runtime.test.ts`'s
+   * "every refusal is the same refusal".
+   *
+   * What is testable HERE is the tool's half of the bargain: it receives one
+   * opaque reason and must not embellish it. An earlier version of this suite
+   * called the same mock twice and compared the two strings, which is true
+   * however the tool behaves — the distinguishing input never reached it. That
+   * proved nothing and is gone.
+   */
+  it('renders the single opaque reason without adding a cause', async () => {
     const deps = makeDeps({
       renameWorkspace: vi.fn(async () => ({ ok: false as const, reason: 'not_found_or_denied' as const })),
     });
-    return runWith(deps, { name: 'Anything', workspaceId: OTHER_WORKSPACE });
-  };
+    const result = await runWith(deps, { name: 'Anything', workspaceId: OTHER_WORKSPACE });
 
-  it('refuses a workspace that is not the caller\'s, does not exist, or is out of scope — identically', async () => {
-    // One dep answer covers all three causes BY CONSTRUCTION: the runtime
-    // collapses them to a single reason, so there is no branch here that could
-    // later grow a distinguishing message.
-    const first = await refusal();
-    const second = await refusal();
-
+    const error = String(result.error);
     assert({
-      given: 'a refused rename',
-      should: 'fail without leaking why',
-      actual: { success: first.success, sameMessage: first.error === second.error },
-      expected: { success: false, sameMessage: true },
+      given: 'the runtime\'s one refusal reason',
+      should: 'fail without naming a cause',
+      actual: {
+        success: result.success,
+        // The id the caller passed in is the only identifier it may echo.
+        echoesCallerId: error.includes(OTHER_WORKSPACE),
+      },
+      expected: { success: false, echoesCallerId: true },
     });
+    for (const leak of ['owner', 'owned by', 'belongs to', 'scope', 'credential', 'permission', 'drive']) {
+      expect(error.toLowerCase(), `refusal must not hint at "${leak}"`).not.toContain(leak);
+    }
   });
 
-  it('names the id the caller asked for, and nothing about its existence', async () => {
-    const result = await refusal();
-
-    assert({
-      given: 'a refused rename of an explicit id',
-      should: 'echo only the id the caller already knew',
-      actual: typeof result.error === 'string' && (result.error as string).includes(OTHER_WORKSPACE),
-      expected: true,
+  it('passes the model-supplied id through unchanged and invents no other', async () => {
+    const deps = makeDeps({
+      renameWorkspace: vi.fn(async () => ({ ok: false as const, reason: 'not_found_or_denied' as const })),
     });
+    const result = await runWith(deps, { name: 'Anything', workspaceId: OTHER_WORKSPACE });
+
+    expect(String(result.error)).not.toContain(OWN_WORKSPACE);
   });
 });

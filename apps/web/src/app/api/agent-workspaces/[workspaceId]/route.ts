@@ -266,7 +266,13 @@ export async function PATCH(request: Request, context: RouteContext) {
     userId: auth.userId,
     resourceType: 'agent_session',
     resourceId: workspaceId,
-    details: { operation: 'rename', route: ROUTE, name: session.name },
+    // The NEW NAME is deliberately not logged. Every other write audit in this
+    // file records the operation and machine state only, and an audit row is
+    // append-only — it outlives the workspace row it describes. A session label
+    // is free text a user or a model wrote, so copying it here would give that
+    // text a longer retention than the record it came from, for no forensic
+    // gain: rename is not a destructive act and the row itself holds the name.
+    details: { operation: 'rename', route: ROUTE },
   });
 
   return NextResponse.json({ session });

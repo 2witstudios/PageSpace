@@ -102,11 +102,13 @@ export type RenameAgentSessionRequest = z.infer<typeof renameAgentSessionRequest
  * `base 2`, `base 3`, … — starting at the bare label rather than always
  * suffixing a number, so no session is ever born "Agent 1".
  *
- * Shared BY DESIGN between the two spawn paths. The HTTP route has always
- * derived a label this way; the agent path (`spawn_session` with
- * `workspace: "new"`) did not, and wrote `null` instead — which is why an
- * agent-minted workspace rendered as the generic "Session" forever. Both call
- * this now, so a nameless workspace is no longer creatable from either side.
+ * Shared BY DESIGN across every path that mints a workspace. The HTTP route has
+ * always derived a label this way; none of the three agent-side paths did, and
+ * each wrote `null` instead — which is why an agent-minted workspace rendered as
+ * the generic "Session" forever. All of them call this now: the explicit
+ * `spawn_session({ workspace: "new" })`, the DEFAULT `spawn_session` placement
+ * that lazily mints the caller's own workspace, and the same lazy mint reached
+ * by the first sandbox tool call in a global chat.
  *
  * Uniqueness here is COSMETIC, not structural: names carry no constraint, and
  * a collision would be legal — this only keeps a sidebar of ten sessions

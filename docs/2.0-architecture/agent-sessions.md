@@ -168,10 +168,13 @@ Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
     ownership is checked only after, where naming the refusal leaks nothing.
     The tool path applies BOTH gates through the same pair, so the tool surface
     cannot drift wider than the HTTP one.
-  - Neither spawn path can mint a nameless workspace any more:
-    `nextUniqueSessionName` moved into the shared contract and the agent path
-    calls it, auto-labelling from the agent's own title when the model supplies
-    no `workspaceName`.
+  - No path can mint a nameless workspace any more. `nextUniqueSessionName`
+    moved into the shared contract and all THREE agent-side minting paths call
+    it, auto-labelling from the agent's own title when no name is supplied: the
+    explicit `spawn_session({ workspace: 'new' })`, the DEFAULT `spawn_session`
+    placement that lazily mints the caller's own workspace, and the same lazy
+    mint reached by the first `bash`/file call in a global chat. The default
+    placement was the one originally missed, and it is the most travelled.
 
   Renaming is safe by construction, not by care: `agent_workspaces.name` carries
   no uniqueness constraint and nothing looks a session up by it (invariant 2),

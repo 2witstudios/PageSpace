@@ -71,7 +71,11 @@ import {
   resolveDriveMembership,
   canRunCodeForSession,
 } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
-import { MAX_ACTIVE_WORKSPACES_PER_OWNER, type AgentSessionDTO } from '@pagespace/lib/agent-workspaces/session-contract';
+import {
+  MAX_ACTIVE_WORKSPACES_PER_OWNER,
+  nextUniqueSessionName,
+  type AgentSessionDTO,
+} from '@pagespace/lib/agent-workspaces/session-contract';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
@@ -858,8 +862,10 @@ export type EnsureGlobalSandboxSessionResult =
 export async function ensureGlobalSandboxSession(
   conversationId: string,
   userId: string,
+  /** Label to derive the workspace's name from; defaults to "Global Assistant". */
+  baseLabel?: string,
 ): Promise<EnsureGlobalSandboxSessionResult> {
-  return ensureConversationSession(conversationId, userId, null);
+  return ensureConversationSession(conversationId, userId, null, baseLabel);
 }
 
 /**
@@ -873,16 +879,34 @@ export async function ensureDriveSessionForConversation(
   conversationId: string,
   userId: string,
   driveId: string,
+  /** Label to derive the workspace's name from — normally the agent's title. */
+  baseLabel?: string,
 ): Promise<EnsureGlobalSandboxSessionResult> {
-  return ensureConversationSession(conversationId, userId, driveId);
+  return ensureConversationSession(conversationId, userId, driveId, baseLabel);
 }
 
 async function ensureConversationSession(
   conversationId: string,
   userId: string,
   driveId: string | null,
+  baseLabel?: string,
 ): Promise<EnsureGlobalSandboxSessionResult> {
-  const spawned = await spawnSession({ userId, driveId });
+  // NAME IT. This is the THIRD minting path and by far the most travelled one:
+  // it is what a plain `spawn_session` (no `workspace` argument) reaches, and
+  // what the first `bash`/file tool call in a global chat reaches. The other
+  // two paths were taught to name their workspaces and this one was not, so it
+  // went on minting rows that render as the literal fallback "Session" in their
+  // owner's sidebar.
+  //
+  // Same derivation as the HTTP spawn route, through the same shared helper, so
+  // there is one rule rather than three. A caller that knows the agent passes
+  // its title; otherwise the drive tells us which generic label fits.
+  const existingNames = (await listSessions({ ownerId: userId })).map((session) => session.name);
+  const name = nextUniqueSessionName(
+    baseLabel?.trim() || (driveId === null ? 'Global Assistant' : 'Agent'),
+    existingNames,
+  );
+  const spawned = await spawnSession({ userId, driveId, name });
   if (!spawned.ok) {
     // `session_limit_reached` is a distinct, actionable denial ("end an
     // existing session first") the caller already knows how to surface —

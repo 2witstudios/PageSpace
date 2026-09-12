@@ -30,7 +30,8 @@ export function RenameDialog({
   description,
 }: RenameDialogProps) {
   const [name, setName] = useState(initialName);
-  const inputId = useId();
+  // Keys the editing session below — NOT the input, which keeps its own id.
+  const editingSessionId = useId();
 
   useEffect(() => {
     setName(initialName);
@@ -40,7 +41,7 @@ export function RenameDialog({
   // revalidation or an auth refresh landing mid-type would otherwise be free to
   // re-render this input out from under a half-typed name. Matches what
   // `DriveEnvNameDialog` already does for the environment rename beside it.
-  useEditingSession(`rename-dialog-${inputId}`, isOpen, 'form', { componentName: 'RenameDialog' });
+  useEditingSession(`rename-dialog-${editingSessionId}`, isOpen, 'form', { componentName: 'RenameDialog' });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
