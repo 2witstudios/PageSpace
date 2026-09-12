@@ -272,7 +272,7 @@ them is designed, not accidental, and it must not become the thing everyone assu
    `validateAuthorizeRequest` → exchange, while "short-circuits the same way `manage_keys` does" is
    implemented nowhere. A `profile`-only principal resolves to `allowedDriveIds: []`, and
    `checkMCPDriveScope` (`apps/web/src/lib/auth/index.ts:785`) reads an empty list as "unscoped", i.e.
-   **allowed for any drive** — the exact shape `validateOAuthAccessToken:349-360` refuses to issue for
+   **allowed for any drive** — the exact shape `validateOAuthAccessToken:339-353` refuses to issue for
    `all_drives`, and the reason `manage_keys` got the `manageKeysNoDriveAccess` sentinel
    (`index.ts:750`). 93 route files call `checkMCPDriveScope`. **Phase 1 acceptance line:**
    `checkMCPDriveScope` and `getAllowedDriveIds` deny a profile-only OAuth principal, via an
