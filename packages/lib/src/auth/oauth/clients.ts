@@ -92,6 +92,9 @@ const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', '[::1]']);
  *  - **platform-handled** (`chrome:`, `chrome-extension:`, `resource:`,
  *    `content:`, `intent:`, `android-app:`, `mailto:`, `tel:`, `sms:`) — the
  *    OS or browser routes these, so they belong to no registered app.
+ *  - **network/transport** (`ftp:`, `ftps:`, `telnet:`, `ssh:`, `gopher:`,
+ *    `ldap:`, `ldaps:`) — these address a server, not a program on the user's
+ *    device, so a code delivered to one has left the device entirely.
  *
  * This is a DENY-list, and `classifyRedirect` says so: a scheme nobody thought
  * of is treated as private-use and is registrable. See that function's note
@@ -121,6 +124,16 @@ const NEVER_PRIVATE_USE_SCHEMES = new Set([
   'mailto:',
   'tel:',
   'sms:',
+  // Network/transport schemes. Not app schemes under any reading, and each
+  // would hand the authorization code to a server rather than to a program on
+  // the user's device.
+  'ftp:',
+  'ftps:',
+  'telnet:',
+  'ssh:',
+  'gopher:',
+  'ldap:',
+  'ldaps:',
 ]);
 
 type RedirectKind = 'https' | 'loopback' | 'private_use' | 'reject';

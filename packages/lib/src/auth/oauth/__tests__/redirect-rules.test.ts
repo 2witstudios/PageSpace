@@ -145,6 +145,11 @@ describe('validateRedirectUri — private-use schemes (RFC 8252 §7.1)', () => {
       'mailto:evil@example.com',
       'tel:+15550100',
       'sms:+15550100',
+      // Network/transport schemes: a code delivered here has left the device.
+      'ftp://evil.example.com/cb',
+      'telnet://evil.example.com',
+      'ssh://evil.example.com',
+      'ldap://evil.example.com/cb',
     ]) {
       const dangerous = client({ redirectUris: [uri] });
       expect(validateRedirectUri(dangerous, uri)).toBe(false);

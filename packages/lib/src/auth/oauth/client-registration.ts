@@ -100,6 +100,13 @@ function isHttpsUrl(value: string): boolean {
  * `allowedScopes` entries are `string` here; which strings are declarable is
  * `classifyScopeShape`'s job below, so the two rejections stay distinguishable.
  */
+/**
+ * Bidi controls, zero-width characters and the BOM. Not control characters by
+ * the `\x00-\x1F\x7F` definition, but they reorder or hide rendered text,
+ * which is the same attack against the same surface.
+ */
+const NAME_INVISIBLE_CHAR_RE = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/;
+
 const NAME = z
   .string()
   .min(1)
@@ -119,13 +126,6 @@ const REDIRECT_URIS = z.array(z.unknown()).min(1).max(10);
 // There are only six legal shapes, so anything longer is a mistake or an
 // attempt to make the error list itself the payload.
 const ALLOWED_SCOPES = z.array(z.unknown()).min(1).max(20);
-
-/**
- * Bidi controls, zero-width characters and the BOM. Not control characters by
- * the `\x00-\x1F\x7F` definition, but they reorder or hide rendered text,
- * which is the same attack against the same surface.
- */
-const NAME_INVISIBLE_CHAR_RE = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/;
 
 /** Classify one `allowedScopes` entry. `null` means it is a legal cap. */
 function classifyScopeShape(scope: string): 'unknown' | 'forbidden' | null {
