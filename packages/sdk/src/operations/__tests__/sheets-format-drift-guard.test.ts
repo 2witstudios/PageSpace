@@ -37,6 +37,7 @@ import {
   MAX_REGION_COLUMNS,
   MAX_REGION_HEADER_ROWS,
   MAX_REGION_TOTAL_ROWS,
+  MAX_ADDRESSABLE_ROW,
   MAX_COLUMN_WIDTH,
   MAX_ROW_HEIGHT,
   MIN_COLUMN_WIDTH,
@@ -45,8 +46,9 @@ import {
   OP_FIELDS,
   FIELDS_BY_KIND,
   SCALE_ANCHOR_TYPES,
+  parseConditionalRule,
+  parseRegion,
 } from '@pagespace/lib/sheets/sheet';
-import { parseConditionalRule, parseRegion } from '@pagespace/lib/sheets/sheet';
 import type { ColumnRole, ConditionalOperator, ConditionalRule } from '@pagespace/lib/sheets/sheet';
 import { applySheetFormat, readSheetFormatting } from '../sheets.js';
 import type { SheetConditionalRuleInput, SheetRegionInput } from '../sheets.js';
@@ -191,7 +193,7 @@ describe('conditional rule shapes — drift guard vs @pagespace/lib', () => {
       // The premise: lib really does carry the unknown field through. If this
       // ever stops being true, the looseness below is no longer required and
       // this test should fail rather than quietly over-permit.
-      expect((parsed as Record<string, unknown>).futureField, `lib stopped preserving unknown fields on a ${kind} rule`)
+      expect((parsed as unknown as Record<string, unknown>).futureField, `lib stopped preserving unknown fields on a ${kind} rule`)
         .toEqual({ nested: 1 });
       // And the conclusion: what lib hands back, the SDK accepts.
       expect(accepts(parsed), `SDK rejected a ${kind} rule lib returned`).toBe(true);
@@ -206,10 +208,10 @@ describe('conditional rule shapes — drift guard vs @pagespace/lib', () => {
       columns: [{ column: 'C', role: 'currency', currency: 'USD', futureColumnField: 'x' }],
       futureRegionField: 'y',
     };
-    const parsed = parseRegion(stored) as Record<string, unknown> | null;
+    const parsed = parseRegion(stored) as unknown as Record<string, unknown> | null;
     expect(parsed).not.toBeNull();
     expect(parsed!.futureRegionField, 'lib stopped preserving unknown region fields').toBe('y');
-    expect((parsed!.columns as Record<string, unknown>[])[0]!.futureColumnField, 'lib stopped preserving unknown column fields')
+    expect((parsed!.columns as unknown as Record<string, unknown>[])[0]!.futureColumnField, 'lib stopped preserving unknown column fields')
       .toBe('x');
     expect(
       applySheetFormat.inputSchema.safeParse({ pageId: 'p1', ops: [{ type: 'upsertRegion', region: parsed }] }).success,
@@ -270,6 +272,30 @@ describe('inlined caps — drift guard vs @pagespace/lib', () => {
 
     expect(accepts([{ type: 'upsertRegion', region: { ...region, columns: [{ ...column, decimals: MAX_DECIMALS }] } }])).toBe(true);
     expect(accepts([{ type: 'upsertRegion', region: { ...region, columns: [{ ...column, decimals: MAX_DECIMALS + 1 }] } }])).toBe(false);
+  });
+
+  it('bounds a row-height row and a region total row at lib\'s DIFFERENT ceilings', () => {
+    // `MAX_ADDRESSABLE_ROW` bounds a 0-BASED index (`decodeCellAddress`
+    // returns `parseInt(rowPart) - 1`), and lib's two fields compare against
+    // it differently: `setRowHeight` bounds `row - 1 > MAX_ADDRESSABLE_ROW`,
+    // while `readTotalRows` filters `row <= MAX_ADDRESSABLE_ROW` with no
+    // shift. So the last row that can take a HEIGHT is one past the last row
+    // that can be marked a TOTAL. lib's own comment records this having been
+    // got wrong once: comparing `row` to the constant directly "left the last
+    // addressable row able to take a cell format but not a row height".
+    // Pinned here because a single shared schema would have to be wrong for
+    // one of them, and nothing else would notice.
+    const height = (row: number) => accepts([{ type: 'setRowHeight', row, height: 32 }]);
+    const total = (row: number) =>
+      accepts([{ type: 'upsertRegion', region: { id: 'g', range: 'A1:F', totalRows: [row] } }]);
+
+    expect(height(MAX_ADDRESSABLE_ROW + 1), 'last addressable row must take a height').toBe(true);
+    expect(height(MAX_ADDRESSABLE_ROW + 2)).toBe(false);
+    expect(height(0)).toBe(false);
+
+    expect(total(MAX_ADDRESSABLE_ROW)).toBe(true);
+    expect(total(MAX_ADDRESSABLE_ROW + 1), 'lib filters a total row past the constant').toBe(false);
+    expect(total(0)).toBe(false);
   });
 
   it('bounds column widths and row heights at lib\'s min and max', () => {

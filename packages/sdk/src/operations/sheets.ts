@@ -401,18 +401,56 @@ const cellFormatSchema = z.record(z.string(), z.unknown());
 /** A1 range — `"B2:D40"`, a single cell, or `"A1:F"` open to the sheet's end. */
 const rangeSchema = z.string().min(1);
 
-/** 1-based, as the sheet labels it: row 417 is where `C417` lives. */
-const rowNumberSchema = z.number().int().min(1).max(MAX_ADDRESSABLE_ROW);
+/**
+ * A note on `columnSchema` where the formatting ops below reuse it: it allows
+ * up to seven letters, because that is what the ROW store's `assertColumn`
+ * allows and the query/projection operations above need. Formatting stops
+ * earlier — lib's `validateColumn` refuses anything past ZZZ — so `"ABCD"`
+ * clears this schema and is then refused by the server.
+ *
+ * Left deliberately: the server's refusal names the real boundary ("Column
+ * "ABCD" is past the last addressable column, ZZZ"), which is a better answer
+ * than the regex failure a tighter local schema would produce, and a local cap
+ * would start refusing valid columns the day the address space widens.
+ */
 
 /**
- * A frozen-pane count. `0` unfreezes that axis; `null` clears it.
+ * A 1-based row number as `setRowHeight` takes it — row 417 is where `C417`
+ * lives.
+ *
+ * The ceiling is `MAX_ADDRESSABLE_ROW + 1`, NOT `MAX_ADDRESSABLE_ROW`, because
+ * that constant bounds a 0-BASED index: `decodeCellAddress` returns
+ * `parseInt(rowPart) - 1`. lib bounds this field as `row - 1 >
+ * MAX_ADDRESSABLE_ROW`, and its comment records the bug that produced that
+ * form — comparing `row` to the constant directly "left the last addressable
+ * row able to take a cell format but not a row height, which is the kind of
+ * disagreement no caller can see coming". Capping at the constant here would
+ * reintroduce exactly that, one layer up, as a local refusal of a row the
+ * server accepts.
+ */
+const rowHeightRowSchema = z.number().int().min(1).max(MAX_ADDRESSABLE_ROW + 1);
+
+/**
+ * A 1-based row number as a REGION's `totalRows` takes it — a different
+ * ceiling from `rowHeightRowSchema`, deliberately, and not a copy-paste slip.
+ * lib's `readTotalRows` filters on `row >= 1 && row <= MAX_ADDRESSABLE_ROW`,
+ * comparing the 1-based value to the constant without the shift, so the last
+ * row a height can be set on is one past the last row that can be marked a
+ * total. Mirroring lib field by field is the only way these agree; a single
+ * shared "row number" schema would have to be wrong for one of them.
+ */
+const totalRowSchema = z.number().int().min(1).max(MAX_ADDRESSABLE_ROW);
+
+/**
+ * A frozen-pane COUNT, not an index. `0` unfreezes that axis; `null` clears it.
  *
  * The real bound is the tab's own extent — the server refuses "freeze 5 rows"
- * on a 3-row sheet naming both numbers — so these ceilings only keep an
- * absurd value from reaching it at all.
+ * on a 3-row sheet, naming both numbers — so these ceilings only keep an absurd
+ * value from reaching it at all. `+ 1` because a count of every addressable
+ * row is one more than the largest 0-based index those constants hold.
  */
-const frozenRowCountSchema = z.number().int().min(0).max(MAX_ADDRESSABLE_ROW);
-const frozenColumnCountSchema = z.number().int().min(0).max(MAX_ADDRESSABLE_COLUMN);
+const frozenRowCountSchema = z.number().int().min(0).max(MAX_ADDRESSABLE_ROW + 1);
+const frozenColumnCountSchema = z.number().int().min(0).max(MAX_ADDRESSABLE_COLUMN + 1);
 
 /**
  * Fields that belong to SOME rule kind, and so may be foreign to another —
@@ -555,7 +593,7 @@ const regionSchema = z.looseObject({
   /** Leading rows that are headers rather than data. Defaults to 1. */
   headerRows: z.number().int().min(0).max(MAX_REGION_HEADER_ROWS).optional(),
   /** Absolute 1-based row numbers holding totals. */
-  totalRows: z.array(rowNumberSchema).max(MAX_REGION_TOTAL_ROWS).optional(),
+  totalRows: z.array(totalRowSchema).max(MAX_REGION_TOTAL_ROWS).optional(),
   // Loose for the same reason the region itself is: `readColumns` spreads the
   // stored entry, so an extension field on a column travels through untouched
   // and must survive a round trip rather than fail the read.
@@ -598,7 +636,7 @@ const formatOpSchema = z.discriminatedUnion('type', [
   }),
   z.strictObject({
     type: z.literal('setRowHeight'),
-    row: rowNumberSchema,
+    row: rowHeightRowSchema,
     /** Pixels. `null` restores the default height. */
     height: z.number().int().min(MIN_ROW_HEIGHT).max(MAX_ROW_HEIGHT).nullable(),
   }),
