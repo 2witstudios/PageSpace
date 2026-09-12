@@ -53,7 +53,7 @@ import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { createSandboxTools, type ListReachableEnvironments, type ResolveEnvironmentTarget, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
-import { decideEnvReach, ENV_UNREACHABLE_MESSAGE } from '@pagespace/lib/env-bridge/decide-env-reach';
+import { conversationMayReachPersistentEnvironments, decideEnvReach, ENV_UNREACHABLE_MESSAGE } from '@pagespace/lib/env-bridge/decide-env-reach';
 import { OWN_SANDBOX_LABEL } from '@pagespace/lib/services/sandbox/environment-directory';
 import type { SandboxEnvironmentTarget } from '@pagespace/lib/services/sandbox/tool-runners';
 import {
@@ -599,6 +599,10 @@ export function createResolveSandboxActorContext(
     const base = {
       userId,
       conversationId,
+      // Fail CLOSED: only an explicit `'global'` chat source is the dashboard
+      // assistant. A page agent, and any surface that did not say what it is,
+      // reads as `'page'` and cannot reach a persistent environment.
+      conversationKind: chatSourceType === 'global' ? ('global' as const) : ('page' as const),
       requestOrigin: context?.requestOrigin,
       agentPageId: context?.chatSource?.agentPageId ?? context?.parentAgentId,
       actorEmail: actorInfo.actorEmail,
@@ -651,6 +655,10 @@ export const resolveSandboxActorContext: ResolveSandboxContext =
  * answer the route gives as a 404, expressed as a list a model can read.
  */
 export const productionListReachableEnvironments: ListReachableEnvironments = async (ctx) => {
+  // The promise is about the GLOBAL assistant specifically — the column, the
+  // settings toggle and the changelog all say so. A page agent gets its own
+  // sandbox and nothing else, and never learns that a machine exists.
+  if (!conversationMayReachPersistentEnvironments(ctx.conversationKind ?? 'page')) return [];
   const { isLocalEnvsEnabled } = await import('@pagespace/lib/services/drive-envs/local-envs-enabled');
   if (!isLocalEnvsEnabled()) return [];
   const { listGlobalAssistantEnvironments } = await import('@/lib/drive-envs/drive-envs-runtime');
@@ -704,6 +712,12 @@ export const productionResolveEnvironmentTarget: ResolveEnvironmentTarget = asyn
       payer: { driveId: ctx.driveId, ownerId: ctx.ownerId ?? ctx.userId, tenantId: ctx.tenantId, tier: ctx.tier },
     };
   }
+  // A page conversation is refused BEFORE the lookup — `decideEnvReach` owns the
+  // rule, and this is it applied early so a page turn cannot probe for an id's
+  // existence through timing or through a read it was never entitled to make.
+  const kind = ctx.conversationKind ?? 'page';
+  if (!conversationMayReachPersistentEnvironments(kind)) return { ok: false, error: ENV_UNREACHABLE_MESSAGE };
+
   const { isLocalEnvsEnabled } = await import('@pagespace/lib/services/drive-envs/local-envs-enabled');
   // With the flag off there are no reachable environments at all, and saying so
   // any other way would tell the caller whether the id exists.
@@ -717,6 +731,7 @@ export const productionResolveEnvironmentTarget: ResolveEnvironmentTarget = asyn
   const sibling = env === null ? null : await store.findLocalByEnvId(environmentId);
   const verdict = decideEnvReach({
     actorId: ctx.userId,
+    conversationKind: kind,
     env: env === null ? null : { visibleToGlobalAssistant: env.visibleToGlobalAssistant, ownerId: sibling?.ownerId ?? null },
   });
   if (!verdict.ok) return { ok: false, error: ENV_UNREACHABLE_MESSAGE };

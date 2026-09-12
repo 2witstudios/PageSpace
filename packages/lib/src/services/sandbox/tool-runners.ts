@@ -125,6 +125,14 @@ export interface SandboxActorContext {
    * sandbox — omission must never be a silent default, at any layer.
    */
   environment?: SandboxEnvironmentTarget;
+  /**
+   * WHICH KIND of conversation this call came from — `'global'` only for the
+   * dashboard assistant. Fails CLOSED: absent reads as `'page'`, because the
+   * only thing it gates is reaching a PERSISTENT environment, and a surface
+   * that did not say what it is has not established that it is the one agent
+   * the owner switched their machine on for.
+   */
+  conversationKind?: 'global' | 'page';
 }
 
 export interface SandboxQuotaDeps {

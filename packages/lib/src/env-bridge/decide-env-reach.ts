@@ -7,16 +7,20 @@
  * so that every caller asks it the same way and no call site can answer it
  * with a habit.
  *
- * **Three refusals, ONE sentence.** `not_found`, `not_owner` and `not_visible`
- * are separate typed reasons so the server can audit which one fired, but the
- * message a model (and therefore a user of the model) sees is identical for
- * all three — `ENV_UNREACHABLE_MESSAGE`. An addressing failure must not tell
+ * **Every refusal, ONE sentence.** `not_global`, `not_found`, `not_owner` and
+ * `not_visible` are separate typed reasons so the server can audit which one
+ * fired, but the message a model (and therefore a user of the model) sees is
+ * identical for all of them — `ENV_UNREACHABLE_MESSAGE`. An addressing failure must not tell
  * the caller whether the id they guessed exists, who owns it, or whether it is
  * merely switched off: any of those is a probe. The tests pin the three to one
  * string.
  *
  * **Absence is never a grant.** A missing row, a missing owner and a `false`
  * flag all refuse. There is no "unset" that means yes.
+ *
+ * **Four refusals, one sentence.** `not_global` joins them for the same reason:
+ * a page conversation must not be able to tell a real environment id from a
+ * made-up one either.
  *
  * **Visibility is not authority.** An `ok` here says only that the assistant
  * may ADDRESS this environment. Whether anything may then run on it is still
@@ -47,14 +51,42 @@ export interface EnvReachFacts {
   readonly ownerId: string | null;
 }
 
-export type EnvReachDenyReason = 'not_found' | 'not_owner' | 'not_visible';
+/**
+ * Which KIND of conversation is asking. Only `'global'` may reach a persistent
+ * environment; everything else — a page agent's conversation, or an unknown
+ * surface — is `'page'` and fails closed.
+ */
+export type ConversationKind = 'global' | 'page';
+
+/**
+ * May a conversation of this kind reach a PERSISTENT environment at all?
+ *
+ * **The promise the product makes is specifically about the GLOBAL assistant.**
+ * The column is `visibleToGlobalAssistant`, the settings toggle says "Let your
+ * global assistant use this machine", and the changelog says the same. A page
+ * agent in a drive is a different agent with a different audience, and a person
+ * who switched their laptop on for the assistant they talk to from the
+ * dashboard did not thereby switch it on for every sandbox-enabled agent in
+ * every drive they belong to.
+ *
+ * This has to be a fact the DECISION owns rather than a check at one call site,
+ * because there are two call sites — discovery and resolution — and the tool
+ * registry is built ONCE per process and shared by every turn
+ * (`ai-tools.ts`), so nothing about the tool objects themselves distinguishes a
+ * dashboard turn from a page turn.
+ */
+export function conversationMayReachPersistentEnvironments(kind: ConversationKind): boolean {
+  return kind === 'global';
+}
+
+export type EnvReachDenyReason = 'not_global' | 'not_found' | 'not_owner' | 'not_visible';
 
 export type EnvReachVerdict =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: EnvReachDenyReason };
 
 /** The documented, tested deny order. */
-export const ENV_REACH_DENY_ORDER: readonly EnvReachDenyReason[] = ['not_found', 'not_owner', 'not_visible'];
+export const ENV_REACH_DENY_ORDER: readonly EnvReachDenyReason[] = ['not_global', 'not_found', 'not_owner', 'not_visible'];
 
 /**
  * The ONE sentence every reach refusal surfaces, whatever the typed reason.
@@ -68,7 +100,16 @@ export const ENV_UNREACHABLE_MESSAGE =
   'No environment with that id is available to you. Call list_environments and copy an id from its output exactly — never construct or guess one.';
 
 /** @returns `ok`, or the first reason in `ENV_REACH_DENY_ORDER` that applies. */
-export function decideEnvReach(input: { actorId: string; env: EnvReachFacts | null }): EnvReachVerdict {
+export function decideEnvReach(input: {
+  actorId: string;
+  /** Which kind of conversation is asking. Only a global one may reach a persistent environment. */
+  conversationKind: ConversationKind;
+  env: EnvReachFacts | null;
+}): EnvReachVerdict {
+  // FIRST, and before the row is even consulted: a page conversation may not
+  // reach a persistent environment whatever the row says, so it must not be
+  // able to learn anything about one from the order of these checks either.
+  if (!conversationMayReachPersistentEnvironments(input.conversationKind)) return { ok: false, reason: 'not_global' };
   if (input.env === null) return { ok: false, reason: 'not_found' };
   if (input.env.ownerId === null || input.env.ownerId !== input.actorId) return { ok: false, reason: 'not_owner' };
   if (!input.env.visibleToGlobalAssistant) return { ok: false, reason: 'not_visible' };

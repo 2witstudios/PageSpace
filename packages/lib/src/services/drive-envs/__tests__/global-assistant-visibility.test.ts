@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { createDriveEnv, setGlobalAssistantVisibility, type LocalEnvIdentityDeps } from '../drive-envs';
-import { decideEnvReach, ENV_REACH_DENY_ORDER, ENV_UNREACHABLE_MESSAGE } from '../../../env-bridge/decide-env-reach';
+import { conversationMayReachPersistentEnvironments, decideEnvReach, ENV_REACH_DENY_ORDER, ENV_UNREACHABLE_MESSAGE } from '../../../env-bridge/decide-env-reach';
 import { decideBind } from '../../../env-bridge/decide-bind';
 import { makeDriveEnvStore, DRIVE_ID, PAYER_ID, NOW } from './fakes';
 
@@ -38,7 +38,7 @@ describe('visibility to the global assistant — default off, owner-only', () =>
     const h = await harness();
     // The row as MINTED, with nothing ever written to the flag.
     expect(h.fake.rows.get(h.envId)!.visibleToGlobalAssistant).toBe(false);
-    expect(decideEnvReach({ actorId: 'owner-1', env: { visibleToGlobalAssistant: false, ownerId: 'owner-1' } })).toEqual({ ok: false, reason: 'not_visible' });
+    expect(decideEnvReach({ actorId: 'owner-1', conversationKind: 'global', env: { visibleToGlobalAssistant: false, ownerId: 'owner-1' } })).toEqual({ ok: false, reason: 'not_visible' });
   });
 
   it('given the owner turns visibility on, should change nothing about who may drive the machine — D-6 owner-only binding is untouched', async () => {
@@ -89,7 +89,7 @@ describe('visibility to the global assistant — default off, owner-only', () =>
   it('given visibility is turned OFF while a conversation already holds a session there, should refuse the NEXT call rather than honouring the earlier reach', async () => {
     const h = await harness();
     await h.set('owner-1', true);
-    const reachNow = () => decideEnvReach({ actorId: 'owner-1', env: { visibleToGlobalAssistant: h.fake.rows.get(h.envId)!.visibleToGlobalAssistant, ownerId: 'owner-1' } });
+    const reachNow = () => decideEnvReach({ actorId: 'owner-1', conversationKind: 'global', env: { visibleToGlobalAssistant: h.fake.rows.get(h.envId)!.visibleToGlobalAssistant, ownerId: 'owner-1' } });
     expect(reachNow()).toEqual({ ok: true });
     // The owner switches it off mid-conversation. Nothing about the session row
     // changes — the reach is re-decided from the env on the next call.
@@ -100,12 +100,12 @@ describe('visibility to the global assistant — default off, owner-only', () =>
 
 describe('decideEnvReach — absence is never a grant, and a refusal never leaks', () => {
   it('refuses a missing row, an ownerless env, a non-owner and an invisible env, in the documented order', () => {
-    expect(decideEnvReach({ actorId: 'u', env: null })).toEqual({ ok: false, reason: 'not_found' });
-    expect(decideEnvReach({ actorId: 'u', env: { visibleToGlobalAssistant: true, ownerId: null } })).toEqual({ ok: false, reason: 'not_owner' });
-    expect(decideEnvReach({ actorId: 'u', env: { visibleToGlobalAssistant: true, ownerId: 'other' } })).toEqual({ ok: false, reason: 'not_owner' });
-    expect(decideEnvReach({ actorId: 'u', env: { visibleToGlobalAssistant: false, ownerId: 'u' } })).toEqual({ ok: false, reason: 'not_visible' });
-    expect(decideEnvReach({ actorId: 'u', env: { visibleToGlobalAssistant: true, ownerId: 'u' } })).toEqual({ ok: true });
-    expect(ENV_REACH_DENY_ORDER).toEqual(['not_found', 'not_owner', 'not_visible']);
+    expect(decideEnvReach({ actorId: 'u', conversationKind: 'global', env: null })).toEqual({ ok: false, reason: 'not_found' });
+    expect(decideEnvReach({ actorId: 'u', conversationKind: 'global', env: { visibleToGlobalAssistant: true, ownerId: null } })).toEqual({ ok: false, reason: 'not_owner' });
+    expect(decideEnvReach({ actorId: 'u', conversationKind: 'global', env: { visibleToGlobalAssistant: true, ownerId: 'other' } })).toEqual({ ok: false, reason: 'not_owner' });
+    expect(decideEnvReach({ actorId: 'u', conversationKind: 'global', env: { visibleToGlobalAssistant: false, ownerId: 'u' } })).toEqual({ ok: false, reason: 'not_visible' });
+    expect(decideEnvReach({ actorId: 'u', conversationKind: 'global', env: { visibleToGlobalAssistant: true, ownerId: 'u' } })).toEqual({ ok: true });
+    expect(ENV_REACH_DENY_ORDER).toEqual(['not_global', 'not_found', 'not_owner', 'not_visible']);
   });
 
   it('surfaces ONE sentence for all three refusals, so an id that does not exist and one the caller may not see are indistinguishable', () => {
@@ -114,5 +114,32 @@ describe('decideEnvReach — absence is never a grant, and a refusal never leaks
     expect(ENV_UNREACHABLE_MESSAGE).toContain('list_environments');
     expect(ENV_UNREACHABLE_MESSAGE).toContain('never construct or guess one');
     expect(ENV_UNREACHABLE_MESSAGE).not.toMatch(/exist|owner|visib/i);
+  });
+});
+
+describe('decideEnvReach — only the GLOBAL assistant reaches a persistent environment', () => {
+  const visibleMine = { visibleToGlobalAssistant: true, ownerId: 'u' } as const;
+
+  it('given a PAGE conversation, should refuse even an environment the actor owns and has made visible', () => {
+    // The promise is specifically about the global assistant: the column is
+    // `visibleToGlobalAssistant`, and the settings toggle says "Let your global
+    // assistant use this machine". Switching a laptop on for the assistant you
+    // talk to from the dashboard is not switching it on for every
+    // sandbox-enabled agent in every drive you belong to.
+    expect(decideEnvReach({ actorId: 'u', conversationKind: 'page', env: visibleMine })).toEqual({ ok: false, reason: 'not_global' });
+    expect(decideEnvReach({ actorId: 'u', conversationKind: 'global', env: visibleMine })).toEqual({ ok: true });
+  });
+
+  it('refuses a page conversation BEFORE the row is consulted, so the deny order leaks nothing about whether an id exists', () => {
+    // Same answer for a real env, a missing one, and someone else's — a page
+    // turn cannot tell them apart, which is the point.
+    for (const env of [visibleMine, null, { visibleToGlobalAssistant: true, ownerId: 'someone-else' }]) {
+      expect(decideEnvReach({ actorId: 'u', conversationKind: 'page', env })).toEqual({ ok: false, reason: 'not_global' });
+    }
+  });
+
+  it('the rule is ONE predicate both call sites share — discovery and resolution cannot drift', () => {
+    expect(conversationMayReachPersistentEnvironments('global')).toBe(true);
+    expect(conversationMayReachPersistentEnvironments('page')).toBe(false);
   });
 });

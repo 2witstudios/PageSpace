@@ -79,6 +79,7 @@ import {
   buildRealSandboxRunDeps,
   buildSandboxTools,
   productionResolveEnvironmentTarget,
+  productionListReachableEnvironments,
   type ResolveSandboxActorContextDeps,
 } from '../sandbox-tools-runtime';
 import { ENV_UNREACHABLE_MESSAGE } from '@pagespace/lib/env-bridge/decide-env-reach';
@@ -813,6 +814,8 @@ describe('productionResolveEnvironmentTarget — resolving the mandatory id (lea
     conversationId: 'a78aoz3je2ycbofz79zgez9q',
     actorEmail: 'u1@example.com',
     tier: 'pro' as const,
+    // The dashboard assistant. A page conversation is a separate describe below.
+    conversationKind: 'global' as const,
   };
   const ENV_ID = 'dw9jthqyaza6ga3b6m5nmpqw';
 
@@ -1063,5 +1066,82 @@ describe('a mis-addressed call lands where the owner\'s click still gates it (le
     // and what the owner's local prompt names. Routing changed where a call
     // goes; it changed nothing about who it claims to be.
     expect(principals).toEqual([{ userId: 'u1', sessionId: 'ws-env-1', conversationId: 'conv-1' }]);
+  });
+});
+
+describe('only the GLOBAL assistant reaches a persistent environment (Codex P1, #2616)', () => {
+  const ENV_ID = 'dw9jthqyaza6ga3b6m5nmpqw';
+  const pageCtx = {
+    userId: 'u1',
+    tenantId: 'u1',
+    driveId: 'd1',
+    conversationId: 'a78aoz3je2ycbofz79zgez9q',
+    actorEmail: 'u1@example.com',
+    tier: 'pro' as const,
+    conversationKind: 'page' as const,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsLocalEnvsEnabled.mockReturnValue(true);
+    mockFindEnvById.mockResolvedValue({ id: ENV_ID, name: 'mac', driveId: 'drive-1', substrate: 'local', visibleToGlobalAssistant: true });
+    mockFindLocalByEnvId.mockResolvedValue({ envId: ENV_ID, ownerId: 'u1', label: 'jono-macstudio' });
+    mockResolveDriveEnvPayer.mockResolvedValue({ payerId: 'drive-owner', tier: 'pro' });
+  });
+
+  it('a PAGE conversation gets the own-sandbox row and NOTHING else — it never learns a machine exists', async () => {
+    expect(await productionListReachableEnvironments(pageCtx)).toEqual([]);
+    // And it does not even reach the flag or the store to find that out.
+    expect(mockIsLocalEnvsEnabled).not.toHaveBeenCalled();
+    expect(mockFindEnvById).not.toHaveBeenCalled();
+  });
+
+  it("a PAGE conversation naming a REAL visible env the actor owns is refused with the SAME sentence as an unreachable one", async () => {
+    const refused = await productionResolveEnvironmentTarget({ ctx: pageCtx, environmentId: ENV_ID });
+    expect(refused).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+    // Refused BEFORE the lookup, so it cannot probe for an id's existence.
+    expect(mockFindEnvById).not.toHaveBeenCalled();
+
+    // The very same id, from the dashboard assistant, resolves — so the refusal
+    // above is the conversation kind answering and not a broken fixture.
+    const globalCtx = { ...pageCtx, conversationKind: 'global' as const };
+    expect(await productionResolveEnvironmentTarget({ ctx: globalCtx, environmentId: ENV_ID })).toMatchObject({ ok: true });
+  });
+
+  it("a PAGE conversation still reaches its OWN sandbox — this narrows persistent environments, not code execution", async () => {
+    expect(await productionResolveEnvironmentTarget({ ctx: pageCtx, environmentId: pageCtx.conversationId })).toMatchObject({
+      ok: true,
+      target: { kind: 'conversation' },
+    });
+  });
+
+  it('an actor context with NO conversation kind fails CLOSED, as a page conversation', async () => {
+    const unknown = { ...pageCtx, conversationKind: undefined };
+    expect(await productionListReachableEnvironments(unknown)).toEqual([]);
+    expect(await productionResolveEnvironmentTarget({ ctx: unknown, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+  });
+});
+
+describe('createResolveSandboxActorContext — the conversation kind rides the actor context', () => {
+  it('marks a global chat source global, and every other surface page', async () => {
+    const resolve = createResolveSandboxActorContext(makeDeps());
+    const global = await resolve({ userId: 'u1', conversationId: 'conv-1', chatSource: { type: 'global' } });
+    expect('error' in global ? null : global.conversationKind).toBe('global');
+
+    const page = await resolve({
+      userId: 'u1',
+      conversationId: 'conv-1',
+      chatSource: { type: 'page', agentPageId: 'page-agent-1' },
+      locationContext: { currentDrive: { id: 'd1', name: 'D', slug: 'd' } },
+    });
+    expect('error' in page ? null : page.conversationKind).toBe('page');
+
+    // No chatSource at all: page, because it has not established otherwise.
+    const unknown = await resolve({
+      userId: 'u1',
+      conversationId: 'conv-1',
+      locationContext: { currentDrive: { id: 'd1', name: 'D', slug: 'd' } },
+    });
+    expect('error' in unknown ? null : unknown.conversationKind).toBe('page');
   });
 });
