@@ -105,9 +105,10 @@ const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', '[::1]']);
  */
 const NEVER_PRIVATE_USE_SCHEMES = new Set([
   // Unreachable through `classifyRedirect`, which answers for both before
-  // consulting this set. Kept so the set is independently correct — it names
-  // every scheme that is not a private-use scheme, and a future caller that
-  // reaches for it directly should not have to know the ordering.
+  // consulting this set. Kept so a direct caller does not have to know that
+  // ordering to get the right answer about these two. Note the set is a
+  // DENY-list and nothing more: membership proves a scheme is not private-use,
+  // absence proves nothing at all (see `classifyRedirect` below).
   'http:',
   'https:',
   'ws:',
@@ -151,26 +152,6 @@ const NEVER_PRIVATE_USE_SCHEMES = new Set([
 type RedirectKind = 'https' | 'loopback' | 'private_use' | 'reject';
 
 /**
- * Which rule this URI plays by. Total — every input gets one of the four
- * answers.
- *
- * `https:` and `http:` are allow-listed: each has one explicit accepting
- * condition and everything else about them is `reject`. **Private-use schemes
- * are DENY-listed**: a scheme that is neither http(s) nor on
- * `NEVER_PRIVATE_USE_SCHEMES` classifies as `private_use`, so an unfamiliar
- * scheme is registrable rather than refused.
- *
- * That asymmetry is deliberate and it is the one place this module does not
- * fail closed. RFC 8252 §7.1 says a native app's redirect scheme is one the
- * app itself chose, so the set is open by construction — an allow-list would
- * have to be a list of every app that will ever exist. The exposure it leaves
- * is scheme squatting: nothing stops a registration claiming `slack://oauth`,
- * and on a shared device the OS hands the code to whichever app claimed the
- * scheme. Exact-match registration, per-client scope caps, and the
- * "Unverified app" badge are what stand in front of that today; ADR 0004
- * Decision 3 records it as accepted rather than solved.
- */
-/**
  * The hostname with EVERY trailing dot removed.
  * `new URL('https://localhost./cb').hostname` is `'localhost.'`, which names the
  * same host as `localhost` but is a different string — so an equality check
@@ -199,6 +180,26 @@ function canonicalHostname(url: URL): string {
   return hostname.slice(0, end);
 }
 
+/**
+ * Which rule this URI plays by. Total — every input gets one of the four
+ * answers.
+ *
+ * `https:` and `http:` are allow-listed: each has one explicit accepting
+ * condition and everything else about them is `reject`. **Private-use schemes
+ * are DENY-listed**: a scheme that is neither http(s) nor on
+ * `NEVER_PRIVATE_USE_SCHEMES` classifies as `private_use`, so an unfamiliar
+ * scheme is registrable rather than refused.
+ *
+ * That asymmetry is deliberate and it is the one place this module does not
+ * fail closed. RFC 8252 §7.1 says a native app's redirect scheme is one the
+ * app itself chose, so the set is open by construction — an allow-list would
+ * have to be a list of every app that will ever exist. The exposure it leaves
+ * is scheme squatting: nothing stops a registration claiming `slack://oauth`,
+ * and on a shared device the OS hands the code to whichever app claimed the
+ * scheme. Exact-match registration, per-client scope caps, and the
+ * "Unverified app" badge are what stand in front of that today; ADR 0004
+ * Decision 3 records it as accepted rather than solved.
+ */
 function classifyRedirect(url: URL): RedirectKind {
   if (url.protocol === 'https:') {
     // RFC 8252 §8.3: `localhost` can be remapped; only the numeric literals

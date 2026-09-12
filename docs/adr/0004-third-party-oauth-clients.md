@@ -336,8 +336,11 @@ one.
 
 Validation is `validateClientRegistration`
 (`packages/lib/src/auth/oauth/client-registration.ts`): `unknown` in, a typed error union out,
-never throws, every problem reported at once with the field that caused it. Name 1–100 and description ≤500, both held to the display-text rule mcp key names already
-meet (no control characters, no bidi overrides or directional isolates, no zero-width characters
+never throws, every problem reported at once with the field that caused it. Name 1–100 and description ≤500 (an empty description means "no description", the same as
+omitting the field — an absent one and an empty one render identically, and rejecting `''` would
+leave no way to clear a description on a later partial update; whitespace-only stays an error,
+since `''` is unambiguously empty and `'   '` is invisible content), both held to the
+display-text rule mcp key names already meet (no control characters, no bidi overrides or directional isolates, no zero-width characters
 — they render beside the "Unverified app" badge, and ADR 0002 Decision 5 makes what the screen says
 part of the security boundary; the name additionally may not be whitespace-only or carry leading or
 trailing whitespace, and is rejected rather than silently trimmed). `logoUrl`/`homepageUrl` https-only (an `http:` logo is a mixed-content

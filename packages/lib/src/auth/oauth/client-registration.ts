@@ -143,10 +143,17 @@ const NAME = z
 // pass claimed and did not deliver: the description renders on the consent
 // screen directly beneath the name, so a whitespace-only one is an empty line
 // under a name and a leading-whitespace one renders indented away from it.
-// Send the field or omit it; sending it blank is neither.
+//
+// The empty string is the exception, and it is NOT rejected: `''` means "no
+// description", the same as omitting the field. Rejecting it read as
+// consistent with `name` but left no way to CLEAR a description on a later
+// partial update (omitting means "unchanged") and failed any create form that
+// posts its empty optional fields — a trap set for the Phase 1 console by a
+// rule that bought nothing, since an absent description and an empty one
+// render identically. Whitespace-only stays an error: `''` is unambiguously
+// empty, `'   '` is invisible content, and the two deserve different answers.
 const DESCRIPTION = z
   .string()
-  .min(1)
   .max(500)
   .refine((value) => value.trim().length > 0)
   .refine((value) => value === value.trim())
@@ -189,7 +196,9 @@ export function validateClientRegistration(input: unknown): ClientRegistrationRe
     errors.push({ code: 'invalid_name', field: 'name' });
   }
 
-  if (candidate.description !== undefined && !DESCRIPTION.safeParse(candidate.description).success) {
+  // `''` is normalized to absent rather than validated: see DESCRIPTION above.
+  const description = candidate.description === '' ? undefined : candidate.description;
+  if (description !== undefined && !DESCRIPTION.safeParse(description).success) {
     errors.push({ code: 'invalid_description', field: 'description' });
   }
 
@@ -281,7 +290,7 @@ export function validateClientRegistration(input: unknown): ClientRegistrationRe
     name: candidate.name as string,
     redirectUris: acceptedRedirectUris,
   };
-  if (candidate.description !== undefined) value.description = candidate.description as string;
+  if (description !== undefined) value.description = description as string;
   if (candidate.logoUrl !== undefined) value.logoUrl = candidate.logoUrl as string;
   if (candidate.homepageUrl !== undefined) value.homepageUrl = candidate.homepageUrl as string;
   if (allowedScopesParse !== null && allowedScopesParse.success) {

@@ -187,10 +187,22 @@ describe('validateClientRegistration — description', () => {
     // control/invisible-character check but none of NAME's trim refinements,
     // so a whitespace-only or leading-whitespace description validated and
     // rendered indented away from the name it sits under.
-    for (const description of ['   ', '\t', '  Sends things', 'Sends things  ', '']) {
+    for (const description of ['   ', '\t', '  Sends things', 'Sends things  ']) {
       expect(codes({ ...valid, description })).toContain('invalid_description');
     }
     expect(validateClientRegistration({ ...valid, description: 'Sends things by swiping' }).ok).toBe(true);
+  });
+
+  it('treats `""` as "no description" rather than an error, and drops it from the accepted value', () => {
+    // An absent description and an empty one render identically, so rejecting
+    // `''` bought nothing and cost two things: no way to CLEAR a description on
+    // a partial update (omitting means "unchanged"), and a create form that
+    // posts its empty optional fields would fail on one. `'   '` stays an error
+    // — `''` is unambiguously empty, whitespace is invisible content.
+    const result = validateClientRegistration({ ...valid, description: '' });
+    expect(result.ok).toBe(true);
+    expect(result.ok && Object.keys(result.value).sort()).toEqual(['name', 'redirectUris']);
+    expect(codes({ ...valid, description: '   ' })).toContain('invalid_description');
   });
 
   it('holds the description to the same display rule as the name — it renders on the same screen', () => {
