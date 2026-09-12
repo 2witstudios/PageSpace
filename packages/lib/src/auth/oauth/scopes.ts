@@ -330,7 +330,8 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
 
   // name_without_mint_grant: `name:*` only means something on a grant that mints a NEW
   // mcp_tokens row (a pure drive:* set or all_drives). Every other shape either has no row
-  // to name (account/manage_keys) or explicitly changes nothing (update_key/activate_key).
+  // to name (account/manage_keys), explicitly changes nothing (update_key/activate_key), or
+  // cannot deliver what an mcp_tokens row holds (profile — see below).
   // Reject rather than silently drop it or let a consent line imply a new key when none is minted.
   //
   // Deliberately NOT enforcing "a mint-shaped grant REQUIRES a name" here, even though that's
@@ -347,6 +348,12 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
   // would narrate "create a key named X" on a consent screen while exchange
   // produces an ordinary OAuth pair and mints nothing. Rejecting the promise,
   // not the grant: the same set without `name:` still parses.
+  //
+  // This one is safe to tighten despite the re-parsing note above, which is the
+  // usual reason a rule cannot be added here: no persisted `oauth_access_tokens`
+  // row can carry `profile` alongside `name:`, because `profile` did not exist
+  // before this rule did, and from here on the combination is refused at
+  // authorize time and so can never reach storage.
   if (
     newKeyName !== null &&
     !((allDrives || drives.size > 0) && !profile && updateKeyId === null && activateKeyId === null)
