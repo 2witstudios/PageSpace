@@ -401,18 +401,15 @@ const cellFormatSchema = z.record(z.string(), z.unknown());
 /** A1 range — `"B2:D40"`, a single cell, or `"A1:F"` open to the sheet's end. */
 const rangeSchema = z.string().min(1);
 
-/**
- * A note on `columnSchema` where the formatting ops below reuse it: it allows
- * up to seven letters, because that is what the ROW store's `assertColumn`
- * allows and the query/projection operations above need. Formatting stops
- * earlier — lib's `validateColumn` refuses anything past ZZZ — so `"ABCD"`
- * clears this schema and is then refused by the server.
- *
- * Left deliberately: the server's refusal names the real boundary ("Column
- * "ABCD" is past the last addressable column, ZZZ"), which is a better answer
- * than the regex failure a tighter local schema would produce, and a local cap
- * would start refusing valid columns the day the address space widens.
- */
+// On `columnSchema`, which the formatting ops below reuse: it allows up to
+// seven letters, because that is what the ROW store's `assertColumn` allows and
+// the query/projection operations above need. Formatting stops earlier — lib's
+// `validateColumn` refuses anything past ZZZ — so `"ABCD"` clears this schema
+// and is then refused by the server. Left deliberately: that refusal names the
+// real boundary ("Column "ABCD" is past the last addressable column, ZZZ"),
+// which beats the regex failure a tighter local schema would produce, and a
+// local cap would start refusing valid columns the day the address space
+// widens.
 
 /**
  * A 1-based row number as `setRowHeight` takes it — row 417 is where `C417`
