@@ -58,5 +58,39 @@ export async function resolveSandboxToolEligibilityForConversation(
     return canRunCodeForSession({ userId, driveId: session.driveId, ownerId: session.ownerId });
   }
   if (surface === 'page') return false;
-  return canRunCodeForSession({ userId, driveId: null, ownerId: userId });
+  if (await canRunCodeForSession({ userId, driveId: null, ownerId: userId })) return true;
+  // Last: a GLOBAL conversation whose own coordinates are ineligible may still
+  // be able to run in an environment it can reach — a free-tier person who owns
+  // a visible machine in a Pro-owned drive is eligible THERE, because the tier
+  // leg keys on the PAYER (see this module's own header, and `canRunCode`'s).
+  // Without this the compute family is stripped from the request before
+  // `list_environments` can be called at all, so fixing the tool's own gate
+  // alone would change nothing (Codex P1, #2616).
+  return hasEligibleReachableEnvironment(userId);
+}
+
+/**
+ * Does this user own any environment, visible to the global assistant, whose
+ * PAYER would authorize them? Bounded (owner-scoped, capped by the store's own
+ * listing limit) and reached only after the cheap check has already failed.
+ *
+ * The probe has the same shape the run will be gated with: the environment's
+ * payer, and NO drive — a local env authorizes on machine ownership, which the
+ * listing has already established for every row it returns. `false` on any
+ * error: this widens eligibility, so it must fail closed.
+ */
+async function hasEligibleReachableEnvironment(userId: string): Promise<boolean> {
+  try {
+    const { isLocalEnvsEnabled } = await import('@pagespace/lib/services/drive-envs/local-envs-enabled');
+    if (!isLocalEnvsEnabled()) return false;
+    const { listGlobalAssistantEnvironments, resolveDriveEnvPayer } = await import('@/lib/drive-envs/drive-envs-runtime');
+    const environments = await listGlobalAssistantEnvironments(userId);
+    for (const env of environments) {
+      const payer = await resolveDriveEnvPayer(env.driveId);
+      if (payer && (await canRunCodeForSession({ userId, driveId: null, ownerId: payer.payerId }))) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }

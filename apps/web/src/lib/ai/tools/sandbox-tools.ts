@@ -229,6 +229,25 @@ export interface SandboxToolsDeps {
   gate: SandboxGate;
   listEnvironments: ListReachableEnvironments;
   resolveEnvironment: ResolveEnvironmentTarget;
+  /**
+   * The gate for DISCOVERY, which is a different question from the gate for
+   * running.
+   *
+   * `list_environments` runs no code, so gating it on the CONVERSATION's payer
+   * is not a safety property — it is a contradiction. `canRunCode`'s own
+   * docblock says the tier leg keys on the PAYER precisely so "a free-tier
+   * member of a Pro-owned drive is still eligible", and `openAt` switches to
+   * the ENVIRONMENT's payer for exactly that reason. Discovery gated on the
+   * conversation was the one place that disagreed: a free-tier person who owns
+   * a visible machine in a Pro-owned drive could never obtain the id of the
+   * environment that would then have authorized their run (Codex P1, #2616).
+   *
+   * So this asks the honest question — may this actor run ANYWHERE they can
+   * reach? — while staying behind the kill switch, which is never a UX
+   * concern. It is never the security boundary: the id it hands back is
+   * useless without `openAt`'s full gate on the target's own payer.
+   */
+  gateDiscovery: SandboxGate;
 }
 
 function readContext(options: unknown): ToolExecutionContext | undefined {
@@ -252,12 +271,24 @@ function gateDenial(
  * gate (tool-filtering.ts) — the return type of `createSandboxTools` below is
  * the source of truth, and this list's own test pins the two never drift.
  */
-export const SANDBOX_CORE_TOOL_NAMES: readonly string[] = ['list_environments', 'bash', 'writeFile', 'readFile', 'editFile'];
-
-/** The discovery tool's name, so callers name it rather than spelling it. */
+/** The discovery tool's name, so every other reference to it is this constant rather than a literal. */
 export const LIST_ENVIRONMENTS_TOOL_NAME = 'list_environments';
 
-export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironments, resolveEnvironment }: SandboxToolsDeps): {
+/**
+ * The four ADDRESSED execution tools — the ones that take a mandatory
+ * `environmentId`. Distinct from the core set below, which also holds the
+ * discovery tool they get that id from: the system prompt's addressing bullet
+ * must name these and only these, because the git/gh toolkit and the shell
+ * family take no addressing field at all.
+ */
+export const ADDRESSED_SANDBOX_TOOL_NAMES: readonly string[] = ['bash', 'writeFile', 'readFile', 'editFile'];
+
+export const SANDBOX_CORE_TOOL_NAMES: readonly string[] = [
+  LIST_ENVIRONMENTS_TOOL_NAME,
+  ...ADDRESSED_SANDBOX_TOOL_NAMES,
+];
+
+export function createSandboxTools({ runDeps, resolveContext, gate, gateDiscovery, listEnvironments, resolveEnvironment }: SandboxToolsDeps): {
   list_environments: Tool;
   bash: Tool;
   writeFile: Tool;
@@ -281,7 +312,10 @@ export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironm
     return { ok: true, ctx };
   };
 
-  const open = async (
+  // DISCOVERY's open: the actor, then the discovery gate — which asks whether
+  // they may run ANYWHERE they can reach, not whether they may run in this
+  // conversation's own sandbox. See `gateDiscovery`.
+  const openForDiscovery = async (
     options: unknown,
   ): Promise<
     | { ok: true; ctx: SandboxActorContext }
@@ -289,7 +323,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironm
   > => {
     const actor = await resolveActor(options);
     if (!actor.ok) return actor;
-    const decision = await gate(actor.ctx);
+    const decision = await gateDiscovery(actor.ctx);
     if (!decision.ok) return { ok: false, error: gateDenial(decision) };
     return { ok: true, ctx: actor.ctx };
   };
@@ -347,7 +381,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironm
         'Use the label, not the id, when you talk to the person about where something ran.',
       inputSchema: z.object({}).strict(),
       execute: async (_input, options): Promise<EnvironmentDirectory | { success: false; error: string; retryAfter?: number }> => {
-        const opened = await open(options);
+        const opened = await openForDiscovery(options);
         if (!opened.ok) return opened.error;
         const environments = await listEnvironments(opened.ctx);
         // The conversation's own sandbox is addressed by the conversation's own

@@ -763,6 +763,49 @@ export const productionResolveEnvironmentTarget: ResolveEnvironmentTarget = asyn
   };
 };
 
+/**
+ * The DISCOVERY gate: may this actor run ANYWHERE they can reach?
+ *
+ * The conversation's own coordinates first — the common case, and the cheapest.
+ * If those refuse for any reason OTHER than the kill switch, the honest second
+ * question is whether one of the environments they can reach would authorize
+ * them, because that is the environment `openAt` will gate against when they
+ * actually run. A free-tier person who owns a visible machine in a Pro-owned
+ * drive is eligible there — `canRunCode`'s tier leg keys on the PAYER, and its
+ * own docblock says so — and refusing them the ID of the only place they can
+ * run made discovery the one surface that contradicted the rule (Codex P1,
+ * #2616).
+ *
+ * The KILL SWITCH is never second-guessed: a disabled deployment refuses
+ * discovery outright, and no environment can make it eligible.
+ */
+export const productionSandboxDiscoveryGate: SandboxGate = async (ctx) => {
+  const direct = await productionSandboxGate(ctx);
+  if (direct.ok || direct.reason === 'kill_switch_off') return direct;
+
+  const reachable = await productionListReachableEnvironments(ctx);
+  if (reachable.length === 0) return direct;
+
+  const { resolveDriveEnvPayer } = await import('@/lib/drive-envs/drive-envs-runtime');
+  for (const env of reachable) {
+    const payer = await resolveDriveEnvPayer(env.driveId);
+    if (!payer) continue;
+    // The SAME shape `openAt` will gate the run with: the environment's payer,
+    // and NO drive — a local env authorizes on machine ownership, which the
+    // discovery listing has already established for every row it returned.
+    const verdict = await gateSandboxToolCall({
+      userId: ctx.userId,
+      ownerId: payer.payerId,
+      tenantId: payer.payerId,
+      requestOrigin: ctx.requestOrigin,
+      agentPageId: ctx.agentPageId,
+      tier: payer.tier,
+    });
+    if (verdict.ok) return verdict;
+  }
+  return direct;
+};
+
 /** The shared call-time gate binding — kill-switch, canRunCode, quota preflight. */
 export const productionSandboxGate: SandboxGate = (ctx) =>
   gateSandboxToolCall({
@@ -791,6 +834,7 @@ export function buildSandboxTools(): {
     runDeps: buildRealSandboxRunDeps(),
     resolveContext: resolveSandboxActorContext,
     gate: productionSandboxGate,
+    gateDiscovery: productionSandboxDiscoveryGate,
     listEnvironments: productionListReachableEnvironments,
     resolveEnvironment: productionResolveEnvironmentTarget,
   });

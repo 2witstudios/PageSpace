@@ -6,6 +6,7 @@
  */
 
 import { hasSandboxComputeTools, SESSION_FAMILY_TOOL_NAMES } from './tool-filtering';
+import { ADDRESSED_SANDBOX_TOOL_NAMES, LIST_ENVIRONMENTS_TOOL_NAME } from '../tools/sandbox-tools';
 
 export interface PersonalizationInfo {
   bio?: string;
@@ -391,9 +392,9 @@ function buildSandboxInstructions(availableTools?: string[]): string {
   // mandatory field succeed on the first call rather than fail on it — where
   // an id comes from — and the one thing that makes a wrong one recoverable:
   // read back the environment the result names.
-  const addressedToolNames = namesPresent(['bash', 'writeFile', 'readFile', 'editFile']);
+  const addressedToolNames = namesPresent(ADDRESSED_SANDBOX_TOOL_NAMES);
   const addressingBullet = addressedToolNames.length
-    ? `• ${addressedToolNames.join('/')} each take a REQUIRED environmentId saying where to run. Call list_environments first and copy an id from its output exactly — never construct, guess or shorten one, and never reuse an id from an earlier conversation; an id that did not come from that list does not exist and the call is refused. This conversation's own sandbox is in that list like any other environment; there is no default. Every result names the environment it actually ran in — read it back, and if it is not the one you meant, say so rather than continuing.`
+    ? `• ${addressedToolNames.join('/')} each take a REQUIRED environmentId saying where to run. Call ${LIST_ENVIRONMENTS_TOOL_NAME} first and copy an id from its output exactly — never construct, guess or shorten one, and never reuse an id from an earlier conversation; an id that did not come from that list does not exist and the call is refused. This conversation's own sandbox is in that list like any other environment; there is no default. Every result names the environment it actually ran in — read it back, and if it is not the one you meant, say so rather than continuing.`
     : null;
 
   const bullets: (string | null)[] = [
