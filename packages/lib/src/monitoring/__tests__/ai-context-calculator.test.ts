@@ -401,6 +401,37 @@ describe('getContextWindowSize', () => {
     });
   });
 
+  describe('Z.ai direct (admin `glm` provider, bare ids)', () => {
+    // The admin-only Coder Plan endpoint sends BARE `glm-*` ids with no vendor
+    // prefix, so the prefixed-id catalog lookup cannot fire and no substring
+    // heuristic matches them. Before the direct lookup they all resolved to the
+    // 200k default, which made buildModelContext compact a 1M-window model at
+    // 150k (0.75) and hard-truncate it at 190k (0.95).
+    it('returns the catalog window for glm-5.3-flash (1,310,720) not the 200k default', () => {
+      expect(getContextWindowSize('glm-5.3-flash', 'glm')).toBe(1_310_720);
+    });
+
+    it('returns the catalog window for glm-5.3 (1M)', () => {
+      expect(getContextWindowSize('glm-5.3', 'glm')).toBe(1_000_000);
+    });
+
+    it('returns the catalog window for glm-4.5-air (128k)', () => {
+      expect(getContextWindowSize('glm-4.5-air', 'glm')).toBe(128_000);
+    });
+
+    it('resolves a bare glm id even when no provider is passed', () => {
+      expect(getContextWindowSize('glm-5.1')).toBe(202_752);
+    });
+
+    it('keeps the 200k default for a bare glm id absent from the catalog', () => {
+      expect(getContextWindowSize('glm-9.9-imaginary', 'glm')).toBe(200_000);
+    });
+
+    it('does not disturb the prefixed OpenRouter twin, which keeps its own catalog entry', () => {
+      expect(getContextWindowSize('z-ai/glm-5.3-flash', 'zai')).toBe(1_310_720);
+    });
+  });
+
   describe('MiniMax family', () => {
     it('should return 1M for m2.5 model', () => {
       expect(getContextWindowSize('minimax-m2.5')).toBe(1_000_000);
