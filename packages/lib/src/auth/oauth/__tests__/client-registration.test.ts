@@ -105,6 +105,29 @@ describe('validateClientRegistration — non-string entries report a constant sh
   });
 });
 
+describe('validateClientRegistration — a registration body cannot reach anything but its own fields', () => {
+  it('drops an own `__proto__` property and pollutes nothing', () => {
+    // `JSON.parse` creates `__proto__` as an OWN property rather than setting
+    // the prototype, so it survives into the object a route would hand us.
+    // Nothing here copies caller keys into a fresh object, which is what makes
+    // this safe — asserted rather than assumed, because the safety comes from
+    // the rebuild-field-by-field shape and a future refactor to a spread would
+    // silently lose it.
+    const input = JSON.parse('{"__proto__":{"polluted":"yes"},"name":"x","redirectUris":["https://a.example.com/cb"]}');
+    const result = validateClientRegistration(input);
+    expect(result.ok).toBe(true);
+    expect(result.ok && Object.keys(result.value).sort()).toEqual(['name', 'redirectUris']);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect((Object.prototype as unknown as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it('does not let a `constructor` or `prototype` key through either', () => {
+    const input = JSON.parse('{"constructor":{"x":1},"prototype":{"y":2},"name":"x","redirectUris":["https://a.example.com/cb"]}');
+    const result = validateClientRegistration(input);
+    expect(result.ok && Object.keys(result.value).sort()).toEqual(['name', 'redirectUris']);
+  });
+});
+
 describe('validateClientRegistration — name', () => {
   it('rejects an empty name', () => {
     expect(codes({ ...valid, name: '' })).toContain('invalid_name');

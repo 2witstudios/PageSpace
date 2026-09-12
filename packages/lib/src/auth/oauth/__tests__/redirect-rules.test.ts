@@ -54,6 +54,30 @@ describe('validateRedirectUri — https exact match', () => {
     expect(validateRedirectUri(web, 'https://app.example/auth/pagespace/callback')).toBe(false);
   });
 
+  it('rejects a homograph host — the URL parser punycodes it, so it can never collide with the ASCII registration', () => {
+    // U+0430 CYRILLIC SMALL LETTER A in place of ASCII "a". It normalizes to
+    // `xn--pp-6kc.example.com`, which is a different host and so fails exact
+    // match. Asserted because the protection comes from the parser rather than
+    // from anything in this module — if matching ever moved to raw strings,
+    // this is the test that would catch it.
+    expect(validateRedirectUri(web, 'https://\u0430pp.example.com/auth/pagespace/callback')).toBe(false);
+    expect(new URL('https://\u0430pp.example.com/cb').hostname).toBe('xn--pp-6kc.example.com');
+  });
+
+  it('rejects a fully-qualified trailing-dot host, which resolves the same but is not the registered string', () => {
+    expect(validateRedirectUri(web, 'https://app.example.com./auth/pagespace/callback')).toBe(false);
+  });
+
+  it('accepts a host differing only in case — hosts are case-insensitive and the parser lowercases them', () => {
+    expect(validateRedirectUri(web, 'https://APP.EXAMPLE.COM/auth/pagespace/callback')).toBe(true);
+  });
+
+  it('does not decode a percent-encoded path into a match', () => {
+    // `%63` is "c". The parser leaves it encoded, so the path stays distinct
+    // from the registered `/auth/pagespace/callback`.
+    expect(validateRedirectUri(web, 'https://app.example.com/auth/pagespace/%63allback')).toBe(false);
+  });
+
   it('rejects a different path — prefix, suffix, and trailing slash all count', () => {
     expect(validateRedirectUri(web, 'https://app.example.com/auth/pagespace/callback/evil')).toBe(false);
     expect(validateRedirectUri(web, 'https://app.example.com/auth/pagespace')).toBe(false);
