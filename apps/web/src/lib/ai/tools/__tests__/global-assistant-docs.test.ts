@@ -57,6 +57,29 @@ describe('the posture document', () => {
     expect(posture).toMatch(/File it as its own decision/);
   });
 
+  it('says the database CHECK was DROPPED, why it was right for a Sprite env and wrong for a local one, and where the guarantee lives now', () => {
+    // The most consequential change in the phase: a constraint that cannot be
+    // got wrong became two code branches that can. An auditor and the founder
+    // read THIS document, not the schema file — so it may not be silent here.
+    expect(posture).toMatch(/### The database CHECK that was dropped, and why/);
+    expect(posture).toMatch(/agent_workspaces_env_needs_drive_check/);
+    expect(posture).toMatch(/0296/);
+    // Right about one substrate, wrong about the other — both said.
+    expect(posture).toMatch(/right about a Sprite env and wrong about a local one/);
+    expect(posture).toMatch(/that arm is still enforced/);
+    // And where it lives now.
+    expect(posture).toMatch(/\*\*Where the guarantee lives now:\*\*/);
+  });
+
+  it('carries the routing row in the LAYERS table naming both branches, and the residual in the REGISTER', () => {
+    const layers = posture.slice(posture.indexOf('| Layer | Where |'), posture.indexOf('In SSH terms'));
+    expect(layers).toMatch(/\| Drive agreement on an env-bound session/);
+    expect(layers).toMatch(/gateLocalEnvBind/);
+    expect(layers).toMatch(/env\.driveId === driveId/);
+    expect(layers).toMatch(/DROPPED/);
+    expect(posture).toMatch(/\| R-18 \| \*\*A database CHECK became two code branches/);
+  });
+
   it('adds to the layers table, the residual register and the flag-on checklist', () => {
     expect(posture).toMatch(/\| Visibility to the global assistant \|/);
     expect(posture).toMatch(/\| Mandatory, opaque environment id on every code-execution tool \|/);
