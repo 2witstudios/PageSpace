@@ -173,6 +173,19 @@ export function getContextWindowSize(model: string, provider?: string): number {
     return MODEL_CONTEXT_WINDOWS[model as keyof typeof MODEL_CONTEXT_WINDOWS];
   }
 
+  // Z.ai direct (the admin-only `glm` provider, api.z.ai/api/coding/paas/v4) sends
+  // BARE `glm-*` ids with no vendor prefix, so the prefixed-id lookup above never
+  // fires for them and no heuristic block below matches — they fell through to the
+  // 200k conservative default. That silently compacted 1M-window models at 150k and
+  // hard-truncated them at 190k (buildModelContext's 0.75/0.95 ratios). The catalog
+  // carries an exact entry for every id this provider offers, so consult it directly.
+  // Unknown/unlisted bare glm ids keep the 200k default via the fallthrough below.
+  if (providerLower === 'glm' || modelLower.startsWith('glm-')) {
+    if (modelLower in MODEL_CONTEXT_WINDOWS) {
+      return MODEL_CONTEXT_WINDOWS[modelLower as keyof typeof MODEL_CONTEXT_WINDOWS];
+    }
+  }
+
   // OpenAI models
   if (providerLower === 'openai' || modelLower.includes('gpt')) {
     // GPT-5.4 models (400k context)
