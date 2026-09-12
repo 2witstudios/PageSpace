@@ -525,7 +525,16 @@ const conditionalRuleSchema = z.discriminatedUnion('kind', [
     kind: z.literal('cell'),
     id: z.string().min(1),
     ranges: z.array(rangeSchema).min(1),
-    condition: z.looseObject({
+    // STRICT, like `scaleAnchorSchema` and unlike everything else in this
+    // rule, because lib REBUILDS this object rather than spreading it:
+    // `parseConditionalRule` constructs `{operator}` and copies only `value`
+    // and `value2` onto it. So an extension inside `condition` can never come
+    // back from a read, and on a write lib refuses it by name —
+    // `firstSanitizedPath` walks the REQUEST's keys and reports the first one
+    // that would not survive, as `condition.<field>`. Accepting one here would
+    // promise a round trip that does not happen, and cost a round trip to be
+    // told the same thing the schema already knows.
+    condition: z.strictObject({
       operator: z.enum([
         'greaterThan', 'greaterThanOrEqual', 'lessThan', 'lessThanOrEqual',
         'equal', 'notEqual', 'between', 'notBetween',

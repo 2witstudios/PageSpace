@@ -238,6 +238,31 @@ describe('conditional rule shapes — drift guard vs @pagespace/lib', () => {
     }
   });
 
+  it('REFUSES an extension inside condition, because lib rebuilds that object', () => {
+    // The mirror of the test above, and the reason the two nested shapes are
+    // schema'd differently. lib spreads the rule and the region, so an
+    // extension on either survives; it REBUILDS `condition` and the scale
+    // anchors, so an extension inside those is dropped. Executed rather than
+    // asserted: the parser is run and the field is shown to be gone.
+    const stored = {
+      kind: 'cell', id: 'r', ranges: ['A1'],
+      condition: { operator: 'lessThan', value: '0', extraField: 1 },
+      format: { bold: true },
+    };
+    const parsed = parseConditionalRule(stored) as unknown as Record<string, unknown> | null;
+    expect(parsed).not.toBeNull();
+    expect(
+      (parsed!.condition as Record<string, unknown>).extraField,
+      'lib started preserving fields inside condition — the strict schema is now wrong',
+    ).toBeUndefined();
+    // So accepting one would promise a round trip that does not happen.
+    expect(accepts(stored), 'SDK accepted a condition extension lib drops').toBe(false);
+    // And the same for a scale anchor, which `readAnchor` also rebuilds.
+    expect(accepts({ ...byKind.colorScale, min: { type: 'min', color: '#ffffff', extraField: 1 } })).toBe(false);
+    // While the rule level, which lib spreads, still takes one.
+    expect(accepts({ ...byKind.cell, futureRuleField: 1 })).toBe(true);
+  });
+
   it('accepts an unknown extension field on a region and on a region column', () => {
     const stored = {
       id: 'g1',
