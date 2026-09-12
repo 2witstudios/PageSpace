@@ -833,7 +833,9 @@ describe('productionResolveEnvironmentTarget — resolving the mandatory id (lea
       ok: true,
       target: { id: ctx.conversationId, kind: 'conversation', label: expect.any(String), driveId: 'd1' },
       // The conversation's OWN payer, unchanged — never a second resolution.
-      payer: { driveId: 'd1', ownerId: 'u1', tenantId: 'u1', tier: 'pro' },
+      // Its own sandbox keeps the conversation's own drive on BOTH coordinates:
+      // the drive-role leg applies there exactly as it always did.
+      payer: { driveId: 'd1', ownerId: 'u1', tenantId: 'u1', tier: 'pro', gateDriveId: 'd1' },
     });
     expect(mockFindEnvById).not.toHaveBeenCalled();
     expect(mockResolveDriveEnvPayer).not.toHaveBeenCalled();
@@ -846,7 +848,15 @@ describe('productionResolveEnvironmentTarget — resolving the mandatory id (lea
       target: { id: ENV_ID, kind: 'environment', label: 'jono-macstudio', driveId: 'drive-1' },
       // The PAYER is the ENVIRONMENT's drive owner, not the conversation's
       // driveless global coordinates (leaf D).
-      payer: { driveId: 'drive-1', ownerId: 'drive-owner', tenantId: 'drive-owner', tier: 'pro' },
+      payer: {
+        driveId: 'drive-1',
+        ownerId: 'drive-owner',
+        tenantId: 'drive-owner',
+        tier: 'pro',
+        // A LOCAL env authorizes on machine ownership, so the drive-role leg
+        // does not apply — `drive-1` stays the BILLING coordinate above.
+        gateDriveId: undefined,
+      },
     });
     expect(mockResolveDriveEnvPayer).toHaveBeenCalledWith('drive-1');
   });
@@ -871,6 +881,14 @@ describe('productionResolveEnvironmentTarget — resolving the mandatory id (lea
     expect(missing).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
     expect(theirs).toEqual(missing);
     expect(invisible).toEqual(missing);
+  });
+
+  it('a SPRITE env keeps its drive as the gate drive; a LOCAL env does not — the exception is for hardware somebody owns', async () => {
+    const local = await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID });
+    expect(local).toMatchObject({ ok: true, payer: { driveId: 'drive-1', gateDriveId: undefined } });
+    // A visible Sprite env cannot be reached today (no owner to check), so the
+    // Sprite arm is asserted where it is decided rather than end to end.
+    expect(mockFindEnvById).toHaveBeenCalledWith(ENV_ID);
   });
 
   it('given a SPRITE env (no enrolling owner), should refuse — there is nobody the ownership check could pass against', async () => {

@@ -54,7 +54,7 @@ const OTHER_ID = 'dw9jthqyaza6ga3b6m5nmpqw';
 const ownSandbox: ResolveEnvironmentTarget = async ({ ctx, environmentId }) => ({
   ok: true,
   target: { id: environmentId, kind: 'conversation', label: "This conversation's own sandbox", driveId: 'd1' },
-  payer: { driveId: ctx.driveId, ownerId: ctx.ownerId ?? ctx.userId, tenantId: ctx.tenantId, tier: ctx.tier },
+  payer: { driveId: ctx.driveId, ownerId: ctx.ownerId ?? ctx.userId, tenantId: ctx.tenantId, tier: ctx.tier, gateDriveId: ctx.driveId },
 });
 
 /** No persistent environments reachable — the default for every case that is not about discovery. */
@@ -667,5 +667,98 @@ describe('every result names the environment it ran in (leaf E)', () => {
     // And no extra audit write was introduced by naming it: the code-execution
     // audit fires exactly once, as it did before.
     expect(audits).toHaveLength(1);
+  });
+});
+
+describe("a LOCAL environment authorizes on machine ownership, not drive membership (Codex P2, #2616)", () => {
+  const ENV_ID = 'dw9jthqyaza6ga3b6m5nmpqw';
+  /** A local machine the actor owns, in a drive they are NOT a member of any more. */
+  const departedOwner: ResolveEnvironmentTarget = async () => ({
+    ok: true,
+    target: { id: ENV_ID, kind: 'environment', label: 'jono-macstudio', driveId: 'drive-they-left' },
+    // The drive is still the BILLING coordinate; `gateDriveId` is absent because
+    // the entitlement is owning the machine.
+    payer: { driveId: 'drive-they-left', ownerId: 'drive-owner', tenantId: 'drive-owner', tier: 'pro' },
+  });
+
+  it("given the owner has LEFT the drive, should still run — the gate never sees a drive to check their membership against", async () => {
+    const seen: Array<string | undefined> = [];
+    const tools = createSandboxTools({
+      resolveEnvironment: departedOwner,
+      listEnvironments: noEnvironments,
+      runDeps: fakeRunDeps(),
+      resolveContext: okResolve,
+      gate: async (ctx) => {
+        seen.push(ctx.driveId);
+        // The real `canRunCode` skips its drive-role leg when driveId is
+        // absent; this fake asserts the gate is given the absence.
+        return ctx.driveId === undefined ? { ok: true } : { ok: false, reason: 'no_drive_access', error: 'You do not have access to run code in this drive.' };
+      },
+    });
+    const result = (await exec(tools.bash, { environmentId: ENV_ID, command: 'ls' }, {})) as { success: boolean };
+    expect(result.success).toBe(true);
+    expect(seen).toEqual([undefined]);
+  });
+
+  it('the BILLING coordinate is untouched — the environment\'s drive still rides the context the runner meters against', async () => {
+    const billed: Array<string | undefined> = [];
+    const runDeps = fakeRunDeps();
+    runDeps.acquireSandbox = async (input) => {
+      billed.push(input.driveId);
+      return { ok: true, sandboxId: 'sbx', resumed: false, workspaceId: 'ws-1' };
+    };
+    const tools = createSandboxTools({ resolveEnvironment: departedOwner, listEnvironments: noEnvironments, runDeps, resolveContext: okResolve, gate: okGate });
+    await exec(tools.bash, { environmentId: ENV_ID, command: 'ls' }, {});
+    expect(billed).toEqual(['drive-they-left']);
+  });
+
+  it('the KILL SWITCH still refuses the departed owner — this drops the drive-role leg, not the gate', async () => {
+    const tools = createSandboxTools({
+      resolveEnvironment: departedOwner,
+      listEnvironments: noEnvironments,
+      runDeps: fakeRunDeps(),
+      resolveContext: okResolve,
+      gate: async () => ({ ok: false, reason: 'kill_switch_off', error: 'Code execution is disabled.' }),
+    });
+    const result = (await exec(tools.bash, { environmentId: ENV_ID, command: 'ls' }, {})) as { success: boolean; error: string };
+    expect(result).toMatchObject({ success: false, error: 'Code execution is disabled.' });
+  });
+
+  it('the TIER leg still refuses them — it keys on the environment\'s payer, which is still supplied', async () => {
+    const payers: Array<string | undefined> = [];
+    const tools = createSandboxTools({
+      resolveEnvironment: departedOwner,
+      listEnvironments: noEnvironments,
+      runDeps: fakeRunDeps(),
+      resolveContext: okResolve,
+      gate: async (ctx) => {
+        payers.push(ctx.ownerId);
+        return { ok: false, reason: 'tier_ineligible', error: 'Running code requires a Pro plan or above.' };
+      },
+    });
+    const result = (await exec(tools.bash, { environmentId: ENV_ID, command: 'ls' }, {})) as { success: boolean };
+    expect(result.success).toBe(false);
+    expect(payers).toEqual(['drive-owner']);
+  });
+
+  it('a SPRITE env keeps the drive-role leg — this exception is for the machine somebody owns, and nothing else', async () => {
+    const seen: Array<string | undefined> = [];
+    const spriteEnv: ResolveEnvironmentTarget = async () => ({
+      ok: true,
+      target: { id: ENV_ID, kind: 'environment', label: 'staging', driveId: 'drive-1' },
+      payer: { driveId: 'drive-1', ownerId: 'drive-owner', tenantId: 'drive-owner', tier: 'pro', gateDriveId: 'drive-1' },
+    });
+    const tools = createSandboxTools({
+      resolveEnvironment: spriteEnv,
+      listEnvironments: noEnvironments,
+      runDeps: fakeRunDeps(),
+      resolveContext: okResolve,
+      gate: async (ctx) => {
+        seen.push(ctx.driveId);
+        return { ok: true };
+      },
+    });
+    await exec(tools.bash, { environmentId: ENV_ID, command: 'ls' }, {});
+    expect(seen).toEqual(['drive-1']);
   });
 });

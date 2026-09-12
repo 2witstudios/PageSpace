@@ -226,10 +226,27 @@ export async function gateLocalEnvForRequester({
   deps: Pick<EnsureDriveEnvSandboxDeps, 'store' | 'resolvePayer' | 'liveConnection' | 'localEnvsEnabled'>;
 }): Promise<LocalEnvGateVerdict> {
   const payer = await deps.resolvePayer(row.driveId);
-  // A vanished drive has nobody to authorize against; the code-exec gate's own
-  // vocabulary says so rather than this module inventing a verdict.
+  // A vanished drive has nobody to bill; the code-exec gate's own vocabulary
+  // says so rather than this module inventing a verdict.
+  //
+  // **`driveId` is deliberately NOT passed to `canRunCode`.** The env's drive
+  // is the PAYER coordinate — `payer.payerId` carries it, and the tier leg
+  // resolves against it exactly as before — but the actor's own drive EDIT
+  // ACCESS is not what entitles them here. A local env is one person's own
+  // computer and [D-6] makes binding structurally owner-only: `decideBind`
+  // decides it two lines below, on `drive_env_local.ownerId`, with no actor
+  // role in its input at all. Running the drive-role leg as well meant the
+  // owner who LEFT the drive was refused `code_exec_denied` / `no_drive_access`
+  // on their own hardware, which is neither what [D-6] says nor what the
+  // machines listing promises when it keeps showing them their computer
+  // (Codex P2, #2616).
+  //
+  // This removes a redundant check, not the ownership one — the same shape as
+  // leaf D's drive comparison, and for the same reason. A non-owner now falls
+  // to `bind_policy` instead of `code_exec_denied`, which is the accurate word
+  // for why they are refused. The kill switch and the tier leg are untouched.
   const canRun = payer
-    ? () => canRunCode({ userId: requesterId, driveId: row.driveId, ownerId: payer.payerId, requestOrigin: 'user' })
+    ? () => canRunCode({ userId: requesterId, ownerId: payer.payerId, requestOrigin: 'user' })
     : async () => ({ ok: false as const, reason: 'no_drive_access' as const });
   return gateLocalEnv({
     row,

@@ -199,6 +199,28 @@ export interface SandboxPayerCoordinates {
   readonly ownerId: string;
   readonly tenantId: string;
   readonly tier: SandboxActorContext['tier'];
+  /**
+   * The drive to authorize the actor's own EDIT ACCESS against — `canRunCode`'s
+   * drive-role leg. Absent means that leg does not apply, and only the kill
+   * switch and the PAYER's tier leg do.
+   *
+   * **It is absent for exactly one case, and the case is the point.** A LOCAL
+   * environment is one person's own computer: the entitlement is machine
+   * OWNERSHIP, already proved by `decideEnvReach` here and re-proved by
+   * `decideBind`'s owner-only `bind_policy` at bind ([D-6], which says in so
+   * many words that a drive role never grants Bind). Authorizing it against the
+   * env's drive as well meant the machine the discovery list deliberately still
+   * shows after its owner leaves that drive — *it is their computer* — refused
+   * on every call (Codex P2, #2616): `getUserDrivePermissions(...).hasAccess`
+   * is false, so `canRunCode` denied `no_drive_access`.
+   *
+   * `driveId` above is unaffected and stays the env's drive: it is the BILLING
+   * and tenant coordinate, and a drive environment is still paid for by that
+   * drive's owner. This field separates "who pays" from "who must be a member",
+   * which `canRunCode` already keeps as two legs — nothing here bypasses the
+   * kill switch or the tier leg.
+   */
+  readonly gateDriveId?: string;
 }
 
 export interface SandboxToolsDeps {
@@ -296,7 +318,11 @@ export function createSandboxTools({ runDeps, resolveContext, gate, listEnvironm
     // as it widens: naming an environment never inherits the conversation's
     // entitlement.
     const ctx: SandboxActorContext = { ...actor.ctx, ...resolved.payer, environment: resolved.target };
-    const decision = await gate(ctx);
+    // The gate sees `gateDriveId`, which is the env's drive for everything
+    // except a LOCAL environment — where the entitlement is machine ownership
+    // and the drive-role leg does not apply. `ctx.driveId` keeps the billing
+    // coordinate either way. See `SandboxPayerCoordinates.gateDriveId`.
+    const decision = await gate({ ...ctx, driveId: resolved.payer.gateDriveId });
     // A refusal names the environment that refused (leaf E), so a wrong target
     // reads as a wrong target rather than as a broken tool. Only AFTER
     // resolution: a refusal that never resolved an environment has none to

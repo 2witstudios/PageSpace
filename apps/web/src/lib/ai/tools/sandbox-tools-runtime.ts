@@ -709,7 +709,9 @@ export const productionResolveEnvironmentTarget: ResolveEnvironmentTarget = asyn
     return {
       ok: true,
       target: { id: environmentId, kind: 'conversation', label: OWN_SANDBOX_LABEL, driveId: ctx.driveId ?? null },
-      payer: { driveId: ctx.driveId, ownerId: ctx.ownerId ?? ctx.userId, tenantId: ctx.tenantId, tier: ctx.tier },
+      // Its own coordinates, unchanged — including the drive it authorizes
+      // against, which for the conversation's own sandbox is the drive it is in.
+      payer: { driveId: ctx.driveId, ownerId: ctx.ownerId ?? ctx.userId, tenantId: ctx.tenantId, tier: ctx.tier, gateDriveId: ctx.driveId },
     };
   }
   // A page conversation is refused BEFORE the lookup — `decideEnvReach` owns the
@@ -747,7 +749,17 @@ export const productionResolveEnvironmentTarget: ResolveEnvironmentTarget = asyn
   return {
     ok: true,
     target: { id: env!.id, kind: 'environment', label: sibling?.label ?? env!.name, driveId: env!.driveId },
-    payer: { driveId: env!.driveId, ownerId: payer.payerId, tenantId: payer.payerId, tier: payer.tier },
+    payer: {
+      driveId: env!.driveId,
+      ownerId: payer.payerId,
+      tenantId: payer.payerId,
+      tier: payer.tier,
+      // A LOCAL env authorizes on machine OWNERSHIP (already decided above,
+      // and re-decided by `decideBind` at bind), so the drive-role leg does
+      // not apply — otherwise the owner who left the drive is refused on every
+      // call, on their own computer. Every other substrate keeps it.
+      gateDriveId: env!.substrate === 'local' ? undefined : env!.driveId,
+    },
   };
 };
 

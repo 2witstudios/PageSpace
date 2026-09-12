@@ -423,12 +423,37 @@ describe('ensureDriveEnvSandbox', () => {
       expect(local!.provision).not.toHaveBeenCalled();
     });
 
-    it('given canRunCode denies, should answer code_exec_denied with the cause as detail — the base gate is consulted with the DRIVE OWNER as payer', async () => {
-      canRunCode.mockResolvedValue({ ok: false, reason: 'no_drive_access' });
+    it('given canRunCode denies, should answer code_exec_denied with the cause as detail — the base gate is consulted with the DRIVE OWNER as payer and NO drive to check membership against', async () => {
+      canRunCode.mockResolvedValue({ ok: false, reason: 'tier_ineligible' });
       const { result, host } = await ensureLocal({ sibling: sibling() });
-      expect(result).toEqual({ ok: false, reason: 'local_refused', refusal: 'code_exec_denied', detail: 'no_drive_access' });
-      expect(canRunCode).toHaveBeenCalledWith({ userId: REQUESTER_ID, driveId: DRIVE_ID, ownerId: DRIVE_OWNER_ID, requestOrigin: 'user' });
+      expect(result).toEqual({ ok: false, reason: 'local_refused', refusal: 'code_exec_denied', detail: 'tier_ineligible' });
+      // The PAYER is still the env's drive owner, so the tier leg and the kill
+      // switch are untouched. `driveId` is deliberately ABSENT: a local env is
+      // one person's own computer, and [D-6] makes binding owner-only two lines
+      // later in `decideBind` — running the drive-role leg as well refused the
+      // owner who LEFT the drive on their own hardware (Codex P2, #2616).
+      expect(canRunCode).toHaveBeenCalledWith({ userId: REQUESTER_ID, ownerId: DRIVE_OWNER_ID, requestOrigin: 'user' });
       expect(host.provision).not.toHaveBeenCalled();
+    });
+
+    it("given the machine's OWNER who has since LEFT the drive, should bind — the entitlement is owning the machine, not membership", async () => {
+      // The real `canRunCode` skips its drive-role leg entirely when `driveId`
+      // is absent, so this fake answers the way it would: ok without a drive,
+      // `no_drive_access` with one. The assertion is that the gate never
+      // supplies one for a local env.
+      canRunCode.mockImplementation(async (input) =>
+        input.driveId === undefined ? { ok: true } : { ok: false, reason: 'no_drive_access' },
+      );
+      const { result } = await ensureLocal({ sibling: sibling() });
+      expect(result).not.toMatchObject({ refusal: 'code_exec_denied' });
+    });
+
+    it('the KILL SWITCH and the TIER leg still refuse that same owner — this drops the drive-role leg, not the gate', async () => {
+      for (const reason of ['kill_switch_off', 'tier_ineligible'] as const) {
+        canRunCode.mockResolvedValue({ ok: false, reason });
+        const { result } = await ensureLocal({ sibling: sibling() });
+        expect(result).toEqual({ ok: false, reason: 'local_refused', refusal: 'code_exec_denied', detail: reason });
+      }
     });
 
     it("given a requester who is not the machine's owner under owner-only policy, should answer bind_policy", async () => {
