@@ -208,6 +208,21 @@ avatar. No access to any drive or content."* The second sentence is contractual,
 what is and is not being handed over. `SCOPES_SUPPORTED` in
 `packages/lib/src/auth/oauth/metadata.ts` advertises it.
 
+**That second sentence is a claim about the SET, and it is emitted opt-in.** `profile drive:abc123`
+is a legal grant, and rendering "No access to any drive or content" above "Act as you in Acme Drive"
+is a contradiction on the one surface that has to be trustworthy — it shipped that way for an hour
+on `/api/account/oauth-grants` before review caught it. `describeScopeForConsent` therefore emits the
+absolute sentence only when the caller passes `ctx.profileIsSoleAccess`, which only a caller holding
+the whole set can honestly affirm; without it the narration is the identity sentence alone, which is
+true of every `profile` grant. The default is the weaker claim deliberately: a caller that forgets
+the flag under-claims, and under-claiming is recoverable in a way that a false reassurance is not.
+
+The corollary is a rule for Phase 1: **a surface that narrates scopes calls `describeGrantScopes`
+rather than re-deriving the narration.** Three surfaces re-derive it today — the loopback consent
+page, the device-flow verify route, and the connected-apps listing — and `profile` had to be taught
+to each separately, which is exactly why two of them currently render a `profile` grant as an empty
+capability list. See "Phase 1 obligations" below.
+
 ## Decision 5 — Issuance is per-client
 
 `applyKeyGrant` — the branch that mints a real `mcp_` key for a pure `drive:*` or `all_drives`
@@ -277,6 +292,22 @@ them is designed, not accidental, and it must not become the thing everyone assu
    `safeFetch` for it.
 4. **Registration rejections are an abuse signal.** Phase 1's route should emit a security-audit
    event on rejection; repeated `forbidden_scope` from one owner is worth seeing.
+5. **Two of the three scope-narrating surfaces have no `profile` branch.** The loopback consent page
+   (`apps/web/src/app/oauth/consent/page.tsx:114-157`) and the device-flow verify route
+   (`apps/web/src/app/api/oauth/device_authorization/verify/route.ts:66-156`) each build
+   `scopeDescriptions` with a hand-written if-chain over `ScopeSet` fields instead of calling
+   `describeGrantScopes`, so a `scope=profile` request renders the app name above an **empty**
+   capability list and Allow still mints the code — the user approves a grant the screen never named.
+   **Acceptance:** both call `describeGrantScopes`; a `profile`-only consent renders a non-empty list.
+   The structural half outlives the `profile` half — as long as three surfaces each re-derive scope
+   meaning, the next scope gets missed the same way.
+6. **`profile` is reachable through the live doors today.** `POST /api/oauth/device_authorization`
+   accepts `scope=profile` for `pagespace-cli` ([D-11] permits it); `isCredentialEscalatingGrant` is
+   false for `profile`, so `/activate` runs no step-up; and `profile offline_access` satisfies rule
+   10, so the credential is refreshable. With obligation 1 open, the token that flow issues is
+   admitted to every drive the user has. Not a production exposure — the epic converges to master as
+   one reviewed PR after Phase 6's security review — but "Phase 1 will handle it" and "nothing can
+   reach it before Phase 6" are different claims, and only the second one is load-bearing.
 
 ## Decision 7 — Per-client scope caps
 
