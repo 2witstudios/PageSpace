@@ -242,6 +242,12 @@ describe('describeGrantScopes — profile', () => {
 
   it('no line in a profile+drive grant claims the grant reaches no drive', () => {
     const lines = describeGrantScopes(['profile', 'drive:abc123'], resolvers);
+    // The length assertion is what stops this from proving nothing: a bare
+    // `.some(...) === false` also holds for an empty array, so a
+    // `describeGrantScopes` that returned `[]` unconditionally would pass it.
+    // Verified by making it do exactly that — this test went green until the
+    // line below was added.
+    expect(lines).toHaveLength(2);
     expect(lines.some((line) => /no access to any drive or content/i.test(line))).toBe(false);
   });
 });

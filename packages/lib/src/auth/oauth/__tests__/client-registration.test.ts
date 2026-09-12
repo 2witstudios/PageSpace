@@ -350,7 +350,12 @@ describe('validateClientRegistration — allowedScopes are shapes, and only thre
 
   it('caps the list — there are only six legal shapes, so a longer array is a mistake or an abuse', () => {
     const twenty = Array.from({ length: 20 }, (_unused, index) => (index === 0 ? 'profile' : `bogus${index}`));
-    expect(codes({ ...valid, allowedScopes: twenty })).not.toContain('invalid_allowed_scopes');
+    const atCap = codes({ ...valid, allowedScopes: twenty });
+    expect(atCap).not.toContain('invalid_allowed_scopes');
+    // …and the array was actually walked, so the assertion above is about the
+    // cap rather than about validation having stopped early: 19 bogus entries,
+    // 19 `unknown_scope` errors.
+    expect(atCap.filter((code) => code === 'unknown_scope')).toHaveLength(19);
     const twentyOne = Array.from({ length: 21 }, (_unused, index) => (index === 0 ? 'profile' : `bogus${index}`));
     expect(codes({ ...valid, allowedScopes: twentyOne })).toContain('invalid_allowed_scopes');
   });
