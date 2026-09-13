@@ -54,3 +54,26 @@ export function driveScopedOAuthAuthResult(
     ...overrides,
   };
 }
+
+/**
+ * A profile-only OAuth credential (`profile`, ADR 0004 Decision 4): identity
+ * via `/api/auth/me` and nothing else. `allowedDriveIds: []` is deliberately
+ * the raw shape — the drive-scope helpers must deny it on the SCOPE, not rely
+ * on `validateOAuthAccessToken` having already replaced the empty list.
+ */
+export function profileOnlyAuthResult(
+  overrides: Partial<OAuthAuthResult> = {}
+): OAuthAuthResult {
+  return {
+    tokenType: 'oauth',
+    userId: 'user-profile-only',
+    role: 'user',
+    tokenVersion: 1,
+    adminRoleVersion: 0,
+    tokenId: 'oauth-token-profile-only',
+    scopes: { account: false, offlineAccess: false, drives: new Map(), manageKeys: false, allDrives: false, profile: true, updateKeyId: null, activateKeyId: null, newKeyName: null },
+    driveScopes: [],
+    allowedDriveIds: [],
+    ...overrides,
+  };
+}

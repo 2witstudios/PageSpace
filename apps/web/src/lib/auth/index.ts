@@ -353,7 +353,21 @@ export async function validateOAuthAccessToken(token: string): Promise<OAuthAuth
     }
 
     const driveScopes = scopeSetToDriveScopes(parsed.scopes);
-    const allowedDriveIds = parsed.scopes.account ? [] : driveScopes.map((scope) => scope.driveId);
+
+    // `profile` (ADR 0004 Decision 4) arrived after the guard above was
+    // written and produces the identical hazard shape: `account: false` with
+    // zero drive rows, i.e. `allowedDriveIds: []`, which the grant-everything
+    // helper family reads as UNSCOPED. Unlike `all_drives` it is a legitimate
+    // bearer credential — `/api/auth/me` must still resolve it — so instead of
+    // rejecting, a profile-only principal is born carrying the no-drive
+    // sentinel. Any caller that reads `allowedDriveIds` directly then sees "no
+    // drives", independently of the `isProfileOnly` short-circuit in every
+    // helper below; either one alone keeps the token out of content.
+    const allowedDriveIds = parsed.scopes.account
+      ? []
+      : isProfileOnlyScopeSet(parsed.scopes)
+        ? [...profileOnlyNoDriveAccess]
+        : driveScopes.map((scope) => scope.driveId);
 
     return {
       userId: record.userId,
@@ -742,12 +756,44 @@ function manageKeysOnlyDeniedResponse(): NextResponse {
   );
 }
 
+function isProfileOnlyScopeSet(scopes: ScopeSet): boolean {
+  return scopes.profile && !scopes.account && scopes.drives.size === 0;
+}
+
+/**
+ * True iff this credential is identity-only (`profile`, optionally with
+ * `offline_access`; ADR 0004 Decision 4) and must never resolve to content
+ * access. Reachable today through both the authorize and device-authorization
+ * flows. `profile drive:X:*` is NOT profile-only — it is an ordinary
+ * drive-scoped principal confined to X.
+ */
+export function isProfileOnly(auth: AuthResult): boolean {
+  return isOAuthAuthResult(auth) && isProfileOnlyScopeSet(auth.scopes);
+}
+
+function profileOnlyDeniedResponse(): NextResponse {
+  return NextResponse.json(
+    { error: 'This credential is identity-only and has no drive content access' },
+    { status: 403 }
+  );
+}
+
+/** The 403 for a credential that has no drive access at all, or null if it has some. */
+function noDriveAccessResponse(auth: AuthResult): NextResponse | null {
+  if (isManageKeysOnly(auth)) return manageKeysOnlyDeniedResponse();
+  if (isProfileOnly(auth)) return profileOnlyDeniedResponse();
+  return null;
+}
+
 // Never equals a real drive id (cuid2 ids are lowercase alphanumeric only).
 // Lets a manage-keys-only credential resolve through the same allowedDriveIds
 // contract as every other scoped credential, so any caller that reads
 // `allowedDriveIds.length` directly — not just the helpers below — also sees
 // "no drives" rather than the empty-array-means-full-access default.
 const manageKeysNoDriveAccess: readonly string[] = ['MANAGE_KEYS_ONLY_NO_DRIVE_ACCESS'];
+// Same contract for an identity-only (`profile`) credential. Also stamped onto
+// the principal itself by `validateOAuthAccessToken`.
+const profileOnlyNoDriveAccess: readonly string[] = ['PROFILE_ONLY_NO_DRIVE_ACCESS'];
 
 /**
  * Get allowed drive IDs from an authentication result.
@@ -756,6 +802,9 @@ const manageKeysNoDriveAccess: readonly string[] = ['MANAGE_KEYS_ONLY_NO_DRIVE_A
 export function getAllowedDriveIds(auth: AuthResult): string[] {
   if (isManageKeysOnly(auth)) {
     return [...manageKeysNoDriveAccess];
+  }
+  if (isProfileOnly(auth)) {
+    return [...profileOnlyNoDriveAccess];
   }
   if (isMCPAuthResult(auth)) {
     return auth.allowedDriveIds;
@@ -786,8 +835,9 @@ export function checkMCPDriveScope(
   auth: AuthResult,
   driveId: string
 ): NextResponse | null {
-  if (isManageKeysOnly(auth)) {
-    return manageKeysOnlyDeniedResponse();
+  const noDriveAccess = noDriveAccessResponse(auth);
+  if (noDriveAccess) {
+    return noDriveAccess;
   }
 
   const allowedDriveIds = getAllowedDriveIds(auth);
@@ -821,8 +871,9 @@ export async function checkMCPPageScope(
   auth: AuthResult,
   pageId: string
 ): Promise<NextResponse | null> {
-  if (isManageKeysOnly(auth)) {
-    return manageKeysOnlyDeniedResponse();
+  const noDriveAccess = noDriveAccessResponse(auth);
+  if (noDriveAccess) {
+    return noDriveAccess;
   }
 
   const allowedDriveIds = getAllowedDriveIds(auth);
@@ -866,7 +917,7 @@ export function filterDrivesByMCPScope(
   auth: AuthResult,
   driveIds: string[]
 ): string[] {
-  if (isManageKeysOnly(auth)) {
+  if (isManageKeysOnly(auth) || isProfileOnly(auth)) {
     return [];
   }
 
@@ -895,8 +946,9 @@ export function checkMCPCreateScope(
   auth: AuthResult,
   targetDriveId: string | null
 ): NextResponse | null {
-  if (isManageKeysOnly(auth)) {
-    return manageKeysOnlyDeniedResponse();
+  const noDriveAccess = noDriveAccessResponse(auth);
+  if (noDriveAccess) {
+    return noDriveAccess;
   }
 
   const allowedDriveIds = getAllowedDriveIds(auth);

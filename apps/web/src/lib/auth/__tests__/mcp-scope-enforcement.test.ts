@@ -83,11 +83,12 @@ import {
   filterDrivesByMCPScope,
   getAllowedDriveIds,
   isManageKeysOnly,
+  isProfileOnly,
   type MCPAuthResult,
   type SessionAuthResult,
   type OAuthAuthResult,
 } from '../index';
-import { manageKeysScopedAuthResult } from './manage-keys-fixture';
+import { manageKeysScopedAuthResult, profileOnlyAuthResult } from './manage-keys-fixture';
 
 describe('MCP Scope Enforcement', () => {
   beforeEach(() => {
@@ -587,6 +588,109 @@ describe('MCP Scope Enforcement', () => {
 
       expect(result).not.toBeNull();
       expect(result?.status).toBe(403);
+    });
+  });
+  // ===========================================================================
+  // profile-only credential (ADR 0004 Decision 4, Phase 1 obligation 1)
+  // ===========================================================================
+  // `profile` is identity and nothing else. Its principal carries no drive rows,
+  // and before this guard the grant-everything helper family read that empty
+  // list as UNSCOPED — a `profile` token was admitted to every drive its user
+  // has. Every helper below must deny it exactly as it denies manage_keys.
+
+  describe('profile-only credential', () => {
+    const profileOfflineAccess = () =>
+      profileOnlyAuthResult({
+        scopes: { ...profileOnlyAuthResult().scopes, offlineAccess: true },
+      });
+
+    it('isProfileOnly identifies a profile-only OAuth credential, with or without offline_access', () => {
+      expect(isProfileOnly(profileOnlyAuthResult())).toBe(true);
+      expect(isProfileOnly(profileOfflineAccess())).toBe(true);
+    });
+
+    it('isProfileOnly is false for every other credential kind, including profile beside a drive grant', () => {
+      expect(isProfileOnly(createSessionAuth())).toBe(false);
+      expect(isProfileOnly(createUnscopedMCPAuth())).toBe(false);
+      expect(isProfileOnly(createScopedMCPAuth(['drive-1']))).toBe(false);
+      expect(isProfileOnly(createAccountScopedOAuthAuth())).toBe(false);
+      expect(isProfileOnly(createScopedOAuthAuth(['drive-1']))).toBe(false);
+      expect(isProfileOnly(manageKeysScopedAuthResult())).toBe(false);
+      expect(
+        isProfileOnly(
+          profileOnlyAuthResult({
+            scopes: {
+              ...profileOnlyAuthResult().scopes,
+              drives: new Map([['drive-1', { kind: 'drive', driveId: 'drive-1', role: { kind: 'member' } }]]),
+            },
+            driveScopes: [{ driveId: 'drive-1', role: 'MEMBER', customRoleId: null }],
+            allowedDriveIds: ['drive-1'],
+          })
+        )
+      ).toBe(false);
+    });
+
+    it('getAllowedDriveIds never returns an empty array (which would mean full access)', () => {
+      expect(getAllowedDriveIds(profileOnlyAuthResult()).length).toBeGreaterThan(0);
+      expect(getAllowedDriveIds(profileOfflineAccess()).length).toBeGreaterThan(0);
+    });
+
+    it('getAllowedDriveIds never names a real drive', () => {
+      expect(getAllowedDriveIds(profileOnlyAuthResult())).not.toContain('any-drive');
+    });
+
+    it('checkMCPDriveScope denies a profile token access to an arbitrary drive', () => {
+      const result = checkMCPDriveScope(profileOnlyAuthResult(), 'any-drive');
+
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe(403);
+    });
+
+    it('checkMCPDriveScope denies a profile offline_access token access to an arbitrary drive', () => {
+      const result = checkMCPDriveScope(profileOfflineAccess(), 'any-drive');
+
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe(403);
+    });
+
+    it('checkMCPPageScope denies access to any page without a DB lookup', async () => {
+      const result = await checkMCPPageScope(profileOnlyAuthResult(), 'any-page');
+
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe(403);
+      expect(mockPageFindFirst).not.toHaveBeenCalled();
+    });
+
+    it('filterDrivesByMCPScope filters every drive out', () => {
+      expect(filterDrivesByMCPScope(profileOnlyAuthResult(), ['drive-1', 'drive-2'])).toEqual([]);
+    });
+
+    it('checkMCPCreateScope denies creating a new drive', () => {
+      const result = checkMCPCreateScope(profileOnlyAuthResult(), null);
+
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe(403);
+    });
+
+    it('checkMCPCreateScope denies creating a resource in any existing drive', () => {
+      const result = checkMCPCreateScope(profileOnlyAuthResult(), 'any-drive');
+
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe(403);
+    });
+
+    it('a profile drive:X grant still reaches drive X and only drive X', () => {
+      const auth = profileOnlyAuthResult({
+        scopes: {
+          ...profileOnlyAuthResult().scopes,
+          drives: new Map([['drive-1', { kind: 'drive', driveId: 'drive-1', role: { kind: 'member' } }]]),
+        },
+        driveScopes: [{ driveId: 'drive-1', role: 'MEMBER', customRoleId: null }],
+        allowedDriveIds: ['drive-1'],
+      });
+
+      expect(checkMCPDriveScope(auth, 'drive-1')).toBeNull();
+      expect(checkMCPDriveScope(auth, 'drive-2')?.status).toBe(403);
     });
   });
 });
