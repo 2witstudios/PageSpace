@@ -69,6 +69,70 @@ describe('oauthClients', () => {
   it('exports relations to codes and tokens', () => {
     expect(oauthClientsRelations).toBeDefined();
   });
+
+  // Phase 1a leaf 1 (ADR 0004 Decisions 2, 7, 8): third-party client metadata.
+  describe('third-party client metadata (ADR 0004)', () => {
+    it('allowedGrantTypes is a required jsonb list that defaults to [] — no grant until declared', () => {
+      expect(columns.allowedGrantTypes.dataType).toBe('json');
+      expect(columns.allowedGrantTypes.columnType).toBe('PgJsonb');
+      expect(columns.allowedGrantTypes.notNull).toBe(true);
+      expect(columns.allowedGrantTypes.default).toEqual([]);
+    });
+
+    it('allowedScopes is a required jsonb list that defaults to [] — an app may ask for nothing it did not declare', () => {
+      expect(columns.allowedScopes.columnType).toBe('PgJsonb');
+      expect(columns.allowedScopes.notNull).toBe(true);
+      expect(columns.allowedScopes.default).toEqual([]);
+    });
+
+    it('ownerUserId is a nullable FK to users that is set null when the owner is deleted', () => {
+      expect(columns.ownerUserId.notNull).toBe(false);
+      const fk = fkOnColumn(config, 'ownerUserId');
+      expect(getTableConfig(fk.reference().foreignTable).name).toBe('users');
+      expect(fk.onDelete).toBe('set null');
+    });
+
+    it('logoUrl, homepageUrl and description are optional text', () => {
+      for (const name of ['logoUrl', 'homepageUrl', 'description'] as const) {
+        expect(columns[name].columnType).toBe('PgText');
+        expect(columns[name].notNull).toBe(false);
+      }
+    });
+
+    it('verified is required and defaults to false — every registered app starts unverified', () => {
+      expect(columns.verified.columnType).toBe('PgBoolean');
+      expect(columns.verified.notNull).toBe(true);
+      expect(columns.verified.default).toBe(false);
+    });
+
+    it('updatedAt is required, defaults to now, and moves on update', () => {
+      expect(columns.updatedAt.columnType).toBe('PgTimestamp');
+      expect(columns.updatedAt.notNull).toBe(true);
+      expect(columns.updatedAt.hasDefault).toBe(true);
+      expect(columns.updatedAt.onUpdateFn).toBeTypeOf('function');
+    });
+
+    it('indexes ownerUserId for owner-scoped listing', () => {
+      expect(config.indexes.some((i) => i.config.name === 'oauth_clients_owner_user_id_idx')).toBe(true);
+    });
+
+    it('accepts a typed insert carrying every new column', () => {
+      const row: typeof oauthClients.$inferInsert = {
+        clientId: 'app_x',
+        name: 'SwipeSend',
+        clientType: 'public',
+        redirectUris: ['swipesend://callback'],
+        allowedGrantTypes: ['authorization_code', 'refresh_token'],
+        allowedScopes: ['profile', 'drive:member', 'offline_access'],
+        ownerUserId: 'user-1',
+        logoUrl: 'https://swipesend.app/logo.png',
+        homepageUrl: 'https://swipesend.app',
+        description: 'Swipe to send',
+        verified: false,
+      };
+      expect(row.allowedScopes).toContain('profile');
+    });
+  });
 });
 
 describe('oauthAuthorizationCodes', () => {

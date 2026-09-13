@@ -5,21 +5,43 @@ import { users } from './auth';
 
 export const oauthClientType = pgEnum('OAuthClientType', ['public', 'confidential']);
 
-// OAuth 2.1 clients (ADR 0002 Decision 3). First-party clients (e.g. the CLI,
-// client_id "pagespace-cli") are authoritatively defined in a static in-code
-// registry, not this table — this table exists to accommodate future RFC 7591
-// dynamic client registration.
+// OAuth 2.1 clients (ADR 0002 Decision 3, amended by ADR 0004 Decision 2).
+// First-party clients (e.g. the CLI, client_id "pagespace-cli") are
+// authoritatively defined in a static in-code registry — their rows here exist
+// only as FK targets (`ensureOAuthClientRow`). Third-party clients registered
+// through the developer console live here and nowhere else, and are resolved
+// static-first by `resolveClient`. Always public + PKCE (ADR 0004 Decision 1).
 export const oauthClients = pgTable('oauth_clients', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   clientId: text('clientId').unique().notNull(),
   name: text('name').notNull(),
   clientType: oauthClientType('clientType').notNull(),
   redirectUris: jsonb('redirectUris').$type<string[]>().notNull(),
+  // Grant types the token endpoint will honour for this client. `[]` by
+  // default: a row that never declared any is refused every grant.
+  allowedGrantTypes: jsonb('allowedGrantTypes').$type<string[]>().default([]).notNull(),
+  // Scope SHAPES the client may request (ADR 0004 Decision 7: `profile`,
+  // `offline_access`, `drive`, `drive:admin`, `drive:member`, `drive:role`).
+  // `[]` by default: a row that never declared a cap may request nothing.
+  allowedScopes: jsonb('allowedScopes').$type<string[]>().default([]).notNull(),
+  // The user who registered the client. Null for first-party FK rows, and
+  // after the owner's account is deleted (the client outlives its owner only
+  // until an operator disables it — grants belong to the users who gave them).
+  ownerUserId: text('ownerUserId').references(() => users.id, { onDelete: 'set null' }),
+  // Consent-screen presentation (ADR 0004 Decision 8). https-only, enforced by
+  // `validateClientRegistration`; browser-rendered, never fetched server-side.
+  logoUrl: text('logoUrl'),
+  homepageUrl: text('homepageUrl'),
+  description: text('description'),
+  // "Unverified app" iff false. Never settable through registration.
+  verified: boolean('verified').default(false).notNull(),
   isFirstParty: boolean('isFirstParty').default(false).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
   disabledAt: timestamp('disabledAt', { mode: 'date' }),
 }, (table) => ({
   clientIdIdx: index('oauth_clients_client_id_idx').on(table.clientId),
+  ownerUserIdIdx: index('oauth_clients_owner_user_id_idx').on(table.ownerUserId),
 }));
 
 // Authorization codes (RFC 6749 §4.1 + PKCE, RFC 7636). Only the SHA3-256
