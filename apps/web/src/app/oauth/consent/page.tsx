@@ -11,6 +11,7 @@ import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { resolveClient } from '@/lib/repositories/oauth-repository';
 import { ConsentActions } from './ConsentActions';
+import { consentClientPresentation } from './consent-presentation';
 
 interface ConsentPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -124,20 +125,53 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
     keyName: updateKeyName ?? activateKeyName ?? undefined,
   });
 
+  const presentation = consentClientPresentation(result.client);
+
   return (
     <div className="mx-auto max-w-md py-16">
+      {presentation.logoUrl && (
+        // A registered client's own logo host: plain <img> (next/image would
+        // proxy it through this server), no referrer so the consent URL never
+        // reaches that host.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={presentation.logoUrl}
+          alt={`${presentation.name} logo`}
+          referrerPolicy="no-referrer"
+          width={48}
+          height={48}
+          className="mb-4 h-12 w-12 rounded"
+        />
+      )}
       <h1 className="text-xl font-semibold">
         {updateKeyName !== null
-          ? `${result.client.name} wants to update the key "${updateKeyName}"`
+          ? `${presentation.name} wants to update the key "${updateKeyName}"`
           : activateKeyName !== null
-            ? `${result.client.name} wants to make "${activateKeyName}" its active key`
-            : `${result.client.name} is requesting access`}
-        {result.client.firstParty && (
+            ? `${presentation.name} wants to make "${activateKeyName}" its active key`
+            : `${presentation.name} is requesting access`}
+        {presentation.builtByPageSpace && (
           <span className="ml-2 rounded bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground">
             Built by PageSpace
           </span>
         )}
+        {presentation.unverified && (
+          <span className="ml-2 rounded border border-amber-500 px-2 py-0.5 text-xs font-normal text-amber-700 dark:text-amber-400">
+            Unverified app
+          </span>
+        )}
       </h1>
+      {presentation.homepage && (
+        <p className="mt-1 text-sm text-muted-foreground">
+          <a
+            href={presentation.homepage.href}
+            target="_blank"
+            rel="noopener noreferrer nofollow"
+            className="underline"
+          >
+            {presentation.homepage.host}
+          </a>
+        </p>
+      )}
       <ul className="mt-6 space-y-3 text-sm">
         {scopeDescriptions.map((text, i) => (
           <li key={i} className="rounded border p-3">

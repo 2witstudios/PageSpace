@@ -177,3 +177,54 @@ describe('consent page — third-party client resolved through resolveClient', (
   });
 });
 
+describe('consent page — who is asking (ADR 0004 Decision 8)', () => {
+  it('shows a third-party app\'s name, logo and homepage, labels it "Unverified app", and never "Built by PageSpace"', async () => {
+    resolveClient.mockImplementation(async () => ({
+      ...THIRD_PARTY,
+      logoUrl: 'https://swipesend.app/logo.png',
+      homepageUrl: 'https://swipesend.app/about',
+    }));
+
+    await renderConsent({ client_id: 'app_swipesend', redirect_uri: THIRD_PARTY_REDIRECT, scope: 'profile' });
+
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toContain('SwipeSend');
+    const logo = screen.getByRole('img', { name: 'SwipeSend logo' });
+    expect(logo.getAttribute('src')).toBe('https://swipesend.app/logo.png');
+    expect(logo.getAttribute('referrerpolicy')).toBe('no-referrer');
+    const homepage = screen.getByRole('link', { name: 'swipesend.app' });
+    expect(homepage.getAttribute('href')).toBe('https://swipesend.app/about');
+    expect(homepage.getAttribute('rel')).toContain('noopener');
+    expect(screen.getByText('Unverified app')).toBeInTheDocument();
+    expect(screen.queryByText('Built by PageSpace')).not.toBeInTheDocument();
+  });
+
+  it('drops "Unverified app" for a verified third-party app', async () => {
+    resolveClient.mockImplementation(async () => ({ ...THIRD_PARTY, verified: true }));
+
+    await renderConsent({ client_id: 'app_swipesend', redirect_uri: THIRD_PARTY_REDIRECT, scope: 'profile' });
+
+    expect(screen.queryByText('Unverified app')).not.toBeInTheDocument();
+    expect(screen.queryByText('Built by PageSpace')).not.toBeInTheDocument();
+  });
+
+  it('labels the first-party CLI "Built by PageSpace" and not unverified', async () => {
+    await renderConsent({ scope: 'account' });
+
+    expect(screen.getByText('Built by PageSpace')).toBeInTheDocument();
+    expect(screen.queryByText('Unverified app')).not.toBeInTheDocument();
+  });
+
+  it('renders profile narration first on a mixed identity + drive consent', async () => {
+    resolveClient.mockImplementation(async () => ({ ...THIRD_PARTY, allowedScopes: ['profile', 'drive:member', 'offline_access'] }));
+    findDrivesByIds.mockResolvedValue([{ id: 'abc123', name: 'Acme Drive' }]);
+
+    await renderConsent({
+      client_id: 'app_swipesend',
+      redirect_uri: THIRD_PARTY_REDIRECT,
+      scope: 'offline_access drive:abc123:member profile',
+    });
+
+    expect(capabilityItems()[0]).toBe('See your name, email, and avatar.');
+  });
+});
+
