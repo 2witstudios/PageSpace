@@ -240,52 +240,38 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
   ),
 
   /**
-   * An env-bound session MUST have a drive. `driveId` is nullable because a
-   * global-assistant session lives outside any drive — but an env does not: it
-   * is drive-owned, drive-paid and drive-shared, so "user-scoped session
-   * borrowing a drive's machine" is a state with no coherent access or billing
-   * answer. `decideAgentSessionAccess` derives access from `driveId` alone, so
-   * a row with an env and no drive would route work into a drive's shared
-   * filesystem through an authorization path that never looked at that drive.
+   * **`agent_workspaces_env_needs_drive_check` WAS HERE AND IS DELIBERATELY
+   * GONE** (phase "a global assistant reaches any environment it may see",
+   * leaf D; migration 0296). It read `envId IS NULL OR driveId IS NOT NULL`.
    *
-   * **This closes one half of the drive-agreement invariant. The other half is
-   * now cheaply closable too, and is NOT yet closed — read on before copying
-   * the old reasoning out of this file.**
+   * It was right about the case it was written for and wrong about the one the
+   * founder actually asked for. Its argument was that `decideAgentSessionAccess`
+   * derives access from `driveId` alone, so a row with an env and no drive
+   * would route work into a drive's shared filesystem through an authorization
+   * path that never looked at that drive. That argument holds for a SPRITE env
+   * — which is drive-owned, drive-paid and drive-shared, and whose only access
+   * answer is a drive one — and it is still enforced, in `spawnAgentSession`,
+   * which refuses a Sprite env whose drive is not the session's.
    *
-   * The other half is that `envId`'s env belongs to THIS session's drive. An
-   * earlier cut of this docblock argued it could not be stated structurally,
-   * because a composite FK on `(envId, driveId)` would need
-   * `ON DELETE SET NULL ("envId")` — so that reclaiming an env did not also
-   * blank `driveId` and silently convert a drive session into a
-   * global-assistant one — and Drizzle 0.45.2 cannot express a column-scoped
-   * SET NULL.
+   * It does NOT hold for a LOCAL env, and that is the whole of the change. A
+   * local env is one person's own computer: [D-6] made binding structurally
+   * owner-only (`decideBind`'s `bind_policy`, `drive_env_local.ownerId`, no
+   * actor role anywhere in the input), so the ownership check already exists,
+   * is load-bearing, and is proven by the M1 exit gate. A driveless session
+   * bound to a local env is exactly right: `decideAgentSessionAccess` keeps it
+   * private to its owner (`global_assistant_not_owner`), which is the SAME
+   * person the bind gate already restricted it to. Relaxing this removed a
+   * redundant scoping check rather than introducing a new ownership one
+   * ([D-4]).
    *
-   * **That argument died with `set null`.** `envId` is `ON DELETE CASCADE`
-   * now, so a composite FK wants CASCADE too: the whole row goes, and there is
-   * no `driveId` left to blank. Drizzle expresses a plain composite cascade FK
-   * without difficulty. Verified against a live database: with
-   * `UNIQUE (id, "driveId")` on `drive_envs` and
-   * `FOREIGN KEY ("envId","driveId") REFERENCES drive_envs(id,"driveId") ON
-   * DELETE CASCADE`, a same-drive binding is accepted, a cross-drive binding
-   * is REFUSED, and deleting the env still cascades the session away.
-   *
-   * The `MATCH SIMPLE` hole that would normally undercut such an FK — a NULL
-   * in either column skipping the check entirely — is already closed by the
-   * constraint above: a row with an `envId` and no `driveId` cannot exist.
-   *
-   * It is not enforced here because that is a schema-shape decision beyond the
-   * change this constraint shipped with, not because it is expensive. Until it
-   * lands, the check remains a Phase 3 acceptance criterion on
-   * `spawnAgentSession`:
-   *
-   * Ships NOT VALID for the same reason as the constraint above, and is
-   * vacuously true of the existing corpus for the same reason: `envId` does
-   * not exist until this migration.
+   * **Where the guarantee lives now**, since it is no longer a CHECK: in
+   * `spawnAgentSession`, as two branches that cannot both be forgotten — a
+   * local env goes through `gateLocalEnvBind` (owner-only), and any other
+   * substrate must still satisfy `env.driveId === driveId`. The service's test
+   * matrix pins both, including the negative that a non-owner is still refused
+   * a local env and that a Sprite env is still refused a driveless session.
    */
-  envNeedsDriveCheck: check(
-    'agent_workspaces_env_needs_drive_check',
-    sql`${table.envId} IS NULL OR ${table.driveId} IS NOT NULL`,
-  ),
+
 }));
 
 /**

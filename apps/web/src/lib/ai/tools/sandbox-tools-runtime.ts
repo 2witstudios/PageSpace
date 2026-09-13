@@ -26,7 +26,7 @@ import { db } from '@pagespace/db/db';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { defaultBuildEnv, localRefusalToToolDenial, type SandboxRunDeps } from '@pagespace/lib/services/sandbox/tool-runners';
-import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
+import { canRunCode, isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import {
   screenToolOutput,
   heuristicInjectionClassifier,
@@ -52,12 +52,17 @@ import { gateSandboxToolCall } from '@pagespace/lib/services/sandbox/tool-gate';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
-import { createSandboxTools, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
+import { createSandboxTools, type ListReachableEnvironments, type ResolveEnvironmentTarget, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
+import { conversationMayReachPersistentEnvironments, decideEnvReach, ENV_UNREACHABLE_MESSAGE } from '@pagespace/lib/env-bridge/decide-env-reach';
+import { anyReachableEnvironmentPayerAllows } from '@/lib/ai/core/reachable-environment-payers';
+import { OWN_SANDBOX_LABEL } from '@pagespace/lib/services/sandbox/environment-directory';
+import type { SandboxEnvironmentTarget } from '@pagespace/lib/services/sandbox/tool-runners';
 import {
   findSessionForConversation,
   provisionSessionSandbox,
   measureWarmSessionStorage,
   ensureGlobalSandboxSession,
+  ensureEnvironmentSession,
   type AgentSessionRecord,
   type EnsureGlobalSandboxSessionFailureReason,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
@@ -179,6 +184,69 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     // then ensure its Sprite — both through the shared agent-sessions runtime,
     // never a local copy (the CAS only serializes provisioners that all run it).
     acquireSandbox: async (input) => {
+      // Omission is never a default, at any layer. The schema makes a missing
+      // `environmentId` a validation error the model sees, and this makes a
+      // missing TARGET a refusal rather than a quiet fall-back to the
+      // conversation's own sandbox — the exact shape July's `target` got wrong
+      // in the other direction.
+      const target = input.environment;
+      if (!target) return { ok: false, reason: 'provision_failed', cause: 'missing_environment' };
+      if (target.kind === 'environment') {
+        // A named environment runs in ITS OWN session — found or spawned once
+        // per (owner, environment), never this conversation's session
+        // re-pointed at it. The spawn carries the owner-only bind gate for a
+        // local env, so a refusal happens before any row exists.
+        // The session's drive follows the substrate: the env's own drive for a
+        // cloud env, null for a local machine. The target already carries it.
+        const ensured = await ensureEnvironmentSession({ ownerId: input.userId, envId: target.id, driveId: target.substrate === 'local' ? null : target.driveId });
+        if (!ensured.ok) {
+          // A refused BIND keeps its own typed word all the way to the agent —
+          // "your computer is not connected" and "the machine owner's bind
+          // policy denies you" are different problems with different owners.
+          // This path adds no refusal vocabulary of its own.
+          const refusal = ensured.refusal;
+          if (refusal && !refusal.ok && refusal.reason === 'env_bind_refused') {
+            const denial = localRefusalToToolDenial(refusal.refusal);
+            if (denial) return { ok: false, reason: denial };
+            return { ok: false, reason: 'provision_failed', cause: refusal.refusal };
+          }
+          return { ok: false, reason: 'provision_failed', cause: ensured.reason };
+        }
+        const row = ensured.session;
+        const nowMs = Date.now();
+        const guardrail = checkSessionRuntimeGuardrail({ workspaceId: row.id, now: nowMs });
+        if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
+
+        // The SAME provisioning path an env-bound session spawned from the
+        // sidebar takes: the router inside `ensureAgentSessionSandbox` sees
+        // `envId` and provisions the ENVIRONMENT, resolving the payer from the
+        // env's own drive. A paused, revoked or policy-refusing environment
+        // refuses here, through the existing sign/provision gate, with its
+        // existing typed reason.
+        const provisioned = await provisionSessionSandbox(row, input.userId);
+        if (!provisioned.ok) {
+          if (provisioned.reason === 'denied') {
+            return provisioned.denial === 'not_authorized'
+              ? { ok: false, reason: 'no_drive_access' }
+              : { ok: false, reason: 'provision_failed', cause: provisioned.denial };
+          }
+          if (provisioned.reason === 'local_refused') {
+            const denial = localRefusalToToolDenial(provisioned.refusal);
+            if (denial) return { ok: false, reason: denial };
+          }
+          return { ok: false, reason: 'provision_failed', cause: provisioned.detail ?? provisioned.reason };
+        }
+
+        recordSessionActivity({ workspaceId: row.id, now: nowMs });
+        return {
+          ok: true,
+          sandboxId: provisioned.sandboxId,
+          resumed: provisioned.resumed,
+          workspaceId: row.id,
+          pageId: input.agentPageId,
+        };
+      }
+
       const conversationId = input.conversationId;
       if (!conversationId) {
         // No conversation, nothing to resolve a session through.
@@ -367,6 +435,21 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     // findings — P1, PR #2314, both rounds: session_limit_reached fell
     // through unmetered first, then spawn_failed did too).
     resolveBillingSession: async (ctx) => {
+      // A NAMED environment bills the ENVIRONMENT's drive, not the
+      // conversation's (leaf D). That keeps a drive environment billed to that
+      // drive's owner exactly as it is today when a session is spawned into it
+      // from the sidebar — the conversation that happens to be driving it does
+      // not change who pays. Resolved through the SAME find-or-spawn
+      // `acquireSandbox` is about to use, so billing can never see a different
+      // session from the one that runs.
+      const target = ctx.environment;
+      if (target?.kind === 'environment') {
+        const ensured = await ensureEnvironmentSession({ ownerId: ctx.userId, envId: target.id, driveId: target.substrate === 'local' ? null : target.driveId });
+        if (!ensured.ok) {
+          return { deny: ensured.reason === 'session_limit_reached' ? 'session_limit_reached' : 'provision_failed' };
+        }
+        return { workspaceId: ensured.session.id, driveId: target.driveId, ownerId: ensured.session.ownerId };
+      }
       if (!ctx.conversationId) return null;
       const resolved = await resolveOrProvisionSession(ctx.conversationId, ctx.userId);
       if (resolved.ok) {
@@ -519,6 +602,10 @@ export function createResolveSandboxActorContext(
     const base = {
       userId,
       conversationId,
+      // Fail CLOSED: only an explicit `'global'` chat source is the dashboard
+      // assistant. A page agent, and any surface that did not say what it is,
+      // reads as `'page'` and cannot reach a persistent environment.
+      conversationKind: chatSourceType === 'global' ? ('global' as const) : ('page' as const),
       requestOrigin: context?.requestOrigin,
       agentPageId: context?.chatSource?.agentPageId ?? context?.parentAgentId,
       actorEmail: actorInfo.actorEmail,
@@ -559,6 +646,195 @@ export function createResolveSandboxActorContext(
 export const resolveSandboxActorContext: ResolveSandboxContext =
   createResolveSandboxActorContext();
 
+/**
+ * The discovery read behind `list_environments` — both conditions (the caller
+ * OWNS the machine, and it is visible to the global assistant) applied in SQL
+ * by the store, never here. Loaded lazily so the chat pipeline does not import
+ * the drive-env store at module load.
+ *
+ * **The environment gate is only consulted when local environments are
+ * enabled.** With the flag off there are no reachable environments at all, so
+ * the list is the conversation's own sandbox and nothing else — the same
+ * answer the route gives as a 404, expressed as a list a model can read.
+ */
+export const productionListReachableEnvironments: ListReachableEnvironments = async (ctx) => {
+  // The promise is about the GLOBAL assistant specifically — the column, the
+  // settings toggle and the changelog all say so. A page agent gets its own
+  // sandbox and nothing else, and never learns that an environment exists.
+  if (!conversationMayReachPersistentEnvironments(ctx.conversationKind ?? 'page')) return [];
+  // `LOCAL_ENVS_ENABLED` is applied PER SUBSTRATE inside the listing, not as a
+  // short-circuit here: it gates personal hardware, never a drive's own cloud
+  // sandbox. The origin is threaded so this asks exactly what resolution asks.
+  const { listGlobalAssistantEnvironments } = await import('@/lib/drive-envs/drive-envs-runtime');
+  return listGlobalAssistantEnvironments(ctx.userId, { requestOrigin: ctx.requestOrigin, agentPageId: ctx.agentPageId });
+};
+
+/**
+ * Resolve the mandatory `environmentId` into the server's own target (leaf C).
+ *
+ * Two addresses, one namespace, and neither is guessable:
+ *
+ *  - the CONVERSATION's own id addresses its own sandbox — the address this
+ *    runtime already resolves a session through (contract.ts invariant 1) —
+ *    which is why the conversation's default sandbox is named exactly like any
+ *    other environment and has no implicit path of its own;
+ *  - any other id must be a `drive_envs.id` the caller may reach, decided by
+ *    the pure `decideEnvReach`: it exists, they OWN it, and its owner has made
+ *    it visible to the global assistant. All three refusals surface the SAME
+ *    sentence, so an id that does not exist and one the caller may not see are
+ *    indistinguishable from outside.
+ *
+ * Visibility is re-read HERE, on every call, rather than remembered from a
+ * bind: switching it off refuses the next call instead of honouring an earlier
+ * reach.
+ *
+ * The `label` on the returned target comes from the ROW, never from the model's
+ * input, so leaf E's "every result names where it ran" cannot be steered by
+ * what the model said.
+ */
+/**
+ * The conversation's OWN sandbox as a resolved target (leaf C).
+ *
+ * Exported because the tools that are NOT addressed — the git/gh toolkit and
+ * `copy_content`, which are deliberately fixed to the conversation's own
+ * sandbox — share `buildRealSandboxRunDeps`, and `acquireSandbox` refuses
+ * without a target. They say so explicitly here rather than relying on a
+ * fallback: the whole point of leaf C is that no layer has one.
+ */
+export function ownSandboxTarget(ctx: { conversationId: string; driveId?: string }): SandboxEnvironmentTarget {
+  return { id: ctx.conversationId, kind: 'conversation', label: OWN_SANDBOX_LABEL, driveId: ctx.driveId ?? null };
+}
+
+export const productionResolveEnvironmentTarget: ResolveEnvironmentTarget = async ({ ctx, environmentId }) => {
+  if (environmentId === ctx.conversationId) {
+    // The conversation's own sandbox keeps the conversation's own payer — the
+    // coordinates `resolveSandboxActorContext` already resolved. Identity, not
+    // a second resolution that could disagree with the first.
+    return {
+      ok: true,
+      target: { id: environmentId, kind: 'conversation', label: OWN_SANDBOX_LABEL, driveId: ctx.driveId ?? null },
+      // Its own coordinates, unchanged — including the drive it authorizes
+      // against, which for the conversation's own sandbox is the drive it is in.
+      payer: { driveId: ctx.driveId, ownerId: ctx.ownerId ?? ctx.userId, tenantId: ctx.tenantId, tier: ctx.tier, gateDriveId: ctx.driveId },
+    };
+  }
+  // A page conversation is refused BEFORE the lookup — `decideEnvReach` owns the
+  // rule, and this is it applied early so a page turn cannot probe for an id's
+  // existence through timing or through a read it was never entitled to make.
+  const kind = ctx.conversationKind ?? 'page';
+  if (!conversationMayReachPersistentEnvironments(kind)) return { ok: false, error: ENV_UNREACHABLE_MESSAGE };
+
+  const { getDriveEnvStore } = await import('@/lib/drive-envs/drive-envs-runtime');
+  const store = await getDriveEnvStore();
+  const env = await store.findById(environmentId);
+
+  // `LOCAL_ENVS_ENABLED` gates LOCAL MACHINES ONLY — the cloud opt-in for
+  // exposing personal hardware (invariant 11), which has nothing to say about a
+  // drive's own cloud sandbox. This used to short-circuit BEFORE the lookup and
+  // refuse everything, which made every cloud env unreachable on every
+  // deployment, since the flag is off on all of them.
+  //
+  // The refusal is still the one message, so a caller learns nothing from it
+  // about whether the id exists or which substrate it is.
+  if (env !== null && env.substrate === 'local') {
+    const { isLocalEnvsEnabled } = await import('@pagespace/lib/services/drive-envs/local-envs-enabled');
+    if (!isLocalEnvsEnabled()) return { ok: false, error: ENV_UNREACHABLE_MESSAGE };
+  }
+  // A local env's owner lives on the sibling; a Sprite env has none, and does
+  // not need one — its authority is the drive permission below.
+  const sibling = env === null || env.substrate !== 'local' ? null : await store.findLocalByEnvId(environmentId);
+
+  // The CLOUD authority, computed here because this is where the database is,
+  // and handed to the pure decision as a fact. `canRunCode` verbatim — same
+  // kill switch, same payer tier (the ENV's drive owner), same drive access and
+  // `canEdit`. Asked only for a Sprite env, and asked on EVERY call: losing
+  // edit access, or the kill switch going off, refuses the next call even with
+  // a session already held.
+  const mayRunCodeInEnvDrive =
+    env !== null && env.substrate === 'sprite'
+      ? (await canRunCode({ userId: ctx.userId, driveId: env.driveId, requestOrigin: ctx.requestOrigin, agentPageId: ctx.agentPageId })).ok
+      : false;
+
+  const verdict = decideEnvReach({
+    actorId: ctx.userId,
+    conversationKind: kind,
+    mayRunCodeInEnvDrive,
+    env: env === null ? null : { substrate: env.substrate, visibleToGlobalAssistant: env.visibleToGlobalAssistant, ownerId: sibling?.ownerId ?? null },
+  });
+  if (!verdict.ok) return { ok: false, error: ENV_UNREACHABLE_MESSAGE };
+
+  // The PAYER is the ENVIRONMENT's drive owner, with no fallback — the same
+  // rule `resolveDriveEnvPayer` applies to provisioning, so the gate, the
+  // credit check and the provision cannot disagree about who is paying. A
+  // vanished drive fails the call closed rather than charging the caller for a
+  // machine the drive was going to pay for.
+  const { resolveDriveEnvPayer } = await import('@/lib/drive-envs/drive-envs-runtime');
+  const payer = await resolveDriveEnvPayer(env!.driveId);
+  if (!payer) return { ok: false, error: ENV_UNREACHABLE_MESSAGE };
+  return {
+    ok: true,
+    target: { id: env!.id, kind: 'environment', label: sibling?.label ?? env!.name, driveId: env!.driveId, substrate: env!.substrate },
+    payer: {
+      driveId: env!.driveId,
+      ownerId: payer.payerId,
+      tenantId: payer.payerId,
+      tier: payer.tier,
+      // A LOCAL env authorizes on machine OWNERSHIP (already decided above,
+      // and re-decided by `decideBind` at bind), so the drive-role leg does
+      // not apply — otherwise the owner who left the drive is refused on every
+      // call, on their own computer. A CLOUD env is the opposite: the drive IS
+      // its authority, and `canRunCode` has just been asked about that exact
+      // drive, so the gate asks the same question again at the call boundary.
+      gateDriveId: env!.substrate === 'local' ? undefined : env!.driveId,
+    },
+  };
+};
+
+/**
+ * The DISCOVERY gate: may this actor run ANYWHERE they can reach?
+ *
+ * The conversation's own coordinates first — the common case, and the cheapest.
+ * If those refuse for any reason OTHER than the kill switch, the honest second
+ * question is whether one of the environments they can reach would authorize
+ * them, because that is the environment `openAt` will gate against when they
+ * actually run. A free-tier person who owns a visible machine in a Pro-owned
+ * drive is eligible there — `canRunCode`'s tier leg keys on the PAYER, and its
+ * own docblock says so — and refusing them the ID of the only place they can
+ * run made discovery the one surface that contradicted the rule (Codex P1,
+ * #2616).
+ *
+ * The KILL SWITCH is never second-guessed: a disabled deployment refuses
+ * discovery outright, and no environment can make it eligible.
+ */
+export const productionSandboxDiscoveryGate: SandboxGate = async (ctx) => {
+  const direct = await productionSandboxGate(ctx);
+  if (direct.ok || direct.reason === 'kill_switch_off') return direct;
+
+  // The ITERATION — which payers get asked, once per DISTINCT drive, failing
+  // closed — is shared with the pipeline eligibility strip
+  // (`sandbox-tool-eligibility.ts`) so the two cannot drift: fixing one without
+  // the other changes nothing, because that strip removes the tool before this
+  // gate can allow it. Only the AUTHORIZER below is local to this call site.
+  const allowed = await anyReachableEnvironmentPayerAllows({
+    userId: ctx.userId,
+    // The SAME shape `openAt` will gate the run with: the environment's payer,
+    // and NO drive — a local env authorizes on machine ownership, which the
+    // discovery listing has already established for every row it returned.
+    authorize: async (payer) =>
+      (
+        await gateSandboxToolCall({
+          userId: ctx.userId,
+          ownerId: payer.payerId,
+          tenantId: payer.payerId,
+          requestOrigin: ctx.requestOrigin,
+          agentPageId: ctx.agentPageId,
+          tier: payer.tier,
+        })
+      ).ok,
+  });
+  return allowed ? { ok: true } : direct;
+};
+
 /** The shared call-time gate binding — kill-switch, canRunCode, quota preflight. */
 export const productionSandboxGate: SandboxGate = (ctx) =>
   gateSandboxToolCall({
@@ -577,6 +853,7 @@ export const productionSandboxGate: SandboxGate = (ctx) =>
  * by itself.
  */
 export function buildSandboxTools(): {
+  list_environments: Tool;
   bash: Tool;
   writeFile: Tool;
   readFile: Tool;
@@ -586,5 +863,8 @@ export function buildSandboxTools(): {
     runDeps: buildRealSandboxRunDeps(),
     resolveContext: resolveSandboxActorContext,
     gate: productionSandboxGate,
+    gateDiscovery: productionSandboxDiscoveryGate,
+    listEnvironments: productionListReachableEnvironments,
+    resolveEnvironment: productionResolveEnvironmentTarget,
   });
 }

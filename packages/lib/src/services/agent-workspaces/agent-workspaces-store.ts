@@ -80,9 +80,13 @@ export interface NewAgentSessionInput {
   name: string | null;
   /**
    * The environment to run inside, or null for the ordinary ephemeral session
-   * that owns its own Sprite. NOT validated here — that the env exists and
-   * belongs to `driveId` is `spawnAgentSession`'s check, and the database's
-   * `agent_workspaces_env_needs_drive_check` is the backstop under it.
+   * that owns its own Sprite. NOT validated here — that the env exists, and
+   * that the actor may bind it, is `spawnAgentSession`'s check: the owner-only
+   * `gateLocalEnvBind` for a local env, `env.driveId === driveId` for every
+   * other substrate. There is no database backstop under the drive half any
+   * more (`agent_workspaces_env_needs_drive_check` was dropped in 0296 so a
+   * driveless global-assistant session can bind the user's own machine — see
+   * the schema docblock where it used to live).
    */
   envId: string | null;
   now: Date;
@@ -143,6 +147,22 @@ export interface AgentSessionStore {
    * makes sandbox sharing structural rather than wired.
    */
   findByConversation(conversationId: string): Promise<AgentSessionRecord | null>;
+  /**
+   * This owner's ACTIVE (not-ended) session bound to one ENVIRONMENT — the
+   * lookup that makes a named environment hold ONE session per environment
+   * rather than a single session re-pointed between them (leaf D).
+   *
+   * Re-pointing is the shape this exists to prevent: mutating a live session's
+   * `envId` is the predecessor's `switch_machine`, it races every concurrent
+   * call in the same session, and it silently moves work that a previous call
+   * believed was somewhere else. Two environments are two sessions, which is
+   * precisely what two environments mean.
+   *
+   * Keyed on `(ownerId, envId, endedAt IS NULL)`. Newest first, so a duplicate
+   * left by a race resolves to one deterministic winner rather than
+   * alternating.
+   */
+  findActiveByOwnerAndEnv(input: { ownerId: string; envId: string }): Promise<AgentSessionRecord | null>;
   /**
    * Create a session row. NOT idempotent and NOT keyed on anything external:
    * a session's id is minted here (schema default), because spawning a session
@@ -494,6 +514,19 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
         )
         .limit(1);
       return (row?.session as AgentSessionRecord) ?? null;
+    },
+
+    async findActiveByOwnerAndEnv({ ownerId, envId }) {
+      // One row, on the indexed `envId` plus the owner, narrowed to not-ended.
+      // Ordered so a duplicate left by two concurrent first-touches resolves to
+      // one deterministic winner rather than alternating between them.
+      const [row] = await db
+        .select()
+        .from(agentWorkspaces)
+        .where(and(eq(agentWorkspaces.ownerId, ownerId), eq(agentWorkspaces.envId, envId), isNull(agentWorkspaces.endedAt)))
+        .orderBy(desc(agentWorkspaces.createdAt))
+        .limit(1);
+      return (row as AgentSessionRecord) ?? null;
     },
 
     async create(input) {

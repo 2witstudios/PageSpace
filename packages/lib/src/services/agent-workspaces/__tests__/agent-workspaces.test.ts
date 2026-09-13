@@ -488,10 +488,13 @@ describe('spawnAgentSession — inside an environment', () => {
     expect(store.calls.create).toBe(0);
   });
 
-  it('given a GLOBAL-assistant spawn, should refuse an env with no branch of its own — drive_envs.driveId is NOT NULL', async () => {
-    // A row with an env and no drive is what `agent_workspaces_env_needs_drive_check`
-    // forbids, and it would route work into a drive's shared filesystem through
-    // an access path (`decideAgentSessionAccess`) that only ever reads driveId.
+  it('given a GLOBAL-assistant spawn and a SPRITE env, should STILL refuse with no branch of its own — drive_envs.driveId is NOT NULL (leaf D leaves this untouched)', async () => {
+    // A Sprite env is drive-owned, drive-paid and drive-shared and has no owner
+    // of its own, so a driveless session bound to one would route work into a
+    // drive's shared filesystem through an access path
+    // (`decideAgentSessionAccess`) that only ever reads driveId. Leaf D relaxed
+    // the drive comparison for LOCAL envs only; this is the negative that pins
+    // the other arm.
     const store = makeAgentSessionStore();
     const result = await spawnAgentSession({
       ownerId: OWNER_ID,
@@ -570,6 +573,88 @@ describe('spawnAgentSession — inside an environment', () => {
       const store = makeAgentSessionStore();
       const result = await spawnAgentSession({ ownerId: OWNER_ID, driveId: DRIVE_ID, envId: ENV_ID, deps: makeSpawnDeps(store, envInDrive) });
       expect(result.ok).toBe(true);
+    });
+
+    // Leaf D — a DRIVELESS global-assistant session may bind a LOCAL env it
+    // owns. The drive comparison no longer decides it; the owner-only bind gate
+    // does, and it must never become the only ownership check by accident.
+    describe('a DRIVELESS global-assistant session (leaf D)', () => {
+      it('given a visible local env the caller owns, should BIND — the drive comparison no longer decides it', async () => {
+        const store = makeAgentSessionStore();
+        const asked: Array<{ envId: string; requesterId: string }> = [];
+        const result = await spawnAgentSession({
+          ownerId: OWNER_ID,
+          driveId: null,
+          envId: ENV_ID,
+          deps: makeSpawnDeps(store, { ...localEnvInDrive, gateLocalEnvBind: async (input) => { asked.push(input); return { ok: true, envId: input.envId }; } }),
+        });
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.session.envId).toBe(ENV_ID);
+        expect(result.session.driveId).toBeNull();
+        // The gate was asked about THIS env and THIS requester — the ownership
+        // check is real, not inferred from the drive.
+        expect(asked).toEqual([{ envId: ENV_ID, requesterId: OWNER_ID }]);
+      });
+
+      it('given a local env in a drive the caller has nothing to do with, should still bind IF they own the machine — it is their computer', async () => {
+        const store = makeAgentSessionStore();
+        const result = await spawnAgentSession({
+          ownerId: OWNER_ID,
+          driveId: null,
+          envId: ENV_ID,
+          deps: makeSpawnDeps(store, { findEnv: async () => ({ driveId: 'drive-someone-elses', substrate: 'local' }), gateLocalEnvBind: async (input) => ({ ok: true, envId: input.envId }) }),
+        });
+        expect(result.ok).toBe(true);
+      });
+
+      it('given a caller who is NOT the owner, should still be refused by the owner-only bind gate — independently and unchanged', async () => {
+        // This leaf REMOVED a redundant scoping check; it must not have made
+        // the bind gate the only thing standing between a stranger and
+        // someone's hardware by weakening it. `bind_policy` is `decideBind`'s
+        // own word for "you are not the owner".
+        const store = makeAgentSessionStore();
+        for (const driveId of [null, DRIVE_ID]) {
+          const result = await spawnAgentSession({
+            ownerId: 'someone-else',
+            driveId,
+            envId: ENV_ID,
+            deps: makeSpawnDeps(store, { ...localEnvInDrive, gateLocalEnvBind: async () => ({ ok: false, refusal: 'bind_policy' }) }),
+          });
+          expect(result).toEqual({ ok: false, reason: 'env_bind_refused', refusal: 'bind_policy' });
+        }
+        expect(store.rows.size).toBe(0);
+      });
+
+      it('given a paused, revoked or policy-refusing environment, should refuse with the EXISTING typed reason — this path adds no new refusal vocabulary', async () => {
+        const store = makeAgentSessionStore();
+        for (const refusal of ['revoked', 'not_connected', 'no_server_ops', 'flag_disabled'] as const) {
+          const result = await spawnAgentSession({
+            ownerId: OWNER_ID,
+            driveId: null,
+            envId: ENV_ID,
+            deps: makeSpawnDeps(store, { ...localEnvInDrive, gateLocalEnvBind: async () => ({ ok: false, refusal }) }),
+          });
+          expect(result).toEqual({ ok: false, reason: 'env_bind_refused', refusal });
+        }
+        expect(store.rows.size).toBe(0);
+      });
+
+      it('given no such env, should still refuse before the gate is consulted at all', async () => {
+        const store = makeAgentSessionStore();
+        const result = await spawnAgentSession({
+          ownerId: OWNER_ID,
+          driveId: null,
+          envId: ENV_ID,
+          deps: makeSpawnDeps(store, {
+            findEnv: async () => null,
+            gateLocalEnvBind: async () => {
+              throw new Error('the bind gate must not be consulted for an env that does not exist');
+            },
+          }),
+        });
+        expect(result).toEqual({ ok: false, reason: 'env_not_found' });
+      });
     });
   });
 });

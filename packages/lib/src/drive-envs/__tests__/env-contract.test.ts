@@ -14,7 +14,7 @@ import {
 } from '../env-contract';
 import { GRANT_OPS } from '../../env-bridge/grant';
 
-const BASE_DTO = { id: 'env_1', driveId: 'drive_1', name: 'dev', substrate: 'sprite', status: 'none', createdAt: '2026-09-04T00:00:00.000Z' };
+const BASE_DTO = { id: 'env_1', driveId: 'drive_1', name: 'dev', substrate: 'sprite', status: 'none', visibleToGlobalAssistant: false, createdAt: '2026-09-04T00:00:00.000Z' };
 
 describe('drive-env contract — the substrate axis (Local Environments epic)', () => {
   describe('driveEnvDtoSchema — the local variant exposes the server policy (what PageSpace may ask the machine to do)', () => {

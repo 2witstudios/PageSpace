@@ -14,6 +14,47 @@ import type { ExecRunner } from '../../env-bridge/exec-runner.js';
 import { machineProfileName, type HostCredential, type MachineHostCredential } from '../../credentials/serialize.js';
 import type { CredentialStore } from '../../credentials/store.js';
 import type { HandlerContext } from '../../handler-context.js';
+
+/**
+ * Wait until a pid file holds a COMPLETE pid, not merely until it exists.
+ *
+ * `/bin/sh -c 'echo $$ > file'` CREATES the file and writes to it as two
+ * separate steps, so there is a window where `existsSync` is already true and
+ * the contents are still `''`. Reading in that window yields `Number('') === 0`,
+ * the assertion fails as a bare `false !== true`, and the run reads like a Stop
+ * bug in the daemon rather than the test losing a race with the shell.
+ *
+ * Test-only: nothing in the daemon changes. The deadline is the same 5s the
+ * caller used; what changes is WHAT is waited for.
+ *
+ * Limit, stated rather than papered over: this closes the CREATE-then-WRITE
+ * window, not a torn write. A prefix of a pid (`4` of `4242`) parses as a
+ * positive integer and would be accepted. `echo $$ > file` emits the whole
+ * line in one write, so that window does not exist at this call site; if a
+ * caller ever writes a pid in pieces, this helper is not the guard for it.
+ */
+async function readPidWhenComplete(
+  pidFile: string,
+  fs: { existsSync: (p: string) => boolean; readFileSync: (p: string, e: 'utf8') => string },
+  deadlineMs = 5_000,
+): Promise<number> {
+  const deadline = Date.now() + deadlineMs;
+  let last = '<file never appeared>';
+  while (Date.now() < deadline) {
+    if (fs.existsSync(pidFile)) {
+      last = fs.readFileSync(pidFile, 'utf8');
+      const pid = Number(last.trim());
+      if (Number.isInteger(pid) && pid > 0) return pid;
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  // Name what was actually read: an empty string and a missing file are
+  // different failures, and the bare `false` this replaces distinguished
+  // neither.
+  throw new Error(
+    `pid file ${pidFile} never held a positive integer within ${deadlineMs}ms; last content read: ${JSON.stringify(last)}`,
+  );
+}
 import { parseArgv } from '../../argv/parse.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../exit-codes.js';
 
@@ -450,10 +491,7 @@ describe('pagespace env connect <enrollmentId>', () => {
       const request = grantRequestForFrame({ ...unsigned, grant: {}, sig: '' } as GrantFrame);
       const grant: Grant = { grantId: 'g_sleep', envId: 'env_1', principal: { userId: 'u1', sessionId: 's', conversationId: 'c' }, op: 'exec', argsHash: envBridgeHash(canonicalizeArgs(request.args)), iat: NOW - 1000, exp: NOW + 30_000, nonce: 'n_sleep' };
       h.socket().receive({ ...unsigned, grant: { ...grant, principal: { ...grant.principal } }, sig: Buffer.from(nodeSign(null, encodeGrant(grant), serverPair.privateKey)).toString('base64') } as unknown as Frame);
-      const deadline = Date.now() + 5_000;
-      while (!existsSync(pidFile) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
-      const pid = Number(readFileSync(pidFile, 'utf8').trim());
-      expect(Number.isInteger(pid) && pid > 0).toBe(true);
+      const pid = await readPidWhenComplete(pidFile, { existsSync, readFileSync });
       expect(() => process.kill(pid, 0)).not.toThrow();
 
       const pausedAt = NOW + 500;
@@ -585,5 +623,33 @@ describe('pagespace env connect <enrollmentId>', () => {
     expect(h.socket().headers).toEqual({ Authorization: 'Bearer tok_2' });
     h.socket().open();
     expect(h.socket().sent[0]).toContain('"type":"hello"');
+  });
+});
+
+/**
+ * The waiter above is itself the thing that broke the Unit Tests job, so it is
+ * tested against the race FORCED rather than hoped for: the stub reports the
+ * file as existing immediately and only fills it in after a delay, which is
+ * exactly what `echo $$ > file` does and exactly what a loaded CI box widens.
+ */
+describe('readPidWhenComplete (the pid file is created before it is written)', () => {
+  it('waits through the window where the file exists and is still empty', async () => {
+    let content = '';
+    setTimeout(() => { content = '4242\n'; }, 120);
+    const pid = await readPidWhenComplete('/forced/race.pid', { existsSync: () => true, readFileSync: () => content });
+    // Waiting on existence alone reads '' here and yields 0.
+    expect(pid).toBe(4242);
+  });
+
+  it('does not mistake a not-yet-created file for a pid', async () => {
+    await expect(
+      readPidWhenComplete('/forced/missing.pid', { existsSync: () => false, readFileSync: () => '' }, 60),
+    ).rejects.toThrow(/last content read: "<file never appeared>"/);
+  });
+
+  it('names the last content it read when the deadline passes, so the failure is diagnosable', async () => {
+    await expect(
+      readPidWhenComplete('/forced/empty.pid', { existsSync: () => true, readFileSync: () => '' }, 60),
+    ).rejects.toThrow(/never held a positive integer within 60ms; last content read: ""/);
   });
 });

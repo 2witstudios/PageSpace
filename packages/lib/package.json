@@ -183,6 +183,11 @@
       "import": "./dist/env-bridge/index.js",
       "require": "./dist/env-bridge/index.js"
     },
+    "./env-bridge/decide-env-reach": {
+      "types": "./dist/env-bridge/decide-env-reach.d.ts",
+      "import": "./dist/env-bridge/decide-env-reach.js",
+      "require": "./dist/env-bridge/decide-env-reach.js"
+    },
     "./env-bridge/grant": {
       "types": "./dist/env-bridge/grant.d.ts",
       "import": "./dist/env-bridge/grant.js",
@@ -1107,6 +1112,11 @@
       "types": "./dist/services/sandbox/machine-diff.d.ts",
       "import": "./dist/services/sandbox/machine-diff.js",
       "require": "./dist/services/sandbox/machine-diff.js"
+    },
+    "./services/sandbox/environment-directory": {
+      "types": "./dist/services/sandbox/environment-directory.d.ts",
+      "import": "./dist/services/sandbox/environment-directory.js",
+      "require": "./dist/services/sandbox/environment-directory.js"
     },
     "./services/sandbox/tool-runners": {
       "types": "./dist/services/sandbox/tool-runners.d.ts",

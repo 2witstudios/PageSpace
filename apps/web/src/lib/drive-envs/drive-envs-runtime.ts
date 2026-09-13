@@ -20,6 +20,8 @@ import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
+import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import {
   ensureDriveEnvSandbox,
   gateLocalEnvForRequester,
@@ -46,6 +48,7 @@ import {
   renameDriveEnv,
   setLocalEnvServerPolicy,
   setLocalEnvPaused,
+  setGlobalAssistantVisibility,
   deleteDriveEnv,
   rebuildDriveEnv,
   toDriveEnvDTO,
@@ -53,6 +56,7 @@ import {
   type RenameDriveEnvResult,
   type SetLocalEnvServerPolicyResult,
   type SetLocalEnvPausedResult,
+  type SetGlobalAssistantVisibilityResult,
   type DeleteDriveEnvResult,
   type RebuildDriveEnvResult,
 } from '@pagespace/lib/services/drive-envs/drive-envs';
@@ -167,6 +171,78 @@ export async function listOwnerMachines(ownerId: string): Promise<Array<{ env: D
   const now = Date.now();
   return rows.map(({ env, local }) => ({ env: toDriveEnvDTO(env, localFactsFor(env, local, liveConnection(env.id), now)), driveId: env.driveId }));
 }
+
+/**
+ * Every environment the GLOBAL ASSISTANT may reach for this user — the backing
+ * read for `list_environments` and for `GET /api/env-bridge/environments`
+ * (leaf B).
+ *
+ * BOTH conditions are the store's, in SQL: the caller owns the machine AND the
+ * environment is visible to the global assistant. Ownership is the real access
+ * filter and is deliberately NOT drive membership — a drive relationship is not
+ * an entitlement to every row inside it (PR #2609) — which is also why a
+ * machine in a drive the owner has since left is still listed: it is their
+ * computer.
+ */
+export async function listGlobalAssistantEnvironments(
+  userId: string,
+  /**
+   * The acting ORIGIN, threaded so discovery asks `canRunCode` the identical
+   * question resolution will. Without it an agent-origin call saw a laxer list
+   * than the next call would honour — not a hole (the stricter side is the one
+   * that authorizes) but exactly the drift this whole arrangement exists to
+   * prevent. Defaults to a user-origin view for the registration-time caller,
+   * which has no request to take an origin from.
+   */
+  origin: { requestOrigin?: 'user' | 'agent'; agentPageId?: string } = {},
+): Promise<Array<{ id: string; label: string; substrate: 'sprite' | 'local'; driveId: string }>> {
+  const { requestOrigin = 'user', agentPageId } = origin;
+  const store = await getDriveEnvStore();
+
+  // **`LOCAL_ENVS_ENABLED` gates LOCAL MACHINES ONLY**, and this is the ONE
+  // place that decides it, so discovery, resolution and the eligibility strip
+  // cannot answer differently.
+  //
+  // It is the cloud opt-in for exposing PERSONAL HARDWARE to a shared drive
+  // (invariant 11). A drive's own cloud sandbox is not personal hardware and
+  // has nothing to do with that opt-in: gating it here made the founder's
+  // ruling fail for exactly the case it exists for — a person whose own tier
+  // cannot run a personal sandbox, but who can run code in a paid team drive,
+  // got nothing, because the flag is off on every deployment.
+  const localEnvsEnabled = isLocalEnvsEnabled();
+
+  const [localRows, spriteCandidates] = await Promise.all([
+    // LOCAL machines: the owner's own, only the ones they switched on, and only
+    // while the deployment allows personal hardware at all. Not read otherwise.
+    localEnvsEnabled ? store.listVisibleToGlobalAssistantByOwner(userId) : Promise.resolve([]),
+    // CLOUD envs: CANDIDATES from the drives this person is actually in. A
+    // drive relationship is not an entitlement (PR #2609), so every one of
+    // these is still put to `canRunCode` below. Never gated on the flag.
+    store.listSpriteEnvsInUserDrives(userId),
+  ]);
+
+  // The AUTHORITY for a cloud env, asked once per DISTINCT drive — several envs
+  // in one drive are one question. `canRunCode`'s answer is used verbatim:
+  // same kill switch, same payer tier, same drive access and `canEdit` the
+  // person meets to run code there from any other surface. Founder ruling: if
+  // the user can, their global assistant can — nothing more, nothing less.
+  const decidedByDrive = new Map<string, boolean>();
+  const cloud: Array<{ id: string; label: string; substrate: 'sprite' | 'local'; driveId: string }> = [];
+  for (const env of spriteCandidates) {
+    let allowed = decidedByDrive.get(env.driveId);
+    if (allowed === undefined) {
+      allowed = (await canRunCode({ userId, driveId: env.driveId, requestOrigin, agentPageId })).ok;
+      decidedByDrive.set(env.driveId, allowed);
+    }
+    if (allowed) cloud.push({ id: env.id, label: env.name, substrate: env.substrate, driveId: env.driveId });
+  }
+
+  return [
+    ...cloud,
+    ...localRows.map(({ env, local }) => ({ id: env.id, label: local.label, substrate: env.substrate, driveId: env.driveId })),
+  ];
+}
+
 
 /** Activity across every machine a user OWNS, newest first — the account page's read. */
 export async function listOwnerActivity(input: { ownerId: string; limit?: number }): Promise<DriveEnvActivityDTO[]> {
@@ -396,6 +472,16 @@ export async function setEnvPaused(input: { envId: string; requesterId: string; 
   getEnvBridgeClient().pauseEnv(input.envId);
   const delivered = await pauseLocalEnvMachine({ envId: input.envId });
   return { ok: true, paused: true, machine: delivered.ok ? delivered.machine : { kind: 'no_live_socket' } };
+}
+
+/**
+ * Turn an environment's visibility to the GLOBAL ASSISTANT on or off — the
+ * account settings toggle and the drive settings toggle both land here. Null
+ * plumbing only: the owner-only decision is the store's compare-and-set.
+ */
+export async function setEnvGlobalAssistantVisibility(input: { envId: string; requesterId: string; visible: boolean }): Promise<SetGlobalAssistantVisibilityResult> {
+  const store = await getDriveEnvStore();
+  return setGlobalAssistantVisibility({ envId: input.envId, requesterId: input.requesterId, visible: input.visible, deps: { store, now: () => new Date() } });
 }
 
 /**
