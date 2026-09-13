@@ -52,6 +52,11 @@ export function ConsentActions(props: ConsentActionsProps) {
   // for the CLI login flow it risked the user waiting out the CLI's timeout
   // on a screen that looked like it still needed nothing from them.
   useEffect(() => {
+    // Only a consent that REQUIRES step-up can be resuming one. Where step-up
+    // is not required the server ignores the token, so honouring a fragment
+    // here would approve on page load: a crafted `#step_up_token=` link would
+    // grant an app the user's identity with no Allow click at all.
+    if (!stepUpRequired) return;
     const tokenFromEmail = readStepUpTokenFromHash(window.location.hash);
     if (!tokenFromEmail) return;
     // Effects can run twice (StrictMode); the grant is single-use, so the

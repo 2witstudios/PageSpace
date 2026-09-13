@@ -177,3 +177,32 @@ describe('ConsentActions — identity-only consent skips the ceremony (requiresS
     expect(postMock).not.toHaveBeenCalledWith('/api/oauth/authorize', expect.anything());
   });
 });
+
+// The emailed-grant auto-resume exists ONLY to finish a step-up ceremony the
+// user already started with an Allow click. On a consent that needs no
+// step-up the server ignores the token, so honouring a `#step_up_token`
+// fragment there would approve on page load — a crafted link would grant an
+// app the user's identity without the user ever clicking Allow.
+describe('ConsentActions — no auto-approval when step-up is not required', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    postMock.mockResolvedValue({ redirectUri: 'http://127.0.0.1:1/cb?code=abc' });
+  });
+
+  afterEach(() => {
+    window.history.replaceState(null, '', '/');
+  });
+
+  for (const scope of ['profile', 'profile offline_access']) {
+    it(`never approves a "${scope}" consent on load because of a step_up_token fragment`, async () => {
+      window.history.replaceState(null, '', '/oauth/consent?client_id=client-1#step_up_token=attacker-supplied');
+
+      render(<ConsentActions {...defaultProps} scope={scope} />);
+
+      // Give any mount effect a chance to fire.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(postMock).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: /^allow$/i })).not.toBeDisabled();
+    });
+  }
+});
