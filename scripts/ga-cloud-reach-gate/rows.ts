@@ -13,15 +13,25 @@
  *    assertion passes on the wrong refusal.
  *
  * Required env:
- *   GATE_BASE_URL   the running app's origin (also sent as `Origin`)
+ *   GATE_BASE_URL   the running app's origin (also sent as `Origin`). LOOPBACK ONLY —
+ *                   see `./local-origin.ts` for why the gate refuses anything else.
  *   seed JSON path  argv[2], from `seed-gate.ts`
  *
  *   GATE_BASE_URL=http://localhost:3000 bun scripts/ga-cloud-reach-gate/rows.ts seed.json
  */
 import { readFileSync } from 'node:fs';
 import { expect, failed, record, required, summarize } from '../env-bridge-exit-gate/report.ts';
+import { gateUrl, resolveLocalGateOrigin } from './local-origin.ts';
 
-const host = required('GATE_BASE_URL');
+/**
+ * LOOPBACK ONLY, decided before anything is read or sent.
+ *
+ * The seed this script loads carries real session cookies, so a mistyped
+ * `GATE_BASE_URL` would ship them off the machine. `resolveLocalGateOrigin`
+ * throws here — before `readFileSync`, before any `fetch` — and returns an
+ * origin rebuilt from literals, so the caller's string never reaches a request.
+ */
+const origin = resolveLocalGateOrigin(required('GATE_BASE_URL'));
 
 interface SeedDrive { driveId: string; envId: string; envName: string; payerId: string; payerSession?: string }
 interface Seed {
@@ -37,7 +47,7 @@ interface Seed {
 interface Answer { code: number; json: Record<string, unknown> | null; text: string }
 
 async function call(path: string, init?: RequestInit): Promise<Answer> {
-  const response = await fetch(`${host}${path}`, { redirect: 'manual', ...init });
+  const response = await fetch(gateUrl(origin, path), { redirect: 'manual', ...init });
   const text = await response.text();
   let json: Record<string, unknown> | null = null;
   try {
@@ -55,7 +65,7 @@ async function authedWrite(path: string, session: string, body: unknown, method 
   const token = typeof csrf.json?.csrfToken === 'string' ? csrf.json.csrfToken : '';
   return call(path, {
     method,
-    headers: { 'content-type': 'application/json', cookie: cookieFor(session), 'X-CSRF-Token': token, origin: host },
+    headers: { 'content-type': 'application/json', cookie: cookieFor(session), 'X-CSRF-Token': token, origin },
     body: JSON.stringify(body),
   });
 }
