@@ -205,4 +205,21 @@ describe('ConsentActions — no auto-approval when step-up is not required', () 
       expect(screen.getByRole('button', { name: /^allow$/i })).not.toBeDisabled();
     });
   }
+
+  // The positive half, so the guard above can never be "fixed" by deleting the
+  // email resume outright: a consent that DOES require step-up still finishes
+  // the emailed ceremony automatically.
+  it('still auto-resumes a step-up-REQUIRED consent (profile drive:X:member) from its emailed step_up_token', async () => {
+    window.history.replaceState(null, '', '/oauth/consent?client_id=client-1#step_up_token=ps_stepup_email');
+
+    render(<ConsentActions {...defaultProps} scope="profile drive:abc123:member" />);
+
+    await waitFor(() => {
+      expect(postMock).toHaveBeenCalledWith(
+        '/api/oauth/authorize',
+        expect.objectContaining({ action: 'approve', scope: 'profile drive:abc123:member', stepUpToken: 'ps_stepup_email' }),
+      );
+    });
+    expect(window.location.hash).not.toContain('step_up_token');
+  });
 });
