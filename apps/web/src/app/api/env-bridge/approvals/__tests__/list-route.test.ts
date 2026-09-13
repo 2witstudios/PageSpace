@@ -109,6 +109,12 @@ describe('no code path sends an approval TO the machine (GA wave 2 invariant, se
     expect(body).toMatch(/notifyMachineOfApprovalRevoke\(/);
     expect(body).not.toMatch(/sendGrant\(|signGrantFrame\(|approvalIntent|remember\(/);
     // The web dir has no other file that lists env dirs by name — a sanity check the scan above is not vacuous.
-    expect(readdirSync(path.join(WEB, 'app', 'api', 'env-bridge')).filter((name) => !name.startsWith('__')).sort()).toEqual(['activity', 'approvals', 'enroll', 'machines', 'token', 'ws'].sort());
+    //
+    // It is also a deliberate speed bump: a NEW route under `env-bridge/` has to
+    // be added here on purpose, by someone who has just read what this test is
+    // for. `environments` (the global assistant's discovery read) is a GET that
+    // lists rows the caller owns and returns no frame to any machine — the scan
+    // above is what actually enforces that, and this line is the acknowledgement.
+    expect(readdirSync(path.join(WEB, 'app', 'api', 'env-bridge')).filter((name) => !name.startsWith('__')).sort()).toEqual(['activity', 'approvals', 'enroll', 'environments', 'machines', 'token', 'ws'].sort());
   });
 });

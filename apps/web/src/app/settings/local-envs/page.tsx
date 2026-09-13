@@ -25,6 +25,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useEnvApprovals, useOwnerMachines, type OwnerMachine } from '@/hooks/drive-envs/useEnvApprovals';
 import { EnvActivityPanel } from '@/components/agents/EnvActivityPanel';
 import { EnvApprovalsList } from '@/components/settings/EnvApprovalsList';
+import { GlobalAssistantVisibilityToggle } from '@/components/settings/GlobalAssistantVisibilityToggle';
 
 function statusOf(machine: OwnerMachine): { label: string; variant: 'default' | 'secondary' | 'outline' | 'destructive' } {
   const env = machine.env;
@@ -109,6 +110,18 @@ export default function LocalEnvironmentsSettingsPage() {
                     <p className="mb-3 text-xs text-muted-foreground">
                       PageSpace may: {env.serverPolicy.ops.length === 0 ? 'nothing yet' : env.serverPolicy.ops.map((op) => ({ exec: 'run commands', fs_read: 'read files', fs_write: 'write files', pty_open: 'open a terminal' })[op]).join(', ')}
                     </p>
+                    {/* Every machine listed here is one the caller enrolled — the
+                        read selects by owner — so the toggle is always theirs. */}
+                    <div className="mb-3">
+                      <GlobalAssistantVisibilityToggle
+                        driveId={machine.driveId}
+                        envId={env.id}
+                        label={env.label}
+                        visible={env.visibleToGlobalAssistant}
+                        isOwner
+                        onChanged={machines.refetch}
+                      />
+                    </div>
                     {env.enrolled && <EnvActivityPanel driveId={machine.driveId} envId={env.id} enabled tailSize={5} scope="account" />}
                   </CardContent>
                 </Card>

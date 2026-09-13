@@ -1360,6 +1360,45 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     return <RichContentRenderer title="Bash" content={content} />;
   },
 
+  /**
+   * The environment DIRECTORY. Worth a rich renderer rather than raw JSON
+   * because this is the one place a person can see WHICH of their machines the
+   * assistant can currently reach — and, by its absence, which they have not
+   * switched on. The label is what a person recognises; the id is shown because
+   * it is what the next call will name, so a wrong one is legible here too.
+   */
+  list_environments: ({ parsedOutput }) => {
+    const environments = parsedOutput?.environments;
+    if (!Array.isArray(environments)) return null;
+    const rows = environments
+      .map((entry) => {
+        const row = entry as { id?: unknown; label?: unknown; substrate?: unknown; kind?: unknown };
+        if (typeof row.label !== 'string' || typeof row.id !== 'string') return null;
+        // User language, never the code token. The epic's naming rule is
+        // explicit: the user noun is "environment", `sprite` is an internal
+        // substrate value, and "machine" is reserved for Fly Machines — so a
+        // cloud env must never render as "staging (sprite)".
+        const where =
+          row.kind === 'conversation'
+            ? 'this conversation'
+            : row.substrate === 'local'
+              ? 'your computer'
+              : row.substrate === 'sprite'
+                ? 'cloud'
+                : '';
+        return `${row.label}${where ? ` (${where})` : ''}\n  ${row.id}`;
+      })
+      .filter((row): row is string => row !== null);
+    if (rows.length === 0) return null;
+    const notice = typeof parsedOutput?.notice === 'string' ? parsedOutput.notice : null;
+    return (
+      <RichContentRenderer
+        title={`Environments (${rows.length})`}
+        content={[rows.join('\n'), notice].filter(Boolean).join('\n\n')}
+      />
+    );
+  },
+
   find: ({ parsedInput, output }) => {
     const pattern = parsedInput?.pattern as string | undefined;
     const content = typeof output === 'string' ? output : null;

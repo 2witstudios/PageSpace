@@ -119,6 +119,7 @@ export function toDriveEnvDTO(row: DriveEnvRecord, local?: LocalEnvFacts): Drive
     id: row.id,
     driveId: row.driveId,
     name: row.name,
+    visibleToGlobalAssistant: row.visibleToGlobalAssistant,
     createdAt: row.createdAt.toISOString(),
   };
   if (row.substrate === 'local') {
@@ -776,6 +777,61 @@ export async function setLocalEnvPaused({
 }): Promise<SetLocalEnvPausedResult> {
   const written = await deps.store.setPaused({ envId, ownerId: requesterId, paused, now: deps.now() });
   if (written) return { ok: true, paused };
+  const row = await deps.store.findLocalByEnvId(envId);
+  if (!row) return { ok: false, reason: 'not_found' };
+  if (row.revokedAt !== null) return { ok: false, reason: 'revoked' };
+  if (row.ownerId !== requesterId) return { ok: false, reason: 'not_owner', ownerId: row.ownerId };
+  return { ok: false, reason: 'not_found' };
+}
+
+// ---------------------------------------------------------------------------
+// Global-assistant visibility — owner-only, D-6; default OFF
+// ---------------------------------------------------------------------------
+
+export interface SetGlobalAssistantVisibilityDeps {
+  store: Pick<DriveEnvStore, 'setGlobalAssistantVisibility' | 'findLocalByEnvId'>;
+  now: () => Date;
+}
+
+export type SetGlobalAssistantVisibilityResult =
+  | { ok: true; visibleToGlobalAssistant: boolean }
+  | { ok: false; reason: 'not_found' }
+  | { ok: false; reason: 'not_owner'; ownerId: string }
+  | { ok: false; reason: 'revoked' };
+
+/**
+ * Turn this environment's visibility to the GLOBAL ASSISTANT on or off.
+ *
+ * The global assistant is the one agent whose context spans every drive a
+ * person belongs to, so what it may reach is a deliberate choice rather than a
+ * consequence of ownership. The column defaults to `false` and the absence of
+ * a value is never a grant.
+ *
+ * **Visibility is not a grant of authority.** Turning it on changes nothing
+ * about WHO may drive the machine: binding is still the enrolling user's alone
+ * ([D-6], `decideBind`'s `bind_policy`), and this function cannot widen that by
+ * one user. It decides only what the assistant can SEE, and therefore address.
+ *
+ * **Owner-only, by the row, not by a role** — the same shape as
+ * `setLocalEnvPaused` and `setLocalEnvServerPolicy`: the security claim is the
+ * store's compare-and-set (`drive_env_local.ownerId`, not revoked), and the
+ * read below runs only AFTER a lost CAS, only to choose the honest typed
+ * answer.
+ */
+export async function setGlobalAssistantVisibility({
+  envId,
+  requesterId,
+  visible,
+  deps,
+}: {
+  envId: string;
+  /** The acting user — compared against the row's OWNER, never against a drive role. */
+  requesterId: string;
+  visible: boolean;
+  deps: SetGlobalAssistantVisibilityDeps;
+}): Promise<SetGlobalAssistantVisibilityResult> {
+  const written = await deps.store.setGlobalAssistantVisibility({ envId, ownerId: requesterId, visible, now: deps.now() });
+  if (written) return { ok: true, visibleToGlobalAssistant: visible };
   const row = await deps.store.findLocalByEnvId(envId);
   if (!row) return { ok: false, reason: 'not_found' };
   if (row.revokedAt !== null) return { ok: false, reason: 'revoked' };

@@ -7,6 +7,36 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Your assistant on the dashboard can now work in your cloud environments — any of them you
+  could already use.** The assistant you talk to from the dashboard used to be stuck with one
+  sandbox of its own. It can now list and work in the shared cloud environments of every drive
+  where you can run code. **There is nothing to turn on:** the permission you already hold in
+  that drive is the permission it uses, so if you can run code there, so can it, and if you are
+  a viewer, it is refused exactly as you are. Lose edit access mid-conversation and the very
+  next thing it tries is refused. Every result tells you which environment it ran in, by name.
+  Worth knowing, because it is a real change in shape rather than in permissions: this is one
+  conversation that can reach all of those environments in turn, and it is the assistant that
+  reads the most of other people's writing. It can do nothing in any drive that you could not
+  already do there yourself.
+
+- **Local Environments: your assistant on the dashboard can work on a machine you switch on for
+  it — and it is off for every machine until you do (opt-in).** The assistant you talk to from
+  the dashboard works across every drive you belong to, and until now it could only ever touch
+  one cloud sandbox of its own. Now it can also work on a computer you enrolled, once you switch
+  that computer on for it. **You have to turn it on, per machine:** open **Settings → Local
+  environments** and use *Let your global assistant use this machine*. Every machine starts off,
+  and an environment with the switch off is invisible to that assistant — it cannot list it,
+  cannot name it, and cannot run anything on it. Switch it off again mid-conversation and the
+  very next thing it tries is refused; it does not ride an earlier reach.
+  When it does run something, the result tells you which machine, by the name you gave it, so a
+  wrong one shows up immediately instead of only in a log.
+  One thing this does **not** do, deliberately: it does not widen who may drive the machine —
+  that is still only you, and a command or a write that could become one still waits for your
+  passkey-verified click on that computer. Your own computer is the one place that needs a
+  switch at all, and the reason is worth saying plainly: a cloud environment is your team's and
+  your drive permissions already govern it, whereas your laptop is yours, so reaching it should
+  be a decision you made rather than a consequence of having enrolled it.
+
 - **Local Environments: a file write that could become a command now asks you first (opt-in).**
   Writing files inside the folders you declared runs without a prompt, because that is the point
   of declaring them. But a file's contents can be a command something else runs later: a

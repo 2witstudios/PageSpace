@@ -60,6 +60,12 @@ export interface DriveEnvRecord {
   name: string;
   /** AUDIT ONLY: who asked for this env. Nothing resolves payment, permission or lifecycle through it. */
   createdBy: string | null;
+  /**
+   * May the global assistant reach this env? Default false; absence is never a
+   * grant. See the `drive_envs` column docblock for why the flag lives on the
+   * substrate-independent table.
+   */
+  visibleToGlobalAssistant: boolean;
 
   spriteKey: string | null;
   sandboxId: string | null;
@@ -224,6 +230,37 @@ export interface DriveEnvStore {
   /** Every machine a user OWNS, across drives, with its env row — the account page's read (GA wave 3). Owner, never requester. */
   listLocalByOwner(ownerId: string): Promise<Array<{ env: DriveEnvRecord; local: DriveEnvLocalRecord }>>;
   /**
+   * Every environment the GLOBAL ASSISTANT may reach for this user — the
+   * discovery read behind `list_environments` (leaf B).
+   *
+   * TWO conditions in SQL, not one: the caller OWNS the machine
+   * (`drive_env_local.ownerId`) AND the environment is visible to the global
+   * assistant (`drive_envs.visibleToGlobalAssistant`). Ownership is the real
+   * access filter — deliberately NOT drive membership, which is a relationship
+   * and not an entitlement to every row inside it (the trap PR #2609 hit).
+   * That is also why a machine in a drive the owner has since LEFT still
+   * appears: it is their computer.
+   *
+   * A REVOKED machine is excluded: it can never take a grant again, so listing
+   * it would offer the model an id that is guaranteed to refuse.
+   */
+  listVisibleToGlobalAssistantByOwner(ownerId: string): Promise<Array<{ env: DriveEnvRecord; local: DriveEnvLocalRecord }>>;
+  /**
+   * CANDIDATE cloud (Sprite) environments for the global assistant: every
+   * Sprite env in a drive this user OWNS or is an ACCEPTED member of.
+   *
+   * **Candidates, not an authorization answer.** The drive relationship is what
+   * makes a row worth asking about; whether the person may actually run there
+   * is `canRunCode`'s to say, per drive, and the caller asks it. Splitting it
+   * this way is deliberate — a drive relationship is not an entitlement (the
+   * trap PR #2609 hit), and `canRunCode` additionally weighs the kill switch,
+   * the payer's tier and `canEdit`, none of which SQL should be reimplementing.
+   *
+   * Unaccepted invitations are excluded (`acceptedAt IS NOT NULL`): an invite
+   * nobody took up is not a drive you are in.
+   */
+  listSpriteEnvsInUserDrives(userId: string): Promise<DriveEnvRecord[]>;
+  /**
    * Enroll: pin the machine key and consume the code, IFF the row is pending
    * (`enrolledAt IS NULL AND enrollmentCodeUsedAt IS NULL AND revokedAt IS
    * NULL`) AND the stored code hash is still the one the caller VERIFIED
@@ -292,6 +329,17 @@ export interface DriveEnvStore {
    * the row is in the requested state. False = not written.
    */
   setPaused(input: { envId: string; ownerId: string; paused: boolean; now: Date }): Promise<boolean>;
+  /**
+   * Set `drive_envs.visibleToGlobalAssistant` IFF the caller OWNS the local
+   * machine behind this env and it is not revoked — ONE guarded `UPDATE`,
+   * exactly as `setPaused` and `setServerPolicy` are, so ownership is the
+   * write's own predicate rather than a pre-read a caller could skip.
+   *
+   * The predicate reaches ACROSS the two tables on purpose: the column lives
+   * on `drive_envs` (one question, both substrates) while the owner lives on
+   * `drive_env_local` ([D-6] — never a drive role). False = not written.
+   */
+  setGlobalAssistantVisibility(input: { envId: string; ownerId: string; visible: boolean; now: Date }): Promise<boolean>;
   /**
    * Revoke: stamp `revokedAt` IFF `revokedAt IS NULL` (Codex C4). False means
    * it was already revoked — the caller still completes the other two legs
@@ -630,6 +678,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     { agentWorkspaces },
     { drives },
     { machineSpriteReclaims },
+    { driveMembers },
   ] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
@@ -638,6 +687,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     import('@pagespace/db/schema/agent-workspaces'),
     import('@pagespace/db/schema/core'),
     import('@pagespace/db/schema/machine-sprite-reclaims'),
+    import('@pagespace/db/schema/members'),
   ]);
 
   /** A sibling row joined with its env's drive (the record carries `driveId` for the listing join). */
@@ -722,6 +772,41 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
         .from(driveEnvLocal)
         .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId))
         .where(eq(driveEnvLocal.ownerId, ownerId))
+        .orderBy(asc(driveEnvs.createdAt))
+        .limit(MAX_DRIVE_ENVS_LISTED);
+      return rows.map((row) => ({ env: row.env as DriveEnvRecord, local: row.local as DriveEnvLocalRecord }));
+    },
+
+    async listSpriteEnvsInUserDrives(userId) {
+      // Bounded like every other read here (the findMany-limit rule): a
+      // person's reachable cloud envs are small by construction, but the limit
+      // is a property of the query rather than of today's constants.
+      const rows = await db
+        .select({ env: driveEnvs })
+        .from(driveEnvs)
+        .innerJoin(drives, eq(drives.id, driveEnvs.driveId))
+        .leftJoin(
+          driveMembers,
+          and(eq(driveMembers.driveId, driveEnvs.driveId), eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)),
+        )
+        .where(
+          and(
+            eq(driveEnvs.substrate, 'sprite'),
+            // Owner OR accepted member. Nothing else is a drive you are in.
+            or(eq(drives.ownerId, userId), isNotNull(driveMembers.userId)),
+          ),
+        )
+        .orderBy(asc(driveEnvs.createdAt))
+        .limit(MAX_DRIVE_ENVS_LISTED);
+      return rows.map((row) => row.env as DriveEnvRecord);
+    },
+
+    async listVisibleToGlobalAssistantByOwner(ownerId) {
+      const rows = await db
+        .select({ env: driveEnvs, local: localSelection })
+        .from(driveEnvLocal)
+        .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId))
+        .where(and(eq(driveEnvLocal.ownerId, ownerId), isNull(driveEnvLocal.revokedAt), eq(driveEnvs.visibleToGlobalAssistant, true)))
         .orderBy(asc(driveEnvs.createdAt))
         .limit(MAX_DRIVE_ENVS_LISTED);
       return rows.map((row) => ({ env: row.env as DriveEnvRecord, local: row.local as DriveEnvLocalRecord }));
@@ -830,6 +915,23 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
         .set({ revokedAt: at, updatedAt: at })
         .where(and(eq(driveEnvLocal.envId, envId), isNull(driveEnvLocal.revokedAt)))
         .returning({ envId: driveEnvLocal.envId });
+      return updated.length === 1;
+    },
+
+    async setGlobalAssistantVisibility({ envId, ownerId, visible, now: at }) {
+      // The owner predicate is a correlated EXISTS on the sibling, so the
+      // write is still ONE statement: a non-owner (a drive admin included)
+      // matches no row and changes nothing.
+      const updated = await db
+        .update(driveEnvs)
+        .set({ visibleToGlobalAssistant: visible, updatedAt: at })
+        .where(
+          and(
+            eq(driveEnvs.id, envId),
+            sql`EXISTS (SELECT 1 FROM ${driveEnvLocal} WHERE ${driveEnvLocal.envId} = ${driveEnvs.id} AND ${driveEnvLocal.ownerId} = ${ownerId} AND ${driveEnvLocal.revokedAt} IS NULL)`,
+          ),
+        )
+        .returning({ id: driveEnvs.id });
       return updated.length === 1;
     },
 

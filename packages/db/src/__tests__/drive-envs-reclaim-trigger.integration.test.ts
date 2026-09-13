@@ -95,7 +95,7 @@ describe('drive_envs sprite reclaim trigger — live', () => {
    * constraint was scanned; a regex over the SQL file proves the file says a
    * word, and would keep passing if the statements were reordered.
    */
-  it('should ship the populated-table CHECKs NOT VALID and the new-table CHECK VALID', async () => {
+  it('should ship the populated-table CHECK NOT VALID — and should no longer carry the env-needs-drive CHECK at all', async () => {
     const { rows } = await client.query<{ conname: string; convalidated: boolean }>(
       `SELECT conname, convalidated FROM pg_constraint
         WHERE conname IN (
@@ -105,15 +105,19 @@ describe('drive_envs sprite reclaim trigger — live', () => {
         ORDER BY conname`,
     );
     const validated = new Map(rows.map((r) => [r.conname, r.convalidated]));
-    expect([...validated.keys()].sort()).toEqual([
-      'agent_workspaces_env_needs_drive_check',
-      'agent_workspaces_env_no_sprite_check',
-    ]);
+    // `agent_workspaces_env_needs_drive_check` was DROPPED in migration 0296 so
+    // a driveless global-assistant session can bind the user's OWN machine,
+    // where [D-6]'s owner-only bind gate is the real ownership check. Asserted
+    // as an ABSENCE against the live catalogue, because that is the only place
+    // a dropped constraint can be observed — the schema file no longer mentions
+    // it. The SPRITE half of the guarantee it used to carry did not go with it:
+    // `spawnAgentSession` still refuses an env whose drive is not the session's,
+    // and its own suite pins that negative.
+    expect([...validated.keys()]).toEqual(['agent_workspaces_env_no_sprite_check']);
     // `agent_workspaces` is populated — stage 2 (`VALIDATE CONSTRAINT`) is a
-    // separate release. If either of these flips to true inside THIS release,
-    // the two-stage rule was broken.
+    // separate release. If this flips to true inside THIS release, the
+    // two-stage rule was broken.
     expect(validated.get('agent_workspaces_env_no_sprite_check')).toBe(false);
-    expect(validated.get('agent_workspaces_env_needs_drive_check')).toBe(false);
   });
 
   it('given an env with a live Sprite pointer, should MOVE it into the outbox when the drive cascade deletes it', async () => {
@@ -387,7 +391,7 @@ describe('drive_envs CHECK constraints — live', () => {
     }
   });
 
-  it('given an env is drive-owned, should REFUSE a env-bound session with no drive', async () => {
+  it('given a DRIVELESS session bound to an env, should ACCEPT it — the CHECK is gone, and the guarantee moved to spawnAgentSession', async () => {
     const suffix = uniqueSuffix('wsdrv');
     const envId = `b-${suffix}`;
     const { userId, driveId } = await seedDrive(suffix);
@@ -398,17 +402,27 @@ describe('drive_envs CHECK constraints — live', () => {
         [envId, driveId],
       );
 
-      // `driveId` is nullable for global-assistant sessions, but an env is
-      // drive-owned, drive-paid and drive-shared: a user-scoped session
-      // borrowing a drive's machine has no coherent access or billing answer,
-      // and `decideAgentSessionAccess` reads `driveId` alone.
-      await expect(
-        client.query(
-          `INSERT INTO agent_workspaces (id, "ownerId", "envId", "updatedAt")
-           VALUES ($1, $2, $3, (now() at time zone 'utc'))`,
-          [`ws-${suffix}`, userId, envId],
-        ),
-      ).rejects.toThrow(/agent_workspaces_env_needs_drive_check/);
+      // This used to be refused by `agent_workspaces_env_needs_drive_check`.
+      // That CHECK was right about a SPRITE env — drive-owned, drive-paid, with
+      // no owner of its own — and wrong about a LOCAL one, where [D-6] already
+      // makes binding structurally owner-only, and it could not tell them
+      // apart. Dropped in 0296; the database no longer forbids the SHAPE.
+      //
+      // The guarantee lives in `spawnAgentSession` now, as two branches: a
+      // local env goes through the owner-only `gateLocalEnvBind`, and every
+      // other substrate must still satisfy `env.driveId === driveId` — so a
+      // driveless session is still refused a SPRITE env, which is what this row
+      // used to be protecting and what that service's own matrix pins directly.
+      await client.query(
+        `INSERT INTO agent_workspaces (id, "ownerId", "envId", "updatedAt")
+         VALUES ($1, $2, $3, (now() at time zone 'utc'))`,
+        [`ws-${suffix}`, userId, envId],
+      );
+      const bound = await client.query<{ driveId: string | null; envId: string }>(
+        `SELECT "driveId", "envId" FROM agent_workspaces WHERE id = $1`,
+        [`ws-${suffix}`],
+      );
+      expect(bound.rows[0]).toEqual({ driveId: null, envId });
 
       // A driveless session with NO env is still fine — that is the global
       // assistant, and this constraint must not have broken it.

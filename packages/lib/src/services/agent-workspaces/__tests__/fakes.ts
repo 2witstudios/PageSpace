@@ -99,6 +99,16 @@ export function makeAgentSessionStore(
       return rows.get(workspaceId) ?? null;
     },
 
+    async findActiveByOwnerAndEnv({ ownerId, envId }) {
+      // The real store's predicate, verbatim: owner AND env AND not ended,
+      // newest first.
+      const matches = [...rows.values()].filter(
+        (row) => row.ownerId === ownerId && row.envId === envId && row.endedAt === null,
+      );
+      matches.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      return matches[0] ?? null;
+    },
+
     async create(input) {
       calls.create += 1;
       minted += 1;

@@ -29,6 +29,8 @@ export function makeEnvRecord(over: Partial<DriveEnvRecord> = {}): DriveEnvRecor
     driveId: DRIVE_ID,
     name: 'staging',
     createdBy: 'user-1',
+    // Default OFF — the absence of a value is never a grant (leaf A).
+    visibleToGlobalAssistant: false,
     spriteKey: null,
     sandboxId: null,
     spriteInstanceId: null,
@@ -93,6 +95,16 @@ export interface FakeDriveEnvStore {
   /** payerId → envs owned across their drives, the quota's input. */
   ownedEnvs: Map<string, number>;
   calls: { deleteIfUnoccupied: number; requestTeardown: number; stampSpriteTornDown: number };
+}
+
+/** Which drives a user owns or has accepted membership of — the fake's stand-in for the members join. */
+const driveMemberships = new Map<string, Set<string>>();
+
+/** Declare a user as a member of a drive, for `listSpriteEnvsInUserDrives`. */
+export function grantDriveMembership(userId: string, driveId: string): void {
+  const drives = driveMemberships.get(userId) ?? new Set<string>();
+  drives.add(driveId);
+  driveMemberships.set(userId, drives);
 }
 
 export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date = () => NOW): FakeDriveEnvStore {
@@ -233,6 +245,39 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       if (!sibling || sibling.ownerId !== ownerId || sibling.revokedAt !== null) return false;
       if (paused && sibling.pausedAt !== null) return true;
       local.set(envId, { ...sibling, pausedAt: paused ? at : null, updatedAt: at });
+      return true;
+    },
+
+    async listSpriteEnvsInUserDrives(userId) {
+      // The real store's predicate, modelled: Sprite substrate, in a drive the
+      // user owns or has ACCEPTED membership of. The fake has no membership
+      // table, so `driveMemberships` is the seam the tests drive it through.
+      return [...rows.values()].filter(
+        (row) => row.substrate === 'sprite' && (driveMemberships.get(userId)?.has(row.driveId) ?? false),
+      );
+    },
+
+    async listVisibleToGlobalAssistantByOwner(ownerId) {
+      // The real store's predicate, verbatim: the caller OWNS the machine, it
+      // is not revoked, AND the env is visible to the global assistant.
+      const out: Array<{ env: DriveEnvRecord; local: DriveEnvLocalRecord }> = [];
+      for (const sibling of local.values()) {
+        const row = rows.get(sibling.envId);
+        if (!row) continue;
+        if (sibling.ownerId !== ownerId || sibling.revokedAt !== null || !row.visibleToGlobalAssistant) continue;
+        out.push({ env: row, local: sibling });
+      }
+      return out;
+    },
+
+    async setGlobalAssistantVisibility({ envId, ownerId, visible, now: at }) {
+      // The real store's CAS predicate, verbatim: the env exists, the SIBLING's
+      // owner is the caller, and it is not revoked. The column lives on the env
+      // row; the owner lives on the sibling.
+      const row = rows.get(envId);
+      const sibling = local.get(envId);
+      if (!row || !sibling || sibling.ownerId !== ownerId || sibling.revokedAt !== null) return false;
+      rows.set(envId, { ...row, visibleToGlobalAssistant: visible, updatedAt: at });
       return true;
     },
 

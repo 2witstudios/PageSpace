@@ -32,8 +32,8 @@ import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
 
 const OWNER = 'user-owner';
 const ADMIN = 'user-admin';
-const mac: Extract<DriveEnvDTO, { substrate: 'local' }> = { id: 'env-mac', driveId: 'drive-1', name: 'mac', substrate: 'local', status: 'connected', label: 'jono-macstudio', enrolled: true, serverPolicy: { ops: ['fs_read'], checkpoint: false }, ownerId: OWNER, capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, paused: false, createdAt: '2026-09-01T00:00:00.000Z' };
-const cloud: DriveEnvDTO = { id: 'env-cloud', driveId: 'drive-1', name: 'staging', substrate: 'sprite', status: 'running', createdAt: '2026-09-01T00:00:00.000Z' };
+const mac: Extract<DriveEnvDTO, { substrate: 'local' }> = { id: 'env-mac', driveId: 'drive-1', name: 'mac', substrate: 'local', status: 'connected', label: 'jono-macstudio', enrolled: true, serverPolicy: { ops: ['fs_read'], checkpoint: false }, ownerId: OWNER, capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, paused: false, visibleToGlobalAssistant: false, createdAt: '2026-09-01T00:00:00.000Z' };
+const cloud: DriveEnvDTO = { id: 'env-cloud', driveId: 'drive-1', name: 'staging', substrate: 'sprite', status: 'running', visibleToGlobalAssistant: false, createdAt: '2026-09-01T00:00:00.000Z' };
 const mutate = vi.fn();
 
 function feed(envs: DriveEnvDTO[]) {

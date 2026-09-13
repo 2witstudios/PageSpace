@@ -2066,6 +2066,20 @@
       "when": 1789211980065,
       "tag": "0294_secret_moira_mactaggert",
       "breakpoints": true
+    },
+    {
+      "idx": 295,
+      "version": "7",
+      "when": 1789212685644,
+      "tag": "0295_medical_beast",
+      "breakpoints": true
+    },
+    {
+      "idx": 296,
+      "version": "7",
+      "when": 1789215145717,
+      "tag": "0296_aspiring_chimera",
+      "breakpoints": true
     }
   ]
 }

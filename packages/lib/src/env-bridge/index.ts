@@ -21,6 +21,7 @@ export * from './frame-codec';
 export * from './bridge-session';
 export * from './resolve-timeout';
 export * from './decide-bind';
+export * from './decide-env-reach';
 export * from './decide-sign';
 export * from './plan-local-provision';
 export * from './enrollment';

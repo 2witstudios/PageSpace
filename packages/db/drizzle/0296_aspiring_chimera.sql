@@ -1,0 +1,1 @@
+ALTER TABLE "agent_workspaces" DROP CONSTRAINT "agent_workspaces_env_needs_drive_check";

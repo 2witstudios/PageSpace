@@ -180,7 +180,7 @@ describe('listDriveEnvs / the DTO', () => {
 
     it('given a local row WITH its drive_env_local facts, should project substrate local, the machine label, and the CONNECTION status — never a Sprite status', () => {
       const dto = toDriveEnvDTO(makeEnvRecord({ substrate: 'local' }), { label: 'jono-macstudio', status: 'connected', enrolled: true, serverPolicy: { ops: ['fs_read'], checkpoint: false }, ownerId: 'user-1', capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, paused: false });
-      expect(dto).toEqual({ id: ENV_ID, driveId: DRIVE_ID, name: 'staging', substrate: 'local', status: 'connected', label: 'jono-macstudio', enrolled: true, serverPolicy: { ops: ['fs_read'], checkpoint: false }, ownerId: 'user-1', capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, paused: false, createdAt: NOW.toISOString() });
+      expect(dto).toEqual({ id: ENV_ID, driveId: DRIVE_ID, name: 'staging', substrate: 'local', status: 'connected', label: 'jono-macstudio', enrolled: true, serverPolicy: { ops: ['fs_read'], checkpoint: false }, ownerId: 'user-1', capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, paused: false, visibleToGlobalAssistant: false, createdAt: NOW.toISOString() });
       expect(driveEnvDtoSchema.safeParse(dto).success).toBe(true);
     });
 

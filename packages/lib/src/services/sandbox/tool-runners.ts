@@ -54,6 +54,40 @@ import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
 export const MAX_WRITE_BYTES = 1024 * 1024;
 
 /** Everything the runners need about the actor + AI attribution for a turn. */
+/**
+ * The RESOLVED target of one code-execution call (leaf C/D).
+ *
+ * Every execution tool takes a mandatory, opaque `environmentId` and the server
+ * resolves it — existence, access and visibility — into this. It is the
+ * SERVER's record of where the call goes, never the model's input echoed back:
+ * `label` in particular is read from the row, so a result that names where it
+ * ran cannot be steered by what the model said.
+ */
+export interface SandboxEnvironmentTarget {
+  /** The opaque id the call named, as resolved. */
+  readonly id: string;
+  /**
+   * `conversation` = this conversation's own sandbox, addressed by the
+   * conversation's own id; `environment` = a persistent environment
+   * (`drive_envs.id`).
+   */
+  readonly kind: 'conversation' | 'environment';
+  /** The label as the SERVER holds it — what a result names. Never echoed from the model's input. */
+  readonly label: string;
+  /** The owning drive; `null` for a global-assistant conversation's own sandbox. */
+  readonly driveId: string | null;
+  /**
+   * What runs it. Absent for the conversation's own sandbox, which is not a
+   * persistent environment at all.
+   *
+   * Carried because the SESSION SHAPE follows it: a cloud env's session is
+   * bound to that env's drive, a local machine's is driveless. The resolver
+   * already knows the substrate, so the router does not have to read the row a
+   * second time to find out.
+   */
+  readonly substrate?: 'sprite' | 'local';
+}
+
 export interface SandboxActorContext {
   userId: string;
   tenantId: string;
@@ -92,6 +126,23 @@ export interface SandboxActorContext {
    * for that call rather than guessed at.
    */
   turnId?: string;
+  /**
+   * WHERE this call runs, resolved by the server from the mandatory
+   * `environmentId` (leaf C). Optional on the TYPE only because the chat-context
+   * resolver builds the actor half before any target is known; the tool factory
+   * always sets it before a runner sees the context, and `acquireSandbox` fails
+   * CLOSED when it is absent rather than falling back to the conversation's own
+   * sandbox — omission must never be a silent default, at any layer.
+   */
+  environment?: SandboxEnvironmentTarget;
+  /**
+   * WHICH KIND of conversation this call came from — `'global'` only for the
+   * dashboard assistant. Fails CLOSED: absent reads as `'page'`, because the
+   * only thing it gates is reaching a PERSISTENT environment, and a surface
+   * that did not say what it is has not established that it is the one agent
+   * the owner switched their machine on for.
+   */
+  conversationKind?: 'global' | 'page';
 }
 
 export interface SandboxQuotaDeps {
@@ -220,6 +271,12 @@ export interface AcquireSandboxRequest {
    * id, never off this one.
    */
   conversationId?: string;
+  /**
+   * The resolved target for this call. Absent is a FAULT, not a default: an
+   * implementation must refuse rather than pick the conversation's own sandbox
+   * (leaf C — omission is never a silent fallback).
+   */
+  environment?: SandboxEnvironmentTarget;
 }
 
 export type SandboxAcquireResult =
@@ -444,6 +501,45 @@ export type SandboxToolDenialReason =
   | 'local_approval_required'
   | 'error';
 
+/**
+ * The environment a code-execution result actually happened in (leaf E).
+ *
+ * With a mandatory id the remaining failure mode is copying a REAL id for the
+ * WRONG environment — a call that succeeds, somewhere nobody meant. Naming the
+ * target on every result puts it in the model's context each turn and makes a
+ * wrong one visible to the person immediately, rather than only to whoever
+ * opens the audit log afterwards.
+ *
+ * **Both fields come from the SERVER's record**, via the resolved
+ * `SandboxEnvironmentTarget` — never echoed from the tool's input. If they were
+ * echoed, a mis-addressed call would confirm the address the model already
+ * believed, which is the opposite of what this is for.
+ *
+ * It RECORDS nothing new: `drive_env_grant_audit` already carries `envId` for
+ * every grant, and `id` here is that same environment id. This surfaces what is
+ * recorded.
+ */
+export interface SandboxResultEnvironment {
+  /** The environment id — the same id `drive_env_grant_audit.envId` carries. */
+  readonly id: string;
+  /** The human label, for speaking to the person. Read from the row. */
+  readonly label: string;
+}
+
+/**
+ * Stamp the environment onto a tool result — success or refusal alike, which is
+ * the point of doing it in ONE place at the tool boundary rather than at each
+ * of the several dozen sites that build a result. A refusal that does not name
+ * the environment reads as a broken tool; one that does reads as a wrong
+ * target, which is the thing the person can actually act on.
+ */
+export function nameEnvironmentOnResult<T extends object>(
+  target: SandboxEnvironmentTarget,
+  result: T,
+): T & { environment: SandboxResultEnvironment } {
+  return { ...result, environment: { id: target.id, label: target.label } };
+}
+
 /** A failure that carries the daemon's challenge id (only `local_approval_required` does). */
 export type SandboxToolFailure = { success: false; error: string; reason: SandboxToolDenialReason; challengeId?: string };
 
@@ -619,6 +715,7 @@ function acquireRequest(ctx: SandboxActorContext): AcquireSandboxRequest {
     requestOrigin: ctx.requestOrigin,
     agentPageId: ctx.agentPageId,
     conversationId: ctx.conversationId,
+    environment: ctx.environment,
   };
 }
 

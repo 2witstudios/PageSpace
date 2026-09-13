@@ -207,6 +207,13 @@ designed.
 | The exec-allowlisted warning ([D-7]) | `packages/lib/src/env-bridge/policy-warnings.ts` (`exec_allowlisted`), printed by `env connect` (and audited there as `policy_warning:exec_allowlisted`) and by `env policy` | **Yes, for `allowlist` mode.** See R-11: the warning fires on `mode === 'allowlist' && ops.includes('exec')`, but `decideExecution` treats `exec` in `ops` as pre-approved **in `ask` mode too** (`decide-execution.ts`, `preapproved`), and that combination is not warned about. |
 | The home-root warning | `packages/lib/src/env-bridge/policy-warnings.ts` (`root_is_home`), printed by `pagespace env enroll` (while the owner is at the keyboard), `env connect` and `env policy`, and audited at connect as `policy_warning:root_is_home` | **Loud, never refusing** — the same [D-7] principle. `enroll` scaffolds `roots: [cwd]` and `policy-types.ts` refuses only `/` and `..`, so enrolling from `$HOME` silently scopes an agent to `~/.ssh`, the shell rc files and every project at once, with no click (file ops are Tier A). `connect` now audits every warning CODE rather than special-casing one. |
 | Effective-capability display (`intersectCapabilities`) | `packages/lib/src/env-bridge/intersect-capabilities.ts`, shown on the drive settings Environments page | **Informational, never load-bearing.** The enforcing three-way check runs inline in `decideExecution`; this is the display of it, and the page states the machine's own policy file as unknown to the server. |
+| A CLOUD env reaches by `canRunCode` PARITY | `packages/lib/src/env-bridge/decide-env-reach.ts` (the `substrate === 'sprite'` arm, keyed on the injected `mayRunCodeInEnvDrive`); computed by `apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts` calling `canRunCode({ userId, driveId: env.driveId })`, and applied per DISTINCT drive in the discovery read (`apps/web/src/lib/drive-envs/drive-envs-runtime.ts`) | **Yes, and it is `canRunCode` VERBATIM — never re-derived.** The drive permission is the visibility: there is no per-env opt-in for a cloud env because there is no owner to give one. Re-checked on EVERY call, so losing drive edit access, or the kill switch going off, refuses the next call even with a session already held. A drift-guard test asserts the reach verdict never diverges from the in-drive code-exec verdict, in either direction. The candidate SQL narrows to drives the person owns or has ACCEPTED membership of, and that relationship is a candidate filter, never the authorization answer (the trap PR #2609 hit). |
+| Visibility to the global assistant — a LOCAL-machine opt-in | `drive_envs.visibleToGlobalAssistant` (NOT NULL, DEFAULT false; `packages/db/src/schema/drive-envs.ts`); written only by the env OWNER through `PATCH .../envs/[envId] { visibleToGlobalAssistant }` (`apps/web/src/app/api/drives/[driveId]/envs/[envId]/route.ts` → `setGlobalAssistantVisibility`, a compare-and-set whose owner predicate is a correlated EXISTS on `drive_env_local.ownerId`); decided by the pure `packages/lib/src/env-bridge/decide-env-reach.ts` | **Yes, and default OFF.** The absence of a value is never a grant. It is VISIBILITY, never authority: turning it on cannot widen who may drive the machine by one user — that is still `decideBind`'s owner-only `bind_policy` ([D-6]). It is re-read on EVERY call, not remembered from a bind, so switching it off refuses the next call rather than honouring an earlier reach. A Sprite env has no enrolling owner, so no surface can set it true for one — see the section below. |
+| Drive agreement on an env-bound session — **now two code branches, not a database CHECK** | `packages/lib/src/services/agent-workspaces/agent-workspaces.ts` (`spawnAgentSession`): `substrate === 'local'` → `gateLocalEnvBind` (owner-only, [D-6]); every OTHER substrate → `env.driveId === driveId`, unchanged. The database constraint `agent_workspaces_env_needs_drive_check` is **DROPPED** (migration `packages/db/drizzle/0296_aspiring_chimera.sql`); `packages/db/src/schema/agent-workspaces.ts` carries the argument where it used to sit | **Yes — and this row exists because the guarantee MOVED.** It used to be a database CHECK (`envId IS NULL OR driveId IS NOT NULL`), which is the kind of thing that cannot be got wrong; it is now two branches in one function, which can. That trade is deliberate and is the only way to express the distinction the CHECK could not — see the prose below and R-18. The SPRITE half is not weakened: a driveless session is still refused a Sprite env, and the service's matrix pins that negative directly rather than inferring it. The LOCAL half rests entirely on `decideBind`'s owner-only `bind_policy`, which is why the same matrix pins a non-owner refusal with AND without a drive. |
+| Only the GLOBAL assistant reaches a persistent environment | `packages/lib/src/env-bridge/decide-env-reach.ts` (`conversationMayReachPersistentEnvironments`, and `not_global` first in `ENV_REACH_DENY_ORDER`); `conversationKind` on `SandboxActorContext`, resolved from the chat source in `apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts` | **Yes, and it fails CLOSED** — only an explicit `'global'` chat source is global; anything else, including a surface that did not say what it is, reads as `'page'`. The promise the product makes is specifically about the dashboard assistant (the column, the settings toggle and the changelog all say so), and nothing enforced it before: the tool registry is built ONCE per process and shared by every turn, so no tool object can tell a dashboard turn from a page turn. The rule lives in the pure decision because there are TWO call sites — discovery and resolution — which must not drift. A page conversation still reaches its own sandbox; this narrows persistent environments, not code execution. |
+| Mandatory, opaque environment id on every code-execution tool | `apps/web/src/lib/ai/tools/sandbox-tools.ts` (`environmentId` required on `bash`, `writeFile`, `readFile`, `editFile`); the shape at the zod boundary in `packages/lib/src/services/sandbox/environment-directory.ts` (`environmentIdSchema`: cuid2 AND 20–32 characters); resolved by `productionResolveEnvironmentTarget` (`apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts`); the only source of an id is the `list_environments` tool | **Yes.** Omission is a schema error, never a fallback — and the fallback is removed at every layer beneath it too: `acquireSandbox` refuses `missing_environment` rather than picking a default. A guessed id fails closed. The length floor is load-bearing: `isCuid` alone accepts `main`, `staging` and `prod`, which are exactly the values July's `target` was filled with. |
+| A LOCAL env is authorized on machine OWNERSHIP, not drive membership | `apps/web/src/lib/ai/tools/sandbox-tools.ts` (`SandboxPayerCoordinates.gateDriveId` — absent for a local target, so the gate runs without a drive) and `packages/lib/src/services/drive-envs/env-provision-deps.ts` (`gateLocalEnvForRequester` calls `canRunCode` with no `driveId`) | **Yes, and it is a NARROWING of what is checked, not of what is enforced.** `canRunCode` keeps two independent legs; only the actor's drive-EDIT-ACCESS leg is dropped, and only for a local env, because [D-6] already makes binding owner-only and `decideBind` decides it immediately after. The kill switch and the PAYER's tier leg (the env's drive owner) both still run. The env's drive stays the BILLING coordinate. See R-19 for the consequence. |
+| The result says where it ran | `nameEnvironmentOnResult` (`packages/lib/src/services/sandbox/tool-runners.ts`), stamped once at the tool boundary in `sandbox-tools.ts` onto every result AND every refusal that got far enough to resolve a target | **Yes, as visibility rather than as a gate.** Both fields come from the server's resolved row, never echoed from the model's input, so a mis-addressed call cannot have its own belief read back to it. It records nothing new — `drive_env_grant_audit` already carries `envId` — it surfaces what is recorded, without opening an audit log. |
 | OS confinement of `exec` | none | **Does not exist.** Post-GA task `bos8qmmwx4kkbx7v7huw3hhi`. |
 | Egress control on the machine | none | **Does not exist.** Owned by the confinement task. |
 
@@ -273,8 +280,13 @@ flag is on, any later change to the hello bytes needs a version field and a migr
   document covers PTY frames.
 - **[D-3] A local machine is a substrate of an environment**, created in the ordinary
   environment-creation flow; the dialog is the only place the enrollment code is shown.
-- **[D-4] A global assistant cannot reach any environment.** Structural today
-  (`drive_envs.driveId` is NOT NULL and a driveless session has no drive to match); deferred.
+- **[D-4] A global assistant cannot reach any environment.** **RESOLVED 2026-09-12** — it can
+  now reach any environment its owner has made VISIBLE to it, naming the target on every call.
+  The blocker was structural (`drive_envs.driveId` is NOT NULL, so a driveless session had no
+  drive to match) and what removed it was [D-6]: for a LOCAL env the owner-only bind gate is
+  already the ownership check, so relaxing the drive comparison for that substrate removed a
+  redundant scoping check rather than introducing a new ownership one. A Sprite env keeps the
+  comparison, because it has no owner of its own. See the section below.
 - **[D-5] A per-user "may my machines be used" setting.** Deferred; subsumed by the account
   settings page (wave 3).
 - **[D-6] A machine is driven by its owner only.** Structural. It closes the multi-principal
@@ -331,6 +343,131 @@ without confinement; `exec-runner.ts` spawns the process and applies no network 
 allowlist) as its owner. Until that lands, the README's advice is the control: run the daemon as
 an ordinary user on a machine, or an account, that does not hold secrets you would not hand to
 whoever is driving the agent.
+
+## The global assistant reaches environments it may see
+
+Added 2026-09-12 (phase `de301c773t025ivjwf5ygtlb`). The founder's ask, in their words: *"if
+I'm at my dashboard I should be able to talk to my global assistant and it can talk to any of
+the sandboxes, because those are functionally tools or contain tools a lot of the time."*
+Before this, a dashboard conversation could touch exactly one sandbox: a driveless session was
+auto-created on its first tool call and could never reach an environment that already existed,
+because `spawnAgentSession` compared `env.driveId !== driveId` against a NOT NULL column
+([D-4]).
+
+### The database CHECK that was dropped, and why
+
+**Migration 0296 drops `agent_workspaces_env_needs_drive_check`** (`envId IS NULL OR driveId IS
+NOT NULL`). This is the most consequential change in the phase and it deserves to be read
+directly rather than inferred from the table above: a constraint that cannot be got wrong was
+traded for two code branches that can.
+
+The CHECK was **right about a Sprite env and wrong about a local one**, and it could not tell
+them apart. A Sprite env is drive-owned, drive-paid and drive-shared and has no owner of its
+own; `decideAgentSessionAccess` derives access from `driveId` alone, so a driveless session
+bound to one would route work into a drive's shared filesystem through an authorization path
+that never looked at that drive. That argument is untouched and **that arm is still enforced**
+— in `spawnAgentSession`, whose matrix pins the negative directly (a driveless spawn is refused
+a Sprite env) rather than leaving it to fall out of a comparison. A LOCAL env is one person's
+own computer, and [D-6] already makes binding it structurally owner-only: `decideBind` compares
+the requester to `drive_env_local.ownerId` and there is no actor role in its input at all. So
+the ownership check already existed, was load-bearing, and was proven by the M1 exit gate.
+Relaxing the drive comparison for that substrate removed a **redundant scoping check**, not an
+ownership one ([D-4], which recorded exactly this caution: it replaces a refusal that cannot be
+got wrong with a check that can).
+
+**Where the guarantee lives now:** in `spawnAgentSession`, as two branches that cannot both be
+forgotten, plus `decideBind` under the local one. The schema file keeps the full argument at
+the site where the constraint used to be, so a future reader who goes looking for it finds it
+rather than concluding it was never there. Both branches are mutation-checked, including the
+mutant that swaps them. **The residual is real and is R-18**: a constraint is enforced against
+every writer forever, and a branch is enforced against the callers that go through it.
+
+**The global assistant is the agent most exposed to prompt injection in the product, and that
+is a property of what it is rather than a defect to be fixed here.** Its context spans every
+drive the person belongs to, so every page, comment and message any of their collaborators
+wrote is content it may read; R-6 describes that surface for one drive, and this agent has all
+of them at once. That is the reason its reach is a deliberate choice and not a consequence of
+ownership: an environment is invisible to it until its owner switches it on, one environment at
+a time, default off.
+
+### Why addressing is mandatory and opaque
+
+This is not per-call free addressing, and the reason is written in the repository's own
+history. In July an **optional** per-call `target` was added to these exact tools and removed
+two days later (`cf576fbc1`, *"code-execution tools always run at the conversation's own
+node"*). The model habitually invented a plausible value — `target: { branch: "main" }`,
+straight out of its git priors — and every such call was refused, so a bound agent running
+`pwd && ls -la` could fail on every call. The post-mortem records that the prompt and the tool
+descriptions *actively encouraged* the bad value.
+
+The lesson taken is not "never address". It is that a model will fill an addressing field with
+something believable. So:
+
+- the id is one a model **cannot invent** — opaque, copied from `list_environments`, where a
+  guess simply does not exist and **fails closed**;
+- **omission is a validation error**, never a silent fallback to the conversation's own
+  sandbox — and the conversation's own sandbox is itself addressed by an id, listed like any
+  other row, so there is no implicit path a model can take while believing it is somewhere
+  else;
+- the tool descriptions say *copy the id from `list_environments`, never construct one*. The
+  wording is part of the fix, not documentation around it, which is why it is asserted by a
+  test rather than left to drift;
+- the shape check refuses free text, and its **length floor is the half that works**: `isCuid`
+  is a loose heuristic that accepts `main`, `staging` and `prod`, so the schema also requires
+  20–32 characters, which every real 24-character cuid2 satisfies and no plausible invention
+  does.
+
+The high-consequence case needs no new control. If a valid-but-wrong id points at the owner's
+own machine, commands and sensitive writes still require the owner's passkey-verified click
+(hardening B), so a mis-addressed call lands somewhere recoverable. What a mis-addressed call
+*does* get is a wrong place to run, and that is what the environment named on every result is
+for: it is in the model's context each turn and in front of the person immediately.
+
+### Two substrates, two authorities
+
+**Founder ruling, 2026-09-12:** *"if the user can, their global assistant should be able to."*
+The rule is exact parity with what the person can already do inside the drive — nothing more,
+nothing less.
+
+**A CLOUD (Sprite) environment reaches by `canRunCode` parity, with no opt-in.** It is
+drive-owned, drive-paid and drive-shared and has no owner of its own, so the DRIVE PERMISSION
+is the visibility: the assistant may address it exactly when the person may run code in that
+drive from any other surface — same kill switch, same payer tier (the drive's owner), same
+drive access and `canEdit`. A VIEWER is refused here exactly as they are in-drive. `decideBind`
+is not involved; a cloud env has no bind policy. This grants no new authority: a person who can
+spawn a session in that drive from the sidebar and run code there could already do everything
+the assistant can now do on their behalf.
+
+**A LOCAL machine keeps its own rule, unchanged.** It is one person's computer, so its
+authority is that person ([D-6], owner-only bind) PLUS their explicit
+`visibleToGlobalAssistant` opt-in. A drive permission substitutes for neither half, and the
+opt-in does not substitute for being the owner. `visibleToGlobalAssistant` is a local-machine
+column and is deliberately not consulted for a cloud env in either direction — treating it as a
+gate would make every cloud env permanently unreachable, and treating a stray `true` as a grant
+would let a row widen what the drive decided.
+
+**The parity promise is a TEST, not a comment.** For every verdict `canRunCode` can produce, the
+cloud reach verdict must equal it — no case where one allows and the other refuses, in either
+direction, and neither a stray visibility flag nor the actor's identity can make them diverge.
+
+**Still not here:** switching a conversation's default environment (it keeps its own sandbox and
+names a target per call), and session-level taint (R-16).
+
+**Switching a conversation's default environment is also not here.** The conversation keeps its
+own sandbox and names a target per call. There is no mutable "active machine", no `switch_machine`,
+and no state a later call inherits from an earlier one — two environments are two sessions
+(`findActiveByOwnerAndEnv`), never one session re-pointed.
+
+### The remaining gap: session-level taint
+
+**Nothing here escalates an outward-capable tool because the context happens to hold content
+someone else wrote.** That is the app-wide answer to prompt injection — a session that has read
+a colleague's page is more dangerous than one that has not, whatever tool it then reaches for —
+and it is deliberately out of this phase's scope, because it is a decision about every tool in
+the product and not about environments. It is named here as the gap rather than left implied:
+the controls this phase adds are *visibility* (what the assistant may see) and *addressing*
+(that it must say where it is going and cannot guess). Neither is a control on what the
+assistant was persuaded to want. R-16.
 
 ## Rollout safety
 
@@ -408,6 +545,12 @@ whoever is driving the agent.
 | R-12 | **A destructive side effect on a REFUSED request.** This feature pairs a guard with an irreversible REMOTE effect in four places — env revoke, env delete, Stop, and approval revoke — and the effect is a signed frame that changes state on someone's computer (a deleted key, a SIGKILLed process group, a forgotten approval). Where the guard is evaluated beside the effect rather than with it, a refusal the caller reads as "nothing happened" can leave the machine changed and unrecoverable: `DELETE …/envs/[envId]` did exactly that until 2026-09-09, revoking the machine and every session before the `409 live_sessions` guard had a say, and per R-8 the surviving row could then never take a new machine. Structural, not a slip: the irreversible half is remote and cannot be rolled back with the transaction. | Was certain on that route; now guarded | High — silent, and unrecoverable without re-enrolment | The env routes | **Mitigated**: the effect runs as the delete transaction's `beforeDelete`, under the row lock, after the guard passes, so guard and effect are one critical section (`drive-envs-store.ts`, `deleteIfUnoccupied`). The other three were checked at the same commit and do NOT have it — Stop sends its signed `pause` only after the owner-only CAS has won (`setEnvPaused`), and both approval-revoke routes check `drive_env_local.ownerId` before `revokeLocalEnvApproval`. Any new pairing must use the same shape. `llb2x2c5rew97nxg9xkio7u1` (Done) |
 | R-13 | **A deny-list of sensitive writes can never be complete, and escalation does not make it complete.** The classifier (`classify-write.ts`) escalates the writes that are *recognisably* commands — VCS metadata, shell startup files, build and task files, package manifests, CI configs, tool configs, and any file that will be executable once the write lands — including one that already is, whose permissions a mode-less write would leave untouched. **A write to ordinary source code that the owner later builds or runs is still execution**, and no list of filenames catches it: an agent that edits `src/index.ts` in a project the owner runs `bun dev` on has achieved code execution without touching a single name on the list. The rule is deliberately generous (a miss costs one click, not a breach) and case-insensitive, because macOS and Windows resolve `MAKEFILE` and `Makefile` to the same file — but generosity is not completeness. This raises the cost of the obvious vectors and puts a human in front of them; **it is not a boundary.** Only OS confinement (R-3) is. *A second, narrower residual lives in the same row:* the existing-mode probe reads the file before the write, so a file that becomes executable in between is written headless — the same TOCTOU class as C9, bounded here by the fact that the write itself never chmods, so nothing the daemon does creates the executable bit. | Certain by construction | High where it applies — but it strictly *reduces* what Tier A used to allow silently | Post-GA, with R-3 | `bos8qmmwx4kkbx7v7huw3hhi` |
 
+| R-18 | **A database CHECK became two code branches.** Migration 0296 drops `agent_workspaces_env_needs_drive_check` (`envId IS NULL OR driveId IS NOT NULL`) because it could not distinguish a Sprite env (drive-owned, no owner of its own — the case it was right about, still enforced) from a LOCAL env (one person's computer, where [D-6]'s owner-only bind gate is already the ownership check — the case it was wrong about). The trade is deliberate and [D-4] warned about exactly this shape: a CHECK is enforced against every writer forever, including a future code path nobody has written yet, whereas `spawnAgentSession`'s two branches are enforced only against callers that go through them. A future writer that inserts an `agent_workspaces` row directly — a backfill script, a migration, a new service — now has nothing beneath it. **Mitigations:** both branches are mutation-checked, including the mutant that swaps them; the non-owner refusal is pinned with AND without a drive, so the local arm cannot silently become the only check; and the schema file keeps the whole argument at the site the constraint used to occupy so it cannot be rediscovered as an accident. **Any new writer of `agent_workspaces.envId` must go through `spawnAgentSession`.** | Low today (one writer) | High if a second writer appears — a driveless session on a drive's shared Sprite filesystem, authorized by a path that never looked at that drive | `spawnAgentSession` | Recorded here; no task |
+| R-19 | **A departed drive member's machine still runs, and the drive still pays.** A LOCAL env is authorized on machine OWNERSHIP, not on the actor's drive membership: `canRunCode` is called without a `driveId`, so its drive-role leg does not apply, while the env's drive owner remains the payer and the tier leg keys on them. Without this, the machine the discovery list deliberately still shows after its owner leaves the drive — *it is their computer* — refused on every call (Codex P2, #2616), which is neither what [D-6] says nor what the listing promises. **The consequence, stated rather than discovered:** a person who has left a drive can still run on their own machine and the drive's owner is still metered for that active runtime, because the env row is drive-owned and drive-paid. The drive's remedy is the one [D-6] already gives it — Delete or Revoke the environment, both of which a drive admin holds and neither of which needs the owner. The kill switch and the tier leg are untouched, and a non-owner now falls to `decideBind`'s `bind_policy`, which is the accurate reason. | Low (requires a departure with the machine left enrolled) | Low — bounded active-runtime metering on a drive that can end it at will | Drive admins | Recorded here; no task |
+| R-20 | **The global assistant's blast radius is now every cloud environment the person can edit.** A prompt injection landing in a GLOBAL conversation can act in any Sprite env in any drive where that person passes `canRunCode` — not just the conversation's own sandbox. **This is deliberate and it is parity, not escalation**: the person's own in-drive agents can already do exactly this in each of those drives today, and a page agent in drive D has had drive D's env within reach since the env feature shipped. What CHANGES is the AGGREGATION — one conversation, whose reading context spans every drive the person belongs to (R-16), can now reach all of those environments in turn, where before an attacker had to land in the specific drive whose environment they wanted. So the surface is not wider per drive; it is reachable from one place instead of many, by the agent that reads the most untrusted content. Mitigations are the existing ones and no new control was added: `canRunCode` re-checked on every call, the environment named on every result, the mandatory opaque id, and — for a LOCAL machine, which is the only substrate where a command runs on hardware PageSpace does not sandbox — the owner's passkey-verified click. A cloud env's commands run in a Fly microVM, which is the containment a local machine does not have (R-3). | Medium on any shared drive | Medium-to-high, bounded per drive by what the person could already do there | Product, with R-16 | Named here; R-16 is the app-wide answer |
+| R-16 | **No session-level taint.** A conversation whose context holds content authored by someone else is more dangerous than one whose context does not, and nothing in the product escalates an outward-capable tool on that basis. The GLOBAL ASSISTANT is where this bites hardest: its context spans every drive the person belongs to, so R-6's surface is not one drive's shared pages but all of them at once, and the phase that let it reach environments deliberately did not add this. What it added instead is *visibility* (an environment is invisible until its owner switches it on, default off) and *addressing* (it must name where it is going and cannot guess). Neither is a control on what the assistant was persuaded to want. | Medium on any shared drive, and the global assistant is the worst case | High — the same execution surface R-6 describes, reached from a conversation with the widest possible reading context | Product, app-wide | Named as the remaining gap in the phase; no task yet — it is a decision about every tool, not about environments |
+| R-17 | **A REAL id for the WRONG environment.** The mandatory opaque id makes a *guess* fail closed, and the tool descriptions plus `list_environments` make an *invention* unlikely. Neither stops the model copying a genuine id for an environment the person did not mean, which succeeds — somewhere nobody intended. **Mitigations, both partial:** every result and every post-resolution refusal names the environment it ran in, from the server's row and never echoed from the model's input, so it is in the model's context each turn and in front of the person immediately without opening an audit log; and where it matters most — the owner's own machine — commands and sensitive writes still wait for the passkey-verified click, so a mis-addressed call lands somewhere recoverable. What is left is a wrong *place* for an ordinary file read or an unapproved-but-harmless command. | Low, and bounded by how few environments a person has visible | Low to medium — bounded by the click for anything consequential | Product | Recorded here; no task |
+
 ## Flag-on checklist
 
 Each item is a command whose output is the evidence, or a task that must read Done. Run from
@@ -463,11 +606,32 @@ the repository root on the commit being deployed.
     and a >30 s command that completed in 35 s rather than being aborted. Repeat on the
     deployment host.
 
+11. The global assistant's reach is off by default and unguessable, on the deployed commit:
+    `psql "$DATABASE_URL" -c '\d drive_envs' | grep visibleToGlobalAssistant` shows
+    `not null default false`, and
+    `psql "$DATABASE_URL" -c 'select count(*) from drive_envs where "visibleToGlobalAssistant"'`
+    prints `0` before anyone has switched one on. Then, with the flag on and one machine enrolled
+    but NOT made visible: `list_environments` in a dashboard conversation must list only that
+    conversation's own sandbox and say in words that there is nothing else, and a `bash` call
+    naming the machine's real id must be refused. Switch visibility on for that machine, and the
+    same two calls must list it and run on it. Finally switch it off mid-conversation: the next
+    call must be refused rather than honouring the earlier reach.
+12. Omission and invention both fail, on the deployed commit — all three print a match:
+    `grep -c "environmentId: environmentIdField" apps/web/src/lib/ai/tools/sandbox-tools.ts`
+    (expect `4`);
+    `grep -c "MIN_ENVIRONMENT_ID_LENGTH" packages/lib/src/services/sandbox/environment-directory.ts`;
+    `grep -c "missing_environment" apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts`.
+    And the behaviour: a `bash` call with no `environmentId` must fail schema validation rather
+    than running anywhere, and `environmentId: "main"` must be refused with the message naming
+    `list_environments`.
+
 ## Out of scope
 
 - **PTY sessions (M2).** `pty_open` is advertised unsupported by the daemon
   (`dispatcher.ts`, `DAEMON_CAPABILITIES`); the PTY frame model needs [D-2].
 - **Consumers (M3).** PanePicker and the `pagespace pane` viewer.
-- **Global assistant ([D-4]).** A driveless session cannot bind any environment; changing that
-  is its own task with its own tests.
+- **Session-level taint.** R-16, and the app-wide answer to prompt injection rather than an
+  environment feature.
+- **Switching a conversation's default environment.** The conversation keeps its own sandbox and
+  names a target per call.
 - **Windows.** `env connect` refuses to start there (`packages/cli/src/commands/env/connect.ts`).

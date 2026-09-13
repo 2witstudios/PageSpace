@@ -64,6 +64,8 @@ const SECRET = 'env-session-integration-secret-key-0123456789';
 const payerId = createId();
 const driveId = createId();
 const otherDriveId = createId();
+/** A SECOND real user — so "not the machine's owner" is a real FK, not a string that happens to differ. */
+const otherUserId = createId();
 /** Every sandbox name this file lets reach the DB — the reclaim outbox is FK-less, so teardown sweeps it by name. */
 const sandboxIds = new Set<string>();
 
@@ -143,24 +145,29 @@ async function seedEnv(name = `env-${createId().slice(0, 8)}`, inDrive = driveId
 }
 
 /** The spawn, with its result union intact — for the cases where refusal IS the assertion. */
-async function trySpawn(input: { envId: string | null; driveId?: string | null }) {
+async function trySpawn(input: { envId: string | null; driveId?: string | null; requesterId?: string }) {
   return spawnAgentSession({
-    ownerId: payerId,
+    ownerId: input.requesterId ?? payerId,
     driveId: input.driveId === undefined ? driveId : input.driveId,
     envId: input.envId,
     deps: {
       store: sessionStore,
       now: () => new Date(),
       maxActiveSessions: 1_000,
-      // The REAL gate (C1), on the real store: the sibling lookup, the drive-role
-      // check and canRunCode all run against Postgres. Only consulted for a
-      // LOCAL env — the Sprite rows in this suite never reach it.
-      gateLocalEnvBind: ({ envId, requesterId }) =>
-        gateLocalEnvForRequester({
-          row: { id: envId, driveId, substrate: 'local' },
+      // The REAL gate (C1), on the real store: the sibling lookup and canRunCode
+      // run against Postgres. Only consulted for a LOCAL env — the Sprite rows
+      // in this suite never reach it. The row carries the env's OWN drive, read
+      // back from the store, rather than assuming the session's: leaf D lets a
+      // local env live in a different drive from the session binding it, so
+      // hardcoding one here would hide exactly the case these rows cover.
+      gateLocalEnvBind: async ({ envId, requesterId }) => {
+        const env = await envStore.findById(envId);
+        return gateLocalEnvForRequester({
+          row: { id: envId, driveId: env?.driveId ?? driveId, substrate: 'local' },
           requesterId,
           deps: { store: envStore, resolvePayer: async () => ({ payerId, tier: 'pro' }), localEnvsEnabled: true },
-        }),
+        });
+      },
       // The REAL store, so the drive-agreement check reads a real row rather
       // than a fixture that could disagree with one.
       findEnv: async (id) => envStore.findById(id),
@@ -179,7 +186,10 @@ beforeAll(async () => {
   sessionStore = await createDbAgentSessionStore();
   await db
     .insert(users)
-    .values({ id: payerId, email: `env-ses-${payerId}@test.local`, name: 'Env Payer', subscriptionTier: 'pro', updatedAt: new Date() })
+    .values([
+      { id: payerId, email: `env-ses-${payerId}@test.local`, name: 'Env Payer', subscriptionTier: 'pro', updatedAt: new Date() },
+      { id: otherUserId, email: `env-ses-other-${otherUserId}@test.local`, name: 'Other User', subscriptionTier: 'pro', updatedAt: new Date() },
+    ])
     .onConflictDoNothing();
   // The local-env bind rows below run the REAL canRunCode against this DB; the
   // kill switch is the one input that is process env rather than a row.
@@ -214,7 +224,7 @@ beforeEach(wipe);
 afterAll(async () => {
   await wipe();
   await db.delete(drives).where(inArray(drives.id, [driveId, otherDriveId]));
-  await db.delete(users).where(eq(users.id, payerId));
+  await db.delete(users).where(inArray(users.id, [payerId, otherUserId]));
 });
 
 describe('binding a session to an environment', () => {
@@ -229,10 +239,13 @@ describe('binding a session to an environment', () => {
     expect(await sessionStore.list({ driveId })).toEqual([]);
   });
 
-  it('given a GLOBAL-assistant spawn, should refuse an env — no session may hold an env without a drive', async () => {
-    // `drive_envs.driveId` is NOT NULL, so this falls out of the same
-    // comparison with no branch of its own — and the database forbids the row
-    // outright via `agent_workspaces_env_needs_drive_check`.
+  it('given a GLOBAL-assistant spawn and a SPRITE env, should refuse — a drive env has no owner of its own to bind against', async () => {
+    // `seedEnv` mints a SPRITE env, and `drive_envs.driveId` is NOT NULL, so
+    // this falls out of the same comparison with no branch of its own. Leaf D
+    // relaxed that comparison for LOCAL envs only, where [D-6]'s owner-only
+    // bind gate is the ownership check; the database CHECK that used to say
+    // the same thing is gone (0296), so this service-level refusal is now the
+    // whole of the guarantee for this substrate.
     const envId = await seedEnv();
     expect(await trySpawn({ envId, driveId: null })).toEqual({ ok: false, reason: 'env_not_found' });
   });
@@ -587,10 +600,13 @@ describe('the database\'s own guard', () => {
     expect(violated).toBe('agent_workspaces_env_no_sprite_check');
   });
 
-  it('should REFUSE an env-bound session with no drive', async () => {
-    // `agent_workspaces_env_needs_drive_check` — a row with an env and no drive
-    // would route work into a drive's shared filesystem through an access path
-    // that only ever reads `driveId`.
+  it('should ACCEPT an env-bound session with no drive — the CHECK is gone, and the guarantee moved to spawnAgentSession (leaf D)', async () => {
+    // `agent_workspaces_env_needs_drive_check` was dropped in 0296 so a
+    // driveless global-assistant session can bind the user's OWN machine,
+    // where [D-6]'s owner-only bind gate is the real ownership check. The
+    // database no longer forbids the shape; `spawnAgentSession` is what
+    // refuses a SPRITE env to a driveless session, and its own suite pins
+    // that negative directly.
     const envId = await seedEnv();
     const violated = await constraintViolatedBy(
       db.insert(agentWorkspaces).values({
@@ -601,7 +617,7 @@ describe('the database\'s own guard', () => {
         updatedAt: new Date(),
       }),
     );
-    expect(violated).toBe('agent_workspaces_env_needs_drive_check');
+    expect(violated).toBeUndefined();
   });
 });
 
@@ -654,12 +670,55 @@ describe('spawnAgentSession into a LOCAL env — the bind gate, for real (C1)', 
     expect(await trySpawn({ envId })).toEqual({ ok: false, reason: 'env_bind_refused', refusal: 'revoked' });
   });
 
-  it('given a local env in ANOTHER drive, should still be env_not_found — the drive check runs before the gate', async () => {
+  /** A local env in a DIFFERENT drive from the session doing the binding, owned by `ownerId`. */
+  async function seedLocalEnvInOtherDrive(input: { ownerId: string; enrolled: boolean; heartbeat?: Date }) {
     const created = await envStore.createIfUnderLimit({
       driveId: otherDriveId, name: `local-${createId().slice(0, 8)}`, createdBy: payerId, payerId, maxEnvs: 1_000, now: new Date(),
-      local: { ownerId: payerId, label: 'x', enrollmentId: `enr_${createId()}`, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(Date.now() + 600_000) , serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } },
+      local: { ownerId: input.ownerId, label: 'x', enrollmentId: `enr_${createId()}`, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(Date.now() + 600_000), serverPolicy: { ops: ['fs_read', 'fs_write'], checkpoint: false } },
     });
     if (!created.ok) throw new Error(created.reason);
-    expect(await trySpawn({ envId: created.env.id })).toEqual({ ok: false, reason: 'env_not_found' });
+    if (input.enrolled) {
+      await envStore.pinMachineKey({ envId: created.env.id, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', ownerCredentials: null, enrollmentCodeHash: 'hash', now: new Date() });
+    }
+    if (input.heartbeat) {
+      await db.update(driveEnvLocal).set({ lastSeenAt: input.heartbeat }).where(eq(driveEnvLocal.envId, created.env.id));
+    }
+    return created.env.id;
+  }
+
+  // Leaf D: for a LOCAL env the drive comparison no longer decides anything —
+  // the owner-only bind gate does. These three rows are the whole of that
+  // change, on real Postgres: the gate refuses for a REASON ABOUT THE MACHINE
+  // rather than hiding it behind the drive, the same env binds once it is
+  // connected, and a non-owner is still refused.
+  it('given a local env in ANOTHER drive, should reach the BIND GATE rather than the drive check — an unconnected one refuses not_connected, not env_not_found', async () => {
+    const envId = await seedLocalEnvInOtherDrive({ ownerId: payerId, enrolled: true });
+    expect(await trySpawn({ envId })).toEqual({ ok: false, reason: 'env_bind_refused', refusal: 'not_connected' });
+  });
+
+  it('given that SAME env once connected, should BIND — the machine is the caller\'s, and its drive is not the caller\'s session drive', async () => {
+    const envId = await seedLocalEnvInOtherDrive({ ownerId: payerId, enrolled: true, heartbeat: new Date() });
+    const result = await trySpawn({ envId });
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.session.envId).toBe(envId);
+    // The session's drive and the env's drive genuinely differ — the assertion
+    // above is not passing because they happen to match.
+    expect(result.session.driveId).toBe(driveId);
+    expect((await envStore.findById(envId))?.driveId).toBe(otherDriveId);
+  });
+
+  it('given a connected local env the caller does NOT own, should refuse bind_policy — removing the drive check did not make ownership optional', async () => {
+    const envId = await seedLocalEnvInOtherDrive({ ownerId: otherUserId, enrolled: true, heartbeat: new Date() });
+    expect(await trySpawn({ envId })).toEqual({ ok: false, reason: 'env_bind_refused', refusal: 'bind_policy' });
+  });
+
+  it('given a DRIVELESS global-assistant session and a connected local env the caller owns, should BIND — the case [D-4] blocked', async () => {
+    const envId = await seedLocalEnv({ enrolled: true, heartbeat: new Date() });
+    const result = await trySpawn({ envId, driveId: null });
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.session.driveId).toBeNull();
+    expect(result.session.envId).toBe(envId);
   });
 });

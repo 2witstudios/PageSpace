@@ -80,6 +80,29 @@ Each guarantee is followed by its exact limit.
   setting. *Limit: this controls who may ask. It does not control what your own agent read
   before it asked — see prompt injection below.*
 
+- **Your assistant on the dashboard can work in any cloud environment you can already use.**
+  The assistant you talk to from the dashboard can list and work in the shared cloud
+  environments of any drive where you can run code — there is **nothing to switch on**, because
+  the permission you already have in that drive is the permission it uses. If you are a viewer
+  in a drive, it is refused there exactly as you are. *Limit: this gives it exactly what you
+  could already do in those drives yourself, and nothing beyond it — but it gives it to one
+  conversation, and that conversation reads content from every drive you are in. If something
+  you read steers it, the reach is every cloud environment you can edit rather than just the
+  one you were looking at. The controls are the same ones your own in-drive agents have.*
+
+- **Your assistant on the dashboard cannot see your machine until you say so.** The assistant
+  you talk to from the dashboard works across every drive you belong to, so what it may reach is
+  a choice you make one machine at a time, not something that follows from owning the machine.
+  Every machine starts **off**, under **Settings → Local environments**; switching one on lets
+  that assistant see it and name it when it runs something, and nothing else. When it does run
+  something, the result says which machine it ran on, by the name you gave it. *Limit, and read
+  it carefully: switching this on does not widen who may drive the machine — that is still only
+  you — and it does not remove a single approval. A command or a sensitive write still waits for
+  your click on that computer. What it does is give the agent most exposed to other people's
+  writing a way to reach your machine at all; the reason it is off by default is that this
+  assistant reads content from every drive you are in, and that content can steer it (see
+  prompt injection below).*
+
 - **By default, every command needs your click.** The starter policy the enroller writes never
   pre-approves commands, so the first time an agent wants to run a program the daemon freezes
   the exact command, working directory, environment and limits; a card in the chat shows you
@@ -224,6 +247,25 @@ approved, it runs with no prompt, with whatever arguments the steered agent chos
 inherent to agents reading content nobody vetted; it is not a defect in the daemon, and it is
 the strongest reason to approve programs, not shells, and to keep approvals short.
 
+**The dashboard assistant names where it works; it can still name the wrong one.** Every code
+tool it uses requires an environment id, and it can only get one from the list it is shown — it
+cannot invent one, and a made-up id simply does not exist and is refused. What that does not
+prevent is it copying a real id for somewhere you did not mean. Two things limit that and
+neither removes it: every result and every refusal says where it happened, by name, so a wrong
+one is visible immediately rather than only in a log; and where it matters most — a command on
+your own computer, or a write that could become one — your click is still required there. On a
+cloud environment there is no click: it runs in the isolated virtual machine that environment
+already uses, with whatever your drive has allowed, exactly as it would if you had run it
+yourself from that drive.
+
+**Nothing treats a conversation as tainted by what it has read.** A conversation that has read a
+colleague's page is more dangerous than one that has not, and PageSpace does not currently
+restrict what an agent may do on that basis — not for your machine, and not for anything else.
+Visibility decides what the assistant can see; the approval decides what runs. Neither is a
+control on what the assistant was persuaded to want. This is the honest remaining gap, and it is
+an answer PageSpace owes across the whole product rather than one this feature could give on its
+own.
+
 **There is no network control on your machine.** PageSpace's cloud sandbox runs inside an
 isolated virtual machine. Your computer does not. A command on it can reach anything you can
 reach, with whatever credentials are on the machine. Nothing in this release bounds that except
@@ -250,6 +292,9 @@ what stand in for the sandbox until one exists. They are real. They are not a sa
 - Run the daemon as an ordinary user, never as root, and prefer a machine — or a separate
   account — that does not hold secrets you would not hand to whoever is driving the agent.
 - Leave "Run commands" off unless you need it. File work runs without it.
+- Leave your machine switched **off** for the dashboard assistant unless you want it there, and
+  switch it off again when you are done — it takes effect on the very next thing that assistant
+  tries.
 - Keep your policy's \`principals\` to yourself, and keep \`ops\` and \`roots\` narrow.
 - Approve programs, not shells or interpreters, and pick the shortest scope that does the job.
 - Stop the daemon when you are not using it, remove approvals you no longer need from
