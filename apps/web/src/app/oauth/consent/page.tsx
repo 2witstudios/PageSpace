@@ -73,7 +73,8 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
         <div className="mx-auto max-w-md py-16 text-center">
           <h1 className="text-xl font-semibold">Authorization error</h1>
           <p className="mt-2 text-muted-foreground">
-            {result.error === 'invalid_client' ? 'Unknown client.' : 'Invalid or unregistered redirect_uri.'}
+            {/* One message for unknown / disabled / foreign-redirect (ADR 0004 G17). */}
+            Unknown client or unregistered redirect_uri.
           </p>
         </div>
       );

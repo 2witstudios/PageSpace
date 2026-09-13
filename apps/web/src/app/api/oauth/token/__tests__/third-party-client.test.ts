@@ -191,3 +191,14 @@ describe('POST /api/oauth/token — per-client issuance (ADR 0004 Decision 5)', 
   });
 });
 
+describe('POST /api/oauth/token — client_secret is judged before the client is looked up', () => {
+  it('answers a client_secret with invalid_request whether or not the client_id exists — no enabled-client oracle', async () => {
+    const known = await POST(tokenRequest({ ...CODE_GRANT, client_secret: 'shh' }) as never);
+    const unknown = await POST(tokenRequest({ ...CODE_GRANT, client_id: 'app_nope', client_secret: 'shh' }) as never);
+
+    expect(await known.json()).toEqual({ error: 'invalid_request' });
+    expect(await unknown.json()).toEqual({ error: 'invalid_request' });
+    expect(resolveClient).not.toHaveBeenCalled();
+  });
+});
+

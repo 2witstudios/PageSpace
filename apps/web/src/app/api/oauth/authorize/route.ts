@@ -106,9 +106,10 @@ export async function GET(req: NextRequest) {
 
   if (!result.ok) {
     if (result.kind === 'no_redirect') {
-      return renderErrorPage(
-        result.error === 'invalid_client' ? 'Unknown client.' : 'Invalid or unregistered redirect_uri.',
-      );
+      // One page for both no-redirect failures (ADR 0004 G17): an unknown
+      // client, a disabled one and a foreign redirect_uri must be
+      // indistinguishable, or this page probes which client ids are enabled.
+      return renderErrorPage('Unknown client or unregistered redirect_uri.');
     }
     return NextResponse.redirect(
       buildRedirectWithParams(result.redirectUri, { error: result.error, state: result.state }),
@@ -192,7 +193,8 @@ export async function POST(req: NextRequest) {
 
   if (!result.ok) {
     if (result.kind === 'no_redirect') {
-      return NextResponse.json({ error: result.error }, { status: 400 });
+      // Constant shape for unknown / disabled / foreign-redirect (ADR 0004 G17).
+      return NextResponse.json({ error: 'invalid_client' }, { status: 400 });
     }
     return NextResponse.json({
       redirectUri: buildRedirectWithParams(result.redirectUri, { error: result.error, state: result.state }),

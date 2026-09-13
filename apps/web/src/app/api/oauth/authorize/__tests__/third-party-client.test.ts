@@ -169,3 +169,42 @@ describe('POST /api/oauth/authorize — third-party client', () => {
     expect(createAuthorizationCode).not.toHaveBeenCalled();
   });
 });
+
+// ADR 0004 fail-closed G17: an unknown client, a disabled client and a foreign
+// redirect_uri are indistinguishable — otherwise the error page is a probe for
+// which registered client ids are enabled.
+describe('authorize — unknown, disabled and foreign-redirect clients look identical (G17)', () => {
+  function withRedirect(req: Request, redirectUri: string): Request {
+    const url = new URL(req.url);
+    url.searchParams.set('redirect_uri', redirectUri);
+    return new Request(url, { method: 'GET' });
+  }
+
+  it('GET renders the same error page for all three', async () => {
+    const unknown = await GET(getRequest('profile', 'app_nope') as never);
+    resolveClient.mockResolvedValueOnce(null);
+    const disabled = await GET(getRequest('profile') as never);
+    const foreignRedirect = await GET(withRedirect(getRequest('profile'), 'https://evil.example/cb') as never);
+
+    const bodies = await Promise.all([unknown.text(), disabled.text(), foreignRedirect.text()]);
+    expect([unknown.status, disabled.status, foreignRedirect.status]).toEqual([400, 400, 400]);
+    expect(new Set(bodies).size).toBe(1);
+  });
+
+  it('POST answers a foreign redirect_uri with the same invalid_client an unknown client gets', async () => {
+    const foreign = await POST(
+      new Request('http://web.local/api/oauth/authorize', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...JSON.parse(await postRequest('profile').text()), redirectUri: 'https://evil.example/cb' }),
+      }) as never,
+    );
+    resolveClient.mockResolvedValueOnce(null);
+    const unknown = await POST(postRequest('profile') as never);
+
+    expect(foreign.status).toBe(400);
+    expect(await foreign.json()).toEqual(await unknown.json());
+    expect(createAuthorizationCode).not.toHaveBeenCalled();
+  });
+});
+

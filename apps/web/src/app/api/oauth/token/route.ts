@@ -180,18 +180,17 @@ type ClientResolution = ResolvedClient | { rejection: NextResponse };
  * grant handler.
  */
 async function resolveRequestClient(form: URLSearchParams, clientId: string, grantType: string): Promise<ClientResolution> {
+  // Public-client confusion guard (ADR 0004 Decision 1): every client is
+  // public — none has a secret — so a request presenting one is rejected
+  // outright. Judged BEFORE the client lookup, so the answer is the same for
+  // an unknown, a disabled and an enabled client_id (no enabled-client oracle).
+  if (form.get('client_secret')) {
+    return { rejection: noStoreJson(INVALID_REQUEST, 400) };
+  }
+
   const client = await resolveClient(clientId);
   if (!client) {
     return { rejection: noStoreJson(INVALID_GRANT, 400) };
-  }
-
-  // Public-client confusion guard (ADR 0004 Decision 1): every client is
-  // public — none has a secret — so a request presenting one is rejected
-  // outright rather than silently ignored, before any other judgement about
-  // the request is made.
-  const clientSecret = form.get('client_secret');
-  if (client.type === 'public' && clientSecret) {
-    return { rejection: noStoreJson(INVALID_REQUEST, 400) };
   }
 
   if (!client.allowedGrantTypes.includes(grantType)) {

@@ -166,14 +166,19 @@ describe('consent page — third-party client resolved through resolveClient', (
     expect(findDrivesByIds).not.toHaveBeenCalled();
   });
 
-  it('renders the same "Unknown client." for an unknown and a disabled client', async () => {
-    const { unmount } = await renderConsent({ client_id: 'app_nope', redirect_uri: THIRD_PARTY_REDIRECT, scope: 'profile' });
-    expect(screen.getByText('Unknown client.')).toBeInTheDocument();
-    unmount();
+  it('renders the same error for an unknown client, a disabled client and a foreign redirect_uri (G17)', async () => {
+    const MESSAGE = 'Unknown client or unregistered redirect_uri.';
+    const first = await renderConsent({ client_id: 'app_nope', redirect_uri: THIRD_PARTY_REDIRECT, scope: 'profile' });
+    expect(screen.getByText(MESSAGE)).toBeInTheDocument();
+    first.unmount();
 
     resolveClient.mockResolvedValueOnce(null);
-    await renderConsent({ client_id: 'app_swipesend', redirect_uri: THIRD_PARTY_REDIRECT, scope: 'profile' });
-    expect(screen.getByText('Unknown client.')).toBeInTheDocument();
+    const second = await renderConsent({ client_id: 'app_swipesend', redirect_uri: THIRD_PARTY_REDIRECT, scope: 'profile' });
+    expect(screen.getByText(MESSAGE)).toBeInTheDocument();
+    second.unmount();
+
+    await renderConsent({ client_id: 'app_swipesend', redirect_uri: 'https://evil.example/cb', scope: 'profile' });
+    expect(screen.getByText(MESSAGE)).toBeInTheDocument();
   });
 });
 
