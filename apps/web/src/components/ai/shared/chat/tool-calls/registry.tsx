@@ -1374,7 +1374,18 @@ export const toolRenderers: Record<string, ToolRenderer> = {
       .map((entry) => {
         const row = entry as { id?: unknown; label?: unknown; substrate?: unknown; kind?: unknown };
         if (typeof row.label !== 'string' || typeof row.id !== 'string') return null;
-        const where = row.kind === 'conversation' ? 'this conversation' : String(row.substrate ?? '');
+        // User language, never the code token. The epic's naming rule is
+        // explicit: the user noun is "environment", `sprite` is an internal
+        // substrate value, and "machine" is reserved for Fly Machines — so a
+        // cloud env must never render as "staging (sprite)".
+        const where =
+          row.kind === 'conversation'
+            ? 'this conversation'
+            : row.substrate === 'local'
+              ? 'your computer'
+              : row.substrate === 'sprite'
+                ? 'cloud'
+                : '';
         return `${row.label}${where ? ` (${where})` : ''}\n  ${row.id}`;
       })
       .filter((row): row is string => row !== null);

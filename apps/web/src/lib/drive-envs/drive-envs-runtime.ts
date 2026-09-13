@@ -21,6 +21,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
+import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import {
   ensureDriveEnvSandbox,
   gateLocalEnvForRequester,
@@ -183,15 +184,40 @@ export async function listOwnerMachines(ownerId: string): Promise<Array<{ env: D
  * machine in a drive the owner has since left is still listed: it is their
  * computer.
  */
-export async function listGlobalAssistantEnvironments(userId: string): Promise<Array<{ id: string; label: string; substrate: 'sprite' | 'local'; driveId: string }>> {
+export async function listGlobalAssistantEnvironments(
+  userId: string,
+  /**
+   * The acting ORIGIN, threaded so discovery asks `canRunCode` the identical
+   * question resolution will. Without it an agent-origin call saw a laxer list
+   * than the next call would honour — not a hole (the stricter side is the one
+   * that authorizes) but exactly the drift this whole arrangement exists to
+   * prevent. Defaults to a user-origin view for the registration-time caller,
+   * which has no request to take an origin from.
+   */
+  origin: { requestOrigin?: 'user' | 'agent'; agentPageId?: string } = {},
+): Promise<Array<{ id: string; label: string; substrate: 'sprite' | 'local'; driveId: string }>> {
+  const { requestOrigin = 'user', agentPageId } = origin;
   const store = await getDriveEnvStore();
+
+  // **`LOCAL_ENVS_ENABLED` gates LOCAL MACHINES ONLY**, and this is the ONE
+  // place that decides it, so discovery, resolution and the eligibility strip
+  // cannot answer differently.
+  //
+  // It is the cloud opt-in for exposing PERSONAL HARDWARE to a shared drive
+  // (invariant 11). A drive's own cloud sandbox is not personal hardware and
+  // has nothing to do with that opt-in: gating it here made the founder's
+  // ruling fail for exactly the case it exists for — a person whose own tier
+  // cannot run a personal sandbox, but who can run code in a paid team drive,
+  // got nothing, because the flag is off on every deployment.
+  const localEnvsEnabled = isLocalEnvsEnabled();
+
   const [localRows, spriteCandidates] = await Promise.all([
-    // LOCAL machines: the owner's own, and only the ones they switched on.
-    // Unchanged — a person's own computer is theirs to opt in.
-    store.listVisibleToGlobalAssistantByOwner(userId),
+    // LOCAL machines: the owner's own, only the ones they switched on, and only
+    // while the deployment allows personal hardware at all. Not read otherwise.
+    localEnvsEnabled ? store.listVisibleToGlobalAssistantByOwner(userId) : Promise.resolve([]),
     // CLOUD envs: CANDIDATES from the drives this person is actually in. A
     // drive relationship is not an entitlement (PR #2609), so every one of
-    // these is still put to `canRunCode` below.
+    // these is still put to `canRunCode` below. Never gated on the flag.
     store.listSpriteEnvsInUserDrives(userId),
   ]);
 
@@ -205,7 +231,7 @@ export async function listGlobalAssistantEnvironments(userId: string): Promise<A
   for (const env of spriteCandidates) {
     let allowed = decidedByDrive.get(env.driveId);
     if (allowed === undefined) {
-      allowed = (await canRunCode({ userId, driveId: env.driveId, requestOrigin: 'user' })).ok;
+      allowed = (await canRunCode({ userId, driveId: env.driveId, requestOrigin, agentPageId })).ok;
       decidedByDrive.set(env.driveId, allowed);
     }
     if (allowed) cloud.push({ id: env.id, label: env.name, substrate: env.substrate, driveId: env.driveId });

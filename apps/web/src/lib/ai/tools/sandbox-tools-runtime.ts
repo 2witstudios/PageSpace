@@ -660,12 +660,13 @@ export const resolveSandboxActorContext: ResolveSandboxContext =
 export const productionListReachableEnvironments: ListReachableEnvironments = async (ctx) => {
   // The promise is about the GLOBAL assistant specifically — the column, the
   // settings toggle and the changelog all say so. A page agent gets its own
-  // sandbox and nothing else, and never learns that a machine exists.
+  // sandbox and nothing else, and never learns that an environment exists.
   if (!conversationMayReachPersistentEnvironments(ctx.conversationKind ?? 'page')) return [];
-  const { isLocalEnvsEnabled } = await import('@pagespace/lib/services/drive-envs/local-envs-enabled');
-  if (!isLocalEnvsEnabled()) return [];
+  // `LOCAL_ENVS_ENABLED` is applied PER SUBSTRATE inside the listing, not as a
+  // short-circuit here: it gates personal hardware, never a drive's own cloud
+  // sandbox. The origin is threaded so this asks exactly what resolution asks.
   const { listGlobalAssistantEnvironments } = await import('@/lib/drive-envs/drive-envs-runtime');
-  return listGlobalAssistantEnvironments(ctx.userId);
+  return listGlobalAssistantEnvironments(ctx.userId, { requestOrigin: ctx.requestOrigin, agentPageId: ctx.agentPageId });
 };
 
 /**
@@ -723,14 +724,22 @@ export const productionResolveEnvironmentTarget: ResolveEnvironmentTarget = asyn
   const kind = ctx.conversationKind ?? 'page';
   if (!conversationMayReachPersistentEnvironments(kind)) return { ok: false, error: ENV_UNREACHABLE_MESSAGE };
 
-  const { isLocalEnvsEnabled } = await import('@pagespace/lib/services/drive-envs/local-envs-enabled');
-  // With the flag off there are no reachable environments at all, and saying so
-  // any other way would tell the caller whether the id exists.
-  if (!isLocalEnvsEnabled()) return { ok: false, error: ENV_UNREACHABLE_MESSAGE };
-
   const { getDriveEnvStore } = await import('@/lib/drive-envs/drive-envs-runtime');
   const store = await getDriveEnvStore();
   const env = await store.findById(environmentId);
+
+  // `LOCAL_ENVS_ENABLED` gates LOCAL MACHINES ONLY — the cloud opt-in for
+  // exposing personal hardware (invariant 11), which has nothing to say about a
+  // drive's own cloud sandbox. This used to short-circuit BEFORE the lookup and
+  // refuse everything, which made every cloud env unreachable on every
+  // deployment, since the flag is off on all of them.
+  //
+  // The refusal is still the one message, so a caller learns nothing from it
+  // about whether the id exists or which substrate it is.
+  if (env !== null && env.substrate === 'local') {
+    const { isLocalEnvsEnabled } = await import('@pagespace/lib/services/drive-envs/local-envs-enabled');
+    if (!isLocalEnvsEnabled()) return { ok: false, error: ENV_UNREACHABLE_MESSAGE };
+  }
   // A local env's owner lives on the sibling; a Sprite env has none, and does
   // not need one — its authority is the drive permission below.
   const sibling = env === null || env.substrate !== 'local' ? null : await store.findLocalByEnvId(environmentId);

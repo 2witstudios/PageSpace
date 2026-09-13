@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { renderToolContent } from '../registry';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -196,5 +197,30 @@ describe('DIFF_TOOL_NAMES <-> RichDiffRenderer cross-check', () => {
         `but their registry.tsx renderer doesn't reference RichDiffRenderer: ${missing.join(', ')}.\n` +
         'Either wire up RichDiffRenderer for them in registry.tsx, or remove them from DIFF_TOOL_NAMES.'
     ).toEqual([]);
+  });
+});
+
+describe('list_environments renderer — user language, never the code token', () => {
+  it('renders a cloud env as "cloud" and a machine as "your computer" — never the substrate value', () => {
+    const content = renderToolContent({
+      toolName: 'list_environments',
+      parsedInput: null,
+      parsedOutput: {
+        environments: [
+          { id: 'a78aoz3je2ycbofz79zgez9q', label: "This conversation's own sandbox", substrate: 'sprite', kind: 'conversation' },
+          { id: 'j945few5ssv75k5ad0bowbb4', label: 'staging', substrate: 'sprite', kind: 'environment' },
+          { id: 'dw9jthqyaza6ga3b6m5nmpqw', label: 'jono-macstudio', substrate: 'local', kind: 'environment' },
+        ],
+        notice: 'copy an id',
+      },
+      output: null,
+    });
+    const text = JSON.stringify(content);
+    expect(text).toContain('staging');
+    expect(text).toContain('cloud');
+    expect(text).toContain('your computer');
+    expect(text).toContain('this conversation');
+    // The epic's naming rule: `sprite` is a code token and must never surface.
+    expect(text).not.toContain('sprite');
   });
 });

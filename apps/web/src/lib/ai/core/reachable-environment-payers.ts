@@ -22,10 +22,15 @@
  * duplicates cannot change the answer — it is a disjunction over the same set —
  * only how many times it is asked.
  *
+ * **`LOCAL_ENVS_ENABLED` is NOT consulted here.** It gates personal hardware
+ * only, and the listing below already applies it per substrate — applying it
+ * again as a short-circuit is the defect this arrangement had: it made every
+ * CLOUD env unreachable on every deployment, because the flag is off on all of
+ * them.
+ *
  * **Fail closed.** This function only ever WIDENS eligibility, so every
- * uncertainty resolves to `false`: the feature flag off, a drive whose payer
- * cannot be resolved (skipped, never treated as allowing), a listing that
- * throws. A drive that does not resolve must not refuse the others either —
+ * uncertainty resolves to `false`: a drive whose payer cannot be resolved
+ * (skipped, never treated as allowing), a listing that throws. A drive that does not resolve must not refuse the others either —
  * one vanished drive is not an answer about a different one.
  */
 
@@ -39,8 +44,7 @@ import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers
  * is stricter anyway — it cannot drift from what the parameter actually takes.
  */
 interface ReachableEnvironmentPayerDeps {
-  /** `LOCAL_ENVS_ENABLED` for this deployment. */
-  isEnabled: () => Promise<boolean>;
+
   /** The environments this user may reach — already filtered for access AND visibility. */
   listEnvironments: (userId: string) => Promise<readonly { driveId: string }[]>;
   /** A drive's payer and their tier; `null` when the drive has vanished. */
@@ -49,10 +53,6 @@ interface ReachableEnvironmentPayerDeps {
 
 /** The production wiring, imported lazily so the chat pipeline loads neither store at module load. */
 const defaultReachableEnvironmentPayerDeps: ReachableEnvironmentPayerDeps = {
-  isEnabled: async () => {
-    const { isLocalEnvsEnabled } = await import('@pagespace/lib/services/drive-envs/local-envs-enabled');
-    return isLocalEnvsEnabled();
-  },
   listEnvironments: async (userId) => {
     const { listGlobalAssistantEnvironments } = await import('@/lib/drive-envs/drive-envs-runtime');
     return listGlobalAssistantEnvironments(userId);
@@ -77,7 +77,6 @@ export async function anyReachableEnvironmentPayerAllows(input: {
 }): Promise<boolean> {
   const deps = input.deps ?? defaultReachableEnvironmentPayerDeps;
   try {
-    if (!(await deps.isEnabled())) return false;
     const environments = await deps.listEnvironments(input.userId);
     for (const driveId of new Set(environments.map((env) => env.driveId))) {
       const payer = await deps.resolvePayer(driveId);

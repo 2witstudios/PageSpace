@@ -24,7 +24,6 @@ const PRO = { payerId: 'drive-owner', tier: 'pro' as const };
 
 function deps(over: Partial<ReachableEnvironmentPayerDeps> = {}): ReachableEnvironmentPayerDeps {
   return {
-    isEnabled: async () => true,
     listEnvironments: async () => [],
     resolvePayer: async () => PRO,
     ...over,
@@ -104,30 +103,9 @@ describe('anyReachableEnvironmentPayerAllows — asked once per DRIVE', () => {
   });
 
   it('fails CLOSED on every uncertainty — this only ever WIDENS eligibility', async () => {
-    // Asserted by what it does NOT do, not by a throwing authorizer: the
-    // fail-closed catch below would swallow that throw and return false anyway,
-    // so the assertion would hold with the flag check deleted (it survived the
-    // mutant that deleted it). The observable consequence is that nothing is
-    // read at all.
-    const listed: string[] = [];
-    const authorized: string[] = [];
-    const flagOff = await anyReachableEnvironmentPayerAllows({
-      userId: 'u1',
-      authorize: async (payer) => {
-        authorized.push(payer.payerId);
-        return true;
-      },
-      deps: deps({
-        isEnabled: async () => false,
-        listEnvironments: async (userId) => {
-          listed.push(userId);
-          return [{ driveId: 'drive-1' }];
-        },
-      }),
-    });
-    expect(flagOff).toBe(false);
-    expect(listed).toEqual([]);
-    expect(authorized).toEqual([]);
+    // `LOCAL_ENVS_ENABLED` is deliberately NOT consulted here any more: it gates
+    // personal hardware, and the listing applies it per substrate. Consulting it
+    // again as a short-circuit made every CLOUD env unreachable in production.
 
     const listingThrew = await anyReachableEnvironmentPayerAllows({
       userId: 'u1',

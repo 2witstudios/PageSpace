@@ -20,11 +20,13 @@ const {
   mockEnsureEnvironmentSession,
   mockResolveSandboxHostForSandboxId,
   mockCanRunCode,
+  mockListGlobalAssistantEnvironments,
 } = vi.hoisted(() => ({
   mockIsLocalEnvsEnabled: vi.fn(() => true),
   mockResolveDriveEnvPayer: vi.fn(),
   mockEnsureEnvironmentSession: vi.fn(),
   mockResolveSandboxHostForSandboxId: vi.fn(),
+  mockListGlobalAssistantEnvironments: vi.fn(async () => []),
   mockCanRunCode: vi.fn<(input: unknown) => Promise<{ ok: boolean; reason?: string }>>(async () => ({ ok: true })),
   mockFindEnvById: vi.fn(),
   mockFindLocalByEnvId: vi.fn(),
@@ -68,7 +70,7 @@ vi.mock('@/lib/agent-workspaces/sandbox-host-registry', () => ({
 }));
 vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
   getDriveEnvStore: async () => ({ findById: mockFindEnvById, findLocalByEnvId: mockFindLocalByEnvId }),
-  listGlobalAssistantEnvironments: vi.fn(async () => []),
+  listGlobalAssistantEnvironments: mockListGlobalAssistantEnvironments,
   resolveDriveEnvPayer: mockResolveDriveEnvPayer,
 }));
 vi.mock('@pagespace/lib/services/sandbox/sandbox-billing', () => ({
@@ -915,10 +917,16 @@ describe('productionResolveEnvironmentTarget — resolving the mandatory id (lea
     expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
   });
 
-  it('given the feature flag is off, should refuse a named environment with the same sentence and read nothing', async () => {
+  it('given the feature flag is off, should refuse a LOCAL environment with the same sentence — after reading it, because the substrate is what the flag is about', async () => {
+    // This row previously asserted the flag refused BEFORE any read. That
+    // short-circuit is exactly the defect: `LOCAL_ENVS_ENABLED` gates personal
+    // hardware, so it cannot be answered without knowing the substrate, and
+    // answering it early made every CLOUD env unreachable in production. The
+    // lookup is required; the refusal is still the one message, so a caller
+    // still learns nothing from it.
     mockIsLocalEnvsEnabled.mockReturnValue(false);
     expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
-    expect(mockFindEnvById).not.toHaveBeenCalled();
+    expect(mockFindEnvById).toHaveBeenCalledWith(ENV_ID);
   });
 
   it('visibility is re-read on EVERY call, so switching it off refuses the next one rather than honouring an earlier reach', async () => {
@@ -1288,5 +1296,55 @@ describe('the cloud SESSION is bound to the ENV\'s drive (scope correction, poin
     });
     expect(billing).toEqual({ workspaceId: 'ws-1', driveId: 'drive-1', ownerId: 'u1' });
     expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ ownerId: 'u1', envId: ENV_ID, driveId: 'drive-1' });
+  });
+});
+
+describe('LOCAL_ENVS_ENABLED gates local machines only, at RESOLUTION too', () => {
+  const CLOUD_ID = 'j945few5ssv75k5ad0bowbb4';
+  const LOCAL_ID = 'dw9jthqyaza6ga3b6m5nmpqw';
+  const ctx = {
+    userId: 'u1',
+    tenantId: 'u1',
+    conversationId: 'a78aoz3je2ycbofz79zgez9q',
+    actorEmail: 'u1@example.com',
+    tier: 'pro' as const,
+    conversationKind: 'global' as const,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCanRunCode.mockResolvedValue({ ok: true });
+    mockResolveDriveEnvPayer.mockResolvedValue({ payerId: 'drive-owner', tier: 'pro' });
+  });
+
+  it('given the flag OFF, a CLOUD env id should still RESOLVE — the flag is about personal hardware', async () => {
+    mockIsLocalEnvsEnabled.mockReturnValue(false);
+    mockFindEnvById.mockResolvedValue({ id: CLOUD_ID, name: 'staging', driveId: 'drive-1', substrate: 'sprite', visibleToGlobalAssistant: false });
+    mockFindLocalByEnvId.mockResolvedValue(null);
+    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: CLOUD_ID })).toMatchObject({
+      ok: true,
+      target: { kind: 'environment', substrate: 'sprite' },
+    });
+  });
+
+  it('given the flag OFF, a LOCAL env id should still be REFUSED — that opt-in is exactly what the flag is for', async () => {
+    mockIsLocalEnvsEnabled.mockReturnValue(false);
+    mockFindEnvById.mockResolvedValue({ id: LOCAL_ID, name: 'mac', driveId: 'drive-1', substrate: 'local', visibleToGlobalAssistant: true });
+    mockFindLocalByEnvId.mockResolvedValue({ envId: LOCAL_ID, ownerId: 'u1', label: 'jono-macstudio' });
+    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: LOCAL_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+  });
+
+  it('given the flag ON, the same LOCAL env resolves — so the row above is the flag answering, not a broken fixture', async () => {
+    mockIsLocalEnvsEnabled.mockReturnValue(true);
+    mockFindEnvById.mockResolvedValue({ id: LOCAL_ID, name: 'mac', driveId: 'drive-1', substrate: 'local', visibleToGlobalAssistant: true });
+    mockFindLocalByEnvId.mockResolvedValue({ envId: LOCAL_ID, ownerId: 'u1', label: 'jono-macstudio' });
+    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: LOCAL_ID })).toMatchObject({ ok: true, target: { substrate: 'local' } });
+  });
+
+  it('discovery asks canRunCode with the SAME origin resolution does — no laxer list than the next call honours', async () => {
+    const agentCtx = { ...ctx, requestOrigin: 'agent' as const, agentPageId: 'page-1' };
+    mockListGlobalAssistantEnvironments.mockResolvedValue([]);
+    await productionListReachableEnvironments(agentCtx);
+    expect(mockListGlobalAssistantEnvironments).toHaveBeenCalledWith('u1', { requestOrigin: 'agent', agentPageId: 'page-1' });
   });
 });
