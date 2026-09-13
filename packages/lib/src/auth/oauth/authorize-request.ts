@@ -14,6 +14,7 @@
 
 import { parseScopeList, isPureDriveGrant, isAllDrivesGrant, hasNewKeyName, type ScopeSet } from './scopes';
 import { validateRedirectUri, type RegisteredClient } from './clients';
+import { scopeSetFitsCap } from './client-registration';
 
 export interface AuthorizeRequestParams {
   clientId: string | undefined;
@@ -74,6 +75,15 @@ export function validateAuthorizeRequest(
 
   const parsedScope = parseScopeList(params.scope);
   if (!parsedScope.ok) {
+    return { ok: false, kind: 'redirect', error: 'invalid_scope', redirectUri, state };
+  }
+
+  // Per-client scope cap (ADR 0004 Decision 7): a client may not even ASK
+  // beyond the shapes it declared. Here, after redirect_uri is trusted and
+  // before anything else about the scope set is judged, so every caller —
+  // the authorize GET, the consent screen and the approval POST — refuses it
+  // before a consent screen can render.
+  if (!scopeSetFitsCap(parsedScope.scopes, client.allowedScopes)) {
     return { ok: false, kind: 'redirect', error: 'invalid_scope', redirectUri, state };
   }
 

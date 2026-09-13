@@ -29,10 +29,11 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getClientIP } from '@/lib/auth';
-import { getRegisteredClient, type RegisteredClient } from '@pagespace/lib/auth/oauth/clients';
+import type { RegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { ACCESS_TOKEN_TTL_SECONDS, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import {
-  ensureOAuthClientRow,
+  resolveClient,
+  resolveClientDbId,
   exchangeAuthorizationCode,
   refreshTokenGrant,
   pollDeviceToken,
@@ -170,31 +171,37 @@ type ClientResolution = ResolvedClient | { rejection: NextResponse };
 
 /**
  * Resolve and validate the requesting client — shared by all three grants.
- * Unknown client_id, a public client presenting a client_secret, and a grant
- * type outside the client's `allowedGrantTypes` (defined but previously
- * unenforced, `clients.ts:19`) all collapse to the SAME rejections
- * (`invalid_grant` / `invalid_request`) every grant produces; one guard, not
- * divergent copies per grant handler.
+ * The client comes from `resolveClient` (static first-party registry, then an
+ * enabled `oauth_clients` row — ADR 0004 Decision 2). Unknown client_id, a
+ * disabled one, one whose row vanished before issuance, and a grant type
+ * outside the client's `allowedGrantTypes` all collapse to the SAME
+ * `invalid_grant` every grant produces; a public client presenting a
+ * client_secret is `invalid_request`. One guard, not divergent copies per
+ * grant handler.
  */
-async function resolveClient(form: URLSearchParams, clientId: string, grantType: string): Promise<ClientResolution> {
-  const client = getRegisteredClient(clientId);
+async function resolveRequestClient(form: URLSearchParams, clientId: string, grantType: string): Promise<ClientResolution> {
+  const client = await resolveClient(clientId);
   if (!client) {
     return { rejection: noStoreJson(INVALID_GRANT, 400) };
+  }
+
+  // Public-client confusion guard (ADR 0004 Decision 1): every client is
+  // public — none has a secret — so a request presenting one is rejected
+  // outright rather than silently ignored, before any other judgement about
+  // the request is made.
+  const clientSecret = form.get('client_secret');
+  if (client.type === 'public' && clientSecret) {
+    return { rejection: noStoreJson(INVALID_REQUEST, 400) };
   }
 
   if (!client.allowedGrantTypes.includes(grantType)) {
     return { rejection: noStoreJson(INVALID_GRANT, 400) };
   }
 
-  // Public-client confusion guard: the CLI is a public client (ADR 0003) —
-  // it never has a secret, and a request presenting one is rejected outright
-  // rather than silently ignored.
-  const clientSecret = form.get('client_secret');
-  if (client.type === 'public' && clientSecret) {
-    return { rejection: noStoreJson(INVALID_REQUEST, 400) };
+  const clientDbId = await resolveClientDbId(client);
+  if (clientDbId === null) {
+    return { rejection: noStoreJson(INVALID_GRANT, 400) };
   }
-
-  const clientDbId = await ensureOAuthClientRow(client);
   return { client, clientDbId };
 }
 
@@ -297,7 +304,7 @@ async function handleAuthorizationCodeGrant(req: NextRequest, form: URLSearchPar
   const rateLimited = await checkTokenExchangeRateLimit(req, clientId);
   if (rateLimited) return rateLimited;
 
-  const resolved = await resolveClient(form, clientId, 'authorization_code');
+  const resolved = await resolveRequestClient(form, clientId, 'authorization_code');
   if ('rejection' in resolved) return resolved.rejection;
   const { client, clientDbId } = resolved;
 
@@ -341,7 +348,7 @@ async function handleRefreshTokenGrant(req: NextRequest, form: URLSearchParams):
   const rateLimited = await checkTokenExchangeRateLimit(req, clientId);
   if (rateLimited) return rateLimited;
 
-  const resolved = await resolveClient(form, clientId, 'refresh_token');
+  const resolved = await resolveRequestClient(form, clientId, 'refresh_token');
   if ('rejection' in resolved) return resolved.rejection;
   const { client, clientDbId } = resolved;
 
@@ -427,7 +434,7 @@ async function handleDeviceCodeGrant(req: NextRequest, form: URLSearchParams): P
   const rateLimited = await checkDevicePollRateLimit(req, clientId);
   if (rateLimited) return rateLimited;
 
-  const resolved = await resolveClient(form, clientId, 'urn:ietf:params:oauth:grant-type:device_code');
+  const resolved = await resolveRequestClient(form, clientId, 'urn:ietf:params:oauth:grant-type:device_code');
   if ('rejection' in resolved) return resolved.rejection;
   const { client, clientDbId } = resolved;
 

@@ -7,7 +7,9 @@
  */
 import { describe, it, expect } from 'vitest';
 import { validateAuthorizeRequest, type AuthorizeRequestParams } from '../authorize-request';
-import { getRegisteredClient, PAGESPACE_CLI_CLIENT_ID } from '../clients';
+import { getRegisteredClient, PAGESPACE_CLI_CLIENT_ID, type RegisteredClient } from '../clients';
+import { scopeSetFitsCap } from '../client-registration';
+import { parseScopeList } from '../scopes';
 
 const client = getRegisteredClient(PAGESPACE_CLI_CLIENT_ID)!;
 const REDIRECT_URI = 'http://127.0.0.1:51234/callback';
@@ -218,5 +220,98 @@ describe('validateAuthorizeRequest', () => {
         }
       });
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-client scope caps (ADR 0004 Decision 7, Phase 1a leaf 3): a client may
+// not even ASK beyond the scope shapes it declared. Rejected as invalid_scope
+// on the redirect branch — after redirect_uri is trusted, before any consent
+// screen could render.
+// ---------------------------------------------------------------------------
+
+describe('validateAuthorizeRequest — per-client allowedScopes cap', () => {
+  const HTTPS_REDIRECT = 'https://swipesend.app/auth/pagespace/callback';
+  function thirdParty(allowedScopes: string[]): RegisteredClient {
+    return {
+      clientId: 'app_swipesend',
+      name: 'SwipeSend',
+      type: 'public',
+      redirectUris: [HTTPS_REDIRECT],
+      allowedGrantTypes: ['authorization_code', 'refresh_token'],
+      allowedScopes,
+      firstParty: false,
+      verified: false,
+    };
+  }
+  const params = (scope: string) => baseParams({ clientId: 'app_swipesend', redirectUri: HTTPS_REDIRECT, scope });
+
+  const expectInvalidScope = (result: ReturnType<typeof validateAuthorizeRequest>) => {
+    expect(result).toEqual({ ok: false, kind: 'redirect', error: 'invalid_scope', redirectUri: HTTPS_REDIRECT, state: 'xyz123' });
+  };
+
+  it('accepts a request inside the cap', () => {
+    expect(validateAuthorizeRequest(params('profile'), thirdParty(['profile'])).ok).toBe(true);
+    expect(
+      validateAuthorizeRequest(params('profile offline_access'), thirdParty(['profile', 'offline_access'])).ok,
+    ).toBe(true);
+  });
+
+  it('rejects a scope the client never declared, even an identity-only one', () => {
+    expectInvalidScope(validateAuthorizeRequest(params('profile offline_access'), thirdParty(['profile'])));
+    expectInvalidScope(validateAuthorizeRequest(params('profile'), thirdParty(['offline_access'])));
+  });
+
+  it('matches drive scopes by SHAPE — the role must be one the cap names', () => {
+    const cap = thirdParty(['profile', 'drive:member', 'offline_access']);
+    expect(validateAuthorizeRequest(params('profile drive:abc123:member offline_access'), cap).ok).toBe(true);
+    expectInvalidScope(validateAuthorizeRequest(params('profile drive:abc123:admin'), cap));
+    expectInvalidScope(validateAuthorizeRequest(params('profile drive:abc123'), cap));
+    expectInvalidScope(validateAuthorizeRequest(params('profile drive:abc123:role:rol456'), cap));
+  });
+
+  it('maps each drive role to its own shape', () => {
+    expect(validateAuthorizeRequest(params('profile drive:abc123'), thirdParty(['profile', 'drive'])).ok).toBe(true);
+    expect(validateAuthorizeRequest(params('profile drive:abc123:admin'), thirdParty(['profile', 'drive:admin'])).ok).toBe(true);
+    expect(
+      validateAuthorizeRequest(params('profile drive:abc123:role:rol456'), thirdParty(['profile', 'drive:role'])).ok,
+    ).toBe(true);
+  });
+
+  it('never lets a cap reach a scope that has no shape — account, manage_keys, all_drives, key ops', () => {
+    const everything = thirdParty(['profile', 'offline_access', 'drive', 'drive:admin', 'drive:member', 'drive:role', 'account', 'manage_keys', 'all_drives']);
+    for (const scope of ['account', 'manage_keys offline_access', 'all_drives name:k', 'activate_key:tok1', 'update_key:tok1 drive:abc123']) {
+      expectInvalidScope(validateAuthorizeRequest(params(scope), everything));
+    }
+  });
+
+  it('reads an empty cap as "may ask for nothing", never as "no cap"', () => {
+    expectInvalidScope(validateAuthorizeRequest(params('profile'), thirdParty([])));
+  });
+
+  it('leaves a client with no declared cap (first-party only) unchanged', () => {
+    expect(validateAuthorizeRequest(baseParams({ scope: 'account' }), client).ok).toBe(true);
+    expect(validateAuthorizeRequest(baseParams({ scope: 'manage_keys offline_access' }), client).ok).toBe(true);
+  });
+});
+
+describe('scopeSetFitsCap', () => {
+  const parse = (raw: string) => {
+    const parsed = parseScopeList(raw);
+    if (!parsed.ok) throw new Error(`fixture did not parse: ${raw}`);
+    return parsed.scopes;
+  };
+
+  it('is true for any scope set when no cap is declared', () => {
+    expect(scopeSetFitsCap(parse('account'), undefined)).toBe(true);
+  });
+
+  it('is true only when every requested shape is declared', () => {
+    expect(scopeSetFitsCap(parse('profile drive:abc123:member'), ['profile', 'drive:member'])).toBe(true);
+    expect(scopeSetFitsCap(parse('profile drive:abc123:member'), ['profile'])).toBe(false);
+  });
+
+  it('is false for a shapeless scope whatever the cap holds', () => {
+    expect(scopeSetFitsCap(parse('account'), ['account'])).toBe(false);
   });
 });

@@ -48,6 +48,11 @@ vi.mock('@pagespace/db/schema/members', () => ({ driveRoles: {} }));
 
 vi.mock('@/lib/auth/auth-fetch', () => ({ post: vi.fn() }));
 
+const resolveClient = vi.fn();
+vi.mock('@/lib/repositories/oauth-repository', () => ({
+  resolveClient: (...args: unknown[]) => resolveClient(...args),
+}));
+
 import ConsentPage from '../page';
 
 const REDIRECT_URI = 'http://127.0.0.1:51234/callback';
@@ -74,8 +79,12 @@ function capabilityItems(): string[] {
   return screen.getAllByRole('listitem').map((li) => li.textContent ?? '');
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  const { getRegisteredClient } = await vi.importActual<typeof import('@pagespace/lib/auth/oauth/clients')>(
+    '@pagespace/lib/auth/oauth/clients',
+  );
+  resolveClient.mockImplementation(async (clientId: string) => getRegisteredClient(clientId));
   findDrivesByIds.mockResolvedValue([]);
   findActiveMcpTokenByIdAndUser.mockResolvedValue({ id: 'tok1', name: 'my-key' });
 });
@@ -114,3 +123,57 @@ describe('consent page — narration via describeGrantScopes', () => {
     expect(capabilityItems()[0]).toContain('"ci-key"');
   });
 });
+
+const THIRD_PARTY_REDIRECT = 'https://swipesend.app/auth/pagespace/callback';
+const THIRD_PARTY = {
+  clientId: 'app_swipesend',
+  name: 'SwipeSend',
+  type: 'public' as const,
+  redirectUris: [THIRD_PARTY_REDIRECT],
+  allowedGrantTypes: ['authorization_code', 'refresh_token'],
+  allowedScopes: ['profile', 'offline_access'],
+  firstParty: false,
+  verified: false,
+};
+
+describe('consent page — third-party client resolved through resolveClient', () => {
+  beforeEach(() => {
+    resolveClient.mockImplementation(async (clientId: string) => (clientId === THIRD_PARTY.clientId ? THIRD_PARTY : null));
+  });
+
+  it('renders consent for a request inside the client\'s cap', async () => {
+    await renderConsent({ client_id: 'app_swipesend', redirect_uri: THIRD_PARTY_REDIRECT, scope: 'profile offline_access' });
+
+    expect(resolveClient).toHaveBeenCalledWith('app_swipesend');
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toContain('SwipeSend');
+  });
+
+  it('redirects with error=invalid_scope for a scope beyond the cap BEFORE rendering anything', async () => {
+    const rendering = ConsentPage({
+      searchParams: Promise.resolve(
+        consentParams({ client_id: 'app_swipesend', redirect_uri: THIRD_PARTY_REDIRECT, scope: 'profile drive:abc123:member' }),
+      ),
+    });
+
+    const signal = await rendering.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(signal).toBeInstanceOf(RedirectSignal);
+    const location = new URL((signal as RedirectSignal).url);
+    expect(location.origin + location.pathname).toBe(THIRD_PARTY_REDIRECT);
+    expect(location.searchParams.get('error')).toBe('invalid_scope');
+    expect(findDrivesByIds).not.toHaveBeenCalled();
+  });
+
+  it('renders the same "Unknown client." for an unknown and a disabled client', async () => {
+    const { unmount } = await renderConsent({ client_id: 'app_nope', redirect_uri: THIRD_PARTY_REDIRECT, scope: 'profile' });
+    expect(screen.getByText('Unknown client.')).toBeInTheDocument();
+    unmount();
+
+    resolveClient.mockResolvedValueOnce(null);
+    await renderConsent({ client_id: 'app_swipesend', redirect_uri: THIRD_PARTY_REDIRECT, scope: 'profile' });
+    expect(screen.getByText('Unknown client.')).toBeInTheDocument();
+  });
+});
+

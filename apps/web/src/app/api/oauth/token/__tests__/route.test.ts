@@ -14,6 +14,11 @@ const exchangeAuthorizationCode = vi.fn();
 const refreshTokenGrant = vi.fn();
 const pollDeviceToken = vi.fn();
 vi.mock('@/lib/repositories/oauth-repository', () => ({
+  // resolveClient keeps the real static-registry answer; resolveClientDbId
+  // delegates to the ensureOAuthClientRow mock, as the route did before it.
+  resolveClient: async (clientId: string) =>
+    (await vi.importActual<typeof import('@pagespace/lib/auth/oauth/clients')>('@pagespace/lib/auth/oauth/clients')).getRegisteredClient(clientId),
+  resolveClientDbId: (...args: unknown[]) => ensureOAuthClientRow(...args),
   ensureOAuthClientRow: (...args: unknown[]) => ensureOAuthClientRow(...args),
   exchangeAuthorizationCode: (...args: unknown[]) => exchangeAuthorizationCode(...args),
   refreshTokenGrant: (...args: unknown[]) => refreshTokenGrant(...args),

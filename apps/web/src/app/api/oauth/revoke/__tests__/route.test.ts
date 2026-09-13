@@ -13,7 +13,13 @@ vi.mock('server-only', () => ({}));
 
 const ensureOAuthClientRow = vi.fn();
 const revokeOAuthToken = vi.fn();
+const resolveClient = vi.fn();
+const resolveClientDbId = vi.fn();
 vi.mock('@/lib/repositories/oauth-repository', () => ({
+  // resolveClient keeps the real static-registry answer; resolveClientDbId
+  // delegates to the ensureOAuthClientRow mock, as the route did before it.
+  resolveClient: (...args: unknown[]) => resolveClient(...args),
+  resolveClientDbId: (...args: unknown[]) => resolveClientDbId(...args),
   ensureOAuthClientRow: (...args: unknown[]) => ensureOAuthClientRow(...args),
   revokeOAuthToken: (...args: unknown[]) => revokeOAuthToken(...args),
 }));
@@ -55,6 +61,10 @@ const ALLOWED = { allowed: true, attemptsRemaining: 19 };
 beforeEach(() => {
   vi.clearAllMocks();
   ensureOAuthClientRow.mockResolvedValue(CLIENT_DB_ID);
+  resolveClient.mockImplementation(async (clientId: string) =>
+    (await vi.importActual<typeof import('@pagespace/lib/auth/oauth/clients')>('@pagespace/lib/auth/oauth/clients')).getRegisteredClient(clientId),
+  );
+  resolveClientDbId.mockImplementation((...args: unknown[]) => ensureOAuthClientRow(...args));
   revokeOAuthToken.mockResolvedValue(undefined);
   checkDistributedRateLimit.mockResolvedValue(ALLOWED);
 });
@@ -223,5 +233,36 @@ describe('POST /api/oauth/revoke — audit logging', () => {
       expect.anything(),
       expect.objectContaining({ eventType: 'auth.token.revoked' }),
     );
+  });
+});
+
+describe('POST /api/oauth/revoke — DB-backed third-party client (resolveClient)', () => {
+  it('revokes against the third-party client\'s own row id', async () => {
+    resolveClient.mockResolvedValue({
+      clientId: 'app_swipesend',
+      name: 'SwipeSend',
+      type: 'public',
+      redirectUris: ['https://swipesend.app/auth/pagespace/callback'],
+      allowedGrantTypes: ['authorization_code', 'refresh_token'],
+      allowedScopes: ['profile'],
+      firstParty: false,
+      verified: false,
+    });
+    resolveClientDbId.mockResolvedValue('db-row-1');
+
+    const res = await POST(revokeRequest({ token: 'ps_rt_' + 'a'.repeat(43), client_id: 'app_swipesend' }) as never);
+
+    expect(res.status).toBe(200);
+    expect(resolveClient).toHaveBeenCalledWith('app_swipesend');
+    expect(revokeOAuthToken).toHaveBeenCalledWith(expect.objectContaining({ clientDbId: 'db-row-1' }));
+  });
+
+  it('answers a client whose row vanished exactly like an unknown client — 200, nothing revoked', async () => {
+    resolveClientDbId.mockResolvedValue(null);
+
+    const res = await POST(revokeRequest({ token: 'ps_rt_' + 'a'.repeat(43), client_id: CLIENT_ID }) as never);
+
+    expect(res.status).toBe(200);
+    expect(revokeOAuthToken).not.toHaveBeenCalled();
   });
 });

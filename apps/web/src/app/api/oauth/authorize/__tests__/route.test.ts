@@ -21,6 +21,11 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
 }));
 
 vi.mock('@/lib/repositories/oauth-repository', () => ({
+  // resolveClient keeps the real static-registry answer (the route used it
+  // directly before resolveClient existed).
+  resolveClient: async (clientId: string) =>
+    (await vi.importActual<typeof import('@pagespace/lib/auth/oauth/clients')>('@pagespace/lib/auth/oauth/clients')).getRegisteredClient(clientId),
+  resolveClientDbId: vi.fn().mockResolvedValue('client-db-id-1'),
   ensureOAuthClientRow: vi.fn().mockResolvedValue('client-db-id-1'),
   createAuthorizationCode: vi.fn().mockResolvedValue(undefined),
 }));

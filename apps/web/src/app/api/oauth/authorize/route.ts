@@ -23,13 +23,12 @@ import {
   validateAuthorizeRequest,
   type AuthorizeRequestParams,
 } from '@pagespace/lib/auth/oauth/authorize-request';
-import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { checkGrantAuthority, formatScopeSet } from '@pagespace/lib/auth/oauth/scopes';
 import { requiresStepUp } from '@pagespace/lib/auth/oauth/step-up-boundary';
 import { AUTHORIZATION_CODE_TTL_SECONDS } from '@pagespace/lib/auth/oauth/code-lifecycle';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { resolveGrantAuthority } from '@/lib/auth/oauth-grant-authority';
-import { ensureOAuthClientRow, createAuthorizationCode } from '@/lib/repositories/oauth-repository';
+import { resolveClient, resolveClientDbId, createAuthorizationCode } from '@/lib/repositories/oauth-repository';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
@@ -100,7 +99,9 @@ export async function GET(req: NextRequest) {
 
   const { searchParams, search } = new URL(req.url);
   const params = extractParams(searchParams);
-  const client = params.clientId ? getRegisteredClient(params.clientId) : null;
+  // Static first-party registry, then an enabled `oauth_clients` row (ADR 0004
+  // Decision 2). Unknown and disabled are the same null → the same error page.
+  const client = params.clientId ? await resolveClient(params.clientId) : null;
   const result = validateAuthorizeRequest(params, client);
 
   if (!result.ok) {
@@ -186,7 +187,7 @@ export async function POST(req: NextRequest) {
     scope: body.scope,
     state: body.state,
   };
-  const client = getRegisteredClient(body.clientId);
+  const client = await resolveClient(body.clientId);
   const result = validateAuthorizeRequest(params, client);
 
   if (!result.ok) {
@@ -291,7 +292,12 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const clientDbId = await ensureOAuthClientRow(result.client);
+  // A third-party client disabled or deleted since `resolveClient` has no row
+  // to reference: refuse exactly as an unknown client is refused.
+  const clientDbId = await resolveClientDbId(result.client);
+  if (clientDbId === null) {
+    return NextResponse.json({ error: 'invalid_client' }, { status: 400 });
+  }
   const { token: code, hash: codeHash, tokenPrefix: codePrefix } = generateToken('ps_ac');
   const expiresAt = new Date(Date.now() + AUTHORIZATION_CODE_TTL_SECONDS * 1000);
 

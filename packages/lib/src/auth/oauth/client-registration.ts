@@ -26,7 +26,7 @@
 
 import { z } from 'zod';
 import { validateRedirectUri } from './clients';
-import { NAME_CONTROL_CHAR_RE } from './scopes';
+import { NAME_CONTROL_CHAR_RE, type ParsedScope, type ScopeSet } from './scopes';
 
 /**
  * What a non-string entry is reported as. A FIXED placeholder: `String(value)`
@@ -49,6 +49,56 @@ const ALLOWED_SCOPE_SHAPES = new Set(['profile', 'offline_access', 'drive', 'dri
  * shapes land here too: they are real scopes, just not caps.
  */
 const FORBIDDEN_SCOPE_PREFIXES = ['account', 'all_drives', 'manage_keys', 'update_key', 'activate_key', 'name'];
+
+type DriveRole = (ParsedScope & { kind: 'drive' })['role']['kind'];
+
+/** The cap shape each drive role is requested under. */
+const DRIVE_ROLE_SHAPE = {
+  inherit: 'drive',
+  admin: 'drive:admin',
+  member: 'drive:member',
+  custom: 'drive:role',
+} as const satisfies { readonly [K in DriveRole]: string };
+
+/**
+ * The cap shapes a `ScopeSet` field needs, or `null` when the field can never
+ * be requested under ANY cap. One entry per field, closed by `satisfies`: a
+ * new `ScopeSet` field fails to compile here until someone states which shape
+ * (if any) a registered client must declare to ask for it. The fail-closed
+ * answer is `null`.
+ */
+const CAP_SHAPES_FOR = {
+  profile: (on: boolean) => (on ? ['profile'] : []),
+  offlineAccess: (on: boolean) => (on ? ['offline_access'] : []),
+  drives: (drives: ScopeSet['drives']) => [...drives.values()].map((scope) => DRIVE_ROLE_SHAPE[scope.role.kind]),
+  account: (on: boolean) => (on ? null : []),
+  manageKeys: (on: boolean) => (on ? null : []),
+  allDrives: (on: boolean) => (on ? null : []),
+  updateKeyId: (id: string | null) => (id !== null ? null : []),
+  activateKeyId: (id: string | null) => (id !== null ? null : []),
+  newKeyName: (name: string | null) => (name !== null ? null : []),
+} satisfies { readonly [K in keyof ScopeSet]: (value: ScopeSet[K]) => readonly string[] | null };
+
+/**
+ * Whether a requested scope set stays inside a client's declared cap
+ * (ADR 0004 Decision 7). `undefined` = no cap declared, which only a
+ * first-party client (defined in code) can have. An empty cap permits
+ * nothing — never read as "no cap". A scope with no shape (`account`,
+ * `manage_keys`, `all_drives`, key operations, `name:`) never fits, whatever
+ * the cap lists.
+ */
+export function scopeSetFitsCap(scopes: ScopeSet, allowedScopes: readonly string[] | undefined): boolean {
+  if (allowedScopes === undefined) return true;
+
+  const declared = new Set(allowedScopes.filter((shape) => ALLOWED_SCOPE_SHAPES.has(shape)));
+  const needed: string[] = [];
+  for (const field of Object.keys(CAP_SHAPES_FOR) as (keyof ScopeSet)[]) {
+    const shapes = (CAP_SHAPES_FOR[field] as (value: ScopeSet[typeof field]) => readonly string[] | null)(scopes[field]);
+    if (shapes === null) return false;
+    needed.push(...shapes);
+  }
+  return needed.every((shape) => declared.has(shape));
+}
 
 export interface ClientRegistration {
   name: string;

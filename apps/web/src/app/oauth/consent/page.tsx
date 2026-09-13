@@ -5,11 +5,11 @@ import { eq } from '@pagespace/db/operators';
 import { driveRoles } from '@pagespace/db/schema/members';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { validateAuthorizeRequest, type AuthorizeRequestParams } from '@pagespace/lib/auth/oauth/authorize-request';
-import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { describeGrantScopes } from '@pagespace/lib/auth/oauth/grant-scope-summary';
 import { formatScopeSet } from '@pagespace/lib/auth/oauth/scopes';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import { sessionRepository } from '@/lib/repositories/session-repository';
+import { resolveClient } from '@/lib/repositories/oauth-repository';
 import { ConsentActions } from './ConsentActions';
 
 interface ConsentPageProps {
@@ -60,7 +60,10 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
     scope: first(params.scope),
     state: first(params.state),
   };
-  const client = authorizeParams.clientId ? getRegisteredClient(authorizeParams.clientId) : null;
+  // Same resolution the authorize endpoint uses (ADR 0004 Decision 2), and the
+  // same validation — so a request beyond the client's scope cap redirects
+  // with invalid_scope here, before a single capability is rendered.
+  const client = authorizeParams.clientId ? await resolveClient(authorizeParams.clientId) : null;
   const result = validateAuthorizeRequest(authorizeParams, client);
 
   if (!result.ok) {
