@@ -9,7 +9,7 @@ import { render, screen } from '@testing-library/react';
 vi.mock('server-only', () => ({}));
 
 vi.mock('next/headers', () => ({
-  cookies: vi.fn(async () => ({ toString: () => 'session=ps_sess_test' })),
+  cookies: vi.fn(async () => ({ toString: (): string => 'session=ps_sess_test' })),
 }));
 
 class RedirectSignal extends Error {
