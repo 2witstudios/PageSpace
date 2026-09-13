@@ -97,6 +97,16 @@ export interface FakeDriveEnvStore {
   calls: { deleteIfUnoccupied: number; requestTeardown: number; stampSpriteTornDown: number };
 }
 
+/** Which drives a user owns or has accepted membership of — the fake's stand-in for the members join. */
+const driveMemberships = new Map<string, Set<string>>();
+
+/** Declare a user as a member of a drive, for `listSpriteEnvsInUserDrives`. */
+export function grantDriveMembership(userId: string, driveId: string): void {
+  const drives = driveMemberships.get(userId) ?? new Set<string>();
+  drives.add(driveId);
+  driveMemberships.set(userId, drives);
+}
+
 export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date = () => NOW): FakeDriveEnvStore {
   const rows = new Map<string, DriveEnvRecord>();
   for (const row of seed) rows.set(row.id, row);
@@ -236,6 +246,15 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       if (paused && sibling.pausedAt !== null) return true;
       local.set(envId, { ...sibling, pausedAt: paused ? at : null, updatedAt: at });
       return true;
+    },
+
+    async listSpriteEnvsInUserDrives(userId) {
+      // The real store's predicate, modelled: Sprite substrate, in a drive the
+      // user owns or has ACCEPTED membership of. The fake has no membership
+      // table, so `driveMemberships` is the seam the tests drive it through.
+      return [...rows.values()].filter(
+        (row) => row.substrate === 'sprite' && (driveMemberships.get(userId)?.has(row.driveId) ?? false),
+      );
     },
 
     async listVisibleToGlobalAssistantByOwner(ownerId) {

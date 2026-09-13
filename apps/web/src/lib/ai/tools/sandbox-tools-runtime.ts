@@ -26,7 +26,7 @@ import { db } from '@pagespace/db/db';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { defaultBuildEnv, localRefusalToToolDenial, type SandboxRunDeps } from '@pagespace/lib/services/sandbox/tool-runners';
-import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
+import { canRunCode, isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import {
   screenToolOutput,
   heuristicInjectionClassifier,
@@ -196,7 +196,9 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
         // per (owner, environment), never this conversation's session
         // re-pointed at it. The spawn carries the owner-only bind gate for a
         // local env, so a refusal happens before any row exists.
-        const ensured = await ensureEnvironmentSession({ ownerId: input.userId, envId: target.id });
+        // The session's drive follows the substrate: the env's own drive for a
+        // cloud env, null for a local machine. The target already carries it.
+        const ensured = await ensureEnvironmentSession({ ownerId: input.userId, envId: target.id, driveId: target.substrate === 'local' ? null : target.driveId });
         if (!ensured.ok) {
           // A refused BIND keeps its own typed word all the way to the agent —
           // "your computer is not connected" and "the machine owner's bind
@@ -442,7 +444,7 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       // session from the one that runs.
       const target = ctx.environment;
       if (target?.kind === 'environment') {
-        const ensured = await ensureEnvironmentSession({ ownerId: ctx.userId, envId: target.id });
+        const ensured = await ensureEnvironmentSession({ ownerId: ctx.userId, envId: target.id, driveId: target.substrate === 'local' ? null : target.driveId });
         if (!ensured.ok) {
           return { deny: ensured.reason === 'session_limit_reached' ? 'session_limit_reached' : 'provision_failed' };
         }
@@ -729,13 +731,26 @@ export const productionResolveEnvironmentTarget: ResolveEnvironmentTarget = asyn
   const { getDriveEnvStore } = await import('@/lib/drive-envs/drive-envs-runtime');
   const store = await getDriveEnvStore();
   const env = await store.findById(environmentId);
-  // A local env's owner lives on the sibling; a Sprite env has none, which
-  // `decideEnvReach` refuses (`not_owner`) rather than falling back to a role.
-  const sibling = env === null ? null : await store.findLocalByEnvId(environmentId);
+  // A local env's owner lives on the sibling; a Sprite env has none, and does
+  // not need one — its authority is the drive permission below.
+  const sibling = env === null || env.substrate !== 'local' ? null : await store.findLocalByEnvId(environmentId);
+
+  // The CLOUD authority, computed here because this is where the database is,
+  // and handed to the pure decision as a fact. `canRunCode` verbatim — same
+  // kill switch, same payer tier (the ENV's drive owner), same drive access and
+  // `canEdit`. Asked only for a Sprite env, and asked on EVERY call: losing
+  // edit access, or the kill switch going off, refuses the next call even with
+  // a session already held.
+  const mayRunCodeInEnvDrive =
+    env !== null && env.substrate === 'sprite'
+      ? (await canRunCode({ userId: ctx.userId, driveId: env.driveId, requestOrigin: ctx.requestOrigin, agentPageId: ctx.agentPageId })).ok
+      : false;
+
   const verdict = decideEnvReach({
     actorId: ctx.userId,
     conversationKind: kind,
-    env: env === null ? null : { visibleToGlobalAssistant: env.visibleToGlobalAssistant, ownerId: sibling?.ownerId ?? null },
+    mayRunCodeInEnvDrive,
+    env: env === null ? null : { substrate: env.substrate, visibleToGlobalAssistant: env.visibleToGlobalAssistant, ownerId: sibling?.ownerId ?? null },
   });
   if (!verdict.ok) return { ok: false, error: ENV_UNREACHABLE_MESSAGE };
 
@@ -749,7 +764,7 @@ export const productionResolveEnvironmentTarget: ResolveEnvironmentTarget = asyn
   if (!payer) return { ok: false, error: ENV_UNREACHABLE_MESSAGE };
   return {
     ok: true,
-    target: { id: env!.id, kind: 'environment', label: sibling?.label ?? env!.name, driveId: env!.driveId },
+    target: { id: env!.id, kind: 'environment', label: sibling?.label ?? env!.name, driveId: env!.driveId, substrate: env!.substrate },
     payer: {
       driveId: env!.driveId,
       ownerId: payer.payerId,
@@ -758,7 +773,9 @@ export const productionResolveEnvironmentTarget: ResolveEnvironmentTarget = asyn
       // A LOCAL env authorizes on machine OWNERSHIP (already decided above,
       // and re-decided by `decideBind` at bind), so the drive-role leg does
       // not apply — otherwise the owner who left the drive is refused on every
-      // call, on their own computer. Every other substrate keeps it.
+      // call, on their own computer. A CLOUD env is the opposite: the drive IS
+      // its authority, and `canRunCode` has just been asked about that exact
+      // drive, so the gate asks the same question again at the call boundary.
       gateDriveId: env!.substrate === 'local' ? undefined : env!.driveId,
     },
   };

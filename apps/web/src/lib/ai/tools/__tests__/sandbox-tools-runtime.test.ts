@@ -19,11 +19,13 @@ const {
   mockResolveDriveEnvPayer,
   mockEnsureEnvironmentSession,
   mockResolveSandboxHostForSandboxId,
+  mockCanRunCode,
 } = vi.hoisted(() => ({
   mockIsLocalEnvsEnabled: vi.fn(() => true),
   mockResolveDriveEnvPayer: vi.fn(),
   mockEnsureEnvironmentSession: vi.fn(),
   mockResolveSandboxHostForSandboxId: vi.fn(),
+  mockCanRunCode: vi.fn<(input: unknown) => Promise<{ ok: boolean; reason?: string }>>(async () => ({ ok: true })),
   mockFindEnvById: vi.fn(),
   mockFindLocalByEnvId: vi.fn(),
   mockFindSessionForConversation: vi.fn(),
@@ -57,6 +59,10 @@ vi.mock('@pagespace/lib/services/sandbox/quota', () => ({
   recordSessionActivity: mockRecordSessionActivity,
 }));
 vi.mock('@pagespace/lib/services/drive-envs/local-envs-enabled', () => ({ isLocalEnvsEnabled: mockIsLocalEnvsEnabled }));
+vi.mock('@pagespace/lib/services/sandbox/can-run-code', async (orig) => ({
+  ...(await orig<typeof import('@pagespace/lib/services/sandbox/can-run-code')>()),
+  canRunCode: mockCanRunCode,
+}));
 vi.mock('@/lib/agent-workspaces/sandbox-host-registry', () => ({
   resolveSandboxHostForSandboxId: mockResolveSandboxHostForSandboxId,
 }));
@@ -845,7 +851,7 @@ describe('productionResolveEnvironmentTarget — resolving the mandatory id (lea
     const result = await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID });
     expect(result).toEqual({
       ok: true,
-      target: { id: ENV_ID, kind: 'environment', label: 'jono-macstudio', driveId: 'drive-1' },
+      target: { id: ENV_ID, kind: 'environment', label: 'jono-macstudio', driveId: 'drive-1', substrate: 'local' },
       // The PAYER is the ENVIRONMENT's drive owner, not the conversation's
       // driveless global coordinates (leaf D).
       payer: {
@@ -891,9 +897,21 @@ describe('productionResolveEnvironmentTarget — resolving the mandatory id (lea
     expect(mockFindEnvById).toHaveBeenCalledWith(ENV_ID);
   });
 
-  it('given a SPRITE env (no enrolling owner), should refuse — there is nobody the ownership check could pass against', async () => {
-    mockFindEnvById.mockResolvedValue({ id: ENV_ID, name: 'staging', driveId: 'drive-1', substrate: 'sprite', visibleToGlobalAssistant: true });
+  it('given a SPRITE env, should RESOLVE on the drive permission — it has no owner, and needs none (scope correction 2026-09-12)', async () => {
+    // This row previously asserted the opposite. The founder's ruling is exact
+    // parity — "if the user can, their global assistant should be able to" — so
+    // a cloud env's authority is `canRunCode` for its drive, and the absence of
+    // an enrolling owner is not a refusal, it is the whole reason there is
+    // nothing to opt in to.
+    mockFindEnvById.mockResolvedValue({ id: ENV_ID, name: 'staging', driveId: 'drive-1', substrate: 'sprite', visibleToGlobalAssistant: false });
     mockFindLocalByEnvId.mockResolvedValue(null);
+    mockCanRunCode.mockResolvedValue({ ok: true });
+    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID })).toMatchObject({
+      ok: true,
+      target: { kind: 'environment', substrate: 'sprite', label: 'staging' },
+    });
+    // And refused the moment the drive says no — the parity runs both ways.
+    mockCanRunCode.mockResolvedValue({ ok: false, reason: 'insufficient_role' });
     expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
   });
 
@@ -921,7 +939,7 @@ describe('acquireSandbox — omission is never a default (leaf C)', () => {
 
 describe('acquireSandbox — routing to a NAMED environment (leaf D)', () => {
   const ENV_ID = 'dw9jthqyaza6ga3b6m5nmpqw';
-  const envTarget = { id: ENV_ID, kind: 'environment' as const, label: 'jono-macstudio', driveId: 'drive-1' };
+  const envTarget = { id: ENV_ID, kind: 'environment' as const, label: 'jono-macstudio', driveId: 'drive-1', substrate: 'local' as const };
   const envSession = {
     id: 'ws-env-1',
     ownerId: 'u1',
@@ -953,7 +971,7 @@ describe('acquireSandbox — routing to a NAMED environment (leaf D)', () => {
   it('should run in the ENVIRONMENT\'s own session — never this conversation\'s session re-pointed at it', async () => {
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(input());
-    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ ownerId: 'u1', envId: ENV_ID });
+    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ ownerId: 'u1', envId: ENV_ID, driveId: null });
     // The conversation's own session is never consulted on this path.
     expect(mockFindSessionForConversation).not.toHaveBeenCalled();
     expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(envSession, 'u1');
@@ -1036,13 +1054,13 @@ describe('resolveBillingSession — a named environment bills the ENVIRONMENT\'s
     conversationId: 'conv-1',
     actorEmail: 'u1@example.com',
     tier: 'pro' as const,
-    environment: { id: ENV_ID, kind: 'environment' as const, label: 'jono-macstudio', driveId: 'drive-1' },
+    environment: { id: ENV_ID, kind: 'environment' as const, label: 'jono-macstudio', driveId: 'drive-1', substrate: 'local' as const },
   };
 
   it("resolves the payer from the ENVIRONMENT's drive, not the driveless conversation, through the SAME session acquire will use", async () => {
     const deps = buildRealSandboxRunDeps();
     expect(await deps.resolveBillingSession?.(ctx)).toEqual({ workspaceId: 'ws-env-1', driveId: 'drive-1', ownerId: 'u1' });
-    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ ownerId: 'u1', envId: ENV_ID });
+    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ ownerId: 'u1', envId: ENV_ID, driveId: null });
     // The conversation's own session is never resolved on this path — billing
     // and the run cannot see different sessions.
     expect(mockFindSessionForConversation).not.toHaveBeenCalled();
@@ -1161,5 +1179,114 @@ describe('createResolveSandboxActorContext — the conversation kind rides the a
       locationContext: { currentDrive: { id: 'd1', name: 'D', slug: 'd' } },
     });
     expect('error' in unknown ? null : unknown.conversationKind).toBe('page');
+  });
+});
+
+describe('a CLOUD (Sprite) env reaches by canRunCode parity (founder ruling 2026-09-12)', () => {
+  const ENV_ID = 'j945few5ssv75k5ad0bowbb4';
+  const ctx = {
+    userId: 'u1',
+    tenantId: 'u1',
+    conversationId: 'a78aoz3je2ycbofz79zgez9q',
+    actorEmail: 'u1@example.com',
+    tier: 'pro' as const,
+    conversationKind: 'global' as const,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsLocalEnvsEnabled.mockReturnValue(true);
+    mockCanRunCode.mockResolvedValue({ ok: true });
+    mockResolveDriveEnvPayer.mockResolvedValue({ payerId: 'drive-owner', tier: 'pro' });
+    mockFindEnvById.mockResolvedValue({ id: ENV_ID, name: 'staging', driveId: 'drive-1', substrate: 'sprite', visibleToGlobalAssistant: false });
+    mockFindLocalByEnvId.mockResolvedValue(null);
+  });
+
+  it('given a drive where the user has edit access, should resolve the cloud env WITHOUT any visibility toggle', async () => {
+    const result = await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID });
+    expect(result).toMatchObject({ ok: true, target: { id: ENV_ID, kind: 'environment', substrate: 'sprite', driveId: 'drive-1' } });
+    // The authority is canRunCode for the ENV's drive — asked verbatim.
+    expect(mockCanRunCode).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', driveId: 'drive-1' }));
+    // A Sprite env has no sibling to read, and none is read.
+    expect(mockFindLocalByEnvId).not.toHaveBeenCalled();
+  });
+
+  it('given a VIEWER (canRunCode denies insufficient_role), should refuse with the ONE message — exactly as in-drive', async () => {
+    mockCanRunCode.mockResolvedValue({ ok: false, reason: 'insufficient_role' });
+    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+  });
+
+  it('given a drive the user is NOT in, a REAL id gets the identical refusal to a guess', async () => {
+    mockCanRunCode.mockResolvedValue({ ok: false, reason: 'no_drive_access' });
+    const realButForbidden = await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID });
+    mockFindEnvById.mockResolvedValue(null);
+    const guessed = await productionResolveEnvironmentTarget({ ctx, environmentId: 'dw9jthqyaza6ga3b6m5nmpqw' });
+    expect(realButForbidden).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+    expect(guessed).toEqual(realButForbidden);
+  });
+
+  it('given the kill switch off or an ineligible PAYER tier, should refuse — the drive\'s payer governs, not the user\'s own tier', async () => {
+    for (const reason of ['kill_switch_off', 'tier_ineligible'] as const) {
+      mockCanRunCode.mockResolvedValue({ ok: false, reason });
+      expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID }), reason).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+    }
+  });
+
+  it('re-checks canRunCode on EVERY call — losing edit access mid-conversation refuses the next one', async () => {
+    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID })).toMatchObject({ ok: true });
+    mockCanRunCode.mockResolvedValue({ ok: false, reason: 'insufficient_role' });
+    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+    expect(mockCanRunCode).toHaveBeenCalledTimes(2);
+  });
+
+  it('given a PAGE conversation, a cloud env id is still refused before canRunCode is even asked', async () => {
+    const page = { ...ctx, conversationKind: 'page' as const };
+    expect(await productionResolveEnvironmentTarget({ ctx: page, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+    expect(mockCanRunCode).not.toHaveBeenCalled();
+    expect(mockFindEnvById).not.toHaveBeenCalled();
+  });
+
+  it("the cloud target keeps the drive on BOTH coordinates — the drive is its authority, so the gate asks about it too", async () => {
+    const result = await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID });
+    expect(result).toMatchObject({ ok: true, payer: { driveId: 'drive-1', gateDriveId: 'drive-1', ownerId: 'drive-owner' } });
+  });
+});
+
+describe('the cloud SESSION is bound to the ENV\'s drive (scope correction, point 3)', () => {
+  const ENV_ID = 'j945few5ssv75k5ad0bowbb4';
+  const cloudTarget = { id: ENV_ID, kind: 'environment' as const, label: 'staging', driveId: 'drive-1', substrate: 'sprite' as const };
+  const localTarget = { id: 'dw9jthqyaza6ga3b6m5nmpqw', kind: 'environment' as const, label: 'jono-macstudio', driveId: 'drive-9', substrate: 'local' as const };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCheckSessionRuntimeGuardrail.mockReturnValue({ allowed: true });
+    mockEnsureEnvironmentSession.mockResolvedValue({ ok: true, session: { id: 'ws-1', ownerId: 'u1', driveId: 'drive-1', envId: ENV_ID } });
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx', resumed: false });
+  });
+
+  it("a CLOUD env's session carries the env's drive — the drive agreement is satisfied, not bypassed", async () => {
+    const deps = buildRealSandboxRunDeps();
+    await deps.acquireSandbox({ tenantId: 'drive-owner', driveId: 'drive-1', userId: 'u1', conversationId: 'conv-1', environment: cloudTarget });
+    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ ownerId: 'u1', envId: ENV_ID, driveId: 'drive-1' });
+  });
+
+  it('a LOCAL machine keeps its DRIVELESS session — only that substrate is the exception', async () => {
+    const deps = buildRealSandboxRunDeps();
+    await deps.acquireSandbox({ tenantId: 'u1', userId: 'u1', conversationId: 'conv-1', environment: localTarget });
+    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ ownerId: 'u1', envId: localTarget.id, driveId: null });
+  });
+
+  it("billing for a cloud env keys on the ENV's drive and the session bound to it", async () => {
+    const deps = buildRealSandboxRunDeps();
+    const billing = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'drive-owner',
+      conversationId: 'conv-1',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+      environment: cloudTarget,
+    });
+    expect(billing).toEqual({ workspaceId: 'ws-1', driveId: 'drive-1', ownerId: 'u1' });
+    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ ownerId: 'u1', envId: ENV_ID, driveId: 'drive-1' });
   });
 });

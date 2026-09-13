@@ -246,6 +246,21 @@ export interface DriveEnvStore {
    */
   listVisibleToGlobalAssistantByOwner(ownerId: string): Promise<Array<{ env: DriveEnvRecord; local: DriveEnvLocalRecord }>>;
   /**
+   * CANDIDATE cloud (Sprite) environments for the global assistant: every
+   * Sprite env in a drive this user OWNS or is an ACCEPTED member of.
+   *
+   * **Candidates, not an authorization answer.** The drive relationship is what
+   * makes a row worth asking about; whether the person may actually run there
+   * is `canRunCode`'s to say, per drive, and the caller asks it. Splitting it
+   * this way is deliberate — a drive relationship is not an entitlement (the
+   * trap PR #2609 hit), and `canRunCode` additionally weighs the kill switch,
+   * the payer's tier and `canEdit`, none of which SQL should be reimplementing.
+   *
+   * Unaccepted invitations are excluded (`acceptedAt IS NOT NULL`): an invite
+   * nobody took up is not a drive you are in.
+   */
+  listSpriteEnvsInUserDrives(userId: string): Promise<DriveEnvRecord[]>;
+  /**
    * Enroll: pin the machine key and consume the code, IFF the row is pending
    * (`enrolledAt IS NULL AND enrollmentCodeUsedAt IS NULL AND revokedAt IS
    * NULL`) AND the stored code hash is still the one the caller VERIFIED
@@ -663,6 +678,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     { agentWorkspaces },
     { drives },
     { machineSpriteReclaims },
+    { driveMembers },
   ] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
@@ -671,6 +687,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     import('@pagespace/db/schema/agent-workspaces'),
     import('@pagespace/db/schema/core'),
     import('@pagespace/db/schema/machine-sprite-reclaims'),
+    import('@pagespace/db/schema/members'),
   ]);
 
   /** A sibling row joined with its env's drive (the record carries `driveId` for the listing join). */
@@ -758,6 +775,30 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
         .orderBy(asc(driveEnvs.createdAt))
         .limit(MAX_DRIVE_ENVS_LISTED);
       return rows.map((row) => ({ env: row.env as DriveEnvRecord, local: row.local as DriveEnvLocalRecord }));
+    },
+
+    async listSpriteEnvsInUserDrives(userId) {
+      // Bounded like every other read here (the findMany-limit rule): a
+      // person's reachable cloud envs are small by construction, but the limit
+      // is a property of the query rather than of today's constants.
+      const rows = await db
+        .select({ env: driveEnvs })
+        .from(driveEnvs)
+        .innerJoin(drives, eq(drives.id, driveEnvs.driveId))
+        .leftJoin(
+          driveMembers,
+          and(eq(driveMembers.driveId, driveEnvs.driveId), eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)),
+        )
+        .where(
+          and(
+            eq(driveEnvs.substrate, 'sprite'),
+            // Owner OR accepted member. Nothing else is a drive you are in.
+            or(eq(drives.ownerId, userId), isNotNull(driveMembers.userId)),
+          ),
+        )
+        .orderBy(asc(driveEnvs.createdAt))
+        .limit(MAX_DRIVE_ENVS_LISTED);
+      return rows.map((row) => row.env as DriveEnvRecord);
     },
 
     async listVisibleToGlobalAssistantByOwner(ownerId) {

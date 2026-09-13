@@ -22,6 +22,15 @@
  * a page conversation must not be able to tell a real environment id from a
  * made-up one either.
  *
+ * **Two substrates, two authorities, one function.** A CLOUD (Sprite) env is
+ * drive-owned and has no owner of its own, so its authority is the DRIVE
+ * PERMISSION the person already holds — `canRunCode` for that drive, injected
+ * as `mayRunCodeInEnvDrive`. The founder's ruling is exact parity: *if the user
+ * can, their global assistant should be able to*. There is no per-env opt-in
+ * for a cloud env because there is nobody to give one. A LOCAL machine is one
+ * person's computer, so its authority is that person plus their explicit
+ * opt-in, and neither half is substitutable by a drive permission.
+ *
  * **Visibility is not authority.** An `ok` here says only that the assistant
  * may ADDRESS this environment. Whether anything may then run on it is still
  * `decideBind` / `decideSign` / the machine's own policy, unchanged — for a
@@ -40,13 +49,32 @@
 
 /** What the reach decision needs to know about an environment. `null` = no such row. */
 export interface EnvReachFacts {
-  /** `drive_envs.visibleToGlobalAssistant`. Default false on the column; absence is never a grant. */
+  /**
+   * What runs this environment. It is the DISCRIMINATOR for how reach is
+   * decided, because the two substrates answer to different authorities:
+   *
+   *  - `'sprite'` — a CLOUD environment. Drive-owned, drive-paid, drive-shared,
+   *    with no owner of its own. Its authority is the DRIVE PERMISSION the
+   *    person already has, so there is nothing to opt in to.
+   *  - `'local'` — one person's own computer. Its authority is that person
+   *    ([D-6]), plus their explicit opt-in.
+   */
+  readonly substrate: 'sprite' | 'local';
+  /**
+   * `drive_envs.visibleToGlobalAssistant`. A LOCAL-machine opt-in only: the
+   * owner deciding whether their own computer is in reach. Default false on the
+   * column, and absence is never a grant.
+   *
+   * **Deliberately not consulted for a cloud env**, in either direction — see
+   * the module doc. A cloud env has no owner to set it, so treating it as a
+   * gate would make every cloud env permanently unreachable, and treating a
+   * stray `true` as a grant would let a row widen what the drive decided.
+   */
   readonly visibleToGlobalAssistant: boolean;
   /**
    * The environment's OWNER — `drive_env_local.ownerId` for a local machine.
-   * `null` for an environment with no owner (a Sprite env, or a local env
-   * whose owner was erased): nobody can be the owner of an ownerless
-   * environment, so every actor is refused.
+   * `null` for a Sprite env (which has none by design) or a local env whose
+   * owner was erased. Only consulted on the local arm.
    */
   readonly ownerId: string | null;
 }
@@ -79,14 +107,14 @@ export function conversationMayReachPersistentEnvironments(kind: ConversationKin
   return kind === 'global';
 }
 
-export type EnvReachDenyReason = 'not_global' | 'not_found' | 'not_owner' | 'not_visible';
+export type EnvReachDenyReason = 'not_global' | 'not_found' | 'not_permitted' | 'not_owner' | 'not_visible';
 
 export type EnvReachVerdict =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: EnvReachDenyReason };
 
 /** The documented, tested deny order. */
-export const ENV_REACH_DENY_ORDER: readonly EnvReachDenyReason[] = ['not_global', 'not_found', 'not_owner', 'not_visible'];
+export const ENV_REACH_DENY_ORDER: readonly EnvReachDenyReason[] = ['not_global', 'not_found', 'not_permitted', 'not_owner', 'not_visible'];
 
 /**
  * The ONE sentence every reach refusal surfaces, whatever the typed reason.
@@ -104,6 +132,18 @@ export function decideEnvReach(input: {
   actorId: string;
   /** Which kind of conversation is asking. Only a global one may reach a persistent environment. */
   conversationKind: ConversationKind;
+  /**
+   * `canRunCode({ userId, driveId: env.driveId })` for the acting user, computed
+   * by the caller and injected so this stays pure.
+   *
+   * It is the WHOLE authority for a cloud env, deliberately: the same kill
+   * switch, the same payer tier, the same drive access and `canEdit` bar the
+   * person meets to run code in that drive from any other surface. Re-deriving
+   * any part of it here would be a second answer to a question `canRunCode`
+   * already owns, and the drift guard in the test suite exists to keep the two
+   * from ever disagreeing.
+   */
+  mayRunCodeInEnvDrive: boolean;
   env: EnvReachFacts | null;
 }): EnvReachVerdict {
   // FIRST, and before the row is even consulted: a page conversation may not
@@ -111,6 +151,18 @@ export function decideEnvReach(input: {
   // able to learn anything about one from the order of these checks either.
   if (!conversationMayReachPersistentEnvironments(input.conversationKind)) return { ok: false, reason: 'not_global' };
   if (input.env === null) return { ok: false, reason: 'not_found' };
+
+  // A CLOUD env: the drive permission IS the visibility. "If the user can,
+  // their global assistant should be able to" — exact parity, nothing more and
+  // nothing less. No owner is consulted (there is none) and no opt-in is
+  // consulted (there is nobody to give one).
+  if (input.env.substrate === 'sprite') {
+    return input.mayRunCodeInEnvDrive ? { ok: true } : { ok: false, reason: 'not_permitted' };
+  }
+
+  // A LOCAL machine: unchanged. The owner, and then the owner's explicit
+  // opt-in. Permission to run code in the drive the machine happens to be
+  // enrolled in is NOT a substitute for either ([D-6]).
   if (input.env.ownerId === null || input.env.ownerId !== input.actorId) return { ok: false, reason: 'not_owner' };
   if (!input.env.visibleToGlobalAssistant) return { ok: false, reason: 'not_visible' };
   return { ok: true };

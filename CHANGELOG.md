@@ -7,6 +7,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Your assistant on the dashboard can now work in your cloud environments — any of them you
+  could already use.** The assistant you talk to from the dashboard used to be stuck with one
+  sandbox of its own. It can now list and work in the shared cloud environments of every drive
+  where you can run code. **There is nothing to turn on:** the permission you already hold in
+  that drive is the permission it uses, so if you can run code there, so can it, and if you are
+  a viewer, it is refused exactly as you are. Lose edit access mid-conversation and the very
+  next thing it tries is refused. Every result tells you which environment it ran in, by name.
+  Worth knowing, because it is a real change in shape rather than in permissions: this is one
+  conversation that can reach all of those environments in turn, and it is the assistant that
+  reads the most of other people's writing. It can do nothing in any drive that you could not
+  already do there yourself.
+
 - **Local Environments: your assistant on the dashboard can work on a machine you switch on for
   it — and it is off for every machine until you do (opt-in).** The assistant you talk to from
   the dashboard works across every drive you belong to, and until now it could only ever touch
@@ -18,13 +30,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   very next thing it tries is refused; it does not ride an earlier reach.
   When it does run something, the result tells you which machine, by the name you gave it, so a
   wrong one shows up immediately instead of only in a log.
-  Two things this does **not** do, deliberately. It does not widen who may drive the machine —
+  One thing this does **not** do, deliberately: it does not widen who may drive the machine —
   that is still only you, and a command or a write that could become one still waits for your
-  passkey-verified click on that computer. And it does not reach your team's cloud
-  environments: only machines you enrolled and switched on, plus the conversation's own sandbox.
-  The reason it ships off is worth saying plainly: this is the agent that reads the most of other
-  people's writing, so what it can reach should be a decision you made, not a consequence of
-  owning the machine.
+  passkey-verified click on that computer. Your own computer is the one place that needs a
+  switch at all, and the reason is worth saying plainly: a cloud environment is your team's and
+  your drive permissions already govern it, whereas your laptop is yours, so reaching it should
+  be a decision you made rather than a consequence of having enrolled it.
 
 - **Local Environments: a file write that could become a command now asks you first (opt-in).**
   Writing files inside the folders you declared runs without a prompt, because that is the point

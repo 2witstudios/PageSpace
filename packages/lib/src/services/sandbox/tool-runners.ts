@@ -76,6 +76,16 @@ export interface SandboxEnvironmentTarget {
   readonly label: string;
   /** The owning drive; `null` for a global-assistant conversation's own sandbox. */
   readonly driveId: string | null;
+  /**
+   * What runs it. Absent for the conversation's own sandbox, which is not a
+   * persistent environment at all.
+   *
+   * Carried because the SESSION SHAPE follows it: a cloud env's session is
+   * bound to that env's drive, a local machine's is driveless. The resolver
+   * already knows the substrate, so the router does not have to read the row a
+   * second time to find out.
+   */
+  readonly substrate?: 'sprite' | 'local';
 }
 
 export interface SandboxActorContext {

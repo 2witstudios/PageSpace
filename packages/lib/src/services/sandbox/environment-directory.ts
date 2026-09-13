@@ -12,6 +12,12 @@
  * around it: every answer tells the model to copy an id and never to construct
  * one.
  *
+ * **Two substrates, two ways in.** A CLOUD environment is listed when the
+ * person can already run code in its drive — the drive permission is the whole
+ * of it, with nothing to opt in to, because a cloud env has no owner to opt in.
+ * A LOCAL machine is listed when its owner has switched it on. The rows look
+ * identical to the model on purpose: it addresses by id either way.
+ *
  * **The conversation's own sandbox is a row like any other.** It is listed
  * first, addressed by the conversation's own id, and named plainly — so there
  * is no implicit path a model can take while believing it is somewhere else.
@@ -91,9 +97,16 @@ export interface EnvironmentDirectory {
 export const COPY_THE_ID_NOTICE =
   'Pass one of these ids verbatim as environmentId on bash, writeFile, readFile and editFile. Copy it exactly from this list — never construct, shorten or guess an id, and never reuse an id from an earlier conversation.';
 
-/** What the caller is told when nothing but their own sandbox is reachable. */
+/**
+ * What the caller is told when nothing but their own sandbox is reachable.
+ *
+ * It names BOTH reasons, because the two substrates become reachable in
+ * different ways and a person reading it back needs to know which lever is
+ * theirs: a cloud environment appears when they can run code in its drive
+ * (nothing to switch on), a local machine when its owner switches it on.
+ */
 export const NO_VISIBLE_ENVIRONMENTS_NOTICE =
-  'You have no other environments available: none has been made visible to your global assistant. The only place you can run anything is this conversation\'s own sandbox, listed above.';
+  "You have no other environments available: there is no cloud environment in a drive you can run code in, and no computer of your own switched on for your assistant. The only place you can run anything is this conversation's own sandbox, listed above.";
 
 export interface EnvironmentDirectoryInput {
   /** This conversation's own sandbox — always present, always first. */

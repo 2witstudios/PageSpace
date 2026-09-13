@@ -40,6 +40,10 @@ describe('buildEnvironmentDirectory', () => {
   it('given the caller has no visible environments, should say so IN WORDS rather than returning an empty list', () => {
     const directory = buildEnvironmentDirectory({ conversation: CONVERSATION, environments: [] });
     expect(directory.notice).toContain(NO_VISIBLE_ENVIRONMENTS_NOTICE);
+    // Names BOTH ways in, so the reader knows which lever is theirs.
+    expect(NO_VISIBLE_ENVIRONMENTS_NOTICE).toMatch(/cloud environment in a drive you can run code in/i);
+    expect(NO_VISIBLE_ENVIRONMENTS_NOTICE).toMatch(/computer of your own switched on/i);
+    expect(NO_VISIBLE_ENVIRONMENTS_NOTICE).not.toMatch(/made visible/i);
     expect(directory.notice).toContain(COPY_THE_ID_NOTICE);
     // Never a bare empty array with a mandatory field left to invent.
     expect(directory.environments).toHaveLength(1);

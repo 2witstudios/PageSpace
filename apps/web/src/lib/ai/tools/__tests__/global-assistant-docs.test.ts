@@ -50,11 +50,24 @@ describe('the posture document', () => {
     expect(posture).toMatch(/Neither is a control on what the\s*\n?\s*assistant was persuaded to want/);
   });
 
-  it('says plainly that the discovery list is LOCAL-ONLY in practice, and what would decide a cloud env\'s visibility', () => {
-    expect(posture).toMatch(/LOCAL-ONLY/);
-    expect(posture).toMatch(/A Sprite \(cloud\) environment has no enrolling\s*\n?\s*owner/);
-    expect(posture).toMatch(/decided by a drive\s*\n?\s*ROLE/);
-    expect(posture).toMatch(/File it as its own decision/);
+  it('records the founder ruling and the canRunCode parity for CLOUD envs, and says the local rule is unchanged', () => {
+    expect(posture).toMatch(/### Two substrates, two authorities/);
+    expect(posture).toMatch(/if the user can, their global assistant should be able to/);
+    expect(posture).toMatch(/the DRIVE PERMISSION\s*\n?\s*is the visibility/);
+    expect(posture).toMatch(/A VIEWER is refused here exactly as they are in-drive/);
+    expect(posture).toMatch(/A LOCAL machine keeps its own rule, unchanged/);
+    // The parity promise is a test, and the document says so.
+    expect(posture).toMatch(/parity promise is a TEST, not a comment/);
+  });
+
+  it('no longer claims the feature is LOCAL-ONLY anywhere', () => {
+    expect(posture).not.toMatch(/LOCAL-ONLY|local-only/);
+  });
+
+  it('names the new blast radius in the register — aggregation, not per-drive escalation', () => {
+    expect(posture).toMatch(/\| R-20 \| \*\*The global assistant's blast radius/);
+    expect(posture).toMatch(/it is parity, not escalation/);
+    expect(posture).toMatch(/What CHANGES is the AGGREGATION/);
   });
 
   it('says the database CHECK was DROPPED, why it was right for a Sprite env and wrong for a local one, and where the guarantee lives now', () => {
@@ -81,7 +94,8 @@ describe('the posture document', () => {
   });
 
   it('adds to the layers table, the residual register and the flag-on checklist', () => {
-    expect(posture).toMatch(/\| Visibility to the global assistant \|/);
+    expect(posture).toMatch(/\| Visibility to the global assistant — a LOCAL-machine opt-in \|/);
+    expect(posture).toMatch(/\| A CLOUD env reaches by `canRunCode` PARITY \|/);
     expect(posture).toMatch(/\| Mandatory, opaque environment id on every code-execution tool \|/);
     expect(posture).toMatch(/\| The result says where it ran \|/);
     expect(posture).toMatch(/\| R-17 \| \*\*A REAL id for the WRONG environment/);
@@ -97,8 +111,9 @@ describe('the customer page does not read better than the internal document', ()
     expect(customerPage).toMatch(/still waits for\s*\n?\s*your click/);
   });
 
-  it('carries the LOCAL-ONLY scope and the wrong-machine limit, not only the capability', () => {
-    expect(customerPage).toMatch(/It does not reach your team's cloud\s*\n?\s*environments/);
+  it('says a cloud environment needs no switch, and that the limit is what you can already do there', () => {
+    expect(customerPage).toMatch(/nothing to switch on/i);
+    expect(customerPage).toMatch(/exactly what you\s*\n?\s*could already do in those drives yourself/i);
     expect(customerPage).toMatch(/it can still name the wrong one/);
   });
 
@@ -134,9 +149,18 @@ describe('the changelog', () => {
     expect(entry).toMatch(/Every machine starts off/);
   });
 
-  it('carries the same two limits the other surfaces do', () => {
+  it('tells a person the CLOUD half needs nothing turned on, and names the shape change', () => {
+    const entry = changelog.slice(0, changelog.indexOf('a file write that could become a command'));
+    expect(entry).toMatch(/There is nothing to turn on/);
+    expect(entry).toMatch(/if you can run code there, so can it/);
+    expect(entry).toMatch(/refused exactly as you are/);
+    // The honest framing: a change in shape, not in permissions.
+    expect(entry).toMatch(/It can do nothing in any drive that you could not\s*\n?\s*already do there yourself/);
+  });
+
+  it('still carries the LOCAL limit — the machine switch and the click', () => {
     const entry = changelog.slice(0, changelog.indexOf('a file write that could become a command'));
     expect(entry).toMatch(/does not widen who may drive the machine/);
-    expect(entry).toMatch(/does not reach your team's cloud\s*\n?\s*environments/);
+    expect(entry).toMatch(/passkey-verified click/);
   });
 });

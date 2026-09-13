@@ -20,6 +20,7 @@ import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
 import {
   ensureDriveEnvSandbox,
   gateLocalEnvForRequester,
@@ -182,11 +183,40 @@ export async function listOwnerMachines(ownerId: string): Promise<Array<{ env: D
  * machine in a drive the owner has since left is still listed: it is their
  * computer.
  */
-export async function listGlobalAssistantEnvironments(ownerId: string): Promise<Array<{ id: string; label: string; substrate: 'sprite' | 'local'; driveId: string }>> {
+export async function listGlobalAssistantEnvironments(userId: string): Promise<Array<{ id: string; label: string; substrate: 'sprite' | 'local'; driveId: string }>> {
   const store = await getDriveEnvStore();
-  const rows = await store.listVisibleToGlobalAssistantByOwner(ownerId);
-  return rows.map(({ env, local }) => ({ id: env.id, label: local.label, substrate: env.substrate, driveId: env.driveId }));
+  const [localRows, spriteCandidates] = await Promise.all([
+    // LOCAL machines: the owner's own, and only the ones they switched on.
+    // Unchanged — a person's own computer is theirs to opt in.
+    store.listVisibleToGlobalAssistantByOwner(userId),
+    // CLOUD envs: CANDIDATES from the drives this person is actually in. A
+    // drive relationship is not an entitlement (PR #2609), so every one of
+    // these is still put to `canRunCode` below.
+    store.listSpriteEnvsInUserDrives(userId),
+  ]);
+
+  // The AUTHORITY for a cloud env, asked once per DISTINCT drive — several envs
+  // in one drive are one question. `canRunCode`'s answer is used verbatim:
+  // same kill switch, same payer tier, same drive access and `canEdit` the
+  // person meets to run code there from any other surface. Founder ruling: if
+  // the user can, their global assistant can — nothing more, nothing less.
+  const decidedByDrive = new Map<string, boolean>();
+  const cloud: Array<{ id: string; label: string; substrate: 'sprite' | 'local'; driveId: string }> = [];
+  for (const env of spriteCandidates) {
+    let allowed = decidedByDrive.get(env.driveId);
+    if (allowed === undefined) {
+      allowed = (await canRunCode({ userId, driveId: env.driveId, requestOrigin: 'user' })).ok;
+      decidedByDrive.set(env.driveId, allowed);
+    }
+    if (allowed) cloud.push({ id: env.id, label: env.name, substrate: env.substrate, driveId: env.driveId });
+  }
+
+  return [
+    ...cloud,
+    ...localRows.map(({ env, local }) => ({ id: env.id, label: local.label, substrate: env.substrate, driveId: env.driveId })),
+  ];
 }
+
 
 /** Activity across every machine a user OWNS, newest first — the account page's read. */
 export async function listOwnerActivity(input: { ownerId: string; limit?: number }): Promise<DriveEnvActivityDTO[]> {
