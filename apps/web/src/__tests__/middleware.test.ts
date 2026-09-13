@@ -73,7 +73,9 @@ vi.mock('@/lib/auth/cookie-config', () => ({
 }));
 
 vi.mock('@/lib/well-known/rewrites', () => ({
-  WELL_KNOWN_REWRITES: [],
+  WELL_KNOWN_REWRITES: [
+    { source: '/.well-known/oauth-authorization-server', destination: '/api/well-known/oauth-authorization-server' },
+  ],
 }));
 
 import { middleware } from '../middleware';
@@ -614,3 +616,83 @@ describe('middleware — handoff-bridge OAuth callbacks skip the middleware CSP'
     );
   });
 });
+
+/**
+ * ADR 0004 Decision 9 (Phase 1a leaf 6): a browser app on a foreign origin
+ * (the SDK's sign-in flow) must be able to READ the token, revoke and
+ * discovery responses. A form-encoded POST is a simple request — no preflight
+ * — so the response itself has to carry the CORS headers, and origin
+ * validation cannot be what refuses it: these endpoints authenticate with
+ * PKCE, a single-use code or a refresh token in the body, never a cookie.
+ * Scoped to exactly those three; every other public route is unchanged.
+ */
+describe('middleware — CORS on the OAuth token, revoke and discovery responses', () => {
+  const FOREIGN_ORIGIN = 'https://swipesend.app';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSessionFromCookies.mockReturnValue(undefined);
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+    mockValidateOriginForMiddleware.mockReturnValue({
+      valid: false,
+      origin: FOREIGN_ORIGIN,
+      skipped: false,
+      reason: 'origin not in allowlist',
+    });
+  });
+
+  const formPost = (pathname: string) =>
+    buildRequest(pathname, { origin: FOREIGN_ORIGIN, 'content-type': 'application/x-www-form-urlencoded' }, 'POST');
+
+  for (const pathname of ['/api/oauth/token', '/api/oauth/revoke']) {
+    it(`a foreign-origin form POST to ${pathname} gets a readable response: Access-Control-Allow-Origin: *`, async () => {
+      const response = await middleware(formPost(pathname));
+
+      expect(response.status).not.toBe(403);
+      expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      expect(mockValidateOriginForMiddleware).not.toHaveBeenCalled();
+      expect(mockGetSessionFromCookies).not.toHaveBeenCalled();
+    });
+  }
+
+  it('answers a preflight to /api/oauth/token through the generic OPTIONS short-circuit: 204 with CORS', async () => {
+    const response = await middleware(buildRequest('/api/oauth/token', { origin: FOREIGN_ORIGIN }, 'OPTIONS'));
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+  });
+
+  it('rewrites the RFC 8414 discovery document to its handler AND makes the response readable cross-origin', async () => {
+    const response = await middleware(
+      buildRequest('/.well-known/oauth-authorization-server', { origin: FOREIGN_ORIGIN }),
+    );
+
+    expect(response.headers.get('x-middleware-rewrite')).toContain('/api/well-known/oauth-authorization-server');
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+  });
+
+  it('does NOT add CORS to another public route — a webhook intake response carries no Access-Control-Allow-Origin', async () => {
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: 'no origin' });
+
+    const response = await middleware(buildRequest('/api/webhooks/whk_abc123', {}, 'POST'));
+
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBeNull();
+  });
+
+  for (const pathname of ['/api/oauth/device_authorization', '/api/oauth/authorize']) {
+    it(`does NOT extend it to the neighbouring ${pathname} — still origin-validated, no CORS`, async () => {
+      const response = await middleware(formPost(pathname));
+
+      expect(mockValidateOriginForMiddleware).toHaveBeenCalled();
+      expect(response.status).toBe(403);
+      expect(response.headers.get('Access-Control-Allow-Origin')).toBeNull();
+    });
+  }
+
+  it('does not treat a path that merely starts with /api/oauth/token as the token endpoint', async () => {
+    const response = await middleware(formPost('/api/oauth/token-exchange'));
+
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBeNull();
+  });
+});
+

@@ -48,6 +48,15 @@ const OAUTH_BEARER_PREFIX = `Bearer ${OAUTH_ACCESS_TOKEN_PREFIX}`;
 
 const SIGNIN_PATH = '/auth/signin';
 
+/**
+ * The OAuth endpoints a browser app on ANY origin must be able to read (ADR
+ * 0004 Decision 9): the token endpoint and revocation. Exact paths only. The
+ * RFC 8414 discovery document gets the same treatment in the well-known
+ * rewrite branch below. Nothing else — not `device_authorization`, not the
+ * session-bound `authorize` — belongs here.
+ */
+const CROSS_ORIGIN_READABLE_OAUTH_PATHS: ReadonlySet<string> = new Set(['/api/oauth/token', '/api/oauth/revoke']);
+
 // The iOS shell remote-loads https://pagespace.ai/dashboard (apps/ios/capacitor.config.ts).
 // Capacitor decides every top-level navigation in WebViewDelegationHandler.swift:98-116:
 // with no `server.allowNavigation` the host allowlist is empty, so it falls through to a
@@ -181,6 +190,25 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       return response;
     }
 
+    // OAuth token + revocation endpoints (ADR 0004 Decision 9): origin-exempt
+    // and CORS-readable. A browser SDK on a foreign origin POSTs these
+    // form-encoded — a simple request, no preflight — and must be able to READ
+    // the response, so the response itself carries the CORS headers.
+    //
+    // Exempt from origin validation ONLY because neither handler reads a
+    // cookie or a session: they authenticate with PKCE, a single-use code, a
+    // refresh token or a device_code in the body, so an Origin check protects
+    // nothing and would refuse exactly the callers these endpoints exist for.
+    // That invariant is what keeps this from being a CSRF hole, and it is
+    // pinned by `app/api/oauth/__tests__/origin-exempt-routes-read-no-session.test.ts`
+    // — which fails the moment either route file touches a cookie or session.
+    // Exact paths (a Set, never a prefix). A preflight still takes the generic
+    // OPTIONS short-circuit below.
+    if (req.method !== 'OPTIONS' && CROSS_ORIGIN_READABLE_OAUTH_PATHS.has(pathname)) {
+      const { response } = createSecureResponse(isProduction, req, { isAPIRoute: true });
+      return applyApiCorsHeaders(response);
+    }
+
     // Published-app serving edge: pagespace-proxy calls this for EVERY request to
     // a published app, with no session and no user — it authenticates via the
     // APP_ROUTER_PROXY_SECRET shared secret checked inside the route, which
@@ -288,7 +316,9 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     // (no session), which is why it sits above the auth checks below.
     const wellKnown = WELL_KNOWN_REWRITES.find((rewrite) => rewrite.source === pathname);
     if (wellKnown) {
-      return NextResponse.rewrite(new URL(wellKnown.destination, req.url));
+      // Readable cross-origin (ADR 0004 Decision 9): a browser SDK discovers
+      // the token endpoint from here before it has anything else.
+      return applyApiCorsHeaders(NextResponse.rewrite(new URL(wellKnown.destination, req.url)));
     }
 
     // Public routes that don't require authentication
@@ -298,7 +328,8 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     // OAuth grant endpoints are public by protocol design (RFC 6749/7009/8628): the CLI calls
     // them with no browser session at all, authenticating via client_id/code/refresh_token/
     // device_code in the request body instead — each route enforces its own auth internally
-    // (authorize's POST still requires a session; token/revoke/device_authorization never do).
+    // (authorize's POST still requires a session; device_authorization never does). token and
+    // revoke are public too but return earlier, with CORS (CROSS_ORIGIN_READABLE_OAUTH_PATHS).
     // Exact matches only — device_authorization's /verify and /decision sub-routes are the
     // browser-side /activate screen and DO require a session, so must not be swept in here.
     // Third-party webhooks authenticate via their own signature/HMAC check inside route.ts,
@@ -361,8 +392,6 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       pathname.startsWith('/api/drives') ||
       pathname.startsWith('/api/cron/') ||
       pathname === '/api/oauth/authorize' ||
-      pathname === '/api/oauth/token' ||
-      pathname === '/api/oauth/revoke' ||
       pathname === '/api/oauth/device_authorization' ||
       pathname === '/api/memory/cron' ||
       pathname === '/api/pulse/cron' ||
