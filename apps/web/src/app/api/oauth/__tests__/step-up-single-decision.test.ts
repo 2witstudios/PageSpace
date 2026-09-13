@@ -108,3 +108,26 @@ describe('step-up single decision point', () => {
     expect(source).toMatch(/\brequiresStepUp\s*\(/);
   });
 });
+
+/**
+ * Scope narration has ONE implementation too (ADR 0004 Decision 4, Phase 1
+ * obligation 5): three surfaces each re-deriving what a scope means is how
+ * `profile` had to be taught to all three separately, and how the next scope
+ * gets missed. The live consent surfaces call `describeGrantScopes`; none
+ * builds its list from `describeScopeForConsent` directly.
+ */
+describe('scope narration single implementation', () => {
+  const NARRATING_SURFACES = [
+    join(WEB_SRC, 'app', 'oauth', 'consent', 'page.tsx'),
+    join(WEB_SRC, 'app', 'api', 'oauth', 'device_authorization', 'verify', 'route.ts'),
+  ];
+
+  for (const file of NARRATING_SURFACES) {
+    it(`${rel(file)} narrates through describeGrantScopes`, () => {
+      const source = code(file);
+
+      expect(source).toMatch(/\bdescribeGrantScopes\s*\(/);
+      expect(source).not.toMatch(/\bdescribeScopeForConsent\b/);
+    });
+  }
+});

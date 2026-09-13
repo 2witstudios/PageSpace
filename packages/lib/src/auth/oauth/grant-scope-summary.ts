@@ -1,6 +1,8 @@
 /**
- * Human-readable scope summaries for the connected-apps listing page (Phase
- * 8 task k58h61obmc91sn1ndngrsev5). Pure over already-fetched data: the
+ * Human-readable scope summaries — the ONE scope-to-text list builder, used by
+ * the connected-apps listing page (Phase 8 task k58h61obmc91sn1ndngrsev5), the
+ * OAuth consent screen and the device-flow /activate screen (ADR 0004 Decision
+ * 4, Phase 1 obligation 5). Pure over already-fetched data: the
  * caller resolves drive/custom-role names server-side and passes them in as
  * lookup maps; this reuses `describeScopeForConsent` per scope (the OAuth
  * consent screen's own formatter) rather than reinventing scope-to-text
@@ -15,6 +17,12 @@ import { describeScopeForConsent } from './consent';
 export interface GrantScopeNameResolvers {
   readonly driveNamesById: ReadonlyMap<string, string>;
   readonly roleNamesById: ReadonlyMap<string, { name: string; description: string | null }>;
+  /**
+   * Display name of the existing key an `update_key`/`activate_key` scope
+   * targets. Resolved by the caller AFTER checking the consenting user owns it
+   * (a grant carries at most one target); absent falls back to the token id.
+   */
+  readonly keyName?: string;
 }
 
 /** A stored grant's scopes were validated at consent time — a parse failure here only matters as a fail-safe. */
@@ -53,10 +61,14 @@ export function describeGrantScopes(scopes: readonly string[], resolvers: GrantS
     descriptions.push(describeScopeForConsent({ kind: 'all_drives' }, {}));
   }
   if (parsed.scopes.updateKeyId !== null) {
-    descriptions.push(describeScopeForConsent({ kind: 'update_key', tokenId: parsed.scopes.updateKeyId }, {}));
+    descriptions.push(
+      describeScopeForConsent({ kind: 'update_key', tokenId: parsed.scopes.updateKeyId }, { keyName: resolvers.keyName }),
+    );
   }
   if (parsed.scopes.activateKeyId !== null) {
-    descriptions.push(describeScopeForConsent({ kind: 'activate_key', tokenId: parsed.scopes.activateKeyId }, {}));
+    descriptions.push(
+      describeScopeForConsent({ kind: 'activate_key', tokenId: parsed.scopes.activateKeyId }, { keyName: resolvers.keyName }),
+    );
   }
   for (const scope of parsed.scopes.drives.values()) {
     const driveName = resolvers.driveNamesById.get(scope.driveId);

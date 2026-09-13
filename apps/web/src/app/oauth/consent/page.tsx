@@ -6,7 +6,8 @@ import { driveRoles } from '@pagespace/db/schema/members';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { validateAuthorizeRequest, type AuthorizeRequestParams } from '@pagespace/lib/auth/oauth/authorize-request';
 import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
-import { describeScopeForConsent } from '@pagespace/lib/auth/oauth/consent';
+import { describeGrantScopes } from '@pagespace/lib/auth/oauth/grant-scope-summary';
+import { formatScopeSet } from '@pagespace/lib/auth/oauth/scopes';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { ConsentActions } from './ConsentActions';
@@ -111,51 +112,14 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
       : [];
   const roleById = new Map(roleRows.filter((r): r is NonNullable<typeof r> => !!r).map((r) => [r.id, r]));
 
-  const scopeDescriptions: string[] = [];
-  // Named first so the user reads "this creates a key named X" before the
-  // capability list that follows.
-  if (result.scopes.newKeyName !== null) {
-    scopeDescriptions.push(describeScopeForConsent({ kind: 'name', name: result.scopes.newKeyName }, {}));
-  }
-  if (result.scopes.updateKeyId !== null) {
-    scopeDescriptions.push(
-      describeScopeForConsent(
-        { kind: 'update_key', tokenId: result.scopes.updateKeyId },
-        { keyName: updateKeyName ?? undefined },
-      ),
-    );
-  }
-  if (result.scopes.activateKeyId !== null) {
-    scopeDescriptions.push(
-      describeScopeForConsent(
-        { kind: 'activate_key', tokenId: result.scopes.activateKeyId },
-        { keyName: activateKeyName ?? undefined },
-      ),
-    );
-  }
-  if (result.scopes.account) {
-    scopeDescriptions.push(describeScopeForConsent({ kind: 'account' }, {}));
-  }
-  if (result.scopes.offlineAccess) {
-    scopeDescriptions.push(describeScopeForConsent({ kind: 'offline_access' }, {}));
-  }
-  if (result.scopes.manageKeys) {
-    scopeDescriptions.push(describeScopeForConsent({ kind: 'manage_keys' }, {}));
-  }
-  if (result.scopes.allDrives) {
-    scopeDescriptions.push(describeScopeForConsent({ kind: 'all_drives' }, {}));
-  }
-  for (const scope of result.scopes.drives.values()) {
-    const driveName = driveNamesById.get(scope.driveId);
-    if (scope.role.kind === 'custom') {
-      const role = roleById.get(scope.role.customRoleId);
-      scopeDescriptions.push(
-        describeScopeForConsent(scope, { driveName, roleName: role?.name, roleSummary: role?.description ?? undefined }),
-      );
-    } else {
-      scopeDescriptions.push(describeScopeForConsent(scope, { driveName }));
-    }
-  }
+  // One narration implementation for every surface (ADR 0004 Decision 4,
+  // Phase 1 obligation 5) — the list builder holds the whole scope set, so it
+  // alone can say whether `profile` is the only access being granted.
+  const scopeDescriptions = describeGrantScopes(formatScopeSet(result.scopes).split(' ').filter(Boolean), {
+    driveNamesById,
+    roleNamesById: roleById,
+    keyName: updateKeyName ?? activateKeyName ?? undefined,
+  });
 
   return (
     <div className="mx-auto max-w-md py-16">
