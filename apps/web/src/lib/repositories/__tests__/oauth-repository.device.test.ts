@@ -242,7 +242,6 @@ describe('createDeviceAuthorization', () => {
   it('persists only the hashed device_code and user_code, never raw values', async () => {
     await createDeviceAuthorization({
       clientDbId: CLIENT_DB_ID,
-      client: CLI_CLIENT,
       scopes: ['account'],
       deviceCodeHash: hashToken(DEVICE_CODE),
       deviceCodePrefix: 'ps_dc_abcd',
