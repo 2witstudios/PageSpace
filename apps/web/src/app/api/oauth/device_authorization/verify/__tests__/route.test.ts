@@ -184,6 +184,10 @@ describe('POST /api/oauth/device_authorization/verify — step-up advertisement'
     ['a mint grant', ['drive:drv1:member', 'name:remote-key', 'offline_access']],
     ['a re-scope grant', ['update_key:tok1', 'drive:drv1:member']],
     ['an activation grant', ['activate_key:tok1']],
+    // requiresStepUp (ADR 0004 Decision 6) is the single decision: anything
+    // that reaches content or key management steps up, not only key minting.
+    ['a pure drive grant', ['drive:drv1:member', 'offline_access']],
+    ['a key-management login grant', ['manage_keys', 'offline_access']],
   ];
 
   for (const [label, scopes] of ESCALATING) {
@@ -197,11 +201,11 @@ describe('POST /api/oauth/device_authorization/verify — step-up advertisement'
     });
   }
 
-  it('does not advertise step-up for a plain login grant', async () => {
+  it('does not advertise step-up for an identity-only (profile offline_access) grant', async () => {
     verifyDeviceUserCode.mockResolvedValue({
       outcome: 'ok',
       clientId: 'pagespace-cli',
-      scopes: ['manage_keys', 'offline_access'],
+      scopes: ['profile', 'offline_access'],
     });
 
     const body = await (await POST(verifyRequest({ userCode: 'ABCD-EFGH' }) as never)).json();

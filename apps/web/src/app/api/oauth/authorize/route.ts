@@ -25,6 +25,7 @@ import {
 } from '@pagespace/lib/auth/oauth/authorize-request';
 import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { checkGrantAuthority, formatScopeSet } from '@pagespace/lib/auth/oauth/scopes';
+import { requiresStepUp } from '@pagespace/lib/auth/oauth/step-up-boundary';
 import { AUTHORIZATION_CODE_TTL_SECONDS } from '@pagespace/lib/auth/oauth/code-lifecycle';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { resolveGrantAuthority } from '@/lib/auth/oauth-grant-authority';
@@ -141,7 +142,7 @@ const approvalSchema = z.object({
   scope: z.string(),
   state: z.string().optional(),
   action: z.enum(['approve', 'deny']),
-  // Required only for action=approve (checked explicitly below via the
+  // Required only for an approval whose scope set `requiresStepUp` (checked explicitly below via the
   // falsy check, not `.min(1)` here — an empty string must fail that same
   // check identically to an absent field, not surface as a distinct
   // zod-shaped 400 that tells an attacker the field was present but empty).
@@ -208,20 +209,27 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Step-up gate (Phase 8 credential minting security correction): approving
-  // consent mints an authorization code — the same escalation shape as
-  // minting an mcp_* token — so it requires a live step-up grant bound to
-  // exactly this client_id + redirect_uri + scope + state, not just a valid
-  // session. Bound on the RAW wire params (not `result.*`) because that's
-  // exactly what the consent page's step-up ceremony independently computes
-  // client-side before the user ever clicks Allow.
-  if (!body.stepUpToken) {
-    auditRequest(req, {
-      eventType: 'authz.access.denied',
-      userId: auth.userId,
-      details: { clientId: result.client.clientId, oauthEvent: 'consent_missing_step_up' },
-    });
-    return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
+  // Step-up gate (Phase 8 credential minting security correction, narrowed by
+  // ADR 0004 Decision 6): approving a grant that reaches content or key
+  // management requires a live step-up grant bound to exactly this client_id +
+  // redirect_uri + scope + state, not just a valid session. `requiresStepUp` is
+  // the ONLY decision — the consent screen asks the same function whether to
+  // run the ceremony — so identity alone (`profile`, `profile offline_access`)
+  // takes the plain session + CSRF Allow. Bound on the RAW wire params (not
+  // `result.*`) because that's exactly what the consent page's step-up
+  // ceremony independently computes client-side before the user clicks Allow.
+  // A token sent on a grant that does not require one is ignored, never burned.
+  let stepUpToken: string | null = null;
+  if (requiresStepUp(result.scopes)) {
+    if (!body.stepUpToken) {
+      auditRequest(req, {
+        eventType: 'authz.access.denied',
+        userId: auth.userId,
+        details: { clientId: result.client.clientId, oauthEvent: 'consent_missing_step_up' },
+      });
+      return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
+    }
+    stepUpToken = body.stepUpToken;
   }
 
   // Consent = minting: enforce the same authority caps as mcp-tokens (ADR 0002
@@ -267,18 +275,20 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const stepUpResult = await consumeStepUpGrant({
-    userId: auth.userId,
-    token: body.stepUpToken,
-    actionBinding: { clientId: body.clientId, redirectUri: body.redirectUri, scope: body.scope, state: body.state ?? '' },
-  });
-  if (!stepUpResult.ok) {
-    auditRequest(req, {
-      eventType: 'authz.access.denied',
+  if (stepUpToken !== null) {
+    const stepUpResult = await consumeStepUpGrant({
       userId: auth.userId,
-      details: { clientId: result.client.clientId, oauthEvent: 'consent_step_up_invalid' },
+      token: stepUpToken,
+      actionBinding: { clientId: body.clientId, redirectUri: body.redirectUri, scope: body.scope, state: body.state ?? '' },
     });
-    return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
+    if (!stepUpResult.ok) {
+      auditRequest(req, {
+        eventType: 'authz.access.denied',
+        userId: auth.userId,
+        details: { clientId: result.client.clientId, oauthEvent: 'consent_step_up_invalid' },
+      });
+      return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
+    }
   }
 
   const clientDbId = await ensureOAuthClientRow(result.client);

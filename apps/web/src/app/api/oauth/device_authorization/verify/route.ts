@@ -13,7 +13,8 @@ import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { normalizeUserCode } from '@pagespace/lib/auth/oauth/user-code';
 import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
-import { isCredentialEscalatingGrant, parseScopeList } from '@pagespace/lib/auth/oauth/scopes';
+import { parseScopeList } from '@pagespace/lib/auth/oauth/scopes';
+import { requiresStepUp } from '@pagespace/lib/auth/oauth/step-up-boundary';
 import { describeScopeForConsent } from '@pagespace/lib/auth/oauth/consent';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
@@ -75,11 +76,12 @@ export async function POST(req: NextRequest) {
   if (parsed !== null && !parsed.ok) {
     return NextResponse.json({ error: 'invalid_code' }, { status: 400 });
   }
-  // Derived from the SAME predicate the decision route enforces with, so the
-  // screen can never advertise a ceremony the server doesn't demand (or skip
-  // one it does). Surfaced so the ceremony runs before the user clicks Allow
-  // rather than failing them afterward.
-  const requiresStepUp = parsed?.ok === true && isCredentialEscalatingGrant(parsed.scopes);
+  // `requiresStepUp` (ADR 0004 Decision 6) is the single step-up decision —
+  // the decision route enforces with the same call, so the screen can never
+  // advertise a ceremony the server doesn't demand (or skip one it does).
+  // Surfaced so the ceremony runs before the user clicks Allow rather than
+  // failing them afterward.
+  const stepUpRequired = parsed?.ok === true && requiresStepUp(parsed.scopes);
 
   if (parsed?.ok) {
     // An update_key grant re-scopes one of the VERIFYING user's existing keys
@@ -162,12 +164,12 @@ export async function POST(req: NextRequest) {
     clientName: client.name,
     firstParty: client.firstParty,
     scopeDescriptions,
-    requiresStepUp,
+    requiresStepUp: stepUpRequired,
     // The exact binding the decision route will recompute from its own
     // lookup, handed to the client so the grant it mints can't be bound to a
     // different tuple by accident. Not a trust boundary: a client that lied
     // here would mint a grant whose hash simply fails to match the server's
     // recomputed one at decision time, and the approval is refused.
-    stepUpActionBinding: requiresStepUp ? { userCode: normalized, scope: result.scopes.join(' ') } : null,
+    stepUpActionBinding: stepUpRequired ? { userCode: normalized, scope: result.scopes.join(' ') } : null,
   });
 }

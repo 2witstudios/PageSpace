@@ -1,27 +1,24 @@
 /**
  * The consent step-up boundary (ADR 0004 Decision 6).
  *
- * `POST /api/oauth/authorize` requires a second-factor ceremony for every
- * consent today. That is correct for every grant PageSpace has ever issued —
- * all of them reach content or mint/re-scope a credential — but it is the
- * whole of US8's problem: an app that only wants to know who you are should
- * not drag a passkey or email ceremony into signing in.
+ * `POST /api/oauth/authorize` used to require a second-factor ceremony for
+ * every consent. That was correct for every grant PageSpace had issued — all
+ * of them reach content or mint/re-scope a credential — but it is the whole of
+ * US8's problem: an app that only wants to know who you are should not drag a
+ * passkey or email ceremony into signing in.
  *
- * This module is intended to become the single place that distinction is
- * computed: the screen that decides whether to OFFER the ceremony and the
- * server that decides whether to REQUIRE one must read the same answer from
- * here, because two independent expressions of the rule is exactly how a
- * future scope ends up on a screen that never runs the ceremony — or, worse,
- * on a server that stops demanding one (the drift
- * `isCredentialEscalatingGrant` was written to prevent, one layer down in
- * `./scopes`).
+ * This module is the single place that distinction is computed: the screen
+ * that decides whether to OFFER the ceremony and the server that decides
+ * whether to REQUIRE one read the same answer from here, because two
+ * independent expressions of the rule is exactly how a future scope ends up on
+ * a screen that never runs the ceremony — or, worse, on a server that stops
+ * demanding one.
  *
- * It is not that yet, and saying so matters. Production still decides step-up
- * via `isCredentialEscalatingGrant` (`device_authorization/verify/route.ts`,
- * `device_authorization/decision/route.ts`) and via the unconditional step-up
- * on `POST /api/oauth/authorize`. **Phase 1 replaces both with this function**
- * — until it does, the two expressions this module warns about are both live.
- * See ADR 0004 Decision 4, "Phase 1 obligations", item 2.
+ * Call sites (Phase 1a): `POST /api/oauth/authorize`, the consent screen
+ * (`app/oauth/consent/consent-step-up.ts`), and the device flow's
+ * `verify` + `decision` routes. `apps/web/src/app/api/oauth/__tests__/
+ * step-up-single-decision.test.ts` fails if any consent surface decides
+ * step-up any other way.
  *
  * Pure and total: a plain value in, a boolean out, no throw path.
  *

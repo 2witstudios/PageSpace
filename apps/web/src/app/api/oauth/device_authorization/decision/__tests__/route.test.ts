@@ -239,7 +239,8 @@ describe('POST /api/oauth/device_authorization/decision — P1b: grant-authority
   consumeStepUpGrant.mockResolvedValue({ ok: true });
     recordDeviceApproval.mockResolvedValue({ outcome: 'approved' });
 
-    const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve' }) as never);
+    // A drive grant requires step-up (requiresStepUp, ADR 0004 Decision 6).
+    const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve', stepUpToken: 'grant' }) as never);
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, action: 'approved' });
@@ -276,6 +277,10 @@ describe('POST /api/oauth/device_authorization/decision — step-up gate on cred
     ['a mint grant', ['drive:drv1:member', 'name:remote-key', 'offline_access']],
     ['a re-scope grant', ['update_key:tok1', 'drive:drv1:member']],
     ['an activation grant', ['activate_key:tok1']],
+    // requiresStepUp (ADR 0004 Decision 6) is the single decision: anything
+    // that reaches content or key management steps up, not only key minting.
+    ['a pure drive grant', ['drive:drv1:member', 'offline_access']],
+    ['a key-management login grant', ['manage_keys', 'offline_access']],
   ];
 
   for (const [label, scopes] of ESCALATING) {
@@ -319,11 +324,11 @@ describe('POST /api/oauth/device_authorization/decision — step-up gate on cred
     });
   }
 
-  it('does NOT require step-up for a plain login grant, leaving `login --device` unchanged', async () => {
+  it('does NOT require step-up for an identity-only (profile offline_access) grant', async () => {
     verifyDeviceUserCode.mockResolvedValue({
       outcome: 'ok',
       clientId: 'pagespace-cli',
-      scopes: ['manage_keys', 'offline_access'],
+      scopes: ['profile', 'offline_access'],
     });
     recordDeviceApproval.mockResolvedValue({ outcome: 'approved' });
 

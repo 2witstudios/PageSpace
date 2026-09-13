@@ -124,3 +124,56 @@ describe('ConsentActions — WebAuthn ceremony cancellation', () => {
     });
   });
 });
+
+describe('ConsentActions — identity-only consent skips the ceremony (requiresStepUp false)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.history.replaceState(null, '', '/oauth/consent?client_id=client-1');
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/oauth/authorize') {
+        return Promise.resolve({ redirectUri: 'http://127.0.0.1:1/cb?code=abc' });
+      }
+      throw new Error(`unexpected post to ${url}`);
+    });
+  });
+
+  afterEach(() => {
+    window.history.replaceState(null, '', '/');
+  });
+
+  for (const scope of ['profile', 'profile offline_access']) {
+    it(`approves "${scope}" in a single Allow click with no WebAuthn or email ceremony and no stepUpToken`, async () => {
+      render(<ConsentActions {...defaultProps} scope={scope} />);
+
+      await userEvent.click(screen.getByRole('button', { name: /^allow$/i }));
+
+      await waitFor(() => {
+        expect(postMock).toHaveBeenCalledWith(
+          '/api/oauth/authorize',
+          expect.objectContaining({ action: 'approve', scope }),
+        );
+      });
+      expect(postMock).toHaveBeenCalledTimes(1);
+      expect(postMock.mock.calls[0][1]).not.toHaveProperty('stepUpToken');
+      expect(startAuthentication).not.toHaveBeenCalled();
+    });
+  }
+
+  it('still runs the ceremony for a profile drive:X:member consent', async () => {
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/auth/step-up/webauthn/options') {
+        return Promise.resolve({ options: { challenge: 'srv-challenge' }, challengeId: 'chal-1' });
+      }
+      throw new Error(`unexpected post to ${url}`);
+    });
+    vi.mocked(startAuthentication).mockRejectedValue(new Error('NotAllowedError: user cancelled'));
+
+    render(<ConsentActions {...defaultProps} scope="profile drive:abc123:member" />);
+    await userEvent.click(screen.getByRole('button', { name: /^allow$/i }));
+
+    await waitFor(() => {
+      expect(startAuthentication).toHaveBeenCalledTimes(1);
+    });
+    expect(postMock).not.toHaveBeenCalledWith('/api/oauth/authorize', expect.anything());
+  });
+});
