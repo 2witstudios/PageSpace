@@ -10,7 +10,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and, isNull } from '@pagespace/db/operators';
 import { oauthClients, oauthAuthorizationCodes, oauthRefreshTokens, oauthAccessTokens, oauthDeviceCodes } from '@pagespace/db/schema/oauth';
 import { users } from '@pagespace/db/schema/auth';
-import type { RegisteredClient } from '@pagespace/lib/auth/oauth/clients';
+import { resolveClientFrom, type RegisteredClient, type OAuthClientRecord } from '@pagespace/lib/auth/oauth/clients';
 import { hashToken, generateToken } from '@pagespace/lib/auth/token-utils';
 import { decideCodeExchange, type CodeExchangeDecision } from '@pagespace/lib/auth/oauth/code-lifecycle';
 import {
@@ -56,6 +56,60 @@ export async function ensureOAuthClientRow(client: RegisteredClient): Promise<st
   }
 
   return row.id;
+}
+
+/** The enabled `oauth_clients` row for a client id — `disabledAt IS NULL` in the query itself. */
+async function findEnabledOAuthClientRecord(clientId: string): Promise<OAuthClientRecord | null> {
+  const row = await db.query.oauthClients.findFirst({
+    where: and(eq(oauthClients.clientId, clientId), isNull(oauthClients.disabledAt)),
+    columns: {
+      clientId: true,
+      name: true,
+      clientType: true,
+      redirectUris: true,
+      allowedGrantTypes: true,
+      allowedScopes: true,
+      logoUrl: true,
+      homepageUrl: true,
+      description: true,
+      ownerUserId: true,
+      verified: true,
+      isFirstParty: true,
+      disabledAt: true,
+    },
+  });
+  return row ?? null;
+}
+
+/**
+ * Resolve a `client_id` for every OAuth door (ADR 0004 Decision 2): the static
+ * first-party registry first, then an ENABLED `oauth_clients` row. Unknown and
+ * disabled clients both return `null` — callers answer both with the same
+ * constant-shape error.
+ */
+export function resolveClient(clientId: string): Promise<RegisteredClient | null> {
+  return resolveClientFrom(clientId, findEnabledOAuthClientRecord);
+}
+
+/**
+ * The `oauth_clients.id` every code/token row references for this client.
+ *
+ * First-party clients get their FK row ensured (they are defined in code).
+ * A third-party client already HAS its row, so its id is read from it — never
+ * via `ensureOAuthClientRow`, whose insert would resurrect a client deleted
+ * between resolution and issuance as an enabled row. A row disabled or
+ * deleted in that window returns `null`, which callers treat like an unknown
+ * client.
+ */
+export async function resolveClientDbId(client: RegisteredClient): Promise<string | null> {
+  if (client.firstParty) {
+    return ensureOAuthClientRow(client);
+  }
+  const row = await db.query.oauthClients.findFirst({
+    where: and(eq(oauthClients.clientId, client.clientId), isNull(oauthClients.disabledAt)),
+    columns: { id: true },
+  });
+  return row?.id ?? null;
 }
 
 export interface CreateAuthorizationCodeInput {
