@@ -56,10 +56,11 @@ const OWN_WORKER = {
 
 function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
   return {
-    findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: null })),
+    findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: null, name: 'Workspace' })),
     // The layout family's session-access gate (security review HIGH 2).
     checkWorkspaceAccess: vi.fn(async () => ({ allowed: true })),
     checkWorkspaceEndAccess: vi.fn(async () => ({ allowed: true })),
+    renameWorkspace: vi.fn(async ({ name }: { name: string }) => ({ ok: true as const, name })),
     listWorkspaceWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
     listOwnWorkspaces: vi.fn(async () => []),
     listSharedWorkspaces: vi.fn(async () => []),
@@ -138,6 +139,10 @@ describe('list_sessions description: "List the workspaces you can reach, and the
     expect(result).toEqual({
       success: true,
       workspaceId: WORKSPACE_ID,
+      // The caller's OWN workspace now reports its label too — every other
+      // section already carried one, so an agent could read every name except
+      // the one it was standing in.
+      name: 'Workspace',
       ...here,
       otherWorkspaces: [elsewhere],
       sharedWorkspaces: [shared],

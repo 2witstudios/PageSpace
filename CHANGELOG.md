@@ -16,8 +16,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   quick prompts underneath that put the same thing straight into the composer without sending it.
   Nothing is invented: the line only ever says what it can back up, and on a quiet day it just says
   you're caught up. Once you start a conversation the line tucks into a small strip under the
-  header instead of taking up the page, and you can still expand it. Collapse the left sidebar and
-  a small drive switcher stays next to the title, so you always know what the assistant can see.
+  header instead of taking up the page, and you can still expand it. On desktop, collapse the left
+  sidebar and a small drive switcher stays next to the title, so you always know what the assistant
+  can see; on a phone the sidebar sheet's own switcher covers that, so the header row stays one row.
 - **Channels, Files, Tasks and Calendar are one page each, with a drive focus** — each of those
   views used to exist twice: a dashboard version and a drive version, with different titles and a
   sidebar that only ever linked to whichever one you were in. Now "All drives" is a focus like any
@@ -42,6 +43,22 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   tables declared, ranges touched and rules added, with a swatch per colour, so you can see what
   changed without opening the sheet. The spreadsheets skill now teaches all of this; the
   workspace-tool count in the docs goes from 81 to 83.
+- **The SDK and CLI can now format a spreadsheet, not just fill it** — the AI agent tools could
+  already declare a table's structure and style it (that shipped just above); an SDK or CLI caller
+  could not, so a sheet built by a script stayed a grid of bare numbers with no call available to
+  change that. Two additions close it. `pagespace sheets formatting <pageId>` shows how a sheet is
+  styled today — the tables it declares, its conditional rules and their ids, frozen rows and
+  columns, column formats and widths, row heights, and (with `--ranges`) the formats on individual
+  cells. `pagespace sheets format <pageId>` applies changes: declare a table's range, header rows,
+  what each column means, where the totals are and an accent colour, and the presentation is derived
+  from that, so rows you add next week inherit it. Everything the grid itself can do is reachable —
+  cell and column formats, widths, heights, freezes, and conditional rules you can add, edit,
+  reorder or remove by id. In fact more than the agent tools can do: an agent can only add and
+  remove a rule, while a script can patch one in place. Changes apply in the order you send them,
+  in one transaction, all or nothing: one bad instruction refuses the whole call, tells you which
+  one was wrong, and writes nothing. The same two operations are available to the TypeScript SDK as
+  `client.sheets.readFormatting` / `client.sheets.applyFormat`, and to any MCP client
+  (ChatGPT, Codex, Claude Desktop) through `pagespace mcp`.
 - **iPhone and iPad: sign-in no longer tells you Google is blocked when it isn't, and an emailed
   sign-in link now signs you in inside the app** — two things were wrong on the app's sign-in
   screen. It showed a warning saying "Google sign-in is blocked in this app" and pushed you toward

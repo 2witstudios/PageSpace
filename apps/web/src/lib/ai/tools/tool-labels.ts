@@ -20,6 +20,11 @@ export const TOOL_NAME_MAP: Record<string, string> = {
   'list_drives': 'Workspaces',
   'create_drive': 'Create Workspace',
   'rename_drive': 'Rename Workspace',
+  // NOT plain 'Rename Workspace' — that label belongs to `rename_drive` above,
+  // because a "workspace" to a USER is a drive. This tool relabels an agent
+  // SESSION (`agent_workspaces`), which users see as a session, and two cards
+  // reading identically for different objects is worse than a longer label.
+  'rename_workspace': 'Rename Agent Session',
   'update_drive_context': 'Update Context',
   'set_home_page': 'Set Home Page',
   // Member tools

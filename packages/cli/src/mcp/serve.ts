@@ -11,6 +11,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
   appendRows,
+  applySheetFormat,
   askAgent,
   createCalendarEvent,
   createCommand,
@@ -62,6 +63,7 @@ import {
   queryRows,
   readConversation,
   readDocument,
+  readSheetFormatting,
   regexSearch,
   removeCalendarAttendee,
   removeRolePagePermissions,
@@ -122,6 +124,7 @@ import { CLI_VERSION } from '../commands/version.js';
  */
 const ALL_OPERATIONS: readonly Operation[] = [
   appendRows,
+  applySheetFormat,
   askAgent,
   createCalendarEvent,
   createCommand,
@@ -173,6 +176,7 @@ const ALL_OPERATIONS: readonly Operation[] = [
   queryRows,
   readConversation,
   readDocument,
+  readSheetFormatting,
   regexSearch,
   removeCalendarAttendee,
   removeRolePagePermissions,

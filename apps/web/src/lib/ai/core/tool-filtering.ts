@@ -32,6 +32,10 @@ export const WRITE_TOOLS = new Set([
   // Drive operations
   'create_drive',
   'rename_drive',
+  // Relabels an agent WORKSPACE (agent_workspaces) — not a drive. A write, so
+  // a read-only agent must not get it; free on every plan, so it is
+  // deliberately absent from SANDBOX_COMPUTE_TOOL_NAMES.
+  'rename_workspace',
   'update_drive_context',
   'set_home_page',
   // Explicit per-entity trash/restore (pages and drives)
@@ -168,6 +172,7 @@ export const SESSION_FAMILY_TOOL_NAMES: readonly string[] = [
   'send_shell',
   'read_shell',
   'kill_shell',
+  'rename_workspace',
 ];
 
 /**

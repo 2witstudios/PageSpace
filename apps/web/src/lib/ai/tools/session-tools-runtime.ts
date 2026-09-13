@@ -44,6 +44,11 @@ import {
   resolveDriveMembership,
 } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { isDriveWithinCredentialScope } from '@pagespace/lib/agent-workspaces/credential-scope';
+import { decideAgentSessionRenameAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
+import {
+  MAX_SESSION_NAME_LENGTH,
+  nextUniqueSessionName,
+} from '@pagespace/lib/agent-workspaces/session-contract';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { redactConversationTitleForViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -63,9 +68,11 @@ import {
   ensureDriveSessionForConversation,
   ensureGlobalSandboxSession,
   findSessionForConversation,
+  findSessionRecord,
   listSessions,
   listSessionConversationsBulk,
   provisionSessionSandbox,
+  renameSession,
   spawnSession,
   getAgentSessionStore,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
@@ -744,7 +751,9 @@ export async function resolveCallerSessionForWorker(
       driveId: agent.driveId,
     });
     if (!access.allowed) return { ok: false, reason: 'not_permitted' };
-    return mapEnsured(await ensureDriveSessionForConversation(callerConversationId, ownerId, agent.driveId));
+    return mapEnsured(
+      await ensureDriveSessionForConversation(callerConversationId, ownerId, agent.driveId, agent.title),
+    );
   }
 
   // 'client' (API-managed) rows have no in-app viewer — same policy the
@@ -780,11 +789,13 @@ async function resolveWorkerPlacement(input: {
   agentPageId: string | null;
   /** The calling credential's drive ceiling; `[]` = unscoped. */
   allowedDriveIds: string[];
+  /** A label for a workspace this spawn MINTS (`workspace: 'new'`); ignored otherwise. */
+  workspaceName?: string | undefined;
 }): Promise<
   | { ok: true; workspaceId: string; unwind: (() => Promise<void>) | null }
   | CreateWorkerSessionFailure
 > {
-  const { workspace, callerConversationId, ownerId, agentPageId, allowedDriveIds } = input;
+  const { workspace, callerConversationId, ownerId, agentPageId, allowedDriveIds, workspaceName } = input;
 
   if (workspace === undefined) {
     // The caller's own workspace — minted if it has none.
@@ -815,12 +826,16 @@ async function resolveWorkerPlacement(input: {
     // — general-purpose self-review, PR #2513: this third spawn path fetched
     // the agent, defaultEnvId/sandboxEnabled included, but never applied it).
     let envId: string | null = null;
+    // The agent's own title is the workspace's default label, read here where
+    // the agent row is already in hand rather than fetched a second time below.
+    let agentTitleForLabel: string | null = null;
     if (agentPageId !== null) {
       const agent = await conversationRepository.getAiAgent(agentPageId);
       if (!agent) {
         return { ok: false, reason: 'conversation_unavailable', detail: 'That agent is not available.' };
       }
       driveId = agent.driveId;
+      agentTitleForLabel = agent.title;
       if (agent.sandboxEnabled && agent.defaultEnvId) {
         envId = agent.defaultEnvId;
       }
@@ -829,7 +844,36 @@ async function resolveWorkerPlacement(input: {
     if (!access.allowed) {
       return { ok: false, reason: 'not_permitted', detail: 'You are not permitted to start a workspace there.' };
     }
-    const spawned = await spawnSession({ userId: ownerId, driveId, envId });
+    // NAME IT. This path used to pass no name at all, so every workspace an
+    // agent minted was born `null` and rendered in the sidebar as the literal
+    // fallback "Session" — permanently, since nothing could rename it either.
+    // The DEFAULT placement (no `workspace` argument) mints through
+    // `ensureConversationSession` instead and is named there, the same way.
+    //
+    // The model's own label wins and is bounded HERE; a DERIVED one comes back
+    // already bounded from the length-aware helper and must not be cut again
+    // (cutting it is what collapses "<base> 2" back onto "<base>" at the cap).
+    //
+    // The uniqueness read is FAIL-SAFE, matching `ensureConversationSession`: a
+    // cosmetic suffix must never be the reason a spawn fails. Degrading costs
+    // at most a duplicate label (names carry no uniqueness constraint);
+    // refusing would cost the workspace.
+    let name = workspaceName?.trim();
+    if (name) {
+      name = name.slice(0, MAX_SESSION_NAME_LENGTH);
+    } else {
+      const baseLabel = agentPageId !== null ? (agentTitleForLabel || 'Agent') : 'Global Assistant';
+      const existingNames = await listSessions({ ownerId })
+        .then((sessions) => sessions.map((session) => session.name))
+        .catch((error) => {
+          loggers.ai.warn('createWorkerSession: could not read existing session names for the label', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return [] as string[];
+        });
+      name = nextUniqueSessionName(baseLabel, existingNames);
+    }
+    const spawned = await spawnSession({ userId: ownerId, driveId, envId, name });
     if (!spawned.ok) {
       return spawned.reason === 'session_limit_reached'
         ? { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' }
@@ -951,7 +995,11 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       // a workspace in a different drive than its agent page (spawn_session
       // takes an explicit `workspace` id), so the page-scope check upstream does
       // not cover it.
-      return row ? { workspaceId: row.id, driveId: row.driveId ?? null } : null;
+      // `name` rides along too, so `list_sessions` can report the caller's own
+      // workspace label. Coalesced the same way `toAgentSessionDTO` does — a
+      // legacy row minted before the agent path named its workspaces still has
+      // a null here.
+      return row ? { workspaceId: row.id, driveId: row.driveId ?? null, name: row.name ?? '' } : null;
     },
 
     // THE session-access decision, wired for the tool surface exactly as the
@@ -964,6 +1012,47 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     // re-deciding here is what keeps the capability gate live without a second
     // wiring for it to drift from.
     checkWorkspaceEndAccess: (userId, workspaceId) => checkSessionEndAccess(userId, workspaceId),
+
+    // Relabel a workspace. Owner-only, and the SAME rule the PATCH route
+    // applies, resolved through the same `findSessionRecord` + `renameSession`
+    // pair — one rule with two callers, never two implementations that can
+    // drift (the discipline `agent-workspace-access.ts` documents).
+    //
+    // Every refusal collapses to one reason on purpose: a workspace that does
+    // not exist, one owned by someone else, and one outside the calling
+    // credential's drives must be indistinguishable to the model, or the
+    // refusals become an enumeration oracle over workspace ids.
+    renameWorkspace: async ({ userId, workspaceId, name, allowedDriveIds }) => {
+      const row = await findSessionRecord(workspaceId);
+      if (!row) return { ok: false, reason: 'not_found_or_denied' };
+      // BOTH gates the route applies, in the same order and for the same
+      // reasons — this is the one place the tool surface could have ended up
+      // WIDER than the HTTP surface it mirrors (the defect
+      // `session-tools-layout-authz.test.ts` was written about).
+      //
+      // The access decision is not redundant with the ownership check below:
+      // it denies even the OWNER once they lose the workspace's drive
+      // ("losing the drive loses its working contexts"), and without it a
+      // revoked owner could still rename here while every route 404s them.
+      const access = await checkSessionAccess(userId, workspaceId);
+      if (!access.allowed) return { ok: false, reason: 'not_found_or_denied' };
+      // Reached is not the same as yours to relabel — a drive member may use a
+      // colleague's workspace and still not get to retitle it in their sidebar.
+      // THE SAME decision the PATCH route applies, imported rather than
+      // re-implemented, so "one rule with two callers" is literally true.
+      if (!decideAgentSessionRenameAccess({ requesterId: userId, session: row }).allowed) {
+        return { ok: false, reason: 'not_found_or_denied' };
+      }
+      // A rename is a WRITE, so the credential ceiling applies exactly as it
+      // does to spawn placement: a drive-scoped token must not write to a
+      // workspace in a drive it was never granted, however freely its owner
+      // may reach it.
+      if (!isDriveWithinCredentialScope(allowedDriveIds, row.driveId ?? null)) {
+        return { ok: false, reason: 'not_found_or_denied' };
+      }
+      const dto = await renameSession({ workspaceId, name });
+      return dto ? { ok: true, name: dto.name } : { ok: false, reason: 'not_found_or_denied' };
+    },
     listWorkspaceWorkers,
     listOwnWorkspaces,
     listSharedWorkspaces,
@@ -1089,8 +1178,12 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       );
     },
 
-    createWorkerSession: async ({ conversationId, callerConversationId, ownerId, agentPageId, name, workspace, allowedDriveIds }) => {
-      const placement = await resolveWorkerPlacement({ workspace, callerConversationId, ownerId, agentPageId, allowedDriveIds });
+    createWorkerSession: async ({ conversationId, callerConversationId, ownerId, agentPageId, name, workspace, allowedDriveIds, workspaceName }) => {
+      // `workspaceName` must be forwarded, not just accepted: this destructure
+      // is an explicit field list, so a new input silently vanishes here
+      // otherwise — which is exactly what happened on the first cut, leaving
+      // `spawn_session`'s workspaceName inert while every type still checked.
+      const placement = await resolveWorkerPlacement({ workspace, callerConversationId, ownerId, agentPageId, allowedDriveIds, workspaceName });
       if (!placement.ok) return placement;
       const { workspaceId, unwind } = placement;
 

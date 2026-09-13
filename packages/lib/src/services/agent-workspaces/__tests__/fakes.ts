@@ -135,6 +135,16 @@ export function makeAgentSessionStore(
       return { ok: true, session: row };
     },
 
+    async rename({ workspaceId, name, now }) {
+      const row = rows.get(workspaceId);
+      // Mirrors the real store exactly: no `endedAt` guard (an ended row
+      // relabels fine) and no uniqueness check (names are not constrained).
+      if (!row) return null;
+      const renamed = { ...row, name, updatedAt: now };
+      rows.set(workspaceId, renamed);
+      return renamed;
+    },
+
     async list(filter) {
       // Mirrors the real store: active rows only, newest activity first,
       // capped at MAX_ACTIVE_WORKSPACES_PER_OWNER (the sidebar polls this every few

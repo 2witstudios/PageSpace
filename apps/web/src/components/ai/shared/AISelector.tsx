@@ -99,7 +99,11 @@ export function AISelector({
             className
           )}
         >
-          <span className={selectedAgent ? "truncate min-w-0" : ""}>
+          {/* Always truncating, not just for an agent title: the button is
+              allowed to shrink below its intrinsic width (see the header in
+              GlobalAssistantView), so a label with nowhere to go must end in
+              an ellipsis rather than spill over its neighbours. */}
+          <span className="truncate min-w-0">
             {selectedAgent ? selectedAgent.title : 'Global Assistant'}
           </span>
           <ChevronDown className="h-4 w-4 opacity-50" />

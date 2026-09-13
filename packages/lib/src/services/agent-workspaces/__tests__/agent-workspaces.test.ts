@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   spawnAgentSession,
   endAgentSession,
+  renameAgentSession,
   listAgentSessions,
   toAgentSessionDTO,
   type SpawnAgentSessionDeps,
@@ -142,6 +143,90 @@ describe('findByConversation — how a thread resolves its working context', () 
     // conflation that was removed.
     const store = makeAgentSessionStore([makeSessionRecord()]);
     expect(await store.store.findByConversation('unbound-conv')).toBeNull();
+  });
+});
+
+describe('renameAgentSession', () => {
+  const LATER = new Date(NOW.getTime() + 60_000);
+
+  it('given an existing session, should store the new label and bump updatedAt', async () => {
+    const store = makeAgentSessionStore([makeSessionRecord({ name: 'Old name' })]);
+
+    const result = await renameAgentSession({
+      workspaceId: SESSION_ID,
+      name: 'Deploy work',
+      deps: { store: store.store, now: () => LATER },
+    });
+
+    expect(result).toEqual({ ok: true, session: expect.objectContaining({ name: 'Deploy work' }) });
+    expect(store.rows.get(SESSION_ID)?.name).toBe('Deploy work');
+    expect(store.rows.get(SESSION_ID)?.updatedAt).toEqual(LATER);
+  });
+
+  it('given an unknown id, should answer not_found rather than creating anything', async () => {
+    const store = makeAgentSessionStore([makeSessionRecord()]);
+
+    const result = await renameAgentSession({
+      workspaceId: 'ses-does-not-exist',
+      name: 'Deploy work',
+      deps: { store: store.store, now: () => LATER },
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'not_found' });
+    expect(store.rows.size).toBe(1);
+  });
+
+  it('given an ENDED session, should still rename it', async () => {
+    // Deliberate, not an oversight: an ended row is retained so its
+    // conversations stay readable as history, and labelling history is exactly
+    // as useful as labelling live work. There is no lifecycle gate here to
+    // "restore" later.
+    const store = makeAgentSessionStore([makeSessionRecord({ name: 'Old name', endedAt: NOW })]);
+
+    const result = await renameAgentSession({
+      workspaceId: SESSION_ID,
+      name: 'Last week\'s migration',
+      deps: { store: store.store, now: () => LATER },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(store.rows.get(SESSION_ID)?.name).toBe('Last week\'s migration');
+    expect(store.rows.get(SESSION_ID)?.endedAt).toEqual(NOW);
+  });
+
+  it('given a name already held by another session, should allow it', async () => {
+    // Names are labels, never addresses (session-contract invariant 2): there
+    // is no uniqueness constraint at any level, and the whole rename design
+    // rests on that — a conflict arm here would be inventing a rule the schema
+    // deliberately does not have.
+    const store = makeAgentSessionStore([
+      makeSessionRecord({ id: 'ses-a', name: 'Shared name' }),
+      makeSessionRecord({ id: 'ses-b', name: 'Other' }),
+    ]);
+
+    const result = await renameAgentSession({
+      workspaceId: 'ses-b',
+      name: 'Shared name',
+      deps: { store: store.store, now: () => LATER },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(store.rows.get('ses-a')?.name).toBe('Shared name');
+    expect(store.rows.get('ses-b')?.name).toBe('Shared name');
+  });
+
+  it('given a rename, should leave the Sprite identity untouched', async () => {
+    const store = makeAgentSessionStore([makeSessionRecord({ spriteKey: SESSION_KEY, sandboxId: 'sb-1' })]);
+
+    await renameAgentSession({
+      workspaceId: SESSION_ID,
+      name: 'Deploy work',
+      deps: { store: store.store, now: () => LATER },
+    });
+
+    const row = store.rows.get(SESSION_ID);
+    expect(row?.spriteKey).toBe(SESSION_KEY);
+    expect(row?.sandboxId).toBe('sb-1');
   });
 });
 

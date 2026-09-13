@@ -243,6 +243,44 @@ describe('buildModelContext', () => {
     summarizerModel: 'test-model',
   };
 
+  // Regression: the admin-only Z.ai `glm` provider sends BARE model ids, which
+  // getContextWindowSize could not resolve — every glm conversation budgeted against
+  // the 200k conservative default instead of the model's real window. A ~160k-token
+  // history on glm-5.3-flash (1,310,720) is 0.12 of the real window but 0.80 of the
+  // default, i.e. past the 0.75 trigger ratio: it compacted for no reason.
+  it('budgets a bare glm id against its real window, not the 200k default', () => {
+    // 640k chars / 4 chars-per-token = ~160k tokens.
+    const huge: CompactionMessage[] = [
+      makeUser('m1', 'x'.repeat(640_000)),
+      makeAssistant('m2', 'ok'),
+    ];
+
+    const real = buildModelContext({
+      messages: huge,
+      compaction: null,
+      model: 'glm-5.3-flash',
+      provider: 'glm',
+      systemPromptTokens: 0,
+      toolTokens: 0,
+    });
+    expect(real.needsCompaction).toBe(false);
+    expect(real.emergencyTruncated).toBe(false);
+    expect(real.tailMessages.length).toBe(huge.length);
+
+    // Control: an id the catalog does not know still falls back to 200k, where the
+    // very same history is over the trigger ratio — proving the assertion above is
+    // about the window lookup and not about the history being small.
+    const fallback = buildModelContext({
+      messages: huge,
+      compaction: null,
+      model: 'glm-9.9-imaginary',
+      provider: 'glm',
+      systemPromptTokens: 0,
+      toolTokens: 0,
+    });
+    expect(fallback.needsCompaction).toBe(true);
+  });
+
   it('passthrough: returns all messages when well under threshold', () => {
     const result = buildModelContext({
       messages: TEN_MSGS,

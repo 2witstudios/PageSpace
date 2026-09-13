@@ -379,10 +379,14 @@ describe('suppressGithubIntegrationTools', () => {
 });
 
 describe('SESSION_FAMILY_TOOL_NAMES', () => {
-  const MUTATIONS = ['spawn_session', 'send_session', 'kill_session', 'spawn_shell', 'send_shell', 'kill_shell'];
+  // `rename_workspace` is a MUTATION: relabelling someone's session is a write,
+  // so a read-only agent must not get it — the same rule every other write here
+  // follows, and the reason the family list and WRITE_TOOLS must be edited
+  // together.
+  const MUTATIONS = ['spawn_session', 'send_session', 'kill_session', 'spawn_shell', 'send_shell', 'kill_shell', 'rename_workspace'];
   const READS = ['list_sessions', 'read_session', 'read_shell'];
 
-  it('names the nine session/shell orchestration tools', () => {
+  it('names the ten session/shell/workspace orchestration tools', () => {
     expect([...SESSION_FAMILY_TOOL_NAMES].sort()).toEqual([...MUTATIONS, ...READS].sort());
   });
 
@@ -469,6 +473,8 @@ describe('read-only mode vs the session/shell family', () => {
     send_shell: 'send_shell',
     read_shell: 'read_shell',
     kill_shell: 'kill_shell',
+    // Relabels the WORKSPACE (the container), not a worker — hence the name.
+    rename_workspace: 'rename_workspace',
   };
 
   it('classifies the mutating session/shell tools as write tools', () => {
@@ -479,6 +485,8 @@ describe('read-only mode vs the session/shell family', () => {
       'spawn_shell',
       'send_shell',
       'kill_shell',
+      // A label is still a write: a read-only agent must not relabel a session.
+      'rename_workspace',
     ]) {
       expect(isWriteTool(name)).toBe(true);
     }
@@ -611,7 +619,12 @@ describe('filterToolsForSandboxTier', () => {
 
 describe('SANDBOX_COMPUTE_TOOL_NAMES', () => {
   it('is exactly SANDBOX_TOOL_NAMES minus the chat-only session tools', () => {
-    const chatOnly = ['list_sessions', 'spawn_session', 'send_session', 'read_session', 'kill_session'];
+    // `rename_workspace` joins the chat-only side: a label costs no compute, so
+    // it stays free on every plan like the rest of the session verbs. It is
+    // still in SANDBOX_TOOL_NAMES (via the family), so the per-agent sandbox
+    // switch strips it along with the whole session surface — an agent with no
+    // session surface has no workspace to name.
+    const chatOnly = ['list_sessions', 'spawn_session', 'send_session', 'read_session', 'kill_session', 'rename_workspace'];
     const expected = [...SANDBOX_TOOL_NAMES].filter((name) => !chatOnly.includes(name)).sort();
     expect([...SANDBOX_COMPUTE_TOOL_NAMES].sort()).toEqual(expected);
   });

@@ -58,6 +58,12 @@ describe('tool registry — internal consistency', () => {
         'send_session',
         'read_session',
         'kill_session',
+        // Naming the WORKSPACE is chat-only for the same reason the worker
+        // verbs are: a label touches no sandbox and costs no compute, so it is
+        // free on every plan. Outside TOOL_MODULES too, so the public
+        // workspace-tool count (and every doc that cites it) is unchanged —
+        // which is exactly what the assertions below pin.
+        'rename_workspace',
         // The LAYOUT family (issue #2208) is chat-only for the same reason the
         // worker verbs are: arranging your own pane grid touches no sandbox,
         // so gating it on the compute kill-switch would hide a chat capability

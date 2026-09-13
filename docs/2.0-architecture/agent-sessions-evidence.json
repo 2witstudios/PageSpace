@@ -400,7 +400,7 @@
         },
         {
           "file": "apps/web/src/lib/ai/tools/__tests__/session-tools-schema.test.ts",
-          "name": "exposes exactly the fourteen tool names",
+          "name": "exposes exactly the fifteen tool names",
           "suite": "web-unit"
         }
       ],

@@ -138,6 +138,7 @@ export const AI_PRICING = {
   // Z.ai GLM direct — GLM Coder Plan supported models only (source: z.ai/guides/overview/pricing)
   // GLM-5.3 rates unpublished at launch (2026-08-14); GLM-5.2 rates as placeholder.
   'glm-5.3':     { input: 1.40, output: 4.40 },
+  'glm-5.3-flash': { input: 0.075, output: 0.25 },
   'glm-5.2':     { input: 1.40, output: 4.40 },
   'glm-5.1':     { input: 1.40, output: 4.40 },
   'glm-5-turbo': { input: 1.20, output: 4.00 },
@@ -635,6 +636,7 @@ export const MODEL_CONTEXT_WINDOWS = {
 
   // Z.ai GLM direct — GLM Coder Plan supported models only
   'glm-5.3':     1000000,
+  'glm-5.3-flash': 1310720,
   'glm-5.2':     1000000,
   'glm-5.1':     202752,
   'glm-5-turbo': 202752,

@@ -69,10 +69,12 @@ import {
 import { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
 import {
   appendRows as appendSheetRows,
+  applySheetFormat,
   deleteRows as deleteSheetRows,
   describeSheet,
   getRows as getSheetRows,
   queryRows as querySheetRows,
+  readSheetFormatting,
   updateCells as updateSheetCells,
 } from './operations/sheets.js';
 import { exportPageMarkdown, exportSheetCsv } from './operations/export.js';
@@ -151,6 +153,13 @@ const DEFAULT_OPERATIONS_MAP = {
     appendRows: appendSheetRows,
     updateCells: updateSheetCells,
     deleteRows: deleteSheetRows,
+    /**
+     * Presentation, not data. `readFormatting` before `applyFormat`, so a
+     * write builds on the regions and rules already declared instead of over
+     * them — the same order `read_sheet`/`format_sheet` ask of a model.
+     */
+    readFormatting: readSheetFormatting,
+    applyFormat: applySheetFormat,
   },
   roles: {
     list: listDriveRoles,

@@ -27,7 +27,7 @@ vi.mock('@pagespace/lib/logging/logger-browser', () => ({
 }));
 vi.mock('@/lib/logging/mask', () => ({ maskIdentifier: (value: string) => value }));
 
-const { broadcastWorkspaceNodesUpdated } = await import('../agent-workspace-events');
+const { broadcastWorkspaceNodesUpdated, broadcastSessionUpdated } = await import('../agent-workspace-events');
 
 const NODES = [{ nodeType: 'root' as const, id: 'ws-1', parentId: null, position: 0 as const, axis: 'row' as const }];
 
@@ -110,6 +110,51 @@ describe('broadcastWorkspaceNodesUpdated', () => {
     expect(() =>
       broadcastWorkspaceNodesUpdated({ workspaceId: 'ws-1', rev: 4, nodes: NODES, ownerId: 'user-1' }),
     ).not.toThrow();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The DIRECTORY plane's event, first emitted by rename. The listener has
+ * consumed `session:*` since the directory plane landed; nothing produced one
+ * until a session row gained a mutable user-visible field.
+ */
+describe('broadcastSessionUpdated', () => {
+  it('reaches the workspace room AND the owner\'s own sessions room — and only those', () => {
+    broadcastSessionUpdated({ workspaceId: 'ws-1', ownerId: 'user-1' });
+
+    expect(emitted().map((message) => message.channelId).sort()).toEqual([
+      'session:ws-1',
+      'user:user-1:sessions',
+    ]);
+    for (const message of emitted()) {
+      expect(message.event).toBe('session:updated');
+    }
+  });
+
+  it('carries NO name — a room has no viewer to redact for', () => {
+    // The same rule the node payload obeys (security review HIGH 1). Every
+    // subscriber re-reads through its own access-checked GET, so shipping the
+    // label would buy nothing and would put a title on a wire that cannot ask
+    // whose it is.
+    broadcastSessionUpdated({ workspaceId: 'ws-1', ownerId: 'user-1' });
+
+    for (const message of emitted()) {
+      expect(message.payload).toEqual({ workspaceId: 'ws-1' });
+    }
+  });
+
+  it('reaches only the workspace room when the owner is unknown', () => {
+    broadcastSessionUpdated({ workspaceId: 'ws-1', ownerId: null });
+
+    expect(emitted().map((message) => message.channelId)).toEqual(['session:ws-1']);
+  });
+
+  it('emits nothing when the realtime service is not configured', () => {
+    delete process.env.INTERNAL_REALTIME_URL;
+
+    broadcastSessionUpdated({ workspaceId: 'ws-1', ownerId: 'user-1' });
+
     expect(mockFetch).not.toHaveBeenCalled();
   });
 });

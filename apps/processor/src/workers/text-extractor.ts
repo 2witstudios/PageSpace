@@ -4,7 +4,8 @@ import mammoth from 'mammoth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { contentStore } from '../server';
 import type { TextExtractJobData, TextExtractResult } from '../types';
-import type { PDFLoadingTask, PDFTextItem, PDFInfo } from '../types/pdfjs';
+import type { PDFLoadingTask, PDFInfo } from '../types/pdfjs';
+import { composePageText, composeDocumentText } from '../services/pdf-text-layout';
 import { cleanExtractedText, shouldPersistExtractedText } from './extracted-text-policy';
 
 export async function extractText(data: TextExtractJobData): Promise<TextExtractResult> {
@@ -114,17 +115,13 @@ async function extractPdfText(buffer: Buffer): Promise<{ text: string; metadata:
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
 
-    const pageText = textContent.items
-      .map((item: PDFTextItem) => item.str)
-      .join(' ');
-
-    textParts.push(pageText);
+    textParts.push(composePageText(textContent.items));
   }
 
   const info: PDFInfo | null = metadata.info;
 
   return {
-    text: textParts.join('\n\n'),
+    text: composeDocumentText(textParts),
     metadata: {
       title: info?.Title || '',
       author: info?.Author || '',

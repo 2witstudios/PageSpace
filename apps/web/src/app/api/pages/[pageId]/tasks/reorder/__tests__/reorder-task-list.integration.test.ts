@@ -86,6 +86,7 @@ describe('reorderTaskListChildren concurrency (Postgres row lock)', () => {
 
     const HOLD_MS = 500;
     let backendPid: number | undefined;
+    let holdReleasedAt: number | undefined;
 
     // A fractional position also proves the `real` cast: an ::int cast would store 9.
     const plan = computeReorderPlan([{ id: task.id, position: 9.5 }]);
@@ -96,6 +97,7 @@ describe('reorderTaskListChildren concurrency (Postgres row lock)', () => {
       // Hold the FOR SHARE lock open for a measurable window so the
       // concurrent trash attempt below is provably blocked, not just fast.
       await new Promise((resolve) => setTimeout(resolve, HOLD_MS));
+      holdReleasedAt = performance.now();
       return lockedIds;
     });
 
@@ -107,15 +109,18 @@ describe('reorderTaskListChildren concurrency (Postgres row lock)', () => {
     }
     await waitForPagesLock(backendPid);
 
-    const trashStart = performance.now();
     await db.update(pages).set({ isTrashed: true }).where(eq(pages.id, childPage.id));
-    const trashDurationMs = performance.now() - trashStart;
+    const trashFinishedAt = performance.now();
 
     const lockedIds = await reorderPromise;
 
     // The trash UPDATE must have waited for the reorder transaction's SHARE
-    // lock to release — without the fix it would return almost immediately.
-    expect(trashDurationMs).toBeGreaterThanOrEqual(HOLD_MS - 100);
+    // lock to release — without the fix it would finish ~HOLD_MS before the
+    // hold ends. An ordering check, not a duration threshold: the time spent
+    // polling pg_locks comes out of HOLD_MS, so a loaded runner shrinks the
+    // measured wait even when the lock blocked correctly.
+    expect(holdReleasedAt).toBeDefined();
+    expect(trashFinishedAt).toBeGreaterThanOrEqual(holdReleasedAt as number);
 
     // The reorder itself still succeeded: the task was in scope for the
     // entire transaction (locked before the trash committed), so it must be

@@ -14,6 +14,10 @@ export interface PDFTextContent {
 
 export interface PDFTextItem {
   str: string;
+  /** pdf.js sets this on the item that ends a visual line. */
+  hasEOL?: boolean;
+  /** pdf.js text-item matrix; index 5 is the baseline Y in PDF units. */
+  transform?: number[];
 }
 
 export interface PDFInfo {

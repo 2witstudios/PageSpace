@@ -28,6 +28,8 @@ const {
   mockResolveDriveMembership,
   mockGetConversation,
   mockGetAiAgent,
+  mockFindSessionRecord,
+  mockRenameSession,
 } = vi.hoisted(() => ({
   mockFindSessionForConversation: vi.fn(),
   mockEnsureGlobalSandboxSession: vi.fn(),
@@ -44,6 +46,8 @@ const {
   mockResolveDriveMembership: vi.fn(),
   mockGetConversation: vi.fn(),
   mockGetAiAgent: vi.fn(),
+  mockFindSessionRecord: vi.fn(),
+  mockRenameSession: vi.fn(),
 }));
 
 vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
@@ -59,6 +63,8 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   listSessionConversationsBulk: mockListSessionConversationsBulk,
   provisionSessionSandbox: vi.fn(),
   getAgentSessionStore: vi.fn(),
+  findSessionRecord: mockFindSessionRecord,
+  renameSession: mockRenameSession,
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: mockCanUserViewPage,
@@ -109,6 +115,9 @@ beforeEach(() => {
   // `undefined` and every unrelated test would fail on the access read rather
   // than on what it is actually asserting. Tests about revocation override it.
   mockCheckSessionAccess.mockResolvedValue({ allowed: true });
+  mockListSessions.mockResolvedValue([]);
+  mockFindSessionRecord.mockResolvedValue({ id: 'ses-1', ownerId: 'user-1', driveId: 'drive-1' });
+  mockRenameSession.mockResolvedValue({ workspaceId: 'ses-1', name: 'Renamed' });
 });
 
 describe('resolveCallerSessionForWorker', () => {
@@ -188,7 +197,11 @@ describe('resolveCallerSessionForWorker', () => {
       ownerId: 'user-1',
       driveId: 'drive-1',
     });
-    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', 'user-1', 'drive-1');
+    // The agent's TITLE rides along so the lazily minted workspace is labelled
+    // with the agent rather than the generic fallback. This is the DEFAULT
+    // placement — the most travelled minting path, and the one that went on
+    // producing nameless "Session" rows after the other two were fixed.
+    expect(mockEnsureDriveSessionForConversation).toHaveBeenCalledWith('conv-p', 'user-1', 'drive-1', 'Agent');
   });
 
   test('a PAGE conversation whose agent the caller cannot view refuses with not_permitted — RBAC is the gate, not binding state', async () => {
@@ -317,11 +330,105 @@ describe('createWorkerSession — placement', () => {
       const result = await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
 
       expect(result).toEqual({ ok: true, workspaceId: 'ses-fresh' });
-      expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: null, envId: null });
+      expect(mockSpawnSession).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1', driveId: null, envId: null }),
+      );
       expect(mockCreateConversationInSession).toHaveBeenCalledWith(
         expect.objectContaining({ workspaceId: 'ses-fresh' }),
       );
       expect(mockEndSession).not.toHaveBeenCalled();
+    });
+
+    /**
+     * THE BUG THIS EPIC OPENED WITH. This path used to call `spawnSession`
+     * with no `name` at all, so every workspace an agent minted was born
+     * `null` and rendered in its owner's sidebar as the literal fallback
+     * "Session" — permanently, because nothing could rename it either.
+     */
+    test('never mints a NAMELESS workspace: a global spawn is auto-labelled', async () => {
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
+
+      expect(mockSpawnSession).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Global Assistant' }),
+      );
+    });
+
+    test('auto-labels from the AGENT when spawning for a page agent', async () => {
+      mockGetAiAgent.mockResolvedValue({ id: 'agent-1', driveId: 'drive-1', title: 'Release Bot' });
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      await deps.createWorkerSession({ ...baseInput, agentPageId: 'agent-1', workspace: 'new' });
+
+      expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ name: 'Release Bot' }));
+    });
+
+    test('scans past an existing label rather than colliding with it', async () => {
+      // Cosmetic uniqueness only — names carry no constraint — but a sidebar
+      // of five identical rows is unreadable.
+      mockListSessions.mockResolvedValue([{ name: 'Global Assistant' }, { name: 'Global Assistant 2' }]);
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
+
+      expect(mockSpawnSession).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Global Assistant 3' }),
+      );
+    });
+
+    test('given the uniqueness read failing, still spawns — with the bare label', async () => {
+      // A cosmetic suffix must never be the reason a spawn fails. Degrading
+      // costs at most a duplicate name (they carry no uniqueness constraint);
+      // refusing would cost the whole workspace.
+      mockListSessions.mockRejectedValue(new Error('database unavailable'));
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      const result = await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
+
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+      expect(mockSpawnSession).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Global Assistant' }),
+      );
+    });
+
+    test("the model's own workspaceName wins, trimmed", async () => {
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      await deps.createWorkerSession({ ...baseInput, workspace: 'new', workspaceName: '  Migration run  ' });
+
+      expect(mockSpawnSession).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Migration run' }),
+      );
+      // The derivation is skipped entirely when the model supplied a label.
+      expect(mockListSessions).not.toHaveBeenCalled();
+    });
+
+    test('bounds an over-long workspaceName rather than refusing the spawn', async () => {
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      await deps.createWorkerSession({ ...baseInput, workspace: 'new', workspaceName: 'x'.repeat(500) });
+
+      const name = mockSpawnSession.mock.calls[0][0].name as string;
+      expect(name).toHaveLength(120);
     });
 
     test('derives the drive from the target agent when spawning for a page agent, and denies without checking spawnSession if the drive refuses', async () => {
@@ -345,7 +452,9 @@ describe('createWorkerSession — placement', () => {
       const deps = buildSessionToolsDeps();
       await deps.createWorkerSession({ ...baseInput, agentPageId: 'agent-1', workspace: 'new' });
 
-      expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1', envId: 'env-default' });
+      expect(mockSpawnSession).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1', driveId: 'drive-1', envId: 'env-default' }),
+      );
     });
 
     test('does NOT apply defaultEnvId while the agent\'s Sandbox switch is off — the stored default stays inert', async () => {
@@ -357,7 +466,9 @@ describe('createWorkerSession — placement', () => {
       const deps = buildSessionToolsDeps();
       await deps.createWorkerSession({ ...baseInput, agentPageId: 'agent-1', workspace: 'new' });
 
-      expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1', envId: null });
+      expect(mockSpawnSession).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1', driveId: 'drive-1', envId: null }),
+      );
     });
 
     test('a spawnSession cap refusal propagates as session_limit_reached', async () => {
@@ -814,5 +925,98 @@ describe('listOwnWorkspaces — owned, and separately still accessible', () => {
     const own = await deps.listOwnWorkspaces({ userId: OWNER, excludeWorkspaceId: 'ses-current' });
 
     expect(own.map((w) => w.workspaceId)).toEqual(['ses-mine']);
+  });
+});
+
+/**
+ * `renameWorkspace` — where the rename's authorization actually lives.
+ *
+ * The tool factory routes; this dep decides, because deciding needs the
+ * workspace ROW. It applies the same two gates, in the same order, as
+ * `PATCH /api/agent-workspaces/[workspaceId]`, and collapses every denial to
+ * one reason so the refusals cannot be used to enumerate workspace ids.
+ */
+describe('renameWorkspace — the tool surface must not be wider than the HTTP one', () => {
+  const rename = (over: Record<string, unknown> = {}) =>
+    buildSessionToolsDeps().renameWorkspace({
+      userId: 'user-1',
+      workspaceId: 'ses-1',
+      name: 'Deploy work',
+      allowedDriveIds: [],
+      ...over,
+    });
+
+  test('an owner with access renames, and gets the STORED name back', async () => {
+    const result = await rename();
+
+    expect(result).toEqual({ ok: true, name: 'Renamed' });
+    expect(mockRenameSession).toHaveBeenCalledWith({ workspaceId: 'ses-1', name: 'Deploy work' });
+  });
+
+  test('a workspace that does not exist is refused without a write', async () => {
+    mockFindSessionRecord.mockResolvedValue(null);
+
+    expect(await rename()).toEqual({ ok: false, reason: 'not_found_or_denied' });
+    expect(mockRenameSession).not.toHaveBeenCalled();
+  });
+
+  test("someone else's workspace is refused without a write", async () => {
+    mockFindSessionRecord.mockResolvedValue({ id: 'ses-1', ownerId: 'user-2', driveId: 'drive-1' });
+
+    expect(await rename()).toEqual({ ok: false, reason: 'not_found_or_denied' });
+    expect(mockRenameSession).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The gate that is NOT redundant with ownership: `decideAgentSessionAccess`
+   * denies the OWNER too once they lose the workspace's drive. Without this
+   * check a revoked owner could still rename through the tool while every HTTP
+   * route 404s them — the exact asymmetry the layout-authz suite exists for.
+   */
+  test('an owner whose drive access was revoked is refused', async () => {
+    mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'drive_access_denied' });
+
+    expect(await rename()).toEqual({ ok: false, reason: 'not_found_or_denied' });
+    expect(mockRenameSession).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A rename IS A WRITE, so the calling credential's ceiling applies exactly as
+   * it does to spawn placement: a drive-scoped token must not write to a
+   * workspace in a drive it was never granted, however freely its owner may
+   * reach it.
+   */
+  test('a drive-scoped credential cannot rename outside its drives', async () => {
+    expect(await rename({ allowedDriveIds: ['drive-other'] })).toEqual({
+      ok: false,
+      reason: 'not_found_or_denied',
+    });
+    expect(mockRenameSession).not.toHaveBeenCalled();
+  });
+
+  test('a drive-scoped credential CAN rename inside its drives', async () => {
+    expect(await rename({ allowedDriveIds: ['drive-1'] })).toEqual({ ok: true, name: 'Renamed' });
+  });
+
+  test('every refusal is the same refusal', async () => {
+    // Asserted rather than assumed: a distinguishing reason added later would
+    // turn these into an oracle over which workspace ids are real.
+    mockFindSessionRecord.mockResolvedValue(null);
+    const missing = await rename();
+
+    mockFindSessionRecord.mockResolvedValue({ id: 'ses-1', ownerId: 'user-2', driveId: 'drive-1' });
+    const foreign = await rename();
+
+    mockFindSessionRecord.mockResolvedValue({ id: 'ses-1', ownerId: 'user-1', driveId: 'drive-1' });
+    const outOfScope = await rename({ allowedDriveIds: ['drive-other'] });
+
+    expect(missing).toEqual(foreign);
+    expect(foreign).toEqual(outOfScope);
+  });
+
+  test('a row that vanishes between the read and the write is refused, not reported as done', async () => {
+    mockRenameSession.mockResolvedValue(null);
+
+    expect(await rename()).toEqual({ ok: false, reason: 'not_found_or_denied' });
   });
 });

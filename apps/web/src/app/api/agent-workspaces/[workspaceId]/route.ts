@@ -1,5 +1,5 @@
 /**
- * One agent session — status / ensure+provision / end.
+ * One agent session — status / ensure+provision / rename / end.
  *
  * GET    → 200 { session: AgentSessionDTO | null, sandboxEligible, canEndSession }
  *   `{ session: null }` whether the session never existed OR is someone
@@ -12,6 +12,21 @@
  * POST   → 200 { session } — provision the EXISTING session's sandbox,
  *   idempotent by the session id (a re-POST resumes). No body: sessions are
  *   born through the collection route's spawn; this route never mints one.
+ *
+ * PATCH  { name } → 200 { session } — relabel the session.
+ *   A name is a label and never an address (session-contract invariant 2), so
+ *   this breaks nothing: no running worker, no shell, no sandbox, no binding.
+ *
+ *   OWNER ONLY, and this is the family's ONE deliberate 403. Renaming is not
+ *   release-of-compute, so the END decision (with its real `canRunCode`
+ *   capability) is the wrong gate — requiring a compute capability to edit a
+ *   text label is a category error. But the plain session access check is too
+ *   wide on its own: it admits any member of the workspace's drive, while
+ *   `listSessions` filters on `ownerId`, so a colleague could relabel a
+ *   workspace they are never even shown in a listing. So: the family gate
+ *   first (unknown and denied still answer with the same 404), and only THEN
+ *   an ownership check, which may answer 403 because passing the first gate
+ *   already told this caller the row exists. Nothing new leaks.
  *
  * DELETE → 200 { ok, spriteTornDown, hadOtherOpenConversations } — end the
  *   session: instance-guarded Sprite kill, row RETAINED (re-provisionable
@@ -47,8 +62,14 @@ import {
   endSession,
   findSessionRecord,
   provisionSessionSandbox,
+  renameSession,
   toSessionDTOWithEnv,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import {
+  MAX_SESSION_NAME_LENGTH,
+  renameAgentSessionRequestSchema,
+} from '@pagespace/lib/agent-workspaces/session-contract';
+import { decideAgentSessionRenameAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -191,6 +212,73 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({ error: 'Failed to load the session' }, { status: 500 });
   }
   return NextResponse.json({ session: await toSessionDTOWithEnv(row) });
+}
+
+export async function PATCH(request: Request, context: RouteContext) {
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
+  if (isAuthError(auth)) return auth.error;
+
+  const { workspaceId } = await context.params;
+
+  // Gate 1 — the family's shared decision. An unknown id and a denied one
+  // answer IDENTICALLY here, exactly as they do on POST/DELETE.
+  const access = await checkSessionAccess(auth.userId, workspaceId);
+  if (!access.allowed) {
+    return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
+  }
+
+  const row = await findSessionRecord(workspaceId);
+  if (!row) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+
+  // Gate 2 — reached is not the same as yours to relabel. A name is the
+  // OWNER's word for their own working context, and a drive member who may USE
+  // a session does not get to retitle it in its owner's sidebar. A real 403 is
+  // safe here and only here: gate 1 already admitted this caller to the row,
+  // so naming the refusal tells them nothing they could not already see.
+  // ONE decision, shared with the tool path — not an inline comparison repeated
+  // in two places (review — CodeRabbit).
+  if (!decideAgentSessionRenameAccess({ requesterId: auth.userId, session: row }).allowed) {
+    auditRequest(request, {
+      eventType: 'authz.access.denied',
+      userId: auth.userId,
+      resourceType: 'agent_session',
+      resourceId: workspaceId,
+      details: { reason: 'not_owner', operation: 'rename', route: ROUTE },
+      riskScore: 0.4,
+    });
+    return NextResponse.json({ error: 'Only the owner can rename this session' }, { status: 403 });
+  }
+
+  const body = await request.json().catch(() => null);
+  const parsed = renameAgentSessionRequestSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: `A session name of 1–${MAX_SESSION_NAME_LENGTH} characters is required` },
+      { status: 400 },
+    );
+  }
+
+  // The schema trimmed it; a whitespace-only name was refused above rather
+  // than stored as a blank that renders as the nameless fallback.
+  const session = await renameSession({ workspaceId, name: parsed.data.name });
+  // Only reachable if the row went away between the read and the write.
+  if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+
+  auditRequest(request, {
+    eventType: 'data.write',
+    userId: auth.userId,
+    resourceType: 'agent_session',
+    resourceId: workspaceId,
+    // The NEW NAME is deliberately not logged. Every other write audit in this
+    // file records the operation and machine state only, and an audit row is
+    // append-only — it outlives the workspace row it describes. A session label
+    // is free text a user or a model wrote, so copying it here would give that
+    // text a longer retention than the record it came from, for no forensic
+    // gain: rename is not a destructive act and the row itself holds the name.
+    details: { operation: 'rename', route: ROUTE },
+  });
+
+  return NextResponse.json({ session });
 }
 
 export async function DELETE(request: Request, context: RouteContext) {

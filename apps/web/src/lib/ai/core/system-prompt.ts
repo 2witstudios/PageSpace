@@ -50,6 +50,7 @@ const CATEGORY_MAP: Record<string, string> = {
   update_agent_config: 'agents', list_agents: 'agents', multi_drive_list_agents: 'agents', list_models: 'agents',
   list_sessions: 'sessions', spawn_session: 'sessions', send_session: 'sessions', read_session: 'sessions', kill_session: 'sessions',
   spawn_shell: 'sessions', send_shell: 'sessions', read_shell: 'sessions', kill_shell: 'sessions',
+  rename_workspace: 'sessions',
   get_activity: 'activity',
   list_calendar_events: 'calendar', get_calendar_event: 'calendar', check_calendar_availability: 'calendar',
   create_calendar_event: 'calendar', update_calendar_event: 'calendar', delete_calendar_event: 'calendar',
@@ -351,6 +352,12 @@ function buildSandboxInstructions(availableTools?: string[]): string {
   }
   if (has('list_sessions')) {
     sessionParts.push('list_sessions re-lists your sessions plus your shells (names are labels, ids address).');
+  }
+  if (has('rename_workspace')) {
+    // The session itself is the one thing an agent could not label. Worth a
+    // clause because the cost of not knowing is silent and permanent: an
+    // unnamed session stays "Session" in its owner's sidebar forever.
+    sessionParts.push('rename_workspace labels the SESSION itself (not a worker) — name it once its purpose is clear.');
   }
   if (has('spawn_shell')) {
     // codex review: compose each follow-up's own role independently — a

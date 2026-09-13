@@ -5,11 +5,15 @@ import { createFakeContext, createRecordingSink, fakeSdk } from '../../__tests__
 import {
   compareColumns,
   createSheetsAppendHandler,
+  createSheetsFormatHandler,
+  renderApplyFormat,
+  renderFormatting,
   renderRows,
   createSheetsEditCellsHandler,
   createSheetsUpdateCellsHandler,
   sheetsDeleteRowsHandler,
   sheetsDescribeHandler,
+  sheetsFormattingHandler,
   sheetsQueryHandler,
   sheetsRowsHandler,
 } from '../sheets.js';
@@ -337,5 +341,294 @@ describe('sheets delete-rows', () => {
     expect(prompt).not.toHaveBeenCalled();
     expect(deleteRows).toHaveBeenCalledWith({ operation: 'delete-rows', pageId: 'pg_1', fromRow: 3, count: 3 });
     expect(stdout.lines.join('')).toContain('Deleted 3 row(s)');
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Formatting verbs — presentation rather than data.
+// ---------------------------------------------------------------------------
+
+const FORMATTING = {
+  pageId: 'pg_1',
+  pageTitle: 'Budget',
+  tabIndex: 0,
+  rowCount: 40,
+  columnCount: 6,
+  frozenRows: 1,
+  frozenColumns: null,
+  columnFormats: { C: { number: { kind: 'currency', currency: 'USD' }, bold: false } },
+  columnWidths: { C: 140 },
+  rowHeights: { '1': 32 },
+  conditionalFormats: [
+    { kind: 'cell' as const, id: 'r1', ranges: ['C2:C40'], condition: { operator: 'lessThan' as const, value: '0' }, format: { color: '#b91c1c' } },
+    { kind: 'colorScale' as const, id: 'r2', ranges: ['D2:D40'], min: { type: 'min' as const, color: '#ffffff' }, max: { type: 'max' as const, color: '#1d4ed8' } },
+    { kind: 'dataBar' as const, id: 'r3', ranges: ['E2:E40'], color: '#1d4ed8' },
+    { kind: 'formula' as const, id: 'r4', ranges: ['A2:A40'], formula: '=A2>0', format: { bold: true } },
+  ],
+  regions: [
+    { id: 'g1', name: 'Spend', range: 'A1:F', headerRows: 1, totalRows: [40], columns: [{ column: 'C', role: 'currency' as const, currency: 'USD' }], theme: 'blue' },
+  ],
+  cellFormats: { A1: { bold: true } },
+};
+
+const APPLY_RESULT = {
+  pageId: 'pg_1',
+  pageTitle: 'Budget',
+  tabIndex: 0,
+  changed: true,
+  cellsFormatted: 6,
+  rowsTouched: 1,
+  tabFieldsChanged: ['frozenRows', 'regions'],
+  conditionalRules: 1,
+  ruleIdsAdded: ['r1'],
+  ruleIdsRemoved: [],
+  regions: 1,
+  regionIdsAdded: ['g1'],
+  regionIdsRemoved: [],
+  rowCount: 40,
+  columnCount: 6,
+  recomputed: [],
+};
+
+describe('renderFormatting', () => {
+  it('names every rule by id, so a reader can pick one to remove', () => {
+    // Removing a rule takes its id and nothing else, and this read is the only
+    // place a CLI caller can get one.
+    const rendered = renderFormatting(FORMATTING);
+    for (const id of ['r1', 'r2', 'r3', 'r4']) expect(rendered).toContain(id);
+    expect(rendered).toContain('cell C2:C40 lessThan 0');
+    expect(rendered).toContain('colorScale D2:D40 min #ffffff .. max #1d4ed8');
+    expect(rendered).toContain('dataBar E2:E40 #1d4ed8');
+    expect(rendered).toContain('formula A2:A40 =A2>0');
+  });
+
+  it('renders a region with its structure and column roles', () => {
+    const rendered = renderFormatting(FORMATTING);
+    expect(rendered).toContain('g1 "Spend" A1:F — 1 header row(s), totals 40, theme blue');
+    expect(rendered).toContain('C=currency (USD)');
+  });
+
+  it('says per-cell formats were not READ when no ranges were asked for', () => {
+    // "none" and "none read" are very different answers: a caller that took
+    // the first for the second would format straight over what is there.
+    const rendered = renderFormatting({ ...FORMATTING, cellFormats: {} });
+    expect(rendered).toContain('none read');
+    expect(renderFormatting(FORMATTING)).toContain('A1: bold');
+  });
+
+  it('says none were FOUND when ranges were asked for and hold nothing', () => {
+    // The response is an empty `cellFormats` in both cases, so the distinction
+    // can only come from what the caller asked for. This is the branch that
+    // licenses "these cells carry no per-cell format of their own".
+    const rendered = renderFormatting({ ...FORMATTING, cellFormats: {} }, ['A1:F40', 'H2:H9']);
+    expect(rendered).toContain('none found in A1:F40, H2:H9');
+    expect(rendered).not.toContain('none read');
+  });
+
+  it('still says none were read when an empty range list survives parsing', () => {
+    // `--ranges ,,` parses to undefined and nothing is sent, so the answer is
+    // the same as omitting the flag — not a false "none found in ".
+    expect(renderFormatting({ ...FORMATTING, cellFormats: {} }, [])).toContain('none read');
+  });
+
+  it('omits a section that is empty rather than printing an empty heading', () => {
+    const bare = {
+      ...FORMATTING,
+      frozenRows: null, frozenColumns: null,
+      columnFormats: {}, columnWidths: {}, rowHeights: {},
+      conditionalFormats: [], regions: [], cellFormats: {},
+    };
+    const rendered = renderFormatting(bare);
+    expect(rendered).toContain('tab 0: 40 rows x 6 columns');
+    for (const heading of ['frozen:', 'regions', 'conditional rules', 'column widths', 'row heights']) {
+      expect(rendered, `"${heading}" should be absent`).not.toContain(heading);
+    }
+  });
+
+  it('renders a false-valued format field as a value, not as a set flag', () => {
+    // `{bold: false}` means "explicitly not bold" — printing it as `bold`
+    // would report the opposite of what is stored.
+    expect(renderFormatting(FORMATTING)).toContain('bold=false');
+  });
+});
+
+describe('renderApplyFormat', () => {
+  it('reports a no-op retry as no change, not as a write', () => {
+    // The server bumps no revision and logs nothing for this; presenting it as
+    // a change would make a harmless retry look like an edit.
+    expect(renderApplyFormat({ ...APPLY_RESULT, changed: false })).toContain('No change');
+  });
+
+  it('reports what actually changed, under the lock', () => {
+    const rendered = renderApplyFormat(APPLY_RESULT);
+    expect(rendered).toContain('6 cell(s) restyled');
+    expect(rendered).toContain('changed frozenRows, regions');
+    expect(rendered).toContain('+1 region(s)');
+    expect(rendered).toContain('+1 rule(s)');
+  });
+});
+
+describe('sheets formatting', () => {
+  it('reads the declarative layer with no ranges, and does not send an empty ranges field', async () => {
+    const readFormatting = vi.fn(async () => FORMATTING);
+    const ctx = createFakeContext({ sdk: fakeSdk({ sheets: { readFormatting } }) });
+
+    const code = await sheetsFormattingHandler(ctx, commandIntent(['pg_1']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(readFormatting).toHaveBeenCalledWith({ operation: 'read-formatting', pageId: 'pg_1' });
+  });
+
+  it('sends --ranges as a list and --tab as a number', async () => {
+    const readFormatting = vi.fn(async () => FORMATTING);
+    const ctx = createFakeContext({ sdk: fakeSdk({ sheets: { readFormatting } }) });
+
+    const code = await sheetsFormattingHandler(ctx, commandIntent(['pg_1', '--ranges', 'A1:F40, H2:H9', '--tab', '2']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(readFormatting).toHaveBeenCalledWith({
+      operation: 'read-formatting', pageId: 'pg_1', tabIndex: 2, ranges: ['A1:F40', 'H2:H9'],
+    });
+  });
+
+  it('reports empty ranges as none FOUND, not as none read, end to end', async () => {
+    // The handler is what knows `--ranges` was passed; the response cannot
+    // say. Asserted through the handler rather than the renderer alone,
+    // because the wiring between them is the part that can be dropped.
+    const stdout = createRecordingSink();
+    const readFormatting = async () => ({ ...FORMATTING, cellFormats: {} });
+    const ctx = createFakeContext({ stdout, sdk: fakeSdk({ sheets: { readFormatting } }) });
+
+    await sheetsFormattingHandler(ctx, commandIntent(['pg_1', '--ranges', 'A1:F40']));
+
+    const out = stdout.lines.join('');
+    expect(out).toContain('none found in A1:F40');
+    expect(out).not.toContain('none read');
+  });
+
+  it('exits 2 without a pageId, and on an unknown argument, never calling the SDK', async () => {
+    const readFormatting = vi.fn(async () => FORMATTING);
+    const ctx = createFakeContext({ sdk: fakeSdk({ sheets: { readFormatting } }) });
+
+    expect(await sheetsFormattingHandler(ctx, commandIntent([]))).toBe(EXIT_USAGE_ERROR);
+    expect(await sheetsFormattingHandler(ctx, commandIntent(['pg_1', '--nope']))).toBe(EXIT_USAGE_ERROR);
+    expect(await sheetsFormattingHandler(ctx, commandIntent(['pg_1', '--tab', 'x']))).toBe(EXIT_USAGE_ERROR);
+    expect(readFormatting).not.toHaveBeenCalled();
+  });
+
+  it('--json emits exactly the SDK response', async () => {
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, sdk: fakeSdk({ sheets: { readFormatting: async () => FORMATTING } }) });
+
+    await sheetsFormattingHandler(ctx, commandIntent(['pg_1', '--json']));
+
+    expect(JSON.parse(stdout.lines.join(''))).toEqual(FORMATTING);
+  });
+});
+
+describe('sheets format', () => {
+  const OPS = '[{"type":"upsertRegion","region":{"id":"g1","range":"A1:F","headerRows":1}}]';
+
+  it('passes the op array through in order, with the tab', async () => {
+    const applyFormat = vi.fn(async () => APPLY_RESULT);
+    const handler = createSheetsFormatHandler({ readStdin: async () => OPS });
+    const ctx = createFakeContext({ sdk: fakeSdk({ sheets: { applyFormat } }) });
+
+    const code = await handler(ctx, commandIntent(['pg_1', '--tab', '1']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(applyFormat).toHaveBeenCalledWith({
+      operation: 'apply-format',
+      pageId: 'pg_1',
+      tabIndex: 1,
+      ops: [{ type: 'upsertRegion', region: { id: 'g1', range: 'A1:F', headerRows: 1 } }],
+    });
+  });
+
+  it('prefers --json-input over stdin and never reads it', async () => {
+    const applyFormat = vi.fn(async () => APPLY_RESULT);
+    const readStdin = vi.fn(async () => 'should not be used');
+    const handler = createSheetsFormatHandler({ readStdin });
+    const ctx = createFakeContext({ sdk: fakeSdk({ sheets: { applyFormat } }) });
+
+    expect(await handler(ctx, commandIntent(['pg_1', '--json-input', OPS]))).toBe(EXIT_SUCCESS);
+    expect(readStdin).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed and non-array JSON as usage errors before any network call', async () => {
+    const applyFormat = vi.fn(async () => APPLY_RESULT);
+    const ctx = createFakeContext({ sdk: fakeSdk({ sheets: { applyFormat } }) });
+
+    expect(await createSheetsFormatHandler({ readStdin: async () => 'not json' })(ctx, commandIntent(['pg_1'])))
+      .toBe(EXIT_USAGE_ERROR);
+    expect(await createSheetsFormatHandler({ readStdin: async () => '{"type":"clearConditionalRules"}' })(ctx, commandIntent(['pg_1'])))
+      .toBe(EXIT_USAGE_ERROR);
+    expect(applyFormat).not.toHaveBeenCalled();
+  });
+
+  it('exits 2 without a pageId, never reading input', async () => {
+    const applyFormat = vi.fn(async () => APPLY_RESULT);
+    const readStdin = vi.fn(async () => OPS);
+    const handler = createSheetsFormatHandler({ readStdin });
+    const ctx = createFakeContext({ sdk: fakeSdk({ sheets: { applyFormat } }) });
+
+    expect(await handler(ctx, commandIntent([]))).toBe(EXIT_USAGE_ERROR);
+    expect(readStdin).not.toHaveBeenCalled();
+    expect(applyFormat).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed stdin read as a runtime error, and sends nothing', async () => {
+    // A read that throws is not a malformed payload: it exits 1, not 2, and
+    // must say why rather than surfacing as "Invalid JSON". Nothing else in
+    // this file covers that branch for any of the payload verbs, so the rule
+    // it encodes — a transport failure never reaches the network — was
+    // untested until now.
+    const applyFormat = vi.fn(async () => APPLY_RESULT);
+    const stderr = createRecordingSink();
+    const handler = createSheetsFormatHandler({
+      readStdin: async () => { throw new Error('stdin closed'); },
+    });
+    const ctx = createFakeContext({ stderr, sdk: fakeSdk({ sheets: { applyFormat } }) });
+
+    expect(await handler(ctx, commandIntent(['pg_1']))).toBe(EXIT_RUNTIME_ERROR);
+    expect(stderr.lines.join('')).toContain('Failed to read input: stdin closed');
+    expect(applyFormat).not.toHaveBeenCalled();
+  });
+
+  it('does not gate on --yes, unlike delete-rows', async () => {
+    // Formatting is presentation, recoverable by writing it again. Prompting
+    // for "bold the header row" would only train the habit of passing --yes
+    // blind, which is what makes the gate on delete-rows worth anything.
+    const applyFormat = vi.fn(async () => APPLY_RESULT);
+    const prompt = vi.fn(async () => 'n');
+    const handler = createSheetsFormatHandler({ readStdin: async () => OPS });
+    const ctx = createFakeContext({ isTTY: true, prompt, sdk: fakeSdk({ sheets: { applyFormat } }) });
+
+    expect(await handler(ctx, commandIntent(['pg_1']))).toBe(EXIT_SUCCESS);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(applyFormat).toHaveBeenCalled();
+  });
+
+  it('surfaces a server refusal — which names the op index — as a runtime error', async () => {
+    const applyFormat = vi.fn(async () => {
+      throw new Error('Op 2 (setColumnWidth): "range" is not a field of this op.');
+    });
+    const stderr = createRecordingSink();
+    const handler = createSheetsFormatHandler({ readStdin: async () => OPS });
+    const ctx = createFakeContext({ stderr, sdk: fakeSdk({ sheets: { applyFormat } }) });
+
+    expect(await handler(ctx, commandIntent(['pg_1']))).toBe(EXIT_RUNTIME_ERROR);
+    expect(stderr.lines.join('')).toContain('Op 2 (setColumnWidth)');
+  });
+
+  it('--json emits exactly the SDK response', async () => {
+    const stdout = createRecordingSink();
+    const handler = createSheetsFormatHandler({ readStdin: async () => OPS });
+    const ctx = createFakeContext({ stdout, sdk: fakeSdk({ sheets: { applyFormat: async () => APPLY_RESULT } }) });
+
+    await handler(ctx, commandIntent(['pg_1', '--json']));
+
+    expect(JSON.parse(stdout.lines.join(''))).toEqual(APPLY_RESULT);
   });
 });
