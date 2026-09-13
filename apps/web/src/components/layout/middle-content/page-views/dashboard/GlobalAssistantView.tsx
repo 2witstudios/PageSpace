@@ -912,9 +912,16 @@ const GlobalAssistantView: React.FC = () => {
     <AskUserAnswerProvider value={askUserAnswering}>
     <div data-testid="global-assistant-view" className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-[var(--separator)]">
-        <div className="flex items-center space-x-2">
+      <div className="flex items-center justify-between gap-2 p-4 border-[var(--separator)]">
+        <div className="flex min-w-0 items-center space-x-2">
           <AISelector
+            // `shrink` overrides the shared button variant's own `shrink-0`
+            // (twMerge, later class wins), and `min-w-0` lets it fall below
+            // its intrinsic width. Without both, a long agent title keeps the
+            // button at full width and pushes the actions off the row — the
+            // truncate on the label inside can only act once the button
+            // itself is allowed to narrow.
+            className="min-w-0 shrink"
             selectedAgent={selectedAgent}
             onSelectAgent={handleSelectAgentForVoice}
             // The CONVERSATION's own liveness, not a raw chat status. Switching agent while
@@ -922,15 +929,21 @@ const GlobalAssistantView: React.FC = () => {
             // longer reports "streaming" at all, because this client does not read a body.
             disabled={effectiveIsStreaming}
           />
-          {/* When the left sidebar (and its drive switcher) is hidden, the
-              scope the assistant can see would otherwise be invisible. */}
+          {/* When the left sidebar (and its drive switcher) is collapsed, the
+              scope the assistant can see would otherwise be invisible.
+
+              Desktop only (lg+), the same gate as DashboardCrumb's drive
+              crumb: below lg the sidebar is a sheet whatever `leftSidebarOpen`
+              says, its DriveSwitcher opens this same picker, and a phone
+              header row has no room for a second wordy control — it pushed
+              the New button off the right edge. */}
           {!leftSidebarOpen && isGlobalMode && (
-            <div className="rounded-lg bg-primary-soft">
+            <div className="hidden rounded-lg bg-primary-soft lg:block">
               <DriveSwitcher />
             </div>
           )}
         </div>
-        <div className="flex items-center space-x-2">
+        <div className="flex shrink-0 items-center space-x-2">
           <PlanChip conversationId={currentConversationId} messages={plainMessages} />
           <TasksDropdown messages={plainMessages} driveId={selectedAgent?.driveId || locationContext?.currentDrive?.id} />
           <Button
