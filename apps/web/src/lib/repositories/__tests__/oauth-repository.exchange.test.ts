@@ -730,7 +730,7 @@ describe('exchangeAuthorizationCode — end-to-end name round trip (pagespace ke
       account: false,
       offlineAccess: true,
       manageKeys: false,
-      allDrives: false,
+      allDrives: false, profile: false,
       updateKeyId: null,
       activateKeyId: null,
       newKeyName: CHOSEN_NAME,

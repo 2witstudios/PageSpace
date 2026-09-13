@@ -24,6 +24,7 @@ function emptySet(overrides: Partial<ScopeSet> = {}): ScopeSet {
     drives: new Map(),
     manageKeys: false,
     allDrives: false,
+    profile: false,
     updateKeyId: null,
     activateKeyId: null,
     newKeyName: null,

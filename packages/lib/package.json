@@ -1928,6 +1928,16 @@
       "import": "./dist/auth/oauth/user-code.js",
       "require": "./dist/auth/oauth/user-code.js"
     },
+    "./auth/oauth/step-up-boundary": {
+      "types": "./dist/auth/oauth/step-up-boundary.d.ts",
+      "import": "./dist/auth/oauth/step-up-boundary.js",
+      "require": "./dist/auth/oauth/step-up-boundary.js"
+    },
+    "./auth/oauth/client-registration": {
+      "types": "./dist/auth/oauth/client-registration.d.ts",
+      "import": "./dist/auth/oauth/client-registration.js",
+      "require": "./dist/auth/oauth/client-registration.js"
+    },
     "./auth/account-lockout": {
       "types": "./dist/auth/account-lockout.d.ts",
       "import": "./dist/auth/account-lockout.js",

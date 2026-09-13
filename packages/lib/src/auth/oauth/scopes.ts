@@ -10,10 +10,17 @@
  */
 
 const RESOURCE_ID_RE = /^[a-z0-9]{1,32}$/;
-const NAME_CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
+/**
+ * Control characters that must never reach a rendered name. Exported so
+ * `./client-registration` applies the identical rule to a CLIENT name, which
+ * renders on the consent screen beside the "Unverified app" badge — the one
+ * place a spoofed name pays off.
+ */
+export const NAME_CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
 
 export type ParsedScope =
   | { kind: 'account' }
+  | { kind: 'profile' }
   | { kind: 'offline_access' }
   | { kind: 'manage_keys' }
   | { kind: 'all_drives' }
@@ -64,12 +71,27 @@ export type ScopeSet = {
   // combining it with any grant would let an "activate" consent screen
   // smuggle a real grant.
   activateKeyId: string | null;
+  // `profile` — identity only (ADR 0004 Decision 4): the name/email/avatar
+  // `/api/auth/me` already returns for an OAuth principal, and nothing else.
+  // Zero content access, so it is the one scope whose approval does not need
+  // the consent step-up ceremony (`requiresStepUp`, `./step-up-boundary`).
+  // Mutually exclusive with `account` (a full-user grant already IS the
+  // identity, and the two shapes would have to resolve to one principal —
+  // `profile_account_conflict` below), and with `manage_keys`/`all_drives`,
+  // each of which is its own principal shape resolved at token-issuance time
+  // (see the existing conflict checks, which `profile` joins rather than
+  // duplicating). Combinable with `drive:*` (sign in AND act in a drive) and
+  // with `offline_access` (rule 10 extended: `profile` is a principal shape,
+  // so a refresh token minted beside it authorizes something real).
+  profile: boolean;
   // `name:<percent-encoded-utf8>` — the user-chosen name for the `mcp_tokens`
   // row this grant mints. Carries no capability itself; FORBIDDEN on any
   // grant shape that doesn't mint a NEW `mcp_tokens` row (`account`/
   // `manage_keys`/`update_key`/`activate_key` — attaching a name there would
   // either be meaningless, since no row is minted, or spoof a "creating a
-  // key" consent line when no key is actually being created), enforced by
+  // key" consent line when no key is actually being created, or — for a
+  // `profile`-bearing set — promise a key that `isPureDriveGrant`'s exclusion
+  // guarantees is never minted), enforced by
   // this parser's `name_without_mint_grant` rule below. Deliberately NOT
   // enforced as *required* on a mint-shaped grant (pure `drive:*`/
   // `all_drives`) at this layer — this parser is reused by flows (e.g.
@@ -86,6 +108,7 @@ export type ScopeError =
   | { code: 'unknown_scope'; scope: string }
   | { code: 'empty_scope' }
   | { code: 'account_drive_conflict' }
+  | { code: 'profile_account_conflict' }
   | { code: 'manage_keys_conflict' }
   | { code: 'all_drives_conflict' }
   | { code: 'duplicate_drive'; driveId: string }
@@ -153,6 +176,7 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
   let offlineAccess = false;
   let manageKeys = false;
   let allDrives = false;
+  let profile = false;
   let updateKeyId: string | null = null;
   let activateKeyId: string | null = null;
   let newKeyName: string | null = null;
@@ -165,6 +189,10 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
     }
     if (token === 'offline_access') {
       offlineAccess = true;
+      continue;
+    }
+    if (token === 'profile') {
+      profile = true;
       continue;
     }
     if (token === 'manage_keys') {
@@ -232,10 +260,22 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
     return { ok: false, error: { code: 'account_drive_conflict' } };
   }
 
+  // `profile` and `account` are two readings of the same request — "tell this
+  // app who I am" versus "let this app be me everywhere" — and a grant cannot
+  // resolve to both principal shapes at once. Rejected outright rather than
+  // silently collapsed into `account` (which would hand an identity-only app
+  // the maximum grant) or into `profile` (which would silently withhold the
+  // access the user was shown and approved). Checked before the manage_keys
+  // and all_drives rules so `profile account` gets its own error shape rather
+  // than being reported as someone else's conflict.
+  if (profile && account) {
+    return { ok: false, error: { code: 'profile_account_conflict' } };
+  }
+
   // manage_keys grants key-management access with zero content access — mixing
   // it with any content-access scope (account or drive:*) is ambiguous,
   // mirroring the account/drive exclusion above.
-  if (manageKeys && (account || drives.size > 0)) {
+  if (manageKeys && (account || profile || drives.size > 0)) {
     return { ok: false, error: { code: 'manage_keys_conflict' } };
   }
 
@@ -243,7 +283,7 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
   // distinct from account's full-user grant and from manage_keys' zero
   // content access), so mixing it with any of them, or with a specific
   // drive:* set, is ambiguous the same way rule 3/11 reject those pairings.
-  if (allDrives && (account || manageKeys || drives.size > 0)) {
+  if (allDrives && (account || manageKeys || profile || drives.size > 0)) {
     return { ok: false, error: { code: 'all_drives_conflict' } };
   }
 
@@ -254,7 +294,7 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
   // error shape is its own.
   if (
     activateKeyId !== null &&
-    (account || manageKeys || allDrives || offlineAccess || updateKeyId !== null || drives.size > 0)
+    (account || manageKeys || allDrives || profile || offlineAccess || updateKeyId !== null || drives.size > 0)
   ) {
     return { ok: false, error: { code: 'activate_key_not_alone' } };
   }
@@ -266,7 +306,7 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
     // Nothing but drives can be attached to an mcp token, and this grant
     // mints nothing refreshable — offline_access alongside it would promise
     // a refresh credential that structurally cannot exist.
-    if (account || manageKeys || allDrives || offlineAccess) {
+    if (account || manageKeys || allDrives || profile || offlineAccess) {
       return { ok: false, error: { code: 'update_key_conflict' } };
     }
     // Re-scoping to zero drives is "disable the key" — that's revocation's
@@ -284,13 +324,14 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
   // their own principal shape, so offline_access + manage_keys or
   // offline_access + all_drives is a valid, expected combination (a
   // long-lived key-management or all-drives session).
-  if (offlineAccess && !account && !manageKeys && !allDrives && drives.size === 0) {
+  if (offlineAccess && !account && !manageKeys && !allDrives && !profile && drives.size === 0) {
     return { ok: false, error: { code: 'offline_access_alone' } };
   }
 
   // name_without_mint_grant: `name:*` only means something on a grant that mints a NEW
   // mcp_tokens row (a pure drive:* set or all_drives). Every other shape either has no row
-  // to name (account/manage_keys) or explicitly changes nothing (update_key/activate_key).
+  // to name (account/manage_keys), explicitly changes nothing (update_key/activate_key), or
+  // cannot deliver what an mcp_tokens row holds (profile — see below).
   // Reject rather than silently drop it or let a consent line imply a new key when none is minted.
   //
   // Deliberately NOT enforcing "a mint-shaped grant REQUIRES a name" here, even though that's
@@ -302,13 +343,27 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
   // The requirement is enforced instead at the one call site that actually mints from this shape:
   // `POST /api/oauth/authorize`'s consent decision (`hasNewKeyName` check, mirroring its
   // update_key/activate_key ownership gates) — see that route for the real enforcement.
-  if (newKeyName !== null && !((allDrives || drives.size > 0) && updateKeyId === null && activateKeyId === null)) {
+  // `profile` joins the exclusion (PR #2612 review): a profile-bearing set is
+  // no longer mint-shaped — `isPureDriveGrant` excludes it — so `name:` here
+  // would narrate "create a key named X" on a consent screen while exchange
+  // produces an ordinary OAuth pair and mints nothing. Rejecting the promise,
+  // not the grant: the same set without `name:` still parses.
+  //
+  // This one is safe to tighten despite the re-parsing note above, which is the
+  // usual reason a rule cannot be added here: no persisted `oauth_access_tokens`
+  // row can carry `profile` alongside `name:`, because `profile` did not exist
+  // before this rule did, and from here on the combination is refused at
+  // authorize time and so can never reach storage.
+  if (
+    newKeyName !== null &&
+    !((allDrives || drives.size > 0) && !profile && updateKeyId === null && activateKeyId === null)
+  ) {
     return { ok: false, error: { code: 'name_without_mint_grant' } };
   }
 
   return {
     ok: true,
-    scopes: { account, offlineAccess, drives, manageKeys, allDrives, updateKeyId, activateKeyId, newKeyName },
+    scopes: { account, offlineAccess, drives, manageKeys, allDrives, profile, updateKeyId, activateKeyId, newKeyName },
   };
 }
 
@@ -335,6 +390,11 @@ export function formatScopeSet(scopes: ScopeSet): string {
   if (scopes.allDrives) tokens.push('all_drives');
   if (scopes.manageKeys) tokens.push('manage_keys');
   if (scopes.offlineAccess) tokens.push('offline_access');
+  // Canonical order keeps the top-level flags alphabetical (account,
+  // all_drives, manage_keys, offline_access, profile) with drive:* last, so
+  // `profile` slots in after `offline_access` — ADR 0002 rule 9, amended by
+  // ADR 0004.
+  if (scopes.profile) tokens.push('profile');
 
   const sortedDriveIds = [...scopes.drives.keys()].sort();
   for (const driveId of sortedDriveIds) {
@@ -374,6 +434,14 @@ export function isScopeSubset(requested: ScopeSet, granted: ScopeSet): boolean {
   // implicitly satisfy a requested `all_drives` (fail closed, no cross-shape
   // narrowing asserted by the grammar).
   if (requested.allDrives && !granted.allDrives) return false;
+
+  // `profile` is a grant of its own, not a weaker `account`: a granted
+  // `account` does NOT satisfy a requested `profile` (no cross-shape
+  // narrowing is asserted by the grammar — parse-time exclusion means the two
+  // never appear together anyway), and a granted `profile` satisfies nothing
+  // but another `profile`. Checked before the account short-circuits below so
+  // a granted `account`/`all_drives` can never stand in for it.
+  if (requested.profile && !granted.profile) return false;
 
   // update_key/activate_key never survive narrowing: each exists only inside
   // a single consent-bound authorization code, so any request carrying one
@@ -423,7 +491,19 @@ export function isScopeSubset(requested: ScopeSet, granted: ScopeSet): boolean {
  * this shape specifically).
  */
 export function isPureDriveGrant(scopes: ScopeSet): boolean {
-  return !scopes.account && !scopes.manageKeys && scopes.drives.size > 0 && scopes.updateKeyId === null && scopes.activateKeyId === null;
+  // `profile` disqualifies the shape: an `mcp_tokens` row carries drive rows
+  // and nothing else, so it structurally cannot deliver the identity half of
+  // a `profile drive:*` grant. Such a grant resolves to an ordinary OAuth
+  // access/refresh pair instead (fail closed — without this, a `profile`
+  // request would silently mint a long-lived `mcp_` key at exchange).
+  return (
+    !scopes.account &&
+    !scopes.manageKeys &&
+    !scopes.profile &&
+    scopes.drives.size > 0 &&
+    scopes.updateKeyId === null &&
+    scopes.activateKeyId === null
+  );
 }
 
 /**

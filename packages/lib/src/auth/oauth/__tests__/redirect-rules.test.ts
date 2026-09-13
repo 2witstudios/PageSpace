@@ -1,0 +1,344 @@
+/**
+ * Redirect URI rules for third-party clients (ADR 0004 Decision 3; epic
+ * `yv08hib74nrtmksdzxmf5nkw` architecture decision 3).
+ *
+ * ONE pure function decides redirect validity, and it is used at registration
+ * time and at authorize time. A second implementation is how an app ends up
+ * registering a URI the authorize endpoint will not honour — or, in the
+ * direction that actually hurts, registering one it will.
+ *
+ * The rules, all fail-closed:
+ *  - `https://` — exact match on scheme, host, port and path. No wildcards, no
+ *    userinfo, no query, no fragment.
+ *  - private-use scheme (`swipesend://callback`) — exact match, and only when
+ *    that client registered it.
+ *  - loopback port-wildcard — FIRST PARTY ONLY. It is what the CLI needs
+ *    (`http://127.0.0.1:{ephemeral}/callback`), and it is precisely the rule
+ *    that must never be lent to a third party.
+ *  - `http://` anywhere but loopback, and `localhost` in any form, rejected.
+ */
+import { describe, it, expect } from 'vitest';
+import { getRegisteredClient, validateRedirectUri, PAGESPACE_CLI_CLIENT_ID, type RegisteredClient } from '../clients';
+
+function client(overrides: Partial<RegisteredClient> = {}): RegisteredClient {
+  return {
+    clientId: 'third-party',
+    name: 'Third Party App',
+    type: 'public',
+    redirectUris: ['https://app.example.com/auth/pagespace/callback'],
+    allowedGrantTypes: ['authorization_code', 'refresh_token'],
+    firstParty: false,
+    verified: false,
+    ...overrides,
+  };
+}
+
+describe('validateRedirectUri — https exact match', () => {
+  const web = client();
+
+  it('accepts the exact registered https URI', () => {
+    expect(validateRedirectUri(web, 'https://app.example.com/auth/pagespace/callback')).toBe(true);
+  });
+
+  it('accepts it with an explicit default port (the URL parser normalizes :443 away)', () => {
+    expect(validateRedirectUri(web, 'https://app.example.com:443/auth/pagespace/callback')).toBe(true);
+  });
+
+  it('rejects a different port on the same host+path', () => {
+    expect(validateRedirectUri(web, 'https://app.example.com:8443/auth/pagespace/callback')).toBe(false);
+  });
+
+  it('rejects a different host, including a subdomain and a suffix-extended host', () => {
+    expect(validateRedirectUri(web, 'https://evil.app.example.com/auth/pagespace/callback')).toBe(false);
+    expect(validateRedirectUri(web, 'https://app.example.com.evil.test/auth/pagespace/callback')).toBe(false);
+    expect(validateRedirectUri(web, 'https://app.example/auth/pagespace/callback')).toBe(false);
+  });
+
+  it('rejects a homograph host — the URL parser punycodes it, so it can never collide with the ASCII registration', () => {
+    // U+0430 CYRILLIC SMALL LETTER A in place of ASCII "a". It normalizes to
+    // `xn--pp-6kc.example.com`, which is a different host and so fails exact
+    // match. Asserted because the protection comes from the parser rather than
+    // from anything in this module — if matching ever moved to raw strings,
+    // this is the test that would catch it.
+    expect(validateRedirectUri(web, 'https://\u0430pp.example.com/auth/pagespace/callback')).toBe(false);
+    expect(new URL('https://\u0430pp.example.com/cb').hostname).toBe('xn--pp-6kc.example.com');
+  });
+
+  it('rejects a fully-qualified trailing-dot host, which resolves the same but is not the registered string', () => {
+    expect(validateRedirectUri(web, 'https://app.example.com./auth/pagespace/callback')).toBe(false);
+  });
+
+  it('accepts a host differing only in case — hosts are case-insensitive and the parser lowercases them', () => {
+    expect(validateRedirectUri(web, 'https://APP.EXAMPLE.COM/auth/pagespace/callback')).toBe(true);
+  });
+
+  it('does not decode a percent-encoded path into a match', () => {
+    // `%63` is "c". The parser leaves it encoded, so the path stays distinct
+    // from the registered `/auth/pagespace/callback`.
+    expect(validateRedirectUri(web, 'https://app.example.com/auth/pagespace/%63allback')).toBe(false);
+  });
+
+  it('rejects a different path — prefix, suffix, and trailing slash all count', () => {
+    expect(validateRedirectUri(web, 'https://app.example.com/auth/pagespace/callback/evil')).toBe(false);
+    expect(validateRedirectUri(web, 'https://app.example.com/auth/pagespace')).toBe(false);
+    expect(validateRedirectUri(web, 'https://app.example.com/auth/pagespace/callback/')).toBe(false);
+  });
+
+  it('rejects http:// against an https registration (scheme is part of the match)', () => {
+    expect(validateRedirectUri(web, 'http://app.example.com/auth/pagespace/callback')).toBe(false);
+  });
+
+  it('rejects userinfo, query and fragment on an otherwise exact match', () => {
+    expect(validateRedirectUri(web, 'https://user@app.example.com/auth/pagespace/callback')).toBe(false);
+    expect(validateRedirectUri(web, 'https://user:pw@app.example.com/auth/pagespace/callback')).toBe(false);
+    expect(validateRedirectUri(web, 'https://app.example.com/auth/pagespace/callback?next=//evil.test')).toBe(false);
+    expect(validateRedirectUri(web, 'https://app.example.com/auth/pagespace/callback#x')).toBe(false);
+  });
+
+  it('never honours a wildcard, even if one was somehow registered', () => {
+    const wild = client({ redirectUris: ['https://*.example.com/auth/pagespace/callback'] });
+    expect(validateRedirectUri(wild, 'https://evil.example.com/auth/pagespace/callback')).toBe(false);
+    expect(validateRedirectUri(wild, 'https://*.example.com/auth/pagespace/callback')).toBe(false);
+  });
+
+  it('refuses a literal `*` anywhere in the candidate, even where it would match a registered path byte for byte', () => {
+    const starPath = client({ redirectUris: ['https://app.example.com/cb/*'] });
+    expect(validateRedirectUri(starPath, 'https://app.example.com/cb/*')).toBe(false);
+  });
+
+  it('refuses a REGISTERED uri containing `*` rather than matching it literally (a wildcard registration grants nothing)', () => {
+    const starPath = client({ redirectUris: ['https://app.example.com/cb/*', 'https://app.example.com/cb/ok'] });
+    expect(validateRedirectUri(starPath, 'https://app.example.com/cb/anything')).toBe(false);
+    expect(validateRedirectUri(starPath, 'https://app.example.com/cb/ok')).toBe(true);
+  });
+
+  it('rejects `localhost` over https as well (RFC 8252 §8.3 — the name can be remapped)', () => {
+    const local = client({ redirectUris: ['https://localhost/auth/pagespace/callback'] });
+    expect(validateRedirectUri(local, 'https://localhost/auth/pagespace/callback')).toBe(false);
+  });
+
+  it('rejects a trailing-dot `localhost.`, which the parser keeps as a distinct hostname but which resolves the same', () => {
+    // `new URL('https://localhost./cb').hostname === 'localhost.'`, so an
+    // equality check against 'localhost' missed it entirely and a third party
+    // could register and use it — the same remappable name RFC 8252 §8.3 is
+    // cited for refusing, reached through a spelling the check did not know.
+    const dotted = client({ redirectUris: ['https://localhost./auth/pagespace/callback'] });
+    expect(validateRedirectUri(dotted, 'https://localhost./auth/pagespace/callback')).toBe(false);
+    const dottedHttp = client({ firstParty: true, redirectUris: ['http://localhost./callback'] });
+    expect(validateRedirectUri(dottedHttp, 'http://localhost.:51234/callback')).toBe(false);
+  });
+
+  it('rejects REPEATED trailing dots too — stripping one is the same bug with one more keystroke', () => {
+    // Caught by probing the single-dot fix rather than trusting it: the parser
+    // keeps `localhost..` and `localhost...` verbatim, so a fix that removed
+    // exactly one dot left the bypass intact for anyone who typed two. Whether
+    // a given resolver maps `localhost..` back to loopback is not a thing this
+    // rule should be betting on.
+    for (const host of ['localhost.', 'localhost..', 'localhost...']) {
+      const c = client({ redirectUris: [`https://${host}/auth/pagespace/callback`] });
+      expect(validateRedirectUri(c, `https://${host}/auth/pagespace/callback`)).toBe(false);
+    }
+  });
+
+  it('a repeated-dot loopback literal is not the registered loopback host either', () => {
+    const cliLike = client({ firstParty: true, redirectUris: ['http://127.0.0.1/callback'] });
+    expect(validateRedirectUri(cliLike, 'http://127.0.0.1../callback')).toBe(false);
+  });
+});
+
+describe('validateRedirectUri — private-use schemes (RFC 8252 §7.1)', () => {
+  const native = client({ redirectUris: ['swipesend://callback'] });
+
+  it('accepts the exact registered private-use scheme URI', () => {
+    expect(validateRedirectUri(native, 'swipesend://callback')).toBe(true);
+  });
+
+  it('rejects a different host component under the same scheme', () => {
+    expect(validateRedirectUri(native, 'swipesend://evil')).toBe(false);
+  });
+
+  it('rejects an extended path under the same scheme+host', () => {
+    expect(validateRedirectUri(native, 'swipesend://callback/evil')).toBe(false);
+  });
+
+  it('rejects another app\'s scheme the client never registered', () => {
+    expect(validateRedirectUri(native, 'otherapp://callback')).toBe(false);
+  });
+
+  it('accepts a reverse-DNS private-use scheme when registered exactly', () => {
+    const reverseDns = client({ redirectUris: ['com.example.app://oauth/callback'] });
+    expect(validateRedirectUri(reverseDns, 'com.example.app://oauth/callback')).toBe(true);
+    expect(validateRedirectUri(reverseDns, 'com.example.app://oauth/evil')).toBe(false);
+  });
+
+  it('never treats a dangerous pseudo-scheme as a private-use scheme, even if registered', () => {
+    for (const uri of ['javascript://callback', 'data://callback', 'file://callback', 'blob://callback', 'vbscript://callback', 'about://callback']) {
+      const dangerous = client({ redirectUris: [uri] });
+      expect(validateRedirectUri(dangerous, uri)).toBe(false);
+    }
+  });
+
+  it('never treats a browser-internal or URL-wrapping scheme as private-use, even if registered', () => {
+    // Reported on PR #2612: the classifier is a DENY-list, so anything the
+    // parser accepts and the list omits fell through to `private_use` and was
+    // registrable. These are the ones a real browser or OS will act on —
+    // `filesystem:`/`jar:`/`view-source:` wrap another URL, and the rest are
+    // platform-handled schemes that do not belong to any registered app.
+    for (const uri of [
+      'filesystem:https://evil.example.com/temporary/x',
+      'view-source:https://evil.example.com',
+      'jar:https://evil.example.com!/x',
+      'chrome://settings',
+      'chrome-extension://abcdef/x',
+      'moz-extension://abcdef/x',
+      'safari-web-extension://abcdef/x',
+      'edge://settings',
+      'devtools://devtools/x',
+      'content://com.evil/x',
+      'resource://evil/x',
+      'intent://evil',
+      'android-app://com.evil',
+      'mailto:evil@example.com',
+      'tel:+15550100',
+      'sms:+15550100',
+      // Network/transport schemes: a code delivered here has left the device.
+      'ftp://evil.example.com/cb',
+      'telnet://evil.example.com',
+      'ssh://evil.example.com',
+      'ldap://evil.example.com/cb',
+    ]) {
+      const dangerous = client({ redirectUris: [uri] });
+      expect(validateRedirectUri(dangerous, uri)).toBe(false);
+    }
+  });
+
+  it('rejects a scheme that wraps another URL even when the wrapped URL is otherwise registrable', () => {
+    const wrapped = client({ redirectUris: ['https://app.example.com/auth/pagespace/callback'] });
+    expect(validateRedirectUri(wrapped, 'view-source:https://app.example.com/auth/pagespace/callback')).toBe(false);
+    expect(validateRedirectUri(wrapped, 'filesystem:https://app.example.com/auth/pagespace/callback')).toBe(false);
+  });
+
+  it('rejects a private-use redirect carrying query or fragment', () => {
+    expect(validateRedirectUri(native, 'swipesend://callback?code=x')).toBe(false);
+    expect(validateRedirectUri(native, 'swipesend://callback#x')).toBe(false);
+  });
+});
+
+describe('validateRedirectUri — loopback is first-party only', () => {
+  const cli = getRegisteredClient(PAGESPACE_CLI_CLIENT_ID);
+
+  it('the CLI (first party) still gets the port wildcard on both loopback literals', () => {
+    expect(cli).not.toBeNull();
+    expect(validateRedirectUri(cli!, 'http://127.0.0.1:51234/callback')).toBe(true);
+    expect(validateRedirectUri(cli!, 'http://[::1]:9999/callback')).toBe(true);
+  });
+
+  it('a third party that registered the identical loopback URI gets NO port wildcard', () => {
+    const thirdPartyLoopback = client({ redirectUris: ['http://127.0.0.1/callback'] });
+    expect(validateRedirectUri(thirdPartyLoopback, 'http://127.0.0.1:51234/callback')).toBe(false);
+  });
+
+  it('a third party does not get loopback at all — not even on the exact registered port', () => {
+    const thirdPartyLoopback = client({ redirectUris: ['http://127.0.0.1:51234/callback'] });
+    expect(validateRedirectUri(thirdPartyLoopback, 'http://127.0.0.1:51234/callback')).toBe(false);
+  });
+
+  it('an https registration on the loopback literal does not satisfy a cleartext loopback candidate (the port wildcard belongs to http loopback only)', () => {
+    const httpsLoopback = client({ firstParty: true, redirectUris: ['https://127.0.0.1/callback'] });
+    expect(validateRedirectUri(httpsLoopback, 'http://127.0.0.1:51234/callback')).toBe(false);
+    expect(validateRedirectUri(httpsLoopback, 'http://127.0.0.1/callback')).toBe(false);
+    // …and the https registration still matches its own exact candidate.
+    expect(validateRedirectUri(httpsLoopback, 'https://127.0.0.1/callback')).toBe(true);
+  });
+
+  it('a registered loopback uri carrying a query or fragment grants nothing — the loopback branch compares host and path, so a sloppy registration must not act as a clean one', () => {
+    const dirtyQuery = client({ firstParty: true, redirectUris: ['http://127.0.0.1/callback?x=1'] });
+    expect(validateRedirectUri(dirtyQuery, 'http://127.0.0.1:51234/callback')).toBe(false);
+    const dirtyFragment = client({ firstParty: true, redirectUris: ['http://127.0.0.1/callback#x'] });
+    expect(validateRedirectUri(dirtyFragment, 'http://127.0.0.1:51234/callback')).toBe(false);
+    const dirtyUserinfo = client({ firstParty: true, redirectUris: ['http://user@127.0.0.1/callback'] });
+    expect(validateRedirectUri(dirtyUserinfo, 'http://127.0.0.1:51234/callback')).toBe(false);
+  });
+
+  it('`localhost` is rejected for the first party too', () => {
+    expect(validateRedirectUri(cli!, 'http://localhost:51234/callback')).toBe(false);
+  });
+
+  it('non-loopback http is rejected for the first party too', () => {
+    const firstPartyWeb = client({ firstParty: true, redirectUris: ['http://app.example.com/callback'] });
+    expect(validateRedirectUri(firstPartyWeb, 'http://app.example.com/callback')).toBe(false);
+  });
+
+  it('https on a numeric loopback host is ordinary exact-match https for a third party — accepted, but with NO port wildcard', () => {
+    // Raised by Codex on PR #2612 as a first-party-gate bypass. It is not: the
+    // gate exists to protect the PORT WILDCARD, and that is what the second and
+    // third assertions pin. `loopback` in this module means CLEARTEXT loopback;
+    // an https numeric-IP registration is an exact-match https URI like any
+    // other, and it is https, so it carries none of the cleartext risk the
+    // first-party rule is about. Previously unasserted in either direction —
+    // this test locks the behaviour down. See ADR 0004 Decision 3.
+    const thirdPartyHttpsLoopback = client({ redirectUris: ['https://127.0.0.1/callback'] });
+    expect(validateRedirectUri(thirdPartyHttpsLoopback, 'https://127.0.0.1/callback')).toBe(true);
+    expect(validateRedirectUri(thirdPartyHttpsLoopback, 'https://127.0.0.1:8443/callback')).toBe(false);
+    expect(validateRedirectUri(thirdPartyHttpsLoopback, 'http://127.0.0.1/callback')).toBe(false);
+    const thirdPartyHttpsV6 = client({ redirectUris: ['https://[::1]/callback'] });
+    expect(validateRedirectUri(thirdPartyHttpsV6, 'https://[::1]/callback')).toBe(true);
+    expect(validateRedirectUri(thirdPartyHttpsV6, 'https://[::1]:8443/callback')).toBe(false);
+  });
+
+  it('a first party may still register https and private-use URIs, matched exactly', () => {
+    const firstPartyMixed = client({
+      firstParty: true,
+      redirectUris: ['https://app.pagespace.ai/auth/pagespace/callback', 'pagespace://auth-exchange'],
+    });
+    expect(validateRedirectUri(firstPartyMixed, 'https://app.pagespace.ai/auth/pagespace/callback')).toBe(true);
+    expect(validateRedirectUri(firstPartyMixed, 'pagespace://auth-exchange')).toBe(true);
+    expect(validateRedirectUri(firstPartyMixed, 'pagespace://auth-exchange/evil')).toBe(false);
+  });
+});
+
+describe('validateRedirectUri — malformed and empty input', () => {
+  const web = client();
+
+  it('rejects an empty, whitespace, or unparseable redirect', () => {
+    expect(validateRedirectUri(web, '')).toBe(false);
+    expect(validateRedirectUri(web, '   ')).toBe(false);
+    expect(validateRedirectUri(web, 'not a uri')).toBe(false);
+    expect(validateRedirectUri(web, '/auth/pagespace/callback')).toBe(false);
+  });
+
+  it('rejects everything when the client registered nothing', () => {
+    expect(validateRedirectUri(client({ redirectUris: [] }), 'https://app.example.com/auth/pagespace/callback')).toBe(false);
+  });
+
+  it('skips an unparseable REGISTERED uri without letting it match or throw', () => {
+    const brokenRegistration = client({ redirectUris: ['::::', 'https://app.example.com/auth/pagespace/callback'] });
+    expect(validateRedirectUri(brokenRegistration, '::::')).toBe(false);
+    expect(validateRedirectUri(brokenRegistration, 'https://app.example.com/auth/pagespace/callback')).toBe(true);
+  });
+});
+
+describe('RegisteredClient — third-party metadata fields', () => {
+  it('carries the consent-screen and cap fields Phase 1 renders and enforces', () => {
+    const rich = client({
+      logoUrl: 'https://cdn.example.com/logo.png',
+      homepageUrl: 'https://example.com',
+      description: 'Sends things by swiping',
+      ownerUserId: 'usr123',
+      allowedScopes: ['profile', 'offline_access', 'drive:member'],
+      verified: true,
+    });
+    expect(rich.logoUrl).toBe('https://cdn.example.com/logo.png');
+    expect(rich.homepageUrl).toBe('https://example.com');
+    expect(rich.description).toBe('Sends things by swiping');
+    expect(rich.ownerUserId).toBe('usr123');
+    expect(rich.allowedScopes).toEqual(['profile', 'offline_access', 'drive:member']);
+    expect(rich.verified).toBe(true);
+  });
+
+  it('the first-party CLI client is verified and declares no scope cap', () => {
+    const cli = getRegisteredClient(PAGESPACE_CLI_CLIENT_ID);
+    expect(cli?.verified).toBe(true);
+    expect(cli?.allowedScopes).toBeUndefined();
+  });
+});
