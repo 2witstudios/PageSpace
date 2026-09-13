@@ -205,6 +205,8 @@ import { sessionRepository } from '../session-repository';
 const DEVICE_CODE = 'raw-device-code-value';
 const USER_CODE = 'ABCDEFGH';
 const CLIENT_DB_ID = 'client-db-id-1';
+// These suites exercise the first-party CLI's issuance path (applyKeyGrant).
+const CLI_CLIENT = { firstParty: true } as const;
 const USER_ID = 'user-1';
 
 function seedDeviceRow(overrides: Partial<DeviceRow> = {}): void {
@@ -240,6 +242,7 @@ describe('createDeviceAuthorization', () => {
   it('persists only the hashed device_code and user_code, never raw values', async () => {
     await createDeviceAuthorization({
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       scopes: ['account'],
       deviceCodeHash: hashToken(DEVICE_CODE),
       deviceCodePrefix: 'ps_dc_abcd',
@@ -261,20 +264,20 @@ describe('createDeviceAuthorization', () => {
 describe('pollDeviceToken', () => {
   it('returns not_found for an unknown device_code', async () => {
     deviceRow = null;
-    const result = await pollDeviceToken({ deviceCode: 'never-issued', clientDbId: CLIENT_DB_ID, now: new Date() });
+    const result = await pollDeviceToken({ deviceCode: 'never-issued', clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
     expect(result).toEqual({ outcome: 'not_found' });
   });
 
   it('returns not_found when the device_code belongs to a different client (scoped lookup, no oracle)', async () => {
     seedDeviceRow({ clientId: 'some-other-client-db-id' });
-    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
     expect(result).toEqual({ outcome: 'not_found' });
   });
 
   it('returns authorization_pending on the first poll and persists lastPolledAt', async () => {
     seedDeviceRow();
     const now = new Date();
-    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now });
+    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now });
 
     expect(result).toEqual({ outcome: 'authorization_pending' });
     expect(deviceRow?.lastPolledAt).toEqual(now);
@@ -285,7 +288,7 @@ describe('pollDeviceToken', () => {
     seedDeviceRow({ lastPolledAt: first, pollIntervalSeconds: 5 });
 
     const tooSoon = new Date(first.getTime() + 2000);
-    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: tooSoon });
+    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: tooSoon });
 
     expect(result).toEqual({ outcome: 'slow_down' });
     // The anchor stays at `first` — a throttled poll must not buy the client
@@ -297,12 +300,13 @@ describe('pollDeviceToken', () => {
     seedDeviceRow({ pollIntervalSeconds: 5 });
     const t0 = new Date();
 
-    const poll1 = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: t0 });
+    const poll1 = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: t0 });
     expect(poll1).toEqual({ outcome: 'authorization_pending' });
 
     const poll2 = await pollDeviceToken({
       deviceCode: DEVICE_CODE,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(t0.getTime() + 2000),
     });
     expect(poll2).toEqual({ outcome: 'slow_down' });
@@ -310,6 +314,7 @@ describe('pollDeviceToken', () => {
     const poll3 = await pollDeviceToken({
       deviceCode: DEVICE_CODE,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(t0.getTime() + 5000),
     });
     expect(poll3).toEqual({ outcome: 'authorization_pending' });
@@ -317,20 +322,20 @@ describe('pollDeviceToken', () => {
 
   it('returns expired_token once past expiry, regardless of status', async () => {
     seedDeviceRow({ expiresAt: new Date(Date.now() - 1000) });
-    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
     expect(result).toEqual({ outcome: 'expired_token' });
   });
 
   it('returns access_denied for a denied device code', async () => {
     seedDeviceRow({ deniedAt: new Date() });
-    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
     expect(result).toEqual({ outcome: 'access_denied' });
   });
 
   it('mints a hashed ps_at_*/ps_rt_* token pair for an approved device code', async () => {
     seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['account', 'offline_access'] });
 
-    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
 
     expect(result.outcome).toBe('ok');
     if (result.outcome !== 'ok') throw new Error('unreachable');
@@ -345,7 +350,7 @@ describe('pollDeviceToken', () => {
 
   it('does not persist lastPolledAt for an already-settled (approved) record', async () => {
     seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, lastPolledAt: null });
-    await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+    await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
     expect(deviceRow?.lastPolledAt).toBeNull();
   });
 
@@ -353,7 +358,7 @@ describe('pollDeviceToken', () => {
     seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['account'] });
     userSuspendedAt = new Date();
 
-    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
 
     expect(result).toEqual({ outcome: 'user_suspended' });
     expect(refreshRows).toHaveLength(0);
@@ -365,7 +370,7 @@ describe('pollDeviceToken', () => {
       seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['account', 'offline_access'] });
       const now = new Date();
 
-      await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now });
+      await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now });
 
       expect(deviceRow?.redeemedAt).toEqual(now);
     });
@@ -376,11 +381,11 @@ describe('pollDeviceToken', () => {
     it('refuses a second poll of an already-redeemed code and issues nothing more', async () => {
       seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['account', 'offline_access'] });
 
-      const first = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+      const first = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
       expect(first.outcome).toBe('ok');
       expect(accessRows).toHaveLength(1);
 
-      const second = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+      const second = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
       expect(second).toEqual({ outcome: 'already_redeemed' });
       expect(accessRows).toHaveLength(1);
       expect(refreshRows).toHaveLength(1);
@@ -394,7 +399,7 @@ describe('pollDeviceToken', () => {
         expiresAt: new Date(Date.now() - 1000),
       });
 
-      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
       expect(result).toEqual({ outcome: 'already_redeemed' });
     });
   });
@@ -408,7 +413,7 @@ describe('pollDeviceToken', () => {
       });
       const now = new Date();
 
-      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now });
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now });
 
       expect(result.outcome).toBe('ok_mcp_token');
       if (result.outcome !== 'ok_mcp_token') throw new Error('unreachable');
@@ -433,7 +438,7 @@ describe('pollDeviceToken', () => {
       vi.mocked(sessionRepository.updateMcpTokenDriveScopes).mockResolvedValue({ id: 'tok123' } as never);
       seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['update_key:tok123', 'drive:drv1:member'] });
 
-      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
 
       expect(result.outcome).toBe('ok_mcp_update');
       if (result.outcome !== 'ok_mcp_update') throw new Error('unreachable');
@@ -449,7 +454,7 @@ describe('pollDeviceToken', () => {
       } as never);
       seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['activate_key:tok123'] });
 
-      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
 
       expect(result.outcome).toBe('ok_mcp_activate');
       if (result.outcome !== 'ok_mcp_activate') throw new Error('unreachable');
@@ -463,7 +468,7 @@ describe('pollDeviceToken', () => {
       vi.mocked(sessionRepository.updateMcpTokenDriveScopes).mockResolvedValue(null as never);
       seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['update_key:tok123', 'drive:drv1:member'] });
 
-      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
 
       expect(result).toEqual({ outcome: 'update_target_gone' });
       expect(deviceRow?.redeemedAt).not.toBeNull();
@@ -473,7 +478,7 @@ describe('pollDeviceToken', () => {
       vi.mocked(sessionRepository.findActiveMcpTokenByIdAndUser).mockResolvedValue(null as never);
       seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['activate_key:tok123'] });
 
-      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
 
       expect(result).toEqual({ outcome: 'activate_target_gone' });
       expect(deviceRow?.redeemedAt).not.toBeNull();
@@ -484,7 +489,7 @@ describe('pollDeviceToken', () => {
     it('refuses to redeem an all_drives grant even if one reaches redemption, and mints nothing', async () => {
       seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['all_drives', 'offline_access'] });
 
-      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
 
       expect(result).toEqual({ outcome: 'all_drives_unsupported' });
       expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
@@ -495,7 +500,7 @@ describe('pollDeviceToken', () => {
     it('still mints a plain OAuth pair for an ordinary manage_keys login grant', async () => {
       seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['manage_keys', 'offline_access'] });
 
-      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
 
       expect(result.outcome).toBe('ok');
       expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
@@ -503,11 +508,41 @@ describe('pollDeviceToken', () => {
     });
   });
 
+  // ADR 0004 Decision 5: the same per-client gate as the code exchange. The
+  // device door is first-party-only today, so this is the redemption-time
+  // backstop if a third-party device grant ever reaches it.
+  describe('third-party clients never reach applyKeyGrant', () => {
+    const THIRD_PARTY = { firstParty: false } as const;
+
+    it('issues a ps_at_/ps_rt_ pair for a drive grant instead of minting an mcp_ key', async () => {
+      seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['drive:drv1:member', 'offline_access'] });
+
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: THIRD_PARTY, now: new Date() });
+
+      expect(result.outcome).toBe('ok');
+      expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
+      expect(accessRows).toHaveLength(1);
+      expect(accessRows[0].scopes).toEqual(['drive:drv1:member', 'offline_access']);
+    });
+
+    it('refuses a key-shaped grant outright and marks the code redeemed', async () => {
+      seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['drive:drv1:member', 'name:remote-key'] });
+      const now = new Date();
+
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: THIRD_PARTY, now });
+
+      expect(result).toEqual({ outcome: 'scope_not_issuable' });
+      expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
+      expect(accessRows).toHaveLength(0);
+      expect(deviceRow?.redeemedAt).toEqual(now);
+    });
+  });
+
   describe('F1 — refresh token gated on offline_access', () => {
     it('mints an access-only grant (no refresh row, no refresh_token) when offline_access was not requested', async () => {
       seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['account'] });
 
-      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
 
       expect(result.outcome).toBe('ok');
       if (result.outcome !== 'ok') throw new Error('unreachable');
@@ -520,7 +555,7 @@ describe('pollDeviceToken', () => {
     it('mints a refresh token when offline_access was requested', async () => {
       seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['account', 'offline_access'] });
 
-      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() });
 
       expect(result.outcome).toBe('ok');
       if (result.outcome !== 'ok') throw new Error('unreachable');

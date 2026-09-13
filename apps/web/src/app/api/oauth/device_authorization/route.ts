@@ -44,6 +44,12 @@ export async function POST(req: NextRequest) {
     return noStoreJson({ error: 'invalid_request' }, 400);
   }
 
+  // FIRST-PARTY ONLY, deliberately the static registry and NOT `resolveClient`.
+  // This door never runs `validateAuthorizeRequest`, so it never applies the
+  // per-client scope cap (`scopeSetFitsCap`, ADR 0004 Decision 7): a registered
+  // third-party client admitted here would get the device grant with no cap
+  // at all. Enabling third-party device flow requires wiring that cap into
+  // this route FIRST. Pinned by `__tests__/third-party-client.test.ts`.
   const client = getRegisteredClient(clientId);
   if (!client) {
     return noStoreJson({ error: 'invalid_client' }, 400);

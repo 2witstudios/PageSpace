@@ -25,8 +25,8 @@
  */
 
 import { z } from 'zod';
-import { validateRedirectUri } from './clients';
-import { NAME_CONTROL_CHAR_RE, type ParsedScope, type ScopeSet } from './scopes';
+import { validateRedirectUri, type RegisteredClient } from './clients';
+import { NAME_CONTROL_CHAR_RE, parseScopeList, type ParsedScope, type ScopeSet } from './scopes';
 
 /**
  * What a non-string entry is reported as. A FIXED placeholder: `String(value)`
@@ -98,6 +98,36 @@ export function scopeSetFitsCap(scopes: ScopeSet, allowedScopes: readonly string
     needed.push(...shapes);
   }
   return needed.every((shape) => declared.has(shape));
+}
+
+/** Every shape a registered client could ever declare — the ceiling of any cap. */
+const EVERY_SCOPE_SHAPE: readonly string[] = [...ALLOWED_SCOPE_SHAPES];
+
+/** How a redeemed grant is issued (ADR 0004 Decision 5). */
+export type GrantIssuance = 'apply_key_grant' | 'token_pair' | 'refuse';
+
+/**
+ * Issuance is per-client (ADR 0004 Decision 5). The `applyKeyGrant` path —
+ * which mints a real `mcp_` key for a pure `drive:*`/`all_drives` grant, and
+ * re-scopes or activates an existing one — belongs to first-party clients
+ * alone, and is returned for them unconditionally so the CLI's behaviour is
+ * exactly what it was (that path already falls through to a token pair for a
+ * grant that is not key-shaped).
+ *
+ * A third-party client gets an ordinary `ps_at_`/`ps_rt_` pair, and only for a
+ * grant made entirely of cap shapes (`profile`, `offline_access`, `drive:*`).
+ * Anything else — a key operation, `name:`, `account`, `manage_keys`,
+ * `all_drives`, or a stored list that no longer parses — is refused rather
+ * than persisted verbatim into a bearer token. The authorize-time cap already
+ * keeps such a grant from being consented to; this is the redemption-time
+ * backstop.
+ */
+export function decideGrantIssuance(client: Pick<RegisteredClient, 'firstParty'>, scopes: readonly string[]): GrantIssuance {
+  if (client.firstParty) return 'apply_key_grant';
+
+  const parsed = parseScopeList(scopes.join(' '));
+  if (!parsed.ok) return 'refuse';
+  return scopeSetFitsCap(parsed.scopes, EVERY_SCOPE_SHAPE) ? 'token_pair' : 'refuse';
 }
 
 export interface ClientRegistration {

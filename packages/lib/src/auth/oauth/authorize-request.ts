@@ -87,6 +87,10 @@ export function validateAuthorizeRequest(
     return { ok: false, kind: 'redirect', error: 'invalid_scope', redirectUri, state };
   }
 
+  // First-party only (ADR 0004 Decision 5): only a first-party client's grant
+  // reaches `applyKeyGrant`, so only a first-party client mints a key that
+  // needs a name. A third-party client's drive grant is an ordinary token pair.
+  //
   // A pure drive:* or all_drives grant, once exchanged, mints a REAL
   // mcp_tokens row (oauth-repository.ts's isPureDriveGrant/isAllDrivesGrant
   // branch) — unlike update_key/activate_key (re-scope/activate an EXISTING
@@ -99,7 +103,11 @@ export function validateAuthorizeRequest(
   // callers separately: this is a pure function of the parsed scope set with
   // no DB/auth dependency, so it belongs beside every other scope-shape
   // rejection this function already owns, not duplicated in each caller.
-  if ((isPureDriveGrant(parsedScope.scopes) || isAllDrivesGrant(parsedScope.scopes)) && !hasNewKeyName(parsedScope.scopes)) {
+  if (
+    client.firstParty &&
+    (isPureDriveGrant(parsedScope.scopes) || isAllDrivesGrant(parsedScope.scopes)) &&
+    !hasNewKeyName(parsedScope.scopes)
+  ) {
     return { ok: false, kind: 'redirect', error: 'invalid_scope', redirectUri, state };
   }
 

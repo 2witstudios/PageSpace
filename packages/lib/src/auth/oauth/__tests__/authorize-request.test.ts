@@ -315,3 +315,38 @@ describe('scopeSetFitsCap', () => {
     expect(scopeSetFitsCap(parse('account'), ['account'])).toBe(false);
   });
 });
+
+// ADR 0004 Decision 5: the `name:` requirement exists because a minted key
+// needs a name. Only a first-party client mints, so only a first-party client
+// is held to it.
+describe('validateAuthorizeRequest — the name: rule is first-party only', () => {
+  const HTTPS_REDIRECT = 'https://swipesend.app/auth/pagespace/callback';
+  const uncappedThirdParty: RegisteredClient = {
+    clientId: 'app_swipesend',
+    name: 'SwipeSend',
+    type: 'public',
+    redirectUris: [HTTPS_REDIRECT],
+    allowedGrantTypes: ['authorization_code'],
+    firstParty: false,
+    verified: false,
+  };
+  const params = (scope: string) => baseParams({ clientId: 'app_swipesend', redirectUri: HTTPS_REDIRECT, scope });
+
+  it('accepts a pure drive grant with no name: from a third-party client — nothing will be minted', () => {
+    expect(validateAuthorizeRequest(params('drive:abc123:member'), uncappedThirdParty).ok).toBe(true);
+    expect(validateAuthorizeRequest(params('drive:abc123:member offline_access'), { ...uncappedThirdParty, allowedScopes: ['drive:member', 'offline_access'] }).ok).toBe(true);
+  });
+
+  it('still requires name: for the first-party CLI', () => {
+    const result = validateAuthorizeRequest(baseParams({ scope: 'drive:abc123:member' }), client);
+    expect(result).toMatchObject({ ok: false, kind: 'redirect', error: 'invalid_scope' });
+  });
+
+  it('rejects a name: from a capped third-party client — there is no key for it to name', () => {
+    const result = validateAuthorizeRequest(
+      params('drive:abc123:member name:k'),
+      { ...uncappedThirdParty, allowedScopes: ['drive:member'] },
+    );
+    expect(result).toMatchObject({ ok: false, kind: 'redirect', error: 'invalid_scope' });
+  });
+});

@@ -146,3 +146,48 @@ describe('POST /api/oauth/token — DB-backed third-party client', () => {
     expect(exchangeAuthorizationCode).not.toHaveBeenCalled();
   });
 });
+
+describe('POST /api/oauth/token — per-client issuance (ADR 0004 Decision 5)', () => {
+  it('hands the resolved client to the exchange so issuance can gate on firstParty', async () => {
+    exchangeAuthorizationCode.mockResolvedValue({
+      outcome: 'ok',
+      userId: 'user-1',
+      scopes: ['profile', 'drive:drv1:member', 'offline_access'],
+      tokens: TOKENS,
+    });
+
+    const res = await POST(tokenRequest(CODE_GRANT) as never);
+
+    expect(exchangeAuthorizationCode).toHaveBeenCalledWith(expect.objectContaining({ client: THIRD_PARTY }));
+    expect(await res.json()).toEqual({
+      access_token: TOKENS.accessToken,
+      token_type: 'Bearer',
+      expires_in: 900,
+      refresh_token: TOKENS.refreshToken,
+      scope: 'profile drive:drv1:member offline_access',
+    });
+  });
+
+  it('collapses a grant the client may not be issued to the constant-shape invalid_grant', async () => {
+    exchangeAuthorizationCode.mockResolvedValue({ outcome: 'scope_not_issuable' });
+
+    const res = await POST(tokenRequest(CODE_GRANT) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_grant' });
+  });
+
+  it('collapses a refused device grant to invalid_grant', async () => {
+    resolveClient.mockResolvedValue({ ...THIRD_PARTY, allowedGrantTypes: ['urn:ietf:params:oauth:grant-type:device_code'] });
+    pollDeviceToken.mockResolvedValue({ outcome: 'scope_not_issuable' });
+
+    const res = await POST(
+      tokenRequest({ grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: 'd', client_id: 'app_swipesend' }) as never,
+    );
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_grant' });
+    expect(pollDeviceToken).toHaveBeenCalledWith(expect.objectContaining({ client: expect.objectContaining({ firstParty: false }) }));
+  });
+});
+

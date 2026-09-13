@@ -198,6 +198,8 @@ const CODE = 'raw-authorization-code-value';
 const CODE_VERIFIER = 'a'.repeat(43);
 const REDIRECT_URI = 'http://127.0.0.1:51234/callback';
 const CLIENT_DB_ID = 'client-db-id-1';
+// These suites exercise the first-party CLI's issuance path (applyKeyGrant).
+const CLI_CLIENT = { firstParty: true } as const;
 const USER_ID = 'user-1';
 
 function seedCodeRow(overrides: Partial<CodeRow> = {}): void {
@@ -250,6 +252,7 @@ describe('exchangeAuthorizationCode — happy path', () => {
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -276,6 +279,7 @@ describe('exchangeAuthorizationCode — happy path', () => {
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -293,6 +297,7 @@ describe('exchangeAuthorizationCode — rejections', () => {
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -307,6 +312,7 @@ describe('exchangeAuthorizationCode — rejections', () => {
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -321,6 +327,7 @@ describe('exchangeAuthorizationCode — rejections', () => {
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -335,6 +342,7 @@ describe('exchangeAuthorizationCode — rejections', () => {
       redirectUri: 'http://127.0.0.1:9999/callback',
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -349,6 +357,7 @@ describe('exchangeAuthorizationCode — rejections', () => {
       redirectUri: REDIRECT_URI,
       codeVerifier: 'b'.repeat(43),
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -366,6 +375,7 @@ describe('exchangeAuthorizationCode — suspended user (zero-trust audit finding
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -387,6 +397,7 @@ describe('exchangeAuthorizationCode — atomic single-use consumption under a ra
         redirectUri: REDIRECT_URI,
         codeVerifier: CODE_VERIFIER,
         clientDbId: CLIENT_DB_ID,
+        client: CLI_CLIENT,
         now: new Date(),
       }),
       exchangeAuthorizationCode({
@@ -394,6 +405,7 @@ describe('exchangeAuthorizationCode — atomic single-use consumption under a ra
         redirectUri: REDIRECT_URI,
         codeVerifier: CODE_VERIFIER,
         clientDbId: CLIENT_DB_ID,
+        client: CLI_CLIENT,
         now: new Date(),
       }),
     ]);
@@ -418,6 +430,7 @@ describe('exchangeAuthorizationCode — atomic single-use consumption under a ra
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
     expect(first.outcome).toBe('ok');
@@ -430,6 +443,7 @@ describe('exchangeAuthorizationCode — atomic single-use consumption under a ra
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -454,6 +468,7 @@ describe('exchangeAuthorizationCode — F1: refresh token gated on offline_acces
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -474,6 +489,7 @@ describe('exchangeAuthorizationCode — F1: refresh token gated on offline_acces
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -494,6 +510,7 @@ describe('exchangeAuthorizationCode — pure drive:* grant mints a real mcp_toke
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -539,6 +556,7 @@ describe('exchangeAuthorizationCode — pure drive:* grant mints a real mcp_toke
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -551,6 +569,81 @@ describe('exchangeAuthorizationCode — pure drive:* grant mints a real mcp_toke
   });
 });
 
+/**
+ * ADR 0004 Decision 5 — issuance is per-client. `applyKeyGrant` (the `mcp_`
+ * mint) is the first-party CLI's behaviour; a third-party app's drive grant is
+ * an ordinary `ps_at_`/`ps_rt_` pair carrying the drive scopes, so it is
+ * revoked with the app and never shows up in `keys list`.
+ */
+describe('exchangeAuthorizationCode — third-party clients never reach applyKeyGrant', () => {
+  const THIRD_PARTY = { firstParty: false } as const;
+  const exchange = () =>
+    exchangeAuthorizationCode({
+      code: CODE,
+      redirectUri: REDIRECT_URI,
+      codeVerifier: CODE_VERIFIER,
+      clientDbId: CLIENT_DB_ID,
+      client: THIRD_PARTY,
+      now: new Date(),
+    });
+
+  it('issues a ps_at_/ps_rt_ pair carrying the drive scopes for a drive:X:member offline_access grant — no mcp_ key', async () => {
+    seedCodeRow({ scopes: ['drive:drv1:member', 'offline_access'] });
+
+    const result = await exchange();
+
+    expect(result.outcome).toBe('ok');
+    if (result.outcome !== 'ok') throw new Error('unreachable');
+    expect(result.tokens.accessToken).toMatch(/^ps_at_/);
+    expect(result.tokens.refreshToken).toMatch(/^ps_rt_/);
+    expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
+    expect(accessRows).toHaveLength(1);
+    expect(accessRows[0].scopes).toEqual(['drive:drv1:member', 'offline_access']);
+    expect(refreshRows).toHaveLength(1);
+    expect(refreshRows[0].scopes).toEqual(['drive:drv1:member', 'offline_access']);
+    expect(codeRow?.issuedFamilyId).toBe(result.tokens.familyId);
+  });
+
+  it('issues the same pair shape for profile drive:X:member offline_access', async () => {
+    seedCodeRow({ scopes: ['profile', 'drive:drv1:member', 'offline_access'] });
+
+    const result = await exchange();
+
+    expect(result.outcome).toBe('ok');
+    expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
+    expect(accessRows[0].scopes).toEqual(['profile', 'drive:drv1:member', 'offline_access']);
+  });
+
+  for (const scopes of [
+    ['update_key:tok1', 'drive:drv1:member'],
+    ['activate_key:tok1'],
+    ['all_drives', 'name:k'],
+    ['drive:drv1:member', 'name:k'],
+    ['manage_keys', 'offline_access'],
+    ['account'],
+  ]) {
+    it(`refuses a key-shaped or shapeless grant (${scopes.join(' ')}) outright, burning the code and issuing nothing`, async () => {
+      seedCodeRow({ scopes });
+
+      const result = await exchange();
+
+      expect(result).toEqual({ outcome: 'scope_not_issuable' });
+      expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
+      expect(sessionRepository.updateMcpTokenDriveScopes).not.toHaveBeenCalled();
+      expect(accessRows).toHaveLength(0);
+      expect(refreshRows).toHaveLength(0);
+      expect(codeRow?.consumedAt).not.toBeNull();
+    });
+  }
+
+  it('refuses a stored scope list that no longer parses rather than minting a pair around it', async () => {
+    seedCodeRow({ scopes: ['not a scope!'] });
+
+    expect(await exchange()).toEqual({ outcome: 'scope_not_issuable' });
+    expect(accessRows).toHaveLength(0);
+  });
+});
+
 describe('exchangeAuthorizationCode — all_drives grant mints a real, unscoped mcp_tokens row, not an OAuth pair', () => {
   it('returns ok_mcp_token with isScoped: false and zero drive rows, against the SAME transaction, issuing zero oauth rows', async () => {
     seedCodeRow({ scopes: ['all_drives', 'name:God%20Key', 'offline_access'] });
@@ -560,6 +653,7 @@ describe('exchangeAuthorizationCode — all_drives grant mints a real, unscoped 
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -599,6 +693,7 @@ describe('exchangeAuthorizationCode — all_drives grant mints a real, unscoped 
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -627,6 +722,7 @@ describe('exchangeAuthorizationCode — update_key grant re-scopes an existing m
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -669,6 +765,7 @@ describe('exchangeAuthorizationCode — update_key grant re-scopes an existing m
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 
@@ -682,7 +779,7 @@ describe('exchangeAuthorizationCode — update_key grant re-scopes an existing m
     seedCodeRow({ scopes: UPDATE_SCOPES });
     mockUpdateResult({ id: 'tok123', isScoped: true });
 
-    const input = { code: CODE, redirectUri: REDIRECT_URI, codeVerifier: CODE_VERIFIER, clientDbId: CLIENT_DB_ID, now: new Date() };
+    const input = { code: CODE, redirectUri: REDIRECT_URI, codeVerifier: CODE_VERIFIER, clientDbId: CLIENT_DB_ID, client: CLI_CLIENT, now: new Date() };
     const first = await exchangeAuthorizationCode(input);
     expect(first.outcome).toBe('ok_mcp_update');
 
@@ -766,6 +863,7 @@ describe('exchangeAuthorizationCode — end-to-end name round trip (pagespace ke
       redirectUri: REDIRECT_URI,
       codeVerifier: CODE_VERIFIER,
       clientDbId: CLIENT_DB_ID,
+      client: CLI_CLIENT,
       now: new Date(),
     });
 

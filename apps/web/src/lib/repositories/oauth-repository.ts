@@ -22,6 +22,7 @@ import {
 } from '@pagespace/lib/auth/oauth/code-lifecycle';
 import { issueInitialTokenPair, issueRotatedTokenPair, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import { decideRefreshRotation } from '@pagespace/lib/auth/oauth/refresh-rotation';
+import { decideGrantIssuance } from '@pagespace/lib/auth/oauth/client-registration';
 import { parseScopeList, isScopeSubset, formatScopeSet, isAllDrivesGrant, isKeyActivationGrant, isKeyUpdateGrant, isPureDriveGrant, hasNewKeyName, scopeSetToDriveScopes } from '@pagespace/lib/auth/oauth/scopes';
 import { sessionRepository } from './session-repository';
 
@@ -147,6 +148,10 @@ export interface ExchangeAuthorizationCodeInput {
    * below is scoped to this, so a code issued to a different client is
    * indistinguishable from an unknown code (no oracle). */
   clientDbId: string;
+  /** The resolved client. Issuance is per-client (ADR 0004 Decision 5): only a
+   * first-party client's grant reaches `applyKeyGrant`. Required, so no caller
+   * can reach the mint path by omission. */
+  client: Pick<RegisteredClient, 'firstParty'>;
   now: Date;
 }
 
@@ -163,7 +168,9 @@ export type ExchangeAuthorizationCodeResult =
   /** An `activate_key` approval verified — nothing was minted or changed; the requesting device may set the key as its ambient default. */
   | { outcome: 'ok_mcp_activate'; userId: string; scopes: string[]; tokenId: string }
   /** The `activate_key` target was revoked/deleted between consent and exchange — collapsed to invalid_grant by the route. */
-  | { outcome: 'activate_target_gone' };
+  | { outcome: 'activate_target_gone' }
+  /** A third-party client's grant carried a scope it may never be issued (`decideGrantIssuance`) — code burned, nothing minted; invalid_grant at the route. */
+  | { outcome: 'scope_not_issuable' };
 
 /**
  * DriveScopeRow → the drive shape `sessionRepository`'s mcp-token writers
@@ -445,13 +452,28 @@ export async function exchangeAuthorizationCode(
     // Deliberately no `issuedFamilyId` on any of them: replaying a consumed
     // code then hits `already_consumed` above with nothing to revoke, which
     // is correct — no credential family was ever issued for it.
-    const keyGrant = await applyKeyGrant(tx, { userId: row.userId, scopes: row.scopes });
-    if (keyGrant.outcome !== 'not_a_key_grant') {
+    //
+    // Per-client (ADR 0004 Decision 5): ONLY a first-party client reaches
+    // `applyKeyGrant`. A third-party app's drive grant falls through to the
+    // ordinary token pair below; a grant it may never be issued is refused
+    // with the code burned.
+    const issuance = decideGrantIssuance(input.client, row.scopes);
+    if (issuance === 'refuse') {
       await tx
         .update(oauthAuthorizationCodes)
         .set({ consumedAt: input.now })
         .where(eq(oauthAuthorizationCodes.id, row.id));
-      return withGrantContext(keyGrant, row.userId, row.scopes);
+      return { outcome: 'scope_not_issuable' };
+    }
+    if (issuance === 'apply_key_grant') {
+      const keyGrant = await applyKeyGrant(tx, { userId: row.userId, scopes: row.scopes });
+      if (keyGrant.outcome !== 'not_a_key_grant') {
+        await tx
+          .update(oauthAuthorizationCodes)
+          .set({ consumedAt: input.now })
+          .where(eq(oauthAuthorizationCodes.id, row.id));
+        return withGrantContext(keyGrant, row.userId, row.scopes);
+      }
     }
 
     // NOTE: every mint/update/activate branch is gated on a successful
@@ -785,6 +807,8 @@ export interface PollDeviceTokenInput {
   /** Resolved `oauth_clients.id` — scopes the lookup so a device_code minted
    * for a different client is indistinguishable from an unknown one. */
   clientDbId: string;
+  /** The resolved client — only a first-party client's grant reaches `applyKeyGrant` (ADR 0004 Decision 5). */
+  client: Pick<RegisteredClient, 'firstParty'>;
   now: Date;
 }
 
@@ -805,7 +829,9 @@ export type PollDeviceTokenResult =
   | { outcome: 'ok_mcp_update'; userId: string; scopes: string[]; tokenId: string }
   | { outcome: 'ok_mcp_activate'; userId: string; scopes: string[]; tokenId: string }
   | { outcome: 'update_target_gone' }
-  | { outcome: 'activate_target_gone' };
+  | { outcome: 'activate_target_gone' }
+  /** A third-party client's grant carried a scope it may never be issued — code redeemed, nothing minted. */
+  | { outcome: 'scope_not_issuable' };
 
 /**
  * Atomically poll a device code (RFC 8628 §3.4-3.5). `FOR UPDATE` locks the
@@ -893,10 +919,18 @@ export async function pollDeviceToken(input: PollDeviceTokenInput): Promise<Poll
     // outcome including the two `*_target_gone` failures — a target that
     // vanished between consent and redemption burns the code rather than
     // leaving it live for a retry.
-    const keyGrant = await applyKeyGrant(tx, { userId: decision.grant.userId, scopes: decision.grant.scopes });
-    if (keyGrant.outcome !== 'not_a_key_grant') {
+    // Per-client, exactly as in `exchangeAuthorizationCode` (ADR 0004 Decision 5).
+    const issuance = decideGrantIssuance(input.client, decision.grant.scopes);
+    if (issuance === 'refuse') {
       await tx.update(oauthDeviceCodes).set({ redeemedAt: input.now }).where(eq(oauthDeviceCodes.id, row.id));
-      return withGrantContext(keyGrant, decision.grant.userId, decision.grant.scopes);
+      return { outcome: 'scope_not_issuable' };
+    }
+    if (issuance === 'apply_key_grant') {
+      const keyGrant = await applyKeyGrant(tx, { userId: decision.grant.userId, scopes: decision.grant.scopes });
+      if (keyGrant.outcome !== 'not_a_key_grant') {
+        await tx.update(oauthDeviceCodes).set({ redeemedAt: input.now }).where(eq(oauthDeviceCodes.id, row.id));
+        return withGrantContext(keyGrant, decision.grant.userId, decision.grant.scopes);
+      }
     }
 
     // RFC 8628 §3.5: the device_code is invalidated on redemption, in the same

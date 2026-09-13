@@ -313,6 +313,7 @@ async function handleAuthorizationCodeGrant(req: NextRequest, form: URLSearchPar
     redirectUri,
     codeVerifier,
     clientDbId,
+    client,
     now: new Date(),
   });
 
@@ -421,6 +422,9 @@ const DEVICE_POLL_ERROR_BODY: Record<Exclude<DevicePollOutcome, DevicePollSucces
   // the authorization-code exchange gives these.
   update_target_gone: INVALID_GRANT,
   activate_target_gone: INVALID_GRANT,
+  // A third-party grant it may never be issued (ADR 0004 Decision 5) — same
+  // constant shape; the authorize-time cap means nothing legitimate lands here.
+  scope_not_issuable: INVALID_GRANT,
 };
 
 async function handleDeviceCodeGrant(req: NextRequest, form: URLSearchParams): Promise<NextResponse> {
@@ -438,7 +442,7 @@ async function handleDeviceCodeGrant(req: NextRequest, form: URLSearchParams): P
   if ('rejection' in resolved) return resolved.rejection;
   const { client, clientDbId } = resolved;
 
-  const result = await pollDeviceToken({ deviceCode, clientDbId, now: new Date() });
+  const result = await pollDeviceToken({ deviceCode, clientDbId, client, now: new Date() });
 
   if (isKeyGrantSuccess(result)) {
     return keyGrantSuccessResponse(req, client.clientId, result, 'device_poll');
