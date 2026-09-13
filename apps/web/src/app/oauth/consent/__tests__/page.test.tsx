@@ -183,24 +183,38 @@ describe('consent page — third-party client resolved through resolveClient', (
 });
 
 describe('consent page — who is asking (ADR 0004 Decision 8)', () => {
-  it('shows a third-party app\'s name, logo and homepage, labels it "Unverified app", and never "Built by PageSpace"', async () => {
+  it('shows an unverified app\'s name and homepage, labels it "Unverified app", and loads NO logo from the app\'s host', async () => {
     resolveClient.mockImplementation(async () => ({
       ...THIRD_PARTY,
+      verified: false,
       logoUrl: 'https://swipesend.app/logo.png',
       homepageUrl: 'https://swipesend.app/about',
     }));
 
-    await renderConsent({ client_id: 'app_swipesend', redirect_uri: THIRD_PARTY_REDIRECT, scope: 'profile' });
+    const { container } = await renderConsent({ client_id: 'app_swipesend', redirect_uri: THIRD_PARTY_REDIRECT, scope: 'profile' });
 
     expect(screen.getByRole('heading', { level: 1 }).textContent).toContain('SwipeSend');
-    const logo = screen.getByRole('img', { name: 'SwipeSend logo' });
-    expect(logo.getAttribute('src')).toBe('https://swipesend.app/logo.png');
-    expect(logo.getAttribute('referrerpolicy')).toBe('no-referrer');
+    // No <img>, and nothing anywhere in the markup that would make the
+    // browser contact the app's host before the user decides.
+    expect(container.querySelectorAll('img')).toHaveLength(0);
+    expect(container.innerHTML).not.toContain('swipesend.app/logo.png');
+    expect(screen.getByTestId('consent-client-initial').textContent).toBe('S');
     const homepage = screen.getByRole('link', { name: 'swipesend.app' });
     expect(homepage.getAttribute('href')).toBe('https://swipesend.app/about');
     expect(homepage.getAttribute('rel')).toContain('noopener');
     expect(screen.getByText('Unverified app')).toBeInTheDocument();
     expect(screen.queryByText('Built by PageSpace')).not.toBeInTheDocument();
+  });
+
+  it('loads a VERIFIED app\'s logo, with no referrer', async () => {
+    resolveClient.mockImplementation(async () => ({ ...THIRD_PARTY, verified: true, logoUrl: 'https://swipesend.app/logo.png' }));
+
+    await renderConsent({ client_id: 'app_swipesend', redirect_uri: THIRD_PARTY_REDIRECT, scope: 'profile' });
+
+    const logo = screen.getByRole('img', { name: 'SwipeSend logo' });
+    expect(logo.getAttribute('src')).toBe('https://swipesend.app/logo.png');
+    expect(logo.getAttribute('referrerpolicy')).toBe('no-referrer');
+    expect(screen.queryByTestId('consent-client-initial')).not.toBeInTheDocument();
   });
 
   it('drops "Unverified app" for a verified third-party app', async () => {

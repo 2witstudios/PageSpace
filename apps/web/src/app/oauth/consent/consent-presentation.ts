@@ -37,7 +37,11 @@ function httpsUrl(value: string | undefined): URL | null {
 export function consentClientPresentation(
   client: Pick<RegisteredClient, 'name' | 'firstParty' | 'verified' | 'logoUrl' | 'homepageUrl'>,
 ): ConsentClientPresentation {
-  const logo = httpsUrl(client.logoUrl);
+  // Only a human-verified app's logo loads (point guard ruling, interim until
+  // [D-13]). A logo is a request from the viewer's browser to a host the app
+  // controls: for a self-registered app that is a tracking beacon telling the
+  // registrant when a victim opened the authorize link, and from which IP.
+  const logo = client.verified === true ? httpsUrl(client.logoUrl) : null;
   const homepage = httpsUrl(client.homepageUrl);
   return {
     name: client.name,

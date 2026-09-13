@@ -130,6 +130,16 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
 
   return (
     <div className="mx-auto max-w-md py-16">
+      {!presentation.logoUrl && (
+        // No network request: an initial stands in for an unverified app's logo.
+        <div
+          data-testid="consent-client-initial"
+          aria-hidden="true"
+          className="mb-4 flex h-12 w-12 items-center justify-center rounded bg-muted text-lg font-semibold text-muted-foreground"
+        >
+          {presentation.name.trim().charAt(0).toUpperCase()}
+        </div>
+      )}
       {presentation.logoUrl && (
         // A registered client's own logo host: plain <img> (next/image would
         // proxy it through this server), no referrer so the consent URL never
