@@ -96,6 +96,11 @@ export interface OAuthAccessTokenRecord {
     adminRoleVersion: number;
     suspendedAt: Date | null;
   };
+  /** The issuing client — its public `clientId` (first-party status is decided from code by the caller) and `disabledAt`. */
+  client: {
+    clientId: string;
+    disabledAt: Date | null;
+  } | null;
 }
 
 /**
@@ -134,6 +139,12 @@ export async function findOAuthAccessTokenByValue(
           role: true,
           adminRoleVersion: true,
           suspendedAt: true,
+        },
+      },
+      client: {
+        columns: {
+          clientId: true,
+          disabledAt: true,
         },
       },
     },

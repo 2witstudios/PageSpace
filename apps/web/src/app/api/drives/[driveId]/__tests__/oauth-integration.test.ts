@@ -104,6 +104,7 @@ function baseOAuthTokenRow(overrides: Record<string, unknown> = {}) {
     expiresAt: new Date(Date.now() + 15 * 60 * 1000),
     revokedAt: null,
     user: { id: USER_ID, role: 'user', tokenVersion: 0, adminRoleVersion: 0, suspendedAt: null },
+    client: { clientId: 'pagespace-cli', disabledAt: null },
     ...overrides,
   };
 }

@@ -7,6 +7,7 @@ import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { sessionService, type SessionClaims, type SessionFailureReason } from '@pagespace/lib/auth/session-service';
 import { findOAuthAccessTokenByValue } from '@pagespace/lib/auth/token-lookup';
 import { parseScopeList, scopeSetToDriveScopes, type ScopeSet, type DriveScopeRow } from '@pagespace/lib/auth/oauth/scopes';
+import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { EnforcedAuthContext } from '@pagespace/lib/permissions/enforced-context';
 import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 import { getSessionFromCookies } from './cookie-config';
@@ -56,6 +57,10 @@ interface OAuthAuthDetails extends BaseAuthDetails {
   // Drive IDs this token is scoped to. Empty array means access to ALL drives
   // (the `account` scope) — same convention as MCPAuthDetails.allowedDriveIds.
   allowedDriveIds: string[];
+  // The issuing client is first-party — decided FROM CODE (the static
+  // registry, by the client row's public clientId), never from the
+  // oauth_clients.isFirstParty column. Normalized at the door, always a boolean.
+  clientFirstParty: boolean;
 }
 
 export interface OAuthAuthResult extends OAuthAuthDetails {
@@ -289,6 +294,13 @@ export async function validateOAuthAccessToken(token: string): Promise<OAuthAuth
 
     const user = record.user;
 
+    // A disabled client's live access tokens stop working NOW, not when they
+    // expire — disabling must reach where the effect lives. A token row with
+    // no client fails closed the same way.
+    if (!record.client || record.client.disabledAt !== null) {
+      return null;
+    }
+
     // Revoke on sight, mirroring the mcp_token_user_suspended handling above.
     if (user.suspendedAt) {
       logSecurityEvent('unauthorized', {
@@ -378,6 +390,7 @@ export async function validateOAuthAccessToken(token: string): Promise<OAuthAuth
       scopes: parsed.scopes,
       driveScopes,
       allowedDriveIds,
+      clientFirstParty: getRegisteredClient(record.client.clientId)?.firstParty === true,
     };
   } catch (error) {
     console.error('validateOAuthAccessToken error', error);

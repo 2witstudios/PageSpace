@@ -161,7 +161,8 @@ describe('Sign in with PageSpace — third-party app, real database', () => {
 
     const me = await meGET(bearer('http://localhost/api/auth/me', body.access_token));
     expect(me.status).toBe(200);
-    expect(await me.json()).toMatchObject({ id: maya.id, email: maya.email, name: maya.name });
+    // Exactly what profile consent narrates — "name, email, and avatar".
+    expect(await me.json()).toStrictEqual({ id: maya.id, name: maya.name, email: maya.email, image: maya.image });
 
     for (const target of [drive.id, otherDrive.id]) {
       const res = await driveGET(bearer(`http://localhost/api/drives/${target}`, body.access_token), {
@@ -236,6 +237,51 @@ describe('Sign in with PageSpace — third-party app, real database', () => {
     expect(body.refresh_token).toMatch(/^ps_rt_/);
     expect((await validateOAuthAccessToken(body.access_token))?.allowedDriveIds).toEqual([drive.id]);
     expect(await db.select({ id: mcpTokens.id }).from(mcpTokens).where(eq(mcpTokens.userId, maya.id))).toEqual([]);
+  });
+
+  it('a third-party drive token without profile gets no identity from /api/auth/me', async () => {
+    const scope = `drive:${drive.id}:member`;
+    const stepUpToken = await stepUpGrantFor(maya.id, { clientId, redirectUri: REDIRECT_URI, scope, state: 'st4te' });
+    const code = await codeFrom(await authorizePOST(consent(clientId, scope, REDIRECT_URI, { stepUpToken }) as never));
+    const body = await (
+      await tokenPOST(
+        tokenRequest({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI, client_id: clientId, code_verifier: CODE_VERIFIER }) as never,
+      )
+    ).json();
+
+    const me = await meGET(bearer('http://localhost/api/auth/me', body.access_token));
+    expect(me.status).toBe(403);
+    expect(await me.json()).toEqual({ error: 'insufficient_scope' });
+  });
+
+  it('disabling a client kills its LIVE access token at once — no 15-minute window', async () => {
+    const code = await codeFrom(await authorizePOST(consent(clientId, 'profile', REDIRECT_URI) as never));
+    const body = await (
+      await tokenPOST(
+        tokenRequest({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI, client_id: clientId, code_verifier: CODE_VERIFIER }) as never,
+      )
+    ).json();
+    expect((await meGET(bearer('http://localhost/api/auth/me', body.access_token))).status).toBe(200);
+
+    await db.update(oauthClients).set({ disabledAt: new Date() }).where(eq(oauthClients.clientId, clientId));
+
+    expect((await meGET(bearer('http://localhost/api/auth/me', body.access_token))).status).toBe(401);
+  });
+
+  it('pagespace-cli manage_keys login keeps the full /api/auth/me body', async () => {
+    const loopback = 'http://127.0.0.1:51234/callback';
+    const scope = 'manage_keys offline_access';
+    const stepUpToken = await stepUpGrantFor(maya.id, { clientId: 'pagespace-cli', redirectUri: loopback, scope, state: 'st4te' });
+    const code = await codeFrom(await authorizePOST(consent('pagespace-cli', scope, loopback, { stepUpToken }) as never));
+    const body = await (
+      await tokenPOST(
+        tokenRequest({ grant_type: 'authorization_code', code, redirect_uri: loopback, client_id: 'pagespace-cli', code_verifier: CODE_VERIFIER }) as never,
+      )
+    ).json();
+
+    const me = await meGET(bearer('http://localhost/api/auth/me', body.access_token));
+    expect(me.status).toBe(200);
+    expect(await me.json()).toMatchObject({ id: maya.id, email: maya.email, role: 'user', subscriptionTier: 'free' });
   });
 
   it('a disabled client is refused at the token endpoint exactly like an unknown one', async () => {

@@ -21,6 +21,7 @@ export function manageKeysScopedAuthResult(
     scopes: { account: false, offlineAccess: false, drives: new Map(), manageKeys: true, allDrives: false, profile: false, updateKeyId: null, activateKeyId: null, newKeyName: null },
     driveScopes: [],
     allowedDriveIds: [],
+    clientFirstParty: true,
     ...overrides,
   };
 }
@@ -51,6 +52,7 @@ export function driveScopedOAuthAuthResult(
     },
     driveScopes: [{ driveId: 'drive-1', role: null, customRoleId: null }],
     allowedDriveIds: ['drive-1'],
+    clientFirstParty: true,
     ...overrides,
   };
 }
@@ -74,6 +76,7 @@ export function profileOnlyAuthResult(
     scopes: { account: false, offlineAccess: false, drives: new Map(), manageKeys: false, allDrives: false, profile: true, updateKeyId: null, activateKeyId: null, newKeyName: null },
     driveScopes: [],
     allowedDriveIds: [],
+    clientFirstParty: true,
     ...overrides,
   };
 }

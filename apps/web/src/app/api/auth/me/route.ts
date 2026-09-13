@@ -3,6 +3,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { isExternalHttpUrl } from '@/lib/auth/google-avatar';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { decideIdentityDisclosure, type IdentityDisclosure } from '@/lib/auth/identity-disclosure';
 
 // Session (browser) and OAuth (CLI `pagespace login` identity confirmation,
 // ADR 0003) both resolve identity the same way; `mcp_*` tokens are scoped
@@ -22,6 +23,16 @@ export async function GET(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
 
+  // Identity is consent-bound for OAuth (ADR 0004 Decisions 4 and 8): a
+  // first-party client keeps the full profile; a third-party app gets only
+  // what `profile` consent narrated, and nothing without it. Decided before
+  // the user row is even read.
+  const disclosure: IdentityDisclosure =
+    auth.tokenType === 'oauth' ? decideIdentityDisclosure(auth) : 'full';
+  if (disclosure === 'deny') {
+    return Response.json({ error: 'insufficient_scope' }, { status: 403 });
+  }
+
   const user = await authRepository.findUserById(auth.userId);
 
   if (!user) {
@@ -37,6 +48,11 @@ export async function GET(req: Request) {
   auditRequest(req, { eventType: 'data.read', userId: auth.userId, resourceType: 'user_profile', resourceId: auth.userId });
 
   const safeImage = isExternalHttpUrl(user.image) ? null : user.image;
+
+  if (disclosure === 'profile') {
+    // "See your name, email, and avatar." — and not one field more.
+    return Response.json({ id: user.id, name: user.name, email: user.email, image: safeImage });
+  }
 
   return Response.json({
     id: user.id,
