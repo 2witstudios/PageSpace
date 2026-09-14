@@ -158,9 +158,18 @@ export default function OssLicensesPage() {
           <p>
             The complete open-source inventory — every direct and transitive
             dependency across the web, desktop, iOS, and Android builds, with the
-            SPDX identifier for each — is maintained in the seller&rsquo;s IP
-            disclosure and is available to recipients on request.
+            SPDX identifier for each — is published in the open-source PageSpace
+            repository:
           </p>
+          <a
+            href="https://github.com/2witstudios/PageSpace"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+          >
+            github.com/2witstudios/PageSpace
+            <ExternalLink className="h-3 w-3" />
+          </a>
         </CardContent>
       </Card>
     </div>
