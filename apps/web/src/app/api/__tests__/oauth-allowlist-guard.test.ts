@@ -25,10 +25,13 @@
 
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'fs';
-import { join, relative, sep } from 'path';
+import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
+import { dirname, join, relative, resolve, sep } from 'path';
 
 const API_DIR = join(__dirname, '..');
+const WEB_SRC = join(API_DIR, '..', '..');
+/** Defines the auth door; its own `allow:` literals are defaults and signatures, not a route's policy. */
+const AUTH_DOOR_FILE = join(WEB_SRC, 'lib', 'auth', 'index.ts');
 
 /**
  * Routes that admit `mcp` but must NOT be required to admit `oauth`.
@@ -63,6 +66,7 @@ export const OAUTH_ALLOWLIST_DENY: ReadonlyArray<{
   { route: 'auth/step-up/*', forbidOAuth: true, reason: 'Step-up ceremonies prove the human is present; an app token can never satisfy one.' },
   { route: 'auth/passkey/*', forbidOAuth: true, reason: 'Step-up / credential ceremonies.' },
   { route: 'oauth/*', forbidOAuth: true, reason: 'The authorization server itself, including the consent POST.' },
+  { route: 'internal/*', forbidOAuth: true, reason: 'Service-to-service endpoints authenticated by HMAC/shared secret; a bearer credential never belongs here.' },
 
   // [D-14 interim] (1) credential minting
   { route: 'drives/[driveId]/envs/[envId]/enrollment-code', forbidOAuth: true, d14Interim: 'credential-minting', reason: '[D-14 interim] credential minting: issues a one-time code a machine enrolls with to obtain its own credential.' },
@@ -109,6 +113,8 @@ export const PENDING_PHASE_2B: ReadonlyArray<{ readonly route: string; readonly 
   { route: 'tasks/[taskId]/triggers', file: 'apps/web/src/app/api/tasks/[taskId]/triggers/route.ts', reason: DEFERRED_RUN_REASON },
   { route: 'tasks/[taskId]/triggers/[triggerType]', file: 'apps/web/src/app/api/tasks/[taskId]/triggers/[triggerType]/route.ts', reason: DEFERRED_RUN_REASON },
   { route: 'calendar/events/[eventId]/triggers', file: 'apps/web/src/app/api/calendar/events/[eventId]/triggers/route.ts', reason: DEFERRED_RUN_REASON },
+  { route: 'ai/chat', file: 'apps/web/src/app/api/ai/chat/route.ts', reason: `${TOOL_CEILING_REASON} Page chat runs through lib/ai/chat-pipeline/handle-chat-turn.ts (PAGE_CHAT_AUTH); its settings handlers share the route.` },
+  { route: 'ai/global/[id]/messages', file: 'apps/web/src/app/api/ai/global/[id]/messages/route.ts', reason: `${TOOL_CEILING_REASON} Shares lib/ai/chat-pipeline/handle-chat-turn.ts with page chat (the global assistant itself is session-only there).` },
 ];
 
 /**
@@ -120,7 +126,7 @@ export const PENDING_PHASE_2B: ReadonlyArray<{ readonly route: string; readonly 
 const MCP_ONLY_DECISION_PATTERNS: ReadonlyArray<{ readonly name: string; readonly pattern: RegExp }> = [
   { name: 'isScopedMCPAuth(', pattern: /\bisScopedMCPAuth\(/ },
   { name: "tokenType === 'mcp'", pattern: /\btokenType\s*[!=]==?\s*['"]mcp['"]/ },
-  { name: 'auth.tokenId', pattern: /\b(?:auth|authResult)\.tokenId\b/ },
+  { name: '<principal>.tokenId', pattern: /\b(?:auth|authResult|principal)\.tokenId\b/ },
   { name: 'isMCPAuthResult(…) guarding a scope field', pattern: /\bisMCPAuthResult\(\s*\w+\s*\)\s*(?:&&|\?)[^;\n]*\.(?:allowedDriveIds|tokenId)\b/ },
   { name: 'if (isMCPAuthResult(…)) { …scope field… }', pattern: /\bif\s*\(\s*isMCPAuthResult\(\s*\w+\s*\)\s*\)\s*\{[^}]*\.(?:allowedDriveIds|tokenId)\b/ },
 ];
@@ -158,16 +164,30 @@ export const ADMIT_NO_CONTENT_OAUTH_ROUTES: ReadonlyMap<string, string> = new Ma
   ['auth/key', 'Reports the presented credential itself — what it is and what it may reach — whatever that credential is.'],
 ]);
 
-function findRouteFiles(dir: string): string[] {
+function findSourceFiles(dir: string, keep: (name: string) => boolean): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
     if (entry === '__tests__' || entry === 'node_modules') continue;
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) {
-      out.push(...findRouteFiles(full));
-    } else if (entry === 'route.ts') {
+      out.push(...findSourceFiles(full, keep));
+    } else if (keep(entry)) {
       out.push(full);
     }
+  }
+  return out;
+}
+
+const findRouteFiles = (dir: string) => findSourceFiles(dir, (name) => name === 'route.ts');
+
+/** The local modules a file imports (relative or `@/`), resolved to files on disk. */
+function localImports(file: string, source: string): string[] {
+  const out: string[] = [];
+  for (const match of source.matchAll(/\bfrom\s+['"]((?:\.{1,2}\/|@\/)[^'"]+)['"]/g)) {
+    const spec = match[1];
+    const base = spec.startsWith('@/') ? join(WEB_SRC, spec.slice(2)) : resolve(dirname(file), spec);
+    const found = [`${base}.ts`, join(base, 'index.ts')].find((candidate) => existsSync(candidate));
+    if (found) out.push(found);
   }
   return out;
 }
@@ -202,15 +222,41 @@ export function parseAllowLists(source: string): string[][] {
   return lists;
 }
 
+/**
+ * An allow list does not have to be written in the route file: a handler module
+ * or shared constant it imports (`commands/command-route-helpers.ts`,
+ * `lib/ai/chat-pipeline/handle-chat-turn.ts`) decides too. Each route therefore
+ * carries the lists — and the source, for (b) and (c) — of every local module
+ * it imports that itself declares an auth door.
+ */
+const authHelperFiles = new Set<string>();
 const routes = findRouteFiles(API_DIR).map((file) => {
-  const source = readFileSync(file, 'utf8');
+  const own = readFileSync(file, 'utf8');
+  const helpers = localImports(file, own)
+    .filter((helper) => helper !== AUTH_DOOR_FILE)
+    .map((helper) => ({ helper, source: readFileSync(helper, 'utf8') }))
+    .filter(({ source }) => parseAllowLists(source).length > 0);
+  for (const { helper } of helpers) authHelperFiles.add(helper);
+  const source = [own, ...helpers.map((h) => h.source)].join('\n');
   return { key: routeKey(file), source, lists: parseAllowLists(source) };
 });
+
+/** Every non-test module outside the route files that declares an allow list admitting `mcp`. */
+const helperFilesAdmittingMcp = [join(API_DIR), join(WEB_SRC, 'lib'), join(WEB_SRC, 'services')]
+  .flatMap((dir) => findSourceFiles(dir, (name) => /\.tsx?$/.test(name) && name !== 'route.ts' && !/\.test\.tsx?$/.test(name)))
+  .filter((file) => file !== AUTH_DOOR_FILE)
+  .filter((file) => parseAllowLists(readFileSync(file, 'utf8')).some((list) => list.includes('mcp')));
 
 const isDenied = (key: string) => OAUTH_ALLOWLIST_DENY.some((d) => matchesRoute(key, d.route));
 const isPendingPhase2b = (key: string) => PENDING_PHASE_2B.some((p) => matchesRoute(key, p.route));
 
 describe('oauth allow-list guard', () => {
+  it('reaches every allow list written outside a route file through the routes that import it', () => {
+    const unreached = helperFilesAdmittingMcp.filter((file) => !authHelperFiles.has(file)).map((file) => relative(WEB_SRC, file));
+    expect(unreached, 'An allow list admitting mcp lives in a module no route imports directly — extend localImports or move the list.').toEqual([]);
+    expect(helperFilesAdmittingMcp.length).toBeGreaterThan(0);
+  });
+
   it('parses allow arrays, not the word mcp', () => {
     expect(parseAllowLists("const A = { allow: ['session', 'mcp'] as const };")).toEqual([['session', 'mcp']]);
     expect(parseAllowLists("return { tokenType: 'mcp', allowedDriveIds: [] };")).toEqual([]);
