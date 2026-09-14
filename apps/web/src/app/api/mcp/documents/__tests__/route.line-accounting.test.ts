@@ -29,6 +29,8 @@ vi.mock('@/lib/auth', () => ({
     allowedDriveIds: [],
   }),
   isAuthError: (result: unknown) => 'error' in (result as object),
+  // Mirrors the real helper for the mcp fixtures used here (their own ceiling).
+  getAllowedDriveIds: (auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? [],
   isMCPAuthResult: () => true,
   getPrincipalAccessLevel: vi.fn().mockResolvedValue({
     canView: true,

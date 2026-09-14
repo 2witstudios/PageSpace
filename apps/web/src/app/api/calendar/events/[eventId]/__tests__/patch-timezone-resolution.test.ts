@@ -88,7 +88,7 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => typeof r === 'object' && r !== null && 'error' in r),
   checkMCPDriveScope: vi.fn(() => null),
-  isScopedMCPAuth: vi.fn(() => false),
+  isDriveScopedPrincipal: vi.fn(() => false),
   isPrincipalDriveMember: vi.fn().mockResolvedValue(true),
   isPrincipalDriveOwnerOrAdmin: vi.fn().mockResolvedValue(true),
 }));

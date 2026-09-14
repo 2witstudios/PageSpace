@@ -68,6 +68,8 @@ vi.mock('@/lib/websocket', () => ({
 vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
   getAppDriveMembership: vi.fn(),
   getAppDriveAccessLevel: vi.fn(),
+  getScopedDriveAccessLevel: vi.fn(),
+  getScopedDriveMembership: vi.fn(),
 }));
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({}),
@@ -80,6 +82,7 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
 import { GET } from '../route';
 import { getDriveById, getDriveWithAccess } from '@pagespace/lib/services/drive-service';
 import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
+import { getScopedDriveAccessLevel, getScopedDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 
 const USER_ID = 'test-user-id';
 const IN_SCOPE_DRIVE = 'driveinscope1';
@@ -114,6 +117,8 @@ beforeEach(() => {
   mcpTokensFindFirst.mockResolvedValue(null);
   vi.mocked(getDriveById).mockResolvedValue({ id: IN_SCOPE_DRIVE } as never);
   vi.mocked(getDriveWithAccess).mockResolvedValue({ id: IN_SCOPE_DRIVE, name: 'Drive' } as never);
+  vi.mocked(getScopedDriveAccessLevel).mockResolvedValue({ canView: true, canEdit: true, canShare: false, canDelete: false });
+  vi.mocked(getScopedDriveMembership).mockReturnValue({ role: null, customRoleId: null });
 });
 
 describe('GET /api/drives/[driveId] — OAuth access-token integration', () => {
@@ -124,6 +129,12 @@ describe('GET /api/drives/[driveId] — OAuth access-token integration', () => {
     const res = await GET(request, context);
 
     expect(res.status).toBe(200);
+    // Gated on the GRANT's own drive access, not the owning user's.
+    expect(getScopedDriveAccessLevel).toHaveBeenCalledWith(
+      [{ driveId: IN_SCOPE_DRIVE, role: null, customRoleId: null }],
+      USER_ID,
+      IN_SCOPE_DRIVE,
+    );
   });
 
   it('rejects the same token for an out-of-scope drive — scope narrowing bites (403)', async () => {

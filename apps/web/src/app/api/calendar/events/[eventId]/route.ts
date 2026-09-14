@@ -5,7 +5,7 @@ import { eq, and } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin, isScopedMCPAuth, type AuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin, type AuthResult, isDriveScopedPrincipal } from '@/lib/auth';
 import { isUserMemberOfAnyEventDrive, getAllDriveIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
@@ -72,7 +72,7 @@ async function canAccessEvent(auth: AuthResult, event: typeof calendarEvents.$in
 
   // A drive-scoped token acts as an app member of its drives only: it gets no
   // identity power over a DIFFERENT user's PERSONAL (drive-less) events.
-  if (!event.driveId && isScopedMCPAuth(auth)) {
+  if (!event.driveId && isDriveScopedPrincipal(auth)) {
     return false;
   }
 
@@ -104,7 +104,7 @@ async function canEditEvent(auth: AuthResult, event: typeof calendarEvents.$infe
   if (event.createdById === auth.userId) return true;
   // Scoped tokens have no identity power over a different user's personal
   // (drive-less) events.
-  if (!event.driveId && isScopedMCPAuth(auth)) return false;
+  if (!event.driveId && isDriveScopedPrincipal(auth)) return false;
   if (event.driveId) return isPrincipalDriveOwnerOrAdmin(auth, event.driveId);
   return false;
 }

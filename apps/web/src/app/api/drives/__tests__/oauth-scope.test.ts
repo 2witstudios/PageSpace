@@ -9,7 +9,7 @@
  * to exactly its scoped drives — never the empty-allowedDriveIds-means-full-
  * access default (the Phase 9 Task 1 bug class).
  *
- * Uses the REAL isScopedMCPAuth/isScopedOAuthAuth/getScopedDriveMembership
+ * Uses the REAL isDriveScopedPrincipal/isScopedOAuthAuth/getScopedDriveMembership
  * implementations so these fail if scope dispatch regresses. Only the active
  * inherited-drive membership check is stubbed at the route boundary.
  */
@@ -53,7 +53,7 @@ vi.mock('@pagespace/lib/permissions/app-permissions', async (importOriginal) => 
   };
 });
 
-// Only stub authentication — isScopedMCPAuth/isScopedOAuthAuth and
+// Only stub authentication — isDriveScopedPrincipal/isScopedOAuthAuth and
 // getScopedDriveMembership run for real.
 vi.mock('@/lib/auth', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth')>();

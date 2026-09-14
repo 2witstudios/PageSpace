@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage, isScopedMCPAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage, isDriveScopedPrincipal } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
@@ -55,7 +55,7 @@ export async function GET(
     // Get available tools for the UI — hide account-level-only tools (e.g.
     // create_drive) from a drive-scoped MCP token, mirroring the runtime
     // chat/consult tool-list filtering.
-    const scopedPageSpaceTools = filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth));
+    const scopedPageSpaceTools = filterToolsForMcpScope(pageSpaceTools, isDriveScopedPrincipal(auth));
     const availableTools = Object.entries(scopedPageSpaceTools).map(([toolName, tool]) => ({
       name: toolName,
       description: tool.description || `${toolName} tool`,
@@ -161,7 +161,7 @@ export async function PATCH(
     // filtering, so a scoped caller can't configure a tool it will never be
     // permitted to invoke.
     if (enabledTools && Array.isArray(enabledTools)) {
-      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth)));
+      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isDriveScopedPrincipal(auth)));
       const invalidTools = enabledTools.filter(tool => !availableToolNames.includes(tool));
       if (invalidTools.length > 0) {
         return NextResponse.json(

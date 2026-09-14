@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, canPrincipalEditPage, isScopedMCPAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, canPrincipalEditPage, isDriveScopedPrincipal } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
@@ -136,7 +136,7 @@ export async function PUT(
     // newly enable an account-level-only tool (e.g. create_drive) — mirrors
     // the runtime chat/consult tool-list filtering.
     if (Array.isArray(requestedEnabledTools.sanitized) && requestedEnabledTools.sanitized.length > 0) {
-      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth)));
+      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isDriveScopedPrincipal(auth)));
       const invalidTools = requestedEnabledTools.sanitized.filter(
         (toolName: string) => !availableToolNames.includes(toolName)
       );
@@ -286,7 +286,7 @@ export async function PUT(
       enabledTools: Array.isArray(updatedAgent.enabledTools) ? updatedAgent.enabledTools : null,
       sandboxEnabled: Boolean(updatedAgent.sandboxEnabled),
       toolExposureMode: updatedAgent.toolExposureMode === 'search' ? 'search' : 'upfront',
-      registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth))),
+      registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, isDriveScopedPrincipal(auth))),
     });
     const toolSurfaceNotes = formatConfigSurfaceNotes(toolSurface);
 

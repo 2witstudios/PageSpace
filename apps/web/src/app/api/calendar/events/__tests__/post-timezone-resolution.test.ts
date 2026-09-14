@@ -92,7 +92,7 @@ vi.mock('@/lib/auth', () => ({
   isPrincipalDriveMember: vi.fn().mockResolvedValue(true),
   getPrincipalDriveIds: vi.fn().mockResolvedValue(['drive-1']),
   canPrincipalViewPage: vi.fn().mockResolvedValue(true),
-  isScopedMCPAuth: vi.fn(() => false),
+  isDriveScopedPrincipal: vi.fn(() => false),
 }));
 
 vi.mock('@/lib/websocket/calendar-events', () => ({

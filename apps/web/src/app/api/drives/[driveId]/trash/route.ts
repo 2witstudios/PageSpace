@@ -6,7 +6,7 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { buildTree } from '@pagespace/lib/content/tree-utils'
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isDriveScopedPrincipal, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -41,7 +41,7 @@ export async function GET(request: Request, context: { params: Promise<DrivePara
 
     // Only owners and admins can view trash. Scoped tokens with an explicit
     // role need OWNER/ADMIN; inherited keys use the owner's own authority.
-    if (isScopedMCPAuth(auth)) {
+    if (isDriveScopedPrincipal(auth)) {
       if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
         return NextResponse.json(
           { error: 'Only drive owners and admins can view trash' },

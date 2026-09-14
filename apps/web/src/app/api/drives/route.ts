@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { listAccessibleDrives, createDrive, type DriveWithAccess } from '@pagespace/lib/services/drive-service';
 import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
-import { getAppDriveMembership, getScopedDriveMembership, hasAppDriveMembership, hasScopedDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { drives as drivesTable } from '@pagespace/db/schema/core';
@@ -10,7 +9,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isScopedMCPAuth, isScopedOAuthAuth, isManageKeysOnly } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isDriveScopedPrincipal, isScopedOAuthAuth, isManageKeysOnly, getAllowedDriveIds, getPrincipalDriveMembership, isPrincipalDriveMember } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { safeParseBody } from '@/lib/validation/parse-body';
@@ -81,36 +80,30 @@ export async function GET(req: Request) {
 
   try {
     let drives: DriveWithAccess[];
-    if (isScopedMCPAuth(auth)) {
-      // A scoped MCP token is its own drive member: list exactly its member
-      // drives (with the TOKEN's role), not the owning user's drive universe.
+    if (isManageKeysOnly(auth)) {
+      // The `pagespace keys` wizard's manage_keys credential belongs to the real
+      // user and must see which drives exist to scope a new key to — it has no
+      // content access, which every content route enforces on its own.
+      drives = await listAccessibleDrives(userId, { includeTrash, tokenScopable });
+    } else if (isDriveScopedPrincipal(auth)) {
+      // A drive-scoped credential (mcp_ key or OAuth drive grant) is its own
+      // drive member: list exactly its member drives with ITS role, not the
+      // owning user's drive universe. A profile-only principal carries a no-drive
+      // sentinel and resolves no membership, so it lists nothing.
       drives = await listScopedDrivesWithMembership({
-        allowedDriveIds: auth.allowedDriveIds,
+        allowedDriveIds: getAllowedDriveIds(auth),
         includeTrash,
         userId,
         getMembership: async (driveId) => {
-          const membership = await getAppDriveMembership(auth.tokenId, driveId);
+          const membership = await getPrincipalDriveMembership(auth, driveId);
           if (!membership || membership.role !== null) return membership;
-          return (await hasAppDriveMembership(auth.tokenId, driveId)) ? membership : null;
+          return (await isPrincipalDriveMember(auth, driveId)) ? membership : null;
         },
       });
     } else if (isScopedOAuthAuth(auth)) {
-      if (isManageKeysOnly(auth)) {
-        drives = await listAccessibleDrives(userId, { includeTrash, tokenScopable });
-      } else if (auth.allowedDriveIds.length > 0) {
-        drives = await listScopedDrivesWithMembership({
-          allowedDriveIds: auth.allowedDriveIds,
-          includeTrash,
-          userId,
-          getMembership: async (driveId) => {
-            const membership = getScopedDriveMembership(auth.driveScopes, driveId);
-            if (!membership || membership.role !== null) return membership;
-            return (await hasScopedDriveMembership(auth.driveScopes, auth.userId, driveId)) ? membership : null;
-          },
-        });
-      } else {
-        drives = [];
-      }
+      // Fail closed: a non-account OAuth credential with no drive rows is not a
+      // shape any grant should produce — never let it inherit the full list.
+      drives = [];
     } else {
       drives = await listAccessibleDrives(userId, { includeTrash, tokenScopable });
     }

@@ -7,9 +7,8 @@ import { pages, drives } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, getPrincipalAccessiblePagesInDrive } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getPrincipalAccessiblePagesInDrive, isPrincipalDriveMember, isDriveScopedPrincipal } from '@/lib/auth';
 import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
-import { hasAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -53,10 +52,10 @@ export async function POST(request: Request) {
     // Check authorization. A scoped MCP token is its own drive member — gate on
     // the TOKEN's membership, not the owning user's.
     const isOwner = drive.ownerId === userId;
-    if (isScopedMCPAuth(auth)) {
+    if (isDriveScopedPrincipal(auth)) {
       // Membership gate only — the tree below is filtered to the TOKEN's
       // per-page view set, so per-page custom-role grants still work.
-      if (!(await hasAppDriveMembership(auth.tokenId, driveId))) {
+      if (!(await isPrincipalDriveMember(auth, driveId))) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 });
       }
     } else {
@@ -94,7 +93,7 @@ export async function POST(request: Request) {
     // getUserAccessiblePagesInDrive handles owner/admin (returns all) vs member (non-private + explicit).
     // Scoped MCP tokens filter by the TOKEN's own accessible pages.
     let visiblePages = pageResults;
-    if (isScopedMCPAuth(auth)) {
+    if (isDriveScopedPrincipal(auth)) {
       const accessible = await getPrincipalAccessiblePagesInDrive(auth, driveId);
       const accessibleIds = new Set(accessible.map(page => page.id));
       visiblePages = pageResults.filter(page => accessibleIds.has(page.id));

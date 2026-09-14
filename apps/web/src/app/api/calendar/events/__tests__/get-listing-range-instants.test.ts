@@ -72,7 +72,7 @@ vi.mock('@/lib/auth', () => ({
   isPrincipalDriveMember: vi.fn(),
   getPrincipalDriveIds: vi.fn().mockResolvedValue([]),
   canPrincipalViewPage: vi.fn(),
-  isScopedMCPAuth: vi.fn(() => false),
+  isDriveScopedPrincipal: vi.fn(() => false),
 }));
 
 vi.mock('@pagespace/db/db', () => ({

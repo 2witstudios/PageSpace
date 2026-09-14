@@ -17,7 +17,7 @@ import { describeContentModeMismatch, isRawTextPage, serializePageContentForAI }
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateMCPRequest, isAuthError, isMCPAuthResult, getPrincipalAccessLevel } from '@/lib/auth';
+import { authenticateMCPRequest, isAuthError, getPrincipalAccessLevel, getAllowedDriveIds } from '@/lib/auth';
 import { writeDeniedDetails } from '../write-denied-details';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
@@ -155,11 +155,10 @@ export async function POST(req: NextRequest) {
   }
   const userId = auth.userId;
 
-  // Get allowed drive IDs from token scope (empty means no restrictions)
-  let allowedDriveIds: string[] = [];
-  if (isMCPAuthResult(auth)) {
-    allowedDriveIds = auth.allowedDriveIds ?? [];
-  }
+  // Drive ceiling of the credential (empty means no restrictions); correct for
+  // mcp_ keys and OAuth grants alike, and a no-drive sentinel for credentials
+  // with no content access.
+  const allowedDriveIds = getAllowedDriveIds(auth);
 
   try {
     const body = await req.json();

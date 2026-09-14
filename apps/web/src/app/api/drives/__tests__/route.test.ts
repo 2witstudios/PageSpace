@@ -52,7 +52,7 @@ vi.mock('@/lib/websocket', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
-  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+  isDriveScopedPrincipal: vi.fn(() => false), // Session/unscoped fixtures by default
   isScopedOAuthAuth: vi.fn(() => false),
   isManageKeysOnly: vi.fn(() => false),
   checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default

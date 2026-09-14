@@ -26,6 +26,8 @@ const mockGetActorInfo = vi.fn();
 vi.mock('@/lib/auth', () => ({
   authenticateMCPRequest: (...args: unknown[]) => mockAuthenticateMCPRequest(...args),
   isAuthError: (result: unknown) => 'error' in (result as object),
+  // Mirrors the real helper for the mcp fixtures used here (their own ceiling).
+  getAllowedDriveIds: (auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? [],
   isMCPAuthResult: (result: unknown) => !('error' in (result as object)) && (result as { tokenType?: string }).tokenType === 'mcp',
   isOAuthAuthResult: (result: unknown) => !('error' in (result as object)) && (result as { tokenType?: string }).tokenType === 'oauth',
   isManageKeysOnly: (result: unknown) =>

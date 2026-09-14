@@ -11,7 +11,7 @@ import { upsertCalendarTriggerWorkflowInTx, validateCalendarAgentTrigger } from 
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, isPrincipalDriveMember, getPrincipalDriveIds, canPrincipalViewPage, isScopedMCPAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, isPrincipalDriveMember, getPrincipalDriveIds, canPrincipalViewPage, isDriveScopedPrincipal } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
@@ -478,7 +478,7 @@ export async function GET(request: Request) {
     // exact identity) — but a driveless event belonging to a DIFFERENT user
     // (reachable only via the attendee branch) stays capped out.
     const principalDriveIdSet = new Set(driveIds);
-    const visibleEvents = isScopedMCPAuth(auth)
+    const visibleEvents = isDriveScopedPrincipal(auth)
       ? events.filter((e) =>
           (e.driveId !== null && principalDriveIdSet.has(e.driveId)) ||
           (e.driveId === null && e.createdById === userId)

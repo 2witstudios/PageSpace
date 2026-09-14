@@ -58,7 +58,7 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
-  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+  isDriveScopedPrincipal: vi.fn(() => false), // Session/unscoped fixtures by default
 }));
 
 vi.mock('@pagespace/lib/permissions/app-permissions', () => ({

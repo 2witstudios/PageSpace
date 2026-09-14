@@ -24,7 +24,7 @@ import { SheetAddressError } from '@pagespace/lib/sheets/store';
 import { logSheetCellActivity } from '@/services/api/sheet-activity';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateMCPRequest, isAuthError, isMCPAuthResult, getPrincipalAccessLevel } from '@/lib/auth';
+import { authenticateMCPRequest, isAuthError, getPrincipalAccessLevel, getAllowedDriveIds } from '@/lib/auth';
 import { writeDeniedDetails } from '../write-denied-details';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
@@ -164,7 +164,7 @@ export async function POST(req: NextRequest) {
   }
   const userId = auth.userId;
 
-  const allowedDriveIds = isMCPAuthResult(auth) ? auth.allowedDriveIds ?? [] : [];
+  const allowedDriveIds = getAllowedDriveIds(auth);
 
   try {
     const body = await req.json();

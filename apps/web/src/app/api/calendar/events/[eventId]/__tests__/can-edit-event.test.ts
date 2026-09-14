@@ -99,7 +99,7 @@ vi.mock('../../../../../../lib/auth', () => ({
     return typeof result === 'object' && result !== null && 'error' in result;
   }),
   checkMCPDriveScope: vi.fn(() => null), // Default: MCP scope check passes
-  isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
+  isDriveScopedPrincipal: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
     auth?.tokenType === 'mcp' && ((auth.allowedDriveIds?.length ?? 0) > 0),
   // Principal dispatch: session auth falls through to the user-level checks,
   // so delegate to the mocked permissions fns to keep call-arg assertions.
@@ -149,7 +149,7 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
 });
 
 // A drive-scoped MCP token (allowedDriveIds non-empty) — matches the
-// isScopedMCPAuth mock above (tokenType === 'mcp' && allowedDriveIds.length > 0).
+// isDriveScopedPrincipal mock above (tokenType === 'mcp' && allowedDriveIds.length > 0).
 const mockScopedMcpAuth = (userId: string) => ({
   userId,
   tokenType: 'mcp' as const,

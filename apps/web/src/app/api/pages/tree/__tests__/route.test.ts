@@ -21,7 +21,7 @@ vi.mock('@/lib/auth', () => ({
     return result !== null && typeof result === 'object' && 'error' in result;
   }),
   checkMCPDriveScope: vi.fn(() => null),
-  isScopedMCPAuth: vi.fn(() => false),
+  isDriveScopedPrincipal: vi.fn(() => false),
   getPrincipalAccessiblePagesInDrive: vi.fn(),
 }));
 

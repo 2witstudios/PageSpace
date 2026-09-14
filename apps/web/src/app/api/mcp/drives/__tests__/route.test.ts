@@ -57,7 +57,9 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateMCPRequest: vi.fn(),
   isAuthError: vi.fn(() => false),
-  isMCPAuthResult: vi.fn(() => false),
+  isDriveScopedPrincipal: vi.fn(() => false),
+  getAllowedDriveIds: vi.fn(() => []),
+  getPrincipalDriveMembership: vi.fn(),
 }));
 
 import { POST } from '../route';

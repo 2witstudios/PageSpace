@@ -103,7 +103,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((r: unknown) => typeof r === 'object' && r !== null && 'error' in r),
   checkMCPDriveScope: vi.fn(() => null),
   checkMCPCreateScope: (...args: [unknown, string | null]) => checkMCPCreateScope(...args),
-  isScopedMCPAuth: vi.fn(() => true),
+  isDriveScopedPrincipal: vi.fn(() => true),
   filterDrivesByMCPScope: vi.fn((_: unknown, ids: string[]) => ids),
   isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
