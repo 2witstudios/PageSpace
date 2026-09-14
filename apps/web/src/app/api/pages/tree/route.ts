@@ -98,6 +98,7 @@ export async function POST(request: Request) {
       const accessibleIds = new Set(accessible.map(page => page.id));
       visiblePages = pageResults.filter(page => accessibleIds.has(page.id));
     } else if (!isOwner) {
+      // user-identity: unscoped-user branch only — drive-scoped credentials took the principal branch above.
       const accessibleIds = new Set(await getUserAccessiblePagesInDrive(userId, driveId));
       visiblePages = pageResults.filter(page => accessibleIds.has(page.id));
     }

@@ -469,6 +469,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         const viewabilityChecks = await Promise.all(
           nonFollowerMentioned.map(async (id: string) => ({
             id,
+            // user-identity: asks whether each MENTIONED user can view the channel, not the caller.
             canView: await canUserViewPage(id, pageId),
           }))
         );

@@ -56,6 +56,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
     }
   } else {
+    // user-identity: unscoped-user branch only — drive-scoped credentials took the principal branch above.
     const drivePerms = await getUserDrivePermissions(userId, driveId);
     if (!drivePerms) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
