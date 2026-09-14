@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Image from "next/image";
 import { useTheme } from "next-themes";
+import { HeroPicture } from "@/components/HeroPicture";
 
 /**
  * The hero's space backdrop, one image per theme. The dark nebula is the base
@@ -31,38 +31,15 @@ export function HeroBackdrop() {
 
   return (
     <>
-      {/* next/image negotiates AVIF/WebP and picks a width for the viewport
-          (~70-280 KB at q90). The theme follows the system and the server
-          cannot know it, so only one frame can take the preload: `priority`
-          stays on the dark one, and the light one is eager with high fetch
-          priority. The inline blur paints either field instantly. */}
-      <Image
-        className="hero-bg"
-        src="/hero-space.webp"
-        alt=""
-        fill
-        priority
-        fetchPriority="high"
-        sizes="100vw"
-        quality={90}
-        placeholder="blur"
-        blurDataURL="data:image/webp;base64,UklGRnIAAABXRUJQVlA4IGYAAAAQBACdASoYAAoAPtFapEwoJSOiMAgBABoJZACdMoAKOILPbRUwIYbwsAD+/re+Pv0MN+A1bR7I/7yCzqImeck6gy0aV0OsD81MyQafLMicOSPnAvKKaENGBgRjKZhqKF8e1s+QAAA="
-      />
-      {/* Eager, not lazy: in dark mode this layer is invisible but still has to
-          be decoded before a switch, or the fade would reveal a blur. */}
+      {/* Both frames are prebuilt variants (see HeroPicture), sized to the
+          viewport. The theme follows the system and the server cannot know it,
+          so only one frame can take the preload: the dark one keeps it, and
+          both load eagerly at high priority. In dark mode the light layer is
+          invisible but still has to be decoded before a switch, or the fade
+          would reveal a blur. */}
+      <HeroPicture frame="dark" className="hero-bg" sizes="100vw" preloadAvif />
       <div className="hero-bg-light" data-theme-fade={switched || undefined}>
-        <Image
-          className="hero-bg"
-          src="/hero-space-light.webp"
-          alt=""
-          fill
-          loading="eager"
-          fetchPriority="high"
-          sizes="100vw"
-          quality={90}
-          placeholder="blur"
-          blurDataURL="data:image/webp;base64,UklGRrwAAABXRUJQVlA4ILAAAACwBACdASoYAAoAPrVKoUqnJCMhsAgA4BaJaACdMoFWZjlG6Gm44gZ57c8sEUywAP7+s0t264aE6qfbqCcUjPS63d5Q5eqST+4+BsCASCMeFtZzi3q9oq8F25pii+Ihg/77uc1nokwPJzmvyRj+48Je+H/mVeXy3o4om2w+8vP31r+BkISDLcZh8oJsK2ecX8GOZluMdX/4b0WFjU5AtlOESCgspF1HJJArdGLVcfAAAA=="
-        />
+        <HeroPicture frame="light" className="hero-bg" sizes="100vw" />
       </div>
     </>
   );

@@ -19,7 +19,9 @@ export default defineConfig({
   webServer: {
     // CAPTURE=1 turns off Next's dev indicator, which otherwise renders into
     // the exported screenshots. See next.config.ts.
-    command: `CAPTURE=1 npx next dev --port ${CAPTURE_PORT}`,
+    // The hero backdrops are prebuilt files; encode them first or a fresh checkout
+    // captures a hero with no backdrop and no error.
+    command: `bun scripts/encode-hero.ts && CAPTURE=1 npx next dev --port ${CAPTURE_PORT}`,
     url: CAPTURE_URL,
     // Never reuse. A server already running from a plain `bun run dev` has no
     // CAPTURE=1, so devIndicators stays on and Next's dev badge renders into
