@@ -99,6 +99,28 @@ export const MCP_ONLY_DECISION_EXEMPT: ReadonlyMap<string, string> = new Map([
   ],
 ]);
 
+/**
+ * Routes admitting `oauth` WITHOUT `mcp`. The door treats a route that admits
+ * `mcp` as a content route and refuses no-content OAuth credentials (`profile`,
+ * `manage_keys`) there; a route admitting `oauth` alone still serves them. So
+ * that shape is pinned: a content route written as `['session', 'oauth']` would
+ * hand a profile-only token whatever its identity-bound decisions release.
+ */
+export const OAUTH_WITHOUT_MCP_ROUTES: ReadonlyMap<string, string> = new Map([
+  ['auth/me', 'Identity itself — a profile token must resolve here (ADR 0004 Decision 4); disclosure is decided per token in the route.'],
+  ['auth/mcp-tokens', "Lists the user's keys for the first-party manage_keys credential; gated on manage_keys in the route."],
+  ['auth/mcp-tokens/[tokenId]', "Revokes a key for the first-party manage_keys credential; gated on manage_keys in the route."],
+]);
+
+/**
+ * Content-admitting routes that opt back in to no-content OAuth credentials
+ * (`admitNoContentOAuth: true`), each with why that credential must reach it.
+ */
+export const ADMIT_NO_CONTENT_OAUTH_ROUTES: ReadonlyMap<string, string> = new Map([
+  ['drives', 'The `pagespace keys` wizard lists the drives a new key may be scoped to with its manage_keys credential; a profile-only token lists nothing (no drive rows).'],
+  ['auth/key', 'Reports the presented credential itself — what it is and what it may reach — whatever that credential is.'],
+]);
+
 function findRouteFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
@@ -206,9 +228,32 @@ describe('oauth allow-list guard', () => {
     ).toEqual([]);
   });
 
+  it('only pinned identity routes admit oauth without mcp', () => {
+    const offenders = routes
+      .filter((r) => r.lists.some((list) => list.includes('oauth') && !list.includes('mcp')))
+      .map((r) => r.key)
+      .filter((key) => !OAUTH_WITHOUT_MCP_ROUTES.has(key))
+      .sort();
+    expect(
+      offenders,
+      "A route admitting 'oauth' without 'mcp' lets profile-only and manage_keys-only tokens through the door. Admit 'mcp' too if it serves content, or pin it in OAUTH_WITHOUT_MCP_ROUTES with a reason.",
+    ).toEqual([]);
+  });
+
+  it('only pinned routes opt back in to no-content OAuth credentials', () => {
+    const offenders = routes
+      .filter((r) => /\badmitNoContentOAuth\s*:\s*true\b/.test(stripComments(r.source)))
+      .map((r) => r.key)
+      .filter((key) => !ADMIT_NO_CONTENT_OAUTH_ROUTES.has(key))
+      .sort();
+    expect(offenders).toEqual([]);
+  });
+
   it('exemption and pending entries all name routes that exist', () => {
     const keys = routes.map((r) => r.key);
     for (const key of MCP_ONLY_DECISION_EXEMPT.keys()) expect(keys).toContain(key);
+    for (const key of OAUTH_WITHOUT_MCP_ROUTES.keys()) expect(keys).toContain(key);
+    for (const key of ADMIT_NO_CONTENT_OAUTH_ROUTES.keys()) expect(keys).toContain(key);
     for (const { route } of PENDING_PHASE_2B) expect(keys).toContain(route);
   });
 });

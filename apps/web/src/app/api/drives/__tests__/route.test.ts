@@ -138,7 +138,7 @@ describe('GET /api/drives', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session', 'mcp', 'oauth'], requireCSRF: false }
+        { allow: ['session', 'mcp', 'oauth'], requireCSRF: false, admitNoContentOAuth: true }
       );
     });
   });

@@ -103,6 +103,7 @@ describe('GET /api/drives — OAuth credentials', () => {
     expect(authenticateRequestWithOptions).toHaveBeenCalledWith(request, {
       allow: ['session', 'mcp', 'oauth'],
       requireCSRF: false,
+      admitNoContentOAuth: true,
     });
   });
 
