@@ -5,7 +5,7 @@ import { getActivityById, previewRollback } from '@/services/api';
 import type { RollbackContext } from '@pagespace/lib/permissions/rollback-permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 
 const querySchema = z.object({
   context: z.enum(['page', 'drive', 'ai_tool', 'user_dashboard']).default('page'),

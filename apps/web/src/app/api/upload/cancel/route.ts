@@ -4,7 +4,7 @@ import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 /**
  * Release an upload slot reserved by /presign when the client-side upload fails

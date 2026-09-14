@@ -20,8 +20,8 @@ import { absoluteInstant } from '@/lib/validation/date-params';
 import { expandRecurringEvents } from '@/lib/workflows/recurrence-utils';
 import { CronExpressionParser } from 'cron-parser';
 
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 // Query parameters for listing events. The range bounds are absolute instants,
 // not wall-clock times — see `absoluteInstant`; an event's own start/end is the

@@ -6,7 +6,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { messageRepository } from '@/lib/repositories/message-repository';
 
 // Auth options: GET is read-only operation
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 
 /**
  * GET handler to load chat messages for a page

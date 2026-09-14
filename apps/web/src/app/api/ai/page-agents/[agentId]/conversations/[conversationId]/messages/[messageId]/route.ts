@@ -11,7 +11,7 @@ import {
 } from '@/lib/repositories/message-repository';
 import { getState, invalidate } from '@/lib/ai/core/compaction/compaction-repository';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 /**
  * PATCH - Edit a page agent conversation message's content

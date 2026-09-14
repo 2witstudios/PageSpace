@@ -9,8 +9,8 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 // Schema for adding attendees
 const addAttendeesSchema = z.object({
   userIds: z.array(z.string()).min(1),

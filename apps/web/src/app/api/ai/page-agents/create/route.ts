@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, canPrincipalEditPage, getPrincipalDriveMembership, isDriveScopedPrincipal } from '@/lib/auth';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';

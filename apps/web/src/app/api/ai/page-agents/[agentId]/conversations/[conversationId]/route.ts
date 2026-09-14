@@ -13,7 +13,7 @@ import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 // Auth options: PATCH and DELETE are write operations requiring CSRF protection
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 /**
  * PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]

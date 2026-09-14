@@ -10,7 +10,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkM
 import { format } from 'date-fns';
 import { optionalAbsoluteInstant, exclusiveEndBound } from '@/lib/validation/date-params';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 
 const querySchema = z.object({
   context: z.enum(['user', 'drive', 'page']),

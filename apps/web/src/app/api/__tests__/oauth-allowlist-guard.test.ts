@@ -94,9 +94,21 @@ export const OAUTH_ALLOWLIST_DENY: ReadonlyArray<{
 const TOOL_CEILING_REASON =
   "Executes agent tools; the per-drive ROLE ceiling in lib/ai/tools/actor-permissions.ts (hasAppTokenCeiling / driveDeniedByAppToken / getActorAccessiblePagesInDrive) keys only on context.mcpTokenId, so an OAuth drive:X:member token would run tools with the owning user's full role in X.";
 
+const MENTION_RESPONDER_REASON =
+  "Posting a message runs every @-mentioned agent through lib/channels/agent-mention-responder.ts, whose ToolExecutionContext carries only userId — no drive ceiling and no role ceiling for ANY credential — so the agent acts with the owning user's full reach.";
+const DEFERRED_RUN_REASON =
+  "Authors deferred agent runs that lib/workflows/workflow-executor.ts executes as the creating user with a ToolExecutionContext carrying no drive ceiling and no role ceiling for ANY credential.";
+
 export const PENDING_PHASE_2B: ReadonlyArray<{ readonly route: string; readonly file: string; readonly reason: string }> = [
   { route: 'ai/page-agents/consult', file: 'apps/web/src/app/api/ai/page-agents/consult/route.ts', reason: TOOL_CEILING_REASON },
   { route: 'v1/chat/completions', file: 'apps/web/src/app/api/v1/chat/completions/route.ts', reason: TOOL_CEILING_REASON },
+  { route: 'channels/[pageId]/messages', file: 'apps/web/src/app/api/channels/[pageId]/messages/route.ts', reason: MENTION_RESPONDER_REASON },
+  { route: 'channels/[pageId]/messages/[messageId]', file: 'apps/web/src/app/api/channels/[pageId]/messages/[messageId]/route.ts', reason: MENTION_RESPONDER_REASON },
+  { route: 'workflows', file: 'apps/web/src/app/api/workflows/route.ts', reason: DEFERRED_RUN_REASON },
+  { route: 'workflows/[workflowId]', file: 'apps/web/src/app/api/workflows/[workflowId]/route.ts', reason: DEFERRED_RUN_REASON },
+  { route: 'tasks/[taskId]/triggers', file: 'apps/web/src/app/api/tasks/[taskId]/triggers/route.ts', reason: DEFERRED_RUN_REASON },
+  { route: 'tasks/[taskId]/triggers/[triggerType]', file: 'apps/web/src/app/api/tasks/[taskId]/triggers/[triggerType]/route.ts', reason: DEFERRED_RUN_REASON },
+  { route: 'calendar/events/[eventId]/triggers', file: 'apps/web/src/app/api/calendar/events/[eventId]/triggers/route.ts', reason: DEFERRED_RUN_REASON },
 ];
 
 /**
@@ -306,6 +318,9 @@ describe('oauth allow-list guard', () => {
     for (const key of MCP_ONLY_DECISION_EXEMPT.keys()) expect(keys).toContain(key);
     for (const key of OAUTH_WITHOUT_MCP_ROUTES.keys()) expect(keys).toContain(key);
     for (const key of ADMIT_NO_CONTENT_OAUTH_ROUTES.keys()) expect(keys).toContain(key);
-    for (const { route } of PENDING_PHASE_2B) expect(keys).toContain(route);
+    for (const { route, file } of PENDING_PHASE_2B) {
+      expect(keys).toContain(route);
+      expect(file).toBe(`apps/web/src/app/api/${route}/route.ts`);
+    }
   });
 });

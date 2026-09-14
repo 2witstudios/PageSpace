@@ -17,7 +17,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
 import { checkObjectExists } from '@/lib/upload/s3-effects';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 // Thrown inside the completion transaction to roll it back when the caller is
 // trying to link a content-addressed blob they neither uploaded nor reference

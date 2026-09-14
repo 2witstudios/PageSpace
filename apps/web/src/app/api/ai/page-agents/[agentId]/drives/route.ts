@@ -8,7 +8,7 @@ import { addAgentToDrive, listAgentDrives } from '@pagespace/lib/services/drive-
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 async function getAgentPage(agentId: string) {

@@ -14,7 +14,7 @@ import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 const PRESIGN_TTL = 900;
 
 interface PresignRequestBody {

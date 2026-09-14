@@ -13,7 +13,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrin
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
 import { optionalAbsoluteInstant, exclusiveEndBound } from '@/lib/validation/date-params';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 
 // Page size for the cursor-paged task-list expansion: bounds each pages query
 // regardless of drive-universe size. The scoped-token permission filter runs
