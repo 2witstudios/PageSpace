@@ -5,7 +5,7 @@ import { eq, and } from '@pagespace/db/operators';
 import { calendarEvents } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveMember, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { eventOutOfScopeResponse, isPersonalEventOutOfScope } from '../../personal-event-scope';
 import {
   isUserMemberOfAnyEventDrive,
@@ -100,7 +100,7 @@ export async function POST(
     const { driveId } = parseResult.data;
 
     const [event] = await db
-      .select({ driveId: calendarEvents.driveId })
+      .select({ driveId: calendarEvents.driveId, createdById: calendarEvents.createdById })
       .from(calendarEvents)
       .where(and(eq(calendarEvents.id, eventId), eq(calendarEvents.isTrashed, false)))
       .limit(1);
@@ -122,6 +122,17 @@ export async function POST(
     const targetScopeError = checkMCPDriveScope(auth, driveId);
     if (targetScopeError) return targetScopeError;
 
+    // The credential's OWN authority as well — the service below decides for
+    // the user only. Another user's event needs the credential to be owner/admin
+    // of the home drive, and the target needs the credential as a member.
+    if (event.driveId && event.createdById !== auth.userId && !(await isPrincipalDriveOwnerOrAdmin(auth, event.driveId))) {
+      return NextResponse.json({ error: 'You do not have permission to share this event' }, { status: 403 });
+    }
+    if (!(await isPrincipalDriveMember(auth, driveId))) {
+      return NextResponse.json({ error: 'You are not a member of the target drive' }, { status: 400 });
+    }
+
+    // user-identity: the service re-checks the USER's creator/home-admin/target-member standing after the credential checks above.
     const result = await shareEventWithDrive({ actingUserId: auth.userId, eventId, driveId });
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status });
@@ -167,7 +178,7 @@ export async function DELETE(
 
   try {
     const [event] = await db
-      .select({ driveId: calendarEvents.driveId })
+      .select({ driveId: calendarEvents.driveId, createdById: calendarEvents.createdById })
       .from(calendarEvents)
       .where(and(eq(calendarEvents.id, eventId), eq(calendarEvents.isTrashed, false)))
       .limit(1);
@@ -188,6 +199,17 @@ export async function DELETE(
     const targetScopeError = checkMCPDriveScope(auth, driveId);
     if (targetScopeError) return targetScopeError;
 
+    // The credential's OWN authority as well — the service below decides for the
+    // user only: creator, or owner/admin of the home or the target drive.
+    const credentialCanManage =
+      event.createdById === auth.userId ||
+      (event.driveId !== null && (await isPrincipalDriveOwnerOrAdmin(auth, event.driveId))) ||
+      (await isPrincipalDriveOwnerOrAdmin(auth, driveId));
+    if (!credentialCanManage) {
+      return NextResponse.json({ error: 'You do not have permission to remove this drive share' }, { status: 403 });
+    }
+
+    // user-identity: the service re-checks the USER's creator/home-admin/target-admin standing after the credential check above.
     const result = await unshareEventFromDrive({ actingUserId: auth.userId, eventId, driveId });
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status });

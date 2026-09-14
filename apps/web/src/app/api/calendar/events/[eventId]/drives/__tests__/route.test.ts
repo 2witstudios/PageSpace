@@ -41,6 +41,9 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 vi.mock('../../../../../../../lib/auth', () => ({
+  // Session fixtures: the credential's authority is the user's; the mocked service decides.
+  isPrincipalDriveMember: async () => true,
+  isPrincipalDriveOwnerOrAdmin: async () => true,
   // The personal-event rule (personal-event-scope.ts) asks whether the caller is an OAuth application.
   isScopedOAuthAuth: (auth: { tokenType?: string; scopes?: { account?: boolean } }) => auth?.tokenType === 'oauth' && !auth.scopes?.account,
   authenticateRequestWithOptions: vi.fn(),
