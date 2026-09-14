@@ -136,7 +136,7 @@ const OK = { MEMBER: 200, ADMIN: 200 } as const;
 const RANGE = `startDate=${encodeURIComponent('2026-01-01T00:00:00Z')}&endDate=${encodeURIComponent('2026-12-31T00:00:00Z')}`;
 
 const ROUTES: readonly RouteCase[] = [
-  { name: 'list pages — GET /api/drives/[driveId]/pages', read: true, statusInX: OK, call: (t, d) => drivePagesGET(req('GET', `/drives/${d.driveId}/pages`, t), params({ driveId: d.driveId })) },
+  { name: 'list pages — GET /api/drives/[driveId]/pages', read: true, statusInX: OK, call: (t, d) => drivePagesGET(req('GET', `/drives/${d.driveId}/pages`, t) as never, params({ driveId: d.driveId })) },
   { name: 'read page — GET /api/pages/[pageId]', read: true, statusInX: OK, call: (t, d) => pageGET(req('GET', `/pages/${d.docId}`, t), params({ pageId: d.docId })) },
   { name: 'create page — POST /api/pages', read: false, statusInX: { MEMBER: 201, ADMIN: 201 }, call: (t, d) => pagesPOST(req('POST', '/pages', t, { title: 'Parity page', type: 'DOCUMENT', driveId: d.driveId })) },
   { name: 'update content — PATCH /api/pages/[pageId]', read: false, statusInX: { MEMBER: 403, ADMIN: 200 }, call: (t, d) => pagePATCH(req('PATCH', `/pages/${d.docId}`, t, { content: '<p>parity</p>' }), params({ pageId: d.docId })) },

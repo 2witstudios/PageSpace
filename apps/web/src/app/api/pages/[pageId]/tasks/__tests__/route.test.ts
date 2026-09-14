@@ -1445,7 +1445,8 @@ beforeEach(() => {
 
       const arrangeCreate = () => {
         const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium', position: 0 };
-        transactionPageResult = [{ id: 'new-page', title: 'Task', type: 'DOCUMENT' }];
+        const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT' };
+        transactionPageResult = [mockNewPage];
         transactionTaskResult = [mockNewTask];
         vi.mocked(authenticateRequestWithOptions).mockResolvedValue(oauthGrant as never);
         vi.mocked(canUserEditPage).mockResolvedValue(true);
