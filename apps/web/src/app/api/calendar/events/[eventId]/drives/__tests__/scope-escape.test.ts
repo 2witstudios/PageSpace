@@ -27,9 +27,9 @@ vi.mock('@/lib/auth', async (importOriginal) => {
   return { ...actual, authenticateRequestWithOptions: vi.fn() };
 });
 
-import { POST } from '../route';
+import { DELETE, POST } from '../route';
 import { authenticateRequestWithOptions, type AuthResult } from '@/lib/auth';
-import { shareEventWithDrive } from '@pagespace/lib/services/calendar-event-drive-service';
+import { shareEventWithDrive, unshareEventFromDrive } from '@pagespace/lib/services/calendar-event-drive-service';
 import { PARITY_USER_ID, mcpDriveKey, oauthDriveGrant } from '@/lib/auth/__tests__/oauth-principal-fixture';
 
 const session: AuthResult = { tokenType: 'session', sessionId: 's', userId: PARITY_USER_ID, role: 'user', tokenVersion: 0, adminRoleVersion: 0 };
@@ -59,5 +59,32 @@ describe('POST /api/calendar/events/[eventId]/drives — the target drive must b
     const res = await share('drivey');
     expect(res.status).toBe(201);
     expect(shareEventWithDrive).toHaveBeenCalledWith({ actingUserId: PARITY_USER_ID, eventId: 'evt', driveId: 'drivey' });
+  });
+});
+
+describe('DELETE /api/calendar/events/[eventId]/drives — the target drive must be in scope', () => {
+  const unshare = (driveId: string) =>
+    DELETE(new Request(`https://example.com/api/calendar/events/evt/drives?driveId=${driveId}`, { method: 'DELETE' }), {
+      params: Promise.resolve({ eventId: 'evt' }),
+    });
+
+  for (const [label, principal] of [
+    ['a drive:X OAuth grant', oauthDriveGrant('drivex', 'admin')],
+    ['a drive-scoped mcp_ key', mcpDriveKey('drivex')],
+  ] as const) {
+    it(`refuses ${label} removing an X event's share from drive Y`, async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(principal);
+      const res = await unshare('drivey');
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: 'This token does not have access to this drive' });
+      expect(unshareEventFromDrive).not.toHaveBeenCalled();
+    });
+  }
+
+  it('lets a session unshare as the service authorizes (unchanged)', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session);
+    const res = await unshare('drivey');
+    expect(res.status).toBe(200);
+    expect(unshareEventFromDrive).toHaveBeenCalledWith({ actingUserId: PARITY_USER_ID, eventId: 'evt', driveId: 'drivey' });
   });
 });

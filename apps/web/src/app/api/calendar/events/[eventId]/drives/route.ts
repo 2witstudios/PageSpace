@@ -183,6 +183,11 @@ export async function DELETE(
       if (scopeError) return scopeError;
     }
 
+    // …and on the TARGET drive: unsharing removes the event from that drive's
+    // calendar, and the service below only checks the owning USER's authority.
+    const targetScopeError = checkMCPDriveScope(auth, driveId);
+    if (targetScopeError) return targetScopeError;
+
     const result = await unshareEventFromDrive({ actingUserId: auth.userId, eventId, driveId });
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status });
