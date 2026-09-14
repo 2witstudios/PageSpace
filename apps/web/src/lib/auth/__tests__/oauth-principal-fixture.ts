@@ -75,3 +75,28 @@ export function profileOnlyGrant(): OAuthAuthResult {
     clientFirstParty: false,
   };
 }
+
+/**
+ * The OAuth scope resolvers as they answer for a user who is STILL a member of
+ * every granted drive. The real resolvers (@pagespace/lib app-permissions) read
+ * that membership from Postgres inside the package, beyond a route-level mock;
+ * their own membership rule is unit-tested there. Route tests swap these in at
+ * the app-permissions boundary so the route's principal dispatch runs for real.
+ */
+export function stillMemberScopedResolvers() {
+  type Row = OAuthAuthResult['driveScopes'][number];
+  const find = (rows: Row[], driveId: string) => rows.find((row) => row.driveId === driveId) ?? null;
+  return {
+    getScopedDriveMembership: async (rows: Row[], _userId: string, driveId: string) => {
+      const row = find(rows, driveId);
+      return row && { role: row.role, customRoleId: row.customRoleId };
+    },
+    hasScopedDriveMembership: async (rows: Row[], _userId: string, driveId: string) => find(rows, driveId) !== null,
+    getScopedDriveAccessLevel: async (rows: Row[], _userId: string, driveId: string) => {
+      const row = find(rows, driveId);
+      if (!row) return null;
+      const adminLike = row.role === 'ADMIN' || row.role === null;
+      return { canView: true, canEdit: true, canShare: adminLike, canDelete: adminLike };
+    },
+  };
+}

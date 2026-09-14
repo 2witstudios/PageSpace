@@ -48,13 +48,16 @@ vi.mock('@pagespace/lib/permissions/app-permissions', async (importOriginal) => 
   const actual = await importOriginal<typeof import('@pagespace/lib/permissions/app-permissions')>();
   return {
     ...actual,
+    // The token's user is still a member of the granted drives (the lib's own
+    // membership read is unit-tested in app-permissions.test.ts).
+    getScopedDriveMembership: (await import('@/lib/auth/__tests__/oauth-principal-fixture')).stillMemberScopedResolvers().getScopedDriveMembership,
     hasAppDriveMembership: vi.fn(),
     hasScopedDriveMembership: vi.fn(),
   };
 });
 
-// Only stub authentication — isDriveScopedPrincipal/isScopedOAuthAuth and
-// getScopedDriveMembership run for real.
+// Only stub authentication — isDriveScopedPrincipal/isScopedOAuthAuth and the
+// principal dispatch run for real.
 vi.mock('@/lib/auth', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth')>();
   return {

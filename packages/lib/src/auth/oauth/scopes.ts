@@ -626,3 +626,17 @@ export function checkGrantAuthority(scopes: ScopeSet, authority: GrantAuthority)
 
   return { ok: true };
 }
+
+/**
+ * Whether a token row's STORED scope list names a drive, in any role form
+ * (`drive:<id>`, `drive:<id>:member|admin`, `drive:<id>:custom:<roleId>`).
+ *
+ * Decides which OAuth token families lose a drive when their user's membership
+ * in it is removed: a token's scopes are frozen at consent and cannot be
+ * narrowed, so the family is revoked. Matches the raw strings rather than
+ * re-parsing, so a row this parser would now reject is still caught.
+ */
+export function storedScopesNameDrive(scopes: readonly string[], driveId: string): boolean {
+  const exact = `drive:${driveId}`;
+  return scopes.some((scope) => scope === exact || scope.startsWith(`${exact}:`));
+}

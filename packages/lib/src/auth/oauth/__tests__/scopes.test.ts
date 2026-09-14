@@ -10,6 +10,7 @@ import {
   scopeSetToDriveScopes,
   checkGrantAuthority,
   hasNewKeyName,
+  storedScopesNameDrive,
   type ScopeSet,
 } from '../scopes';
 
@@ -1026,5 +1027,20 @@ describe('name:<percent-encoded-utf8> (the fix for the "pagespace CLI" name-loss
     expect(hasNewKeyName(emptySet({ newKeyName: 'ci', drives: driveEntry }))).toBe(true);
     expect(hasNewKeyName(emptySet({ drives: driveEntry }))).toBe(false);
     expect(hasNewKeyName(emptySet())).toBe(false);
+  });
+});
+
+describe('storedScopesNameDrive (which OAuth token families a drive-membership removal must revoke)', () => {
+  it('matches a drive scope in any role form', () => {
+    expect(storedScopesNameDrive(['drive:abc123'], 'abc123')).toBe(true);
+    expect(storedScopesNameDrive(['profile', 'drive:abc123:member', 'offline_access'], 'abc123')).toBe(true);
+    expect(storedScopesNameDrive(['drive:abc123:admin'], 'abc123')).toBe(true);
+    expect(storedScopesNameDrive(['drive:abc123:custom:role9'], 'abc123')).toBe(true);
+  });
+
+  it('does not match another drive, a drive id that merely shares a prefix, or non-drive scopes', () => {
+    expect(storedScopesNameDrive(['drive:abc1234:member'], 'abc123')).toBe(false);
+    expect(storedScopesNameDrive(['drive:xyz:member', 'profile', 'account'], 'abc123')).toBe(false);
+    expect(storedScopesNameDrive([], 'abc123')).toBe(false);
   });
 });

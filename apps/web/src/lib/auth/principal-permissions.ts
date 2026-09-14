@@ -237,7 +237,7 @@ export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: st
     return membership.role === 'OWNER' || membership.role === 'ADMIN';
   }
   if (isScopedOAuthAuth(auth)) {
-    const membership = getScopedDriveMembership(auth.driveScopes, driveId);
+    const membership = await getScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
     if (!membership) return false;
     if (membership.role === null) return isDriveOwnerOrAdmin(auth.userId, driveId);
     return membership.role === 'ADMIN';
@@ -321,7 +321,7 @@ export async function getPrincipalDriveMembership(
     return membership && { role: membership.role, customRoleId: membership.customRoleId };
   }
   if (isScopedOAuthAuth(auth)) {
-    const membership = getScopedDriveMembership(auth.driveScopes, driveId);
+    const membership = await getScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
     return membership && { role: membership.role, customRoleId: membership.customRoleId };
   }
 

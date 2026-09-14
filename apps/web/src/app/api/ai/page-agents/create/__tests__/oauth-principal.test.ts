@@ -25,7 +25,11 @@ vi.mock('@pagespace/lib/logging/logger-config', () => {
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/permissions/app-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@pagespace/lib/permissions/app-permissions')>();
-  return { ...actual, getAppDriveMembership: vi.fn() };
+  return {
+    ...actual,
+    ...(await import('@/lib/auth/__tests__/oauth-principal-fixture')).stillMemberScopedResolvers(),
+    getAppDriveMembership: vi.fn(),
+  };
 });
 vi.mock('@/lib/auth', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth')>();

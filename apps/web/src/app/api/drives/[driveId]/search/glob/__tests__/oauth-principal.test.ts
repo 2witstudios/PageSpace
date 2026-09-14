@@ -29,6 +29,7 @@ vi.mock('@pagespace/lib/permissions/app-permissions', async (importOriginal) => 
   const actual = await importOriginal<typeof import('@pagespace/lib/permissions/app-permissions')>();
   return {
     ...actual,
+    ...(await import('@/lib/auth/__tests__/oauth-principal-fixture')).stillMemberScopedResolvers(),
     hasAppDriveMembership: vi.fn(),
     getAppDriveMembership: vi.fn(),
     getAppAccessiblePagesInDrive: vi.fn(),

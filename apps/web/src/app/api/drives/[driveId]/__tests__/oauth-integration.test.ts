@@ -118,7 +118,7 @@ beforeEach(() => {
   vi.mocked(getDriveById).mockResolvedValue({ id: IN_SCOPE_DRIVE } as never);
   vi.mocked(getDriveWithAccess).mockResolvedValue({ id: IN_SCOPE_DRIVE, name: 'Drive' } as never);
   vi.mocked(getScopedDriveAccessLevel).mockResolvedValue({ canView: true, canEdit: true, canShare: false, canDelete: false });
-  vi.mocked(getScopedDriveMembership).mockReturnValue({ role: null, customRoleId: null });
+  vi.mocked(getScopedDriveMembership).mockResolvedValue({ role: null, customRoleId: null });
 });
 
 describe('GET /api/drives/[driveId] — OAuth access-token integration', () => {
