@@ -1,6 +1,6 @@
 "use client";
 
-import Image from "next/image";
+import { HeroPicture } from "@/components/HeroPicture";
 import { cn } from "@/lib/utils";
 import { CANVAS, type ShotDevice } from "@/lib/app-store-shots";
 
@@ -44,12 +44,8 @@ export function ScreenshotCanvas({
       data-width={finalWidth}
       data-height={finalHeight}
     >
-      <Image
-        src="/hero-space.webp"
-        alt=""
-        fill
-        priority
-        quality={90}
+      <HeroPicture
+        frame="dark"
         sizes={`${finalWidth}px`}
         style={{ objectFit: "cover", objectPosition: "50% 50%", zIndex: 0 }}
       />

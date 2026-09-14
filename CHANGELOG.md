@@ -542,6 +542,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **The marketing site no longer goes down when a retina screen loads the home page** — the hero's
+  space backdrops were resized on the server the first time each size was asked for, and a
+  high-resolution screen asked for both the dark and light pictures at full 4K size at once, which ran
+  the site's server out of memory. It restarted, forgot every picture it had already made, and the
+  next visitor with a sharp screen took it down again. Every size of both pictures is now made once
+  when the site is built, so loading the page asks the server for nothing but files. The hero looks
+  and fades exactly as before.
 - **Sending several photos at once now makes one message with one gallery, and stops them appearing
   twice** — attaching a batch of photos used to send them as separate messages, one per file: the
   channel or DM filled with a column of single-photo bubbles, the typed text sat on the first one,
