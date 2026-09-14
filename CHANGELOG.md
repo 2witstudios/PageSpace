@@ -542,6 +542,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **The open-source licenses screen no longer references a private IP-sale disclosure** — the "Full
+  inventory" notice at Settings → Legal → Open-source licenses said the complete dependency
+  inventory was "maintained in the seller's IP disclosure and is available to recipients on
+  request" — language from a private acquisition process that never belonged in the product. The
+  notice now links directly to OSS-INVENTORY.md, the standalone sanitized inventory published in
+  the open-source PageSpace repository.
 - **The marketing site no longer goes down when a retina screen loads the home page** — the hero's
   space backdrops were resized on the server the first time each size was asked for, and a
   high-resolution screen asked for both the dark and light pictures at full 4K size at once, which ran
