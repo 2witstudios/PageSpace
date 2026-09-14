@@ -329,8 +329,15 @@ describe('dispatch matrix — drive-level checks', () => {
 
   it('getPrincipalDriveIds: drive-scoped OAuth token → its allowedDriveIds, NOT the user drive list', async () => {
     vi.mocked(getDriveIdsForUser).mockResolvedValue(['other-drive']);
+    vi.mocked(hasScopedDriveMembership).mockResolvedValue(true);
     expect(await getPrincipalDriveIds(scopedOAuthAuth)).toEqual([DRIVE_ID]);
     expect(getDriveIdsForUser).not.toHaveBeenCalled();
+  });
+
+  it('getPrincipalDriveIds: drops an OAuth scope row whose user is no longer a member — however the membership ended', async () => {
+    vi.mocked(hasScopedDriveMembership).mockResolvedValue(false);
+    expect(await getPrincipalDriveIds(scopedOAuthAuth)).toEqual([]);
+    expect(hasScopedDriveMembership).toHaveBeenCalledWith(scopedOAuthAuth.tokenType === 'oauth' ? scopedOAuthAuth.driveScopes : [], USER_ID, DRIVE_ID);
   });
 
   it('getPrincipalAccessiblePagesInDrive: drive-scoped OAuth token dispatches to getScopedAccessiblePagesInDrive', async () => {
