@@ -8,10 +8,9 @@ the prior written permission of the copyright holder.
 
 Access to this repository does not grant any license or right of use. Any
 third-party open-source components distributed with this software retain
-their own respective licenses; see §3 of
-OSS-COMPLIANCE.md for the formal elections
-and copyleft attributions, §5 of that report for the full OSS inventory,
-and the LICENSES/ directory for the corresponding full license texts
+their own respective licenses. PageSpace elects the MIT option of the
+dual-licensed jszip and the Apache-2.0 option of the dual-licensed dompurify,
+and the LICENSES/ directory carries the corresponding full license texts
 (GPL-3.0.txt, LGPL-3.0.txt, MPL-2.0.txt).
 
 THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR

@@ -157,8 +157,8 @@ export default function OssLicensesPage() {
           </p>
           <p>
             The complete open-source inventory — every direct and transitive
-            dependency across the web, desktop, iOS, and Android builds, with the
-            SPDX identifier for each — is published in the open-source PageSpace
+            dependency in the workspace, recorded in each package&rsquo;s manifest and
+            lockfile — is published in the open-source PageSpace
             repository:
           </p>
           <a
