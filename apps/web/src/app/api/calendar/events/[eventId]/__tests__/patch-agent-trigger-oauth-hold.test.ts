@@ -48,6 +48,7 @@ vi.mock('@/lib/workflows/calendar-trigger-helpers', () => ({
   removeCalendarTrigger: vi.fn().mockResolvedValue(undefined),
   validateCalendarAgentTrigger: vi.fn().mockResolvedValue({ agentPageId: 'agent-1' }),
   resyncCalendarTriggerTimings: vi.fn().mockResolvedValue(undefined),
+  calendarEventHasAgentTrigger: vi.fn().mockResolvedValue(false),
 }));
 
 // timestamp-utils is pure and cheap; these cases all pass absolute (Z) datetimes,
@@ -107,6 +108,8 @@ import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
 import {
   upsertCalendarTriggerWorkflowInTx,
   removeCalendarTrigger,
+  resyncCalendarTriggerTimings,
+  calendarEventHasAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
 
 import { mcpDriveKey, oauthDriveGrant, PARITY_USER_ID } from '@/lib/auth/__tests__/oauth-principal-fixture';
@@ -193,6 +196,26 @@ describe('PATCH /api/calendar/events/[eventId] — agent triggers held from OAut
       expect(removeCalendarTrigger).not.toHaveBeenCalled();
     });
   }
+
+  // Review finding: re-timing an event re-aims its agent trigger
+  // (resyncCalendarTriggerTimings), so moving it to now starts the run.
+  it('refuses moving the start of an event that carries an agent trigger — nothing written', async () => {
+    (authenticateRequestWithOptions as Mock).mockResolvedValue(oauthDriveGrant(DRIVE_ID, 'admin'));
+    vi.mocked(calendarEventHasAgentTrigger).mockResolvedValue(true);
+    const res = await PATCH(makeRequest({ startAt: '2026-06-01T08:00:00Z', endAt: '2026-06-01T10:00:00Z' }), ctx());
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(HELD);
+    expect(calendarEventHasAgentTrigger).toHaveBeenCalledWith(db, EVENT_ID);
+    expect(db.transaction).not.toHaveBeenCalled();
+    expect(resyncCalendarTriggerTimings).not.toHaveBeenCalled();
+  });
+
+  it('moves an event that carries no agent trigger (parity)', async () => {
+    (authenticateRequestWithOptions as Mock).mockResolvedValue(oauthDriveGrant(DRIVE_ID, 'admin'));
+    vi.mocked(calendarEventHasAgentTrigger).mockResolvedValue(false);
+    const res = await PATCH(makeRequest({ startAt: '2026-06-01T08:00:00Z', endAt: '2026-06-01T10:00:00Z' }), ctx());
+    expect(res.status).toBe(200);
+  });
 
   it('applies the same edit without an agentTrigger (parity)', async () => {
     (authenticateRequestWithOptions as Mock).mockResolvedValue(oauthDriveGrant(DRIVE_ID, 'admin'));

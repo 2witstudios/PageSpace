@@ -17,8 +17,9 @@ import {
   resyncCalendarTriggerTimings,
   upsertCalendarTriggerWorkflowInTx,
   validateCalendarAgentTrigger,
+  calendarEventHasAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
-import { refuseOAuthAgentTrigger } from '@/lib/auth/oauth-agent-trigger-hold';
+import { appliesAgentTriggerHold, calendarPatchTriggerIntent, refuseOAuthAgentTrigger } from '@/lib/auth/oauth-agent-trigger-hold';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
@@ -239,8 +240,18 @@ export async function PATCH(
 
     const data = parseResult.data;
 
-    // Agent triggers are held from OAuth applications (pending Phase 2b / [D-15]) — set or clear.
-    const triggerHold = refuseOAuthAgentTrigger(auth, { writesTrigger: data.agentTrigger !== undefined, firesTrigger: false });
+    // Agent triggers are held from OAuth applications (pending Phase 2b / [D-15]):
+    // setting or clearing one, or re-timing an event that carries one (which
+    // re-aims its pending runs), is refused before any write.
+    const timingChanged = data.startAt !== undefined || data.recurrenceRule !== undefined;
+    const triggerHold = refuseOAuthAgentTrigger(
+      auth,
+      calendarPatchTriggerIntent({
+        agentTriggerPresent: data.agentTrigger !== undefined,
+        timingChanged,
+        eventHasTrigger: timingChanged && appliesAgentTriggerHold(auth) && (await calendarEventHasAgentTrigger(db, eventId)),
+      }),
+    );
     if (triggerHold) return triggerHold;
 
     // Apply timezone-aware parsing for naive ISO datetimes: the provided

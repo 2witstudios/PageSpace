@@ -308,6 +308,19 @@ export async function upsertCalendarTriggerWorkflow(
   return database.transaction((tx) => upsertCalendarTriggerWorkflowInTx(tx, params));
 }
 
+/** Whether an agent trigger is attached to this calendar event (any occurrence). */
+export async function calendarEventHasAgentTrigger(
+  database: Pick<typeof DbType, 'select'>,
+  calendarEventId: string,
+): Promise<boolean> {
+  const rows = await database
+    .select({ id: calendarTriggers.id })
+    .from(calendarTriggers)
+    .where(eq(calendarTriggers.calendarEventId, calendarEventId))
+    .limit(1);
+  return rows.length > 0;
+}
+
 /**
  * Re-synchronise trigger rows when the event's timing or recurrence rule changes
  * but the caller did NOT explicitly supply a new agentTrigger payload.

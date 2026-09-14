@@ -343,7 +343,7 @@ describe('oauth allow-list guard', () => {
   // admitting `oauth` that handles agent-trigger input must refuse it from an
   // OAuth principal through the shared refusal — never widen first, hold later.
   it('(c) every route admitting oauth that handles agent-trigger input applies the shared OAuth trigger refusal', () => {
-    const TRIGGER_INPUT = /\bagentTrigger\b|\btriggerType\b|\bcreateTaskTriggerWorkflow\b|\bupsertCalendarTriggerWorkflow\w*\b|\bfireCompletionTrigger\b/;
+    const TRIGGER_INPUT = /\bagentTrigger\b|\btriggerType\b|\bcreateTaskTriggerWorkflow\b|\bupsertCalendarTriggerWorkflow\w*\b|\bfireCompletionTrigger\b|\bsyncTaskDueDateTrigger\b|\bcancelTaskDueDateTrigger\b|\bresyncCalendarTriggerTimings\b|\bremoveCalendarTrigger\b/;
     const offenders = routes
       .filter((r) => r.lists.some((list) => list.includes('oauth')))
       .filter((r) => {

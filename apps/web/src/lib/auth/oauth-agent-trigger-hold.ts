@@ -36,3 +36,41 @@ export function refuseOAuthAgentTrigger(auth: AuthResult, intent: AgentTriggerIn
   if (!intent.writesTrigger && !intent.firesTrigger) return null;
   return NextResponse.json({ error: 'Agent triggers are not available to OAuth applications' }, { status: 403 });
 }
+
+/**
+ * What a task PATCH would do to the task's agent triggers. Pure: the caller
+ * supplies which triggers are armed (enabled, not yet fired).
+ * - `agentTrigger` present (set or clear) → writes;
+ * - a due-date change (move or clear) with an armed due-date trigger → writes:
+ *   it re-aims the run (a past date fires on the next cron) or disables it;
+ * - newly completing the task → fires an armed completion trigger and cancels
+ *   an armed due-date trigger.
+ */
+export function taskPatchTriggerIntent(input: {
+  readonly agentTriggerPresent: boolean;
+  readonly dueDateChanged: boolean;
+  readonly statusMovedToDone: boolean;
+  readonly armed: ReadonlySet<'due_date' | 'completion'>;
+}): AgentTriggerIntent {
+  return {
+    writesTrigger: input.agentTriggerPresent || (input.dueDateChanged && input.armed.has('due_date')),
+    firesTrigger: input.statusMovedToDone && (input.armed.has('completion') || input.armed.has('due_date')),
+  };
+}
+
+/**
+ * What a calendar-event PATCH would do to its agent trigger. Pure.
+ * - `agentTrigger` present (set or clear) → writes;
+ * - a start or recurrence change on an event carrying a trigger → writes: it
+ *   re-aims every pending run (moving the start to now starts one).
+ */
+export function calendarPatchTriggerIntent(input: {
+  readonly agentTriggerPresent: boolean;
+  readonly timingChanged: boolean;
+  readonly eventHasTrigger: boolean;
+}): AgentTriggerIntent {
+  return {
+    writesTrigger: input.agentTriggerPresent || (input.timingChanged && input.eventHasTrigger),
+    firesTrigger: false,
+  };
+}
