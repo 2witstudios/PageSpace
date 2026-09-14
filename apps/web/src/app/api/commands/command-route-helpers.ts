@@ -3,7 +3,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import type { SelectCommand } from '@pagespace/db/schema/commands';
-import { canPrincipalViewPage, type AuthResult } from '@/lib/auth';
+import { canPrincipalViewPage, isDriveScopedPrincipal, type AuthResult } from '@/lib/auth';
 import type { CommandScope } from '@pagespace/lib/commands/command-core';
 
 export const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
@@ -35,6 +35,16 @@ export function toCommandResponse(command: SelectCommand): CommandResponse {
     createdAt: command.createdAt,
     updatedAt: command.updatedAt,
   };
+}
+
+/**
+ * A drive-scoped credential (mcp_ key or OAuth grant) acts within its drives only:
+ * a PERSONAL command belongs to the user across every drive, so it may not be
+ * created, changed or deleted through one. Constant 403; null when allowed.
+ */
+export function refuseScopedPersonalCommand(auth: AuthResult): NextResponse | null {
+  if (!isDriveScopedPrincipal(auth)) return null;
+  return NextResponse.json({ error: 'Drive-scoped credentials cannot manage personal commands' }, { status: 403 });
 }
 
 /** Postgres unique_violation, possibly wrapped by the driver/ORM. */

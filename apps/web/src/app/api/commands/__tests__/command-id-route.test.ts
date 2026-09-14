@@ -43,6 +43,12 @@ vi.mock('@/lib/auth', () => ({
   ),
   checkMCPDriveScope: vi.fn(),
   canPrincipalViewPage: vi.fn(),
+  // Session fixtures: the principal dispatch resolves to the user's own authority.
+  isDriveScopedPrincipal: vi.fn(() => false),
+  isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { isDriveOwnerOrAdmin } = await import('@pagespace/lib/permissions/permissions');
+    return isDriveOwnerOrAdmin(auth.userId, driveId);
+  }),
 }));
 
 import { PATCH, DELETE } from '../[commandId]/route';

@@ -56,6 +56,12 @@ vi.mock('@/lib/auth', () => ({
   canPrincipalViewPage: vi.fn(),
   filterDrivesByMCPScope: vi.fn(),
   checkMCPDriveScope: vi.fn(),
+  // Session fixtures: the principal dispatch resolves to the user's own authority.
+  isDriveScopedPrincipal: vi.fn(() => false),
+  isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { isDriveOwnerOrAdmin } = await import('@pagespace/lib/permissions/permissions');
+    return isDriveOwnerOrAdmin(auth.userId, driveId);
+  }),
 }));
 
 // Wrap (not replace) the real decryptUsersByIdOnce so call counts can be

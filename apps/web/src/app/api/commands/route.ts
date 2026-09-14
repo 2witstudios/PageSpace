@@ -6,12 +6,11 @@ import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { users } from '@pagespace/db/schema/auth';
 import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
-import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope, checkMCPDriveScope, canPrincipalViewPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope, checkMCPDriveScope, canPrincipalViewPage, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import {
   validateCommandTrigger,
   validateCommandDescription,
@@ -23,6 +22,7 @@ import {
   toCommandResponse,
   isUniqueViolation,
   validateEntryPage,
+  refuseScopedPersonalCommand,
 } from './command-route-helpers';
 
 /** Drives where the user is owner or an accepted member (page-level access does not count). */
@@ -198,10 +198,14 @@ export async function POST(request: Request) {
 
     const commandDriveId = typeof driveId === 'string' ? driveId : null;
 
-    if (commandDriveId !== null) {
+    if (commandDriveId === null) {
+      const personalRefusal = refuseScopedPersonalCommand(auth);
+      if (personalRefusal) return personalRefusal;
+    } else {
       const scopeError = checkMCPDriveScope(auth, commandDriveId);
       if (scopeError) return scopeError;
-      const allowed = await isDriveOwnerOrAdmin(userId, commandDriveId);
+      // The CREDENTIAL's authority in the drive, not its user's.
+      const allowed = await isPrincipalDriveOwnerOrAdmin(auth, commandDriveId);
       if (!allowed) {
         return NextResponse.json(
           { error: 'Only the drive owner or admins can manage drive commands' },
