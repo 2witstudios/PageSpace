@@ -7,7 +7,7 @@
 import { createId } from '@paralleldrive/cuid2';
 import { OAUTH_ACCESS_TOKEN_PREFIX } from '@/lib/auth/token-prefixes';
 import { db } from '@pagespace/db/db';
-import { eq, and, isNull } from '@pagespace/db/operators';
+import { eq, and, gt, isNull } from '@pagespace/db/operators';
 import { oauthClients, oauthAuthorizationCodes, oauthRefreshTokens, oauthAccessTokens, oauthDeviceCodes } from '@pagespace/db/schema/oauth';
 import { users } from '@pagespace/db/schema/auth';
 import { resolveClientFrom, type RegisteredClient, type OAuthClientRecord } from '@pagespace/lib/auth/oauth/clients';
@@ -23,7 +23,7 @@ import {
 import { issueInitialTokenPair, issueRotatedTokenPair, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import { decideRefreshRotation } from '@pagespace/lib/auth/oauth/refresh-rotation';
 import { decideGrantIssuance } from '@pagespace/lib/auth/oauth/client-registration';
-import { parseScopeList, isScopeSubset, formatScopeSet, isAllDrivesGrant, isKeyActivationGrant, isKeyUpdateGrant, isPureDriveGrant, hasNewKeyName, scopeSetToDriveScopes } from '@pagespace/lib/auth/oauth/scopes';
+import { parseScopeList, isScopeSubset, formatScopeSet, isAllDrivesGrant, isKeyActivationGrant, isKeyUpdateGrant, isPureDriveGrant, hasNewKeyName, scopeSetToDriveScopes, storedScopesNameDrive } from '@pagespace/lib/auth/oauth/scopes';
 import { sessionRepository } from './session-repository';
 
 /**
@@ -536,6 +536,52 @@ export interface RevokeOAuthTokenInput {
 }
 
 const OAUTH_REFRESH_TOKEN_PREFIX = 'ps_rt_';
+
+/**
+ * Revoke every live OAuth token family of `userId` whose scopes name `driveId`,
+ * inside the caller's transaction — the drive-membership removal that makes
+ * those grants stale (the OAuth counterpart of deleting the user's
+ * `mcp_token_drives` rows for the drive).
+ *
+ * A token's scopes are frozen at consent and cannot be narrowed, so the whole
+ * family goes — including any other drives it named; the app asks again. The
+ * scope resolvers already refuse an explicit-role row once its user is no longer
+ * a member (resolution-time authority); this ends refresh as well, so nothing
+ * keeps minting access tokens for a grant the user can no longer give.
+ */
+export async function revokeOAuthFamiliesNamingDrive(
+  tx: Pick<typeof db, 'select' | 'update'>,
+  input: { userId: string; driveId: string; now: Date },
+): Promise<string[]> {
+  const liveRefresh = await tx
+    .select({ familyId: oauthRefreshTokens.familyId, scopes: oauthRefreshTokens.scopes })
+    .from(oauthRefreshTokens)
+    .where(and(
+      eq(oauthRefreshTokens.userId, input.userId),
+      isNull(oauthRefreshTokens.revokedAt),
+      gt(oauthRefreshTokens.familyExpiresAt, input.now),
+    ));
+  const liveAccess = await tx
+    .select({ familyId: oauthAccessTokens.familyId, scopes: oauthAccessTokens.scopes })
+    .from(oauthAccessTokens)
+    .where(and(
+      eq(oauthAccessTokens.userId, input.userId),
+      isNull(oauthAccessTokens.revokedAt),
+      gt(oauthAccessTokens.expiresAt, input.now),
+    ));
+
+  const familyIds = [
+    ...new Set(
+      [...liveRefresh, ...liveAccess]
+        .filter((row) => storedScopesNameDrive(row.scopes, input.driveId))
+        .map((row) => row.familyId),
+    ),
+  ];
+  for (const familyId of familyIds) {
+    await revokeTokenFamily(tx, familyId, input.now, 'drive_membership_removed');
+  }
+  return familyIds;
+}
 
 /**
  * RFC 7009 revocation (task qyqgrjbvntpsdh578k0yiwgr). A refresh token

@@ -123,6 +123,23 @@ export interface AuthenticateOptions {
   allow: ReadonlyArray<AllowedTokenType>;
   requireCSRF?: boolean;
   requireOriginValidation?: boolean;
+  /**
+   * Admit OAuth credentials that carry NO content access — identity-only
+   * (`profile`) and key-management-only (`manage_keys`) — on a route that also
+   * admits `mcp`.
+   *
+   * A route admitting `mcp` is a CONTENT route: every content route admits the
+   * drive-scoped key, and `oauth` with it (the allow-list parity guard). Such a
+   * route refuses a no-content OAuth credential at the door with the same 403
+   * the scope helpers give it, because not every decision a content route makes
+   * is drive-bound (a personal calendar event the owning user created never
+   * consults a scope helper) and a principal that may reach no content must not
+   * depend on each route remembering that. Routes admitting `oauth` without
+   * `mcp` answer about the identity or its keys and are pinned by that guard.
+   * Set this ONLY on a content-admitting route that must also serve those
+   * credentials (the guard pins which ones).
+   */
+  admitNoContentOAuth?: boolean;
 }
 
 function unauthorized(message: string, status = 401): NextResponse {
@@ -598,7 +615,12 @@ export async function authenticateRequestWithOptions(
         error: unauthorized('OAuth tokens are not permitted for this endpoint'),
       };
     }
-    return authenticateOAuthRequest(request);
+    const oauthResult = await authenticateOAuthRequest(request);
+    if (!isAuthError(oauthResult) && allowMCP && !options.admitNoContentOAuth) {
+      const refusal = noDriveAccessResponse(oauthResult);
+      if (refusal) return { error: refusal };
+    }
+    return oauthResult;
   }
 
   let authResult: AuthenticationResult;

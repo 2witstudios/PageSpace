@@ -16,7 +16,7 @@ import {
 } from '@pagespace/lib/sheets/sheet';
 import { readSheetData } from '@pagespace/lib/sheets/store';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const };
 
 /**
  * Export a sheet page as Excel (.xlsx)

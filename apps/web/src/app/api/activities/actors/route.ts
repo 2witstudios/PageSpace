@@ -9,7 +9,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveMember, getAllowedDriveIds } from '@/lib/auth';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 
 // Query parameter schema
 const querySchema = z.object({

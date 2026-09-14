@@ -57,10 +57,12 @@ vi.mock('../../../../../../lib/integrations/google-calendar/push-service', () =>
 }));
 
 vi.mock('../../../../../../lib/auth', () => ({
+  // The personal-event rule (personal-event-scope.ts) asks whether the caller is an OAuth application.
+  isScopedOAuthAuth: (auth: { tokenType?: string; scopes?: { account?: boolean } }) => auth?.tokenType === 'oauth' && !auth.scopes?.account,
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
   checkMCPDriveScope: vi.fn(() => null),
-  isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
+  isDriveScopedPrincipal: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
     auth?.tokenType === 'mcp' && ((auth.allowedDriveIds?.length ?? 0) > 0),
   isPrincipalDriveMember: vi.fn(),
   isPrincipalDriveOwnerOrAdmin: vi.fn(),

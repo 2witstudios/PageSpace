@@ -19,8 +19,8 @@ import {
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 // Auth options: GET is read-only, POST creates new conversations
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 /**
  * GET /api/ai/page-agents/[agentId]/conversations

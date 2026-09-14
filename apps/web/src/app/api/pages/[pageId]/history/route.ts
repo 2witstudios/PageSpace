@@ -8,7 +8,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { optionalAbsoluteInstant } from '@/lib/validation/date-params';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),

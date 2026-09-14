@@ -81,7 +81,7 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result: any) => 'error' in result),
   checkMCPDriveScope: vi.fn(() => null),
-  isScopedMCPAuth: vi.fn((auth: any) => auth.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0),
+  isDriveScopedPrincipal: vi.fn((auth: any) => auth.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0),
   isPrincipalDriveMember: vi.fn(),
   getPrincipalDriveIds: vi.fn(),
   getPrincipalBatchPagePermissions: vi.fn(async (_auth: any, pageIds: string[]) =>

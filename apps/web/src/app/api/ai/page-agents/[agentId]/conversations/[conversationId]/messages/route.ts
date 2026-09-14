@@ -11,7 +11,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { unifiedPageScope, derivedPageId } from '@/lib/repositories/unified-message-scope';
 
 // Auth options: GET is read-only operation
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 
 /**
  * GET /api/ai/page-agents/[agentId]/conversations/[conversationId]/messages

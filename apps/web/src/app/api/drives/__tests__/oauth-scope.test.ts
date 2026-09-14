@@ -9,7 +9,7 @@
  * to exactly its scoped drives — never the empty-allowedDriveIds-means-full-
  * access default (the Phase 9 Task 1 bug class).
  *
- * Uses the REAL isScopedMCPAuth/isScopedOAuthAuth/getScopedDriveMembership
+ * Uses the REAL isDriveScopedPrincipal/isScopedOAuthAuth/getScopedDriveMembership
  * implementations so these fail if scope dispatch regresses. Only the active
  * inherited-drive membership check is stubbed at the route boundary.
  */
@@ -48,13 +48,16 @@ vi.mock('@pagespace/lib/permissions/app-permissions', async (importOriginal) => 
   const actual = await importOriginal<typeof import('@pagespace/lib/permissions/app-permissions')>();
   return {
     ...actual,
+    // The token's user is still a member of the granted drives (the lib's own
+    // membership read is unit-tested in app-permissions.test.ts).
+    getScopedDriveMembership: (await import('@/lib/auth/__tests__/oauth-principal-fixture')).stillMemberScopedResolvers().getScopedDriveMembership,
     hasAppDriveMembership: vi.fn(),
     hasScopedDriveMembership: vi.fn(),
   };
 });
 
-// Only stub authentication — isScopedMCPAuth/isScopedOAuthAuth and
-// getScopedDriveMembership run for real.
+// Only stub authentication — isDriveScopedPrincipal/isScopedOAuthAuth and the
+// principal dispatch run for real.
 vi.mock('@/lib/auth', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth')>();
   return {
@@ -103,6 +106,7 @@ describe('GET /api/drives — OAuth credentials', () => {
     expect(authenticateRequestWithOptions).toHaveBeenCalledWith(request, {
       allow: ['session', 'mcp', 'oauth'],
       requireCSRF: false,
+      admitNoContentOAuth: true,
     });
   });
 

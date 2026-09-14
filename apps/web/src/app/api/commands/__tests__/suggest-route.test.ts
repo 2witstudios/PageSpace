@@ -30,6 +30,7 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getBatchPagePermissions: vi.fn(),
 }));
 vi.mock('@/lib/auth', () => ({
+  isScopedOAuthAuth: vi.fn(() => false),
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(
     (result: unknown) => !!result && typeof result === 'object' && 'error' in (result as object)

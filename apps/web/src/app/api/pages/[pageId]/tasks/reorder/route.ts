@@ -11,7 +11,7 @@ import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activit
 import { computeReorderPlan } from '@pagespace/lib/services/reorder';
 import { reorderTaskListChildren } from './reorder-task-list';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 /**
  * lockedBatchReorder's batched `UPDATE ... FROM (VALUES ...)` binds 2

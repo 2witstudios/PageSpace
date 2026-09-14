@@ -49,7 +49,7 @@ vi.mock('@/lib/auth', () => ({
   // MCP scope check - returns null (allowed) by default for session auth tests
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
   isMCPAuthResult: vi.fn().mockReturnValue(false),
-  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+  isDriveScopedPrincipal: vi.fn(() => false), // Session/unscoped fixtures by default
   // Session auth falls through to user-level authority; derive it from the
   // test's getDriveAccess fixture so existing fixtures keep driving 403/200.
   isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
@@ -379,7 +379,7 @@ describe('PATCH /api/drives/[driveId]', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session', 'mcp'], requireCSRF: true }
+        { allow: ['session', 'mcp', 'oauth'], requireCSRF: true }
       );
     });
   });
@@ -859,7 +859,7 @@ describe('DELETE /api/drives/[driveId]', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session', 'mcp'], requireCSRF: true }
+        { allow: ['session', 'mcp', 'oauth'], requireCSRF: true }
       );
     });
   });

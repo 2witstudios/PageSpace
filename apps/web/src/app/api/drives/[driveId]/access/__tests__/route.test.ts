@@ -100,7 +100,7 @@ describe('POST /api/drives/[driveId]/access', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session', 'mcp'], requireCSRF: true }
+        { allow: ['session', 'mcp', 'oauth'], requireCSRF: true }
       );
     });
   });

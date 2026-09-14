@@ -12,7 +12,7 @@ import {
   serializeMessageRowToMessages,
 } from '@/lib/ai/openai-api/v1-conversations';
 
-const AUTH_OPTIONS = { allow: ['mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['mcp', 'oauth'] as const, requireCSRF: false };
 
 type RouteContext = { params: Promise<{ id: string }> };
 

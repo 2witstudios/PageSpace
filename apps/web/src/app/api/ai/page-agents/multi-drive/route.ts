@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, getPrincipalDriveAccess, canPrincipalViewPage } from '@/lib/auth';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const };
 import { db } from '@pagespace/db/db'
 import { eq, and, inArray, isNotNull } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';

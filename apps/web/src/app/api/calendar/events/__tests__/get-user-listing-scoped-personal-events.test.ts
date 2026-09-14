@@ -60,6 +60,8 @@ const CREATOR_ID = 'user-creator';
 const OUTSIDER_ID = 'user-outsider';
 
 vi.mock('@/lib/auth', () => ({
+  // The personal-event rule (personal-event-scope.ts) asks whether the caller is an OAuth application.
+  isScopedOAuthAuth: (auth: { tokenType?: string; scopes?: { account?: boolean } }) => auth?.tokenType === 'oauth' && !auth.scopes?.account,
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => typeof r === 'object' && r !== null && 'error' in r),
   checkMCPDriveScope: vi.fn(() => null),
@@ -67,7 +69,7 @@ vi.mock('@/lib/auth', () => ({
   isPrincipalDriveMember: vi.fn(),
   getPrincipalDriveIds: vi.fn().mockResolvedValue([]),
   canPrincipalViewPage: vi.fn(),
-  isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
+  isDriveScopedPrincipal: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
     auth?.tokenType === 'mcp' && ((auth.allowedDriveIds?.length ?? 0) > 0),
 }));
 

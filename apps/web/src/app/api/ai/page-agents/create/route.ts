@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, canPrincipalEditPage, isScopedMCPAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, canPrincipalEditPage, getPrincipalDriveMembership, isDriveScopedPrincipal } from '@/lib/auth';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import {
@@ -86,8 +85,8 @@ export async function POST(request: Request) {
       // Creating at root level — owner-only. An explicit-role key needs the
       // OWNER role (its role replaces its owner's identity); an inherited key
       // falls through to the user ownership check (it IS the owner acting).
-      if (isScopedMCPAuth(auth)) {
-        const membership = await getAppDriveMembership(auth.tokenId, driveId);
+      if (isDriveScopedPrincipal(auth)) {
+        const membership = await getPrincipalDriveMembership(auth, driveId);
         if (!membership || (membership.role !== null && membership.role !== 'OWNER')) {
           auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'token_role_not_owner', driveId, method: 'POST' }, riskScore: 0.5 });
           return NextResponse.json(
@@ -109,7 +108,7 @@ export async function POST(request: Request) {
     // account-level-only tool (e.g. create_drive) — mirrors the runtime
     // chat/consult tool-list filtering.
     if (enabledTools && enabledTools.length > 0) {
-      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth)));
+      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isDriveScopedPrincipal(auth)));
       const invalidTools = enabledTools.filter((toolName: string) => !availableToolNames.includes(toolName));
       if (invalidTools.length > 0) {
         return NextResponse.json(
@@ -229,7 +228,7 @@ export async function POST(request: Request) {
       sandboxEnabled: Boolean(agentData.sandboxEnabled),
       // Creation does not set the exposure mode, so it is the column default.
       toolExposureMode: 'upfront',
-      registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth))),
+      registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, isDriveScopedPrincipal(auth))),
     });
     const toolSurfaceNotes = formatConfigSurfaceNotes(toolSurface);
 

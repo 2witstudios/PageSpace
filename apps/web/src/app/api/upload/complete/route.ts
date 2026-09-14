@@ -1,13 +1,12 @@
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
 import { and, eq, isNull } from '@pagespace/db/operators';
-import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isScopedMCPAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, getPrincipalDriveAccessLevel, isDriveScopedPrincipal } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { files, filePages } from '@pagespace/db/schema/storage';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
-import { getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
 import { updateStorageUsage, shouldChargeForStore } from '@pagespace/lib/services/storage-limits';
 import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
@@ -18,7 +17,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
 import { checkObjectExists } from '@/lib/upload/s3-effects';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 // Thrown inside the completion transaction to roll it back when the caller is
 // trying to link a content-addressed blob they neither uploaded nor reference
@@ -202,12 +201,13 @@ export async function POST(request: Request) {
 
   // A scoped MCP token is its own drive member — uploads require the TOKEN's
   // role to grant edit, not the owning user's.
-  if (isScopedMCPAuth(auth)) {
-    const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+  if (isDriveScopedPrincipal(auth)) {
+    const level = await getPrincipalDriveAccessLevel(auth, driveId);
     if (!level?.canEdit) {
       return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
     }
   } else {
+    // user-identity: unscoped-user branch only — drive-scoped credentials took the principal branch above.
     const drivePerms = await getUserDrivePermissions(userId, driveId);
     if (!drivePerms) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });

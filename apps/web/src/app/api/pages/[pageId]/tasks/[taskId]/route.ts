@@ -12,14 +12,15 @@ import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/pag
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 
-import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers, createTaskTriggerWorkflow, type TaskTriggerWorkflowResult } from '@/lib/workflows/task-trigger-helpers';
+import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers, createTaskTriggerWorkflow, getArmedTaskTriggerTypes, type TaskTriggerWorkflowResult } from '@/lib/workflows/task-trigger-helpers';
 import { checkSubTasksComplete, SUBTASKS_INCOMPLETE_STATUS } from '@/lib/tasks/completion-guard';
 import { reorderTaskPeers } from '@/lib/ai/tools/task-helpers';
 import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import { isNaiveISODatetime, parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
 import { decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
+import { appliesAgentTriggerHold, refuseOAuthAgentTrigger, taskPatchTriggerIntent } from '@/lib/auth/oauth-agent-trigger-hold';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 /**
  * PATCH /api/pages/[pageId]/tasks/[taskId]
@@ -125,6 +126,22 @@ export async function PATCH(
       }
     }
   }
+
+  // Agent triggers are held from OAuth applications (pending Phase 2b / [D-15]):
+  // setting or clearing one, moving or clearing the due date of an armed
+  // due-date trigger, or completing a task with an armed trigger is refused
+  // before any write.
+  const touchesTriggers = agentTrigger !== undefined || dueDate !== undefined || statusMovedToDone;
+  const triggerHold = refuseOAuthAgentTrigger(
+    auth,
+    taskPatchTriggerIntent({
+      agentTriggerPresent: agentTrigger !== undefined,
+      dueDateChanged: dueDate !== undefined,
+      statusMovedToDone,
+      armed: touchesTriggers && appliesAgentTriggerHold(auth) ? await getArmedTaskTriggerTypes(taskId) : new Set(),
+    }),
+  );
+  if (triggerHold) return triggerHold;
 
   // Add note to metadata (mirrors the internal update_task tool)
   if (note || status !== undefined) {

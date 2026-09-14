@@ -62,7 +62,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 // (`pagespace keys describe`) answers the same question whichever credential
 // this machine happens to be using. No CSRF: this is a read, and Bearer auth
 // skips CSRF anyway (`authenticateRequestWithOptions`).
-const AUTH_OPTIONS_READ = { allow: ['mcp', 'oauth', 'session'] as const, requireCSRF: false };
+const AUTH_OPTIONS_READ = { allow: ['mcp', 'oauth', 'session'] as const, requireCSRF: false, admitNoContentOAuth: true };
 
 /**
  * How many drives resolve at once. Small on purpose: this is a status readout,

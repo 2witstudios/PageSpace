@@ -6,12 +6,11 @@ import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { users } from '@pagespace/db/schema/auth';
 import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
-import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope, checkMCPDriveScope, canPrincipalViewPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope, checkMCPDriveScope, canPrincipalViewPage, isScopedOAuthAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import {
   validateCommandTrigger,
   validateCommandDescription,
@@ -23,9 +22,12 @@ import {
   toCommandResponse,
   isUniqueViolation,
   validateEntryPage,
+  refuseScopedPersonalCommand,
+  canManageDriveCommands,
 } from './command-route-helpers';
 
 /** Drives where the user is owner or an accepted member (page-level access does not count). */
+// user-identity: the user's own drive universe; every caller intersects it with the credential's scope.
 async function getMemberDriveIds(userId: string): Promise<string[]> {
   const driveIds = new Set<string>();
 
@@ -63,13 +65,20 @@ export async function GET(request: Request) {
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
+    // user-identity: the user's own drives, intersected with the credential's scope right here.
     const memberDriveIds = filterDrivesByMCPScope(auth, await getMemberDriveIds(userId));
+
+    // An OAuth application's consent names drives, never the user's personal
+    // commands — the personal half is left out of its listing entirely.
+    const visibility = [
+      ...(isScopedOAuthAuth(auth) ? [] : [eq(commands.userId, userId)]),
+      ...(memberDriveIds.length ? [inArray(commands.driveId, memberDriveIds)] : []),
+    ];
+    if (visibility.length === 0) return NextResponse.json({ commands: [] });
 
     // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const visible = await db.query.commands.findMany({
-      where: memberDriveIds.length
-        ? or(eq(commands.userId, userId), inArray(commands.driveId, memberDriveIds))
-        : eq(commands.userId, userId),
+      where: visibility.length === 1 ? visibility[0] : or(...visibility),
     });
 
     const sorted = [...visible].sort((a, b) => a.trigger.localeCompare(b.trigger));
@@ -198,10 +207,13 @@ export async function POST(request: Request) {
 
     const commandDriveId = typeof driveId === 'string' ? driveId : null;
 
-    if (commandDriveId !== null) {
+    if (commandDriveId === null) {
+      const personalRefusal = refuseScopedPersonalCommand(auth);
+      if (personalRefusal) return personalRefusal;
+    } else {
       const scopeError = checkMCPDriveScope(auth, commandDriveId);
       if (scopeError) return scopeError;
-      const allowed = await isDriveOwnerOrAdmin(userId, commandDriveId);
+      const allowed = await canManageDriveCommands(auth, commandDriveId);
       if (!allowed) {
         return NextResponse.json(
           { error: 'Only the drive owner or admins can manage drive commands' },

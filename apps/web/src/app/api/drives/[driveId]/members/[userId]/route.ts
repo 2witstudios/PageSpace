@@ -29,6 +29,7 @@ import { mcpTokenDrives } from '@pagespace/db/schema/members'
 import { mcpTokens } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
+import { revokeOAuthFamiliesNamingDrive } from '@/lib/repositories/oauth-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -341,6 +342,12 @@ export async function DELETE(
             tx.select({ id: mcpTokens.id }).from(mcpTokens).where(eq(mcpTokens.userId, targetUserId)),
           ),
         ));
+
+      // Cascade: the removed user's OAuth grants for this drive end too. Their
+      // scope rows are frozen in the token, so the families naming this drive
+      // are revoked (no refresh, no live access token) — the resolvers already
+      // refuse an explicit-role row once its user is no longer a member.
+      await revokeOAuthFamiliesNamingDrive(tx, { userId: targetUserId, driveId, now: new Date() });
     });
 
     trackDriveOperation(currentUserId, 'remove_member', driveId, {

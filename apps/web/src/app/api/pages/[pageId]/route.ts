@@ -13,8 +13,8 @@ import { and, eq, isNotNull, ne, not, exists, or, isNull, gt, inArray, sql } fro
 import { pages, drives } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions, driveRoles } from '@pagespace/db/schema/members';
 
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;

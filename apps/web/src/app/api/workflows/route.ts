@@ -67,6 +67,7 @@ export async function GET(request: Request) {
   if (scopeError) return scopeError;
 
   if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
+    // user-identity: only picks 404 vs 403 after isPrincipalDriveOwnerOrAdmin(auth) already refused.
     const access = await checkDriveAccess(driveId, userId);
     if (!access.drive) return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     return NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 });
@@ -151,6 +152,7 @@ export async function POST(request: Request) {
   if (scopeError) return scopeError;
 
   if (!(await isPrincipalDriveOwnerOrAdmin(auth, data.driveId))) {
+    // user-identity: only picks 404 vs 403 after isPrincipalDriveOwnerOrAdmin(auth) already refused.
     const access = await checkDriveAccess(data.driveId, userId);
     if (!access.drive) return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     return NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 });

@@ -24,10 +24,13 @@ import { SheetAddressError } from '@pagespace/lib/sheets/store';
 import { logSheetCellActivity } from '@/services/api/sheet-activity';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateMCPRequest, isAuthError, isMCPAuthResult, getPrincipalAccessLevel } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, getPrincipalAccessLevel, getAllowedDriveIds } from '@/lib/auth';
 import { writeDeniedDetails } from '../write-denied-details';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+
+// The MCP HTTP surface: an mcp_ key, or an OAuth grant resolving exactly like one.
+const AUTH_OPTIONS = { allow: ['mcp', 'oauth'] as const, requireCSRF: false };
 
 /**
  * Structured access to sheet rows, for agents.
@@ -158,13 +161,13 @@ const requestSchema = z.object({
 const WRITE_OPERATIONS = new Set(['append-rows', 'update-cells', 'delete-rows', 'apply-format']);
 
 export async function POST(req: NextRequest) {
-  const auth = await authenticateMCPRequest(req);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     return auth.error;
   }
   const userId = auth.userId;
 
-  const allowedDriveIds = isMCPAuthResult(auth) ? auth.allowedDriveIds ?? [] : [];
+  const allowedDriveIds = getAllowedDriveIds(auth);
 
   try {
     const body = await req.json();

@@ -9,10 +9,12 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { eq } from '@pagespace/db/operators';
-import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
-import { authenticateMCPRequest, isAuthError, isMCPAuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isDriveScopedPrincipal, getAllowedDriveIds, getPrincipalDriveMembership } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
+
+// The MCP HTTP surface: an mcp_ key, or an OAuth grant resolving exactly like one.
+const AUTH_OPTIONS = { allow: ['mcp', 'oauth'] as const, requireCSRF: false };
 
 // Schema for drive creation
 const createDriveSchema = z.object({
@@ -20,14 +22,14 @@ const createDriveSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const auth = await authenticateMCPRequest(req);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     return auth.error;
   }
 
   // Check if this MCP token has drive scope restrictions
   // Scoped tokens cannot create new drives (they only have access to specific drives)
-  if (isMCPAuthResult(auth) && (auth.allowedDriveIds?.length ?? 0) > 0) {
+  if (isDriveScopedPrincipal(auth)) {
     return NextResponse.json(
       { error: 'This token is scoped to specific drives and cannot create new drives' },
       { status: 403 }
@@ -93,7 +95,7 @@ export async function POST(req: NextRequest) {
 // GET endpoint to list drives
 // Zero Trust: Returns all drives user has access to (owned + shared), filtered by token scope
 export async function GET(req: NextRequest) {
-  const auth = await authenticateMCPRequest(req);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     return auth.error;
   }
@@ -102,30 +104,26 @@ export async function GET(req: NextRequest) {
     const userId = auth.userId;
 
     // Check if this MCP token has drive scope restrictions
-    let allowedDriveIds: string[] = [];
-    if (isMCPAuthResult(auth)) {
-      allowedDriveIds = auth.allowedDriveIds ?? [];
-    }
+    const allowedDriveIds = getAllowedDriveIds(auth);
 
     // Get all drives user has access to (owned + shared via membership)
+    // user-identity: the user's drives shape the listing; a scoped credential's result is narrowed to its own drives below.
     const allAccessibleDrives = await listAccessibleDrives(userId);
 
     // Filter by token scope if applicable
     let filteredDrives;
     if (allowedDriveIds.length > 0) {
-      // Scoped token: its drive universe is its mcp_token_drives memberships.
+      // Scoped credential: its drive universe is its own drive memberships.
       // Drives the user can also access keep the user-derived shape; drives the
       // token holds an EXPLICIT role in (added by a drive admin) are listed
       // even when the owning user is not a member — parity with /api/drives.
       const accessibleById = new Map(allAccessibleDrives.map((d) => [d.id, d]));
-      const tokenId = isMCPAuthResult(auth) ? auth.tokenId : null;
       filteredDrives = (
         await Promise.all(
           allowedDriveIds.map(async (driveId) => {
             const userView = accessibleById.get(driveId);
             if (userView) return userView;
-            if (!tokenId) return null;
-            const membership = await getAppDriveMembership(tokenId, driveId);
+            const membership = await getPrincipalDriveMembership(auth, driveId);
             if (!membership || membership.role === null) return null; // dangling inherit
             const drive = await db.query.drives.findFirst({ where: eq(drives.id, driveId) });
             if (!drive || drive.isTrashed) return null;

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
 import { checkDriveAccessForRoles, getRoleById, roleNotFoundMessage, updateDriveRole, deleteDriveRole, validateRolePermissions, validateRolePermissionsPatch } from '@pagespace/lib/services/drive-role-service';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -41,6 +41,7 @@ export async function GET(
     if (scopeError) return scopeError;
 
     // Check if user has access to this drive
+    // user-identity: reads need the user to be a drive member; the credential's drive scope is checked above.
     const access = await checkDriveAccessForRoles(driveId, userId);
 
     if (!access.drive) {
@@ -83,6 +84,7 @@ export async function PATCH(
     const scopeError = checkMCPDriveScope(auth, driveId);
     if (scopeError) return scopeError;
 
+    // user-identity: the user's current owner/admin/member standing; the credential's own role is checked with it.
     // Check if user is owner or admin
     const access = await checkDriveAccessForRoles(driveId, userId);
 
@@ -90,7 +92,9 @@ export async function PATCH(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    if (!access.isOwner && !access.isAdmin) {
+    // Owner/admin authority needs BOTH the user (above) and the credential's own
+    // role: a MEMBER-role key held by an admin must not redefine drive roles.
+    if (!access.isOwner && !access.isAdmin || !(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
       return NextResponse.json({ error: 'Only owners and admins can update roles' }, { status: 403 });
     }
 
@@ -192,6 +196,7 @@ export async function DELETE(
     const scopeError = checkMCPDriveScope(auth, driveId);
     if (scopeError) return scopeError;
 
+    // user-identity: the user's current owner/admin/member standing; the credential's own role is checked with it.
     // Check if user is owner or admin
     const access = await checkDriveAccessForRoles(driveId, userId);
 
@@ -199,7 +204,9 @@ export async function DELETE(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    if (!access.isOwner && !access.isAdmin) {
+    // Owner/admin authority needs BOTH the user (above) and the credential's own
+    // role: a MEMBER-role key held by an admin must not redefine drive roles.
+    if (!access.isOwner && !access.isAdmin || !(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
       return NextResponse.json({ error: 'Only owners and admins can delete roles' }, { status: 403 });
     }
 

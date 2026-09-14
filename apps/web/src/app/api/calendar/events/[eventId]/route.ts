@@ -5,8 +5,9 @@ import { eq, and } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin, isScopedMCPAuth, type AuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin, type AuthResult, isDriveScopedPrincipal } from '@/lib/auth';
 import { isUserMemberOfAnyEventDrive, getAllDriveIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
+import { eventOutOfScopeResponse, isPersonalEventOutOfScope } from '../personal-event-scope';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
@@ -16,10 +17,12 @@ import {
   resyncCalendarTriggerTimings,
   upsertCalendarTriggerWorkflowInTx,
   validateCalendarAgentTrigger,
+  calendarEventHasAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
+import { appliesAgentTriggerHold, calendarPatchTriggerIntent, refuseOAuthAgentTrigger } from '@/lib/auth/oauth-agent-trigger-hold';
 
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 // Schema for updating an event
 const updateEventSchema = z.object({
@@ -72,7 +75,7 @@ async function canAccessEvent(auth: AuthResult, event: typeof calendarEvents.$in
 
   // A drive-scoped token acts as an app member of its drives only: it gets no
   // identity power over a DIFFERENT user's PERSONAL (drive-less) events.
-  if (!event.driveId && isScopedMCPAuth(auth)) {
+  if (!event.driveId && isDriveScopedPrincipal(auth)) {
     return false;
   }
 
@@ -104,7 +107,7 @@ async function canEditEvent(auth: AuthResult, event: typeof calendarEvents.$infe
   if (event.createdById === auth.userId) return true;
   // Scoped tokens have no identity power over a different user's personal
   // (drive-less) events.
-  if (!event.driveId && isScopedMCPAuth(auth)) return false;
+  if (!event.driveId && isDriveScopedPrincipal(auth)) return false;
   if (event.driveId) return isPrincipalDriveOwnerOrAdmin(auth, event.driveId);
   return false;
 }
@@ -153,6 +156,8 @@ export async function GET(
     if (!event) {
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
+
+    if (isPersonalEventOutOfScope(auth, event)) return eventOutOfScopeResponse();
 
     // Check MCP drive scope if event is drive-associated
     if (event.driveId) {
@@ -206,6 +211,8 @@ export async function PATCH(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
+    if (isPersonalEventOutOfScope(auth, event)) return eventOutOfScopeResponse();
+
     // Check MCP drive scope if event is drive-associated
     if (event.driveId) {
       const scopeError = checkMCPDriveScope(auth, event.driveId);
@@ -232,6 +239,20 @@ export async function PATCH(
     }
 
     const data = parseResult.data;
+
+    // Agent triggers are held from OAuth applications (pending Phase 2b / [D-15]):
+    // setting or clearing one, or re-timing an event that carries one (which
+    // re-aims its pending runs), is refused before any write.
+    const timingChanged = data.startAt !== undefined || data.recurrenceRule !== undefined;
+    const triggerHold = refuseOAuthAgentTrigger(
+      auth,
+      calendarPatchTriggerIntent({
+        agentTriggerPresent: data.agentTrigger !== undefined,
+        timingChanged,
+        eventHasTrigger: timingChanged && appliesAgentTriggerHold(auth) && (await calendarEventHasAgentTrigger(db, eventId)),
+      }),
+    );
+    if (triggerHold) return triggerHold;
 
     // Apply timezone-aware parsing for naive ISO datetimes: the provided
     // timezone, else the event's own stored timezone, else the caller's profile
@@ -438,6 +459,8 @@ export async function DELETE(
     if (!event) {
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
+
+    if (isPersonalEventOutOfScope(auth, event)) return eventOutOfScopeResponse();
 
     // Check MCP drive scope if event is drive-associated
     if (event.driveId) {

@@ -57,7 +57,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
   isMCPAuthResult: vi.fn().mockReturnValue(false),
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
-  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+  isDriveScopedPrincipal: vi.fn(() => false), // Session/unscoped fixtures by default
 }));
 
 vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
@@ -161,7 +161,7 @@ describe('POST /api/drives/[driveId]/restore', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session', 'mcp'], requireCSRF: true }
+        { allow: ['session', 'mcp', 'oauth'], requireCSRF: true }
       );
     });
   });

@@ -381,13 +381,36 @@ function findScopeRow(driveScopes: DriveScopeRow[], driveId: string): DriveScope
   return driveScopes.find((row) => row.driveId === driveId) ?? null;
 }
 
+/**
+ * The scope row for a drive, if it still grants anything.
+ *
+ * Grant-time authority is not resolution-time authority (ADR 0002 Decision 2):
+ * an OAuth token's rows were frozen at consent, and there is no row to delete
+ * when the user later stops being a member. So an EXPLICIT-role row counts only
+ * while its user is still a member or owner of the drive — by whatever path
+ * that membership ended (removal, leaving, transfer), the token loses the drive
+ * at once, just as the user's explicit-role `mcp_token_drives` rows are deleted
+ * on removal. An inherit row is returned as is: every consumer of an inherit row
+ * already resolves the user's own live access.
+ */
+async function findLiveScopeRow(
+  driveScopes: DriveScopeRow[],
+  ownerUserId: string,
+  driveId: string,
+): Promise<DriveScopeRow | null> {
+  const row = findScopeRow(driveScopes, driveId);
+  if (!row) return null;
+  if (row.role !== null && !(await isUserDriveMember(ownerUserId, driveId))) return null;
+  return row;
+}
+
 export async function getScopedAccessLevel(
   driveScopes: DriveScopeRow[],
   ownerUserId: string,
   targetPageId: string,
 ): Promise<PermissionLevel | null> {
   const target = await fetchPageTarget(targetPageId);
-  const row = findScopeRow(driveScopes, target.driveId);
+  const row = await findLiveScopeRow(driveScopes, ownerUserId, target.driveId);
   if (!row) return null;
 
   if (row.role === null) {
@@ -410,8 +433,10 @@ export async function getScopedAccessLevel(
 }
 
 /**
- * Whether the scope has usable access to the drive. An inherit row counts
- * only while its OWNER still has drive access — mirrors hasAppDriveMembership.
+ * Whether the scope has usable access to the drive: a row for it, and the
+ * token's user still a member or owner — for an inherit row because it IS the
+ * user's access (mirrors hasAppDriveMembership), for an explicit row because
+ * the grant ends with the membership it was consented under.
  */
 export async function hasScopedDriveMembership(
   driveScopes: DriveScopeRow[],
@@ -420,16 +445,19 @@ export async function hasScopedDriveMembership(
 ): Promise<boolean> {
   const row = findScopeRow(driveScopes, driveId);
   if (!row) return false;
-  if (row.role === null) return isUserDriveMember(ownerUserId, driveId);
-  return true;
+  return isUserDriveMember(ownerUserId, driveId);
 }
 
-/** Pure array lookup — no DB, unlike getAppDriveMembership. */
-export function getScopedDriveMembership(
+/**
+ * The row's role as granted, or null when the scope names no such drive or an
+ * explicit-role row has outlived its user's membership (see findLiveScopeRow).
+ */
+export async function getScopedDriveMembership(
   driveScopes: DriveScopeRow[],
+  ownerUserId: string,
   driveId: string,
-): { role: 'ADMIN' | 'MEMBER' | null; customRoleId: string | null } | null {
-  const row = findScopeRow(driveScopes, driveId);
+): Promise<{ role: 'ADMIN' | 'MEMBER' | null; customRoleId: string | null } | null> {
+  const row = await findLiveScopeRow(driveScopes, ownerUserId, driveId);
   if (!row) return null;
   return { role: row.role, customRoleId: row.customRoleId };
 }
@@ -445,7 +473,7 @@ export async function getScopedDriveAccessLevel(
   ownerUserId: string,
   driveId: string,
 ): Promise<PermissionLevel | null> {
-  const row = findScopeRow(driveScopes, driveId);
+  const row = await findLiveScopeRow(driveScopes, ownerUserId, driveId);
   if (!row) return null;
 
   if (row.role === null) {
@@ -465,7 +493,7 @@ export async function getScopedAccessiblePagesInDrive(
   ownerUserId: string,
   driveId: string,
 ): Promise<PageWithPermissions[]> {
-  const row = findScopeRow(driveScopes, driveId);
+  const row = await findLiveScopeRow(driveScopes, ownerUserId, driveId);
   if (!row) return [];
 
   const membership: AppMembershipContext = { role: row.role, customRoleId: row.customRoleId, ownerUserId };

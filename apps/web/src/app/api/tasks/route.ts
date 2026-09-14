@@ -9,19 +9,11 @@ import { groupTaskListsByAllowedStatusSlugs } from './status-group-slugs';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
-import {
-  authenticateRequestWithOptions,
-  isAuthError,
-  checkMCPDriveScope,
-  isScopedMCPAuth,
-  isPrincipalDriveMember,
-  getPrincipalDriveIds,
-  getPrincipalBatchPagePermissions,
-} from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveMember, getPrincipalDriveIds, getPrincipalBatchPagePermissions, isDriveScopedPrincipal } from '@/lib/auth';
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
 import { optionalAbsoluteInstant, exclusiveEndBound } from '@/lib/validation/date-params';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 
 // Page size for the cursor-paged task-list expansion: bounds each pages query
 // regardless of drive-universe size. The scoped-token permission filter runs
@@ -187,7 +179,7 @@ export async function GET(request: Request) {
     // batch call over all fetched ids: the helper enumerates the token's
     // accessible pages per allowed drive on every invocation, so filtering per
     // fetch-chunk would rescan the drive universe once per chunk.
-    if (isScopedMCPAuth(auth) && taskListPageIds.length > 0) {
+    if (isDriveScopedPrincipal(auth) && taskListPageIds.length > 0) {
       const pagePerms = await getPrincipalBatchPagePermissions(auth, taskListPageIds);
       taskListPageIds = taskListPageIds.filter(id => pagePerms.get(id)?.canView);
     }

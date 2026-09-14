@@ -304,24 +304,24 @@ describe('dispatch matrix — drive-level checks', () => {
   });
 
   it('isPrincipalDriveOwnerOrAdmin: scoped OAuth token with explicit ADMIN role → true; MEMBER → false', async () => {
-    vi.mocked(getScopedDriveMembership).mockReturnValue({ role: 'MEMBER', customRoleId: null });
+    vi.mocked(getScopedDriveMembership).mockResolvedValue({ role: 'MEMBER', customRoleId: null });
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true); // owning user IS admin — must not leak through
     expect(await isPrincipalDriveOwnerOrAdmin(scopedOAuthAuth, DRIVE_ID)).toBe(false);
     expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
 
-    vi.mocked(getScopedDriveMembership).mockReturnValue({ role: 'ADMIN', customRoleId: null });
+    vi.mocked(getScopedDriveMembership).mockResolvedValue({ role: 'ADMIN', customRoleId: null });
     expect(await isPrincipalDriveOwnerOrAdmin(scopedOAuthAuth, DRIVE_ID)).toBe(true);
   });
 
   it('isPrincipalDriveOwnerOrAdmin: INHERITED OAuth scope row (role null) uses the owner\'s own authority', async () => {
-    vi.mocked(getScopedDriveMembership).mockReturnValue({ role: null, customRoleId: null });
+    vi.mocked(getScopedDriveMembership).mockResolvedValue({ role: null, customRoleId: null });
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
     expect(await isPrincipalDriveOwnerOrAdmin(scopedOAuthAuth, DRIVE_ID)).toBe(true);
     expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
   });
 
   it('isPrincipalDriveOwnerOrAdmin: no matching OAuth scope row → false (no user fallback)', async () => {
-    vi.mocked(getScopedDriveMembership).mockReturnValue(null);
+    vi.mocked(getScopedDriveMembership).mockResolvedValue(null);
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
     expect(await isPrincipalDriveOwnerOrAdmin(scopedOAuthAuth, DRIVE_ID)).toBe(false);
     expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
@@ -329,8 +329,15 @@ describe('dispatch matrix — drive-level checks', () => {
 
   it('getPrincipalDriveIds: drive-scoped OAuth token → its allowedDriveIds, NOT the user drive list', async () => {
     vi.mocked(getDriveIdsForUser).mockResolvedValue(['other-drive']);
+    vi.mocked(hasScopedDriveMembership).mockResolvedValue(true);
     expect(await getPrincipalDriveIds(scopedOAuthAuth)).toEqual([DRIVE_ID]);
     expect(getDriveIdsForUser).not.toHaveBeenCalled();
+  });
+
+  it('getPrincipalDriveIds: drops an OAuth scope row whose user is no longer a member — however the membership ended', async () => {
+    vi.mocked(hasScopedDriveMembership).mockResolvedValue(false);
+    expect(await getPrincipalDriveIds(scopedOAuthAuth)).toEqual([]);
+    expect(hasScopedDriveMembership).toHaveBeenCalledWith(scopedOAuthAuth.tokenType === 'oauth' ? scopedOAuthAuth.driveScopes : [], USER_ID, DRIVE_ID);
   });
 
   it('getPrincipalAccessiblePagesInDrive: drive-scoped OAuth token dispatches to getScopedAccessiblePagesInDrive', async () => {
@@ -665,7 +672,7 @@ describe('getPrincipalDriveMembership', () => {
   });
 
   it('reads a drive-scoped OAuth token\'s membership from its scope rows', async () => {
-    vi.mocked(getScopedDriveMembership).mockReturnValue({ role: 'ADMIN', customRoleId: null });
+    vi.mocked(getScopedDriveMembership).mockResolvedValue({ role: 'ADMIN', customRoleId: null });
     await expect(getPrincipalDriveMembership(scopedOAuthAuth, DRIVE_ID)).resolves.toEqual({ role: 'ADMIN', customRoleId: null });
   });
 
