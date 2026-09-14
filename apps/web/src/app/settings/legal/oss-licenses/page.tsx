@@ -157,17 +157,16 @@ export default function OssLicensesPage() {
           </p>
           <p>
             The complete open-source inventory — every direct and transitive
-            dependency in the workspace, recorded in each package&rsquo;s manifest and
-            lockfile — is published in the open-source PageSpace
-            repository:
+            dependency, with the license identifier for each — is published
+            in the open-source PageSpace repository:
           </p>
           <a
-            href="https://github.com/2witstudios/PageSpace"
+            href="https://github.com/2witstudios/PageSpace/blob/master/OSS-INVENTORY.md"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
           >
-            github.com/2witstudios/PageSpace
+            OSS-INVENTORY.md
             <ExternalLink className="h-3 w-3" />
           </a>
         </CardContent>

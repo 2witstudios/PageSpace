@@ -626,5 +626,6 @@ All deliberately outside the Android Parity Epic's scope, all still outstanding:
   reads the Gradle property `socialLogin.facebook.include` (default `'true'`), so
   `socialLogin.facebook.include=false` in `android/gradle.properties` drops it from the APK. We
   never initialise Facebook, so set that before the first listing rather than disclosing an SDK
-  that does nothing. Re-check the native dependency set against `capacitor.settings.gradle` and
-  the synced Gradle files after every sync, before any store listing.
+  that does nothing. The mobile native-dependency inventory lives in `OSS-INVENTORY.md` at the
+  repo root (§2 iOS, §3 Android); re-check it against `capacitor.settings.gradle` and the
+  synced Gradle files after every sync, before any store listing.

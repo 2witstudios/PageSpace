@@ -11,7 +11,9 @@ third-party open-source components distributed with this software retain
 their own respective licenses. PageSpace elects the MIT option of the
 dual-licensed jszip and the Apache-2.0 option of the dual-licensed dompurify,
 and the LICENSES/ directory carries the corresponding full license texts
-(GPL-3.0.txt, LGPL-3.0.txt, MPL-2.0.txt).
+(GPL-3.0.txt, LGPL-3.0.txt, MPL-2.0.txt). The complete third-party
+inventory — npm / bun, iOS, Android, and bundled assets — is maintained in
+OSS-INVENTORY.md.
 
 THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,

@@ -4,8 +4,9 @@ import OssLicensesPage from '../page';
 
 /**
  * The full-inventory notice is public-facing UI copy. It must never leak
- * private deal language (a seller's IP-sale disclosure). The inventory
- * source is the public PageSpace repository.
+ * private deal language (a seller's IP-sale disclosure), and its link must
+ * land on the standalone sanitized inventory document — not the repo root,
+ * where no promised inventory exists.
  */
 
 vi.mock('next/navigation', () => ({
@@ -26,16 +27,18 @@ describe('OSS licenses settings page', () => {
     expect(text).not.toMatch(/\bsale\b/i);
   });
 
-  it('names the public repository as the complete-inventory source', () => {
+  it('links directly to the standalone inventory document', () => {
     renderPage();
 
-    const repoLink = screen.getByRole('link', {
-      name: /github\.com\/2witstudios\/PageSpace/i,
+    const inventoryLink = screen.getByRole('link', {
+      name: /OSS-INVENTORY\.md/i,
     });
-    expect(repoLink).toHaveAttribute(
+    expect(inventoryLink).toHaveAttribute(
       'href',
-      'https://github.com/2witstudios/PageSpace'
+      'https://github.com/2witstudios/PageSpace/blob/master/OSS-INVENTORY.md'
     );
-    expect(screen.getByText(/complete open-source inventory/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/complete open-source inventory/i)
+    ).toBeInTheDocument();
   });
 });
