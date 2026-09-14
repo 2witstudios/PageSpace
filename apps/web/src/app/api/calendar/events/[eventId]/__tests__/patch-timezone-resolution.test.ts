@@ -85,6 +85,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
 
 vi.mock('@/lib/auth', () => ({
+  // The personal-event rule (personal-event-scope.ts) asks whether the caller is an OAuth application.
+  isScopedOAuthAuth: (auth: { tokenType?: string; scopes?: { account?: boolean } }) => auth?.tokenType === 'oauth' && !auth.scopes?.account,
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => typeof r === 'object' && r !== null && 'error' in r),
   checkMCPDriveScope: vi.fn(() => null),

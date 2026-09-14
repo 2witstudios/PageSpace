@@ -6,6 +6,7 @@ import { calendarEvents } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { eventOutOfScopeResponse, isPersonalEventOutOfScope } from '../../personal-event-scope';
 import {
   isUserMemberOfAnyEventDrive,
   shareEventWithDrive,
@@ -48,6 +49,8 @@ export async function GET(
     if (!event) {
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
+
+    if (isPersonalEventOutOfScope(auth, event)) return eventOutOfScopeResponse();
 
     if (event.driveId) {
       const scopeError = checkMCPDriveScope(auth, event.driveId);
@@ -105,6 +108,8 @@ export async function POST(
     if (!event) {
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
+
+    if (isPersonalEventOutOfScope(auth, event)) return eventOutOfScopeResponse();
 
     // MCP scope is gated on the home drive
     if (event.driveId) {
@@ -170,6 +175,8 @@ export async function DELETE(
     if (!event) {
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
+
+    if (isPersonalEventOutOfScope(auth, event)) return eventOutOfScopeResponse();
 
     if (event.driveId) {
       const scopeError = checkMCPDriveScope(auth, event.driveId);

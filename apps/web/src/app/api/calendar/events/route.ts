@@ -12,6 +12,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, isPrincipalDriveMember, getPrincipalDriveIds, canPrincipalViewPage, isDriveScopedPrincipal } from '@/lib/auth';
+import { eventOutOfScopeResponse, isPersonalEventOutOfScope, personalEventRefusal } from './personal-event-scope';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
@@ -478,11 +479,13 @@ export async function GET(request: Request) {
     // drive to be out-of-scope of, and the token still acts on behalf of that
     // exact identity) — but a driveless event belonging to a DIFFERENT user
     // (reachable only via the attendee branch) stays capped out.
+    // Personal events follow the shared rule (personal-event-scope.ts): an OAuth
+    // application sees none, another drive-scoped credential only its user's own.
     const principalDriveIdSet = new Set(driveIds);
     const visibleEvents = isDriveScopedPrincipal(auth)
       ? events.filter((e) =>
           (e.driveId !== null && principalDriveIdSet.has(e.driveId)) ||
-          (e.driveId === null && e.createdById === userId)
+          (e.driveId === null && personalEventRefusal(auth, e) === null)
         )
       : events;
 
@@ -536,6 +539,9 @@ export async function POST(request: Request) {
     // Agent triggers are held from OAuth applications (pending Phase 2b / [D-15]).
     const triggerHold = refuseOAuthAgentTrigger(auth, { writesTrigger: data.agentTrigger !== undefined, firesTrigger: false });
     if (triggerHold) return triggerHold;
+
+    // A personal (driveless) event is outside an OAuth application's scope.
+    if (isPersonalEventOutOfScope(auth, { driveId: data.driveId ?? null })) return eventOutOfScopeResponse();
 
     // Explicit body value wins, else the caller's profile timezone, else UTC —
     // the same resolution the task and trigger routes use, so "tomorrow at 7pm"

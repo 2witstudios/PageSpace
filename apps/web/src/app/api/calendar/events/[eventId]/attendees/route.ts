@@ -6,22 +6,12 @@ import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getAllMemberUserIdsForEvent, isUserMemberOfAnyEventDrive, getAllDriveIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, isDriveScopedPrincipal, type AuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds } from '@/lib/auth';
+import { personalEventRefusal } from '../../personal-event-scope';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
-
-/**
- * A drive-scoped credential acts as an app member of its drives only: it gets no
- * identity power over ANOTHER user's personal (driveless) event, even one its
- * user attends. The same rule `canAccessEvent`/`canEditEvent` apply in
- * ../route.ts — the event's own creator keeps reaching it.
- */
-function personalEventRefusal(auth: AuthResult, event: { driveId: string | null; createdById: string }): NextResponse | null {
-  if (event.driveId || event.createdById === auth.userId || !isDriveScopedPrincipal(auth)) return null;
-  return NextResponse.json({ error: 'This token does not have access to this event' }, { status: 403 });
-}
 // Schema for adding attendees
 const addAttendeesSchema = z.object({
   userIds: z.array(z.string()).min(1),

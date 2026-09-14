@@ -5,8 +5,9 @@
  * ../../route.ts already applies. The attendees sub-route checked scope only for
  * drive events, then fell back to the owning user's identity (attendee), so a
  * `drive:X` credential could read the attendee list of, or RSVP to, someone
- * else's personal event. Sessions are unchanged; the creator's own personal
- * event stays reachable, as in ../../route.ts.
+ * else's personal event. Sessions are unchanged; an mcp_ key keeps its user's own
+ * personal events (#1846), while an OAuth application reaches no personal event at
+ * all (personal-event-scope.ts).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -78,13 +79,21 @@ describe('calendar attendees — drive-scoped principals on personal events', ()
       expect(db.update).not.toHaveBeenCalled();
     });
 
-    it(`still lets ${label} reach the user's OWN personal event (same rule as the event route)`, async () => {
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(principal);
-      vi.mocked(db.query.calendarEvents.findFirst).mockResolvedValue(personalEvent(PARITY_USER_ID) as never);
-      const res = await getAttendees();
-      expect(res.status).toBe(200);
-    });
   }
+
+  it("still lets a drive-scoped mcp_ key reach the user's OWN personal event (#1846)", async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mcpDriveKey('drivex'));
+    vi.mocked(db.query.calendarEvents.findFirst).mockResolvedValue(personalEvent(PARITY_USER_ID) as never);
+    expect((await getAttendees()).status).toBe(200);
+  });
+
+  it("refuses an OAuth grant even the user's OWN personal event — consent never named the personal calendar", async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(oauthDriveGrant('drivex', 'admin'));
+    vi.mocked(db.query.calendarEvents.findFirst).mockResolvedValue(personalEvent(PARITY_USER_ID) as never);
+    const res = await getAttendees();
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'This token does not have access to this event' });
+  });
 
   it("leaves a session attendee's access to another user's personal event unchanged", async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session);

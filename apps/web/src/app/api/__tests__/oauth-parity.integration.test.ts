@@ -16,7 +16,7 @@
  *   - `/api/auth/me`: the right disclosure for each credential.
  *
  * Stubbed only: realtime broadcasts, the audit sink, the distributed rate
- * limiter, and the two object-storage effects (page content snapshots, S3
+ * limiter, Google Calendar push, and the two object-storage effects (page content snapshots, S3
  * presign). Requires DATABASE_URL → a migrated
  * Postgres; FAILS LOUDLY when unreachable.
  */
@@ -26,11 +26,21 @@ import { db } from '@pagespace/db/db';
 import { mcpTokens } from '@pagespace/db/schema/auth';
 import { mcpTokenDrives } from '@pagespace/db/schema/members';
 import { oauthAccessTokens, oauthClients } from '@pagespace/db/schema/oauth';
-import { calendarEvents } from '@pagespace/db/schema/calendar';
+import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { factories } from '@pagespace/db/test/factories';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { ensureTestDb } from '@/test/ensure-test-db';
 
+// Calendar writes defer Google sync with next/server's after(); run it inline.
+vi.mock('next/server', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/server')>()),
+  after: vi.fn((task: () => unknown) => { void Promise.resolve().then(task).catch(() => undefined); }),
+}));
+vi.mock('@/lib/integrations/google-calendar/push-service', () => ({
+  pushEventToGoogle: vi.fn(async () => undefined),
+  pushEventUpdateToGoogle: vi.fn(async () => undefined),
+  pushEventDeleteToGoogle: vi.fn(async () => undefined),
+}));
 vi.mock('@/lib/websocket', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/lib/websocket')>();
   return {
@@ -89,7 +99,10 @@ import { POST as taskCreatePOST } from '../pages/[pageId]/tasks/route';
 import { GET as regexSearchGET } from '../drives/[driveId]/search/regex/route';
 import { GET as driveAgentsGET } from '../drives/[driveId]/agents/route';
 import { GET as agentConversationsGET } from '../ai/page-agents/[agentId]/conversations/route';
-import { GET as calendarEventsGET } from '../calendar/events/route';
+import { GET as calendarEventsGET, POST as calendarEventsPOST } from '../calendar/events/route';
+import { GET as eventGET, PATCH as eventPATCH, DELETE as eventDELETE } from '../calendar/events/[eventId]/route';
+import { GET as attendeesGET, POST as attendeesPOST, PATCH as attendeesPATCH, DELETE as attendeesDELETE } from '../calendar/events/[eventId]/attendees/route';
+import { GET as eventDrivesGET, POST as eventDrivesPOST, DELETE as eventDrivesDELETE } from '../calendar/events/[eventId]/drives/route';
 import { POST as presignPOST } from '../upload/presign/route';
 import { POST as mcpDocumentsPOST } from '../mcp/documents/route';
 import { GET as meGET } from '../auth/me/route';
@@ -280,25 +293,57 @@ describe.each<Role>(['MEMBER', 'ADMIN'])('mcp_ key ⇄ OAuth drive grant parity,
     }, 30_000);
   });
 
-  describe('identity-bound content — released by no scope helper, so refused at the door', () => {
-    it("keeps a personal calendar event the user created from the profile token, while the drive grant still sees it (mcp parity)", async () => {
-      await db.insert(calendarEvents).values({
-        createdById: userId,
-        driveId: null,
-        title: 'Personal parity event',
-        startAt: new Date('2026-06-01T09:00:00Z'),
-        endAt: new Date('2026-06-01T10:00:00Z'),
-      });
-      const personal = (token: string) => calendarEventsGET(req('GET', `/calendar/events?context=user&${RANGE}`, token));
+  describe('personal (driveless) calendar events', () => {
+    const personalEvent = async (title: string) => {
+      const [row] = await db
+        .insert(calendarEvents)
+        .values({ createdById: userId, driveId: null, title, startAt: new Date('2026-06-01T09:00:00Z'), endAt: new Date('2026-06-01T10:00:00Z') })
+        .returning();
+      await db.insert(eventAttendees).values({ eventId: row.id, userId, isOrganizer: true, status: 'ACCEPTED' });
+      return row.id;
+    };
 
-      const viaProfile = await personal(creds.profile);
-      expect(viaProfile.status).toBe(403);
+    it('the profile token is refused at the door; the mcp_ key lists the user\'s own personal event; the OAuth grant does not', async () => {
+      await personalEvent('Personal listing event');
+      const list = (token: string) => calendarEventsGET(req('GET', `/calendar/events?context=user&${RANGE}`, token));
 
-      const viaKey = await answer(await personal(creds.mcp));
-      const viaGrant = await answer(await personal(creds.oauth));
+      expect((await list(creds.profile)).status).toBe(403);
+
+      const viaKey = await answer(await list(creds.mcp));
       expect(viaKey.status).toBe(200);
-      expect(viaGrant).toEqual(viaKey);
-      expect(JSON.stringify(viaKey.body)).toContain('Personal parity event');
+      expect(JSON.stringify(viaKey.body)).toContain('Personal listing event');
+
+      const viaGrant = await answer(await list(creds.oauth));
+      expect(viaGrant.status).toBe(200);
+      expect(JSON.stringify(viaGrant.body)).not.toContain('Personal listing event');
+    }, 30_000);
+
+    // Consent names only the app's drives, never the user's personal calendar
+    // (US10): for an OAuth principal every calendar route treats a driveless
+    // event as out of scope. mcp_ keys keep #1846's own-personal-event rule.
+    type PersonalCase = { name: string; mcpStatus: number; call: (token: string, eventId: string) => Promise<Response> };
+    const PERSONAL: readonly PersonalCase[] = [
+      { name: 'POST /api/calendar/events (driveless)', mcpStatus: 201, call: (t) => calendarEventsPOST(req('POST', '/calendar/events', t, { title: 'New personal', startAt: '2026-06-02T09:00:00Z', endAt: '2026-06-02T10:00:00Z', timezone: 'UTC' })) },
+      { name: 'GET /api/calendar/events/[eventId]', mcpStatus: 200, call: (t, e) => eventGET(req('GET', `/calendar/events/${e}`, t), params({ eventId: e })) },
+      { name: 'PATCH /api/calendar/events/[eventId]', mcpStatus: 200, call: (t, e) => eventPATCH(req('PATCH', `/calendar/events/${e}`, t, { title: 'Renamed personal' }), params({ eventId: e })) },
+      { name: 'GET /api/calendar/events/[eventId]/attendees', mcpStatus: 200, call: (t, e) => attendeesGET(req('GET', `/calendar/events/${e}/attendees`, t), params({ eventId: e })) },
+      { name: 'PATCH /api/calendar/events/[eventId]/attendees (RSVP)', mcpStatus: 200, call: (t, e) => attendeesPATCH(req('PATCH', `/calendar/events/${e}/attendees`, t, { status: 'TENTATIVE' }), params({ eventId: e })) },
+      { name: 'POST /api/calendar/events/[eventId]/attendees', mcpStatus: 200, call: (t, e) => attendeesPOST(req('POST', `/calendar/events/${e}/attendees`, t, { userIds: [userId] }), params({ eventId: e })) },
+      { name: 'DELETE /api/calendar/events/[eventId]/attendees', mcpStatus: 400, call: (t, e) => attendeesDELETE(req('DELETE', `/calendar/events/${e}/attendees?userId=${userId}`, t), params({ eventId: e })) },
+      { name: 'GET /api/calendar/events/[eventId]/drives', mcpStatus: 200, call: (t, e) => eventDrivesGET(req('GET', `/calendar/events/${e}/drives`, t), params({ eventId: e })) },
+      { name: 'POST /api/calendar/events/[eventId]/drives', mcpStatus: 400, call: (t, e) => eventDrivesPOST(req('POST', `/calendar/events/${e}/drives`, t, { driveId: x.driveId }), params({ eventId: e })) },
+      { name: 'DELETE /api/calendar/events/[eventId]/drives', mcpStatus: 404, call: (t, e) => eventDrivesDELETE(req('DELETE', `/calendar/events/${e}/drives?driveId=${x.driveId}`, t), params({ eventId: e })) },
+      { name: 'DELETE /api/calendar/events/[eventId]', mcpStatus: 200, call: (t, e) => eventDELETE(req('DELETE', `/calendar/events/${e}`, t), params({ eventId: e })) },
+    ];
+
+    it.each(PERSONAL.map((c) => [c.name, c] as const))('%s — OAuth grant refused, mcp_ key unchanged', async (_name, route) => {
+      const forGrant = await personalEvent('Personal for grant');
+      const viaGrant = await answer(await route.call(creds.oauth, forGrant));
+      expect(viaGrant, JSON.stringify(viaGrant)).toEqual({ status: 403, body: { error: 'This token does not have access to this event' } });
+
+      const forKey = await personalEvent('Personal for key');
+      const viaKey = await answer(await route.call(creds.mcp, forKey));
+      expect(viaKey.status, JSON.stringify(viaKey).slice(0, 300)).toBe(route.mcpStatus);
     }, 30_000);
   });
 

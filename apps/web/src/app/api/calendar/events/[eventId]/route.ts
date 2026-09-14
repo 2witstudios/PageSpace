@@ -7,6 +7,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin, type AuthResult, isDriveScopedPrincipal } from '@/lib/auth';
 import { isUserMemberOfAnyEventDrive, getAllDriveIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
+import { eventOutOfScopeResponse, isPersonalEventOutOfScope } from '../personal-event-scope';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
@@ -155,6 +156,8 @@ export async function GET(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
+    if (isPersonalEventOutOfScope(auth, event)) return eventOutOfScopeResponse();
+
     // Check MCP drive scope if event is drive-associated
     if (event.driveId) {
       const scopeError = checkMCPDriveScope(auth, event.driveId);
@@ -206,6 +209,8 @@ export async function PATCH(
     if (!event) {
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
+
+    if (isPersonalEventOutOfScope(auth, event)) return eventOutOfScopeResponse();
 
     // Check MCP drive scope if event is drive-associated
     if (event.driveId) {
@@ -443,6 +448,8 @@ export async function DELETE(
     if (!event) {
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
+
+    if (isPersonalEventOutOfScope(auth, event)) return eventOutOfScopeResponse();
 
     // Check MCP drive scope if event is drive-associated
     if (event.driveId) {
