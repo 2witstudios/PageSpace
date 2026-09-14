@@ -49,6 +49,7 @@ import { PATCH, DELETE } from '../[commandId]/route';
 import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, type AuthResult } from '@/lib/auth';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { PARITY_USER_ID, mcpDriveKey, oauthDriveGrant } from '@/lib/auth/__tests__/oauth-principal-fixture';
 
 const session: AuthResult = { tokenType: 'session', sessionId: 's', userId: PARITY_USER_ID, role: 'user', tokenVersion: 0, adminRoleVersion: 0 };
@@ -74,6 +75,7 @@ const memberKey = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
 });
 
 describe('commands — the credential role decides drive commands', () => {
@@ -110,6 +112,33 @@ describe('commands — the credential role decides drive commands', () => {
       const updated = await update();
       expect(updated.status).toBe(403);
       expect(await updated.json()).toEqual(PERSONAL_REFUSED);
+      expect((await remove()).status).toBe(403);
+      expect(db.insert).not.toHaveBeenCalled();
+      expect(db.update).not.toHaveBeenCalled();
+      expect(db.delete).not.toHaveBeenCalled();
+    });
+  }
+
+  // A credential never exceeds its user's CURRENT drive role: a user demoted
+  // ADMIN→MEMBER keeps an explicit-ADMIN credential (roles are frozen at grant
+  // time), so the credential's role alone must not admit it.
+  for (const [label, principal] of [
+    ['an ADMIN OAuth grant', () => oauthDriveGrant('drivex', 'admin')],
+    ['an ADMIN-role mcp_ key', () => {
+      vi.mocked(getAppDriveMembership).mockResolvedValue({ role: 'ADMIN', customRoleId: null, ownerUserId: PARITY_USER_ID });
+      return mcpDriveKey('drivex');
+    }],
+  ] as const) {
+    it(`refuses ${label} whose user has since been demoted to MEMBER`, async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(principal());
+      vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
+      vi.mocked(db.query.commands.findFirst).mockResolvedValue(undefined);
+      const created = await create('drivex');
+      expect(created.status).toBe(403);
+      expect(await created.json()).toEqual(DRIVE_CEILING);
+
+      vi.mocked(db.query.commands.findFirst).mockResolvedValue(driveCommand as never);
+      expect((await update()).status).toBe(403);
       expect((await remove()).status).toBe(403);
       expect(db.insert).not.toHaveBeenCalled();
       expect(db.update).not.toHaveBeenCalled();

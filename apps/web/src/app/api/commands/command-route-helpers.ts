@@ -3,7 +3,8 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import type { SelectCommand } from '@pagespace/db/schema/commands';
-import { canPrincipalViewPage, isDriveScopedPrincipal, type AuthResult } from '@/lib/auth';
+import { canPrincipalViewPage, isDriveScopedPrincipal, isPrincipalDriveOwnerOrAdmin, type AuthResult } from '@/lib/auth';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import type { CommandScope } from '@pagespace/lib/commands/command-core';
 
 export const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
@@ -35,6 +36,18 @@ export function toCommandResponse(command: SelectCommand): CommandResponse {
     createdAt: command.createdAt,
     updatedAt: command.updatedAt,
   };
+}
+
+/**
+ * Whether the caller may manage a DRIVE command: owner/admin authority for the
+ * credential (its own role, not its user's) AND for its user as the user stands
+ * now. Explicit roles are frozen at grant time, so a user demoted ADMIN→MEMBER
+ * would otherwise keep managing commands through an ADMIN key or grant.
+ */
+export async function canManageDriveCommands(auth: AuthResult, driveId: string): Promise<boolean> {
+  if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) return false;
+  // user-identity: a credential never exceeds its user's current drive role
+  return isDriveOwnerOrAdmin(auth.userId, driveId);
 }
 
 /**
