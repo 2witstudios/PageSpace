@@ -112,6 +112,11 @@ export async function POST(
       if (scopeError) return scopeError;
     }
 
+    // …and on the TARGET drive: sharing writes that drive's calendar, and the
+    // service below only checks the owning USER's membership of it.
+    const targetScopeError = checkMCPDriveScope(auth, driveId);
+    if (targetScopeError) return targetScopeError;
+
     const result = await shareEventWithDrive({ actingUserId: auth.userId, eventId, driveId });
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status });
