@@ -3,7 +3,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { isExternalHttpUrl } from '@/lib/auth/google-avatar';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
-import { decideIdentityDisclosure, type IdentityDisclosure } from '@/lib/auth/identity-disclosure';
+import { decidePrincipalIdentityDisclosure, type IdentityDisclosure } from '@/lib/auth/identity-disclosure';
 
 // Session (browser) and OAuth (CLI `pagespace login` identity confirmation,
 // ADR 0003) both resolve identity the same way; `mcp_*` tokens are scoped
@@ -27,8 +27,9 @@ export async function GET(req: Request) {
   // first-party client keeps the full profile; a third-party app gets only
   // what `profile` consent narrated, and nothing without it. Decided before
   // the user row is even read.
-  const disclosure: IdentityDisclosure =
-    auth.tokenType === 'oauth' ? decideIdentityDisclosure(auth) : 'full';
+  // Full disclosure is an explicit allow (session, or what OAuth consent
+  // released); every other principal is denied.
+  const disclosure: IdentityDisclosure = decidePrincipalIdentityDisclosure(auth);
   if (disclosure === 'deny') {
     return Response.json({ error: 'insufficient_scope' }, { status: 403 });
   }
