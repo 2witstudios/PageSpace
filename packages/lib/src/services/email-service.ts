@@ -57,7 +57,7 @@ export interface SendEmailOptions {
    */
   headers?: Record<string, string>;
   /**
-   * Skip the default per-recipient rate limit (3/hr). Use for notification
+   * Skip the default per-recipient rate limit (10/hr). Use for notification
    * streams that are already gated by their own rate limiting upstream
    * (e.g. form submissions, which have their own IP/token rate limits).
    */
@@ -83,11 +83,13 @@ export async function sendEmail(options: SendEmailOptions): Promise<void> {
   const config = getResendConfig();
   const resend = getResend();
 
-  // Rate limit email sending (3 per hour per recipient).
+  // Rate limit email sending (10 per hour per recipient). Every email type
+  // (magic link, invite, notification) shares this bucket, and rejected
+  // attempts still count, so a low cap locks a real user out of sign-in.
   // Postgres-backed so the limit survives restarts and spans replicas (#977).
   if (!options.skipRateLimit) {
     const rateLimit = await checkDistributedRateLimit(`email:${options.to}`, {
-      maxAttempts: 3,
+      maxAttempts: 10,
       windowMs: 60 * 60 * 1000, // 1 hour
       blockDurationMs: 60 * 60 * 1000,
     });

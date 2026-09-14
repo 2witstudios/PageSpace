@@ -930,7 +930,7 @@ export const DISTRIBUTED_RATE_LIMITS = {
   // token (10/min), but a script rotating IPs against the same public token
   // could otherwise still ride that limit indefinitely and mail-bomb the
   // owner's inbox once per accepted submission, since sendEmail's own
-  // recipient-wide 3/hr cap is intentionally skipped for this dispatch (see
+  // recipient-wide 10/hr cap is intentionally skipped for this dispatch (see
   // send-form-notification.ts).
   FORM_SUBMISSION_NOTIFICATION: {
     maxAttempts: 20,
@@ -963,7 +963,7 @@ export const DISTRIBUTED_RATE_LIMITS = {
     progressiveDelay: false,
   },
   MAGIC_LINK: {
-    maxAttempts: 3,
+    maxAttempts: 5,
     windowMs: 15 * 60 * 1000,
     blockDurationMs: 15 * 60 * 1000,
     progressiveDelay: true,
