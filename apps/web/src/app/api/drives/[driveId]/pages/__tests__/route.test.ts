@@ -190,7 +190,7 @@ describe('GET /api/drives/[driveId]/pages', () => {
       await GET(request as never, createContext(mockDriveId));
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(request, {
-        allow: ['session', 'mcp'],
+        allow: ['session', 'mcp', 'oauth'],
         requireCSRF: false,
       });
     });

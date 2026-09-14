@@ -11,7 +11,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAll
 import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 const requestSchema = z.object({
   pageIds: z.array(z.string()).min(1, 'At least one page ID is required'),

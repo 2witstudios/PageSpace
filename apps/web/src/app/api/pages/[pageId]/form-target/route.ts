@@ -34,7 +34,7 @@ import {
   FormTargetArchivedError,
 } from '@/services/api/form-target-service';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 function getWebAppUrl(): string {
   const url = process.env.WEB_APP_URL;

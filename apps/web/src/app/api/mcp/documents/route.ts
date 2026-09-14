@@ -17,10 +17,13 @@ import { describeContentModeMismatch, isRawTextPage, serializePageContentForAI }
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateMCPRequest, isAuthError, getPrincipalAccessLevel, getAllowedDriveIds } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, getPrincipalAccessLevel, getAllowedDriveIds } from '@/lib/auth';
 import { writeDeniedDetails } from '../write-denied-details';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+
+// The MCP HTTP surface: an mcp_ key, or an OAuth grant resolving exactly like one.
+const AUTH_OPTIONS = { allow: ['mcp', 'oauth'] as const, requireCSRF: false };
 
 // Get drive slug from page for socket broadcasting
 async function getDriveIdFromPage(pageId: string): Promise<string | null> {
@@ -149,7 +152,7 @@ const lineOperationSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const auth = await authenticateMCPRequest(req);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     return auth.error;
   }

@@ -22,7 +22,7 @@ const mockReadSheetDocument = vi.fn(async (..._args: unknown[]) => null);
 const mockLogSheetCellActivity = vi.fn(async (..._args: unknown[]) => undefined);
 
 vi.mock('@/lib/auth', () => ({
-  authenticateMCPRequest: vi.fn().mockResolvedValue({
+  authenticateRequestWithOptions: vi.fn().mockResolvedValue({
     userId: 'user_123',
     tokenType: 'mcp',
     tokenId: 'token_123',

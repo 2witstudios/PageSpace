@@ -18,7 +18,7 @@ const mockSerializeTaskItem = vi.fn();
 const mockSelectFrom = vi.fn();
 
 vi.mock('@/lib/auth', () => ({
-  authenticateMCPRequest: vi.fn().mockResolvedValue({
+  authenticateRequestWithOptions: vi.fn().mockResolvedValue({
     userId: 'user_123',
     tokenType: 'mcp',
     tokenId: 'token_123',

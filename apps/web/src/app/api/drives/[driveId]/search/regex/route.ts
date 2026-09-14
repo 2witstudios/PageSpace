@@ -8,7 +8,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const };
 
 /**
  * GET /api/drives/[driveId]/search/regex

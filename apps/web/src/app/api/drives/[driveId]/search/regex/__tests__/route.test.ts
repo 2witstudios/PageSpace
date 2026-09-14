@@ -134,7 +134,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session', 'mcp'] }
+        { allow: ['session', 'mcp', 'oauth'] }
       );
     });
 

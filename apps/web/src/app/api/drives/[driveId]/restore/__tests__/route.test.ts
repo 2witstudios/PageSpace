@@ -161,7 +161,7 @@ describe('POST /api/drives/[driveId]/restore', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session', 'mcp'], requireCSRF: true }
+        { allow: ['session', 'mcp', 'oauth'], requireCSRF: true }
       );
     });
   });

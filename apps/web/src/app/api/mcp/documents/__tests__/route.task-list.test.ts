@@ -14,7 +14,7 @@ const mockFetchEnrichedTasks = vi.fn();
 const mockSerializeTaskItem = vi.fn();
 
 vi.mock('@/lib/auth', () => ({
-  authenticateMCPRequest: (...args: unknown[]) => mockAuthenticateMCPRequest(...args),
+  authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateMCPRequest(...args),
   isAuthError: (result: unknown) => 'error' in (result as object),
   // Mirrors the real helper for the mcp fixtures used here (their own ceiling).
   getAllowedDriveIds: (auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? [],

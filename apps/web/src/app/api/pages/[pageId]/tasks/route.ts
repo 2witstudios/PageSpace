@@ -23,8 +23,8 @@ import { decryptTaskUserRelations, decryptTaskUserRelationsOne } from '@/lib/tas
 import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
 import { parseTaskQuerySpec } from './query-spec';
 
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 /**
  * Get or create task list for a page, ensuring default status configs exist

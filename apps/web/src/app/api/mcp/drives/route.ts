@@ -9,9 +9,12 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { eq } from '@pagespace/db/operators';
-import { authenticateMCPRequest, isAuthError, isDriveScopedPrincipal, getAllowedDriveIds, getPrincipalDriveMembership } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isDriveScopedPrincipal, getAllowedDriveIds, getPrincipalDriveMembership } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
+
+// The MCP HTTP surface: an mcp_ key, or an OAuth grant resolving exactly like one.
+const AUTH_OPTIONS = { allow: ['mcp', 'oauth'] as const, requireCSRF: false };
 
 // Schema for drive creation
 const createDriveSchema = z.object({
@@ -19,7 +22,7 @@ const createDriveSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const auth = await authenticateMCPRequest(req);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     return auth.error;
   }
@@ -92,7 +95,7 @@ export async function POST(req: NextRequest) {
 // GET endpoint to list drives
 // Zero Trust: Returns all drives user has access to (owned + shared), filtered by token scope
 export async function GET(req: NextRequest) {
-  const auth = await authenticateMCPRequest(req);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     return auth.error;
   }

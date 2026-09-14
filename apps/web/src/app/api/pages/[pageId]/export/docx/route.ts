@@ -9,7 +9,7 @@ import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { marked } from 'marked';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const };
 
 /**
  * Export a document page as DOCX

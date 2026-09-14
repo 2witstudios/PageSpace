@@ -35,7 +35,7 @@ export async function GET(
   context: { params: Promise<{ driveId: string }> }
 ) {
   try {
-    const auth = await authenticateRequestWithOptions(request, { allow: ['session', 'mcp'] as const });
+    const auth = await authenticateRequestWithOptions(request, { allow: ['session', 'mcp', 'oauth'] as const });
     if (isAuthError(auth)) return auth.error;
     const { userId } = auth;
 

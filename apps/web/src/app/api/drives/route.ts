@@ -15,7 +15,7 @@ import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activi
 import { safeParseBody } from '@/lib/validation/parse-body';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false, admitNoContentOAuth: true };
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 type ScopedDriveMembership = {
   role: 'OWNER' | 'ADMIN' | 'MEMBER' | null;

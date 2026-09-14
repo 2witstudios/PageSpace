@@ -19,7 +19,7 @@ import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import { isNaiveISODatetime, parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
 import { decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 /**
  * PATCH /api/pages/[pageId]/tasks/[taskId]

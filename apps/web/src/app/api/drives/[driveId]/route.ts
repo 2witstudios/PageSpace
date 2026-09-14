@@ -14,7 +14,7 @@ import { resolveUploadedImageAssetUrl } from '@/lib/canvas/asset-pipeline';
 import { db } from '@pagespace/db/db';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 const patchSchema = z.object({
   name: z.string().optional(),

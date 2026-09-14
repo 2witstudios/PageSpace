@@ -10,7 +10,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getPrincipalAccessiblePagesInDrive, isDriveScopedPrincipal } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 
 // Cutoff date for unread indicators on never-viewed pages
 // For pages the user has never viewed, only show as unread if there's activity after this date

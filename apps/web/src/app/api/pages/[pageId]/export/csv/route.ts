@@ -10,7 +10,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrin
 import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/sheets/sheet';
 import { readSheetData } from '@pagespace/lib/sheets/store';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const };
 
 /**
  * Export a sheet page as CSV

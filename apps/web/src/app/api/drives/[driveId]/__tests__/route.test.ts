@@ -379,7 +379,7 @@ describe('PATCH /api/drives/[driveId]', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session', 'mcp'], requireCSRF: true }
+        { allow: ['session', 'mcp', 'oauth'], requireCSRF: true }
       );
     });
   });
@@ -859,7 +859,7 @@ describe('DELETE /api/drives/[driveId]', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session', 'mcp'], requireCSRF: true }
+        { allow: ['session', 'mcp', 'oauth'], requireCSRF: true }
       );
     });
   });

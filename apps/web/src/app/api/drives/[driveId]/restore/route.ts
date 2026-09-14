@@ -10,7 +10,7 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPDriveScope, getPrincipalDriveMembership, isDriveScopedPrincipal } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 export async function POST(
   request: Request,

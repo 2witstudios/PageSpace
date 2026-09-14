@@ -12,7 +12,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { buildSearchAuditDetails } from '@pagespace/lib/audit/search-audit-details';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const };
 
 /**
  * GET /api/search/multi-drive

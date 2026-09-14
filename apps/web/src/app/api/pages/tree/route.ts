@@ -10,7 +10,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getPrincipalAccessiblePagesInDrive, isPrincipalDriveMember, isDriveScopedPrincipal } from '@/lib/auth';
 import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 const requestSchema = z.object({
   driveId: z.string().min(1, 'Drive ID is required'),

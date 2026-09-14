@@ -9,7 +9,7 @@ import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { pageReorderService } from '@/services/api';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 const reorderSchema = z.object({
   pageId: z.string(),

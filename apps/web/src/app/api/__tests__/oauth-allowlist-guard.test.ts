@@ -38,10 +38,19 @@ const API_DIR = join(__dirname, '..');
  * third-party app must never reach; left false only where the route already
  * admits first-party OAuth credentials under its own gate.
  */
+/**
+ * Why an interim entry is denied (point-guard ruling 2026-09-14, pending Jono's
+ * [D-14]): third-party OAuth gets CONTENT access only. Each category is one
+ * decision, so D-14's answer is a one-line edit per category.
+ */
+export type D14InterimCategory = 'credential-minting' | 'compute-billing-public-exposure' | 'drive-access-control';
+
 export const OAUTH_ALLOWLIST_DENY: ReadonlyArray<{
   readonly route: string;
   readonly forbidOAuth: boolean;
   readonly reason: string;
+  /** Set only on `[D-14 interim]` entries. */
+  readonly d14Interim?: D14InterimCategory;
 }> = [
   { route: 'env-bridge/*', forbidOAuth: true, reason: "A machine's own credential surface — never a third-party app." },
   { route: 'connections', forbidOAuth: true, reason: "The user's third-party integration credentials (Google, GitHub…); an app must not read or manage them." },
@@ -54,6 +63,22 @@ export const OAUTH_ALLOWLIST_DENY: ReadonlyArray<{
   { route: 'auth/step-up/*', forbidOAuth: true, reason: 'Step-up ceremonies prove the human is present; an app token can never satisfy one.' },
   { route: 'auth/passkey/*', forbidOAuth: true, reason: 'Step-up / credential ceremonies.' },
   { route: 'oauth/*', forbidOAuth: true, reason: 'The authorization server itself, including the consent POST.' },
+
+  // [D-14 interim] (1) credential minting
+  { route: 'drives/[driveId]/envs/[envId]/enrollment-code', forbidOAuth: true, d14Interim: 'credential-minting', reason: '[D-14 interim] credential minting: issues a one-time code a machine enrolls with to obtain its own credential.' },
+  { route: 'pages/[pageId]/webhooks/*', forbidOAuth: true, d14Interim: 'credential-minting', reason: '[D-14 interim] credential minting: mints, rotates and wires signing secrets for unattended inbound writes (incl. rotate, triggers).' },
+
+  // [D-14 interim] (2) compute, billing, public exposure
+  { route: 'drives/[driveId]/envs/*', forbidOAuth: true, d14Interim: 'compute-billing-public-exposure', reason: '[D-14 interim] compute, billing, public exposure: sandbox/app environments, their rebuilds, app actions and dedicated-tier dunning state.' },
+  { route: 'drives/[driveId]/published-apps', forbidOAuth: true, d14Interim: 'compute-billing-public-exposure', reason: '[D-14 interim] compute, billing, public exposure: apps served publicly from the drive.' },
+  { route: 'drives/[driveId]/subdomain', forbidOAuth: true, d14Interim: 'compute-billing-public-exposure', reason: "[D-14 interim] compute, billing, public exposure: the drive's public publish subdomain." },
+  { route: 'drives/[driveId]/domains/*', forbidOAuth: true, d14Interim: 'compute-billing-public-exposure', reason: '[D-14 interim] compute, billing, public exposure: custom domains, verification and certificate refresh.' },
+  { route: 'drives/[driveId]/publish-home', forbidOAuth: true, d14Interim: 'compute-billing-public-exposure', reason: "[D-14 interim] compute, billing, public exposure: publishes the drive's public home." },
+  { route: 'pages/[pageId]/publish', forbidOAuth: true, d14Interim: 'compute-billing-public-exposure', reason: '[D-14 interim] compute, billing, public exposure: publishes a page to the public web.' },
+
+  // [D-14 interim] (3) who can access the drive
+  { route: 'drives/[driveId]/members', forbidOAuth: true, d14Interim: 'drive-access-control', reason: '[D-14 interim] who can access the drive: drive membership.' },
+  { route: 'drives/[driveId]/roles/*', forbidOAuth: true, d14Interim: 'drive-access-control', reason: '[D-14 interim] who can access the drive: drive roles and their permissions.' },
 ];
 
 /**
@@ -206,6 +231,33 @@ describe('oauth allow-list guard', () => {
   // Swept-to routes count too: every route that admits `mcp` outside the deny
   // list and the Phase 2b exclusion is required by (a) to admit `oauth`, so it
   // must already decide principal-neutrally — the fix lands BEFORE the widening.
+  it('[D-14 interim] denies are listed by category — one line per category to change when D-14 is answered', () => {
+    const byCategory: Record<string, string[]> = {};
+    for (const entry of OAUTH_ALLOWLIST_DENY) {
+      if (!entry.d14Interim) continue;
+      expect(entry.reason.startsWith('[D-14 interim] ')).toBe(true);
+      expect(entry.forbidOAuth).toBe(true);
+      (byCategory[entry.d14Interim] ??= []).push(entry.route);
+    }
+    expect(byCategory).toEqual({
+      'credential-minting': ['drives/[driveId]/envs/[envId]/enrollment-code', 'pages/[pageId]/webhooks/*'],
+      'compute-billing-public-exposure': [
+        'drives/[driveId]/envs/*',
+        'drives/[driveId]/published-apps',
+        'drives/[driveId]/subdomain',
+        'drives/[driveId]/domains/*',
+        'drives/[driveId]/publish-home',
+        'pages/[pageId]/publish',
+      ],
+      'drive-access-control': ['drives/[driveId]/members', 'drives/[driveId]/roles/*'],
+    });
+    // Every interim entry names at least one real route.
+    const keys = routes.map((r) => r.key);
+    for (const { route, d14Interim } of OAUTH_ALLOWLIST_DENY) {
+      if (d14Interim) expect(keys.some((key) => matchesRoute(key, route)), route).toBe(true);
+    }
+  });
+
   it('(b) no route admitting (or required to admit) oauth decides access with an MCP-only predicate', () => {
     const offenders = routes
       .filter(

@@ -12,7 +12,7 @@ import { pageService, type CreatePageParams } from '@/services/api';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 const creatablePageTypes = getCreatablePageTypes() as unknown as [string, ...string[]];
 
 // Zod schema for page creation request

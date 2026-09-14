@@ -8,7 +8,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isDriveScopedPrincipal, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const };
 
 interface DriveParams {
   driveId: string;
