@@ -21,6 +21,11 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
 }));
 
 vi.mock('@/lib/repositories/oauth-repository', () => ({
+  // resolveClient keeps the real static-registry answer (the route used it
+  // directly before resolveClient existed).
+  resolveClient: async (clientId: string) =>
+    (await vi.importActual<typeof import('@pagespace/lib/auth/oauth/clients')>('@pagespace/lib/auth/oauth/clients')).getRegisteredClient(clientId),
+  resolveClientDbId: vi.fn().mockResolvedValue('client-db-id-1'),
   ensureOAuthClientRow: vi.fn().mockResolvedValue('client-db-id-1'),
   createAuthorizationCode: vi.fn().mockResolvedValue(undefined),
 }));
@@ -713,5 +718,68 @@ describe('POST /api/oauth/authorize — update_key ownership gate', () => {
 
     await POST(postRequest(updateKeyBody) as never);
     expect(consumeStepUpGrant).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ADR 0004 Decision 6: `requiresStepUp(result.scopes)` is the ONLY thing that
+ * decides whether approving consent needs a second factor. Identity alone
+ * (`profile`, `profile offline_access`) takes the plain session + CSRF Allow;
+ * anything that reaches content or key management keeps the ceremony.
+ */
+describe('POST /api/oauth/authorize — step-up iff requiresStepUp(scopes)', () => {
+  beforeEach(() => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+      tokenType: 'session',
+      userId: 'user-1',
+      role: 'user',
+      tokenVersion: 0,
+      adminRoleVersion: 0,
+      sessionId: 'sess-1',
+    } as never);
+  });
+
+  const { stepUpToken: _omit, ...withoutStepUp } = approvalBody;
+
+  for (const scope of ['profile', 'profile offline_access']) {
+    it(`approves "${scope}" with session + CSRF and NO stepUpToken, minting a code`, async () => {
+      const res = await POST(postRequest({ ...withoutStepUp, scope }) as never);
+
+      expect(res.status).toBe(200);
+      const location = new URL((await res.json()).redirectUri);
+      expect(location.searchParams.get('code')).toBeTruthy();
+      expect(location.searchParams.get('state')).toBe('xyz123');
+      expect(consumeStepUpGrant).not.toHaveBeenCalled();
+      expect(vi.mocked(createAuthorizationCode)).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  it('never burns a step-up grant a client sends anyway on a profile-only approval', async () => {
+    const res = await POST(postRequest({ ...approvalBody, scope: 'profile' }) as never);
+
+    expect(res.status).toBe(200);
+    expect(consumeStepUpGrant).not.toHaveBeenCalled();
+  });
+
+  for (const scope of ['profile drive:testdrive1:member offline_access', 'manage_keys offline_access', 'account']) {
+    it(`still returns step_up_required for "${scope}" without a stepUpToken, never minting a code`, async () => {
+      const res = await POST(postRequest({ ...withoutStepUp, scope }) as never);
+
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'step_up_required' });
+      expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+    });
+  }
+
+  it('consumes the step-up grant for a profile drive:X:member approval that carries one', async () => {
+    const scope = 'profile drive:testdrive1:member offline_access';
+    const res = await POST(postRequest({ ...approvalBody, scope }) as never);
+
+    expect(res.status).toBe(200);
+    expect(consumeStepUpGrant).toHaveBeenCalledWith({
+      userId: 'user-1',
+      token: 'ps_stepup_test',
+      actionBinding: { clientId: 'pagespace-cli', redirectUri: REDIRECT_URI, scope, state: 'xyz123' },
+    });
   });
 });

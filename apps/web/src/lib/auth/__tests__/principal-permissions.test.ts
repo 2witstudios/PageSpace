@@ -100,11 +100,13 @@ const accountOAuthAuth: AuthResult = {
   ...base, userId: USER_ID, tokenType: 'oauth', tokenId: TOKEN_ID,
   scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: false, allDrives: false, profile: false, updateKeyId: null, activateKeyId: null, newKeyName: null },
   driveScopes: [], allowedDriveIds: [],
+  clientFirstParty: true,
 };
 const scopedOAuthAuth: AuthResult = {
   ...base, userId: USER_ID, tokenType: 'oauth', tokenId: TOKEN_ID,
   scopes: { account: false, offlineAccess: false, drives: new Map([[DRIVE_ID, { kind: 'drive' as const, driveId: DRIVE_ID, role: { kind: 'inherit' as const } }]]), manageKeys: false, allDrives: false, profile: false, updateKeyId: null, activateKeyId: null, newKeyName: null },
   driveScopes: DRIVE_SCOPES, allowedDriveIds: [DRIVE_ID],
+  clientFirstParty: true,
 };
 
 const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };

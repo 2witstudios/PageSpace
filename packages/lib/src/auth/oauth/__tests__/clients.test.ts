@@ -3,8 +3,15 @@
  * validation. Registry lookup is code, not DB, for the CLI's client_id; the
  * DB `oauth_clients` table exists only for future dynamic registration.
  */
-import { describe, it, expect } from 'vitest';
-import { getRegisteredClient, validateRedirectUri, PAGESPACE_CLI_CLIENT_ID } from '../clients';
+import { describe, it, expect, vi } from 'vitest';
+import {
+  getRegisteredClient,
+  validateRedirectUri,
+  PAGESPACE_CLI_CLIENT_ID,
+  registeredClientFromRecord,
+  resolveClientFrom,
+  type OAuthClientRecord,
+} from '../clients';
 
 describe('getRegisteredClient', () => {
   it('returns the pagespace-cli client for its client_id', () => {
@@ -100,3 +107,126 @@ describe('validateRedirectUri', () => {
     expect(validateRedirectUri(client, 'http://127.0.0.1:5000/callback%2e%2e/evil')).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// DB-backed third-party clients (ADR 0004 Decision 2, Phase 1a leaf 2)
+// ---------------------------------------------------------------------------
+
+function record(overrides: Partial<OAuthClientRecord> = {}): OAuthClientRecord {
+  return {
+    clientId: 'app_swipesend',
+    name: 'SwipeSend',
+    clientType: 'public',
+    redirectUris: ['swipesend://callback'],
+    allowedGrantTypes: ['authorization_code', 'refresh_token'],
+    allowedScopes: ['profile', 'drive:member', 'offline_access'],
+    logoUrl: 'https://swipesend.app/logo.png',
+    homepageUrl: 'https://swipesend.app',
+    description: 'Swipe to send',
+    ownerUserId: 'user-1',
+    verified: false,
+    isFirstParty: false,
+    disabledAt: null,
+    ...overrides,
+  };
+}
+
+describe('registeredClientFromRecord', () => {
+  it('maps an enabled public row to a third-party RegisteredClient, field for field', () => {
+    expect(registeredClientFromRecord(record())).toEqual({
+      clientId: 'app_swipesend',
+      name: 'SwipeSend',
+      type: 'public',
+      redirectUris: ['swipesend://callback'],
+      allowedGrantTypes: ['authorization_code', 'refresh_token'],
+      allowedScopes: ['profile', 'drive:member', 'offline_access'],
+      firstParty: false,
+      verified: false,
+      logoUrl: 'https://swipesend.app/logo.png',
+      homepageUrl: 'https://swipesend.app',
+      description: 'Swipe to send',
+      ownerUserId: 'user-1',
+    });
+  });
+
+  it('omits absent presentation fields rather than carrying nulls', () => {
+    const client = registeredClientFromRecord(record({ logoUrl: null, homepageUrl: null, description: null, ownerUserId: null }));
+    expect(client).not.toBeNull();
+    expect(client).not.toHaveProperty('logoUrl');
+    expect(client).not.toHaveProperty('homepageUrl');
+    expect(client).not.toHaveProperty('description');
+    expect(client).not.toHaveProperty('ownerUserId');
+  });
+
+  it('is never firstParty, whatever the row says — first-party clients exist only in code', () => {
+    expect(registeredClientFromRecord(record({ isFirstParty: true }))?.firstParty).toBe(false);
+  });
+
+  it('carries verified through', () => {
+    expect(registeredClientFromRecord(record({ verified: true }))?.verified).toBe(true);
+  });
+
+  it('returns null for a disabled row', () => {
+    expect(registeredClientFromRecord(record({ disabledAt: new Date('2026-01-01T00:00:00Z') }))).toBeNull();
+  });
+
+  it('returns null for a confidential row — public clients only (ADR 0004 Decision 1)', () => {
+    expect(registeredClientFromRecord(record({ clientType: 'confidential' }))).toBeNull();
+  });
+
+  it('copies the lists, so a caller mutating the client cannot write through to the record', () => {
+    const source = record();
+    const client = registeredClientFromRecord(source)!;
+    client.redirectUris.push('evil://x');
+    client.allowedScopes?.push('account');
+    expect(source.redirectUris).toEqual(['swipesend://callback']);
+    expect(source.allowedScopes).toEqual(['profile', 'drive:member', 'offline_access']);
+  });
+});
+
+describe('resolveClientFrom — static registry first, then the database', () => {
+  it('returns the static first-party client without touching the database', async () => {
+    const lookup = vi.fn();
+    const client = await resolveClientFrom(PAGESPACE_CLI_CLIENT_ID, lookup);
+    expect(client).toBe(getRegisteredClient(PAGESPACE_CLI_CLIENT_ID));
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it('never lets a database row shadow a static client id', async () => {
+    const lookup = vi.fn().mockResolvedValue(record({ clientId: PAGESPACE_CLI_CLIENT_ID, name: 'Impostor' }));
+    const client = await resolveClientFrom(PAGESPACE_CLI_CLIENT_ID, lookup);
+    expect(client?.name).toBe('PageSpace CLI');
+    expect(client?.firstParty).toBe(true);
+  });
+
+  it('falls through to the database for a non-static id', async () => {
+    const lookup = vi.fn().mockResolvedValue(record());
+    const client = await resolveClientFrom('app_swipesend', lookup);
+    expect(lookup).toHaveBeenCalledWith('app_swipesend');
+    expect(client?.clientId).toBe('app_swipesend');
+    expect(client?.firstParty).toBe(false);
+  });
+
+  it('an unknown client and a disabled client are indistinguishable — both null', async () => {
+    const unknown = await resolveClientFrom('app_nope', vi.fn().mockResolvedValue(null));
+    const disabled = await resolveClientFrom(
+      'app_swipesend',
+      vi.fn().mockResolvedValue(record({ disabledAt: new Date('2026-01-01T00:00:00Z') })),
+    );
+    expect(unknown).toBeNull();
+    expect(disabled).toBeNull();
+    expect(disabled).toStrictEqual(unknown);
+  });
+
+  it('never trusts a row whose clientId differs from the one asked for', async () => {
+    const client = await resolveClientFrom('app_swipesend', vi.fn().mockResolvedValue(record({ clientId: 'app_other' })));
+    expect(client).toBeNull();
+  });
+
+  it('returns null for an empty client id without a lookup', async () => {
+    const lookup = vi.fn();
+    expect(await resolveClientFrom('', lookup)).toBeNull();
+    expect(lookup).not.toHaveBeenCalled();
+  });
+});
+

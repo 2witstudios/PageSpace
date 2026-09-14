@@ -124,3 +124,102 @@ describe('ConsentActions — WebAuthn ceremony cancellation', () => {
     });
   });
 });
+
+describe('ConsentActions — identity-only consent skips the ceremony (requiresStepUp false)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.history.replaceState(null, '', '/oauth/consent?client_id=client-1');
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/oauth/authorize') {
+        return Promise.resolve({ redirectUri: 'http://127.0.0.1:1/cb?code=abc' });
+      }
+      throw new Error(`unexpected post to ${url}`);
+    });
+  });
+
+  afterEach(() => {
+    window.history.replaceState(null, '', '/');
+  });
+
+  for (const scope of ['profile', 'profile offline_access']) {
+    it(`approves "${scope}" in a single Allow click with no WebAuthn or email ceremony and no stepUpToken`, async () => {
+      render(<ConsentActions {...defaultProps} scope={scope} />);
+
+      await userEvent.click(screen.getByRole('button', { name: /^allow$/i }));
+
+      await waitFor(() => {
+        expect(postMock).toHaveBeenCalledWith(
+          '/api/oauth/authorize',
+          expect.objectContaining({ action: 'approve', scope }),
+        );
+      });
+      expect(postMock).toHaveBeenCalledTimes(1);
+      expect(postMock.mock.calls[0][1]).not.toHaveProperty('stepUpToken');
+      expect(startAuthentication).not.toHaveBeenCalled();
+    });
+  }
+
+  it('still runs the ceremony for a profile drive:X:member consent', async () => {
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/auth/step-up/webauthn/options') {
+        return Promise.resolve({ options: { challenge: 'srv-challenge' }, challengeId: 'chal-1' });
+      }
+      throw new Error(`unexpected post to ${url}`);
+    });
+    vi.mocked(startAuthentication).mockRejectedValue(new Error('NotAllowedError: user cancelled'));
+
+    render(<ConsentActions {...defaultProps} scope="profile drive:abc123:member" />);
+    await userEvent.click(screen.getByRole('button', { name: /^allow$/i }));
+
+    await waitFor(() => {
+      expect(startAuthentication).toHaveBeenCalledTimes(1);
+    });
+    expect(postMock).not.toHaveBeenCalledWith('/api/oauth/authorize', expect.anything());
+  });
+});
+
+// The emailed-grant auto-resume exists ONLY to finish a step-up ceremony the
+// user already started with an Allow click. On a consent that needs no
+// step-up the server ignores the token, so honouring a `#step_up_token`
+// fragment there would approve on page load — a crafted link would grant an
+// app the user's identity without the user ever clicking Allow.
+describe('ConsentActions — no auto-approval when step-up is not required', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    postMock.mockResolvedValue({ redirectUri: 'http://127.0.0.1:1/cb?code=abc' });
+  });
+
+  afterEach(() => {
+    window.history.replaceState(null, '', '/');
+  });
+
+  for (const scope of ['profile', 'profile offline_access']) {
+    it(`never approves a "${scope}" consent on load because of a step_up_token fragment`, async () => {
+      window.history.replaceState(null, '', '/oauth/consent?client_id=client-1#step_up_token=attacker-supplied');
+
+      render(<ConsentActions {...defaultProps} scope={scope} />);
+
+      // Give any mount effect a chance to fire.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(postMock).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: /^allow$/i })).not.toBeDisabled();
+    });
+  }
+
+  // The positive half, so the guard above can never be "fixed" by deleting the
+  // email resume outright: a consent that DOES require step-up still finishes
+  // the emailed ceremony automatically.
+  it('still auto-resumes a step-up-REQUIRED consent (profile drive:X:member) from its emailed step_up_token', async () => {
+    window.history.replaceState(null, '', '/oauth/consent?client_id=client-1#step_up_token=ps_stepup_email');
+
+    render(<ConsentActions {...defaultProps} scope="profile drive:abc123:member" />);
+
+    await waitFor(() => {
+      expect(postMock).toHaveBeenCalledWith(
+        '/api/oauth/authorize',
+        expect.objectContaining({ action: 'approve', scope: 'profile drive:abc123:member', stepUpToken: 'ps_stepup_email' }),
+      );
+    });
+    expect(window.location.hash).not.toContain('step_up_token');
+  });
+});

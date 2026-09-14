@@ -346,7 +346,10 @@ export async function getPrincipalDriveIds(auth: AuthResult): Promise<string[]> 
     return auth.allowedDriveIds;
   }
   if (isScopedOAuthAuth(auth)) {
-    return auth.allowedDriveIds;
+    // The drive ROWS, not `allowedDriveIds`: a profile-only principal carries a
+    // no-drive sentinel there (see `validateOAuthAccessToken`), which must
+    // never surface as a drive id in a caller's query.
+    return auth.driveScopes.map((scope) => scope.driveId);
   }
   return getDriveIdsForUser(auth.userId);
 }

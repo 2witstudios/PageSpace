@@ -18,7 +18,8 @@ import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/auth';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { normalizeUserCode } from '@pagespace/lib/auth/oauth/user-code';
-import { parseScopeList, checkGrantAuthority, isCredentialEscalatingGrant } from '@pagespace/lib/auth/oauth/scopes';
+import { parseScopeList, checkGrantAuthority } from '@pagespace/lib/auth/oauth/scopes';
+import { requiresStepUp } from '@pagespace/lib/auth/oauth/step-up-boundary';
 import { resolveGrantAuthority } from '@/lib/auth/oauth-grant-authority';
 import { recordDeviceApproval, verifyDeviceUserCode } from '@/lib/repositories/oauth-repository';
 import { requireStepUpGrant } from '@/app/api/auth/mcp-tokens/step-up-gate';
@@ -28,14 +29,11 @@ const bodySchema = z.object({
   userCode: z.string().min(1).max(32),
   action: z.enum(['approve', 'deny']),
   /**
-   * Required only for credential-escalating grants (mint / re-scope /
-   * activate), per `isCredentialEscalatingGrant`. The loopback consent screen
-   * requires step-up for every consent; the device flow historically needed
-   * none because it could only produce a login grant. Now that it can produce
-   * key material, the escalating subset carries the same second factor — or
-   * `--device` would be a way to mint a key with strictly less proof of
-   * presence than the browser flow demands. Plain logins keep their existing
-   * no-step-up path, so `login --device` is unchanged.
+   * Required iff `requiresStepUp(scopes)` (ADR 0004 Decision 6) — the same
+   * single decision the loopback consent route and the /activate screen read,
+   * so `--device` can never approve a grant with strictly less proof of
+   * presence than the browser flow demands. Anything reaching content or key
+   * management steps up; identity alone (`profile`) does not.
    */
   stepUpToken: z.string().min(1).optional(),
 });
@@ -95,7 +93,7 @@ export async function POST(req: NextRequest) {
       // obtained for one device approval can't be replayed against another —
       // the device analogue of the loopback binding's
       // clientId/redirectUri/scope/state tuple.
-      if (parsed.ok && isCredentialEscalatingGrant(parsed.scopes)) {
+      if (parsed.ok && requiresStepUp(parsed.scopes)) {
         const gate = await requireStepUpGrant({
           req,
           userId: auth.userId,

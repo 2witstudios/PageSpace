@@ -91,6 +91,7 @@ const DRIVE_SCOPED_OAUTH = {
   scopes: { account: false, offlineAccess: false, drives: new Map([['drive-1', { kind: 'drive', driveId: 'drive-1', role: { kind: 'inherit' } }]]) },
   driveScopes: [{ driveId: 'drive-1', role: null, customRoleId: null }],
   allowedDriveIds: ['drive-1'],
+  clientFirstParty: true,
 };
 
 const ACCOUNT_SCOPED_OAUTH = {
@@ -103,6 +104,7 @@ const ACCOUNT_SCOPED_OAUTH = {
   scopes: { account: true, offlineAccess: false, drives: new Map() },
   driveScopes: [],
   allowedDriveIds: [],
+  clientFirstParty: true,
 };
 
 describe('/api/auth/mcp-tokens (additional coverage)', () => {

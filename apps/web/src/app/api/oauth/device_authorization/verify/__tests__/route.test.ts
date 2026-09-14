@@ -184,6 +184,10 @@ describe('POST /api/oauth/device_authorization/verify — step-up advertisement'
     ['a mint grant', ['drive:drv1:member', 'name:remote-key', 'offline_access']],
     ['a re-scope grant', ['update_key:tok1', 'drive:drv1:member']],
     ['an activation grant', ['activate_key:tok1']],
+    // requiresStepUp (ADR 0004 Decision 6) is the single decision: anything
+    // that reaches content or key management steps up, not only key minting.
+    ['a pure drive grant', ['drive:drv1:member', 'offline_access']],
+    ['a key-management login grant', ['manage_keys', 'offline_access']],
   ];
 
   for (const [label, scopes] of ESCALATING) {
@@ -197,11 +201,11 @@ describe('POST /api/oauth/device_authorization/verify — step-up advertisement'
     });
   }
 
-  it('does not advertise step-up for a plain login grant', async () => {
+  it('does not advertise step-up for an identity-only (profile offline_access) grant', async () => {
     verifyDeviceUserCode.mockResolvedValue({
       outcome: 'ok',
       clientId: 'pagespace-cli',
-      scopes: ['manage_keys', 'offline_access'],
+      scopes: ['profile', 'offline_access'],
     });
 
     const body = await (await POST(verifyRequest({ userCode: 'ABCD-EFGH' }) as never)).json();
@@ -255,3 +259,38 @@ describe('POST /api/oauth/device_authorization/verify — step-up advertisement'
     expect(await res.json()).toEqual({ error: 'invalid_code' });
   });
 });
+
+/**
+ * The /activate screen narrates through `describeGrantScopes` — the one
+ * scope-to-text implementation — so a scope the lib teaches to narrate cannot
+ * be missing here (ADR 0004 Decision 4, Phase 1 obligation 5).
+ */
+describe('POST /api/oauth/device_authorization/verify — narration via describeGrantScopes', () => {
+  for (const scopes of [['profile'], ['profile', 'offline_access']]) {
+    it(`renders a non-empty list naming the identity fields for ${scopes.join(' ')}`, async () => {
+      verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes });
+
+      const body = await (await POST(verifyRequest({ userCode: 'ABCD-EFGH' }) as never)).json();
+
+      expect(body.scopeDescriptions.length).toBeGreaterThan(0);
+      expect(body.scopeDescriptions[0]).toBe('See your name, email, and avatar. No access to any drive or content.');
+    });
+  }
+
+  it('never claims "No access to any drive or content" beside a drive grant', async () => {
+    verifyDeviceUserCode.mockResolvedValue({
+      outcome: 'ok',
+      clientId: 'pagespace-cli',
+      scopes: ['profile', 'drive:drv1:member'],
+    });
+    const { sessionRepository } = await import('@/lib/repositories/session-repository');
+    vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([{ id: 'drv1', name: 'Acme' }] as never);
+
+    const body = await (await POST(verifyRequest({ userCode: 'ABCD-EFGH' }) as never)).json();
+
+    expect(body.scopeDescriptions).toContain('See your name, email, and avatar.');
+    expect(JSON.stringify(body.scopeDescriptions)).not.toContain('No access to any drive or content');
+    expect(JSON.stringify(body.scopeDescriptions)).toContain('Acme');
+  });
+});
+

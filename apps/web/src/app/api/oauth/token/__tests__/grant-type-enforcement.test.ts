@@ -21,15 +21,15 @@ const RESTRICTED_CLIENT = {
   firstParty: false,
 };
 
-vi.mock('@pagespace/lib/auth/oauth/clients', () => ({
-  getRegisteredClient: (clientId: string) => (clientId === RESTRICTED_CLIENT_ID ? RESTRICTED_CLIENT : null),
-}));
-
 const ensureOAuthClientRow = vi.fn();
 const exchangeAuthorizationCode = vi.fn();
 const refreshTokenGrant = vi.fn();
 const pollDeviceToken = vi.fn();
 vi.mock('@/lib/repositories/oauth-repository', () => ({
+  // The client registry is reached through resolveClient (static first, then
+  // the database); this suite stands a deliberately restricted client there.
+  resolveClient: async (clientId: string) => (clientId === RESTRICTED_CLIENT_ID ? RESTRICTED_CLIENT : null),
+  resolveClientDbId: (...args: unknown[]) => ensureOAuthClientRow(...args),
   ensureOAuthClientRow: (...args: unknown[]) => ensureOAuthClientRow(...args),
   exchangeAuthorizationCode: (...args: unknown[]) => exchangeAuthorizationCode(...args),
   refreshTokenGrant: (...args: unknown[]) => refreshTokenGrant(...args),

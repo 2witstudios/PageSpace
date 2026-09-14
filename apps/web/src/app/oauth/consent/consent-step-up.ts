@@ -9,6 +9,21 @@
  * fix to that ceremony code once had to be manually re-verified per call site.
  */
 
+import { parseScopeList } from '@pagespace/lib/auth/oauth/scopes';
+import { requiresStepUp } from '@pagespace/lib/auth/oauth/step-up-boundary';
+
+/**
+ * Whether approving this consent needs the step-up ceremony. Delegates to
+ * `requiresStepUp` — the same function `POST /api/oauth/authorize` enforces
+ * with — so the screen can never skip a ceremony the server demands, or run
+ * one it ignores. A scope string that does not parse fails closed (`true`);
+ * the server would reject it anyway, and the ceremony is the safe direction.
+ */
+export function consentRequiresStepUp(scope: string): boolean {
+  const parsed = parseScopeList(scope);
+  return parsed.ok ? requiresStepUp(parsed.scopes) : true;
+}
+
 export interface ConsentActionBindingParams {
   readonly clientId: string;
   readonly redirectUri: string;

@@ -7,6 +7,8 @@ import {
   validateMCPToken,
   validateOAuthAccessToken,
   validateSessionToken,
+  checkMCPDriveScope,
+  getAllowedDriveIds,
   isAuthError,
   isMCPAuthResult,
   isSessionAuthResult,
@@ -330,6 +332,7 @@ describe('Auth Middleware', () => {
         expiresAt: new Date(Date.now() + 15 * 60 * 1000),
         revokedAt: null,
         user: { ...baseUser },
+        client: { clientId: 'pagespace-cli', disabledAt: null },
         ...overrides,
       };
     }
@@ -365,6 +368,7 @@ describe('Auth Middleware', () => {
         scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: false, allDrives: false, profile: false, updateKeyId: null, activateKeyId: null, newKeyName: null },
         driveScopes: [],
         allowedDriveIds: [],
+        clientFirstParty: true,
       });
     });
 
@@ -376,6 +380,84 @@ describe('Auth Middleware', () => {
       const result = await validateOAuthAccessToken('ps_at_valid-token');
       expect(result?.allowedDriveIds).toEqual(['abc123def456']);
       expect(result?.driveScopes).toEqual([{ driveId: 'abc123def456', role: 'ADMIN', customRoleId: null }]);
+    });
+
+    // ADR 0004 Decision 4, Phase 1 obligation 1. A `profile` token has no drive
+    // rows and is not `account`, so `allowedDriveIds: []` would read as
+    // UNSCOPED to every caller that trusts the empty-means-full-access
+    // convention. It must still resolve (identity via /api/auth/me) but never
+    // with that shape.
+    it.each([['profile'], ['profile offline_access']])(
+      'resolves a %s token (identity still works) but never as an unscoped principal',
+      async (scope) => {
+        vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(
+          mockOAuthToken({ scopes: scope.split(' ') }) as never
+        );
+
+        const result = await validateOAuthAccessToken('ps_at_valid-token');
+        expect(result).not.toBeNull();
+        expect(result?.userId).toBe('test-user-id');
+        expect(result?.scopes.profile).toBe(true);
+        expect(result?.driveScopes).toEqual([]);
+        expect(result?.allowedDriveIds.length).toBeGreaterThan(0);
+        expect(result?.allowedDriveIds).not.toContain('abc123def456');
+      }
+    );
+
+    it.each([['profile'], ['profile offline_access']])(
+      'a resolved %s token is denied by checkMCPDriveScope for an arbitrary drive',
+      async (scope) => {
+        vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(
+          mockOAuthToken({ scopes: scope.split(' ') }) as never
+        );
+
+        const details = await validateOAuthAccessToken('ps_at_valid-token');
+        const auth = { ...details!, tokenType: 'oauth' as const };
+        expect(checkMCPDriveScope(auth, 'abc123def456')?.status).toBe(403);
+        expect(getAllowedDriveIds(auth)).not.toContain('abc123def456');
+      }
+    );
+
+    it('resolves a profile drive:X:member token to exactly drive X', async () => {
+      vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(
+        mockOAuthToken({ scopes: ['profile', 'drive:abc123def456:member'] }) as never
+      );
+
+      const result = await validateOAuthAccessToken('ps_at_valid-token');
+      expect(result?.allowedDriveIds).toEqual(['abc123def456']);
+      expect(result?.driveScopes).toEqual([{ driveId: 'abc123def456', role: 'MEMBER', customRoleId: null }]);
+    });
+
+    // Point guard ruling (Phase 1a): first-party is decided FROM CODE — the
+    // static registry, by the client row's clientId — never from the
+    // oauth_clients.isFirstParty column, and a disabled client's live access
+    // tokens stop working immediately.
+    it('marks a token issued to the static first-party client as clientFirstParty', async () => {
+      vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(mockOAuthToken() as never);
+
+      expect((await validateOAuthAccessToken('ps_at_valid-token'))?.clientFirstParty).toBe(true);
+    });
+
+    it('marks a DB-registered client as third-party even if its row claims isFirstParty', async () => {
+      vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(
+        mockOAuthToken({ scopes: ['profile'], client: { clientId: 'app_swipesend', disabledAt: null, isFirstParty: true } }) as never
+      );
+
+      expect((await validateOAuthAccessToken('ps_at_valid-token'))?.clientFirstParty).toBe(false);
+    });
+
+    it('refuses a live access token whose client has been disabled', async () => {
+      vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(
+        mockOAuthToken({ scopes: ['profile'], client: { clientId: 'app_swipesend', disabledAt: new Date('2026-09-13T00:00:00Z') } }) as never
+      );
+
+      expect(await validateOAuthAccessToken('ps_at_valid-token')).toBeNull();
+    });
+
+    it('fails closed on a token row with no client', async () => {
+      vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(mockOAuthToken({ client: null }) as never);
+
+      expect(await validateOAuthAccessToken('ps_at_valid-token')).toBeNull();
     });
 
     it('returns null for an expired token', async () => {
@@ -751,6 +833,7 @@ describe('Auth Middleware', () => {
           expiresAt: new Date(Date.now() + 15 * 60 * 1000),
           revokedAt: null,
           user: { id: 'test-user-id', role: 'user', tokenVersion: 0, adminRoleVersion: 0, suspendedAt: null },
+          client: { clientId: 'pagespace-cli', disabledAt: null },
         };
         vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(mockOAuthToken as never);
 
@@ -1192,6 +1275,7 @@ describe('Auth Middleware', () => {
           scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: false, allDrives: false, profile: false, updateKeyId: null, activateKeyId: null, newKeyName: null },
           driveScopes: [],
           allowedDriveIds: [],
+          clientFirstParty: true,
         };
         expect(isOAuthAuthResult(oauthResult)).toBe(true);
       });

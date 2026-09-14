@@ -5,11 +5,13 @@ import { eq } from '@pagespace/db/operators';
 import { driveRoles } from '@pagespace/db/schema/members';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { validateAuthorizeRequest, type AuthorizeRequestParams } from '@pagespace/lib/auth/oauth/authorize-request';
-import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
-import { describeScopeForConsent } from '@pagespace/lib/auth/oauth/consent';
+import { describeGrantScopes } from '@pagespace/lib/auth/oauth/grant-scope-summary';
+import { formatScopeSet } from '@pagespace/lib/auth/oauth/scopes';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import { sessionRepository } from '@/lib/repositories/session-repository';
+import { resolveClient } from '@/lib/repositories/oauth-repository';
 import { ConsentActions } from './ConsentActions';
+import { consentClientPresentation } from './consent-presentation';
 
 interface ConsentPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -59,7 +61,10 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
     scope: first(params.scope),
     state: first(params.state),
   };
-  const client = authorizeParams.clientId ? getRegisteredClient(authorizeParams.clientId) : null;
+  // Same resolution the authorize endpoint uses (ADR 0004 Decision 2), and the
+  // same validation — so a request beyond the client's scope cap redirects
+  // with invalid_scope here, before a single capability is rendered.
+  const client = authorizeParams.clientId ? await resolveClient(authorizeParams.clientId) : null;
   const result = validateAuthorizeRequest(authorizeParams, client);
 
   if (!result.ok) {
@@ -68,7 +73,8 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
         <div className="mx-auto max-w-md py-16 text-center">
           <h1 className="text-xl font-semibold">Authorization error</h1>
           <p className="mt-2 text-muted-foreground">
-            {result.error === 'invalid_client' ? 'Unknown client.' : 'Invalid or unregistered redirect_uri.'}
+            {/* One message for unknown / disabled / foreign-redirect (ADR 0004 G17). */}
+            Unknown client or unregistered redirect_uri.
           </p>
         </div>
       );
@@ -111,66 +117,72 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
       : [];
   const roleById = new Map(roleRows.filter((r): r is NonNullable<typeof r> => !!r).map((r) => [r.id, r]));
 
-  const scopeDescriptions: string[] = [];
-  // Named first so the user reads "this creates a key named X" before the
-  // capability list that follows.
-  if (result.scopes.newKeyName !== null) {
-    scopeDescriptions.push(describeScopeForConsent({ kind: 'name', name: result.scopes.newKeyName }, {}));
-  }
-  if (result.scopes.updateKeyId !== null) {
-    scopeDescriptions.push(
-      describeScopeForConsent(
-        { kind: 'update_key', tokenId: result.scopes.updateKeyId },
-        { keyName: updateKeyName ?? undefined },
-      ),
-    );
-  }
-  if (result.scopes.activateKeyId !== null) {
-    scopeDescriptions.push(
-      describeScopeForConsent(
-        { kind: 'activate_key', tokenId: result.scopes.activateKeyId },
-        { keyName: activateKeyName ?? undefined },
-      ),
-    );
-  }
-  if (result.scopes.account) {
-    scopeDescriptions.push(describeScopeForConsent({ kind: 'account' }, {}));
-  }
-  if (result.scopes.offlineAccess) {
-    scopeDescriptions.push(describeScopeForConsent({ kind: 'offline_access' }, {}));
-  }
-  if (result.scopes.manageKeys) {
-    scopeDescriptions.push(describeScopeForConsent({ kind: 'manage_keys' }, {}));
-  }
-  if (result.scopes.allDrives) {
-    scopeDescriptions.push(describeScopeForConsent({ kind: 'all_drives' }, {}));
-  }
-  for (const scope of result.scopes.drives.values()) {
-    const driveName = driveNamesById.get(scope.driveId);
-    if (scope.role.kind === 'custom') {
-      const role = roleById.get(scope.role.customRoleId);
-      scopeDescriptions.push(
-        describeScopeForConsent(scope, { driveName, roleName: role?.name, roleSummary: role?.description ?? undefined }),
-      );
-    } else {
-      scopeDescriptions.push(describeScopeForConsent(scope, { driveName }));
-    }
-  }
+  // One narration implementation for every surface (ADR 0004 Decision 4,
+  // Phase 1 obligation 5) — the list builder holds the whole scope set, so it
+  // alone can say whether `profile` is the only access being granted.
+  const scopeDescriptions = describeGrantScopes(formatScopeSet(result.scopes).split(' ').filter(Boolean), {
+    driveNamesById,
+    roleNamesById: roleById,
+    keyName: updateKeyName ?? activateKeyName ?? undefined,
+  });
+
+  const presentation = consentClientPresentation(result.client);
 
   return (
     <div className="mx-auto max-w-md py-16">
+      {!presentation.logoUrl && (
+        // No network request: an initial stands in for an unverified app's logo.
+        <div
+          data-testid="consent-client-initial"
+          aria-hidden="true"
+          className="mb-4 flex h-12 w-12 items-center justify-center rounded bg-muted text-lg font-semibold text-muted-foreground"
+        >
+          {presentation.name.trim().charAt(0).toUpperCase()}
+        </div>
+      )}
+      {presentation.logoUrl && (
+        // A registered client's own logo host: plain <img> (next/image would
+        // proxy it through this server), no referrer so the consent URL never
+        // reaches that host.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={presentation.logoUrl}
+          alt={`${presentation.name} logo`}
+          referrerPolicy="no-referrer"
+          width={48}
+          height={48}
+          className="mb-4 h-12 w-12 rounded"
+        />
+      )}
       <h1 className="text-xl font-semibold">
         {updateKeyName !== null
-          ? `${result.client.name} wants to update the key "${updateKeyName}"`
+          ? `${presentation.name} wants to update the key "${updateKeyName}"`
           : activateKeyName !== null
-            ? `${result.client.name} wants to make "${activateKeyName}" its active key`
-            : `${result.client.name} is requesting access`}
-        {result.client.firstParty && (
+            ? `${presentation.name} wants to make "${activateKeyName}" its active key`
+            : `${presentation.name} is requesting access`}
+        {presentation.builtByPageSpace && (
           <span className="ml-2 rounded bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground">
             Built by PageSpace
           </span>
         )}
+        {presentation.unverified && (
+          <span className="ml-2 rounded border border-amber-500 px-2 py-0.5 text-xs font-normal text-amber-700 dark:text-amber-400">
+            Unverified app
+          </span>
+        )}
       </h1>
+      {presentation.homepage && (
+        <p className="mt-1 text-sm text-muted-foreground">
+          <a
+            href={presentation.homepage.href}
+            target="_blank"
+            rel="noopener noreferrer nofollow"
+            className="underline"
+          >
+            {presentation.homepage.host}
+          </a>
+        </p>
+      )}
       <ul className="mt-6 space-y-3 text-sm">
         {scopeDescriptions.map((text, i) => (
           <li key={i} className="rounded border p-3">

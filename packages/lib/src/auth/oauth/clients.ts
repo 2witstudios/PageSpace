@@ -4,8 +4,8 @@
  *
  * The static registry below still holds the first-party clients — the CLI
  * (`client_id: "pagespace-cli"`) is defined in code, not in a table, so a
- * SQL write can never mint a first-party client. Phase 1 adds a DB-backed
- * lookup for third-party clients BEHIND this one (static first, then
+ * SQL write can never mint a first-party client. Third-party clients resolve
+ * from the database BEHIND this one (`resolveClientFrom`: static first, then
  * `oauth_clients` where `disabledAt IS NULL`); an unknown `client_id` stays
  * `invalid_client`.
  *
@@ -73,6 +73,79 @@ const STATIC_CLIENT_REGISTRY = new Map<string, RegisteredClient>([[PAGESPACE_CLI
 export function getRegisteredClient(clientId: string): RegisteredClient | null {
   if (!clientId) return null;
   return STATIC_CLIENT_REGISTRY.get(clientId) ?? null;
+}
+
+/**
+ * The `oauth_clients` columns a DB-backed client resolves from. Structural, so
+ * this module stays free of `@pagespace/db`; the repository reads the row and
+ * hands it in (ADR 0004 Decision 2).
+ */
+export interface OAuthClientRecord {
+  clientId: string;
+  name: string;
+  clientType: 'public' | 'confidential';
+  redirectUris: string[];
+  allowedGrantTypes: string[];
+  allowedScopes: string[];
+  logoUrl: string | null;
+  homepageUrl: string | null;
+  description: string | null;
+  ownerUserId: string | null;
+  verified: boolean;
+  /** Read only to be ignored: first-party clients exist in code, never in a row. */
+  isFirstParty: boolean;
+  disabledAt: Date | null;
+}
+
+/**
+ * A DB row → the client it describes, or null when it must not resolve.
+ *
+ * Fails closed on a disabled row and on a `confidential` row (public clients
+ * only, ADR 0004 Decision 1). `firstParty` is always `false`: a SQL write can
+ * never mint a client that gets the loopback wildcard or the `applyKeyGrant`
+ * mint path. Lists are copied so the returned client shares no mutable state
+ * with the record.
+ */
+export function registeredClientFromRecord(record: OAuthClientRecord): RegisteredClient | null {
+  if (record.disabledAt !== null) return null;
+  if (record.clientType !== 'public') return null;
+
+  const client: RegisteredClient = {
+    clientId: record.clientId,
+    name: record.name,
+    type: 'public',
+    redirectUris: [...record.redirectUris],
+    allowedGrantTypes: [...record.allowedGrantTypes],
+    allowedScopes: [...record.allowedScopes],
+    firstParty: false,
+    verified: record.verified,
+  };
+  if (record.logoUrl !== null) client.logoUrl = record.logoUrl;
+  if (record.homepageUrl !== null) client.homepageUrl = record.homepageUrl;
+  if (record.description !== null) client.description = record.description;
+  if (record.ownerUserId !== null) client.ownerUserId = record.ownerUserId;
+  return client;
+}
+
+/** Reads the ENABLED `oauth_clients` row for a client id, or null. Injected by the caller. */
+export type OAuthClientLookup = (clientId: string) => Promise<OAuthClientRecord | null>;
+
+/**
+ * Resolve a `client_id`: the static registry first, then the database
+ * (ADR 0004 Decision 2). A database row can never shadow a static client, and
+ * a row that answers for a different id than the one asked is ignored.
+ * Unknown, disabled and confidential all return the same `null`, so a caller
+ * cannot tell them apart — there is no oracle to leak.
+ */
+export async function resolveClientFrom(clientId: string, lookup: OAuthClientLookup): Promise<RegisteredClient | null> {
+  if (!clientId) return null;
+
+  const staticClient = getRegisteredClient(clientId);
+  if (staticClient) return staticClient;
+
+  const record = await lookup(clientId);
+  if (!record || record.clientId !== clientId) return null;
+  return registeredClientFromRecord(record);
 }
 
 /** The two loopback literals RFC 8252 §7.3 allows a wildcard port on. `localhost` is deliberately excluded (§8.3). */

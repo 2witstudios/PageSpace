@@ -101,3 +101,20 @@ describe('describeGrantScopes', () => {
     expect(descriptions[0]).toContain('tok123');
   });
 });
+
+describe('describeGrantScopes — target key name (consent surfaces narrate WHICH key)', () => {
+  it('names the key an update_key grant re-scopes when the caller resolved it', () => {
+    const descriptions = describeGrantScopes(['update_key:tok1', 'drive:drv1:member'], { ...NO_NAMES, keyName: 'my-key' });
+    expect(descriptions[0]).toMatch(/"my-key"/);
+  });
+
+  it('names the key an activate_key grant activates when the caller resolved it', () => {
+    const descriptions = describeGrantScopes(['activate_key:tok1'], { ...NO_NAMES, keyName: 'my-key' });
+    expect(descriptions[0]).toMatch(/"my-key"/);
+  });
+
+  it('falls back to the token id when no key name was resolved', () => {
+    const descriptions = describeGrantScopes(['activate_key:tok1'], NO_NAMES);
+    expect(descriptions[0]).toMatch(/"tok1"/);
+  });
+});

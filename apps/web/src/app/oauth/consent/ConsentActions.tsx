@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { post } from '@/lib/auth/auth-fetch';
 import { attemptStepUp, readStepUpTokenFromHash, stripStepUpTokenFromHash } from '@/lib/auth/step-up-ceremony';
-import { buildConsentActionBinding } from './consent-step-up';
+import { buildConsentActionBinding, consentRequiresStepUp } from './consent-step-up';
 
 interface ConsentActionsProps {
   clientId: string;
@@ -25,10 +25,12 @@ type StepUpStatus = 'idle' | 'in_progress' | 'awaiting_email' | 'ready';
  * once the server hands back the validated target.
  *
  * Allow additionally requires a live step-up grant (Phase 8 credential
- * minting security correction): a WebAuthn tap for users with a passkey, or
- * a fresh single-use magic link to their own inbox otherwise. Neither can be
- * extracted from a stolen session cookie and replayed later. Denying never
- * needs a step-up — it only narrows access.
+ * minting security correction) whenever `requiresStepUp` says the scope set
+ * reaches content or key management: a WebAuthn tap for users with a passkey,
+ * or a fresh single-use magic link to their own inbox otherwise. Neither can
+ * be extracted from a stolen session cookie and replayed later. Identity alone
+ * (`profile`) is a single CSRF-protected Allow click (ADR 0004 Decision 6).
+ * Denying never needs a step-up — it only narrows access.
  */
 export function ConsentActions(props: ConsentActionsProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -37,6 +39,7 @@ export function ConsentActions(props: ConsentActionsProps) {
   const [stepUpToken, setStepUpToken] = useState<string | null>(null);
 
   const actionBinding = buildConsentActionBinding(props);
+  const stepUpRequired = consentRequiresStepUp(props.scope);
   const emailResumeStarted = useRef(false);
 
   // A step-up magic link redirects back to this same consent URL with the
@@ -49,6 +52,11 @@ export function ConsentActions(props: ConsentActionsProps) {
   // for the CLI login flow it risked the user waiting out the CLI's timeout
   // on a screen that looked like it still needed nothing from them.
   useEffect(() => {
+    // Only a consent that REQUIRES step-up can be resuming one. Where step-up
+    // is not required the server ignores the token, so honouring a fragment
+    // here would approve on page load: a crafted `#step_up_token=` link would
+    // grant an app the user's identity with no Allow click at all.
+    if (!stepUpRequired) return;
     const tokenFromEmail = readStepUpTokenFromHash(window.location.hash);
     if (!tokenFromEmail) return;
     // Effects can run twice (StrictMode); the grant is single-use, so the
@@ -70,7 +78,7 @@ export function ConsentActions(props: ConsentActionsProps) {
     try {
       let token = emailGrantToken ?? stepUpToken;
 
-      if (action === 'approve' && !token) {
+      if (action === 'approve' && stepUpRequired && !token) {
         setStepUpStatus('in_progress');
         try {
           const next = `${window.location.pathname}${window.location.search}`;
@@ -106,7 +114,7 @@ export function ConsentActions(props: ConsentActionsProps) {
         scope: props.scope,
         state: props.state,
         action,
-        ...(action === 'approve' ? { stepUpToken: token } : {}),
+        ...(action === 'approve' && stepUpRequired ? { stepUpToken: token } : {}),
       });
       window.location.href = redirectUri;
     } catch {

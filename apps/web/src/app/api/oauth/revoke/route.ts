@@ -16,8 +16,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getClientIP } from '@/lib/auth';
-import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
-import { ensureOAuthClientRow, revokeOAuthToken } from '@/lib/repositories/oauth-repository';
+import { resolveClient, resolveClientDbId, revokeOAuthToken } from '@/lib/repositories/oauth-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 
@@ -61,13 +60,16 @@ export async function POST(req: NextRequest) {
     return noStoreJson({ error: 'rate_limited', retryAfter: Math.max(ipLimit.retryAfter ?? 0, clientLimit.retryAfter ?? 0) }, 429);
   }
 
-  const client = getRegisteredClient(clientId);
+  const client = await resolveClient(clientId);
   if (!client) {
-    // No oracle: an unknown client_id is indistinguishable from an unknown token.
+    // No oracle: an unknown or disabled client_id is indistinguishable from an unknown token.
     return noStoreEmpty();
   }
 
-  const clientDbId = await ensureOAuthClientRow(client);
+  const clientDbId = await resolveClientDbId(client);
+  if (clientDbId === null) {
+    return noStoreEmpty();
+  }
   await revokeOAuthToken({ token, clientDbId, now: new Date() });
 
   auditRequest(req, {

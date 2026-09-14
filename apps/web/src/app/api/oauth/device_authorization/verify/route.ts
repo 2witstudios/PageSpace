@@ -13,8 +13,9 @@ import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { normalizeUserCode } from '@pagespace/lib/auth/oauth/user-code';
 import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
-import { isCredentialEscalatingGrant, parseScopeList } from '@pagespace/lib/auth/oauth/scopes';
-import { describeScopeForConsent } from '@pagespace/lib/auth/oauth/consent';
+import { parseScopeList } from '@pagespace/lib/auth/oauth/scopes';
+import { requiresStepUp } from '@pagespace/lib/auth/oauth/step-up-boundary';
+import { describeGrantScopes } from '@pagespace/lib/auth/oauth/grant-scope-summary';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { driveRoles } from '@pagespace/db/schema/members';
@@ -63,7 +64,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'invalid_code' }, { status: 400 });
   }
 
-  const scopeDescriptions: string[] = [];
+  let scopeDescriptions: string[] = [];
   // An empty scope list is a legitimate device-authorization request (the
   // device_authorization route leaves `scopes: []` when the initial POST omits
   // `scope` entirely) — but a NON-empty list this parser rejects is not
@@ -75,11 +76,12 @@ export async function POST(req: NextRequest) {
   if (parsed !== null && !parsed.ok) {
     return NextResponse.json({ error: 'invalid_code' }, { status: 400 });
   }
-  // Derived from the SAME predicate the decision route enforces with, so the
-  // screen can never advertise a ceremony the server doesn't demand (or skip
-  // one it does). Surfaced so the ceremony runs before the user clicks Allow
-  // rather than failing them afterward.
-  const requiresStepUp = parsed?.ok === true && isCredentialEscalatingGrant(parsed.scopes);
+  // `requiresStepUp` (ADR 0004 Decision 6) is the single step-up decision —
+  // the decision route enforces with the same call, so the screen can never
+  // advertise a ceremony the server doesn't demand (or skip one it does).
+  // Surfaced so the ceremony runs before the user clicks Allow rather than
+  // failing them afterward.
+  const stepUpRequired = parsed?.ok === true && requiresStepUp(parsed.scopes);
 
   if (parsed?.ok) {
     // An update_key grant re-scopes one of the VERIFYING user's existing keys
@@ -100,37 +102,6 @@ export async function POST(req: NextRequest) {
       targetKeyName = target.name;
     }
 
-    // Named first so the user reads "this creates a key named X" before the
-    // capability list that follows — same ordering as the consent screen.
-    if (parsed.scopes.newKeyName !== null) {
-      scopeDescriptions.push(describeScopeForConsent({ kind: 'name', name: parsed.scopes.newKeyName }, {}));
-    }
-    if (parsed.scopes.updateKeyId !== null) {
-      scopeDescriptions.push(
-        describeScopeForConsent(
-          { kind: 'update_key', tokenId: parsed.scopes.updateKeyId },
-          { keyName: targetKeyName ?? undefined },
-        ),
-      );
-    }
-    if (parsed.scopes.activateKeyId !== null) {
-      scopeDescriptions.push(
-        describeScopeForConsent(
-          { kind: 'activate_key', tokenId: parsed.scopes.activateKeyId },
-          { keyName: targetKeyName ?? undefined },
-        ),
-      );
-    }
-    if (parsed.scopes.account) {
-      scopeDescriptions.push(describeScopeForConsent({ kind: 'account' }, {}));
-    }
-    if (parsed.scopes.offlineAccess) {
-      scopeDescriptions.push(describeScopeForConsent({ kind: 'offline_access' }, {}));
-    }
-    if (parsed.scopes.manageKeys) {
-      scopeDescriptions.push(describeScopeForConsent({ kind: 'manage_keys' }, {}));
-    }
-
     const driveIds = [...parsed.scopes.drives.keys()];
     const drives = driveIds.length > 0 ? await sessionRepository.findDrivesByIds(driveIds) : [];
     const driveNamesById = new Map(drives.map((d) => [d.id, d.name]));
@@ -144,17 +115,13 @@ export async function POST(req: NextRequest) {
         : [];
     const roleById = new Map(roleRows.filter((r): r is NonNullable<typeof r> => !!r).map((r) => [r.id, r]));
 
-    for (const scope of parsed.scopes.drives.values()) {
-      const driveName = driveNamesById.get(scope.driveId);
-      if (scope.role.kind === 'custom') {
-        const role = roleById.get(scope.role.customRoleId);
-        scopeDescriptions.push(
-          describeScopeForConsent(scope, { driveName, roleName: role?.name, roleSummary: role?.description ?? undefined }),
-        );
-      } else {
-        scopeDescriptions.push(describeScopeForConsent(scope, { driveName }));
-      }
-    }
+    // One narration implementation for every surface (ADR 0004 Decision 4,
+    // Phase 1 obligation 5) — the same list the consent screen renders.
+    scopeDescriptions = describeGrantScopes(result.scopes, {
+      driveNamesById,
+      roleNamesById: roleById,
+      keyName: targetKeyName ?? undefined,
+    });
   }
 
   return NextResponse.json({
@@ -162,12 +129,12 @@ export async function POST(req: NextRequest) {
     clientName: client.name,
     firstParty: client.firstParty,
     scopeDescriptions,
-    requiresStepUp,
+    requiresStepUp: stepUpRequired,
     // The exact binding the decision route will recompute from its own
     // lookup, handed to the client so the grant it mints can't be bound to a
     // different tuple by accident. Not a trust boundary: a client that lied
     // here would mint a grant whose hash simply fails to match the server's
     // recomputed one at decision time, and the approval is refused.
-    stepUpActionBinding: requiresStepUp ? { userCode: normalized, scope: result.scopes.join(' ') } : null,
+    stepUpActionBinding: stepUpRequired ? { userCode: normalized, scope: result.scopes.join(' ') } : null,
   });
 }

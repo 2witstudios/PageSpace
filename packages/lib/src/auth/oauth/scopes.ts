@@ -560,16 +560,9 @@ export function hasNewKeyName(scopes: ScopeSet): scopes is ScopeSet & { newKeyNa
  * device's ambient default (`activate_key:`) — as opposed to merely
  * establishing a login session.
  *
- * Exists so the two halves of the device-flow step-up gate cannot drift: the
- * `/activate` verify route uses it to decide whether to advertise (and run)
- * the second-factor ceremony, and the decision route uses it to decide whether
- * to REQUIRE one. Two independent expressions of that rule would mean a fourth
- * key-shaped scope could be added where the screen never runs the ceremony and
- * the server then rejects a legitimate approval — or, worse, where the server
- * stops demanding one.
- *
- * The loopback consent screen does not need this: `/api/oauth/authorize`
- * requires step-up for EVERY consent, escalating or not.
+ * NOT a step-up decision. Step-up is decided by `requiresStepUp`
+ * (`./step-up-boundary`, ADR 0004 Decision 6) and nothing else — this answers
+ * the narrower question of whether a grant touches key material at all.
  */
 export function isCredentialEscalatingGrant(scopes: ScopeSet): boolean {
   return hasNewKeyName(scopes) || isKeyUpdateGrant(scopes) || isKeyActivationGrant(scopes);

@@ -80,6 +80,7 @@ const DRIVE_SCOPED_OAUTH = {
   scopes: { account: false, offlineAccess: false, drives: new Map([['drive-1', { kind: 'drive', driveId: 'drive-1', role: { kind: 'inherit' } }]]) },
   driveScopes: [{ driveId: 'drive-1', role: null, customRoleId: null }],
   allowedDriveIds: ['drive-1'],
+  clientFirstParty: true,
 };
 
 function mockIsScopedOAuthAuth(): void {

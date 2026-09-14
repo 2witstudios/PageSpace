@@ -22,6 +22,9 @@ vi.mock('@/middleware/security-headers', () => ({
   isPublishedSiteHost: vi.fn(() => false),
   isSecureRequest: vi.fn(() => true),
   shouldDisableCOEP: vi.fn(() => false),
+  // token/revoke/discovery responses carry CORS (ADR 0004 Decision 9); the
+  // header set itself is covered in src/__tests__/middleware.test.ts.
+  applyApiCorsHeaders: vi.fn(<T,>(response: T) => response),
 }));
 // middleware.ts imports origin validation from its leaf module (never the
 // Node-only '@/lib/auth' barrel), so that's what gets mocked. The bearer

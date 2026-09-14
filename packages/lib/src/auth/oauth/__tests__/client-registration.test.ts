@@ -9,7 +9,7 @@
  * port wildcard.
  */
 import { describe, it, expect } from 'vitest';
-import { validateClientRegistration, type ClientRegistrationError } from '../client-registration';
+import { validateClientRegistration, decideGrantIssuance, type ClientRegistrationError } from '../client-registration';
 import { validateRedirectUri } from '../clients';
 
 const valid = {
@@ -389,3 +389,48 @@ describe('validateClientRegistration — reports every problem at once', () => {
     expect(found).toEqual(expect.arrayContaining(['invalid_name', 'invalid_logo_url', 'invalid_redirect_uri', 'forbidden_scope']));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-client issuance (ADR 0004 Decision 5, Phase 1a leaf 4)
+// ---------------------------------------------------------------------------
+
+describe('decideGrantIssuance', () => {
+  const FIRST = { firstParty: true };
+  const THIRD = { firstParty: false };
+
+  it('sends every first-party grant through applyKeyGrant, byte-for-byte as before — even one that does not parse', () => {
+    for (const scopes of [['drive:drv1:member', 'name:k'], ['account'], ['manage_keys', 'offline_access'], ['not a scope!']]) {
+      expect(decideGrantIssuance(FIRST, scopes)).toBe('apply_key_grant');
+    }
+  });
+
+  it('gives a third-party client an ordinary token pair for identity and drive grants', () => {
+    for (const scopes of [
+      ['profile'],
+      ['profile', 'offline_access'],
+      ['drive:drv1:member', 'offline_access'],
+      ['profile', 'drive:drv1', 'drive:drv2:admin', 'drive:drv3:role:rol1'],
+    ]) {
+      expect(decideGrantIssuance(THIRD, scopes)).toBe('token_pair');
+    }
+  });
+
+  it('refuses a third-party grant that carries a key operation or a shapeless scope', () => {
+    for (const scopes of [
+      ['update_key:tok1', 'drive:drv1:member'],
+      ['activate_key:tok1'],
+      ['all_drives', 'name:k'],
+      ['drive:drv1:member', 'name:k'],
+      ['manage_keys', 'offline_access'],
+      ['account'],
+    ]) {
+      expect(decideGrantIssuance(THIRD, scopes)).toBe('refuse');
+    }
+  });
+
+  it('refuses a third-party scope list that does not parse', () => {
+    expect(decideGrantIssuance(THIRD, ['not a scope!'])).toBe('refuse');
+    expect(decideGrantIssuance(THIRD, [])).toBe('refuse');
+  });
+});
+
