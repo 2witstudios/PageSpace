@@ -12,12 +12,13 @@ import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/pag
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 
-import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers, createTaskTriggerWorkflow, type TaskTriggerWorkflowResult } from '@/lib/workflows/task-trigger-helpers';
+import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers, createTaskTriggerWorkflow, hasArmedCompletionTrigger, type TaskTriggerWorkflowResult } from '@/lib/workflows/task-trigger-helpers';
 import { checkSubTasksComplete, SUBTASKS_INCOMPLETE_STATUS } from '@/lib/tasks/completion-guard';
 import { reorderTaskPeers } from '@/lib/ai/tools/task-helpers';
 import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import { isNaiveISODatetime, parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
 import { decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
+import { appliesAgentTriggerHold, refuseOAuthAgentTrigger } from '@/lib/auth/oauth-agent-trigger-hold';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
@@ -125,6 +126,15 @@ export async function PATCH(
       }
     }
   }
+
+  // Agent triggers are held from OAuth applications (pending Phase 2b / [D-15]):
+  // setting or clearing one, or completing a task whose completion trigger is
+  // armed (that would start the agent run), is refused before any write.
+  const triggerHold = refuseOAuthAgentTrigger(auth, {
+    writesTrigger: agentTrigger !== undefined,
+    firesTrigger: statusMovedToDone && appliesAgentTriggerHold(auth) && (await hasArmedCompletionTrigger(taskId)),
+  });
+  if (triggerHold) return triggerHold;
 
   // Add note to metadata (mirrors the internal update_task tool)
   if (note || status !== undefined) {

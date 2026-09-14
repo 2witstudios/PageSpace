@@ -292,6 +292,26 @@ describe('oauth allow-list guard', () => {
     ).toEqual([]);
   });
 
+  // Point-guard hold pending Phase 2b / [D-15]: an agent trigger schedules or
+  // starts an agent run executed as the owning user with no ceiling, so a route
+  // admitting `oauth` that handles agent-trigger input must refuse it from an
+  // OAuth principal through the shared refusal — never widen first, hold later.
+  it('(c) every route admitting oauth that handles agent-trigger input applies the shared OAuth trigger refusal', () => {
+    const TRIGGER_INPUT = /\bagentTrigger\b|\btriggerType\b|\bcreateTaskTriggerWorkflow\b|\bupsertCalendarTriggerWorkflow\w*\b|\bfireCompletionTrigger\b/;
+    const offenders = routes
+      .filter((r) => r.lists.some((list) => list.includes('oauth')))
+      .filter((r) => {
+        const code = stripComments(r.source);
+        return TRIGGER_INPUT.test(code) && !/\brefuseOAuthAgentTrigger\(/.test(code);
+      })
+      .map((r) => r.key)
+      .sort();
+    expect(
+      offenders,
+      'These routes admit OAuth and take agent-trigger input without refuseOAuthAgentTrigger (apps/web/src/lib/auth/oauth-agent-trigger-hold.ts).',
+    ).toEqual([]);
+  });
+
   it('only pinned identity routes admit oauth without mcp', () => {
     const offenders = routes
       .filter((r) => r.lists.some((list) => list.includes('oauth') && !list.includes('mcp')))

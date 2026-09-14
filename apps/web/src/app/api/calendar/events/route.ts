@@ -19,6 +19,7 @@ import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import { absoluteInstant } from '@/lib/validation/date-params';
 import { expandRecurringEvents } from '@/lib/workflows/recurrence-utils';
 import { CronExpressionParser } from 'cron-parser';
+import { refuseOAuthAgentTrigger } from '@/lib/auth/oauth-agent-trigger-hold';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
@@ -531,6 +532,10 @@ export async function POST(request: Request) {
     }
 
     const data = parseResult.data;
+
+    // Agent triggers are held from OAuth applications (pending Phase 2b / [D-15]).
+    const triggerHold = refuseOAuthAgentTrigger(auth, { writesTrigger: data.agentTrigger !== undefined, firesTrigger: false });
+    if (triggerHold) return triggerHold;
 
     // Explicit body value wins, else the caller's profile timezone, else UTC —
     // the same resolution the task and trigger routes use, so "tomorrow at 7pm"
