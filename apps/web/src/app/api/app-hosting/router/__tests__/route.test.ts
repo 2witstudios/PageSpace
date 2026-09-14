@@ -25,7 +25,7 @@ import { GET, POST, HEAD } from '../route';
 
 // >=32 chars: resolveAppRouterProxySecret reads anything shorter as unset.
 const PROXY_SECRET = 'proxy-secret-value-padded-to-32ch';
-const HOST = 'acme.pagespace.app';
+const HOST = 'acme.pagespace.io';
 
 function request(
   headers: Record<string, string> = {},
@@ -92,16 +92,16 @@ describe('the endpoint answers only the edge proxy', () => {
 
 describe('the hostname the decision is made about', () => {
   it('given the explicit host header, should prefer it over Host', async () => {
-    await GET(request({ 'x-pagespace-app-host': 'real.pagespace.app', host: 'internal.flycast' }));
-    expect(resolveAppRoute).toHaveBeenCalledWith('real.pagespace.app');
+    await GET(request({ 'x-pagespace-app-host': 'real.pagespace.io', host: 'internal.flycast' }));
+    expect(resolveAppRoute).toHaveBeenCalledWith('real.pagespace.io');
   });
 
   it('given no explicit header, should fall back to Host for a direct-to-web deployment', async () => {
     const res = new Request('https://pagespace.ai/api/app-hosting/router', {
-      headers: { 'x-pagespace-app-router-key': PROXY_SECRET, host: 'fallback.pagespace.app' },
+      headers: { 'x-pagespace-app-router-key': PROXY_SECRET, host: 'fallback.pagespace.io' },
     });
     await GET(res);
-    expect(resolveAppRoute).toHaveBeenCalledWith('fallback.pagespace.app');
+    expect(resolveAppRoute).toHaveBeenCalledWith('fallback.pagespace.io');
   });
 });
 

@@ -138,10 +138,10 @@ export function normalizeRequestHost(rawHost: string): string {
 /**
  * Resolve a request hostname against the published-apps apex.
  *
- * Only a SINGLE label under the apex is a published app: `acme.pagespace.app`
- * yes, `a.b.pagespace.app` no. That is not fussiness — the wildcard cert covers
+ * Only a SINGLE label under the apex is a published app: `acme.pagespace.io`
+ * yes, `a.b.pagespace.io` no. That is not fussiness — the wildcard cert covers
  * one level, so a deeper name is not TLS-terminated for us anyway, and admitting
- * it would let `evil.acme.pagespace.app` present as the app `evil` while looking
+ * it would let `evil.acme.pagespace.io` present as the app `evil` while looking
  * to a reader like a child of `acme`.
  */
 export function parseAppHost(rawHost: string, apex: string): AppHost {
