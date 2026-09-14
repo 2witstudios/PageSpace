@@ -56,6 +56,16 @@ describe('GET /api/commands — personal commands and OAuth', () => {
     expect(whereOfListing()).toContain('"column":"drive_id"');
   });
 
+  it('returns no commands — and runs no unfiltered query — for an OAuth grant with no member drive in scope', async () => {
+    // The grant names drive Y, which the user does not belong to (left it, or
+    // never did): the drive half is empty and the personal half is excluded.
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(oauthDriveGrant('drivey', 'admin'));
+    const res = await list();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ commands: [] });
+    expect(db.query.commands.findMany).not.toHaveBeenCalled();
+  });
+
   for (const [label, principal] of [['a drive-scoped mcp_ key', mcpDriveKey('drivex')], ['a session', session]] as const) {
     it(`still lists personal commands to ${label}`, async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(principal);
