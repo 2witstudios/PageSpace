@@ -74,6 +74,7 @@ export async function GET(
       const membership = await getPrincipalDriveMembership(auth, driveId);
       if (membership?.role === null) {
         // Inherit: the key is its owner — present the owner's own relationship.
+        // user-identity: an INHERIT-role credential is its user in this drive, so the user's own relationship is the truthful answer.
         const inherited = await getDriveWithAccess(driveId, userId);
         if (inherited) return NextResponse.json(inherited);
       }
@@ -86,6 +87,7 @@ export async function GET(
       });
     }
 
+    // user-identity: unscoped-user branch only — drive-scoped credentials took the principal branch above.
     const driveWithAccess = await getDriveWithAccess(driveId, userId);
 
     if (!driveWithAccess) {

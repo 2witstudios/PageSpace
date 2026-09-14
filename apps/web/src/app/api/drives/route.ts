@@ -84,6 +84,7 @@ export async function GET(req: Request) {
       // The `pagespace keys` wizard's manage_keys credential belongs to the real
       // user and must see which drives exist to scope a new key to — it has no
       // content access, which every content route enforces on its own.
+      // user-identity: the manage_keys credential lists its user's drives to scope a new key; otherwise the unscoped-user branch.
       drives = await listAccessibleDrives(userId, { includeTrash, tokenScopable });
     } else if (isDriveScopedPrincipal(auth)) {
       // A drive-scoped credential (mcp_ key or OAuth drive grant) is its own
@@ -105,6 +106,7 @@ export async function GET(req: Request) {
       // shape any grant should produce — never let it inherit the full list.
       drives = [];
     } else {
+      // user-identity: the manage_keys credential lists its user's drives to scope a new key; otherwise the unscoped-user branch.
       drives = await listAccessibleDrives(userId, { includeTrash, tokenScopable });
     }
 

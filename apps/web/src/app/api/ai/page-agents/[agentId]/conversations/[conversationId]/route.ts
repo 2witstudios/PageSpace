@@ -267,6 +267,7 @@ export async function DELETE(
       const outcome = await expelConversationFromSession({
         conversationId,
         workspaceId,
+        // user-identity: the workspace-tree bookkeeping actor, after canPrincipalEditPage authorized the credential.
         actingUserId: auth.userId,
       });
 
@@ -286,6 +287,7 @@ export async function DELETE(
     // WRITE. A thread with no workspace is exactly what
     // `claimConversationInSession` admits, so a conditional call could never
     // reach the branch that needed it most.
+    // user-identity: the workspace-tree bookkeeping actor, after canPrincipalEditPage authorized the credential.
     await expelAfterDelete({ conversationId, actingUserId: auth.userId });
 
     // Audit log the deletion for security and compliance

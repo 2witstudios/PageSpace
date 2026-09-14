@@ -107,6 +107,7 @@ export async function GET(req: NextRequest) {
     const allowedDriveIds = getAllowedDriveIds(auth);
 
     // Get all drives user has access to (owned + shared via membership)
+    // user-identity: the user's drives shape the listing; a scoped credential's result is narrowed to its own drives below.
     const allAccessibleDrives = await listAccessibleDrives(userId);
 
     // Filter by token scope if applicable

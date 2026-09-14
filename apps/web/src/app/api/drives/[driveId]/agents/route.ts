@@ -195,6 +195,7 @@ export async function POST(
 
     const { driveId } = await context.params;
 
+    // user-identity: this POST handler admits sessions only (its own allow list), so the caller IS the user.
     const access = await checkDriveAccess(driveId, userId);
     if (!access.drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
@@ -215,6 +216,7 @@ export async function POST(
     // the caller against the agent + drive and caps the granted role at the
     // caller's own access.
     const result = await addAgentToDrive({
+      // user-identity: session-only handler; the service caps the grant at the acting user's own access.
       actingUserId: userId,
       agentPageId,
       driveId,

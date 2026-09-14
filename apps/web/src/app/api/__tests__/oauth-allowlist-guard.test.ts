@@ -360,14 +360,15 @@ describe('oauth allow-list guard', () => {
 
   // (d) A credential is its user NARROWED by scope and role. A route that admits
   // a scoped credential and asks a USER-keyed authority function (the user's
-  // role, the user's page access) decides with authority the credential may not
-  // have — the commands role-ceiling escape. Each such call must be annotated
+  // role, the user's page access, the user's drive universe, or a service told
+  // to act as the user via `actingUserId`) decides with authority the credential
+  // may not have — the commands and calendar-share role-ceiling escapes. Each such call must be annotated
   // with why the user's own identity is the right question there
   // (`// user-identity: <reason>` on the call's line or up to three lines above),
   // typically: it runs only in the unscoped-user branch, or it asks about a
   // DIFFERENT user than the caller.
   it('(d) user-keyed authority calls in routes admitting mcp or oauth are annotated user-identity', () => {
-    const USER_KEYED = /\b(?:isDriveOwnerOrAdmin|getUserAccessLevel|canUser\w+|getUserDrivePermissions|isUserDriveMember|getUserAccessiblePagesInDrive\w*)\(/;
+    const USER_KEYED = /\b(?:isDriveOwnerOrAdmin|getUserAccessLevel|canUser\w+|getUserDrivePermissions|isUserDriveMember|getUserAccessiblePagesInDrive\w*|getMemberDriveIds|getDriveIdsForUser|listAccessibleDrives|getDriveWithAccess|checkDriveAccess\w*)\(|\bactingUserId:\s*(?:auth\.)?userId\b/;
     const offenders = routes
       .filter((r) => r.lists.some((list) => list.includes('mcp') || list.includes('oauth')))
       .flatMap((r) => {

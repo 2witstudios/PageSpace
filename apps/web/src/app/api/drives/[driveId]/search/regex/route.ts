@@ -63,6 +63,7 @@ export async function GET(
         .where(eq(drives.id, driveId));
       drive = row ?? null;
     } else {
+      // user-identity: unscoped-user branch only — drive-scoped credentials took the principal branch above.
       const accessInfo = await checkDriveAccessForSearch(driveId, userId);
 
       if (!accessInfo.hasAccess) {

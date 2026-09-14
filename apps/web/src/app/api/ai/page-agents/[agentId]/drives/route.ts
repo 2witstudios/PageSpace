@@ -91,6 +91,7 @@ export async function POST(
     }
 
     const result = await addAgentToDrive({
+      // user-identity: this POST handler admits sessions only (AUTH_OPTIONS_WRITE), so the caller IS the user.
       actingUserId: userId,
       agentPageId: agentId,
       driveId: parsed.data.driveId,
