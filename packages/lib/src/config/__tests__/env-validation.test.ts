@@ -646,7 +646,7 @@ describe('env-validation', () => {
     it('given APP_HOSTING_ENABLED=true and an explicit apex, should boot', () => {
       bootable();
       process.env.APP_HOSTING_ENABLED = 'true';
-      process.env.PUBLISHED_APPS_APEX = 'pagespace.app';
+      process.env.PUBLISHED_APPS_APEX = 'pagespace.io';
 
       expect(() => validateEnv()).not.toThrow();
     });
@@ -660,7 +660,7 @@ describe('env-validation', () => {
       // either, on a feature that is dark by default.
       bootable();
       process.env.APP_HOSTING_ENABLED = 'true';
-      process.env.PUBLISHED_APPS_APEX = 'pagespace.app';
+      process.env.PUBLISHED_APPS_APEX = 'pagespace.io';
       process.env.PUBLISHED_APP_IDLE_STOP_SECONDS = '15m';
       process.env.PUBLISHED_APP_HIT_STAMP_INTERVAL_SECONDS = 'sixty';
       process.env.PUBLISHED_APP_DAILY_AWAKE_SECONDS_CAP = '-1';
