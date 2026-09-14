@@ -10,7 +10,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 - **The marketing site follows your system theme, and light mode has its own hero** — the site used
   to open in dark mode for everyone, and its space hero only worked on a dark page. Light mode now
   has a white version of the same scene with dark text over it, and the site starts in whatever
-  theme your device uses (a theme you picked with the toggle still wins). Switching themes, or your
+  theme your device uses (a theme you picked with the toggle still wins), and the browser's
+  address and status bar match whichever theme is showing. Switching themes, or your
   device switching on its own, fades one hero picture into the other instead of cutting. The
   preview card shown when a site link is shared now carries the current headline.
 - **The Home screen now tells you what's actually waiting for you** — opening the dashboard used
