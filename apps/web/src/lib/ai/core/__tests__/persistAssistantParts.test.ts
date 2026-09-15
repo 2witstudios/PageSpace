@@ -69,3 +69,24 @@ describe('buildAssistantPersistencePayload', () => {
     expect(parts).toHaveLength(1);
   });
 });
+
+describe('buildAssistantPersistencePayload — tool approval states', () => {
+  it('a paused (approval-requested) call persists its approval id on the call row and no result row', () => {
+    const parts = [
+      { type: 'tool-trash_page', toolCallId: 'tc1', toolName: 'trash_page', input: { pageId: 'p' }, state: 'approval-requested', approval: { id: 'ap1' } },
+    ] as unknown as Parameters<typeof buildAssistantPersistencePayload>[1];
+    const payload = buildAssistantPersistencePayload('m1', parts);
+    expect(payload.toolCalls).toEqual([
+      { toolCallId: 'tc1', toolName: 'trash_page', input: { pageId: 'p' }, state: 'approval-requested', approval: { id: 'ap1' } },
+    ]);
+    expect(payload.toolResults).toBeUndefined();
+  });
+
+  it('a denied call persists an output-denied result row', () => {
+    const parts = [
+      { type: 'tool-trash_page', toolCallId: 'tc1', toolName: 'trash_page', input: {}, state: 'output-denied', approval: { id: 'ap1', approved: false } },
+    ] as unknown as Parameters<typeof buildAssistantPersistencePayload>[1];
+    const payload = buildAssistantPersistencePayload('m1', parts);
+    expect(payload.toolResults).toEqual([{ toolCallId: 'tc1', toolName: 'trash_page', output: undefined, state: 'output-denied' }]);
+  });
+});
