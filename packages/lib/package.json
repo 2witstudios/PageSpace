@@ -278,6 +278,31 @@
       "import": "./dist/agent-accounts/bind-approval.js",
       "require": "./dist/agent-accounts/bind-approval.js"
     },
+    "./agent-accounts/build-audit-record": {
+      "types": "./dist/agent-accounts/build-audit-record.d.ts",
+      "import": "./dist/agent-accounts/build-audit-record.js",
+      "require": "./dist/agent-accounts/build-audit-record.js"
+    },
+    "./agent-accounts/decide-audit-gate": {
+      "types": "./dist/agent-accounts/decide-audit-gate.d.ts",
+      "import": "./dist/agent-accounts/decide-audit-gate.js",
+      "require": "./dist/agent-accounts/decide-audit-gate.js"
+    },
+    "./agent-accounts/redact-known-values": {
+      "types": "./dist/agent-accounts/redact-known-values.d.ts",
+      "import": "./dist/agent-accounts/redact-known-values.js",
+      "require": "./dist/agent-accounts/redact-known-values.js"
+    },
+    "./agent-accounts/audit-repository": {
+      "types": "./dist/agent-accounts/audit-repository.d.ts",
+      "import": "./dist/agent-accounts/audit-repository.js",
+      "require": "./dist/agent-accounts/audit-repository.js"
+    },
+    "./agent-accounts/audit-gate-executor": {
+      "types": "./dist/agent-accounts/audit-gate-executor.d.ts",
+      "import": "./dist/agent-accounts/audit-gate-executor.js",
+      "require": "./dist/agent-accounts/audit-gate-executor.js"
+    },
     "./agent-accounts/always-allowed-by-class": {
       "types": "./dist/agent-accounts/always-allowed-by-class.d.ts",
       "import": "./dist/agent-accounts/always-allowed-by-class.js",
