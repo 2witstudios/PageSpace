@@ -167,7 +167,7 @@ interface BillingResponse {
   providerCost: ProviderCostRow[];
   topSpenders: SpenderRow[];
   debtByUser: DebtRow[];
-  revenue: { topupCents: number; topupCount: number; monthlyGrantCents: number; monthlyGrantCount: number };
+  revenue: { topupCents: number; topupCount: number; monthlyGrantCents: number; monthlyGrantCount: number; includedCreditLiabilityCents: number };
   subscriptionsByTier: SubscriptionTierRow[];
   liability: { monthlyRemainingCents: number; topupRemainingCents: number; totalLiabilityCents: number; userCount: number };
   holds: { holdCount: number; heldCents: number };
@@ -200,6 +200,7 @@ function OverviewTab({ data }: { data: BillingResponse }) {
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatCard label="Top-up revenue" value={usd(revenue.topupCents)} icon={Banknote} hint={`${num(revenue.topupCount)} purchases — real cash from Stripe top-ups in range`} />
         <StatCard label="Allowance grants" value={usd(revenue.monthlyGrantCents)} icon={HandCoins} hint={`${num(revenue.monthlyGrantCount)} grants in range — not cash revenue`} />
+        <StatCard label="Included credit liability" value={usd(revenue.includedCreditLiabilityCents)} icon={Scale} hint="Outstanding monthly grants — credit value still owed, not cash. Point-in-time" />
         <StatCard label="Provider cost (what we paid)" value={usd(summary.realCostCents)} icon={Coins} />
         <StatCard label="Charged to users (credits)" value={usd(summary.chargedCents)} hint={`Credits applied: ${usd(summary.appliedCents)}`} />
         <StatCard
