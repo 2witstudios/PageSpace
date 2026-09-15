@@ -189,27 +189,6 @@ describe('GET /api/subscriptions/status', () => {
       expect(body.storage.quota).toBe(2 * 1024 * 1024 * 1024); // 2GB
     });
 
-    it('should return founder tier status with correct quota', async () => {
-      mockSelectWhere.mockResolvedValueOnce([mockUser({
-        subscriptionTier: 'founder',
-        stripeCustomerId: 'cus_123',
-      })]);
-
-      mockSelectLimit.mockResolvedValue([mockSubscription({ status: 'active' })]);
-
-      const request = new Request('https://example.com/api/subscriptions/status', {
-        method: 'GET',
-      }) as unknown as import('next/server').NextRequest;
-
-      const response = await GET(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.subscriptionTier).toBe('founder');
-      expect(body.storage.tier).toBe('founder');
-      expect(body.storage.quota).toBe(10 * 1024 * 1024 * 1024); // 10GB
-    });
-
     it('should return business tier status with correct quota', async () => {
       mockSelectWhere.mockResolvedValueOnce([mockUser({
         subscriptionTier: 'business',
@@ -349,7 +328,6 @@ describe('GET /api/subscriptions/status', () => {
     const tierQuotaTests = [
       { tier: 'free', expectedQuota: 500 * 1024 * 1024, description: '500MB' },
       { tier: 'pro', expectedQuota: 2 * 1024 * 1024 * 1024, description: '2GB' },
-      { tier: 'founder', expectedQuota: 10 * 1024 * 1024 * 1024, description: '10GB' },
       { tier: 'business', expectedQuota: 50 * 1024 * 1024 * 1024, description: '50GB' },
     ];
 

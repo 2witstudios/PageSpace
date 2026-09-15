@@ -21,4 +21,6 @@ export {
   monthlyCreditsPhrase,
   creditsCellPhrase,
   CREDIT_PACK_LIST,
+  includedCreditsPhrase,
+  topUpRatePhrase,
 } from '@pagespace/lib/billing/credit-copy';

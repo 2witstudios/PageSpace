@@ -92,10 +92,10 @@ describe('compareUsers', () => {
     expect(cmp(never, recent)).toBeLessThan(0);
   });
 
-  it('sorts by tier rank (free < pro < founder < business)', () => {
+  it('sorts by tier rank (free < pro < business)', () => {
     const cmp = compareUsers('tier');
     expect(cmp(user({ subscriptionTier: 'free' }), user({ subscriptionTier: 'pro' }))).toBeLessThan(0);
-    expect(cmp(user({ subscriptionTier: 'business' }), user({ subscriptionTier: 'founder' }))).toBeGreaterThan(0);
+    expect(cmp(user({ subscriptionTier: 'business' }), user({ subscriptionTier: 'pro' }))).toBeGreaterThan(0);
     expect(cmp(user({ subscriptionTier: 'pro' }), user({ subscriptionTier: 'pro' }))).toBe(0);
   });
 });

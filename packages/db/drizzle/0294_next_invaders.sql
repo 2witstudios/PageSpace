@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "subscriptionGrandfathered" boolean DEFAULT false NOT NULL;

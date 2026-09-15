@@ -154,18 +154,6 @@ describe('GET /api/drives/[driveId]/backups/schedule', () => {
       expect(body.enabled).toBe(false);
     });
 
-    it('returns available:true for founder tier', async () => {
-      mockLimit.mockReset();
-      mockLimit
-        .mockResolvedValueOnce([{ tier: 'founder' }])
-        .mockResolvedValueOnce([]);
-
-      const res = await GET(req(), ctx(DRIVE_ID));
-      const body = await res.json();
-
-      expect(body.available).toBe(true);
-    });
-
     it('returns available:true for business tier', async () => {
       mockLimit.mockReset();
       mockLimit

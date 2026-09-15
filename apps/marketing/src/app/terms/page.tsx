@@ -126,9 +126,8 @@ export default function TermsOfService() {
             </p>
             <ul className="list-disc pl-6 mb-4">
               <li><strong>Free Plan:</strong> {FREE_STARTER_CREDITS_DISPLAY} credits as a one-time starter grant, standard models, 500MB storage</li>
-              <li><strong>Pro Plan ($15/month):</strong> {MONTHLY_CREDITS.pro}/month in credits, standard and Pro models, 2GB storage</li>
-              <li><strong>Founder Plan ($50/month):</strong> {MONTHLY_CREDITS.founder}/month in credits, standard and Pro models, 10GB storage, priority support</li>
-              <li><strong>Business Plan ($100/month):</strong> {MONTHLY_CREDITS.business}/month in credits, standard and Pro models, 50GB storage, priority support</li>
+              <li><strong>Pro Plan ($15/month):</strong> {MONTHLY_CREDITS.pro} credits a month, standard and Pro models, 2GB storage</li>
+              <li><strong>Business Plan ($50/month per organization, 5 seats included, $10 per extra seat):</strong> {MONTHLY_CREDITS.business} credits a month, standard and Pro models, 50GB storage, priority support</li>
             </ul>
             <p className="mb-4">
               Credits meter AI usage. The Free plan&#39;s starter credits are granted once and are not renewed; paid plans receive a monthly credit allowance, and unused credits roll over and accumulate — they never expire. Additional credits may be purchased at any time as one-time top-ups, which also never expire. Model availability differs by plan: free accounts use standard models, while paid plans add access to Pro (advanced) models.

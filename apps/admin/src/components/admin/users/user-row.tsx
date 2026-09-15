@@ -105,7 +105,7 @@ export function UserRow({ user, onActionComplete }: UserRowProps) {
 
                 <Badge variant={
                   user.subscriptionTier === 'business' ? 'destructive' :
-                    user.subscriptionTier === 'founder' || user.subscriptionTier === 'pro' ? 'default' : 'secondary'
+                    user.subscriptionTier === 'pro' ? 'default' : 'secondary'
                 }>
                   {user.subscription?.isGifted ? (
                     <Gift className="h-3 w-3 mr-1" />

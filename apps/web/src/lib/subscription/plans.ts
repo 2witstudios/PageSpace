@@ -1,13 +1,14 @@
-import { Crown, Zap, Shield, Star } from 'lucide-react';
+import { Crown, Zap, Shield } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import {
   TIERS as CANONICAL_PLAN_ORDER,
   TIER_PLAN_LIMITS,
   formatTierBytes,
+  personalTiers,
   type SubscriptionTier,
 } from '@pagespace/lib/billing/subscription-tiers';
 import { stripeConfig } from '../stripe-config';
-import { MONTHLY_CREDIT_CENTS, monthlyCreditsPhrase } from './credits';
+import { MONTHLY_CREDIT_CENTS, monthlyCreditsPhrase, includedCreditsPhrase, topUpRatePhrase } from './credits';
 
 export type { SubscriptionTier };
 
@@ -35,6 +36,21 @@ export interface PlanDefinition {
   iconColor: string;
   accentColor: string;
   description: string;
+  /**
+   * MON-6: the three facts a plan card states separately — the price
+   * (`price`), the included credits (an integer count, never a dollar figure)
+   * and the top-up rate. Both strings come from ./credits, the one in-app
+   * source for credit copy.
+   */
+  includedCredits: string;
+  topUpRate: string;
+  /**
+   * SEAT-2: whether this is the organization plan. An org plan is not offered
+   * to a lone user — see getPersonalPlans() — and states its seat terms.
+   */
+  isOrgPlan: boolean;
+  includedSeats: number;
+  extraSeatUsd: number;
   limits: {
     /**
      * Monthly included AI-credit allowance, in whole cents of customer-facing credit
@@ -74,7 +90,6 @@ export interface PlanDefinition {
 
 // Stripe Price IDs from hardcoded config (avoids Next.js build-time env var issues)
 const STRIPE_PRICE_ID_PRO = stripeConfig.priceIds.pro;
-const STRIPE_PRICE_ID_FOUNDER = stripeConfig.priceIds.founder;
 const STRIPE_PRICE_ID_BUSINESS = stripeConfig.priceIds.business;
 
 // Storage/file-size/price/domain numbers derive from the canonical
@@ -98,6 +113,17 @@ function planLimits(tier: SubscriptionTier): PlanDefinition['limits'] {
   };
 }
 
+function planTerms(tier: SubscriptionTier): Pick<PlanDefinition, 'includedCredits' | 'topUpRate' | 'isOrgPlan' | 'includedSeats' | 'extraSeatUsd'> {
+  const limits = TIER_PLAN_LIMITS[tier];
+  return {
+    includedCredits: includedCreditsPhrase(tier),
+    topUpRate: topUpRatePhrase(),
+    isOrgPlan: limits.isOrgPlan,
+    includedSeats: limits.includedSeats,
+    extraSeatUsd: limits.extraSeatUsd,
+  };
+}
+
 const storagePhrase = (tier: SubscriptionTier) =>
   `${formatTierBytes(TIER_PLAN_LIMITS[tier].quotaBytes)} storage`;
 const maxFilePhrase = (tier: SubscriptionTier) =>
@@ -113,6 +139,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     iconColor: 'text-blue-500',
     accentColor: 'border-border bg-card/50',
     description: 'Perfect for getting started with PageSpace',
+    ...planTerms('free'),
     limits: planLimits('free'),
     features: [
       { name: monthlyCreditsPhrase('free'), included: true },
@@ -141,9 +168,10 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     icon: Crown,
     iconColor: 'text-amber-500',
     accentColor: 'border-border bg-muted/80',
-    description: 'Best for professionals and growing teams',
+    description: 'Best for professionals',
     highlighted: true,
     stripePriceId: STRIPE_PRICE_ID_PRO,
+    ...planTerms('pro'),
     limits: planLimits('pro'),
     features: [
       { name: monthlyCreditsPhrase('pro'), included: true, description: '3x more than Free' },
@@ -151,34 +179,6 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       { name: 'Standard + Pro AI models', included: true, description: 'Advanced AI reasoning' },
       { name: storagePhrase('pro'), included: true, description: '4x more than Free' },
       { name: maxFilePhrase('pro'), included: true, description: '5x larger files' },
-      { name: 'Priority processing', included: true },
-      { name: 'Priority support', included: true },
-      { name: 'Community support', included: true },
-      { name: 'Enterprise features', included: false },
-    ],
-  },
-  founder: {
-    id: 'founder',
-    name: 'Founder',
-    displayName: 'Founder Plan',
-    price: planPrice('founder'),
-    badge: {
-      text: 'Best Value',
-      variant: 'outline',
-      className: 'bg-zinc-700 text-white border-zinc-700 dark:bg-zinc-300 dark:text-zinc-900 dark:border-zinc-300',
-    },
-    icon: Star,
-    iconColor: 'text-emerald-500',
-    accentColor: 'border-border bg-card/50',
-    description: 'For power users who want maximum value',
-    stripePriceId: STRIPE_PRICE_ID_FOUNDER,
-    limits: planLimits('founder'),
-    features: [
-      { name: monthlyCreditsPhrase('founder'), included: true, description: '10x more than Free' },
-      { name: 'Buy more credits anytime', included: true },
-      { name: 'Standard + Pro AI models', included: true, description: 'Advanced AI reasoning' },
-      { name: storagePhrase('founder'), included: true, description: '20x more than Free' },
-      { name: maxFilePhrase('founder'), included: true, description: '10x larger files' },
       { name: 'Priority processing', included: true },
       { name: 'Priority support', included: true },
       { name: 'Community support', included: true },
@@ -193,8 +193,9 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     icon: Shield,
     iconColor: 'text-violet-500',
     accentColor: 'border-border bg-card/50',
-    description: 'Enterprise-grade features for large teams',
+    description: 'For teams: an organization with seats, a shared credit pool, and org-owned drives',
     stripePriceId: STRIPE_PRICE_ID_BUSINESS,
+    ...planTerms('business'),
     limits: planLimits('business'),
     features: [
       { name: monthlyCreditsPhrase('business'), included: true, description: '20x more than Free' },
@@ -248,6 +249,15 @@ export function canDowngrade(currentTier: SubscriptionTier): boolean {
 
 export function getAllPlans(): PlanDefinition[] {
   return PLAN_ORDER.map(tier => PLANS[tier]);
+}
+
+/**
+ * SEAT-2: the plans a LONE user may be offered — every non-org plan, plus the
+ * user's current plan when it is the org plan (a grandfathered $100 personal
+ * Business subscriber keeps seeing, and managing, their own plan).
+ */
+export function getPersonalPlans(currentTier?: SubscriptionTier): PlanDefinition[] {
+  return personalTiers(currentTier).map(tier => PLANS[tier]);
 }
 
 export function getTierFromPriceId(priceId: string): SubscriptionTier | null {
