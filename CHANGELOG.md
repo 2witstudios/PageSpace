@@ -1125,6 +1125,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   from your own messages each was based on. Those quotes are removed 90 days after an observation
   is settled.
 
+### Security
+
+- **Integration base URLs can no longer point inside the platform** — a custom base URL on an
+  integration connection (the field that lets a webhook or self-hosted API be reached) was only
+  checked for being a well-formed URL. It could name the server's own loopback address, a private
+  network range, or a cloud metadata address, and a tool call would then send the connection's
+  credentials there and hand the reply to the assistant. A base URL is now refused when it is
+  saved if it points at any of those, including a hostname that resolves there, and it is checked
+  again, with a fresh DNS lookup, immediately before every request is sent. Upstream redirects are
+  no longer followed automatically: a redirect to a different site is refused outright, so a
+  connection's credentials never travel to a site the integration was not set up for.
+
 ## [1.7.1] — 2026-08-10
 
 ### Fixed

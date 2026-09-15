@@ -1783,6 +1783,11 @@
       "import": "./dist/integrations/converter/ai-sdk.js",
       "require": "./dist/integrations/converter/ai-sdk.js"
     },
+    "./integrations/validation/validate-base-url": {
+      "types": "./dist/integrations/validation/validate-base-url.d.ts",
+      "import": "./dist/integrations/validation/validate-base-url.js",
+      "require": "./dist/integrations/validation/validate-base-url.js"
+    },
     "./integrations/saga/execute-tool": {
       "types": "./dist/integrations/saga/execute-tool.d.ts",
       "import": "./dist/integrations/saga/execute-tool.js",

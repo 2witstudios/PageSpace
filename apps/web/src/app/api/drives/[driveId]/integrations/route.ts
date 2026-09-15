@@ -12,6 +12,7 @@ import { resolveProviderConfig } from '@pagespace/lib/integrations/providers/bui
 import { encryptCredentials } from '@pagespace/lib/integrations/credentials/encrypt-credentials'
 import { buildOAuthAuthorizationUrl } from '@pagespace/lib/integrations/oauth/oauth-handler'
 import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
+import { validateIntegrationTargetUrl } from '@pagespace/lib/integrations/validation/validate-base-url';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -103,6 +104,18 @@ export async function POST(
     }
 
     const { providerId, name, credentials, baseUrlOverride, returnUrl } = validation.data;
+
+    // A stored override becomes the fetch base for credentialed tool calls:
+    // refuse private / loopback / link-local / metadata targets before any write.
+    if (baseUrlOverride) {
+      const target = await validateIntegrationTargetUrl(baseUrlOverride);
+      if (!target.ok) {
+        return NextResponse.json(
+          { error: 'Validation failed', details: { baseUrlOverride: [target.reason] } },
+          { status: 400 }
+        );
+      }
+    }
 
     const provider = await getProviderById(db, providerId);
     if (!provider || !provider.enabled) {

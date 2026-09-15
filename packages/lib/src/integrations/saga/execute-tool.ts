@@ -244,10 +244,13 @@ export const executeToolSaga = async (
         durationMs: Date.now() - startTime,
       });
 
+      const targetRefused =
+        response.errorType === 'blocked_target' || response.errorType === 'redirect_blocked';
+
       return {
         success: false,
         error: response.error,
-        errorType: 'http',
+        errorType: targetRefused ? 'blocked_target' : 'http',
       };
     }
 
