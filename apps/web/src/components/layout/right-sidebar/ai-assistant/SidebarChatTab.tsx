@@ -999,6 +999,7 @@ const SidebarChatTab: React.FC = () => {
         </div>
 
         <ChatInput
+              showToolApprovalSettings={!selectedAgent}
           ref={chatInputRef}
           value={input}
           onChange={setInput}

@@ -9,6 +9,7 @@ import { AttachButton } from './AttachButton';
 import { AttachmentPreviewStrip } from './AttachmentPreviewStrip';
 import { InputFooter } from '@/components/ui/floating-input';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
+import { useToolApprovalSettings } from '@/lib/ai/shared/hooks/useToolApprovalSettings';
 import { isImageGenerationAllowed } from '@/lib/ai/core/image-gen-access';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
@@ -46,6 +47,12 @@ export interface ChatInputProps {
   hideModelSelector?: boolean;
   /** Style variant: 'main' for InputCard context, 'sidebar' for sidebar contrast */
   variant?: 'main' | 'sidebar';
+  /**
+   * Show the global assistant's tool-approval controls (Ask before actions +
+   * always-allowed list) in the Tools menu. Only the global assistant's
+   * composer sets this — a page agent's mode lives on its settings tab.
+   */
+  showToolApprovalSettings?: boolean;
   /** Number of running MCP servers */
   mcpRunningServers?: number;
   /** Names of running MCP servers */
@@ -120,6 +127,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       crossDrive = false,
       hideModelSelector = false,
       variant = 'main',
+      showToolApprovalSettings = false,
       mcpRunningServers = 0,
       mcpServerNames = [],
       mcpEnabledCount = 0,
@@ -153,6 +161,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     const toggleImageGen = useAssistantSettingsStore((s) => s.toggleImageGen);
     const toggleWriteMode = useAssistantSettingsStore((s) => s.toggleWriteMode);
     const toggleShowPageTree = useAssistantSettingsStore((s) => s.toggleShowPageTree);
+    const toolApprovalSettings = useToolApprovalSettings({ enabled: showToolApprovalSettings });
     const storeProvider = useAssistantSettingsStore((s) => s.currentProvider);
     const storeModel = useAssistantSettingsStore((s) => s.currentModel);
     const setProviderSettings = useAssistantSettingsStore((s) => s.setProviderSettings);
@@ -295,6 +304,10 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           canUseImageGen={isImageGenerationAllowed(isAdmin)}
           writeMode={writeMode}
           onWriteModeToggle={toggleWriteMode}
+          toolApprovalMode={showToolApprovalSettings ? toolApprovalSettings.mode : undefined}
+          onToolApprovalModeToggle={(ask) => void toolApprovalSettings.setMode(ask ? 'ask' : 'auto')}
+          trustedTools={showToolApprovalSettings ? toolApprovalSettings.grants : undefined}
+          onRevokeTrustedTool={(grantId) => void toolApprovalSettings.revokeGrant(grantId)}
           showPageTree={showPageTree}
           onShowPageTreeToggle={toggleShowPageTree}
           mcpRunningServers={mcpRunningServers}
