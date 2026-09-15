@@ -44,7 +44,12 @@ services:
     volumes:
       - infisical_dev_pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: "pg_isready --username=${POSTGRES_USER} && psql --username=${POSTGRES_USER} --list"
+      # Literal username, not ${POSTGRES_USER}: compose interpolates that from a file
+      # literally named `.env` in this directory at COMPOSE-PARSE time, not from
+      # `env_file:` (a container-runtime concern) — renaming `.env` (git-ignored
+      # repo-wide) to `env.dev-fixture` silently broke that substitution and left
+      # the healthcheck running as the container's default OS user ("root").
+      test: "pg_isready --username=infisical && psql --username=infisical --list"
       interval: 5s
       timeout: 10s
       retries: 10
