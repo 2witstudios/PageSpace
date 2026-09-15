@@ -1,7 +1,7 @@
 # Agent Signup — Threat Model
 
 - **Scope:** the two agent signup doors (API/auth.md and browser), the agent secret, the claim ceremony, and the billing link to a human owner. Contract: ADR 0005 (`docs/adr/0005-agent-accounts.md`).
-- **Date:** 2026-09-14 (Phase 0). Revised when [D-27] is answered (§6).
+- **Date:** 2026-09-14 (Phase 0). Revised when [D-29] is answered (§6).
 - **Posture:** zero trust as everywhere else in this repo — fail closed, opaque tokens hashed at rest, constant-shape errors, rate-limit every new endpoint, a control must reach where the effect lives.
 
 ## 1. Principals
@@ -9,7 +9,7 @@
 | Principal | What it holds | What it can do |
 |---|---|---|
 | **Anonymous IP** | Nothing. | Fetch metadata and `/auth.md`; request a PoW challenge; attempt signup (PoW + rate limits); attempt sign-in with a guessed secret (rate-limited, constant 401); start a claim from a claim token it somehow holds. |
-| **Unclaimed agent** | Its own `ps_agent_*` secret; the `ps_at_`/`ps_rt_` tokens it exchanged for; any `mcp_` keys it minted; its claim token. | Everything a free-tier user can do that costs nothing: drives, pages, keys, OAuth grants, API/CLI/MCP. **No AI spend** (402 `requires_funding`). Whether it can DM, invite or upload is [D-27] (§6). |
+| **Unclaimed agent** | Its own `ps_agent_*` secret; the `ps_at_`/`ps_rt_` tokens it exchanged for; any `mcp_` keys it minted; its claim token. | Everything a free-tier user can do that costs nothing: drives, pages, keys, OAuth grants, API/CLI/MCP. **No AI spend** (402 `requires_funding`). Whether it can DM, invite or upload is [D-29] (§6). |
 | **Claimed agent** | The same credentials (pre-claim tokens survive the claim). | Everything above, plus AI calls billed to its owner at the owner's tier. |
 | **Owner (human)** | A normal human account, signed in. | Claim an agent by user code; list, rotate, revoke or unlink the agents it owns; pays for their AI usage. |
 | **Server** | Hashes only: `secretHash`, `claimTokenHash`, `userCodeHash`, `challengeHash`. | Never holds a plaintext secret after the signup response is sent. |
@@ -38,7 +38,7 @@ At rest the server stores `hashToken(secret)` (SHA3-256) and a 12-character pref
 1. **A shared secret can be copied by anyone who reads the agent's store.** There is no device binding, no passkey, no vendor attestation. Whoever holds the secret *is* the agent. The founder accepted this on 2026-09-14: isolating agents into their own accounts is precisely what bounds the blast radius — a copied agent secret never grants access to a human's account, only to the agent's own drives and, once claimed, to spend against its owner's balance. Mitigations are rotation (by the agent or its owner), revocation (bumps `tokenVersion`, live tokens die), and the owner's per-agent visibility in Settings.
 2. **Proof-of-work shapes rate; it does not identify.** A 20-bit SHA3-256 puzzle costs a well-provisioned attacker fractions of a second. PoW exists to make bulk account creation cost CPU rather than nothing, and to let the per-IP limits (`AGENT_CHALLENGE`, `AGENT_SIGNUP`, `AGENT_SIGNUP_DAILY`) be the real ceiling. It says nothing about *who* or *what* is signing up, and nothing here depends on it doing so.
 3. **A leaked claim link lets a stranger start a claim but not finish one.** Finishing requires the user code (short-lived, hashed at rest, single-use), inside the 15-minute expiry, from a browser session signed in as a `human` account. The worst outcome of a leaked claim link is that a stranger *claims the agent and becomes its payer* — which costs the stranger money, not the agent or the original holder. A leaked link cannot read the agent's data, cannot obtain its secret, and cannot mint its tokens.
-4. **No free credits means no free spend — but not no cost.** An unfunded agent can still create rows and upload within the free-tier storage quota. Rate limits and the 30-day lifecycle for never-authenticated signups ([D-28]) bound this; they do not eliminate it.
+4. **No free credits means no free spend — but not no cost.** An unfunded agent can still create rows and upload within the free-tier storage quota. Rate limits and the 30-day lifecycle for never-authenticated signups ([D-30]) bound this; they do not eliminate it.
 5. **The reserved domain is a convention enforced in code, not a network property.** `agents.pagespace.invalid` cannot resolve (RFC 2606), but its safety inside PageSpace depends on the five inbound denylist sites and the one outbound suppression point staying in place. Those are mutation-checked and enumerated by a test (ADR 0005 §4).
 
 ## 5. Threats and controls
@@ -60,9 +60,9 @@ At rest the server stores `hashToken(secret)` (SHA3-256) and a 12-character pref
 | T13 | Deployment where the door should not exist (onprem without opt-in). | `isAgentSignupEnabled` is the single predicate; disabled ⇒ routes and page 404; `decideAgentSignup` reports `disabled` before revealing any challenge state. | `enabled.ts`, `signup-decision.ts`. |
 | T14 | Issuer / URL injection into discovery documents. | `buildServerMetadata` and `buildAuthMd` derive every URL from the configured issuer only, never a request `Host`. | `metadata.ts`, `auth-md.ts`. |
 
-## 6. Unclaimed agents reaching humans — pending D-27
+## 6. Unclaimed agents reaching humans — pending D-29
 
-**pending D-27.** The decision whether an unclaimed agent may initiate DMs, invitations and uploads is open on the global Decisions list (D-27). It is implemented through exactly one mechanism — when `emailVerified` is stamped on the agent's `users` row (at signup, or at claim) — because the seven `isEmailVerified` gates and four `isNotNull(emailVerified)` filters already enforce it. No gate is edited either way. When the orchestrator posts the answer in the epic channel, this section is replaced by its one-sentence consequence for unclaimed agents, and Phase 1 stamps accordingly.
+**pending D-29.** The decision whether an unclaimed agent may initiate DMs, invitations and uploads is open on the global Decisions list (D-29). It is implemented through exactly one mechanism — when `emailVerified` is stamped on the agent's `users` row (at signup, or at claim) — because the seven `isEmailVerified` gates and four `isNotNull(emailVerified)` filters already enforce it. No gate is edited either way. When the orchestrator posts the answer in the epic channel, this section is replaced by its one-sentence consequence for unclaimed agents, and Phase 1 stamps accordingly.
 
 ## 7. Residual risk accepted
 

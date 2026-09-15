@@ -37,8 +37,11 @@ export const PAGESPACE_AGENT_CLIENT_ID = 'pagespace-agent';
  * ADR 0005 Decision 5 — the client agents present on the token endpoint. A
  * separate id keeps agent grants out of the CLI's allowed set (and vice
  * versa) and separates audit/rate-limit keys. No redirect URIs: nothing
- * browser-shaped is ever authorized for it. Additive only — the Sign-in
- * epic is converting this registry to DB-backed lookup.
+ * browser-shaped is ever authorized for it. NOT first-party: that flag
+ * unlocks applyKeyGrant (minting an mcp_ key on a drive grant) and the
+ * loopback redirect wildcard, and this client never uses the authorize or
+ * device flows and refuses drive scopes — least privilege. Additive only —
+ * the Sign-in epic is converting this registry to DB-backed lookup.
  */
 const PAGESPACE_AGENT_CLIENT: RegisteredClient = {
   clientId: PAGESPACE_AGENT_CLIENT_ID,
@@ -50,7 +53,7 @@ const PAGESPACE_AGENT_CLIENT: RegisteredClient = {
     'urn:pagespace:agent-auth:grant-type:claim',
     'refresh_token',
   ],
-  firstParty: true,
+  firstParty: false,
 };
 
 const STATIC_CLIENT_REGISTRY = new Map<string, RegisteredClient>([

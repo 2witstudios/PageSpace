@@ -102,17 +102,20 @@ describe('validateRedirectUri', () => {
 });
 
 describe('getRegisteredClient — pagespace-agent (ADR 0005 Decision 5)', () => {
-  it('returns a public, first-party client with exactly jwt-bearer, claim and refresh_token grants', () => {
+  it('returns a public client with exactly jwt-bearer, claim and refresh_token grants', () => {
     const client = getRegisteredClient(PAGESPACE_AGENT_CLIENT_ID);
     expect(client).not.toBeNull();
     expect(client?.clientId).toBe('pagespace-agent');
     expect(client?.type).toBe('public');
-    expect(client?.firstParty).toBe(true);
     expect(client?.allowedGrantTypes).toEqual([
       'urn:ietf:params:oauth:grant-type:jwt-bearer',
       'urn:pagespace:agent-auth:grant-type:claim',
       'refresh_token',
     ]);
+  });
+
+  it('is NOT first-party — firstParty unlocks applyKeyGrant and the loopback redirect wildcard, neither of which this client may reach (least privilege)', () => {
+    expect(getRegisteredClient(PAGESPACE_AGENT_CLIENT_ID)?.firstParty).toBe(false);
   });
 
   it('has no redirect URIs — nothing browser-shaped can ever be authorized for it', () => {
