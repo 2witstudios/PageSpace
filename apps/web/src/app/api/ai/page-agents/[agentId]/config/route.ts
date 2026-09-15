@@ -298,7 +298,6 @@ export async function PUT(
       enabledTools: Array.isArray(updatedAgent.enabledTools) ? updatedAgent.enabledTools : null,
       sandboxEnabled: Boolean(updatedAgent.sandboxEnabled),
       toolExposureMode: updatedAgent.toolExposureMode === 'search' ? 'search' : 'upfront',
-      toolApprovalMode: updatedAgent.toolApprovalMode === 'auto' ? 'auto' : 'ask',
       registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth))),
     });
     const toolSurfaceNotes = formatConfigSurfaceNotes(toolSurface);

@@ -1374,7 +1374,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     const toolApprovalsInteractive = isSessionAuthResult(authResult) && agentDispatchDepth === 0;
     const toolApprovalGrants =
       toolApprovalsInteractive && toolApprovalMode === 'ask'
-        ? await toolApprovalRepository.listGrants(userId, conversationId ?? null)
+        ? await toolApprovalRepository.listGrants(userId!, conversationId ?? null)
         : [];
     // Capture BEFORE exposure so capability sections (TASK_MANAGEMENT, AGENTS, etc.) are
     // correctly included in search mode where non-core tools become callable via execute_tool
@@ -1868,7 +1868,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           // instance, so a tool that shifts focus in place is seen by everything
           // that runs after it.
           const toolExecutionContext: ToolExecutionContext = {
-            userId,
+            userId: userId!,
             timezone: userTimezone,
             aiProvider: currentProvider,
             aiModel: currentModel,
