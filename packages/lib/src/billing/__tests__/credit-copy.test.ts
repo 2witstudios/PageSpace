@@ -61,10 +61,11 @@ describe('MON-5 the web formatter, the marketing mirror, and admin consume one c
     expect(creditsPhrase('pro')).toBe('900/mo');
   });
 
-  it('top-up packs are real purchases and keep their dollar price strings', async () => {
+  it('MON-4 top-up packs are credit counts; their prices are real purchases and keep dollar strings', async () => {
     const { CREDIT_PACKS_DISPLAY, creditPacksPhrase, CREDIT_PACK_LIST } = await load();
+    expect(CREDIT_PACK_LIST.map((p) => p.credits)).toEqual([1000, 2500, 5000]);
+    expect(CREDIT_PACK_LIST.map((p) => p.label)).toEqual(['1,000 credits', '2,500 credits', '5,000 credits']);
     expect(CREDIT_PACKS_DISPLAY).toEqual(['$10', '$25', '$50']);
     expect(creditPacksPhrase()).toBe('$10, $25, or $50');
-    expect(CREDIT_PACK_LIST.map((p) => p.cents)).toEqual([1000, 2500, 5000]);
   });
 });

@@ -8,6 +8,8 @@
  *   - INCLUDED_CREDIT_RATIO_BPS: the share of a subscription's price paid that is
  *     granted back as credit value each period;
  *   - FREE_STARTER_CREDITS: the one-time free grant, a plain count;
+ *   - CREDIT_PACKS and the custom top-up bounds, as credit counts priced from the
+ *     rate with no ratio (MON-4);
  *   - the conversions between cents, credits, and dollars, and the one formatter
  *     that renders a credit amount.
  *
@@ -167,4 +169,70 @@ export function formatCreditCount(cents: number): string {
 export function formatDollars(cents: number): string {
   const dollars = dollarsFromCents(cents);
   return Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`;
+}
+
+/** Dollars → credits at the purchase rate (MON-4): $12.34 buys 1,234 credits. */
+export function creditsFromDollars(dollars: number): number {
+  return Math.round(dollars * CREDITS_PER_DOLLAR);
+}
+
+export interface CreditPack {
+  /** Stable SKU id, round-tripped through Stripe checkout metadata (`packId`). */
+  id: string;
+  /** Credits added to the never-expiring top-up bucket. */
+  credits: number;
+  /** Human label for the purchase menu and receipts: a credit count, never a price. */
+  label: string;
+}
+
+function creditPack(id: string, credits: number): CreditPack {
+  return { id, credits, label: `${formatCreditCount(centsFromCredits(credits))} credits` };
+}
+
+/**
+ * One-time top-up packs offered for purchase, defined as credit counts (MON-4). The
+ * SKU ids are stable (they predate the credit denomination and live in Stripe
+ * metadata and the e2e seed); the price comes from {@link creditPackPriceCents}.
+ */
+export const CREDIT_PACKS: Record<string, CreditPack> = {
+  pack_10: creditPack('pack_10', 1000),
+  pack_25: creditPack('pack_25', 2500),
+  pack_50: creditPack('pack_50', 5000),
+};
+
+export function getCreditPack(id: string): CreditPack | undefined {
+  return CREDIT_PACKS[id];
+}
+
+/**
+ * MON-4: what a pack costs, in whole cents, at CREDITS_PER_DOLLAR with NO ratio
+ * applied — a top-up buys credit value one-for-one, unlike a subscription's included
+ * credits. The checkout line item's `unit_amount` and the funding ledger both use
+ * this figure.
+ */
+export function creditPackPriceCents(pack: CreditPack): number {
+  return centsFromCredits(pack.credits);
+}
+
+/**
+ * Bounds, in credits, for a CUSTOM top-up alongside the fixed packs. The min keeps
+ * dust purchases above Stripe's per-transaction fee; the max caps single-charge
+ * fraud/chargeback exposure. Default 500–50,000 credits ($5–$500); tune via env.
+ */
+export const CREDIT_TOPUP_MIN_CREDITS = envInt('CREDIT_TOPUP_MIN_CREDITS', 500);
+export const CREDIT_TOPUP_MAX_CREDITS = envInt('CREDIT_TOPUP_MAX_CREDITS', 50_000);
+
+/**
+ * Normalize and bound a user-supplied custom top-up, in credits (MON-4). Returns the
+ * integer credit count, or null if it is not a finite integer within [min, max].
+ * Pure, so the checkout route and the client validate against the SAME rule.
+ */
+export function validateTopupCredits(
+  credits: number,
+  minCredits: number = CREDIT_TOPUP_MIN_CREDITS,
+  maxCredits: number = CREDIT_TOPUP_MAX_CREDITS,
+): number | null {
+  if (!Number.isInteger(credits)) return null;
+  if (credits < minCredits || credits > maxCredits) return null;
+  return credits;
 }

@@ -52,8 +52,13 @@ import { listSuppressedEmails } from '@pagespace/lib/compliance/erasure/resend-s
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { isValidEmail } from '@pagespace/lib/validators/email';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
-import { CREDIT_TOPUP_MIN_CENTS } from '@pagespace/lib/billing/credit-pricing';
-import { formatCreditCount, formatDollars, tierAllowanceCents } from '@pagespace/lib/billing/money-model';
+import {
+  CREDIT_TOPUP_MIN_CREDITS,
+  centsFromCredits,
+  formatCreditCount,
+  formatDollars,
+  tierAllowanceCents,
+} from '@pagespace/lib/billing/money-model';
 import { FreeCreditsChangeEmail } from '@pagespace/lib/email-templates/FreeCreditsChangeEmail';
 import { renderEmailToHtml } from '@pagespace/lib/email-templates/render-email';
 import {
@@ -152,7 +157,7 @@ async function main(): Promise<number> {
   const usageUrl = `${baseUrl}/settings/usage`;
   const starterCredits = formatCredits(tierAllowanceCents('free'));
   const proMonthlyCredits = formatCredits(tierAllowanceCents('pro'));
-  const minTopup = formatDollars(CREDIT_TOPUP_MIN_CENTS);
+  const minTopup = formatDollars(centsFromCredits(CREDIT_TOPUP_MIN_CREDITS));
 
   console.log('📢 Free-plan credits change notice');
   console.log(`  Mode:          ${opts.live ? 'LIVE SEND' : 'DRY RUN (no sends) — pass --live to send'}`);

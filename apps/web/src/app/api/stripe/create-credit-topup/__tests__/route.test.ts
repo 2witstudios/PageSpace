@@ -59,7 +59,13 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest:
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { CREDIT_PACKS, CREDIT_TOPUP_MIN_CENTS, CREDIT_TOPUP_MAX_CENTS } from '@pagespace/lib/billing/credit-pricing';
+import {
+  CREDIT_PACKS,
+  creditPackPriceCents,
+  centsFromCredits,
+  CREDIT_TOPUP_MIN_CREDITS,
+  CREDIT_TOPUP_MAX_CREDITS,
+} from '@pagespace/lib/billing/money-model';
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -117,17 +123,19 @@ describe('POST /api/stripe/create-credit-topup', () => {
         metadata: expect.objectContaining({
           kind: 'credit_pack',
           packId: PACK.id,
-          packCents: String(PACK.cents),
+          packCents: String(creditPackPriceCents(PACK)),
+          packCredits: String(PACK.credits),
           userId: mockUserId,
         }),
       }),
     );
   });
 
-  it('prices the line item from the canonical pack cents', async () => {
+  it('MON-4 prices the line item from the pack credits at CREDITS_PER_DOLLAR, no ratio', async () => {
     await POST(req({ packId: PACK.id }));
     const arg = mockCheckoutCreate.mock.calls[0][0];
-    expect(arg.line_items[0].price_data.unit_amount).toBe(PACK.cents);
+    expect(arg.line_items[0].price_data.unit_amount).toBe(creditPackPriceCents(PACK));
+    expect(arg.line_items[0].price_data.unit_amount).toBe(1000); // 1,000 credits = $10
     expect(arg.line_items[0].price_data.currency).toBe('usd');
   });
 
@@ -144,32 +152,47 @@ describe('POST /api/stripe/create-credit-topup', () => {
     expect((await response.json()).error).toMatch(/unknown/i);
   });
 
-  it('creates a checkout for a valid custom amount, pricing+metadata from amountCents', async () => {
-    const amountCents = 1234; // $12.34, within [min, max]
-    const response = await POST(req({ amountCents }));
+  it('MON-4 creates a checkout for a valid custom credit count, priced from the rate', async () => {
+    const credits = 1234; // within [min, max]; $12.34 at 100 credits per dollar
+    const response = await POST(req({ credits }));
     expect(response.status).toBe(200);
 
     const arg = mockCheckoutCreate.mock.calls[0][0];
-    expect(arg.line_items[0].price_data.unit_amount).toBe(amountCents);
+    expect(arg.line_items[0].price_data.unit_amount).toBe(centsFromCredits(credits));
+    expect(arg.line_items[0].price_data.unit_amount).toBe(1234);
     expect(arg.metadata).toEqual(
-      expect.objectContaining({ kind: 'credit_pack', packId: 'custom', packCents: String(amountCents), userId: mockUserId }),
+      expect.objectContaining({
+        kind: 'credit_pack',
+        packId: 'custom',
+        packCents: String(centsFromCredits(credits)),
+        packCredits: String(credits),
+        userId: mockUserId,
+      }),
     );
   });
 
-  it('returns 400 for a custom amount below the minimum', async () => {
-    const response = await POST(req({ amountCents: CREDIT_TOPUP_MIN_CENTS - 1 }));
+  it('MON-4 returns 400 for a custom credit count below the minimum', async () => {
+    const response = await POST(req({ credits: CREDIT_TOPUP_MIN_CREDITS - 1 }));
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).not.toMatch(/\$\d+ and \$\d+\./);
+    expect(mockCheckoutCreate).not.toHaveBeenCalled();
+  });
+
+  it('MON-4 returns 400 for a custom credit count above the maximum', async () => {
+    const response = await POST(req({ credits: CREDIT_TOPUP_MAX_CREDITS + 1 }));
     expect(response.status).toBe(400);
     expect(mockCheckoutCreate).not.toHaveBeenCalled();
   });
 
-  it('returns 400 for a custom amount above the maximum', async () => {
-    const response = await POST(req({ amountCents: CREDIT_TOPUP_MAX_CENTS + 1 }));
+  it('MON-4 returns 400 for the old amountCents body shape (top-ups are bought in credits)', async () => {
+    const response = await POST(req({ amountCents: 1234 }));
     expect(response.status).toBe(400);
+    expect((await response.json()).error).toMatch(/credits/i);
     expect(mockCheckoutCreate).not.toHaveBeenCalled();
   });
 
-  it('returns 400 for a non-integer custom amount (fractional cents)', async () => {
-    const response = await POST(req({ amountCents: 1000.5 }));
+  it('returns 400 for a non-integer custom credit count', async () => {
+    const response = await POST(req({ credits: 1000.5 }));
     expect(response.status).toBe(400);
     expect(mockCheckoutCreate).not.toHaveBeenCalled();
   });

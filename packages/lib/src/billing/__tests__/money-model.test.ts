@@ -201,3 +201,66 @@ describe('MON-5 formatCreditCount renders an integer count with thousands separa
     }
   });
 });
+
+describe('MON-4 top-ups buy credits at CREDITS_PER_DOLLAR with no ratio; packs are credit counts', () => {
+  it('MON-4 packs are defined as credit counts 1,000 / 2,500 / 5,000 and priced from the rate', async () => {
+    const { CREDIT_PACKS, creditPackPriceCents, CREDITS_PER_DOLLAR } = await load({ MONEY_MODEL_V2: 'true' });
+    const packs = Object.values(CREDIT_PACKS).sort((a, b) => a.credits - b.credits);
+    expect(packs.map((p) => p.credits)).toEqual([1000, 2500, 5000]);
+    for (const pack of packs) {
+      // $ price = credits / CREDITS_PER_DOLLAR, in cents; the 60% ratio never applies.
+      expect(creditPackPriceCents(pack)).toBe((pack.credits / CREDITS_PER_DOLLAR) * 100);
+    }
+    expect(creditPackPriceCents(CREDIT_PACKS.pack_10)).toBe(1000);
+  });
+
+  it('MON-4 no pack states a size in cents; the label is a credit count with no dollar sign', async () => {
+    const { CREDIT_PACKS } = await load();
+    for (const pack of Object.values(CREDIT_PACKS)) {
+      expect('cents' in pack).toBe(false);
+      expect(pack.label).toBe(`${pack.credits.toLocaleString('en-US')} credits`);
+      expect(pack.label).not.toContain('$');
+    }
+  });
+
+  it('MON-4 getCreditPack resolves a SKU id and rejects an unknown one', async () => {
+    const { getCreditPack, CREDIT_PACKS } = await load();
+    expect(getCreditPack('pack_25')).toBe(CREDIT_PACKS.pack_25);
+    expect(getCreditPack('pack_does_not_exist')).toBeUndefined();
+  });
+
+  it('MON-4 a custom top-up is validated in credits: an integer within [min, max]', async () => {
+    const { validateTopupCredits, CREDIT_TOPUP_MIN_CREDITS, CREDIT_TOPUP_MAX_CREDITS } = await load();
+    expect(CREDIT_TOPUP_MIN_CREDITS).toBe(500);
+    expect(CREDIT_TOPUP_MAX_CREDITS).toBe(50_000);
+    expect(validateTopupCredits(1234)).toBe(1234);
+    expect(validateTopupCredits(CREDIT_TOPUP_MIN_CREDITS)).toBe(CREDIT_TOPUP_MIN_CREDITS);
+    expect(validateTopupCredits(CREDIT_TOPUP_MAX_CREDITS)).toBe(CREDIT_TOPUP_MAX_CREDITS);
+    expect(validateTopupCredits(CREDIT_TOPUP_MIN_CREDITS - 1)).toBeNull();
+    expect(validateTopupCredits(CREDIT_TOPUP_MAX_CREDITS + 1)).toBeNull();
+    expect(validateTopupCredits(1000.5)).toBeNull();
+    expect(validateTopupCredits(Number.NaN)).toBeNull();
+    expect(validateTopupCredits(Number.POSITIVE_INFINITY)).toBeNull();
+    expect(validateTopupCredits(-1000)).toBeNull();
+    // Explicit bounds win over the defaults.
+    expect(validateTopupCredits(100, 50, 200)).toBe(100);
+    expect(validateTopupCredits(100, 150, 200)).toBeNull();
+  });
+
+  it('MON-4 the top-up bounds take env overrides in credits', async () => {
+    const { CREDIT_TOPUP_MIN_CREDITS, CREDIT_TOPUP_MAX_CREDITS } = await load({
+      CREDIT_TOPUP_MIN_CREDITS: '100',
+      CREDIT_TOPUP_MAX_CREDITS: '9000',
+    });
+    expect(CREDIT_TOPUP_MIN_CREDITS).toBe(100);
+    expect(CREDIT_TOPUP_MAX_CREDITS).toBe(9000);
+  });
+
+  it('MON-4 a dollar amount buys credits at the full rate: $12.34 → 1,234 credits → 1234¢ charged', async () => {
+    const { creditsFromDollars, centsFromCredits } = await load({ MONEY_MODEL_V2: 'true' });
+    expect(creditsFromDollars(12.34)).toBe(1234);
+    expect(creditsFromDollars(10)).toBe(1000);
+    expect(centsFromCredits(creditsFromDollars(12.34))).toBe(1234);
+  });
+});
+

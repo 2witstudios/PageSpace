@@ -9,8 +9,11 @@
  * appear only for top-up packs, which are real purchases.
  */
 
-import { CREDIT_PACKS, TIER_ALLOWANCE_REFILLS, type CreditPack } from './credit-pricing';
+import { TIER_ALLOWANCE_REFILLS } from './credit-pricing';
 import {
+  CREDIT_PACKS,
+  type CreditPack,
+  creditPackPriceCents,
   FREE_STARTER_CREDITS,
   centsFromCredits,
   formatCreditCount,
@@ -62,11 +65,11 @@ export function creditsPhrase(tier: SubscriptionTier): string {
   return TIER_ALLOWANCE_REFILLS[tier] ? `${MONTHLY_CREDITS[tier]}/mo` : `${MONTHLY_CREDITS[tier]} to start`;
 }
 
-/** Buyable top-up packs, sorted by ascending credit value. */
-export const CREDIT_PACK_LIST: CreditPack[] = Object.values(CREDIT_PACKS).sort((a, b) => a.cents - b.cents);
+/** Buyable top-up packs, sorted by ascending credit count. */
+export const CREDIT_PACK_LIST: CreditPack[] = Object.values(CREDIT_PACKS).sort((a, b) => a.credits - b.credits);
 
 /** Buyable top-up packs as dollar price strings (e.g. "$10"), sorted by value. Real purchases. */
-export const CREDIT_PACKS_DISPLAY: string[] = CREDIT_PACK_LIST.map((pack) => formatDollars(pack.cents));
+export const CREDIT_PACKS_DISPLAY: string[] = CREDIT_PACK_LIST.map((pack) => formatDollars(creditPackPriceCents(pack)));
 
 /** Top-up packs joined for prose, e.g. "$10, $25, or $50". */
 export function creditPacksPhrase(): string {

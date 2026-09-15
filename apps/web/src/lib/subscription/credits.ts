@@ -6,10 +6,15 @@
  */
 export {
   creditsFromCents,
+  centsFromCredits,
+  creditsFromDollars,
   dollarsFromCents,
-  centsFromDollars,
   formatCreditCount,
   formatDollars,
+  creditPackPriceCents,
+  validateTopupCredits,
+  CREDIT_TOPUP_MIN_CREDITS,
+  CREDIT_TOPUP_MAX_CREDITS,
 } from '@pagespace/lib/billing/money-model';
 export {
   MONTHLY_CREDIT_CENTS,

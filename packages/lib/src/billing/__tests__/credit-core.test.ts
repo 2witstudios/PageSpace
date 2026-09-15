@@ -14,7 +14,6 @@ import {
   holdExpiresAt,
   computeMonthlyRefill,
   applyPaymentToDebt,
-  validateTopupAmountCents,
   classifyStripeEvent,
   computeBackfillActions,
   computeCostDrift,
@@ -516,32 +515,6 @@ describe('applyPaymentToDebt', () => {
   });
 });
 
-describe('validateTopupAmountCents', () => {
-  const MIN = 500;
-  const MAX = 20000;
-
-  it('accepts an in-range integer and returns it normalized', () => {
-    expect(validateTopupAmountCents(1234, MIN, MAX)).toBe(1234);
-  });
-
-  it('accepts the exact bounds', () => {
-    expect(validateTopupAmountCents(MIN, MIN, MAX)).toBe(MIN);
-    expect(validateTopupAmountCents(MAX, MIN, MAX)).toBe(MAX);
-  });
-
-  it('rejects amounts below the min or above the max', () => {
-    expect(validateTopupAmountCents(MIN - 1, MIN, MAX)).toBeNull();
-    expect(validateTopupAmountCents(MAX + 1, MIN, MAX)).toBeNull();
-  });
-
-  it('rejects non-integer, non-finite, or negative amounts', () => {
-    expect(validateTopupAmountCents(1000.5, MIN, MAX)).toBeNull();
-    expect(validateTopupAmountCents(Number.NaN, MIN, MAX)).toBeNull();
-    expect(validateTopupAmountCents(Number.POSITIVE_INFINITY, MIN, MAX)).toBeNull();
-    expect(validateTopupAmountCents(-1000, MIN, MAX)).toBeNull();
-  });
-});
-
 describe('classifyStripeEvent', () => {
   it('maps invoice.paid to a monthly refill', () => {
     expect(classifyStripeEvent({ type: 'invoice.paid', data: { object: {} } }))
@@ -714,22 +687,6 @@ describe('credit-core debt invariants (property-based, seeded)', () => {
     }
   });
 
-  it('validateTopupAmountCents accepts a value iff it is an integer within [min,max]', () => {
-    const rand = mulberry32(0x1234);
-    const MIN = 500;
-    const MAX = 20000;
-    for (let i = 0; i < 2000; i++) {
-      const cents = Math.floor(rand() * 30000) - 1000; // range spans below 0, in-band, and above max
-      const result = validateTopupAmountCents(cents, MIN, MAX);
-      if (cents >= MIN && cents <= MAX) {
-        expect(result).toBe(cents);
-      } else {
-        expect(result).toBeNull();
-      }
-      // A fractional amount is always rejected, in or out of band.
-      expect(validateTopupAmountCents(cents + 0.5, MIN, MAX)).toBeNull();
-    }
-  });
 });
 
 describe('computeCostDrift', () => {

@@ -339,22 +339,6 @@ export function applyPaymentToDebt(
   };
 }
 
-/**
- * Normalize and bound a user-supplied custom top-up amount (whole cents). Returns the
- * normalized integer cents, or null if it isn't a finite integer within [min, max].
- * Pure so the API route and the client validate against the SAME rule. The min keeps
- * dust purchases above Stripe's per-transaction fee; the max caps single-charge risk.
- */
-export function validateTopupAmountCents(
-  cents: number,
-  minCents: number,
-  maxCents: number,
-): number | null {
-  if (!Number.isInteger(cents)) return null;
-  if (cents < minCents || cents > maxCents) return null;
-  return cents;
-}
-
 export type StripeAction =
   | { kind: 'monthly_refill' }
   | { kind: 'topup'; packCents: number }

@@ -6,9 +6,16 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
-import { getCreditPack, CREDIT_TOPUP_MIN_CENTS, CREDIT_TOPUP_MAX_CENTS } from '@pagespace/lib/billing/credit-pricing';
-import { validateTopupAmountCents } from '@pagespace/lib/billing/credit-core';
-import { formatDollars } from '@pagespace/lib/billing/money-model';
+import {
+  getCreditPack,
+  creditPackPriceCents,
+  validateTopupCredits,
+  centsFromCredits,
+  formatCreditCount,
+  formatDollars,
+  CREDIT_TOPUP_MIN_CREDITS,
+  CREDIT_TOPUP_MAX_CREDITS,
+} from '@pagespace/lib/billing/money-model';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -27,7 +34,8 @@ function getBaseUrl(request: NextRequest): string {
  *
  * Create a one-time Stripe Checkout session for a prepaid AI-credit top-up pack.
  * Mirrors create-subscription's auth, but uses `mode: 'payment'` with inline
- * `price_data` sourced from `CREDIT_PACKS` and `metadata.kind = 'credit_pack'`, so
+ * `price_data` priced from the money model (MON-4: credits at CREDITS_PER_DOLLAR, no
+ * ratio) and `metadata.kind = 'credit_pack'`, so
  * the existing webhook (`checkout.session.completed` → `applyStripeFunding`) credits
  * the user's never-expiring top-up bucket exactly once. Returns the hosted Checkout
  * URL for the client to redirect to.
@@ -45,30 +53,33 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
     }
 
-    const obj = (body && typeof body === 'object' ? body : {}) as { packId?: unknown; amountCents?: unknown };
+    const obj = (body && typeof body === 'object' ? body : {}) as { packId?: unknown; credits?: unknown };
 
-    // Two ways to buy: a fixed pack by id, OR a custom whole-cent amount. Resolve both
-    // to a single { id, cents, label } so the checkout session is built once.
-    let purchase: { id: string; cents: number; label: string };
+    // Two ways to buy: a fixed pack by id, OR a custom credit count. Resolve both to a
+    // single { id, credits, cents, label } so the checkout session is built once; the
+    // price is the money model's rate applied to the credits, never a stored figure.
+    let purchase: { id: string; credits: number; cents: number; label: string };
     if (typeof obj.packId === 'string') {
       const pack = getCreditPack(obj.packId);
       if (!pack) {
         return NextResponse.json({ error: 'Unknown credit pack' }, { status: 400 });
       }
-      purchase = { id: pack.id, cents: pack.cents, label: pack.label };
-    } else if (typeof obj.amountCents === 'number') {
-      const cents = validateTopupAmountCents(obj.amountCents, CREDIT_TOPUP_MIN_CENTS, CREDIT_TOPUP_MAX_CENTS);
-      if (cents === null) {
+      purchase = { id: pack.id, credits: pack.credits, cents: creditPackPriceCents(pack), label: pack.label };
+    } else if (typeof obj.credits === 'number') {
+      const credits = validateTopupCredits(obj.credits);
+      if (credits === null) {
+        const min = centsFromCredits(CREDIT_TOPUP_MIN_CREDITS);
+        const max = centsFromCredits(CREDIT_TOPUP_MAX_CREDITS);
         return NextResponse.json(
           {
-            error: `Enter an amount between ${formatDollars(CREDIT_TOPUP_MIN_CENTS)} and ${formatDollars(CREDIT_TOPUP_MAX_CENTS)}.`,
+            error: `Enter between ${formatCreditCount(min)} and ${formatCreditCount(max)} credits (${formatDollars(min)} to ${formatDollars(max)}).`,
           },
           { status: 400 },
         );
       }
-      purchase = { id: 'custom', cents, label: 'Custom' };
+      purchase = { id: 'custom', credits, cents: centsFromCredits(credits), label: 'Custom' };
     } else {
-      return NextResponse.json({ error: 'packId or amountCents is required' }, { status: 400 });
+      return NextResponse.json({ error: 'packId or credits is required' }, { status: 400 });
     }
 
     const [user] = await db.select().from(users).where(eq(users.id, userId));
@@ -103,12 +114,14 @@ export async function POST(request: NextRequest) {
         },
       ],
       // Round-tripped verbatim through the signature-verified webhook event; the
-      // funding shell trusts metadata.userId and reads packCents to size the top-up
-      // (custom amounts arrive the same way — packCents is the chosen amount).
+      // funding shell trusts metadata.userId and reads packCents (the credit VALUE in
+      // cents, which is what the ledger stores) to size the top-up. Custom amounts
+      // arrive the same way. packCredits is the count the buyer chose, for tracing.
       metadata: {
         kind: 'credit_pack',
         packId: purchase.id,
         packCents: String(purchase.cents),
+        packCredits: String(purchase.credits),
         userId: user.id,
       },
       // Mirror the metadata onto the resulting PaymentIntent for traceability.
@@ -129,7 +142,7 @@ export async function POST(request: NextRequest) {
       userId,
       resourceType: 'credit_topup',
       resourceId: session.id,
-      details: { action: 'create_checkout', packId: purchase.id, packCents: purchase.cents },
+      details: { action: 'create_checkout', packId: purchase.id, packCredits: purchase.credits, packCents: purchase.cents },
     });
 
     return NextResponse.json({ url: session.url, sessionId: session.id });

@@ -489,31 +489,9 @@ export const BALANCE_DRIFT_TOLERANCE_CENTS = envInt('BALANCE_DRIFT_TOLERANCE_CEN
  */
 export const NEGATIVE_MARGIN_FLOOR_BPS = envInt('NEGATIVE_MARGIN_FLOOR_BPS', 0);
 
-export interface CreditPack {
-  /** Stable SKU id, also stored in Stripe price metadata. */
-  id: string;
-  /** Credit value added to the top-up bucket, in cents. */
-  cents: number;
-  /** Human label for the dashboard CTA. */
-  label: string;
-}
-
-/** One-time top-up packs offered for purchase. */
-export const CREDIT_PACKS: Record<string, CreditPack> = {
-  pack_10: { id: 'pack_10', cents: 1000, label: '$10 credits' },
-  pack_25: { id: 'pack_25', cents: 2500, label: '$25 credits' },
-  pack_50: { id: 'pack_50', cents: 5000, label: '$50 credits' },
-};
-
-export function getCreditPack(id: string): CreditPack | undefined {
-  return CREDIT_PACKS[id];
-}
-
 /**
- * Bounds (whole cents) for a CUSTOM top-up amount, alongside the fixed packs. The min
- * keeps dust purchases above Stripe's per-transaction fee; the max caps single-charge
- * fraud/chargeback exposure. Validated by `validateTopupAmountCents` in credit-core,
- * shared by the checkout route and the client. Default $5–$500; tune via env.
+ * Top-up packs and custom top-up bounds are credit counts defined in money-model
+ * (MON-4). `getCreditPack` is re-exported here for the Stripe webhook's existing
+ * import; new code imports from './money-model'.
  */
-export const CREDIT_TOPUP_MIN_CENTS = envInt('CREDIT_TOPUP_MIN_CENTS', 500);
-export const CREDIT_TOPUP_MAX_CENTS = envInt('CREDIT_TOPUP_MAX_CENTS', 50000);
+export { getCreditPack, type CreditPack } from './money-model';
