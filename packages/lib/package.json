@@ -2337,6 +2337,56 @@
       "types": "./dist/validators/fly-ownership.d.ts",
       "import": "./dist/validators/fly-ownership.js",
       "require": "./dist/validators/fly-ownership.js"
+    },
+    "./auth/agent/reserved-email": {
+      "types": "./dist/auth/agent/reserved-email.d.ts",
+      "import": "./dist/auth/agent/reserved-email.js",
+      "require": "./dist/auth/agent/reserved-email.js"
+    },
+    "./auth/agent/secret": {
+      "types": "./dist/auth/agent/secret.d.ts",
+      "import": "./dist/auth/agent/secret.js",
+      "require": "./dist/auth/agent/secret.js"
+    },
+    "./auth/agent/enabled": {
+      "types": "./dist/auth/agent/enabled.d.ts",
+      "import": "./dist/auth/agent/enabled.js",
+      "require": "./dist/auth/agent/enabled.js"
+    },
+    "./auth/agent/pow": {
+      "types": "./dist/auth/agent/pow.d.ts",
+      "import": "./dist/auth/agent/pow.js",
+      "require": "./dist/auth/agent/pow.js"
+    },
+    "./auth/agent/signup-decision": {
+      "types": "./dist/auth/agent/signup-decision.d.ts",
+      "import": "./dist/auth/agent/signup-decision.js",
+      "require": "./dist/auth/agent/signup-decision.js"
+    },
+    "./auth/agent/signin-decision": {
+      "types": "./dist/auth/agent/signin-decision.d.ts",
+      "import": "./dist/auth/agent/signin-decision.js",
+      "require": "./dist/auth/agent/signin-decision.js"
+    },
+    "./auth/agent/claim-decision": {
+      "types": "./dist/auth/agent/claim-decision.d.ts",
+      "import": "./dist/auth/agent/claim-decision.js",
+      "require": "./dist/auth/agent/claim-decision.js"
+    },
+    "./auth/agent/account-type": {
+      "types": "./dist/auth/agent/account-type.d.ts",
+      "import": "./dist/auth/agent/account-type.js",
+      "require": "./dist/auth/agent/account-type.js"
+    },
+    "./auth/agent/lifecycle-decision": {
+      "types": "./dist/auth/agent/lifecycle-decision.d.ts",
+      "import": "./dist/auth/agent/lifecycle-decision.js",
+      "require": "./dist/auth/agent/lifecycle-decision.js"
+    },
+    "./billing/agent-payer": {
+      "types": "./dist/billing/agent-payer.d.ts",
+      "import": "./dist/billing/agent-payer.js",
+      "require": "./dist/billing/agent-payer.js"
     }
   },
   "typesVersions": {

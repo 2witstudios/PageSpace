@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // MACHINE_MARKUP_BPS is computed at module-import time from an env var, so
 // each test re-imports the module with different env conditions (same
@@ -7,6 +7,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 describe('MACHINE_MARKUP_BPS floor clamp', () => {
   beforeEach(() => {
     vi.resetModules();
+    delete process.env.MACHINE_MARKUP_BPS;
+    delete process.env.CREDIT_MARKUP_BPS;
+  });
+
+  // lib vitest runs files sequentially in ONE forked process (pool: 'forks',
+  // fileParallelism: false), so process.env leaks into the next file. The
+  // last test here leaves CREDIT_MARKUP_BPS='5000' set; chat-pricing.ts reads
+  // MARKUP_BPS at import and its test then sees 5 instead of 15.
+  afterEach(() => {
     delete process.env.MACHINE_MARKUP_BPS;
     delete process.env.CREDIT_MARKUP_BPS;
   });
@@ -57,6 +66,10 @@ describe('realtime session constants', () => {
 
   beforeEach(() => {
     vi.resetModules();
+    for (const key of KEYS) delete process.env[key];
+  });
+
+  afterEach(() => {
     for (const key of KEYS) delete process.env[key];
   });
 
@@ -149,5 +162,42 @@ describe('allowanceRefills / isOneTimeAllowanceTier', () => {
     const { allowanceRefills, isOneTimeAllowanceTier } = await import('../credit-pricing');
     expect(allowanceRefills('normal')).toBe(false);
     expect(isOneTimeAllowanceTier('normal')).toBe(false);
+  });
+});
+
+describe('starterGrantCents (ADR 0005 Decision 9 — no starter grant for agents)', () => {
+  it('is 0 for an agent on the free tier', async () => {
+    const { starterGrantCents } = await import('../credit-pricing');
+    expect(starterGrantCents({ tier: 'free', accountType: 'agent' })).toBe(0);
+  });
+
+  it('is 0 for an agent on EVERY tier, including an unknown tier', async () => {
+    const { starterGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    for (const tier of Object.keys(TIER_MONTHLY_ALLOWANCE_CENTS)) {
+      expect(starterGrantCents({ tier, accountType: 'agent' })).toBe(0);
+    }
+    expect(starterGrantCents({ tier: 'legacy-tier', accountType: 'agent' })).toBe(0);
+  });
+
+  it('is the free allowance for a human on the free tier', async () => {
+    const { starterGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    expect(starterGrantCents({ tier: 'free', accountType: 'human' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+    expect(starterGrantCents({ tier: 'free', accountType: 'human' })).toBe(500);
+  });
+
+  it('is the tier allowance for a human on a known tier (the gate’s existing lazy-init amount)', async () => {
+    const { starterGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    expect(starterGrantCents({ tier: 'pro', accountType: 'human' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
+    expect(starterGrantCents({ tier: 'business', accountType: 'human' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.business);
+  });
+
+  it('falls back to the free allowance for a human on an unknown tier (matches the gate’s `?? free`)', async () => {
+    const { starterGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    expect(starterGrantCents({ tier: 'legacy-tier', accountType: 'human' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+  });
+
+  it('does not pick up prototype keys as tiers', async () => {
+    const { starterGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    expect(starterGrantCents({ tier: 'toString', accountType: 'human' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
   });
 });

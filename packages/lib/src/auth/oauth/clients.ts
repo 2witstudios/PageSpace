@@ -31,12 +31,53 @@ const PAGESPACE_CLI_CLIENT: RegisteredClient = {
   firstParty: true,
 };
 
-const STATIC_CLIENT_REGISTRY = new Map<string, RegisteredClient>([[PAGESPACE_CLI_CLIENT.clientId, PAGESPACE_CLI_CLIENT]]);
+export const PAGESPACE_AGENT_CLIENT_ID = 'pagespace-agent';
+
+/**
+ * ADR 0005 Decision 5 — the client agents present on the token endpoint. A
+ * separate id keeps agent grants out of the CLI's allowed set (and vice
+ * versa) and separates audit/rate-limit keys. No redirect URIs: nothing
+ * browser-shaped is ever authorized for it. NOT first-party: that flag
+ * unlocks applyKeyGrant (minting an mcp_ key on a drive grant) and the
+ * loopback redirect wildcard, and this client never uses the authorize or
+ * device flows and refuses drive scopes — least privilege. Additive only —
+ * the Sign-in epic is converting this registry to DB-backed lookup.
+ */
+const PAGESPACE_AGENT_CLIENT: RegisteredClient = {
+  clientId: PAGESPACE_AGENT_CLIENT_ID,
+  name: 'PageSpace Agent',
+  type: 'public',
+  redirectUris: [],
+  allowedGrantTypes: [
+    'urn:ietf:params:oauth:grant-type:jwt-bearer',
+    'urn:pagespace:agent-auth:grant-type:claim',
+    'refresh_token',
+  ],
+  firstParty: false,
+};
+
+const STATIC_CLIENT_REGISTRY = new Map<string, RegisteredClient>([
+  [PAGESPACE_CLI_CLIENT.clientId, PAGESPACE_CLI_CLIENT],
+  [PAGESPACE_AGENT_CLIENT.clientId, PAGESPACE_AGENT_CLIENT],
+]);
 
 /** Static registry lookup. Unknown `client_id` → null (caller fails closed with `invalid_client`). */
 export function getRegisteredClient(clientId: string): RegisteredClient | null {
   if (!clientId) return null;
   return STATIC_CLIENT_REGISTRY.get(clientId) ?? null;
+}
+
+/**
+ * The ONE `allowedGrantTypes` guard. Every door that mints from a
+ * `client_id` — the token endpoint for each grant, and the device-
+ * authorization endpoint before it persists a device code — must consult
+ * this, not re-derive `includes` inline: a door that resolves a client but
+ * never checks its grant list mints codes for a client that can never redeem
+ * them (and, with `pagespace-agent` in the registry, would mint a device code
+ * for a client that only ever presents an agent secret). Exact match only.
+ */
+export function clientAllowsGrant(client: Pick<RegisteredClient, 'allowedGrantTypes'>, grantType: string): boolean {
+  return client.allowedGrantTypes.includes(grantType);
 }
 
 /** The two loopback literals RFC 8252 §7.3 allows a wildcard port on. `localhost` is deliberately excluded (§8.3). */

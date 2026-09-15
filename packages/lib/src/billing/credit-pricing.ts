@@ -8,8 +8,9 @@
  */
 
 import type { SubscriptionTier } from '../services/subscription-utils';
+import type { AccountType } from '../auth/agent/account-type';
 
-function envInt(name: string, fallback: number): number {
+export function envInt(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
   if (raw === undefined || raw === '') return fallback;
   // Strict: only an unsigned integer literal overrides the default. Rejects
@@ -106,6 +107,21 @@ export function allowanceRefills(tier: string): boolean {
  */
 export function isOneTimeAllowanceTier(tier: string): boolean {
   return tier in TIER_MONTHLY_ALLOWANCE_CENTS && TIER_ALLOWANCE_REFILLS[tier as SubscriptionTier] === false;
+}
+
+/**
+ * The one-time starter grant a brand-new balance row is seeded with (ADR 0005
+ * Decision 9). Agents get NOTHING — no free AI credits, ever; a human may claim
+ * an agent later and from then on its spend bills the owner. Humans get their
+ * tier's allowance, falling back to the free allowance for an unknown/legacy
+ * tier (the gate's historical `?? free`). The gate's BOTH lazy-init branches
+ * (no row; bare row) must use this and nothing else, so the exclusion cannot
+ * be bypassed by the order in which a top-up and a first call race.
+ */
+export function starterGrantCents(input: { tier: string; accountType: AccountType }): number {
+  if (input.accountType === 'agent') return 0;
+  const known = Object.prototype.hasOwnProperty.call(TIER_MONTHLY_ALLOWANCE_CENTS, input.tier);
+  return known ? TIER_MONTHLY_ALLOWANCE_CENTS[input.tier as SubscriptionTier] : TIER_MONTHLY_ALLOWANCE_CENTS.free;
 }
 
 /**

@@ -18,6 +18,9 @@ import type { SubscriptionTier } from '../services/subscription-utils';
 // Type-only import (erased at compile time, zero runtime cost) — usage-source.ts
 // is itself a pure, zero-I/O module, so this doesn't break the invariant above.
 import type { AIUsageSource } from '../monitoring/usage-source';
+// Type-only import of the account discriminator (ADR 0005 Decision 1) — same
+// zero-runtime-cost reasoning as above.
+import type { AccountType } from '../auth/agent/account-type';
 
 export interface Balance {
   monthlyCents: number;
@@ -125,7 +128,32 @@ export type GateReason =
   // Per-user/day runaway-spend backstop tripped: today's charged spend plus this
   // call's reservation would exceed the configured daily ceiling. Independent of the
   // credit-balance math (evaluateDailyCap, not evaluateGate). Maps to HTTP 429.
-  | 'daily_cap_exceeded';
+  | 'daily_cap_exceeded'
+  // An UNCLAIMED agent is out of credits — and has no way to get any except a
+  // human claiming it. Never produced by evaluateGate; derived from
+  // `out_of_credits` by refineGateReason so the caller can point at the claim
+  // URL instead of the human "add credits" copy. Maps to HTTP 402.
+  | 'requires_funding';
+
+export interface RefineGateReasonInput {
+  reason: GateReason;
+  accountType: AccountType;
+  /** True when `agent_accounts.ownerUserId` is set (a claimed agent). */
+  hasOwner: boolean;
+}
+
+/**
+ * Pure post-step over evaluateGate's reason (ADR 0005 Decision 9). Only ONE
+ * transition exists: `out_of_credits` for an unclaimed agent becomes
+ * `requires_funding`. A claimed agent is judged on its owner's balance, so its
+ * denial is the ordinary one; every other reason passes through untouched.
+ */
+export function refineGateReason(input: RefineGateReasonInput): GateReason {
+  if (input.reason === 'out_of_credits' && input.accountType === 'agent' && !input.hasOwner) {
+    return 'requires_funding';
+  }
+  return input.reason;
+}
 
 export interface DailyCapInput {
   /** This user's charged spend (whole cents) since the start of the current UTC day. */

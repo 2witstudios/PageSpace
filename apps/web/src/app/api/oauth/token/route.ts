@@ -29,7 +29,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getClientIP } from '@/lib/auth';
-import { getRegisteredClient, type RegisteredClient } from '@pagespace/lib/auth/oauth/clients';
+import { getRegisteredClient, clientAllowsGrant, type RegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { ACCESS_TOKEN_TTL_SECONDS, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import {
   ensureOAuthClientRow,
@@ -182,7 +182,7 @@ async function resolveClient(form: URLSearchParams, clientId: string, grantType:
     return { rejection: noStoreJson(INVALID_GRANT, 400) };
   }
 
-  if (!client.allowedGrantTypes.includes(grantType)) {
+  if (!clientAllowsGrant(client, grantType)) {
     return { rejection: noStoreJson(INVALID_GRANT, 400) };
   }
 
