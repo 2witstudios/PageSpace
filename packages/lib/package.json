@@ -2357,6 +2357,21 @@
       "types": "./dist/auth/agent/pow.d.ts",
       "import": "./dist/auth/agent/pow.js",
       "require": "./dist/auth/agent/pow.js"
+    },
+    "./auth/agent/signup-decision": {
+      "types": "./dist/auth/agent/signup-decision.d.ts",
+      "import": "./dist/auth/agent/signup-decision.js",
+      "require": "./dist/auth/agent/signup-decision.js"
+    },
+    "./auth/agent/signin-decision": {
+      "types": "./dist/auth/agent/signin-decision.d.ts",
+      "import": "./dist/auth/agent/signin-decision.js",
+      "require": "./dist/auth/agent/signin-decision.js"
+    },
+    "./auth/agent/claim-decision": {
+      "types": "./dist/auth/agent/claim-decision.d.ts",
+      "import": "./dist/auth/agent/claim-decision.js",
+      "require": "./dist/auth/agent/claim-decision.js"
     }
   },
   "typesVersions": {
