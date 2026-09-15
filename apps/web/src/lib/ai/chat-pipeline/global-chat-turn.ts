@@ -30,11 +30,10 @@ import {
   readToolApprovalScopes,
   type ApprovedToolExecution,
 } from '@/lib/ai/core/approval-resume';
-import { applyApprovalPolicy, isToolApprovalMode, DEFAULT_TOOL_APPROVAL_MODE, type ApprovalPolicyContext } from '@/lib/ai/approvals/approval-policy';
+import { applyApprovalPolicy, type ApprovalPolicyContext } from '@/lib/ai/approvals/approval-policy';
+import { loadGlobalToolApprovalMode, loadToolApprovalGrants } from '@/lib/ai/approvals/load-approval-context';
 import { gatedIntegrationToolNames } from '@/lib/ai/approvals/integration-approval';
 import { approvalResumeRefusal, executeApprovedCallsAndReassemble } from '@/lib/ai/chat-pipeline/approval-turn-support';
-import { toolApprovalRepository } from '@/lib/repositories/tool-approval-repository';
-import { getConfig as getGlobalAssistantConfig } from '@pagespace/lib/integrations/repositories/config-repository';
 import {
   extractClientAskUserResults,
   applyAskUserResultsToGlobalMessage,
@@ -792,13 +791,11 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // The user's approval mode and standing grants for this conversation. Read
     // once per turn, after the resume merge above so a grant written by THIS
     // resume ("always allow") is honoured by the continuation.
-    const [assistantConfig, toolApprovalGrants] = await Promise.all([
-      getGlobalAssistantConfig(db, userId),
-      toolApprovalRepository.listGrants(userId, conversationId),
+    // Both reads fail SAFE (ask, no grants) — see load-approval-context.ts.
+    const [toolApprovalMode, toolApprovalGrants] = await Promise.all([
+      loadGlobalToolApprovalMode(userId, loggers.api),
+      loadToolApprovalGrants(userId, conversationId, loggers.api),
     ]);
-    const toolApprovalMode = isToolApprovalMode(assistantConfig?.toolApprovalMode)
-      ? assistantConfig.toolApprovalMode
-      : DEFAULT_TOOL_APPROVAL_MODE;
 
     // Read ALL active messages from database (source of truth). Exclude 'streaming'
     // placeholders — this load is the model-context source AND the compaction source, so a
