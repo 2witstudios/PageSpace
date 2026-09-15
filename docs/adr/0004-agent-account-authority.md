@@ -162,7 +162,18 @@ Provider tool catalogues (`integrations/providers/*.ts`) are reclassified to thi
 
 ## 5. Decision D4 — audit record shape (frozen; `packages/lib/src/agent-accounts/audit.ts`)
 
-`AgentAccountAuditRecord` carries: `principal` (every §3 principal by id), `accountId`, `credentialVersion`, `policyVersion`, `approvalId`, `grantId`, `operation`, `normalizedAction` (the canonical request minus body, plus `bodySha256`), `outcome` (`'allowed' | 'denied' | 'executed' | 'upstream_failed' | 'unknown'` with `denyReason` when denied), `presenter`, `at`. It carries **no** raw credential, no body, no response body, no header values other than the projected names. Audit **acceptance precedes execution** (§6 F-13): the executor writes the `allowed` record durably, then acts, then writes the outcome row keyed by the same `grantId`.
+`AgentAccountAuditRecord` carries: `principal` (every §3 principal by id), `accountId`, `credentialVersion`, `policyVersion`, `approvalId`, `grantId`, `operation`, `normalizedAction`, `outcome` (`'allowed' | 'denied' | 'executed' | 'upstream_failed' | 'unknown'` with `denyReason` when denied), `presenter`, `at`. It carries **no** raw credential, no body, no response body, and no header values other than the projected names. Audit **acceptance precedes execution** (§6 F-13): the executor writes the `allowed` record durably, then acts, then writes the outcome row keyed by the same `grantId`.
+
+**Amendment 2026-09-15 (G1b review).** The first shape projected the canonical request's `path` and `resources` verbatim, which contradicts this section's own invariant: real APIs put credentials in URLs (`/v1/tokens/<token>`, `/reset/<one-time-code>`, a presigned `X-Amz-Signature` moved into a path), and this chain is tamper-evident, so a value written here cannot be erased afterwards — Art 17 included, which is exactly why `gdpr-export-coverage.ts` treats the chain as non-erasable. `normalizedAction` therefore carries:
+
+| Field | Rule |
+|---|---|
+| `origin` | the pinned canonical origin (not secret; the first thing an investigator needs) |
+| `pathDigest` | `hash(canonical.path)` as SHA3-256 hex — the repo's hash for secret-adjacent values (`auth/secure-compare.ts`). Two rows for the same endpoint still match and still correlate; no path SEGMENT survives |
+| `resourceIds` | the canonical `resources` filtered to the keys the TYPED OPERATION declares (repo, org, recipient, webhook target). A caller that passes any other key contributes nothing to the row |
+| `channel`, `method`, `headerNames`, `bodySha256`, `operation` | unchanged |
+
+`buildAuditRecord` accordingly takes an injected `hash` and the operation's `declaredResourceKeys`; the projection is the catalogue's, never the caller's. The query string was already absent and stays absent.
 
 ## 6. Fail-closed posture (every line is a RED test)
 
@@ -234,7 +245,8 @@ export type DecideAccountAccess = (input: { facts: AccountAccessFacts }) => Acco
 
 // audit.ts
 export type BuildAuditRecord = (input: { grant: AgentAccountGrant; canonical: CanonicalRequest;
-  outcome: AuditOutcome; at: number }) => AgentAccountAuditRecord;   // never includes body/secret
+  outcome: AuditOutcome; at: number; hash: HashBytes; declaredResourceKeys: readonly string[] })
+  => AgentAccountAuditRecord;   // never includes body, secret, header value, URL path or undeclared resource
 ```
 
 Adapters (I/O, G1b): `grant-repository.ts` (nonce consume, approvals, delegations), `authority-executor.ts` (issue after intersection), each integration-tested against the `:5433` Postgres.
@@ -265,6 +277,7 @@ Adapters (I/O, G1b): `grant-repository.ts` (nonce consume, approvals, delegation
 22. Given `decideApproval` under an `always` policy whose `scope.resources` names repo A and a request whose `resources` name repo B, returns `refuse(out_of_scope)`; with repo A, `policy` (PR #2637 P1).
 23. Given a `session` kind and `aud: 'http-executor'` with `sessionHttp: false`, returns `kind_not_resolvable`; `decideAccountAccess` returns `session_http: true` only when `sessionHttpEnabled` and `use` are both true (PR #2637 P1).
 24. Given a grant whose `bindingDigest` was computed over bindings that differ from the store's copy in owner or origins, the plane returns `binding_mismatch` (ADR 0005 §10.5); the grant type requires the field (a grant without it is `malformed`).
+25. Given a canonical request whose PATH contains a token-shaped segment (`/v1/tokens/ghp_…`) and whose `resources` carry an undeclared key, `buildAuditRecord` produces a record containing **no substring** of either: the path is present only as `pathDigest`, and the undeclared resource is absent entirely. Two requests to the same path still produce the same `pathDigest`, and two different paths produce different ones (G1b review amendment; §5).
 
 ## 9. Consequences
 
