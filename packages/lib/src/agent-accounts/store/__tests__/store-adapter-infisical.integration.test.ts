@@ -3,13 +3,22 @@
  * instance + its own metadata Postgres (`store/infisical-dev/`), never a
  * mock of either. Synthetic credentials only (task brief).
  *
- * FAILS LOUDLY when the local instance is unreachable (`requireDb`-style);
- * opt out locally with `ALLOW_SKIP_DB_TESTS=1`. CI provisions the compose
- * stack and never sets it (see `README-infisical-dev.md`).
+ * Skips itself — visibly, as a reported "skipped", never a crash — when the
+ * local instance is not reachable (the same `describe.skipIf(!reachable)`
+ * pattern as `observability/__tests__/analytics-gdpr.integration.test.ts`
+ * and `error-resolutions.integration.test.ts`). Run
+ * `docker compose -f store/infisical-dev/docker-compose.yml up -d`,
+ * bootstrap an admin (see `README-infisical-dev.md`), and export
+ * `INFISICAL_DEV_ADMIN_TOKEN` to exercise it for real. CI's Unit Tests job
+ * brings the stack up and runs this file explicitly in its own named step
+ * (`.github/workflows/ci.yml`), which fails if the suite reports skipped —
+ * the general `test:integration` step above it may legitimately skip this
+ * file (e.g. a local run with no Infisical), but CI as a whole may not.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
 import { createHash } from 'node:crypto';
+import { get } from 'node:http';
 import type { AccountId, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalOrigin } from '../../canonical-request';
 import type {
@@ -38,14 +47,28 @@ import { createInfisicalStoreAdapter } from '../store-adapter-infisical';
 const INFISICAL_URL = process.env.INFISICAL_DEV_URL ?? 'http://localhost:8080';
 const INFISICAL_ADMIN_TOKEN = process.env.INFISICAL_DEV_ADMIN_TOKEN;
 const METADATA_URL = process.env.PLANE_METADATA_DEV_URL ?? 'postgres://plane_metadata:plane_metadata@127.0.0.1:55433/plane_metadata';
-const ALLOW_SKIP = process.env.ALLOW_SKIP_DB_TESTS === '1';
 
 const hash: HashBytes = (bytes) => createHash('sha3-256').update(bytes).digest('hex');
 const NOW = Date.now();
 const TENANT_A = `user:itest-${NOW}-a` as TenantId;
 const TENANT_B = `user:itest-${NOW}-b` as TenantId;
 
-let available = false;
+// node:http, not fetch — matches the repo's other optional-external-service
+// integration suites (analytics-gdpr, error-resolutions) so the probe never
+// depends on whatever a test-setup file does to the global fetch. A missing
+// admin token means the instance cannot be used even if it answers, so both
+// fold into one "usable right now" boolean.
+const infisicalReachable = INFISICAL_ADMIN_TOKEN
+  ? await new Promise<boolean>((resolve) => {
+      const req = get(`${INFISICAL_URL}/api/status`, { timeout: 2000 }, (res) => {
+        res.resume();
+        resolve(res.statusCode === 200);
+      });
+      req.on('timeout', () => req.destroy());
+      req.on('error', () => resolve(false));
+    })
+  : false;
+
 let pool: Pool;
 let projectAId: string;
 let projectBId: string;
@@ -102,37 +125,25 @@ async function provisionTenantProject(name: string): Promise<{ readonly projectI
   };
 }
 
+// Only runs at all when `describe.skipIf(!infisicalReachable)` below let the block through —
+// a failure here is a REAL failure (the instance answered its health check but provisioning
+// still broke), never a reason to fall back to skipping (`requireDb`'s rule: missing service
+// is a visible skip, decided once, up front; a service that answered and then failed is not).
 beforeAll(async () => {
-  if (!INFISICAL_ADMIN_TOKEN) {
-    if (ALLOW_SKIP) return;
-    throw new Error(
-      'store-adapter-infisical.integration.test.ts: INFISICAL_DEV_ADMIN_TOKEN is not set. Bring up store/infisical-dev/ (docker compose up -d) and bootstrap an admin (see README-infisical-dev.md), or set ALLOW_SKIP_DB_TESTS=1 to skip locally.',
-    );
+  orgId = process.env.INFISICAL_DEV_ORG_ID ?? '';
+  if (!orgId) {
+    const orgs = await api<{ organizations: { id: string }[] }>('/api/v1/organization', { token: INFISICAL_ADMIN_TOKEN });
+    orgId = orgs.organizations[0]?.id ?? '';
   }
-  try {
-    orgId = process.env.INFISICAL_DEV_ORG_ID ?? '';
-    if (!orgId) {
-      const orgs = await api<{ organizations: { id: string }[] }>('/api/v1/organization', { token: INFISICAL_ADMIN_TOKEN });
-      orgId = orgs.organizations[0]?.id ?? '';
-    }
-    const a = await provisionTenantProject(`itest-a-${NOW}`);
-    const b = await provisionTenantProject(`itest-b-${NOW}`);
-    projectAId = a.projectId;
-    projectBId = b.projectId;
-    identityA = a.identity;
-    identityBWrongTenant = b.identity;
+  const a = await provisionTenantProject(`itest-a-${NOW}`);
+  const b = await provisionTenantProject(`itest-b-${NOW}`);
+  projectAId = a.projectId;
+  projectBId = b.projectId;
+  identityA = a.identity;
+  identityBWrongTenant = b.identity;
 
-    pool = new Pool({ connectionString: METADATA_URL });
-    await pool.query('SELECT 1');
-
-    available = true;
-  } catch (error) {
-    if (ALLOW_SKIP) {
-      available = false;
-      return;
-    }
-    throw error;
-  }
+  pool = new Pool({ connectionString: METADATA_URL });
+  await pool.query('SELECT 1');
 });
 
 afterAll(async () => {
@@ -193,9 +204,8 @@ function makeGrant(overrides: Partial<AgentAccountGrant> = {}): VerifiedGrant {
   return grant as VerifiedGrant;
 }
 
-describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapter — integration against real Infisical + plane metadata', () => {
+describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integration against real Infisical + plane metadata', () => {
   it('given put then describe, should return version and bindings and never the material', async () => {
-    if (!available) return;
     const adapter = makeAdapter();
     const accountId = `acct-put-describe-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
@@ -221,7 +231,6 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
   });
 
   it('given resolve with a wrong-tenant identity, should return not_found', async () => {
-    if (!available) return;
     const adapter = makeAdapter();
     const accountId = `acct-wrong-tenant-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
@@ -238,7 +247,6 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
   });
 
   it('given resolve after revoke, should return revoked', async () => {
-    if (!available) return;
     const adapter = makeAdapter();
     const accountId = `acct-revoke-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
@@ -257,7 +265,6 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
   // ref.tenantId against identity.tenantId (unlike resolve/describe/writeSecret), so a
   // tenant-B identity could deny a tenant-A account outright.
   it('given revoke with a wrong-tenant identity, should return not_found and leave the account unrevoked', async () => {
-    if (!available) return;
     const adapter = makeAdapter();
     const accountId = `acct-revoke-cross-tenant-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
@@ -276,7 +283,6 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
   });
 
   it('given delete then describe, should return not_found', async () => {
-    if (!available) return;
     const adapter = makeAdapter();
     const accountId = `acct-delete-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
@@ -292,7 +298,6 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
   });
 
   it('given delete whose upstream revocation is unsupported, should return removed true and upstream unsupported', async () => {
-    if (!available) return;
     const adapter = makeAdapter();
     const accountId = `acct-upstream-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
@@ -305,7 +310,6 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
   });
 
   it('given two concurrent rotate calls with the same expectedVersion, should commit exactly one and return version_conflict for the other', async () => {
-    if (!available) return;
     const adapter = makeAdapter();
     const accountId = `acct-concurrent-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
@@ -329,7 +333,6 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
   // WHOLE discriminated SecretMaterial ({ kind, material: perKindPayload }), so resolve returned
   // a double-nested object instead of the per-kind payload callers expect.
   it('given put of api_key material then resolve, should return the exact per-kind payload, not the discriminated-union wrapper', async () => {
-    if (!available) return;
     const adapter = makeAdapter();
     const accountId = `acct-payload-shape-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
@@ -349,7 +352,6 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
   // object (which never has a top-level `refreshToken`) instead of the real oauth2 payload, so the
   // real refresh token was never actually stripped for http-executor/relay-runner resolves.
   it('given resolve of an oauth2 ref by http-executor, should never include refreshToken in the returned material', async () => {
-    if (!available) return;
     const adapter = makeAdapter();
     const accountId = `acct-oauth2-strip-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'oauth2' as const };
@@ -379,7 +381,6 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
   // revokedAt before writing, and metadata.commit unconditionally reset revoked_at to NULL — so a
   // rotate (or put) issued after revoke silently reactivated a supposedly broker-denied credential.
   it('given rotate after revoke, should refuse and resolve should still report revoked', async () => {
-    if (!available) return;
     const adapter = makeAdapter();
     const accountId = `acct-revoke-then-rotate-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
@@ -412,7 +413,6 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
   // ref.kind with the SecretMaterial discriminant, so a caller could submit e.g. password material
   // under an api_key ref; the adapter ignored material.kind and wrote the mismatched payload.
   it('given put with material.kind different from ref.kind, should return kind_mismatch and write nothing', async () => {
-    if (!available) return;
     const adapter = makeAdapter();
     const accountId = `acct-kind-mismatch-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
@@ -438,7 +438,6 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
   // with the STALE metadata version. Simulated here as an out-of-band Infisical write (standing
   // in for a rotation slipping in between resolveCore's metadata.read and infisical.getSecret).
   it('given the Infisical secret changed after the authorizing metadata read (a race), should refuse rather than serve mismatched material', async () => {
-    if (!available) return;
     const adapter = makeAdapter();
     const accountId = `acct-race-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
@@ -472,7 +471,6 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
   // the downstream version_mismatch check (result.version came back as the NEW version), while a
   // caller pairing an old grant with the NEW input.version got the rotated secret.
   it('given a grant naming the version just rotated away, inside rotationGraceMs, should resolve to the OLD material at the OLD version — never the new one', async () => {
-    if (!available) return;
     const adapter = makeAdapter();
     const accountId = `acct-grace-content-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
@@ -519,7 +517,6 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
   // metadata read is stale (still sees previousVersion=1) must not be served v2's content
   // mislabeled as v1. Simulated as an out-of-band overwrite of the companion secret.
   it('given the grace companion secret represents a different version than the authorizing metadata read expected, should refuse', async () => {
-    if (!available) return;
     const adapter = makeAdapter();
     const accountId = `acct-grace-stale-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
