@@ -2337,6 +2337,21 @@
       "types": "./dist/validators/fly-ownership.d.ts",
       "import": "./dist/validators/fly-ownership.js",
       "require": "./dist/validators/fly-ownership.js"
+    },
+    "./auth/agent/reserved-email": {
+      "types": "./dist/auth/agent/reserved-email.d.ts",
+      "import": "./dist/auth/agent/reserved-email.js",
+      "require": "./dist/auth/agent/reserved-email.js"
+    },
+    "./auth/agent/secret": {
+      "types": "./dist/auth/agent/secret.d.ts",
+      "import": "./dist/auth/agent/secret.js",
+      "require": "./dist/auth/agent/secret.js"
+    },
+    "./auth/agent/enabled": {
+      "types": "./dist/auth/agent/enabled.d.ts",
+      "import": "./dist/auth/agent/enabled.js",
+      "require": "./dist/auth/agent/enabled.js"
     }
   },
   "typesVersions": {
