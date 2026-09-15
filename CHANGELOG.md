@@ -489,6 +489,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   or charged; the same balance that used to show as "15" now shows as "1,500". The included
   allowance behind a paid plan is derived from the plan's price rather than kept in a separate
   table, and the admin billing view lists it as included credits.
+- **Plans are Free, Pro, and Business; Founder is retired** — the pricing page and the in-app plan
+  page now show three plans. Pro stays $15 a month for a person. Business is now the plan for an
+  organization: $50 a month with 5 seats included and $10 a month for each extra seat, and it is not
+  offered to a single user. Every plan card states its price, its included credits (a plain count),
+  and the top-up rate as three separate facts. The Founder plan is no longer sold; its subscriber
+  moves to Pro at the end of the current billing period, and anyone already on the earlier $100
+  personal Business plan keeps Business features at the price they pay today.
 - **The header now says "Home", and the drive name next to it opens a proper drive picker** —
   the way back out of a drive used to be a small house icon followed by a `/`, and nothing on
   screen said where it went, so it was easy to miss entirely. It now reads **Home** in words, next
