@@ -36,6 +36,7 @@ import {
   type AIErrorCause,
 } from '@/lib/ai/shared';
 import type { UseAnswerAskUserResult } from '@/lib/ai/shared/hooks/useAnswerAskUser';
+import { useRespondToApproval, type UseRespondToApprovalResult } from '@/lib/ai/shared/hooks/useRespondToApproval';
 import { buildContextRef } from '@/lib/ai/shared/buildContextRef';
 import { buildSessionChatRequestBody } from '@/lib/agents/build-session-chat-request';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
@@ -99,6 +100,8 @@ export interface UseAgentSessionChatReturn {
   errorCause: AIErrorCause | null;
   dismissError: () => void;
   askUserAnswering: UseAnswerAskUserResult;
+  /** Approval plumbing for paused (needsApproval) tool calls — see useRespondToApproval. */
+  toolApprovals: UseRespondToApprovalResult;
 }
 
 export function useAgentSessionChat({
@@ -133,6 +136,7 @@ export function useAgentSessionChat({
     clearError,
     regenerate,
     addToolResult,
+    addToolApprovalResponse,
   } = useChatSession({
     api: '/api/ai/chat',
     channelId: agent.id,
@@ -264,6 +268,17 @@ export function useAgentSessionChat({
     dispatch: dispatchUserMessage,
   });
 
+  // The approval twin, on the same answerability inputs.
+  const toolApprovals = useRespondToApproval({
+    conversationId,
+    renderedMessages,
+    isConversationBusy: isConversationBusyForAskUser,
+    addToolApprovalResponse,
+    wrapSend,
+    releasePendingSend,
+    buildBody,
+  });
+
   const handleSend = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
@@ -356,5 +371,6 @@ export function useAgentSessionChat({
     errorCause,
     dismissError,
     askUserAnswering,
+    toolApprovals,
   };
 }
