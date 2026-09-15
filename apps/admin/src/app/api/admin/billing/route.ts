@@ -21,11 +21,9 @@ import {
   getNegativeMarginAccounts,
   type Granularity,
 } from '@/lib/monitoring';
-import {
-  MARKUP_BPS,
-  TIER_MONTHLY_ALLOWANCE_CENTS,
-  TIER_ALLOWANCE_REFILLS,
-} from '@pagespace/lib/billing/credit-pricing';
+import { TIER_ALLOWANCE_REFILLS } from '@pagespace/lib/billing/credit-pricing';
+import { MARKUP_BPS, CREDITS_PER_DOLLAR, dollarsFromCents } from '@pagespace/lib/billing/money-model';
+import { MONTHLY_CREDIT_CENTS } from '@pagespace/lib/billing/credit-copy';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { toCsv } from '@/lib/csv';
 
@@ -40,7 +38,7 @@ function parseGranularity(value: string | null): Granularity {
 }
 
 function centsToDollars(cents: number): string {
-  return (cents / 100).toFixed(2);
+  return dollarsFromCents(cents).toFixed(2);
 }
 
 function fmtPct(value: number | null): string {
@@ -97,7 +95,10 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
     const enforcement = {
       enabled: true,
       markupBps: MARKUP_BPS,
-      tierAllowanceCents: TIER_MONTHLY_ALLOWANCE_CENTS,
+      creditsPerDollar: CREDITS_PER_DOLLAR,
+      // Included credit value per tier, in whole cents, derived from the list price
+      // (MON-2) — the per-invoice grant is sized from what was actually paid.
+      tierAllowanceCents: MONTHLY_CREDIT_CENTS,
       // false = one-time starter grant (free); true = re-granted each renewal.
       tierAllowanceRefills: TIER_ALLOWANCE_REFILLS,
     };
@@ -119,8 +120,10 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
 
       rows.push(['enforcement', 'enabled', String(enforcement.enabled), '', '', '', '', '', '', '', '', '', '']);
       rows.push(['enforcement', 'markupBps', String(enforcement.markupBps), '', '', '', '', '', '', '', '', '', '']);
+      rows.push(['enforcement', 'creditsPerDollar', String(enforcement.creditsPerDollar), '', '', '', '', '', '', '', '', '', '']);
       for (const [tier, cents] of Object.entries(enforcement.tierAllowanceCents)) {
-        rows.push(['enforcement', 'tier_allowance', tier, '', '', '', '', '', '', '', '', '', centsToDollars(cents)]);
+        // Credit value the tier includes, as dollars of credit value (a liability figure, not cash).
+        rows.push(['enforcement', 'tier_included_credit_value', tier, '', '', '', '', '', '', '', '', '', centsToDollars(cents)]);
       }
 
       rows.push(['summary', range, '', '', '', '', summary.requestCount, centsToDollars(summary.realCostCents), centsToDollars(summary.chargedCents), centsToDollars(summary.appliedCents), centsToDollars(summary.marginCents), fmtPct(summary.marginPct), '']);

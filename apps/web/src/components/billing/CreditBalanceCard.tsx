@@ -8,7 +8,7 @@ import { useCreditBalance } from '@/hooks/useCreditBalance';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
 import { UpgradeTierButton } from '@/components/billing/UpgradeTierButton';
-import { formatCreditCount, formatCreditCountSigned } from '@/lib/subscription/credits';
+import { formatCreditCount } from '@/lib/subscription/credits';
 
 /**
  * Settings card showing the user's prepaid AI-credit balance on a 0–100 scale,
@@ -59,7 +59,7 @@ export function CreditBalanceCard() {
                   balance.spendable < 0 ? 'text-red-600 dark:text-red-400' : ''
                 }`}
               >
-                {formatCreditCountSigned(balance.spendable)}
+                {formatCreditCount(balance.spendable)}
                 <span className="ml-2 text-sm font-normal text-muted-foreground">
                   / {formatCreditCount(balance.monthly.allowance)} credits
                 </span>

@@ -33,7 +33,8 @@ import { creditBalances, creditHolds } from '@pagespace/db/schema/credits';
 import { users } from '@pagespace/db/schema/auth';
 import { and, eq, gt, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
-import { TIER_MONTHLY_ALLOWANCE_CENTS, allowanceRefills, isOneTimeAllowanceTier } from './credit-pricing';
+import { allowanceRefills, isOneTimeAllowanceTier } from './credit-pricing';
+import { tierAllowanceCents } from './money-model';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 // Mirror of addOneMonth in credit-gate (same logic, kept local to avoid pulling
@@ -80,8 +81,9 @@ export interface CreditBalanceSummary {
   reserved: number;
 }
 
+/** Display allowance for an account never granted: derived from the list price (MON-2). */
 function allowanceFor(tier: SubscriptionTier): number {
-  return TIER_MONTHLY_ALLOWANCE_CENTS[tier] ?? TIER_MONTHLY_ALLOWANCE_CENTS.free;
+  return tierAllowanceCents(tier);
 }
 
 /** The unlimited/hidden summary used when prepaid billing is disabled. */

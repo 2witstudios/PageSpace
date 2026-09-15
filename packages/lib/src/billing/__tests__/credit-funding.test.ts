@@ -24,7 +24,7 @@ vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled
 vi.mock('../../logging/logger-config', () => ({ loggers: { api: mockApiLogger } }));
 
 import { applyStripeFunding } from '../credit-funding';
-import { TIER_MONTHLY_ALLOWANCE_CENTS } from '../credit-pricing';
+import { tierAllowanceCents } from '../money-model';
 
 // Capture bag for what each db call was handed.
 interface Captured {
@@ -169,7 +169,7 @@ describe('applyStripeFunding', () => {
 
     await applyStripeFunding(invoiceEvent);
 
-    const allowance = TIER_MONTHLY_ALLOWANCE_CENTS.pro;
+    const allowance = tierAllowanceCents('pro');
     expect(cap.ledgerValues).toMatchObject({
       userId: 'u1',
       entryType: 'monthly_grant',
@@ -266,7 +266,7 @@ describe('applyStripeFunding', () => {
 
     await applyStripeFunding(invoiceEvent);
 
-    const allowance = TIER_MONTHLY_ALLOWANCE_CENTS.pro;
+    const allowance = tierAllowanceCents('pro');
     expect(cap.balanceSet).toMatchObject({
       monthlyRemainingCents: 600 + allowance,
       monthlyAllowanceCents: allowance,
@@ -284,7 +284,7 @@ describe('applyStripeFunding', () => {
 
     await applyStripeFunding(invoiceEvent);
 
-    const allowance = TIER_MONTHLY_ALLOWANCE_CENTS.pro;
+    const allowance = tierAllowanceCents('pro');
     expect(cap.balanceSet).toMatchObject({
       monthlyRemainingCents: allowance,
       monthlyAllowanceCents: allowance,
@@ -388,7 +388,7 @@ describe('applyStripeFunding', () => {
 
     await applyStripeFunding(invoiceEvent, { tier: 'business' });
 
-    const allowance = TIER_MONTHLY_ALLOWANCE_CENTS.business;
+    const allowance = tierAllowanceCents('business');
     expect(cap.ledgerValues).toMatchObject({ amountCents: allowance });
     expect(cap.balanceSet).toMatchObject({
       monthlyRemainingCents: allowance,

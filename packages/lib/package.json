@@ -408,6 +408,16 @@
       "import": "./dist/billing/credit-pricing.js",
       "require": "./dist/billing/credit-pricing.js"
     },
+    "./billing/money-model": {
+      "types": "./dist/billing/money-model.d.ts",
+      "import": "./dist/billing/money-model.js",
+      "require": "./dist/billing/money-model.js"
+    },
+    "./billing/credit-copy": {
+      "types": "./dist/billing/credit-copy.d.ts",
+      "import": "./dist/billing/credit-copy.js",
+      "require": "./dist/billing/credit-copy.js"
+    },
     "./billing/credit-gate": {
       "types": "./dist/billing/credit-gate.d.ts",
       "import": "./dist/billing/credit-gate.js",

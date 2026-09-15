@@ -29,7 +29,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { eq, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { classifyStripeEvent, computeMonthlyRefill, applyPaymentToDebt } from './credit-core';
-import { TIER_MONTHLY_ALLOWANCE_CENTS } from './credit-pricing';
+import { tierAllowanceCents } from './money-model';
 import type { SubscriptionTier } from '../services/subscription-utils';
 import { loggers } from '../logging/logger-config';
 
@@ -170,6 +170,10 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
   // billed. Fall back to the stored tier only when the caller couldn't resolve one.
   const tier = tierOverride ?? user.tier;
   const { start, end } = invoicePeriod(obj);
+  // Grant sized from the tier's list price (MON-2 derivation). Lane A3 replaces this
+  // with allowanceCentsForPaidCents(invoice.amount_paid, tier) so a promo or a
+  // partial period flows through; the refill arithmetic below is already shaped for it.
+  const allowanceCents = tierAllowanceCents(tier);
   let carriedCents = 0;
 
   await db.transaction(async (tx) => {
@@ -179,7 +183,7 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
         userId: user.id,
         entryType: 'monthly_grant',
         bucket: 'monthly',
-        amountCents: (TIER_MONTHLY_ALLOWANCE_CENTS[tier] ?? TIER_MONTHLY_ALLOWANCE_CENTS.free),
+        amountCents: allowanceCents,
         stripeRef,
         // Settled on insert. consumeStatus defaults to 'pending', but the backfill
         // cron sweeps EVERY pending ledger row through settlePendingLedgerRow, which
@@ -220,7 +224,7 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
       .for('update')
       .limit(1);
     carriedCents = currentRow?.monthlyRemainingCents ?? 0;
-    const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS, carriedCents, currentRow?.debtCents ?? 0);
+    const refill = computeMonthlyRefill(allowanceCents, carriedCents, currentRow?.debtCents ?? 0);
 
     await tx
       .insert(creditBalances)
@@ -249,7 +253,7 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
   loggers.api.info('credit funding: monthly refill applied', {
     userId: user.id,
     tier,
-    allowanceCents: TIER_MONTHLY_ALLOWANCE_CENTS[tier] ?? TIER_MONTHLY_ALLOWANCE_CENTS.free,
+    allowanceCents,
     carried: carriedCents,
     stripeRef,
   });

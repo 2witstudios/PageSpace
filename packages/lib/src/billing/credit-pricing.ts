@@ -4,39 +4,19 @@
  * These constants/tables are passed INTO the pure functions in credit-core; the
  * core never imports this module. Env overrides let the founder tune economics
  * without a code change. All monetary values are whole cents of customer-facing
- * credit value. Placeholder defaults — final numbers TBD at kickoff.
+ * credit value. The money model itself — markup, the credit rate, the included-credit
+ * ratio, the free starter grant — lives in money-model.ts (MON-1); this file holds the
+ * operational knobs around it.
  */
 
 import type { SubscriptionTier } from '../services/subscription-utils';
+import { envBool, envFloat, envInt } from './env-parse';
 
-function envInt(name: string, fallback: number): number {
-  const raw = process.env[name]?.trim();
-  if (raw === undefined || raw === '') return fallback;
-  // Strict: only an unsigned integer literal overrides the default. Rejects
-  // trailing junk ("100abc"), decimals ("1.5"), and signs so a typo'd billing
-  // env var falls back to the safe default instead of silently parsing.
-  if (!/^\d+$/.test(raw)) return fallback;
-  return Number.parseInt(raw, 10);
-}
-
-function envBool(name: string, fallback: boolean): boolean {
-  const raw = process.env[name]?.trim().toLowerCase();
-  if (raw === undefined || raw === '') return fallback;
-  if (raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on') return true;
-  if (raw === 'false' || raw === '0' || raw === 'no' || raw === 'off') return false;
-  return fallback; // unrecognized value -> safe default
-}
-
-/** Parse a non-negative float env override; fall back to `fallback` on absence/garbage. */
-function envFloat(name: string, fallback: number): number {
-  const raw = process.env[name]?.trim();
-  if (raw === undefined || raw === '') return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
-}
-
-/** Markup applied to real provider cost, in basis points. 15000 = 1.5×. */
-export const MARKUP_BPS = envInt('CREDIT_MARKUP_BPS', 15000);
+/**
+ * Markup applied to real provider cost, in basis points. Defined ONCE in
+ * money-model (MON-1); re-exported here for the existing import sites.
+ */
+export { MARKUP_BPS } from './money-model';
 
 /**
  * Discount factor (basis points of the input rate) applied to CACHED input tokens in
@@ -49,27 +29,6 @@ export const MARKUP_BPS = envInt('CREDIT_MARKUP_BPS', 15000);
  * discount); default 1000 = 0.10×.
  */
 export const CACHE_READ_DISCOUNT_FACTOR_BPS = envInt('CACHE_READ_DISCOUNT_FACTOR_BPS', 1000);
-
-/**
- * Credit allowance per tier, in whole cents of customer-facing credit value.
- *
- * For tiers that REFILL (see {@link TIER_ALLOWANCE_REFILLS}) this is granted on each
- * subscription renewal and accumulates across periods (rollover): each renewal ADDS
- * the allowance to the current balance rather than replacing it.
- *
- * For the free tier it is a ONE-TIME starter grant: lazily granted on the user's
- * first metered call (credit-gate's `free-init-` path) and never refilled. Bounded
- * lifetime exposure per free user = allowance / markup (~$3.33 at $5 and 1.5×).
- */
-export const TIER_MONTHLY_ALLOWANCE_CENTS: Record<SubscriptionTier, number> = {
-  // Free: $5 of starter credit, once. The free-tier-only premium gate
-  // (requiresProSubscription) confines it to cheaper "standard" models, so the
-  // real provider cost behind that $5 stays low.
-  free: envInt('CREDIT_ALLOWANCE_FREE_CENTS', 500),
-  pro: envInt('CREDIT_ALLOWANCE_PRO_CENTS', 1500),
-  founder: envInt('CREDIT_ALLOWANCE_FOUNDER_CENTS', 5000),
-  business: envInt('CREDIT_ALLOWANCE_BUSINESS_CENTS', 10000),
-};
 
 /**
  * Whether a tier's allowance is re-granted each billing period. `true` = the
@@ -105,7 +64,7 @@ export function allowanceRefills(tier: string): boolean {
  * disagree about which rows are "waiting for the grant".
  */
 export function isOneTimeAllowanceTier(tier: string): boolean {
-  return tier in TIER_MONTHLY_ALLOWANCE_CENTS && TIER_ALLOWANCE_REFILLS[tier as SubscriptionTier] === false;
+  return tier in TIER_ALLOWANCE_REFILLS && TIER_ALLOWANCE_REFILLS[tier as SubscriptionTier] === false;
 }
 
 /**
@@ -530,31 +489,9 @@ export const BALANCE_DRIFT_TOLERANCE_CENTS = envInt('BALANCE_DRIFT_TOLERANCE_CEN
  */
 export const NEGATIVE_MARGIN_FLOOR_BPS = envInt('NEGATIVE_MARGIN_FLOOR_BPS', 0);
 
-export interface CreditPack {
-  /** Stable SKU id, also stored in Stripe price metadata. */
-  id: string;
-  /** Credit value added to the top-up bucket, in cents. */
-  cents: number;
-  /** Human label for the dashboard CTA. */
-  label: string;
-}
-
-/** One-time top-up packs offered for purchase. */
-export const CREDIT_PACKS: Record<string, CreditPack> = {
-  pack_10: { id: 'pack_10', cents: 1000, label: '$10 credits' },
-  pack_25: { id: 'pack_25', cents: 2500, label: '$25 credits' },
-  pack_50: { id: 'pack_50', cents: 5000, label: '$50 credits' },
-};
-
-export function getCreditPack(id: string): CreditPack | undefined {
-  return CREDIT_PACKS[id];
-}
-
 /**
- * Bounds (whole cents) for a CUSTOM top-up amount, alongside the fixed packs. The min
- * keeps dust purchases above Stripe's per-transaction fee; the max caps single-charge
- * fraud/chargeback exposure. Validated by `validateTopupAmountCents` in credit-core,
- * shared by the checkout route and the client. Default $5–$500; tune via env.
+ * Top-up packs and custom top-up bounds are credit counts defined in money-model
+ * (MON-4). `getCreditPack` is re-exported here for the Stripe webhook's existing
+ * import; new code imports from './money-model'.
  */
-export const CREDIT_TOPUP_MIN_CENTS = envInt('CREDIT_TOPUP_MIN_CENTS', 500);
-export const CREDIT_TOPUP_MAX_CENTS = envInt('CREDIT_TOPUP_MAX_CENTS', 50000);
+export { getCreditPack, type CreditPack } from './money-model';

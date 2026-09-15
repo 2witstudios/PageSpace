@@ -16,10 +16,19 @@ import { CreditCard, Loader2 } from 'lucide-react';
 import { post } from '@/lib/auth/auth-fetch';
 import {
   CREDIT_PACK_LIST,
-  formatCreditDollars,
-  TOPUP_MIN_CENTS,
-  TOPUP_MAX_CENTS,
+  creditPackPriceCents,
+  creditsFromDollars,
+  centsFromCredits,
+  dollarsFromCents,
+  formatDollars,
+  validateTopupCredits,
+  CREDIT_TOPUP_MIN_CREDITS,
+  CREDIT_TOPUP_MAX_CREDITS,
 } from '@/lib/subscription/credits';
+
+/** Custom top-up bounds as real-money cents, for the dollar input and its caption. */
+const TOPUP_MIN_CENTS = centsFromCredits(CREDIT_TOPUP_MIN_CREDITS);
+const TOPUP_MAX_CENTS = centsFromCredits(CREDIT_TOPUP_MAX_CREDITS);
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { useCreditBalance } from '@/hooks/useCreditBalance';
 
@@ -32,8 +41,8 @@ interface BuyCreditsButtonProps {
   label?: string;
 }
 
-/** Body for the top-up checkout: either a fixed pack id or a custom whole-cent amount. */
-type TopupBody = { packId: string } | { amountCents: number };
+/** Body for the top-up checkout: either a fixed pack id or a custom credit count (MON-4). */
+type TopupBody = { packId: string } | { credits: number };
 
 /**
  * "Buy credits" trigger that opens a menu of top-up packs (sourced from `CREDIT_PACKS`
@@ -80,14 +89,16 @@ export function BuyCreditsButton({
       setError('Enter a dollar amount.');
       return;
     }
-    const cents = Math.round(dollars * 100);
-    if (cents < TOPUP_MIN_CENTS || cents > TOPUP_MAX_CENTS) {
+    // The buyer types dollars; a top-up buys credits at the full rate (no ratio), and
+    // the route validates the same credit count against the same bounds.
+    const credits = validateTopupCredits(creditsFromDollars(dollars));
+    if (credits === null) {
       setError(
-        `Enter an amount between ${formatCreditDollars(TOPUP_MIN_CENTS)} and ${formatCreditDollars(TOPUP_MAX_CENTS)}.`,
+        `Enter an amount between ${formatDollars(TOPUP_MIN_CENTS)} and ${formatDollars(TOPUP_MAX_CENTS)}.`,
       );
       return;
     }
-    void startCheckout({ amountCents: cents }, 'custom');
+    void startCheckout({ credits }, 'custom');
   };
 
   const isLoading = loadingKey !== null;
@@ -143,13 +154,14 @@ export function BuyCreditsButton({
               ) : (
                 <CreditCard className="h-4 w-4 mr-2" />
               )}
-              {formatCreditDollars(pack.cents)} credits
+              {pack.label}
+              <span className="ml-auto pl-4 text-xs text-muted-foreground">{formatDollars(creditPackPriceCents(pack))}</span>
             </DropdownMenuItem>
           ))}
           <DropdownMenuSeparator />
           <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-            Or a custom amount ({formatCreditDollars(TOPUP_MIN_CENTS)}–
-            {formatCreditDollars(TOPUP_MAX_CENTS)})
+            Or a custom amount ({formatDollars(TOPUP_MIN_CENTS)}–
+            {formatDollars(TOPUP_MAX_CENTS)})
           </DropdownMenuLabel>
           {/* Plain content (not a DropdownMenuItem) so interacting doesn't close the
               menu; stop keydown propagation so Radix typeahead doesn't hijack typing. */}
@@ -161,8 +173,8 @@ export function BuyCreditsButton({
             <Input
               type="number"
               inputMode="decimal"
-              min={TOPUP_MIN_CENTS / 100}
-              max={TOPUP_MAX_CENTS / 100}
+              min={dollarsFromCents(TOPUP_MIN_CENTS)}
+              max={dollarsFromCents(TOPUP_MAX_CENTS)}
               step="1"
               placeholder="25"
               value={customDollars}

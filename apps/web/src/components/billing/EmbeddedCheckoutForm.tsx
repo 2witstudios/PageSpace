@@ -10,6 +10,7 @@ import { Loader2, AlertCircle, Tag } from 'lucide-react';
 import type { PlanDefinition } from '@/lib/subscription/plans';
 import { PromoCodeInput, type AppliedPromo } from './PromoCodeInput';
 import { post } from '@/lib/auth/auth-fetch';
+import { dollarsFromCents } from '@/lib/subscription/credits';
 
 interface ApplyPromoResponse {
   success: boolean;
@@ -59,7 +60,7 @@ export function EmbeddedCheckoutForm({
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
-    }).format(cents / 100);
+    }).format(dollarsFromCents(cents));
   };
 
   // Calculate discounted price if promo is applied

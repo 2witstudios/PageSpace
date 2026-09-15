@@ -2,7 +2,7 @@ import Link from "next/link";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata, LEGAL_LAST_UPDATED } from "@/lib/metadata";
-import { MONTHLY_CREDITS, FREE_STARTER_CREDITS } from "@/lib/credits";
+import { MONTHLY_CREDITS, FREE_STARTER_CREDITS_DISPLAY } from "@/lib/credits";
 
 export const metadata = pageMetadata.terms;
 
@@ -125,7 +125,7 @@ export default function TermsOfService() {
               PageSpace offers the following subscription plans:
             </p>
             <ul className="list-disc pl-6 mb-4">
-              <li><strong>Free Plan:</strong> {FREE_STARTER_CREDITS} credits as a one-time starter grant, standard models, 500MB storage</li>
+              <li><strong>Free Plan:</strong> {FREE_STARTER_CREDITS_DISPLAY} credits as a one-time starter grant, standard models, 500MB storage</li>
               <li><strong>Pro Plan ($15/month):</strong> {MONTHLY_CREDITS.pro}/month in credits, standard and Pro models, 2GB storage</li>
               <li><strong>Founder Plan ($50/month):</strong> {MONTHLY_CREDITS.founder}/month in credits, standard and Pro models, 10GB storage, priority support</li>
               <li><strong>Business Plan ($100/month):</strong> {MONTHLY_CREDITS.business}/month in credits, standard and Pro models, 50GB storage, priority support</li>

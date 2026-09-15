@@ -975,7 +975,7 @@ describe('POST /api/stripe/webhook', () => {
       expect(mockApplyStripeFunding).toHaveBeenCalledWith(event);
     });
 
-    it('sends a payment receipt on a credit-pack checkout, resolving the pack label', async () => {
+    it('MON-4/UI-12 sends a payment receipt on a credit-pack checkout, resolving the pack label as a credit count', async () => {
       const session = mockCheckoutSession({
         mode: 'payment',
         customerEmail: 'buyer@example.com',
@@ -996,7 +996,8 @@ describe('POST /api/stripe/webhook', () => {
       expect(mockSendTopupReceiptEmail).toHaveBeenCalledTimes(1);
       expect(mockSendTopupReceiptEmail).toHaveBeenCalledWith({
         session,
-        packLabel: '$25 credits',
+        // MON-4: pack_25 is 2,500 credits; the label is a credit count, never a dollar figure (UI-12).
+        packLabel: '2,500 credits',
         email: 'buyer@example.com',
         userName: 'Test User',
         eventId: event.id,

@@ -26,14 +26,13 @@ export const CREDIT_CONVERSION_DEFINITION =
 export const MONEY_MODEL_PATH = 'packages/lib/src/billing/money-model.ts';
 
 /**
- * Measured on 2026-09-15 (lane A4), before money-model.ts exists. Owner: lane A1 (MON-5)
- * moves each onto the money-model module and removes the entry.
+ * Measured on 2026-09-15 (lane A4) before money-model.ts existed: the web and marketing
+ * copy helpers each defined a conversion. Lane A1 (MON-5) moved them onto money-model.ts
+ * and emptied this list. Nothing may be added back.
  */
 export const CREDIT_CONVERSION_ALLOWLIST: Readonly<Record<string, string>> = {
-  "apps/web/src/lib/subscription/credits.ts":
-    "TODO(OW-A1 MON-5): in-app credit copy helpers (centsToCredits, toDisplayCredits, formatCreditUnits*, formatCreditCount*) move onto money-model.ts",
-  "apps/marketing/src/lib/credits.ts":
-    "TODO(OW-A1 MON-5): marketing mirror (formatCredits) moves onto money-model.ts",
+  // Lane A1 (MON-5) landed money-model.ts; the web and marketing copy helpers are thin
+  // re-exports of it now, so nothing is allowlisted.
 };
 
 describe('X-6 seam: a credit is converted in one module (the Spec second-conversion grep)', () => {

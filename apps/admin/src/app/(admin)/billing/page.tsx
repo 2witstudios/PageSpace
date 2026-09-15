@@ -32,6 +32,7 @@ import { useAdminQuery } from '@/hooks/use-admin-query';
 import { useUrlTab } from '@/hooks/use-url-tab';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { usd, pct, num } from '@/lib/format';
+import { dollarsFromCents, formatCreditCount } from '@pagespace/lib/billing/money-model';
 
 type Range = '24h' | '7d' | '30d' | 'all';
 type Granularity = 'day' | 'month';
@@ -147,6 +148,9 @@ interface SubscriptionTierRow { tier: string; count: number; }
 interface Enforcement {
   enabled: boolean;
   markupBps: number;
+  /** Credits per dollar of credit value (the money model's display and purchase rate). */
+  creditsPerDollar?: number;
+  /** Included credit value per tier, whole cents, derived from the list price. */
   tierAllowanceCents: Record<string, number>;
   /** Whether the tier's allowance is re-granted each renewal; false = one-time starter grant. */
   tierAllowanceRefills?: Record<string, boolean>;
@@ -273,9 +277,9 @@ function MarginsTab({ data }: { data: BillingResponse }) {
                     .sort((a, b) => (String(a.period) < String(b.period) ? -1 : 1))
                     .map((r) => ({
                       period: String(r.period).slice(0, granularity === 'month' ? 7 : 10),
-                      realCost: +(r.realCostCents / 100).toFixed(2),
-                      charged: +(r.chargedCents / 100).toFixed(2),
-                      margin: +(r.marginCents / 100).toFixed(2),
+                      realCost: +dollarsFromCents(r.realCostCents).toFixed(2),
+                      charged: +dollarsFromCents(r.chargedCents).toFixed(2),
+                      margin: +dollarsFromCents(r.marginCents).toFixed(2),
                     }))}
                   margin={{ top: 4, right: 16, left: 0, bottom: 4 }}
                 >
@@ -741,20 +745,20 @@ function EnforcementTab({ data }: { data: BillingResponse }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Credit allowance by tier</CardTitle>
-          <CardDescription>Paid tiers are re-granted on each renewal; the free tier is a one-time starter grant.</CardDescription>
+          <CardTitle>Included credits by tier</CardTitle>
+          <CardDescription>Derived from each tier&apos;s list price; a renewal grant is sized from the invoice actually paid. Paid tiers are re-granted on each renewal; the free tier is a one-time starter grant.</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
-              <TableRow><TableHead>Tier</TableHead><TableHead>Cadence</TableHead><TableHead className="text-right">Allowance</TableHead></TableRow>
+              <TableRow><TableHead>Tier</TableHead><TableHead>Cadence</TableHead><TableHead className="text-right">Included credits</TableHead></TableRow>
             </TableHeader>
             <TableBody>
               {Object.entries(enforcement.tierAllowanceCents).map(([tier, cents]) => (
                 <TableRow key={tier}>
                   <TableCell className="capitalize">{tier}</TableCell>
                   <TableCell>{enforcement.tierAllowanceRefills?.[tier] === false ? 'One-time' : 'Monthly'}</TableCell>
-                  <TableCell className="text-right">{usd(cents)}</TableCell>
+                  <TableCell className="text-right">{formatCreditCount(cents)} credits</TableCell>
                 </TableRow>
               ))}
             </TableBody>
