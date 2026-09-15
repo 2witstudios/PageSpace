@@ -238,12 +238,27 @@ describe('canonicalizeRequest normalization', () => {
   it('given an empty body, should record the SHA-256 of zero bytes, never null', () => {
     const actual = canonical({ body: new Uint8Array(0), headers: {} });
     expect(actual.bodySha256).toBe(SHA256_EMPTY);
-    expect(actual.headers).toEqual([]);
+  });
+
+  it('given an empty body, should project content-length 0 whether or not the caller supplied it (one request, one digest)', () => {
+    const supplied = canonical({ body: new Uint8Array(0), headers: { 'Content-Length': '0' } });
+    const omitted = canonical({ body: new Uint8Array(0), headers: {} });
+    expect({ supplied: supplied.headers, omitted: omitted.headers }).toEqual({
+      supplied: [['content-length', '0']],
+      omitted: [['content-length', '0']],
+    });
+    expect(digestRequest({ canonical: supplied, hash })).toBe(digestRequest({ canonical: omitted, hash }));
   });
 
   it('given a non-empty body, should project content-length from the bytes themselves', () => {
     const actual = canonical({ headers: {} }).headers;
     expect(actual).toEqual([['content-length', String(BODY.byteLength)]]);
+  });
+
+  it('given a caller-supplied content-length that agrees with the body, should digest identically to one that omitted it', () => {
+    const supplied = canonical({ headers: { 'content-length': String(BODY.byteLength) } });
+    const omitted = canonical({ headers: {} });
+    expect(digestRequest({ canonical: supplied, hash })).toBe(digestRequest({ canonical: omitted, hash }));
   });
 
   it('given the http method in lower case, should upper-case it', () => {
@@ -350,7 +365,7 @@ describe('digestRequest', () => {
     const actual = digestRequest({ canonical: c, hash: spy });
     expect(actual).toBe('digest');
     expect(seen).toEqual([
-      `{"bodySha256":"${SHA256_EMPTY}","channel":"http-executor","headers":[],"method":"POST","operation":{"class":"write","name":"github.issues.create"},"origin":"https://a.example:443","path":"/p","query":[["a","2"],["b","1"]],"resources":[["r","1"]]}`,
+      `{"bodySha256":"${SHA256_EMPTY}","channel":"http-executor","headers":[["content-length","0"]],"method":"POST","operation":{"class":"write","name":"github.issues.create"},"origin":"https://a.example:443","path":"/p","query":[["a","2"],["b","1"]],"resources":[["r","1"]]}`,
     ]);
   });
 });
