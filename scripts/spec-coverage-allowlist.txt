@@ -1,0 +1,97 @@
+# Spec ID-coverage allowlist — IDs from the Organizations & Wallets Spec (page
+# drc7x34unhc0ty1dc0u1j3gy) that have no test yet because their lane has not landed.
+#
+# Rules (enforced by scripts/check-spec-coverage.ts):
+#   - Every ID started allowlisted when the gate was introduced (Wave A, lane A4).
+#   - A lane REMOVES its IDs from this file in the same PR that lands the tests naming them
+#     ("MON-2 …" in an it/test/describe name or a riteway given/should). Leaving an ID here
+#     after a test names it FAILS the gate (STALE-ALLOW), so this file can only shrink.
+#   - A token here that is not a Spec ID FAILS the gate (typo guard).
+#   - Never add an ID back. If a test is deleted, the gate goes red; that is the point.
+# One ID per line; `#` starts a comment.
+AUD-1
+AUD-2
+AUD-3
+DRV-1
+DRV-2
+DRV-3
+DRV-4
+DRV-5
+DRV-6
+DRV-7
+DRV-8
+DRV-9
+MON-1
+MON-2
+MON-3
+MON-4
+MON-5
+MON-6
+MON-7
+MON-8
+ORG-1
+ORG-2
+ORG-3
+ORG-4
+ORG-5
+ORG-6
+POL-1
+POL-2
+POL-3
+POL-4
+POL-5
+POL-6
+POL-7
+POL-8
+POL-9
+POL-10
+POL-11
+SEAT-1
+SEAT-2
+SEAT-3
+SEAT-4
+SEAT-5
+SEAT-6
+SEAT-7
+SEAT-8
+SEAT-9
+SEC-1
+SEC-2
+SEC-3
+SEC-4
+SPEND-1
+SPEND-2
+SPEND-3
+SPEND-4
+SPEND-5
+SPEND-6
+SPEND-7
+SPEND-8
+SPEND-9
+SPEND-10
+UI-1
+UI-2
+UI-3
+UI-4
+UI-5
+UI-6
+UI-7
+UI-8
+UI-9
+UI-10
+UI-11
+UI-12
+WAL-1
+WAL-2
+WAL-3
+WAL-4
+WAL-5
+WAL-6
+WAL-7
+WAL-8
+WAL-9
+X-1
+X-2
+X-3
+X-4
+X-5
