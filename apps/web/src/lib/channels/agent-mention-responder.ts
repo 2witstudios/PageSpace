@@ -3,6 +3,8 @@ import { and, desc, eq, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { hasAgentDriveMembership } from '@pagespace/lib/permissions/agent-permissions'
+import { canActorEditPage } from '@/lib/ai/tools/actor-permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -391,8 +393,73 @@ async function resolveImageAttachmentsForContext(
   return buildRecentImageFileParts(candidates);
 }
 
-function canAgentSendChannelMessages(enabledTools: string[] | null): boolean {
-  return Array.isArray(enabledTools) && enabledTools.includes('send_channel_message');
+/**
+ * Whether the agent's saved tool allowlist lets it talk in channels.
+ *
+ * Same semantics as `filterToolsForAgentAllowlist` (tool-filtering.ts):
+ * `null` is an unconfigured agent with NO restriction — the default every
+ * creation path writes — so a member agent replies to mentions out of the
+ * box; `[]` blocks every tool, and an explicit list must name
+ * `send_channel_message`. Treating null as "not enabled" here meant a
+ * freshly created agent could never answer a mention.
+ */
+export function canAgentSendChannelMessages(enabledTools: string[] | null): boolean {
+  if (enabledTools === null) return true;
+  return enabledTools.includes('send_channel_message');
+}
+
+/**
+ * Whether the mentioner may summon this agent from this channel.
+ *
+ * Viewing the agent's home page is sufficient (the rule this replaces). It is
+ * not necessary: an agent added to the channel's drive as a member — possibly
+ * a guest homed in another drive the mentioner cannot see — was put there by
+ * an owner/admin/member precisely so the drive's members can talk to it, and
+ * the drive's agent-members list already shows it to every member. Membership
+ * in the channel's drive is the grant. Without a driveId there is nothing to
+ * check membership against, so only the view rule applies.
+ */
+async function canMentionerReachAgent(
+  mentionerUserId: string,
+  agentPageId: string,
+  channelDriveId: string | null,
+): Promise<boolean> {
+  if (await canUserViewPage(mentionerUserId, agentPageId)) return true;
+  if (!channelDriveId) return false;
+  return hasAgentDriveMembership(agentPageId, channelDriveId);
+}
+
+/**
+ * The execution context the agent's own reply is authorized under — the same
+ * shape the top-level send passes to `send_channel_message`, so asking
+ * `canActorEditPage` with it up front answers exactly the question that tool
+ * would otherwise answer after the model call has already been paid for.
+ * The thread branch inserts through the repository directly and had no gate
+ * at all; both branches now share this one.
+ */
+function buildAgentActorContext(
+  params: TriggerMentionedAgentResponsesParams,
+  agent: MentionedAgent,
+  conversationId: string,
+  locationContext: ToolExecutionContext['locationContext'],
+  commandExecution?: CommandExecutionData[],
+): ToolExecutionContext {
+  return {
+    userId: params.userId,
+    conversationId,
+    locationContext,
+    requestOrigin: 'agent',
+    chatSource: {
+      type: 'page',
+      agentPageId: agent.id,
+      agentTitle: agent.title,
+    },
+    ...(commandExecution && { commandExecution }),
+  } as ToolExecutionContext;
+}
+
+function mentionConversationIdFor(channelId: string, agentId: string): string {
+  return `channel:${channelId}:agent:${agentId}`;
 }
 
 /**
@@ -539,16 +606,30 @@ export async function triggerMentionedAgentResponses(
       return;
     }
 
+    const locationContext = buildLocationContext(params);
+
+    // Three gates, cheapest first, all before any model call: the agent's
+    // allowlist lets it talk in channels; the mentioner may summon it; and
+    // it can actually post in THIS channel as itself (a plain MEMBER agent
+    // can, in a non-private channel — the same rule as a member user).
     const eligibleAgentChecks = await Promise.all(
-      mentionedAgents.map(async (agent) => ({
-        agent,
-        canView: await canUserViewPage(params.userId, agent.id),
-        canSend: canAgentSendChannelMessages(agent.enabledTools),
-      }))
+      mentionedAgents.map(async (agent) => {
+        if (!canAgentSendChannelMessages(agent.enabledTools)) return { agent, eligible: false };
+        if (!(await canMentionerReachAgent(params.userId, agent.id, params.driveId ?? null))) {
+          return { agent, eligible: false };
+        }
+        const actorContext = buildAgentActorContext(
+          params,
+          agent,
+          mentionConversationIdFor(params.channelId, agent.id),
+          locationContext,
+        );
+        return { agent, eligible: await canActorEditPage(actorContext, params.channelId) };
+      })
     );
 
     const eligibleAgents = eligibleAgentChecks
-      .filter((entry) => entry.canView && entry.canSend)
+      .filter((entry) => entry.eligible)
       .map((entry) => entry.agent);
 
     if (eligibleAgents.length === 0) {
@@ -602,8 +683,6 @@ export async function triggerMentionedAgentResponses(
       }
     }
 
-    const locationContext = buildLocationContext(params);
-
     // Universal Commands (UX spec §6): a chip is inert in a plain channel
     // message, but every command chip executes — with the SENDER's
     // permissions — when this message triggers an agent response.
@@ -635,7 +714,7 @@ export async function triggerMentionedAgentResponses(
     // this skips askAgentExecute/generateText entirely for every one.
     for (const agent of eligibleAgents) {
       try {
-        const mentionConversationId = `channel:${params.channelId}:agent:${agent.id}`;
+        const mentionConversationId = mentionConversationIdFor(params.channelId, agent.id);
 
         let replyContent: string;
         if (isSoloHelpMention) {
@@ -722,18 +801,13 @@ export async function triggerMentionedAgentResponses(
             {
               toolCallId: `channel-mention-send-${params.sourceMessageId}-${agent.id}`,
               messages: [],
-              experimental_context: {
-                userId: params.userId,
-                conversationId: mentionConversationId,
+              experimental_context: buildAgentActorContext(
+                params,
+                agent,
+                mentionConversationId,
                 locationContext,
-                requestOrigin: 'agent',
-                chatSource: {
-                  type: 'page',
-                  agentPageId: agent.id,
-                  agentTitle: agent.title,
-                },
-                ...(commandExecution && { commandExecution }),
-              } as ToolExecutionContext,
+                commandExecution,
+              ),
             }
           );
         }

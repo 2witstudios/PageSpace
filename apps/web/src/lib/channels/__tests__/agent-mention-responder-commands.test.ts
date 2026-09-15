@@ -8,7 +8,10 @@ vi.mock('@pagespace/db/db', () => ({
     },
   },
 }));
-vi.mock('@pagespace/db/operators', () => ({
+vi.mock('@pagespace/db/operators', async (importOriginal) => ({
+  // Keep the real re-exports so transitively imported lib modules that use
+  // `sql` still load (e.g. sheets/search-sql via services/preview).
+  ...(await importOriginal<typeof import('@pagespace/db/operators')>()),
   and: vi.fn(),
   eq: vi.fn(),
   inArray: vi.fn(),
@@ -19,6 +22,16 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 vi.mock('@pagespace/db/schema/chat', () => ({
   channelMessages: { pageId: 'pageId', isActive: 'isActive', createdAt: 'createdAt' },
+}));
+// The two gates added for member agents (see agent-mention-responder.ts):
+// membership in the channel's drive is the grant when the mentioner cannot
+// view the agent's home page, and the agent must be able to post in the
+// channel BEFORE any model call is spent on it.
+vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
+  hasAgentDriveMembership: vi.fn().mockResolvedValue(false),
+}));
+vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  canActorEditPage: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: vi.fn(),
