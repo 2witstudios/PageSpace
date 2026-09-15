@@ -191,6 +191,8 @@ https://www.nango.dev/pricing: Free "$0 /mo", 10 connections, "Hard-capped limit
 
 > "The root encryption key is a 256-bit AES key provided by the operator as an environment variable." … "never leaves the server's memory during operation." … "The root encryption key can alternatively be sourced from an external Hardware Security Module (HSM) such as Thales Luna HSM or AWS CloudHSM." — same
 
+*Format by deployment mode* (docs/self-hosting/configuration/envars): the standard image (`infisical/infisical`, the `v0.165.10` pin in §9/§10) takes `ENCRYPTION_KEY` as a **16-byte hex string** (`openssl rand -hex 16`); only FIPS-enabled deployments (`infisical/infisical-fips`) take a **256-bit base64** key (`openssl rand -base64 32`). The 256-bit statement above is the security-internals description; the env-var contract for our non-FIPS pin is the 16-byte hex form, and §9's template uses that.
+
 > "The Internal KMS Root Key is automatically generated when an Infisical instance starts for the first time." … "encrypts all organization and project data keys" … "encrypted at rest using the Root Encryption Key and stored in the database." — same
 
 > "Each organization and each project has its own dedicated data key, providing cryptographic isolation between tenants." — same
@@ -482,7 +484,7 @@ Self-hosted second plane (option A), flat regardless of credential count: `nango
 
 ## 9. Onprem (deprioritized, D-21): compose join and gated env vars (requirement 2)
 
-Documented so the path exists; it does not drive the recommendation. The snippet joins `infrastructure/docker-compose.tenant.yml` (`networks: internal` is `internal: true`; `traefik` is external; Traefik labels use `${TENANT_SLUG}`). It adds a **third network, `credential_plane`**, and the store, its Postgres and its Redis have an interface on **that network only**: `web`, `processor` and `realtime` never join it, and `agent-proxy` is the sole bridge — the plane's "own network segment". *Amended 2026-09-15 (PR #2633 review)*: the first draft attached `infisical` to the external `traefik` network to carry its ingress labels. That broke the boundary it claimed — `web` and `realtime` already join `traefik` (`docker-compose.tenant.yml`), and so does every other tenant project on the host, so Infisical's port would have been reachable laterally from the app containers of this and other tenants. The corrected snippet keeps `infisical` off `traefik` and exposes the UI through a **`vault-ingress` sidecar**: a reverse proxy that carries the Traefik labels, joins `credential_plane` + `traefik`, and forwards only HTTP to `infisical:8080`. Say plainly what that gives: the store container, its DB and its Redis have no interface any app container can reach; what is reachable laterally via the sidecar is exactly the authenticated HTTP surface that `vault-${TENANT_SLUG}.pagespace.ai` already publishes to the internet — no wider — and the sidecar can narrow it further (IP allowlist, forward-auth, or a path allowlist for the UI/login routes). The stricter variant, if the operator can afford a provisioner step, is a **dedicated per-tenant ingress network** (`vault_ingress_${TENANT_SLUG}`, non-internal bridge) that only the shared Traefik container is connected to (`docker network connect` in `tenant-stack.sh`); then nothing on `traefik` reaches even the sidecar. Either way the resolving machine identity lives only in `agent-proxy`. The Infisical UI is exposed on its own host, not under the tenant's app host, so a tenant's app session can never be a vault session.
+Documented so the path exists; it does not drive the recommendation. The snippet joins `infrastructure/docker-compose.tenant.yml` (`networks: internal` is `internal: true`; `traefik` is external; Traefik labels use `${TENANT_SLUG}`). It adds a **third network, `credential_plane`**, and the store, its Postgres and its Redis have an interface on **that network only**: `web`, `processor` and `realtime` never join it, and `agent-proxy` is the sole bridge — the plane's "own network segment". *Amended 2026-09-15 (PR #2633 review)*: the first draft attached `infisical` to the external `traefik` network to carry its ingress labels. That broke the boundary it claimed — `web` and `realtime` already join `traefik` (`docker-compose.tenant.yml`), and so does every other tenant project on the host, so Infisical's port would have been reachable laterally from the app containers of this and other tenants. The corrected snippet keeps `infisical` off `traefik` and exposes the UI through a **`vault-ingress` sidecar**: a reverse proxy that carries the Traefik labels and forwards only HTTP to `infisical:8080`. *Amended again 2026-09-15 (round 2)*: the sidecar itself must **not** join `traefik` either — every tenant project on the host joins that network, so a sidecar on it hands a compromised app container of any tenant a route to Infisical's HTTP surface, and authentication on that surface does not restore the network isolation the plane is supposed to have. The sidecar therefore joins `credential_plane` plus a **dedicated per-tenant ingress network, `vault_ingress_${TENANT_SLUG}`** (`internal: true`, named explicitly so the compose project prefix does not rename it), to which **only the shared Traefik container is connected** — `tenant-stack.sh up` runs `docker network connect vault_ingress_${TENANT_SLUG} traefik` (idempotent) and `down` disconnects it — and the sidecar carries `traefik.docker.network=vault_ingress_${TENANT_SLUG}` because `traefik.yml`'s docker provider defaults to `network: traefik` for backend addresses. The isolation claim is exactly this: **no container on `traefik` or `internal` — of this tenant or any other — has an interface on `vault_ingress_${TENANT_SLUG}` or `credential_plane`, so the only paths to Infisical's HTTP surface are the Traefik container (from the public vault host) and `agent-proxy` (from `internal`)**; `web`, `processor`, `realtime` and every other tenant's containers cannot reach the store, its DB, its Redis, or the sidecar at all. The sidecar can still narrow the public surface further (IP allowlist, forward-auth, or a path allowlist for the UI/login routes). The resolving machine identity lives only in `agent-proxy`. The Infisical UI is exposed on its own host, not under the tenant's app host, so a tenant's app session can never be a vault session.
 
 ```yaml
 # --- credential plane (Agent Accounts epic; onprem path, D-21 deprioritized) ---
@@ -492,6 +494,11 @@ Documented so the path exists; it does not drive the recommendation. The snippet
 # `credential_plane` ONLY — never on the shared external `traefik` network, which
 # web, realtime and every other tenant project on the host also join. The UI reaches
 # Traefik through the `vault-ingress` sidecar below.
+#
+# NOT DEPLOYABLE AS WRITTEN (spike illustration): images are pinned by TAG and
+# `infisical/cli:0.0.0` is a placeholder. §10's ASI04 rule applies before this joins
+# the tenant compose — every image below must be pinned by `@sha256:` digest, and that
+# digest pinning is a prerequisite for closing G1b (store) and G4 (agent-proxy).
 services:
   infisical-postgres:
     image: postgres:17.5-alpine            # same pin as the app DB
@@ -529,7 +536,7 @@ services:
     environment:
       ENCRYPTION_KEY: ${INFISICAL_ENCRYPTION_KEY:?INFISICAL_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
       AUTH_SECRET: ${INFISICAL_AUTH_SECRET:?INFISICAL_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
-      DB_CONNECTION_URI: postgres://infisical:${INFISICAL_POSTGRES_PASSWORD}@infisical-postgres:5432/infisical
+      DB_CONNECTION_URI: postgres://infisical:${INFISICAL_POSTGRES_PASSWORD}@infisical-postgres:5432/infisical   # password is interpolated UNENCODED: it MUST come from a URI-safe alphabet (see env template note)
       REDIS_URL: redis://infisical-redis:6379
       SITE_URL: https://vault-${TENANT_SLUG}.pagespace.ai
       LICENSE_KEY: ${INFISICAL_LICENSE_KEY:-}     # offline key accepted in the same var (docs/self-hosting/ee)
@@ -541,11 +548,12 @@ services:
     logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
     networks: [credential_plane]             # ONLY here — no interface on `traefik` or `internal`
 
-  # UI/API ingress for the vault host. The only thing on the shared `traefik` network that
-  # can reach Infisical, and it forwards HTTP to infisical:8080 and nothing else. Lateral
-  # reach to this container == the authenticated surface already public on the vault host.
-  # Stricter variant: replace `traefik` here with a per-tenant `vault_ingress` network that
-  # only the shared Traefik container is connected to (docker network connect, tenant-stack.sh).
+  # UI/API ingress for the vault host. Forwards HTTP to infisical:8080 and nothing else.
+  # It is NOT on the shared `traefik` network (every tenant project joins that one): it sits
+  # on the per-tenant `vault_ingress_${TENANT_SLUG}` network, which only the shared Traefik
+  # container joins (`docker network connect vault_ingress_${TENANT_SLUG} traefik` in
+  # tenant-stack.sh `up`; disconnect on `down`). No app container of this or any other
+  # tenant has a route to this sidecar, to infisical, or to its DB/Redis.
   vault-ingress:
     image: nginx:1.28.0-alpine               # pin the real tag at G1b; config = one `location / { proxy_pass http://infisical:8080; }` with websocket upgrade headers
     restart: unless-stopped
@@ -563,7 +571,8 @@ services:
       - "traefik.http.routers.${TENANT_SLUG}-vault.entrypoints=websecure"
       - "traefik.http.routers.${TENANT_SLUG}-vault.tls.certresolver=le"
       - "traefik.http.services.${TENANT_SLUG}-vault.loadbalancer.server.port=80"
-    networks: [credential_plane, traefik]
+      - "traefik.docker.network=vault_ingress_${TENANT_SLUG}"   # provider default is `traefik` (traefik.yml); the sidecar is not on it
+    networks: [credential_plane, vault_ingress]   # never `traefik`
 
   # The egress broker. Bridges `internal` (so the executor / sandbox path can reach
   # it) and `credential_plane` (so it can reach Infisical). Holds the ONLY machine
@@ -587,6 +596,10 @@ networks:
   credential_plane:
     driver: bridge
     internal: true
+  vault_ingress:
+    name: vault_ingress_${TENANT_SLUG}   # explicit: `-p ${PROJECT}` would otherwise prefix it; tenant-stack.sh connects the Traefik container by this name
+    driver: bridge
+    internal: true                      # Traefik reaches the sidecar over it; the sidecar needs no egress
 
 volumes:
   infisical_postgres_data:
@@ -594,7 +607,7 @@ volumes:
 
 `web` gets one addition only: `AGENT_PROXY_URL: http://agent-proxy:17322` (an address, no secret). No store URL and no machine identity go into `web`'s environment — the web process holds no store identity (Codex #2); the resolving identity lives with the proxy container.
 
-**Env vars to append to `env.tenant.template` (all server-side, none `NEXT_PUBLIC_`):** `INFISICAL_POSTGRES_PASSWORD=__GENERATE__`, `INFISICAL_ENCRYPTION_KEY=__GENERATE__` ("Must be a random 16-byte hex string." — https://infisical.com/docs/self-hosting/configuration/envars), `INFISICAL_AUTH_SECRET=__GENERATE__` ("Must be a random 32-byte base64 string."), `INFISICAL_LICENSE_KEY=` (optional; offline key), `AGENT_PROXY_CLIENT_ID=__SET_BY_PROVISIONER__`, `AGENT_PROXY_CLIENT_SECRET=__SET_BY_PROVISIONER__`. `UPGRADE.md` gets a "credential plane" section because the stack refuses to start without them (the `:?` form above), exactly as the Phase 1/2 admin DB vars do — and the same warning applies: regenerating `INFISICAL_ENCRYPTION_KEY` makes the vault permanently unreadable.
+**Env vars to append to `env.tenant.template` (all server-side, none `NEXT_PUBLIC_`):** `INFISICAL_POSTGRES_PASSWORD=__GENERATE__` — **URI-safe alphabet only**: it is interpolated unencoded into `DB_CONNECTION_URI`, so a reserved character (`@`, `/`, `#`, `:`, `?`) would re-parse the authority or truncate the password; `generate-tenant-env.sh` must emit it with `alnum_secret 32` (`[a-zA-Z0-9]`, the same helper the app's `POSTGRES_PASSWORD` already uses at `:64`), never `hex_secret`'s peer `openssl rand -base64`; `INFISICAL_ENCRYPTION_KEY=__GENERATE__` ("Must be a random 16-byte hex string. Can be generated with `openssl rand -hex 16`." — https://infisical.com/docs/self-hosting/configuration/envars; the standard `infisical/infisical:v0.165.10` image pinned above. **FIPS mode differs:** "For FIPS-enabled deployments, `ENCRYPTION_KEY` must be a 256-bit base64-encoded key instead" (`openssl rand -base64 32`, `infisical/infisical-fips` image) — same page), `INFISICAL_AUTH_SECRET=__GENERATE__` ("Must be a random 32-byte base64 string."), `INFISICAL_LICENSE_KEY=` (optional; offline key), `AGENT_PROXY_CLIENT_ID=__SET_BY_PROVISIONER__`, `AGENT_PROXY_CLIENT_SECRET=__SET_BY_PROVISIONER__`. `UPGRADE.md` gets a "credential plane" section because the stack refuses to start without them (the `:?` form above), exactly as the Phase 1/2 admin DB vars do — and the same warning applies: regenerating `INFISICAL_ENCRYPTION_KEY` makes the vault permanently unreadable.
 
 **What `infrastructure/scripts/__tests__/env-var-audit.test.ts` gates:** that test's three cases assert that client-side `.tsx`/`.ts` files never read `NEXT_PUBLIC_APP_URL` without a `WEB_APP_URL` guard. It does not enumerate server env vars. The vars above pass it trivially because none is `NEXT_PUBLIC_*`; the gate that would actually bite is `packages/lib/src/config/env-validation.ts` (`serverEnvSchema`), where `AGENT_PROXY_URL` should be added as an optional URL with the `.or(z.literal(''))` blank-means-unset convention the file already uses, so a blank value disables the feature rather than failing boot.
 
