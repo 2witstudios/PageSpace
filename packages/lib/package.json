@@ -2352,6 +2352,11 @@
       "types": "./dist/auth/agent/enabled.d.ts",
       "import": "./dist/auth/agent/enabled.js",
       "require": "./dist/auth/agent/enabled.js"
+    },
+    "./auth/agent/pow": {
+      "types": "./dist/auth/agent/pow.d.ts",
+      "import": "./dist/auth/agent/pow.js",
+      "require": "./dist/auth/agent/pow.js"
     }
   },
   "typesVersions": {

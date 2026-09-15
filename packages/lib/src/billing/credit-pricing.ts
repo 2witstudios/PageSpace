@@ -9,7 +9,7 @@
 
 import type { SubscriptionTier } from '../services/subscription-utils';
 
-function envInt(name: string, fallback: number): number {
+export function envInt(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
   if (raw === undefined || raw === '') return fallback;
   // Strict: only an unsigned integer literal overrides the default. Rejects

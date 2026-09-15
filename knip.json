@@ -210,6 +210,7 @@
         "src/audit/security-audit.ts",
         "src/auth/account-lockout.ts",
         "src/auth/agent/enabled.ts",
+        "src/auth/agent/pow.ts",
         "src/auth/agent/reserved-email.ts",
         "src/auth/agent/secret.ts",
         "src/auth/broadcast-auth.ts",
