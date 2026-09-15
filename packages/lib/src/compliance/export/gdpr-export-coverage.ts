@@ -94,6 +94,12 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   user_automation_preferences: 'settings',
   user_toast_notification_preferences: 'settings',
   email_notification_preferences: 'settings',
+  // Tool approvals: the subject's standing "allow this tool" grants and every
+  // Allow/Deny they answered on a paused agent action (with the reason they
+  // typed). Both are their decisions about their own assistant; read by
+  // `collectUserSettings`.
+  ai_tool_approval_grants: 'settings',
+  ai_tool_approval_decisions: 'settings',
   // Added with this guard — the omission that motivated it.
   agent_workspaces: 'agentWorkspaces',
   agent_workspace_shells: 'agentWorkspaces',
