@@ -67,6 +67,8 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
   isMCPAuthResult: vi.fn((r: { tokenType?: string }) => r?.tokenType === 'mcp'),
+  // The approval gate only pauses for a browser session (an MCP client has no card to click).
+  isSessionAuthResult: vi.fn((r: { tokenType?: string }) => r?.tokenType === 'session'),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   getAllowedDriveIds: vi.fn(() => []),
   isScopedMCPAuth: vi.fn(() => false),
