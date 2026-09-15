@@ -1101,6 +1101,7 @@ const GlobalAssistantView: React.FC = () => {
         renderInput={(props) => (
           <>
             <ChatInput
+              showToolApprovalSettings={!selectedAgent}
               ref={inputRef}
               value={props.value}
               onChange={props.onChange}

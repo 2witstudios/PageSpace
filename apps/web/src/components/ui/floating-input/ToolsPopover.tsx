@@ -9,7 +9,8 @@ import {
 } from '@/components/ui/popover';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { Wrench, Globe, Pencil, PencilOff, GitBranch, Server, ChevronDown, ChevronRight, Image as ImageIcon, Lock } from 'lucide-react';
+import { Wrench, Globe, Pencil, PencilOff, GitBranch, Server, ChevronDown, ChevronRight, Image as ImageIcon, Lock, ShieldCheck, X } from 'lucide-react';
+import { formatToolName } from '@/lib/ai/tools/tool-labels';
 import { cn } from '@/lib/utils';
 
 export interface ToolsPopoverProps {
@@ -27,6 +28,18 @@ export interface ToolsPopoverProps {
   writeMode?: boolean;
   /** Callback when write mode is toggled */
   onWriteModeToggle?: (enabled: boolean) => void;
+  /**
+   * Tool approvals for the user's global assistant: 'ask' pauses gated writes for
+   * Allow/Deny in the chat, 'auto' never pauses. Omit to hide the row (a page
+   * agent carries its own mode on its settings tab).
+   */
+  toolApprovalMode?: 'ask' | 'auto';
+  /** Callback when the approval switch is flipped (true = ask). */
+  onToolApprovalModeToggle?: (ask: boolean) => void;
+  /** The user's standing "always allow" grants, revocable here. */
+  trustedTools?: Array<{ id: string; toolName: string; conversationId: string | null }>;
+  /** Revoke one grant by id. */
+  onRevokeTrustedTool?: (grantId: string) => void;
   /** Whether to show workspace page tree context to AI */
   showPageTree?: boolean;
   /** Callback when page tree context is toggled */
@@ -70,6 +83,10 @@ export function ToolsPopover({
   canUseImageGen = false,
   writeMode = true,
   onWriteModeToggle,
+  toolApprovalMode,
+  onToolApprovalModeToggle,
+  trustedTools = [],
+  onRevokeTrustedTool,
   showPageTree = false,
   onShowPageTreeToggle,
   mcpRunningServers = 0,
@@ -85,6 +102,8 @@ export function ToolsPopover({
 }: ToolsPopoverProps) {
   // Track whether MCP servers section is expanded
   const [mcpExpanded, setMcpExpanded] = useState(false);
+  const [trustedExpanded, setTrustedExpanded] = useState(false);
+  const alwaysAllowed = trustedTools.filter((grant) => grant.conversationId === null);
 
   // Count active tools for badge (exclude writeMode since it's default true)
   const activeCount = [
@@ -213,6 +232,65 @@ export function ToolsPopover({
               className="scale-75"
             />
           </div>
+
+          {/* Action approval (global assistant only) */}
+          {toolApprovalMode !== undefined && (
+            <>
+              <div
+                className={cn(
+                  'flex items-center justify-between w-full px-2 py-2 rounded-md transition-colors',
+                  'hover:bg-accent hover:text-accent-foreground',
+                  disabled && 'opacity-50 cursor-not-allowed'
+                )}
+                data-testid="tool-approval-toggle"
+              >
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className={cn('h-4 w-4', toolApprovalMode === 'ask' ? 'text-foreground' : 'text-muted-foreground')} />
+                  <span className={cn('text-sm', toolApprovalMode === 'ask' ? 'text-foreground' : 'text-muted-foreground')}>
+                    Ask before actions
+                  </span>
+                </div>
+                <Switch
+                  checked={toolApprovalMode === 'ask'}
+                  onCheckedChange={onToolApprovalModeToggle}
+                  disabled={disabled}
+                  className="scale-75"
+                  aria-label="Ask before actions"
+                />
+              </div>
+              {alwaysAllowed.length > 0 && (
+                <div className="px-2 pb-1">
+                  <button
+                    type="button"
+                    onClick={() => setTrustedExpanded((open) => !open)}
+                    className="flex w-full items-center gap-1 py-1 text-xs text-muted-foreground hover:text-foreground"
+                    aria-expanded={trustedExpanded}
+                  >
+                    {trustedExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                    Always allowed ({alwaysAllowed.length})
+                  </button>
+                  {trustedExpanded && (
+                    <ul className="space-y-0.5 pl-4">
+                      {alwaysAllowed.map((grant) => (
+                        <li key={grant.id} className="flex items-center justify-between gap-2 text-xs">
+                          <span className="truncate">{formatToolName(grant.toolName)}</span>
+                          <button
+                            type="button"
+                            onClick={() => onRevokeTrustedTool?.(grant.id)}
+                            disabled={disabled || !onRevokeTrustedTool}
+                            className="rounded p-0.5 text-muted-foreground hover:text-destructive disabled:opacity-50"
+                            aria-label={`Revoke always allow for ${formatToolName(grant.toolName)}`}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </>
+          )}
 
           {/* Page Tree Context Toggle */}
           <div
