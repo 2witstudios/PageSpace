@@ -52,9 +52,6 @@ export const CREDITS_PER_DOLLAR = 100;
 export const INCLUDED_CREDIT_RATIO_BPS: Record<SubscriptionTier, number> = {
   free: 0,
   pro: 6000,
-  // Founder is removed from the vocabulary by lane A2 (A-9); until then it derives
-  // at the same ratio as the other paid tiers.
-  founder: 6000,
   business: 6000,
 };
 
