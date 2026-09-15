@@ -94,16 +94,40 @@ const build = (outcome: AuditOutcome, grant = makeGrant(), c = canonical()): Age
   buildAuditRecord({ grant, canonical: c, outcome, at: AT });
 
 describe('buildAuditRecord', () => {
-  it('given a canonical request with a body and a resolved credential in scope, should produce a record containing neither (property test over random bodies: JSON.stringify(record) never includes the body bytes or the secret) [0004 §8.18]', () => {
+  it('given a canonical request with a body and a resolved credential in scope, should produce a record containing neither (property test over random bodies, query strings and header values) [0004 §8.18]', () => {
     const leaks: string[] = [];
     for (let i = 0; i < 200; i += 1) {
       const secret = randomBytes(16).toString('hex');
       const bodyText = `{"note":"${randomBytes(8).toString('hex')}","token":"${secret}"}`;
-      const record = build({ kind: 'executed', upstreamStatus: 201 }, makeGrant(), canonical({ body: new TextEncoder().encode(bodyText) }));
+      const inQuery = randomBytes(12).toString('hex');
+      const inHeader = randomBytes(12).toString('hex');
+      const record = build(
+        { kind: 'executed', upstreamStatus: 201 },
+        makeGrant(),
+        canonical({
+          body: new TextEncoder().encode(bodyText),
+          url: `https://api.github.com/repos/octo/hello/issues?token=${inQuery}`,
+          headers: { accept: `application/vnd.${inHeader}+json` },
+        }),
+      );
       const serialized = JSON.stringify(record);
-      if (serialized.includes(secret) || serialized.includes(bodyText)) leaks.push(secret);
+      for (const value of [secret, bodyText, inQuery, inHeader]) {
+        if (serialized.includes(value)) leaks.push(value);
+      }
     }
     expect(leaks).toEqual([]);
+  });
+
+  it('given a credential carried in the PATH or a resource, should land in the record — the shape carries both, so a URL-embedded secret reaches the chain (stated, not hidden)', () => {
+    // Recorded deliberately rather than fixed here: `normalizedAction.path`
+    // and `resources` are part of the frozen record shape (ADR 0004 §5), and
+    // the chain cannot be erased afterwards. Keeping a credential out of a
+    // path is the operation catalogue's job, and narrowing the shape is a
+    // [D-n]. This test exists so the property above is never read as a
+    // guarantee it does not make.
+    const record = build({ kind: 'allowed' }, makeGrant(), canonical({ url: 'https://api.github.com/v1/tokens/ghp_in_the_path', resources: { repo: 'ghp_in_a_resource' } }));
+    const serialized = JSON.stringify(record);
+    expect({ path: serialized.includes('ghp_in_the_path'), resource: serialized.includes('ghp_in_a_resource') }).toEqual({ path: true, resource: true });
   });
 
   it('given a canonical request, should carry header NAMES only, never values', () => {

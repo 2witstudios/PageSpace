@@ -127,6 +127,18 @@ describe('use', () => {
   });
 });
 
+describe('the acting human is the one whose authority counts (ASI03)', () => {
+  it('given an agent-page-owned account whose run acts as a DIFFERENT human from the actor, should return use false', () => {
+    const actual = decide(agentOwned({ actorUserId: 'u_a' as UserId, actingHumanUserId: 'u_b' as UserId, humanDriveRole: 'MEMBER' })).use;
+    expect(actual).toBe(false);
+  });
+
+  it('given an agent-page-owned account and a caller with page-edit but NO drive membership, should return view false (ADR 0004 §4.1 says members who can edit)', () => {
+    const actual = decide(agentOwned({ humanDriveRole: null, humanCanEditAgentPage: true }));
+    expect(actual).toEqual(none);
+  });
+});
+
 describe('manage and grant', () => {
   it('given an agent-page-owned account and a human actor with drive role MEMBER, should return manage false and grant false [0004 §8.16]', () => {
     const actual = decide(agentOwned({ humanDriveRole: 'MEMBER' }));

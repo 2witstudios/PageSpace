@@ -56,10 +56,21 @@ export const decideAccountAccess: DecideAccountAccess = ({ facts }) => {
   } else {
     const role = facts.humanDriveRole;
     const admin = role === 'OWNER' || role === 'ADMIN';
-    view = admin || facts.humanCanEditAgentPage;
+    const member = role !== null;
+    // ADR 0004 §4.1: drive OWNER/ADMIN *and members* who can edit the agent
+    // page. Page-level edit reached through a share, without drive
+    // membership, is not membership — and `view` still discloses the
+    // account's kind, origins, status and last use.
+    view = admin || (member && facts.humanCanEditAgentPage);
     manage = admin;
     grant = admin;
-    use = role !== null && facts.agentPageId === owner.agentPageId && delegated && active;
+    // The ACTOR's drive role is the only role these facts carry, so it may
+    // only decide `use` when the actor IS the acting human of the run. A
+    // member whose run acts as someone else would otherwise cause an
+    // operation under the shared account on that person's behalf — the
+    // confused deputy the user-owned branch already refuses (ASI03).
+    const actorIsActingHuman = facts.actorUserId === facts.actingHumanUserId;
+    use = member && actorIsActingHuman && facts.agentPageId === owner.agentPageId && delegated && active;
   }
 
   const session_http = use && facts.kind === 'session' && facts.sessionHttpEnabled;

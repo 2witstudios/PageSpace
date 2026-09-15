@@ -50,7 +50,10 @@ function refusal(overrides: Partial<CanonicalRequestInput>): CanonicalizeRefusal
 
 /** Turn a canonical request back into an input, so `canonicalize ∘ canonicalize` can be checked. */
 function inputFromCanonical(c: CanonicalRequest, body: Uint8Array): CanonicalRequestInput {
-  const query = c.query.map(([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`).join('&');
+  // The canonical query is already NORMALIZED (still percent-encoded), so a
+  // faithful round-trip joins the pairs verbatim. Re-encoding them here would
+  // hide a missing normalization in the implementation by doing it in the test.
+  const query = c.query.map(([name, value]) => `${name}=${value}`).join('&');
   return {
     channel: c.channel,
     method: c.method,
@@ -161,6 +164,21 @@ describe('canonicalizeRequest refusals (ADR 0004 F18)', () => {
     expect(actual).toBe('malformed');
   });
 
+  it.each([
+    ['a newline and a fabricated second line', 'a public page\nGET https://api.github.com/user (read)'],
+    ['spaces', 'read a public page'],
+    ['an em dash that mimics the headline separator', 'x — https://api.github.com'],
+    ['a parenthesis that mimics the class suffix', 'x (read)'],
+  ])('given an operation name containing %s, should refuse with malformed (the headline is a function of validated fields only)', (_label, name) => {
+    const actual = refusal({ operation: { class: 'read', name } });
+    expect(actual).toBe('malformed');
+  });
+
+  it('given a catalogue-shaped operation name, should admit it', () => {
+    const actual = canonical({ operation: { class: 'read', name: 'github.issues.list_v2-beta' } }).operation.name;
+    expect(actual).toBe('github.issues.list_v2-beta');
+  });
+
   it('given an operation class outside the union, should refuse with malformed', () => {
     const actual = refusal({ operation: { class: 'admin' as unknown as 'read', name: 'x' } });
     expect(actual).toBe('malformed');
@@ -215,12 +233,43 @@ describe('canonicalizeRequest normalization', () => {
     ]);
   });
 
-  it('given a query with an encoded plus, should keep it as a literal plus (no form decoding)', () => {
-    const actual = canonical({ url: 'https://api.github.com/x?q=a%2Bb&r=a+b' }).query;
+  it.each([
+    ['a plus against its percent-encoding', 'https://api.github.com/x?to=a+b', 'https://api.github.com/x?to=a%2Bb'],
+    ['a slash against its percent-encoding', 'https://api.github.com/x?path=/safe', 'https://api.github.com/x?path=%2Fsafe'],
+    ['an ampersand against its percent-encoding', 'https://api.github.com/x?a=1%26b=2', 'https://api.github.com/x?a=1&b=2'],
+  ])('given two wire requests differing by %s, should produce DIFFERENT digests (the approved bytes are the executed bytes)', (_label, first, second) => {
+    const a = digestRequest({ canonical: canonical({ url: first }), hash });
+    const b = digestRequest({ canonical: canonical({ url: second }), hash });
+    expect(a).not.toBe(b);
+  });
+
+  it('given a query component, should normalize percent-encoding without decoding it (uppercase hex, unreserved decoded, everything else kept encoded)', () => {
+    const actual = canonical({ url: 'https://api.github.com/x?q=a%2bb&r=%7euser&s=%41' }).query;
     expect(actual).toEqual([
-      ['q', 'a+b'],
-      ['r', 'a+b'],
+      ['q', 'a%2Bb'],
+      ['r', '~user'],
+      ['s', 'A'],
     ]);
+  });
+
+  it('given a query value containing a percent-encoded control character, should refuse (as the path does)', () => {
+    const actual = [refusal({ url: 'https://api.github.com/x?a=%00' }), refusal({ url: 'https://api.github.com/x?a=%0A' })];
+    expect(actual).toEqual(['path_control_char', 'path_control_char']);
+  });
+
+  it('given a bare flag and the same flag with an empty value, should canonicalize alike — a stated equivalence, since the frozen pair shape cannot hold the difference', () => {
+    const bare = canonical({ url: 'https://api.github.com/x?force' }).query;
+    const empty = canonical({ url: 'https://api.github.com/x?force=' }).query;
+    expect({ bare, empty }).toEqual({ bare: [['force', '']], empty: [['force', '']] });
+  });
+
+  it.each([
+    ['a CRLF pair smuggling a reserved header', 'application/json\r\nauthorization: Bearer ATTACKER'],
+    ['a bare newline', 'application/json\nx: y'],
+    ['a NUL', 'application/json\u0000'],
+  ])('given an admitted header whose VALUE carries %s, should refuse (a name-only check does not stop header injection)', (_label, value) => {
+    const actual = refusal({ headers: { accept: value } });
+    expect(actual).toBe('malformed');
   });
 
   it('given only projected + declared headers, should drop every other header from the projection', () => {
