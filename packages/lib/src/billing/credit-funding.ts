@@ -4,8 +4,14 @@
  * applyPaymentToDebt) comes from credit-core; this file only does I/O.
  *
  * Two funding paths:
- *   - monthly_refill (invoice.paid): a subscription renewal ADDS the tier allowance
+ *   - monthly_refill (invoice.paid): a subscription renewal ADDS the monthly grant
  *     to the current monthly balance (rollover) and rolls the billing window forward.
+ *     The grant is sized from what the invoice PAID: invoice.amount_paid × the tier's
+ *     included-credit ratio (Spec MON-2, via the pure invoice-grant module). The
+ *     ratio itself is what MONEY_MODEL_V2 gates (money-model.ts); off, 100% of the
+ *     paid amount is granted, which reproduces today's amounts for a full-price
+ *     invoice. A $0 invoice grants nothing either way. The ledger row records
+ *     paidCents so the derivation is auditable per row.
  *   - topup (checkout.session.completed, credit_pack): a one-time purchase ADDS to
  *     the never-expiring top-up bucket.
  *
@@ -29,7 +35,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { eq, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { classifyStripeEvent, computeMonthlyRefill, applyPaymentToDebt } from './credit-core';
-import { tierAllowanceCents } from './money-model';
+import { grantForInvoice } from './invoice-grant';
 import type { SubscriptionTier } from '../services/subscription-utils';
 import { loggers } from '../logging/logger-config';
 
@@ -42,6 +48,8 @@ import { loggers } from '../logging/logger-config';
 interface FundingEventObject {
   id?: string | null;
   customer?: string | { id?: string | null } | null;
+  /** Stripe invoice.amount_paid — what the invoice actually collected, in minor units. */
+  amount_paid?: number | null;
   mode?: string | null;
   metadata?: Record<string, string> | null;
   period_start?: number | null;
@@ -142,7 +150,7 @@ async function resolveTopupUser(obj: FundingEventObject): Promise<{ id: string }
 }
 
 /**
- * invoice.paid — add the tier allowance to the current monthly balance (rollover)
+ * invoice.paid — add the invoice-sized grant to the current monthly balance (rollover)
  * and roll the billing window forward, recording a monthly_grant ledger row keyed
  * on the invoice id. The balance write only runs if the grant row was newly inserted.
  */
@@ -169,11 +177,27 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
   // stored tier (user.tier) may be stale ('free'); the invoice reflects what was actually
   // billed. Fall back to the stored tier only when the caller couldn't resolve one.
   const tier = tierOverride ?? user.tier;
+  // MON-2: the grant is sized from what THIS invoice paid, never from a tier table —
+  // a promo, a proration, or a price change flows through with no table edit.
+  const grant = grantForInvoice({ amountPaidCents: obj.amount_paid, tier });
+  const allowanceCents = grant.allowanceCents;
+  // Nothing paid (trial start, 100% promo, proration-only) — or a paid invoice whose
+  // tier could not be resolved (stored tier still 'free' and no price on the line;
+  // the free tier has no ratio) — grants nothing: no grant row, no balance write.
+  // There is nothing to record and nothing to dedupe; the next PAID invoice sizes
+  // its own grant. The unresolved-tier case is logged loudly for follow-up.
+  if (allowanceCents <= 0) {
+    const log = grant.paidCents > 0 ? loggers.api.warn : loggers.api.info;
+    log('credit funding: invoice grants nothing', {
+      userId: user.id,
+      tier,
+      paidCents: grant.paidCents,
+      stripeRef,
+      reason: grant.paidCents > 0 ? 'no ratio for resolved tier' : 'zero-amount invoice',
+    });
+    return;
+  }
   const { start, end } = invoicePeriod(obj);
-  // Grant sized from the tier's list price (MON-2 derivation). Lane A3 replaces this
-  // with allowanceCentsForPaidCents(invoice.amount_paid, tier) so a promo or a
-  // partial period flows through; the refill arithmetic below is already shaped for it.
-  const allowanceCents = tierAllowanceCents(tier);
   let carriedCents = 0;
 
   await db.transaction(async (tx) => {
@@ -184,6 +208,9 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
         entryType: 'monthly_grant',
         bucket: 'monthly',
         amountCents: allowanceCents,
+        // What the invoice actually paid — the grant above is derived from it, so the
+        // ratio is auditable row by row (MON-2).
+        paidCents: grant.paidCents,
         stripeRef,
         // Settled on insert. consumeStatus defaults to 'pending', but the backfill
         // cron sweeps EVERY pending ledger row through settlePendingLedgerRow, which
@@ -254,6 +281,7 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
     userId: user.id,
     tier,
     allowanceCents,
+    paidCents: grant.paidCents,
     carried: carriedCents,
     stripeRef,
   });

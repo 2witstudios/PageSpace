@@ -54,7 +54,7 @@ const H = vi.hoisted(() => {
   ]);
   const creditLedger = cols('creditLedger', [
     'id', 'userId', 'entryType', 'bucket', 'amountCents', 'appliedCents', 'chargeMillicents',
-    'aiUsageLogId', 'realCostCents', 'markupBps', 'stripeRef', 'consumeStatus',
+    'aiUsageLogId', 'realCostCents', 'markupBps', 'stripeRef', 'paidCents', 'consumeStatus',
     'reconcileGenerationKey', 'createdAt',
   ]);
   const creditHolds = cols('creditHolds', ['id', 'userId', 'estCents', 'aiUsageLogId', 'createdAt', 'expiresAt']);
@@ -125,7 +125,7 @@ const H = vi.hoisted(() => {
     if (table === 'creditLedger') {
       return {
         appliedCents: null, chargeMillicents: null, aiUsageLogId: null, realCostCents: null,
-        stripeRef: null, reconcileGenerationKey: null, markupBps: 15000, consumeStatus: 'pending',
+        stripeRef: null, paidCents: null, reconcileGenerationKey: null, markupBps: 15000, consumeStatus: 'pending',
         id: nextId('led'), createdAt: new Date(),
         ...v,
       };
@@ -421,7 +421,7 @@ import {
   MARKUP_BPS,
   MACHINE_MARKUP_BPS,
 } from '../credit-pricing';
-import { tierAllowanceCents } from '../money-model';
+import { tierAllowanceCents, allowanceCentsForPaidCents } from '../money-model';
 
 // The allowances the flow grants when no invoice sizes them (MON-2 derivation
 // from the list price; with MONEY_MODEL_V2 off these equal the old table).
@@ -467,10 +467,12 @@ function chargeMc(costDollars: number): number {
   return Math.round(costDollars * (MARKUP_BPS / 10000) * 100_000);
 }
 
-const invoicePaid = (id: string, customer: string, periodStart: number, periodEnd: number) => ({
+// A Pro renewal at list price unless `amountPaid` says otherwise: the grant is sized
+// from what the invoice PAID (MON-2), so every fixture states it.
+const invoicePaid = (id: string, customer: string, periodStart: number, periodEnd: number, amountPaid = 1500) => ({
   id: `evt_${id}`,
   type: 'invoice.paid',
-  data: { object: { id, customer, period_start: periodStart, period_end: periodEnd } },
+  data: { object: { id, customer, amount_paid: amountPaid, period_start: periodStart, period_end: periodEnd } },
 });
 
 const creditPackCheckout = (id: string, customer: string, packCents: number) => ({
@@ -489,15 +491,59 @@ beforeEach(() => {
   reset();
   vi.clearAllMocks();
   H.isBillingEnabled.mockReturnValue(true);
+  delete process.env.MONEY_MODEL_V2;
+});
+
+describe('credits flow — grants sized from the invoice paid (MON-2, MONEY_MODEL_V2 on)', () => {
+  beforeEach(() => {
+    process.env.MONEY_MODEL_V2 = 'true';
+  });
+
+  it('MON-2 the ledger row records paidCents and the grant is amount_paid × ratio', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    await applyStripeFunding(invoicePaid('in_full', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+
+    const grant = ledgerOf('u1').find((r) => r.entryType === 'monthly_grant' && r.stripeRef === 'in_full')!;
+    expect(grant.paidCents).toBe(1500);
+    expect(grant.amountCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
+    expect(grant.amountCents).toBe(900);
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
+  });
+
+  it('MON-2 a 50%-off invoice grants half', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    await applyStripeFunding(invoicePaid('in_half', 'cus_1', PERIOD_START, PERIOD_END, 750));
+
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(allowanceCentsForPaidCents(1500, 'pro') / 2);
+    expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_half')!.paidCents).toBe(750);
+  });
+
+  it('MON-2 a zero-amount invoice grants nothing: no grant row, no balance row', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    await applyStripeFunding(invoicePaid('in_zero', 'cus_1', PERIOD_START, PERIOD_END, 0));
+
+    expect(ledgerOf('u1')).toHaveLength(0);
+    expect(balanceOf('u1')).toBeUndefined();
+  });
+
+  it('MON-2 replaying the same invoice (stripeRef dedupe) grants once', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    const evt = invoicePaid('in_replay', 'cus_1', PERIOD_START, PERIOD_END, 1500);
+    await applyStripeFunding(evt);
+    await applyStripeFunding(evt);
+
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
+  });
 });
 
 describe('credits flow — happy path (fund → gate → consume → top-up → drained)', () => {
   it('funds $5/mo, draws monthly-first, accepts a top-up, then blocks at out_of_credits', async () => {
-    seedUser('u1', 'cus_1', 'free'); // free tier = 500¢ monthly allowance
+    seedUser('u1', 'cus_1', 'pro'); // a $5 promo-priced Pro invoice → 500¢ (flag off: 100% of paid)
 
-    // ── FUND: invoice.paid grants the monthly allowance and sets the period ──────
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free); // 500
+    // ── FUND: invoice.paid grants what the invoice paid and sets the period ──────
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END, 500));
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(500);
     expect(balanceOf('u1')!.topupRemainingCents).toBe(0);
     const grants = ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant');
     expect(grants).toHaveLength(1);
@@ -660,8 +706,8 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
 
 describe('credits flow — idempotency', () => {
   it('consuming the same aiUsageLogId twice debits exactly once', async () => {
-    seedUser('u1', 'cus_1', 'free');
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
+    seedUser('u1', 'cus_1', 'pro');
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END, 500)); // $5 paid → 500¢
 
     await consumeCredits({ aiUsageLogId: 'log_dup', userId: 'u1', costDollars: 1 }); // 150¢
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(350);

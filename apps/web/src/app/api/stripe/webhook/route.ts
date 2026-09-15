@@ -283,9 +283,16 @@ export async function POST(request: NextRequest) {
           }
           await withFundingRetry(event.id, async () => {
             await handleInvoicePaid(invoice);
-            // Reset the monthly credit bucket to the tier allowance on each renewal.
-            // Derive the tier from the PAID invoice line so a refill that races ahead
-            // of the subscription webhook still grants the correct (paid) allowance.
+            // Grant the monthly credit on each renewal. The grant is sized from what
+            // this invoice actually PAID (invoice.amount_paid × the tier's included-
+            // credit ratio, Spec MON-2, behind MONEY_MODEL_V2) — a promo, a proration,
+            // or a price change flows through with no table edit, and a $0 invoice
+            // grants nothing. The funding shell reads amount_paid off the event; the
+            // ledger row records it as paidCents. Derive the tier from the PAID invoice
+            // line so a refill that races ahead of the subscription webhook still
+            // applies the correct (paid) tier's ratio. Replays are dedupe'd twice: the
+            // stripe_events marker above short-circuits a redelivered event, and the
+            // ledger's stripeRef unique index makes the grant itself exactly-once.
             await applyStripeFunding(event, { tier: tierFromInvoice(invoice) });
           });
           // Push the refilled balance to the user's open tabs, and send a payment

@@ -73,6 +73,7 @@ export const creditLedger = pgTable('credit_ledger', {
   realCostCents: integer('realCostCents'), // round(cost*100) pre-markup, for audit
   markupBps: integer('markupBps').default(15000).notNull(),
   stripeRef: text('stripeRef'), // invoice id / checkout session id for grants & purchases
+  paidCents: integer('paidCents'), // what the Stripe invoice actually paid (monthly_grant rows) — the grant is derived from it (MON-2), so the ratio is auditable per row
   consumeStatus: text('consumeStatus').default('pending').notNull(), // 'pending' | 'applied' | 'skipped'
   consumeError: text('consumeError'),
   // Idempotency arbiter for the async cost-reconcile cron's correction rows. The usage

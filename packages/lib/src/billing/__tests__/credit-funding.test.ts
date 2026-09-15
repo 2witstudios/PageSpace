@@ -24,7 +24,7 @@ vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled
 vi.mock('../../logging/logger-config', () => ({ loggers: { api: mockApiLogger } }));
 
 import { applyStripeFunding } from '../credit-funding';
-import { tierAllowanceCents } from '../money-model';
+import { tierAllowanceCents, allowanceCentsForPaidCents } from '../money-model';
 
 // Capture bag for what each db call was handed.
 interface Captured {
@@ -116,9 +116,20 @@ const invoiceEvent = {
   id: 'evt_inv',
   type: 'invoice.paid',
   data: {
-    object: { id: 'in_123', customer: 'cus_1', period_start: 1_700_000_000, period_end: 1_702_592_000 },
+    object: { id: 'in_123', customer: 'cus_1', amount_paid: 1500, period_start: 1_700_000_000, period_end: 1_702_592_000 },
   },
 };
+
+// Same invoice shape with a different amount actually paid (promo, proration, $0 trial start).
+function paidInvoiceEvent(amountPaid: number | undefined) {
+  return {
+    id: 'evt_inv',
+    type: 'invoice.paid',
+    data: {
+      object: { id: 'in_123', customer: 'cus_1', amount_paid: amountPaid, period_start: 1_700_000_000, period_end: 1_702_592_000 },
+    },
+  };
+}
 
 const topupEvent = {
   id: 'evt_chk',
@@ -150,6 +161,7 @@ describe('applyStripeFunding', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsBillingEnabled.mockReturnValue(true);
+    delete process.env.MONEY_MODEL_V2;
   });
 
   it('does nothing when billing is disabled (tenant/onprem)', async () => {
@@ -169,12 +181,16 @@ describe('applyStripeFunding', () => {
 
     await applyStripeFunding(invoiceEvent);
 
+    // Flag off: 100% of the $15 paid = today's Pro allowance.
     const allowance = tierAllowanceCents('pro');
+    expect(allowance).toBe(1500);
     expect(cap.ledgerValues).toMatchObject({
       userId: 'u1',
       entryType: 'monthly_grant',
       bucket: 'monthly',
       amountCents: allowance,
+      // MON-2: what the invoice paid is recorded on the grant row.
+      paidCents: 1500,
       stripeRef: 'in_123',
       // Must be settled on insert: a 'pending' grant would be clawed back by the
       // backfill cron's pending-usage sweep (settlePendingLedgerRow subtracts it).
@@ -206,6 +222,7 @@ describe('applyStripeFunding', () => {
         object: {
           id: 'in_renewal',
           customer: 'cus_1',
+          amount_paid: 1500,
           period_start: OLD_START,
           period_end: OLD_END,
           lines: { data: [{ period: { start: NEW_START, end: NEW_END } }] },
@@ -236,6 +253,7 @@ describe('applyStripeFunding', () => {
         object: {
           id: 'in_change',
           customer: 'cus_1',
+          amount_paid: 1500,
           period_start: 1_697_000_000,
           period_end: 1_700_000_000,
           lines: { data: [prorationLine, newPlanLine] },
@@ -386,9 +404,11 @@ describe('applyStripeFunding', () => {
       await cb(refillTx(cap, [{ id: 'led_tier' }], 0));
     });
 
-    await applyStripeFunding(invoiceEvent, { tier: 'business' });
+    // A Business invoice: what it paid is the Business list price.
+    await applyStripeFunding(paidInvoiceEvent(tierAllowanceCents('business')), { tier: 'business' });
 
     const allowance = tierAllowanceCents('business');
+    expect(allowance).not.toBe(tierAllowanceCents('free'));
     expect(cap.ledgerValues).toMatchObject({ amountCents: allowance });
     expect(cap.balanceSet).toMatchObject({
       monthlyRemainingCents: allowance,
@@ -410,7 +430,7 @@ describe('applyStripeFunding', () => {
     expect(cap.arbiter?.where).toBeDefined();
   });
 
-  it('is exactly-once: a redelivered event whose grant row already exists does not touch the balance', async () => {
+  it('MON-2 is exactly-once: a redelivered event whose grant row already exists does not touch the balance', async () => {
     mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
     const cap: Captured = {};
     const balanceInsert = vi.fn();
@@ -459,5 +479,112 @@ describe('applyStripeFunding', () => {
     await applyStripeFunding(invoiceEvent);
     expect(mockDb.transaction).not.toHaveBeenCalled();
     expect(mockApiLogger.warn).toHaveBeenCalled();
+  });
+
+  describe('grants sized from the invoice paid (MON-2)', () => {
+    function refill(cap: Captured, carried = 0, debt = 0) {
+      mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
+      mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+        await cb(refillTx(cap, [{ id: 'led_v2' }], carried, debt));
+      });
+    }
+
+    describe('MONEY_MODEL_V2 on (the 60% ratio)', () => {
+      beforeEach(() => {
+        process.env.MONEY_MODEL_V2 = 'true';
+      });
+
+      it('MON-2 sizes the grant as amount_paid × ratio, not the tier list price, and records paidCents on the ledger row', async () => {
+        const cap: Captured = {};
+        refill(cap);
+
+        await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'pro' });
+
+        const expected = allowanceCentsForPaidCents(1500, 'pro');
+        expect(expected).toBe(900);
+        expect(cap.ledgerValues).toMatchObject({
+          entryType: 'monthly_grant',
+          amountCents: expected,
+          paidCents: 1500,
+          stripeRef: 'in_123',
+        });
+        expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: expected, monthlyAllowanceCents: expected });
+      });
+
+      it('MON-2 a 50%-off invoice grants half the list grant', async () => {
+        const cap: Captured = {};
+        refill(cap);
+
+        await applyStripeFunding(paidInvoiceEvent(750), { tier: 'pro' });
+
+        const full = allowanceCentsForPaidCents(1500, 'pro');
+        expect(cap.ledgerValues).toMatchObject({ amountCents: full / 2, paidCents: 750 });
+        expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: full / 2, monthlyAllowanceCents: full / 2 });
+      });
+
+      it('MON-2 the derived grant still rolls over: carried balance and debt are netted before the grant is added', async () => {
+        const cap: Captured = {};
+        refill(cap, 400, 100);
+
+        await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'pro' });
+
+        const grant = allowanceCentsForPaidCents(1500, 'pro');
+        expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: 400 - 100 + grant, debtCents: 0 });
+      });
+    });
+
+    it('MON-2 a zero-amount invoice grants nothing: no ledger row, no balance write, no transaction (either flag state)', async () => {
+      for (const flag of ['true', undefined]) {
+        vi.clearAllMocks();
+        if (flag) process.env.MONEY_MODEL_V2 = flag; else delete process.env.MONEY_MODEL_V2;
+        const cap: Captured = {};
+        refill(cap);
+
+        await applyStripeFunding(paidInvoiceEvent(0), { tier: 'pro' });
+
+        expect(mockDb.transaction).not.toHaveBeenCalled();
+        expect(cap.ledgerValues).toBeUndefined();
+        expect(cap.balanceSet).toBeUndefined();
+        expect(mockApiLogger.info).toHaveBeenCalledWith(
+          'credit funding: invoice grants nothing',
+          expect.objectContaining({ userId: 'u1', paidCents: 0, stripeRef: 'in_123', reason: 'zero-amount invoice' }),
+        );
+      }
+    });
+
+    it('MON-2 an invoice with no amount_paid fails closed (nothing granted)', async () => {
+      const cap: Captured = {};
+      refill(cap);
+
+      await applyStripeFunding(paidInvoiceEvent(undefined), { tier: 'pro' });
+
+      expect(mockDb.transaction).not.toHaveBeenCalled();
+      expect(cap.ledgerValues).toBeUndefined();
+    });
+
+    it('MON-2 a PAID invoice whose tier resolves to free (no ratio) grants nothing and warns loudly for follow-up', async () => {
+      mockDb.select.mockReturnValue(userSelectReturning([{ id: 'u1', subscriptionTier: 'free' }]));
+      const cap: Captured = {};
+      mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+        await cb(refillTx(cap, [{ id: 'led_x' }], 0));
+      });
+
+      await applyStripeFunding(paidInvoiceEvent(1500)); // no invoice-derived tier, stored tier still free
+
+      expect(mockDb.transaction).not.toHaveBeenCalled();
+      expect(mockApiLogger.warn).toHaveBeenCalledWith(
+        'credit funding: invoice grants nothing',
+        expect.objectContaining({ paidCents: 1500, tier: 'free', reason: 'no ratio for resolved tier' }),
+      );
+    });
+
+    it('MON-2 with MONEY_MODEL_V2 off a full-price invoice grants 100% of what it paid, which is today\'s amount', async () => {
+      const cap: Captured = {};
+      refill(cap);
+
+      await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'pro' });
+
+      expect(cap.ledgerValues).toMatchObject({ amountCents: 1500, paidCents: 1500 });
+    });
   });
 });
