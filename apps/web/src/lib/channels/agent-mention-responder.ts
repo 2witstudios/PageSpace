@@ -403,7 +403,7 @@ async function resolveImageAttachmentsForContext(
  * `send_channel_message`. Treating null as "not enabled" here meant a
  * freshly created agent could never answer a mention.
  */
-export function canAgentSendChannelMessages(enabledTools: string[] | null): boolean {
+function canAgentSendChannelMessages(enabledTools: string[] | null): boolean {
   if (enabledTools === null) return true;
   return enabledTools.includes('send_channel_message');
 }
