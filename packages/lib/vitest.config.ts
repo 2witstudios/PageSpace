@@ -24,6 +24,8 @@ export default defineConfig({
       'src/services/agent-workspaces/__tests__/agent-sessions-store.integration.test.ts',
       'src/services/app-hosting/__tests__/provisioner-claim.integration.test.ts',
       'src/tags/__tests__/tag-service.integration.test.ts',
+      'src/agent-accounts/__tests__/replay-store-repository.integration.test.ts',
+      'src/agent-accounts/__tests__/adversarial/replay-across-replicas.integration.test.ts',
     ],
     setupFiles: ['./src/test/setup.ts'],
     // Run test files sequentially to avoid database race conditions
@@ -69,6 +71,8 @@ export default defineConfig({
         'src/services/agent-workspaces/__tests__/agent-sessions-store.integration.test.ts',
         'src/services/app-hosting/__tests__/provisioner-claim.integration.test.ts',
         'src/tags/__tests__/tag-service.integration.test.ts',
+      'src/agent-accounts/__tests__/replay-store-repository.integration.test.ts',
+      'src/agent-accounts/__tests__/adversarial/replay-across-replicas.integration.test.ts',
       ],
       thresholds: {
         lines: 85,

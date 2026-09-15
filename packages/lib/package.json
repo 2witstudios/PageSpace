@@ -218,6 +218,21 @@
       "import": "./dist/agent-accounts/render-approval-subject.js",
       "require": "./dist/agent-accounts/render-approval-subject.js"
     },
+    "./agent-accounts/decide-replay": {
+      "types": "./dist/agent-accounts/decide-replay.d.ts",
+      "import": "./dist/agent-accounts/decide-replay.js",
+      "require": "./dist/agent-accounts/decide-replay.js"
+    },
+    "./agent-accounts/decide-retry": {
+      "types": "./dist/agent-accounts/decide-retry.d.ts",
+      "import": "./dist/agent-accounts/decide-retry.js",
+      "require": "./dist/agent-accounts/decide-retry.js"
+    },
+    "./agent-accounts/replay-store-repository": {
+      "types": "./dist/agent-accounts/replay-store-repository.d.ts",
+      "import": "./dist/agent-accounts/replay-store-repository.js",
+      "require": "./dist/agent-accounts/replay-store-repository.js"
+    },
     "./permissions/account-permissions": {
       "types": "./dist/permissions/account-permissions.d.ts",
       "import": "./dist/permissions/account-permissions.js",
