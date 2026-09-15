@@ -208,3 +208,39 @@ describe('normalizeMessageParts — mixed message arrays', () => {
     expect(normalizeMessageParts(msgs)[0]).toBe(msgs[0]);
   });
 });
+
+describe('normalizeMessageParts — tool approval states', () => {
+  it('converts output-denied to tool-call + tool-result carrying the refusal (with the reason when given)', () => {
+    const out = normalizeMessageParts([
+      {
+        role: 'assistant',
+        parts: [
+          { type: 'tool-trash_page', toolCallId: 'tc1', toolName: 'trash_page', input: { pageId: 'p' }, state: 'output-denied', approval: { id: 'a', approved: false, reason: 'keep it' } },
+          { type: 'tool-trash_page', toolCallId: 'tc2', toolName: 'trash_page', input: {}, state: 'output-denied', approval: { id: 'b', approved: false } },
+        ],
+      },
+    ]);
+    expect(out[0].parts).toEqual([
+      { type: 'tool-call', toolCallId: 'tc1', toolName: 'trash_page', args: { pageId: 'p' } },
+      { type: 'tool-result', toolCallId: 'tc1', toolName: 'trash_page', result: '[denied by user: keep it]' },
+      { type: 'tool-call', toolCallId: 'tc2', toolName: 'trash_page', args: {} },
+      { type: 'tool-result', toolCallId: 'tc2', toolName: 'trash_page', result: '[denied by user]' },
+    ]);
+  });
+
+  it('converts approval-requested / approval-responded to a tool-call only (no result exists yet)', () => {
+    const out = normalizeMessageParts([
+      {
+        role: 'assistant',
+        parts: [
+          { type: 'tool-a', toolCallId: 'tc1', toolName: 'a', input: { x: 1 }, state: 'approval-requested', approval: { id: 'a' } },
+          { type: 'tool-b', toolCallId: 'tc2', toolName: 'b', input: {}, state: 'approval-responded', approval: { id: 'b', approved: true } },
+        ],
+      },
+    ]);
+    expect(out[0].parts).toEqual([
+      { type: 'tool-call', toolCallId: 'tc1', toolName: 'a', args: { x: 1 } },
+      { type: 'tool-call', toolCallId: 'tc2', toolName: 'b', args: {} },
+    ]);
+  });
+});
