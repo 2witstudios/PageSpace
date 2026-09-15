@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 
 /**
@@ -50,22 +50,41 @@ function isCommentLine(line: string): boolean {
   return t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
 }
 
+/** Directory entries, or none when the directory is absent (a partial checkout). */
+function entriesOf(dir: string) {
+  try {
+    return readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
+/** File contents, or null when it vanished or is not a regular file (no check-then-use). */
+function sourceOf(file: string): string | null {
+  try {
+    return readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 export function findSecondConversions(repoRoot: string): string[] {
   const hits: string[] = [];
   const walk = (dir: string) => {
-    for (const name of readdirSync(dir)) {
+    for (const entry of entriesOf(dir)) {
+      const name = entry.name;
       if (SKIP_DIRS.has(name)) continue;
       const full = join(dir, name);
-      const st = statSync(full);
-      if (st.isDirectory()) {
+      if (entry.isDirectory()) {
         walk(full);
         continue;
       }
-      if (!SOURCE_EXT.test(name) || TEST_FILE.test(name)) continue;
+      if (!entry.isFile() || !SOURCE_EXT.test(name) || TEST_FILE.test(name)) continue;
       const rel = relative(repoRoot, full).split(sep).join('/');
       if (ALLOWED.has(rel)) continue;
-      const lines = readFileSync(full, 'utf8').split('\n');
-      lines.forEach((line, i) => {
+      const source = sourceOf(full);
+      if (source === null) continue;
+      source.split('\n').forEach((line, i) => {
         if (isCommentLine(line)) return;
         const names: string[] = [];
         for (const m of line.matchAll(LEFT)) names.push(m[1]);
@@ -76,15 +95,7 @@ export function findSecondConversions(repoRoot: string): string[] {
       });
     }
   };
-  for (const root of ROOTS) {
-    const abs = join(repoRoot, root);
-    try {
-      statSync(abs);
-    } catch {
-      continue; // a root missing from a partial checkout is not a violation
-    }
-    walk(abs);
-  }
+  for (const root of ROOTS) walk(join(repoRoot, root));
   return hits;
 }
 
@@ -92,7 +103,7 @@ describe('MON-5 no second credit or cents conversion outside money-model.ts', ()
   const repoRoot = resolve(__dirname, '../../../../..');
 
   it('MON-5 the scanner sees the repo (money-model.ts exists at the allowed path)', () => {
-    expect(() => statSync(join(repoRoot, 'packages/lib/src/billing/money-model.ts'))).not.toThrow();
+    expect(sourceOf(join(repoRoot, 'packages/lib/src/billing/money-model.ts'))).toContain('CREDITS_PER_DOLLAR');
   });
 
   it('MON-5 the rule itself catches the shapes it is meant to catch and ignores the rest', () => {
