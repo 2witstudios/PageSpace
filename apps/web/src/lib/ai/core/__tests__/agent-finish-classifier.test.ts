@@ -251,8 +251,8 @@ describe('classifyAttempt — tool approval pause', () => {
     content: [
       { type: 'tool-call', toolCallId: 'c1', toolName, input: {} },
       { type: 'tool-approval-request', approvalId: 'ap1', toolCallId: 'c1' },
-    ] as unknown as Exclude<ModelMessage['content'], string>,
-  });
+    ],
+  }) as unknown as ModelMessage;
 
   it('a tool-calls finish carrying a tool-approval-request is terminal:awaiting-user-input, not a retry', () => {
     assert({
