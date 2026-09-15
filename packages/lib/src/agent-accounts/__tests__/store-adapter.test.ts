@@ -69,6 +69,7 @@ describe('decideResolve (ADR 0005 F1-F5, F10; §10.3-5)', () => {
   function grant(overrides: Partial<VerifiedGrant> = {}): VerifiedGrant {
     return {
       aud: 'http-executor',
+      accountId: REF.accountId,
       credentialVersion: 4 as CredentialVersion,
       bindingDigest: digestBindings({ bindings: BINDINGS, hash }),
       sessionHttp: false,

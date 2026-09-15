@@ -27,6 +27,7 @@ const REF = { tenantId: 'user:u1' as TenantId, accountId: 'acct_1' as AccountId,
 function grantOverBindings(bindings: PlaneBindings, overrides: Partial<VerifiedGrant> = {}): VerifiedGrant {
   return {
     aud: 'http-executor',
+    accountId: REF.accountId,
     credentialVersion: 4 as CredentialVersion,
     bindingDigest: digestBindings({ bindings, hash }),
     sessionHttp: false,
