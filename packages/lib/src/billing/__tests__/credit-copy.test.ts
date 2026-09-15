@@ -53,7 +53,7 @@ describe('MON-5 the web formatter, the marketing mirror, and admin consume one c
     }
   });
 
-  it('MON-6 the free phrase says "to start" and never "/month"; paid phrases say "/month"', async () => {
+  it('UI-12 the free phrase says "to start" and never "/month"; paid phrases say "/month"', async () => {
     const { monthlyCreditsPhrase, creditsPhrase } = await load({ MONEY_MODEL_V2: 'true' });
     expect(monthlyCreditsPhrase('free')).toBe('500 credits to start');
     expect(creditsPhrase('free')).toBe('500 to start');
