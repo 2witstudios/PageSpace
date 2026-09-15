@@ -230,6 +230,7 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     },
 
     async revoke(input: RevokeInput): Promise<RevokeResult> {
+      if (input.ref.tenantId !== input.identity.tenantId) return { ok: false, reason: 'not_found' };
       const stored = await deps.metadata.read(input.ref);
       if (stored === null) return { ok: false, reason: 'not_found' };
       const revokedAt = deps.now();
