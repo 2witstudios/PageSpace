@@ -1,0 +1,86 @@
+# Local Infisical OSS bring-up for integration tests ONLY (ADR 0005 §2, G1b
+# task brief item 6). NOT for prod: D-21 revised puts self-hosted Infisical
+# on its own Fly app with its own Postgres + Redis, provisioned separately
+# and approved by Jono — this compose file never runs there. `.env` here
+# holds synthetic dev-only secrets checked into the repo on purpose (see
+# `.env`'s own comment); real deployments generate their own and never
+# commit them.
+services:
+  backend:
+    container_name: infisical-dev-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    image: infisical/infisical:latest
+    env_file: env.dev-fixture
+    ports:
+      - "8080:8080"
+    environment:
+      - NODE_ENV=production
+    networks:
+      - infisical-dev
+
+  redis:
+    image: redis:7-alpine
+    container_name: infisical-dev-redis
+    restart: unless-stopped
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+    networks:
+      - infisical-dev
+    volumes:
+      - infisical_dev_redis_data:/data
+
+  db:
+    container_name: infisical-dev-db
+    image: postgres:14-alpine
+    restart: unless-stopped
+    env_file: env.dev-fixture
+    networks:
+      - infisical-dev
+    volumes:
+      - infisical_dev_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: "pg_isready --username=${POSTGRES_USER} && psql --username=${POSTGRES_USER} --list"
+      interval: 5s
+      timeout: 10s
+      retries: 10
+
+  # The PLANE's own metadata DB (ADR 0005 §2.3: "plane metadata DB, not the
+  # app DB") — holds the CAS advisory-lock namespace and the version/binding
+  # bookkeeping row the adapter commits after each verified write. Reuses
+  # the postgres:14-alpine image already pulled for Infisical's own `db`
+  # service so this stays inside the "three images" budget.
+  metadata:
+    container_name: infisical-dev-metadata
+    image: postgres:14-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=plane_metadata
+      - POSTGRES_PASSWORD=plane_metadata
+      - POSTGRES_DB=plane_metadata
+    ports:
+      - "127.0.0.1:55433:5432"
+    networks:
+      - infisical-dev
+    volumes:
+      - infisical_dev_metadata_data:/var/lib/postgresql/data
+    healthcheck:
+      test: "pg_isready --username=plane_metadata"
+      interval: 5s
+      timeout: 10s
+      retries: 10
+
+volumes:
+  infisical_dev_pg_data:
+    driver: local
+  infisical_dev_redis_data:
+    driver: local
+  infisical_dev_metadata_data:
+    driver: local
+
+networks:
+  infisical-dev:
