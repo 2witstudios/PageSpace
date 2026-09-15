@@ -1125,6 +1125,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   from your own messages each was based on. Those quotes are removed 90 days after an observation
   is settled.
 
+### Security
+
+- **Only administrators can add a custom integration provider** — the admin check on the
+  provider-creation endpoint compared the wrong thing, so any signed-in account could add a
+  global custom integration provider, and a browser session that failed the cross-site request
+  check was let through as well. Non-admins and failed cross-site checks are now refused, and
+  nothing is created. Installing a built-in provider was already checked correctly and is
+  unaffected.
+
 ## [1.7.1] — 2026-08-10
 
 ### Fixed

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError, verifyAdminAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -101,11 +101,10 @@ export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
-  // Only admins can create providers
+  // Only admins can create providers. verifyAdminAuth returns a NextResponse
+  // (truthy) on denial, so the type guard is the only correct check.
   const adminAuth = await verifyAdminAuth(request);
-  if (!adminAuth) {
-    return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
-  }
+  if (isAdminAuthError(adminAuth)) return adminAuth;
 
   try {
     const body = await request.json();
