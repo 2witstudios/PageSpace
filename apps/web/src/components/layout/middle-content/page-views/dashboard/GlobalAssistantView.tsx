@@ -1147,6 +1147,7 @@ const GlobalAssistantView: React.FC = () => {
               <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />
             )}
             <ChatInput
+              showToolApprovalSettings={!selectedAgent}
               ref={inputRef}
               value={props.value}
               onChange={props.onChange}

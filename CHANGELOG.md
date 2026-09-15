@@ -39,6 +39,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   access key and exits with the command's own status; `pagespace workspaces list` finds the id. It
   is held to the same rules as the agent's own `bash` tool — plan, quota, command policy, billing
   and audit — and a key scoped to other drives cannot see or reach the workspace.
+- **The assistant asks before it acts** — every agent now pauses before an edit, a new page, a
+  deletion, a task change, a message, a calendar write, a command in a sandbox, or a worker spawn,
+  and shows an approval card in the chat: Allow once, Allow for this conversation, Always allow
+  that tool, or Deny (with a reason the assistant reads). Reads and searches never ask. The
+  answer sticks: approve in one tab and the card settles everywhere, refresh mid-question and it
+  is still waiting, type past it and the request is treated as denied. "Always allow" grants are
+  yours to revoke from the composer's Tools menu, where a single switch also turns the whole thing
+  off ("Auto") for your global assistant; each page agent has the same choice in its settings under
+  Action Approval. Runs with nobody watching — workflows, triggers, channel mentions and the
+  worker sessions an approved spawn starts — never pause.
 - **Multi-question prompts from the assistant have Back and Next buttons** — when the assistant
   asks several questions at once, you could only switch between them by tapping the small
   numbered tabs or pressing the arrow keys, which is awkward on a phone. Each question now has a
