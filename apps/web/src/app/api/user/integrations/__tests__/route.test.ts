@@ -50,7 +50,8 @@ import { GET, POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getProviderById } from '@pagespace/lib/integrations/repositories/provider-repository';
-import { findUserConnection } from '@pagespace/lib/integrations/repositories/connection-repository';
+import { findUserConnection, createConnection } from '@pagespace/lib/integrations/repositories/connection-repository';
+import { encryptCredentials } from '@pagespace/lib/integrations/credentials/encrypt-credentials';
 import { buildOAuthAuthorizationUrl } from '@pagespace/lib/integrations/oauth/oauth-handler';
 import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
 import { builtinProviders } from '@pagespace/lib/integrations/providers/builtin-providers';
@@ -136,5 +137,62 @@ describe('POST /api/user/integrations OAuth flow', () => {
       canonicalAuthMethod.type === 'oauth2' ? canonicalAuthMethod.config : undefined,
       expect.anything()
     );
+  });
+});
+
+describe('POST /api/user/integrations base URL guard', () => {
+  const blockedOverrides = [
+    'http://127.0.0.1:9000/hook',
+    'http://169.254.169.254/latest/meta-data/',
+    'http://10.0.0.5/hook',
+    'http://[::1]/hook',
+    'http://localhost:3000/hook',
+    'http://metadata.google.internal/computeMetadata/v1/',
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+    vi.mocked(getProviderById).mockResolvedValue({
+      id: 'prov-api',
+      slug: 'linear',
+      providerType: 'custom',
+      enabled: true,
+      config: {
+        authMethod: { type: 'api_key', config: { placement: 'header', paramName: 'Authorization' } },
+        baseUrl: 'https://api.linear.app',
+        tools: [],
+      },
+    } as never);
+    vi.mocked(findUserConnection).mockResolvedValue(null);
+    vi.mocked(encryptCredentials).mockResolvedValue({ apiKey: 'enc' });
+    vi.mocked(createConnection).mockResolvedValue({ id: 'conn-new', providerId: 'prov-api', name: 'X', status: 'active', visibility: 'private', createdAt: new Date() } as never);
+  });
+
+  for (const baseUrlOverride of blockedOverrides) {
+    it(`given baseUrlOverride ${baseUrlOverride}, should reject with 400 and write no row`, async () => {
+      const request = new Request('http://localhost/api/user/integrations', {
+        method: 'POST',
+        body: JSON.stringify({ providerId: 'prov-api', name: 'X', credentials: { apiKey: 'k' }, baseUrlOverride }),
+      });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Validation failed');
+      expect(body.details.baseUrlOverride).toBeDefined();
+      expect(createConnection).not.toHaveBeenCalled();
+    });
+  }
+
+  it('given a public baseUrlOverride, should still create the connection', async () => {
+    const request = new Request('http://localhost/api/user/integrations', {
+      method: 'POST',
+      body: JSON.stringify({ providerId: 'prov-api', name: 'X', credentials: { apiKey: 'k' }, baseUrlOverride: 'https://93.184.216.34/api' }),
+    });
+    const response = await POST(request);
+
+    expect(response.status).toBe(201);
+    expect(createConnection).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ baseUrlOverride: 'https://93.184.216.34/api' }));
   });
 });
