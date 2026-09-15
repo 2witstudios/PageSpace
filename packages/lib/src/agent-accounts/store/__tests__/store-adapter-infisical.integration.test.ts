@@ -352,4 +352,37 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
       expect(JSON.stringify(result.material)).not.toContain('refresh-synthetic-SHOULD-NEVER-LEAK');
     }
   });
+
+  // Codex review PR #2646 (P1, store-adapter-infisical.ts:112): writeSecret never checked
+  // revokedAt before writing, and metadata.commit unconditionally reset revoked_at to NULL — so a
+  // rotate (or put) issued after revoke silently reactivated a supposedly broker-denied credential.
+  it('given rotate after revoke, should refuse and resolve should still report revoked', async () => {
+    if (!available) return;
+    const adapter = makeAdapter();
+    const accountId = `acct-revoke-then-rotate-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    await adapter.revoke({ ref, reason: 'owner_revoked', identity });
+
+    const rotateResult = await adapter.rotate({
+      ref,
+      expectedVersion: 1 as never,
+      next: { kind: 'api_key', material: { value: 'sk-v2-should-not-land', placement: { in: 'header', name: 'Authorization' } } },
+      bindings,
+      identity: refreshIdentity,
+    });
+    expect(rotateResult.ok).toBe(false);
+
+    const described = await adapter.describe({ ref, identity });
+    expect(described.ok).toBe(true);
+    if (described.ok) expect(described.revokedAt).not.toBeNull();
+
+    const grant = makeGrant({ accountId, bindingDigest: digestBindings({ bindings, hash }) });
+    const resolveResult = await adapter.resolve({ ref, version: 1 as never, grant, identity });
+    expect(resolveResult).toEqual({ ok: false, reason: 'revoked' });
+  });
 });
