@@ -302,4 +302,54 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
     expect(outcomes.filter((o) => o === 'commit')).toHaveLength(1);
     expect(outcomes.filter((o) => o === 'version_conflict')).toHaveLength(1);
   });
+
+  // Codex review PR #2646 (P1): the adapter wrote { kind, material } where `material` was the
+  // WHOLE discriminated SecretMaterial ({ kind, material: perKindPayload }), so resolve returned
+  // a double-nested object instead of the per-kind payload callers expect.
+  it('given put of api_key material then resolve, should return the exact per-kind payload, not the discriminated-union wrapper', async () => {
+    if (!available) return;
+    const adapter = makeAdapter();
+    const accountId = `acct-payload-shape-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const perKindPayload = { value: 'sk-shape-check', placement: { in: 'header' as const, name: 'Authorization' } };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: perKindPayload }, expectedVersion: null, bindings, identity });
+
+    const grant = makeGrant({ accountId, accountKind: 'api_key', credentialVersion: 1 as never, bindingDigest: digestBindings({ bindings, hash }) });
+    const result = await adapter.resolve({ ref, version: 1 as never, grant, identity });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.material).toEqual(perKindPayload);
+  });
+
+  // Same review finding: because of the double-nesting, `stripRefreshToken` inspected the WRAPPER
+  // object (which never has a top-level `refreshToken`) instead of the real oauth2 payload, so the
+  // real refresh token was never actually stripped for http-executor/relay-runner resolves.
+  it('given resolve of an oauth2 ref by http-executor, should never include refreshToken in the returned material', async () => {
+    if (!available) return;
+    const adapter = makeAdapter();
+    const accountId = `acct-oauth2-strip-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'oauth2' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'oauth2' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const oauth2Payload = {
+      accessToken: 'access-synthetic',
+      accessExpiresAt: NOW + 3_600_000,
+      refreshToken: 'refresh-synthetic-SHOULD-NEVER-LEAK',
+      scopes: ['repo'],
+      issuer: 'https://issuer.example',
+      tokenEndpoint: 'https://issuer.example/token',
+    };
+
+    await adapter.put({ ref, material: { kind: 'oauth2', material: oauth2Payload }, expectedVersion: null, bindings, identity });
+
+    const grant = makeGrant({ aud: 'http-executor', accountId, accountKind: 'oauth2', credentialVersion: 1 as never, bindingDigest: digestBindings({ bindings, hash }) });
+    const result = await adapter.resolve({ ref, version: 1 as never, grant, identity });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.material).not.toHaveProperty('refreshToken');
+      expect(JSON.stringify(result.material)).not.toContain('refresh-synthetic-SHOULD-NEVER-LEAK');
+    }
+  });
 });
