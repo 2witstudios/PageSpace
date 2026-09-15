@@ -8,7 +8,7 @@
  * real base URL.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ToolCallRequest } from '../types';
 import { executeToolSaga, type ExecuteToolDependencies } from './execute-tool';
 import { builtinProviders } from '../providers/builtin-providers';
@@ -17,6 +17,12 @@ vi.mock('dns', () => ({
   promises: {
     lookup: vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]),
   },
+}));
+
+// The executor connects through pinnedFetch (node http/https pinned to the
+// validated address), never global fetch — route it to the spy.
+vi.mock('../execution/pinned-fetch', () => ({
+  pinnedFetch: (...args: unknown[]) => fetchSpy(...(args as [string, RequestInit])),
 }));
 
 vi.mock('../credentials/encrypt-credentials', () => ({
@@ -34,6 +40,8 @@ vi.mock('../rate-limit/integration-rate-limiter', () => ({
 
 import { promises as dns } from 'dns';
 
+const fetchSpy = vi.hoisted(() => vi.fn<(url: string, init: RequestInit) => Promise<Response>>());
+
 const mockLoadConnection = vi.fn();
 const mockLogAudit = vi.fn(async () => undefined);
 const deps: ExecuteToolDependencies = { loadConnection: mockLoadConnection, logAudit: mockLogAudit };
@@ -48,7 +56,6 @@ const okJson = (body: unknown): Response =>
     text: () => Promise.resolve(JSON.stringify(body)),
   }) as unknown as Response;
 
-const fetchSpy = vi.fn<(url: string, init: RequestInit) => Promise<Response>>();
 
 const connectionFor = (providerSlug: keyof typeof builtinProviders, baseUrlOverride: string | null) => ({
   id: 'conn-1',
@@ -77,13 +84,8 @@ const requestFor = (toolName: string, input: Record<string, unknown> = {}): Tool
 describe('executeToolSaga target guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.stubGlobal('fetch', fetchSpy);
     fetchSpy.mockResolvedValue(okJson({ ok: true }));
     vi.mocked(dns.lookup).mockResolvedValue([{ address: '93.184.216.34', family: 4 }] as never);
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
   });
 
   it('given a stored override that is a private IP literal, should refuse before any request', async () => {

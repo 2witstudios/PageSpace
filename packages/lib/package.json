@@ -1853,6 +1853,11 @@
       "import": "./dist/security/auth-handoff-sweep.js",
       "require": "./dist/security/auth-handoff-sweep.js"
     },
+    "./security/web-fetch-ssrf": {
+      "types": "./dist/security/web-fetch-ssrf.d.ts",
+      "import": "./dist/security/web-fetch-ssrf.js",
+      "require": "./dist/security/web-fetch-ssrf.js"
+    },
     "./security/url-validator": {
       "types": "./dist/security/url-validator.d.ts",
       "import": "./dist/security/url-validator.js",

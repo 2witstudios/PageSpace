@@ -1133,7 +1133,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   network range, or a cloud metadata address, and a tool call would then send the connection's
   credentials there and hand the reply to the assistant. A base URL is now refused when it is
   saved if it points at any of those, including a hostname that resolves there, and it is checked
-  again, with a fresh DNS lookup, immediately before every request is sent. Upstream redirects are
+  again, with a fresh DNS lookup, immediately before every request is sent; the request then
+  connects to exactly the address that was checked, so a name that changes its answer between the
+  check and the connection gains nothing, and a check that stalls is cut off by the same time
+  limit as the request. The check covers every non-public range, not just the common private
+  ones (carrier-grade NAT, multicast, reserved and IPv6-mapped ranges included). Upstream redirects are
   no longer followed automatically: a redirect to a different site is refused outright, so a
   connection's credentials never travel to a site the integration was not set up for.
 

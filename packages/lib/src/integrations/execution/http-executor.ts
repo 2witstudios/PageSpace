@@ -5,9 +5,12 @@
  * and proper error categorization.
  *
  * SSRF guard: every target URL — the initial one and every redirect hop — is
- * validated (scheme, blocked hosts, and DNS re-resolution with every address
- * checked) immediately before connecting. Redirects are never followed by the
- * runtime (`redirect: 'manual'`); the executor follows only same-origin hops,
+ * validated (scheme, blocked hosts, and DNS resolution with every address
+ * required to be public) immediately before connecting, and the connection is
+ * then PINNED to the validated address (`pinnedFetch`), so a DNS answer that
+ * changes between validation and connect cannot redirect the request. The
+ * validation itself is bounded by the request's abort signal. Redirects are
+ * never followed by the client; the executor follows only same-origin hops,
  * so the connection's credential headers never travel to another origin.
  */
 
@@ -15,8 +18,9 @@ import {
   validateIntegrationTargetUrl,
   type IntegrationTargetDecision,
 } from '../validation/validate-base-url';
+import { pinnedFetch, type PinnedFetch } from './pinned-fetch';
 
-type TargetValidator = (url: string) => Promise<IntegrationTargetDecision>;
+type TargetValidator = (url: string, signal: AbortSignal) => Promise<IntegrationTargetDecision>;
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 5;
@@ -103,7 +107,7 @@ type GuardedFetchOutcome =
 const fetchGuarded = async (
   request: HttpRequest,
   signal: AbortSignal,
-  fetchFn: typeof fetch,
+  fetchFn: PinnedFetch,
   validateTarget: TargetValidator
 ): Promise<GuardedFetchOutcome> => {
   let url = request.url;
@@ -111,7 +115,7 @@ const fetchGuarded = async (
   let body = request.body;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const decision = await validateTarget(url);
+    const decision = await validateTarget(url, signal);
     if (!decision.ok) {
       return { kind: 'refused', error: decision.reason, errorType: 'blocked_target' };
     }
@@ -122,6 +126,7 @@ const fetchGuarded = async (
       body,
       signal,
       redirect: 'manual',
+      pinnedAddress: decision.address,
     });
 
     if (!REDIRECT_STATUSES.has(response.status)) {
@@ -151,7 +156,7 @@ const fetchGuarded = async (
     }
 
     // Same-origin hop: apply the standard method rewrite and re-validate the
-    // target (DNS is re-resolved) before connecting again.
+    // target (DNS is re-resolved and re-pinned) before connecting again.
     if (response.status === 303 || ((response.status === 301 || response.status === 302) && method === 'POST')) {
       method = 'GET';
       body = undefined;
@@ -175,8 +180,8 @@ const fetchGuarded = async (
 export const executeHttpRequest = async (
   request: HttpRequest,
   options: ExecuteOptions = {},
-  fetchFn: typeof fetch = fetch,
-  validateTarget: TargetValidator = validateIntegrationTargetUrl
+  fetchFn: PinnedFetch = pinnedFetch,
+  validateTarget: TargetValidator = (url, signal) => validateIntegrationTargetUrl(url, { signal })
 ): Promise<ExecuteResult> => {
   const { timeoutMs = 30000, maxRetries = 3, retryDelayMs = 1000 } = options;
 

@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { executeHttpRequest, type HttpRequest } from './http-executor';
+import type { PinnedFetch } from './pinned-fetch';
 import type { IntegrationTargetDecision } from '../validation/validate-base-url';
 
 // The executor resolves every hostname before connecting; existing cases use
@@ -16,7 +17,8 @@ vi.mock('dns', () => ({
   },
 }));
 
-const allowAll = async (): Promise<IntegrationTargetDecision> => ({ ok: true });
+const PUBLIC = '93.184.216.34';
+const allowAll = async (): Promise<IntegrationTargetDecision> => ({ ok: true, address: PUBLIC });
 
 // Mock fetch for testing
 const mockFetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>();
@@ -58,7 +60,7 @@ describe('executeHttpRequest', () => {
       method: 'GET',
     };
 
-    const resultPromise = executeHttpRequest(request, { maxRetries: 0 }, mockFetch as unknown as typeof fetch);
+    const resultPromise = executeHttpRequest(request, { maxRetries: 0 }, mockFetch as unknown as PinnedFetch);
     await vi.runAllTimersAsync();
     const result = await resultPromise;
 
@@ -78,7 +80,7 @@ describe('executeHttpRequest', () => {
       body: '{"title":"Test"}',
     };
 
-    const resultPromise = executeHttpRequest(request, { maxRetries: 0 }, mockFetch as unknown as typeof fetch);
+    const resultPromise = executeHttpRequest(request, { maxRetries: 0 }, mockFetch as unknown as PinnedFetch);
     await vi.runAllTimersAsync();
     const result = await resultPromise;
 
@@ -101,7 +103,7 @@ describe('executeHttpRequest', () => {
       method: 'GET',
     };
 
-    const resultPromise = executeHttpRequest(request, { maxRetries: 3 }, mockFetch as unknown as typeof fetch);
+    const resultPromise = executeHttpRequest(request, { maxRetries: 3 }, mockFetch as unknown as PinnedFetch);
     await vi.runAllTimersAsync();
     const result = await resultPromise;
 
@@ -128,7 +130,7 @@ describe('executeHttpRequest', () => {
     const resultPromise = executeHttpRequest(request, {
       maxRetries: 3,
       retryDelayMs: 100,
-    }, mockFetch as unknown as typeof fetch);
+    }, mockFetch as unknown as PinnedFetch);
 
     // Advance through retries
     await vi.advanceTimersByTimeAsync(100); // First retry delay
@@ -155,7 +157,7 @@ describe('executeHttpRequest', () => {
       method: 'GET',
     };
 
-    const resultPromise = executeHttpRequest(request, { maxRetries: 2 }, mockFetch as unknown as typeof fetch);
+    const resultPromise = executeHttpRequest(request, { maxRetries: 2 }, mockFetch as unknown as PinnedFetch);
 
     // Advance through Retry-After delay (2 seconds)
     await vi.advanceTimersByTimeAsync(2000);
@@ -179,7 +181,7 @@ describe('executeHttpRequest', () => {
     const resultPromise = executeHttpRequest(request, {
       maxRetries: 2,
       retryDelayMs: 100,
-    }, mockFetch as unknown as typeof fetch);
+    }, mockFetch as unknown as PinnedFetch);
 
     // Advance through all retries
     await vi.advanceTimersByTimeAsync(100);
@@ -207,7 +209,7 @@ describe('executeHttpRequest', () => {
     const resultPromise = executeHttpRequest(request, {
       maxRetries: 2,
       retryDelayMs: 100,
-    }, mockFetch as unknown as typeof fetch);
+    }, mockFetch as unknown as PinnedFetch);
 
     await vi.advanceTimersByTimeAsync(100);
     await vi.runAllTimersAsync();
@@ -231,7 +233,7 @@ describe('executeHttpRequest', () => {
     const resultPromise = executeHttpRequest(request, {
       maxRetries: 3,
       timeoutMs: 100,
-    }, mockFetch as unknown as typeof fetch);
+    }, mockFetch as unknown as PinnedFetch);
 
     await vi.runAllTimersAsync();
     const result = await resultPromise;
@@ -254,7 +256,7 @@ describe('executeHttpRequest', () => {
     const resultPromise = executeHttpRequest(request, {
       maxRetries: 2,
       retryDelayMs: 50,
-    }, mockFetch as unknown as typeof fetch);
+    }, mockFetch as unknown as PinnedFetch);
 
     await vi.advanceTimersByTimeAsync(50);
     await vi.advanceTimersByTimeAsync(100);
@@ -281,7 +283,7 @@ describe('executeHttpRequest', () => {
     const resultPromise = executeHttpRequest(request, {
       maxRetries: 1,
       retryDelayMs: 50,
-    }, mockFetch as unknown as typeof fetch);
+    }, mockFetch as unknown as PinnedFetch);
 
     await vi.advanceTimersByTimeAsync(50);
     await vi.runAllTimersAsync();
@@ -310,7 +312,7 @@ describe('executeHttpRequest target guard', () => {
     const result = await executeHttpRequest(
       { url: 'http://10.0.0.5/hook', method: 'GET', headers: { Authorization: 'Bearer s3cret' } },
       { maxRetries: 3 },
-      mockFetch as unknown as typeof fetch,
+      mockFetch as unknown as PinnedFetch,
       validateTarget
     );
 
@@ -328,7 +330,7 @@ describe('executeHttpRequest target guard', () => {
     const result = await executeHttpRequest(
       { url: 'https://hooks.corp.example/hook', method: 'GET', headers: { Authorization: 'Bearer s3cret' } },
       { maxRetries: 0 },
-      mockFetch as unknown as typeof fetch
+      mockFetch as unknown as PinnedFetch
     );
 
     expect(mockFetch).not.toHaveBeenCalled();
@@ -342,7 +344,7 @@ describe('executeHttpRequest target guard', () => {
     await executeHttpRequest(
       { url: 'https://api.example.com/data', method: 'GET' },
       { maxRetries: 0 },
-      mockFetch as unknown as typeof fetch,
+      mockFetch as unknown as PinnedFetch,
       allowAll
     );
 
@@ -359,7 +361,7 @@ describe('executeHttpRequest target guard', () => {
     const result = await executeHttpRequest(
       { url: 'https://api.example.com/data', method: 'GET', headers: { Authorization: 'Bearer s3cret' } },
       { maxRetries: 0 },
-      mockFetch as unknown as typeof fetch,
+      mockFetch as unknown as PinnedFetch,
       allowAll
     );
 
@@ -374,7 +376,7 @@ describe('executeHttpRequest target guard', () => {
     // Same origin but the validator (DNS re-resolution) now says private: rebinding mid-request.
     const validateTarget = vi
       .fn<() => Promise<IntegrationTargetDecision>>()
-      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true, address: PUBLIC })
       .mockResolvedValueOnce({ ok: false, reason: 'rebound' });
     mockFetch.mockResolvedValueOnce(withLocation(302, '/moved'));
     mockFetch.mockResolvedValue(createMockResponse(200, { leaked: true }));
@@ -382,12 +384,12 @@ describe('executeHttpRequest target guard', () => {
     const result = await executeHttpRequest(
       { url: 'https://api.example.com/data', method: 'GET', headers: { Authorization: 'Bearer s3cret' } },
       { maxRetries: 0 },
-      mockFetch as unknown as typeof fetch,
+      mockFetch as unknown as PinnedFetch,
       validateTarget
     );
 
     expect(validateTarget).toHaveBeenCalledTimes(2);
-    expect(validateTarget).toHaveBeenLastCalledWith('https://api.example.com/moved');
+    expect(validateTarget).toHaveBeenLastCalledWith('https://api.example.com/moved', expect.any(AbortSignal));
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(result.success).toBe(false);
     expect(result.errorType).toBe('blocked_target');
@@ -400,7 +402,7 @@ describe('executeHttpRequest target guard', () => {
     const result = await executeHttpRequest(
       { url: 'https://api.example.com/data', method: 'GET', headers: { Authorization: 'Bearer s3cret' } },
       { maxRetries: 0 },
-      mockFetch as unknown as typeof fetch,
+      mockFetch as unknown as PinnedFetch,
       allowAll
     );
 
@@ -420,7 +422,7 @@ describe('executeHttpRequest target guard', () => {
     await executeHttpRequest(
       { url: 'https://api.example.com/jobs', method: 'POST', body: '{"a":1}' },
       { maxRetries: 0 },
-      mockFetch as unknown as typeof fetch,
+      mockFetch as unknown as PinnedFetch,
       allowAll
     );
 
@@ -435,12 +437,86 @@ describe('executeHttpRequest target guard', () => {
     const result = await executeHttpRequest(
       { url: 'https://api.example.com/loop', method: 'GET' },
       { maxRetries: 0 },
-      mockFetch as unknown as typeof fetch,
+      mockFetch as unknown as PinnedFetch,
       allowAll
     );
 
     expect(result.success).toBe(false);
     expect(result.errorType).toBe('redirect_blocked');
     expect(mockFetch.mock.calls.length).toBeLessThanOrEqual(6);
+  });
+});
+
+describe('executeHttpRequest connection pinning and validation deadline', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('should pass the validated address to the fetch as the pinned connect address', async () => {
+    mockFetch.mockResolvedValue(createMockResponse(200, { ok: true }));
+
+    await executeHttpRequest(
+      { url: 'https://api.example.com/data', method: 'GET', headers: { Authorization: 'Bearer s3cret' } },
+      { maxRetries: 0 },
+      mockFetch as unknown as PinnedFetch,
+      async () => ({ ok: true, address: '140.82.112.6' })
+    );
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://api.example.com/data',
+      expect.objectContaining({ pinnedAddress: '140.82.112.6' })
+    );
+  });
+
+  it('given DNS that flips public→private between lookups, should connect to the validated public address only', async () => {
+    const { promises: dns } = await import('dns');
+    vi.mocked(dns.lookup)
+      .mockResolvedValueOnce([{ address: PUBLIC, family: 4 }] as never)
+      .mockResolvedValue([{ address: '10.0.0.5', family: 4 }] as never);
+    mockFetch.mockResolvedValue(createMockResponse(200, { ok: true }));
+
+    const result = await executeHttpRequest(
+      { url: 'https://rebinder.example/data', method: 'GET', headers: { Authorization: 'Bearer s3cret' } },
+      { maxRetries: 0 },
+      mockFetch as unknown as PinnedFetch
+    );
+
+    expect(result.success).toBe(true);
+    expect(dns.lookup).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[0][1]).toEqual(expect.objectContaining({ pinnedAddress: PUBLIC }));
+  });
+
+  it('should hand the request abort signal to the target validator', async () => {
+    mockFetch.mockResolvedValue(createMockResponse(200, { ok: true }));
+    const validateTarget = vi.fn(allowAll);
+
+    await executeHttpRequest(
+      { url: 'https://api.example.com/data', method: 'GET' },
+      { maxRetries: 0 },
+      mockFetch as unknown as PinnedFetch,
+      validateTarget
+    );
+
+    expect(validateTarget).toHaveBeenCalledWith('https://api.example.com/data', expect.any(AbortSignal));
+  });
+
+  it('given a DNS lookup that never completes, should return timeout within timeoutMs and never fetch', async () => {
+    const { promises: dns } = await import('dns');
+    vi.mocked(dns.lookup).mockReturnValue(new Promise(() => undefined) as never);
+    mockFetch.mockResolvedValue(createMockResponse(200, { ok: true }));
+
+    const outcome = await Promise.race([
+      executeHttpRequest(
+        { url: 'https://stuck-dns.example/data', method: 'GET' },
+        { maxRetries: 0, timeoutMs: 50 },
+        mockFetch as unknown as PinnedFetch
+      ),
+      new Promise<'HUNG'>((resolve) => setTimeout(() => resolve('HUNG'), 500)),
+    ]);
+
+    expect(outcome).not.toBe('HUNG');
+    expect(outcome).toMatchObject({ success: false, errorType: 'timeout' });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
