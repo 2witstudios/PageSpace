@@ -109,6 +109,10 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     const lockKey = lockKeyFor(ref);
     const attemptLock = () => withAdvisoryLock(deps.advisoryLockPool, lockKey, async () => {
       const before = await deps.metadata.read(ref);
+      // A revoked ref is broker-denied permanently, never reactivated by a later write (ADR 0005
+      // §2.2 revoke: "every future resolve returns revoked"). Refuse under the SAME lock a write
+      // would use, before touching Infisical or the metadata row (Codex review PR #2646 P1).
+      if (before !== null && before.revokedAt !== null) return { outcome: 'write_unverified' as const };
       const observedBefore = (before?.currentVersion ?? null) as CredentialVersion | null;
 
       const assumedNextVersion = ((observedBefore ?? 0) + 1) as CredentialVersion;
