@@ -407,4 +407,28 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
     const resolveResult = await adapter.resolve({ ref, version: 1 as never, grant, identity });
     expect(resolveResult).toEqual({ ok: false, reason: 'revoked' });
   });
+
+  // Codex review PR #2646 (P2, store-adapter-infisical.ts:103): PutInput does not type-correlate
+  // ref.kind with the SecretMaterial discriminant, so a caller could submit e.g. password material
+  // under an api_key ref; the adapter ignored material.kind and wrote the mismatched payload.
+  it('given put with material.kind different from ref.kind, should return kind_mismatch and write nothing', async () => {
+    if (!available) return;
+    const adapter = makeAdapter();
+    const accountId = `acct-kind-mismatch-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+
+    const putResult = await adapter.put({
+      ref,
+      material: { kind: 'password', material: { username: 'attacker', password: 'sneaky', totpSecret: null } },
+      expectedVersion: null,
+      bindings,
+      identity,
+    });
+    expect(putResult).toEqual({ ok: false, reason: 'kind_mismatch' });
+
+    const described = await adapter.describe({ ref, identity });
+    expect(described).toEqual({ ok: false, reason: 'not_found' });
+  });
 });
