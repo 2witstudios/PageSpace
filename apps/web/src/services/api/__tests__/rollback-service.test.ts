@@ -883,20 +883,6 @@ describe('rollback-service', () => {
       expect(result).toBe(30);
     });
 
-    it('returns 90 days for founder tier', async () => {
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([{ subscriptionTier: 'founder' }]),
-          }),
-        }),
-      });
-
-      const result = await getUserRetentionDays(mockUserId);
-
-      expect(result).toBe(90);
-    });
-
     it('returns -1 (unlimited) for business tier', async () => {
       mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({

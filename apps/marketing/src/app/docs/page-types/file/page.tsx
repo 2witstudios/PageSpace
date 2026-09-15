@@ -38,7 +38,7 @@ An upload goes in two steps.
 
 While those jobs run, the File page shows a processing status. Your browser gets live updates over the real-time socket, so the preview and "text available" state appear without a refresh. You can keep working — upload a second file, edit a Document, send an AI message — nothing is blocked on the first file finishing.
 
-Size and concurrency are bounded by your tier. Free gives you 500 MB of storage and accepts files up to 50 MB, with 3 uploads in flight at once. Pro is 2 GB / 250 MB per file / 5 at once. Founder is 10 GB / 500 MB per file / 5 at once. Business is 50 GB / 1 GB per file / 10 at once.
+Size and concurrency are bounded by your tier. Free gives you 500 MB of storage and accepts files up to 50 MB, with 3 uploads in flight at once. Pro is 2 GB / 250 MB per file / 5 at once. Business is 50 GB / 1 GB per file / 10 at once.
 
 ## Good to know
 

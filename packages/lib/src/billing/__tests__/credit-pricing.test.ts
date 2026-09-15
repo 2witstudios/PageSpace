@@ -123,7 +123,6 @@ describe('TIER_ALLOWANCE_REFILLS', () => {
     expect(Object.keys(TIER_ALLOWANCE_REFILLS).sort()).toEqual([...TIERS].sort());
     expect(TIER_ALLOWANCE_REFILLS.free).toBe(false);
     expect(TIER_ALLOWANCE_REFILLS.pro).toBe(true);
-    expect(TIER_ALLOWANCE_REFILLS.founder).toBe(true);
     expect(TIER_ALLOWANCE_REFILLS.business).toBe(true);
   });
 
@@ -138,7 +137,7 @@ describe('allowanceRefills / isOneTimeAllowanceTier', () => {
     const { allowanceRefills, isOneTimeAllowanceTier } = await import('../credit-pricing');
     expect(allowanceRefills('free')).toBe(false);
     expect(isOneTimeAllowanceTier('free')).toBe(true);
-    for (const tier of ['pro', 'founder', 'business']) {
+    for (const tier of ['pro', 'business']) {
       expect(allowanceRefills(tier)).toBe(true);
       expect(isOneTimeAllowanceTier(tier)).toBe(false);
     }

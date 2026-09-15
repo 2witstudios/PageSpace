@@ -76,9 +76,9 @@ describe('loadPageVersionHistory (explicit Result)', () => {
 
 describe('loadUserRetentionDays (explicit Result)', () => {
   it('returns ok with the tier retention', async () => {
-    const db = { select: () => ({ from: () => ({ where: () => ({ limit: () => Promise.resolve([{ subscriptionTier: 'founder' }]) }) }) }) };
+    const db = { select: () => ({ from: () => ({ where: () => ({ limit: () => Promise.resolve([{ subscriptionTier: 'pro' }]) }) }) }) };
     const r = await loadUserRetentionDays(depsWith(db), 'u');
-    assert({ given: 'a founder-tier user', should: 'return ok with 90', actual: r, expected: { ok: true, value: 90 } });
+    assert({ given: 'a pro-tier user', should: 'return ok with 30', actual: r, expected: { ok: true, value: 30 } });
   });
 
   it('returns an error result on a DB failure', async () => {

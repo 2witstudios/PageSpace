@@ -18,6 +18,11 @@ interface PlanCardProps {
   onManageBilling?: () => void;
   onCancelSchedule?: () => void;
   cancellingSchedule?: boolean;
+  /**
+   * A-9: the viewer is a grandfathered $100 personal Business subscriber. Their
+   * card is Business at the price they already pay, not the $50 org list price.
+   */
+  grandfathered?: boolean;
   className?: string;
 }
 
@@ -31,8 +36,10 @@ export function PlanCard({
   onManageBilling,
   onCancelSchedule,
   cancellingSchedule = false,
+  grandfathered = false,
   className,
 }: PlanCardProps) {
+  const showsGrandfatheredPrice = isCurrentPlan && grandfathered && plan.isOrgPlan;
   const [isProcessing, setIsProcessing] = useState(false);
 
   const handleAction = async () => {
@@ -202,17 +209,40 @@ export function PlanCard({
           <CardTitle className="text-xl font-bold">{plan.displayName}</CardTitle>
         </div>
         <div className="pt-2">
-          <span className="text-3xl font-bold">{plan.price.formatted}</span>
-          {plan.price.monthly > 0 && (
-            <span className="text-sm text-muted-foreground">/month</span>
+          {showsGrandfatheredPrice ? (
+            <span className="text-lg font-semibold" data-testid="plan-price">Your current price</span>
+          ) : (
+            <>
+              <span className="text-3xl font-bold" data-testid="plan-price">{plan.price.formatted}</span>
+              {plan.price.monthly > 0 && (
+                <span className="text-sm text-muted-foreground">/month</span>
+              )}
+            </>
           )}
         </div>
+        {plan.isOrgPlan && !showsGrandfatheredPrice && (
+          <p className="text-xs text-muted-foreground" data-testid="plan-seats">
+            per organization · {plan.includedSeats} seats included · ${plan.extraSeatUsd} per extra seat
+          </p>
+        )}
       </CardHeader>
 
       <CardContent className="flex-grow flex flex-col justify-between">
         <CardDescription className="text-center text-sm mb-4 h-10">
           {plan.description}
         </CardDescription>
+
+        {/* MON-6: included credits and the top-up rate as separate facts from the price. */}
+        <dl className="mb-4 space-y-1 text-sm">
+          <div className="flex items-center justify-between gap-2">
+            <dt className="text-muted-foreground">Included</dt>
+            <dd className="font-medium text-right" data-testid="plan-included-credits">{plan.includedCredits}</dd>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <dt className="text-muted-foreground">Top up</dt>
+            <dd className="font-medium text-right" data-testid="plan-topup-rate">{plan.topUpRate}</dd>
+          </div>
+        </dl>
 
         <div className="mt-auto">
           {getActionButton()}

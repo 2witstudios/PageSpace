@@ -68,6 +68,11 @@ export const users = pgTable('users', {
   // single write-through derivation and subscription-tier-reconcile.ts for the
   // periodic drift repair. Read call sites must coerce with toSubscriptionTier().
   subscriptionTier: text('subscriptionTier').default('free').notNull(),
+  // A-9: an existing $100-a-month PERSONAL Business subscriber, kept on
+  // Business entitlements at their current Stripe price after Business became
+  // the $50 organization plan. A flag, not a tier: subscriptionTier still says
+  // 'business'. Set once by scripts/migrate-founder-to-pro.ts; no new signups.
+  subscriptionGrandfathered: boolean('subscriptionGrandfathered').default(false).notNull(),
   tosAcceptedAt: timestamp('tosAcceptedAt', { mode: 'date' }),
   // Account lockout fields
   failedLoginAttempts: integer('failedLoginAttempts').default(0).notNull(),

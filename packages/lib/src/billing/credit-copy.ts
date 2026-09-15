@@ -65,6 +65,18 @@ export function creditsPhrase(tier: SubscriptionTier): string {
   return TIER_ALLOWANCE_REFILLS[tier] ? `${MONTHLY_CREDITS[tier]}/mo` : `${MONTHLY_CREDITS[tier]} to start`;
 }
 
+/**
+ * MON-6: the plan card's "included credits" fact — an integer credit COUNT, never a
+ * dollar figure. "1,500 credits included each month" for refilling paid tiers, "500
+ * credits to start" for the free tier's one-time grant. Sized by money-model, so the
+ * MONEY_MODEL_V2 ratio flips this copy with a rebuild, not a code change.
+ */
+export function includedCreditsPhrase(tier: SubscriptionTier): string {
+  return TIER_ALLOWANCE_REFILLS[tier]
+    ? `${MONTHLY_CREDITS[tier]} credits included each month`
+    : `${MONTHLY_CREDITS[tier]} credits to start`;
+}
+
 /** Buyable top-up packs, sorted by ascending credit count. */
 export const CREDIT_PACK_LIST: CreditPack[] = Object.values(CREDIT_PACKS).sort((a, b) => a.credits - b.credits);
 
@@ -76,4 +88,15 @@ export function creditPacksPhrase(): string {
   const packs = CREDIT_PACKS_DISPLAY;
   if (packs.length <= 1) return packs.join('');
   return `${packs.slice(0, -1).join(', ')}, or ${packs[packs.length - 1]}`;
+}
+
+/**
+ * MON-6 / MON-4: the plan card's "top-up rate" fact, from the smallest buyable pack
+ * ("1,000 credits per $10"): the credit figure is a count, the dollar figure a real
+ * purchase price and NO ratio is applied (unlike a subscription's included credits).
+ * The same on every card — the rate is a property of the money model, not of a tier.
+ */
+export function topUpRatePhrase(): string {
+  const smallest = CREDIT_PACK_LIST[0];
+  return `${formatCreditCount(centsFromCredits(smallest.credits))} credits per ${formatDollars(creditPackPriceCents(smallest))}`;
 }

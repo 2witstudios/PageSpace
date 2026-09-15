@@ -6,12 +6,19 @@ import {
   toSubscriptionTier,
   tierRank,
   formatTierBytes,
+  isOrgPlanTier,
+  personalTiers,
   type SubscriptionTier,
 } from '../subscription-tiers';
 
 describe('TIERS', () => {
-  it('lists the canonical vocabulary in ascending plan order (also the upgrade/downgrade ordering)', () => {
-    expect(TIERS).toEqual(['free', 'pro', 'founder', 'business']);
+  it('SEAT-2 lists Free, Pro, Business in ascending plan order (also the upgrade/downgrade ordering)', () => {
+    expect(TIERS).toEqual(['free', 'pro', 'business']);
+  });
+
+  it('A-9 no longer contains founder', () => {
+    expect((TIERS as readonly string[]).includes('founder')).toBe(false);
+    expect(isSubscriptionTier('founder')).toBe(false);
   });
 });
 
@@ -40,6 +47,7 @@ describe('toSubscriptionTier', () => {
 
   it('falls back to free for unknown, null, and undefined values', () => {
     expect(toSubscriptionTier('enterprise')).toBe('free');
+    expect(toSubscriptionTier('founder')).toBe('free');
     expect(toSubscriptionTier(null)).toBe('free');
     expect(toSubscriptionTier(undefined)).toBe('free');
   });
@@ -48,7 +56,7 @@ describe('toSubscriptionTier', () => {
 describe('tierRank', () => {
   it('ranks tiers strictly ascending in PLAN_ORDER order', () => {
     const ranks = TIERS.map((t) => tierRank(t));
-    expect(ranks).toEqual([0, 1, 2, 3]);
+    expect(ranks).toEqual([0, 1, 2]);
   });
 });
 
@@ -64,22 +72,34 @@ describe('TIER_PLAN_LIMITS', () => {
       name: 'Free', priceMonthlyUsd: 0, quotaBytes: 500 * MB, maxFileSize: 50 * MB,
       maxConcurrentUploads: 3, maxFileCount: 100, maxCustomDomains: 0,
       canChooseSubdomain: false, proModels: false,
+      isOrgPlan: false, includedSeats: 0, extraSeatUsd: 0,
     });
     expect(TIER_PLAN_LIMITS.pro).toMatchObject({
       name: 'Pro', priceMonthlyUsd: 15, quotaBytes: 2 * GB, maxFileSize: 250 * MB,
       maxConcurrentUploads: 5, maxFileCount: 500, maxCustomDomains: 1,
       canChooseSubdomain: true, proModels: true,
-    });
-    expect(TIER_PLAN_LIMITS.founder).toMatchObject({
-      name: 'Founder', priceMonthlyUsd: 50, quotaBytes: 10 * GB, maxFileSize: 500 * MB,
-      maxConcurrentUploads: 5, maxFileCount: 500, maxCustomDomains: 3,
-      canChooseSubdomain: true, proModels: true,
+      isOrgPlan: false, includedSeats: 0, extraSeatUsd: 0,
     });
     expect(TIER_PLAN_LIMITS.business).toMatchObject({
-      name: 'Business', priceMonthlyUsd: 100, quotaBytes: 50 * GB, maxFileSize: 1 * GB,
+      name: 'Business', priceMonthlyUsd: 50, quotaBytes: 50 * GB, maxFileSize: 1 * GB,
       maxConcurrentUploads: 10, maxFileCount: 5000, maxCustomDomains: 10,
       canChooseSubdomain: true, proModels: true,
     });
+  });
+
+  it('SEAT-2 Business is the org plan: $50 a month, 5 seats included, $10 per extra seat', () => {
+    expect(TIER_PLAN_LIMITS.business).toMatchObject({
+      priceMonthlyUsd: 50, isOrgPlan: true, includedSeats: 5, extraSeatUsd: 10,
+    });
+    expect(isOrgPlanTier('business')).toBe(true);
+    expect(isOrgPlanTier('pro')).toBe(false);
+    expect(isOrgPlanTier('free')).toBe(false);
+  });
+
+  it('SEAT-2 an org plan is not offered to a lone user; a grandfathered Business user still sees their own plan', () => {
+    expect(personalTiers()).toEqual(['free', 'pro']);
+    expect(personalTiers('free')).toEqual(['free', 'pro']);
+    expect(personalTiers('business')).toEqual(['free', 'pro', 'business']);
   });
 
   it('limits grow monotonically with tier rank', () => {

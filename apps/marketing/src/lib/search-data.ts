@@ -223,7 +223,7 @@ const faqEntries: SearchEntry[] = [
 const pageEntries: SearchEntry[] = [
   {
     title: "Pricing",
-    description: "Compare Free, Pro, Founder, and Business plans.",
+    description: "Compare Free, Pro, and Business plans.",
     href: "/pricing",
     category: "Pages",
     keywords: "plans cost billing subscription",

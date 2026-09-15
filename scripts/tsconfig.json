@@ -38,6 +38,8 @@
     "lib/seed-audit/**/*.ts",
     "__tests__/collab-seed-audit*.test.ts",
     "check-spec-coverage.ts",
-    "__tests__/check-spec-coverage.test.ts"
+    "__tests__/check-spec-coverage.test.ts",
+    "migrate-founder-to-pro.ts",
+    "__tests__/migrate-founder-to-pro.test.ts"
   ]
 }

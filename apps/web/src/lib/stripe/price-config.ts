@@ -9,8 +9,12 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 export const STRIPE_PRICE_TO_TIER: Record<string, SubscriptionTier> = {
   // Current prices
   [stripeConfig.priceIds.pro]: 'pro',
-  [stripeConfig.priceIds.founder]: 'founder',
   [stripeConfig.priceIds.business]: 'business',
+  // Grandfathered prices (A-9): no longer sold, still resolve for the
+  // subscribers on them. The removed Founder tier maps to its migration
+  // target, Pro; the subscription itself moves at period end via
+  // scripts/migrate-founder-to-pro.ts.
+  [stripeConfig.grandfatheredPriceIds.founder]: 'pro',
 };
 
 /**
@@ -20,8 +24,8 @@ export const STRIPE_PRICE_TO_TIER: Record<string, SubscriptionTier> = {
 export const LEGACY_PRICE_AMOUNTS: Record<number, SubscriptionTier> = {
   1500: 'pro',      // $15 - current Pro
   2999: 'pro',      // $29.99 - legacy Pro
-  5000: 'founder',  // $50 - current Founder
-  10000: 'business', // $100 - current Business
+  5000: 'business', // $50 - Business, the org plan (SEAT-2); the removed Founder price is matched by id above
+  10000: 'business', // $100 - legacy personal Business (grandfathered, A-9)
   19999: 'business', // $199.99 - legacy Business
 };
 

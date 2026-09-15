@@ -53,6 +53,7 @@ const mockUser: User = {
   lastStorageCalculated: null,
   stripeCustomerId: null,
   subscriptionTier: 'free',
+  subscriptionGrandfathered: false,
   tosAcceptedAt: null,
   failedLoginAttempts: 0,
   lockedUntil: null,

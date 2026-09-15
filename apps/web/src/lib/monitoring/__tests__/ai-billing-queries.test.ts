@@ -286,7 +286,7 @@ describe('getActiveSubscriptionsByTier', () => {
     );
     const rows = await getActiveSubscriptionsByTier();
     const byTier = Object.fromEntries(rows.map((r) => [r.tier, r.count]));
-    expect(byTier).toEqual({ free: 0, pro: 2, founder: 0, business: 1 });
+    expect(byTier).toEqual({ free: 0, pro: 2, business: 1 });
     expect(mockEq).toHaveBeenCalledWith('SUB_STATUS', 'active');
   });
 });

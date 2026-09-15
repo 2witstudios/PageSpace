@@ -19,7 +19,7 @@ import { publishedApps } from './published-apps';
  *
  *   1. The Stripe webhook derives from the SINGLE row in the event it just
  *      received. A hosting subscription's `customer.subscription.created` would
- *      therefore derive `free` and write it straight over a Pro / Founder /
+ *      therefore derive `free` and write it straight over a Pro /
  *      Business customer's tier — a paying user demoted by buying more.
  *   2. The reconcile cron would then see `indeterminate: true` (an entitled row
  *      on an unmapped price) for that user forever, and `isTierDriftRepairable`

@@ -18,13 +18,13 @@ describe('buildAudienceDefinition', () => {
   it('includes only the fields the admin actually set', () => {
     const def = buildAudienceDefinition({
       includeUnverified: true,
-      planTiers: ['pro', 'founder'],
+      planTiers: ['pro', 'business'],
       signupAfter: '2026-01-01',
       signupBefore: '',
       userIds: ['u1'],
     });
     expect(def.includeUnverified).toBe(true);
-    expect(def.planTiers).toEqual(['pro', 'founder']);
+    expect(def.planTiers).toEqual(['pro', 'business']);
     expect(def.signupAfter).toBe('2026-01-01T00:00:00.000Z');
     expect(def.signupBefore).toBeUndefined();
     expect(def.userIds).toEqual(['u1']);
