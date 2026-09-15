@@ -70,6 +70,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { toErrorCause } from '@/lib/ai/shared/toErrorCause';
 import { askUserAnswersComplete } from '@/lib/ai/shared/ask-user-client';
+import { toolApprovalsComplete } from '@/lib/ai/shared/approval-client';
 import { readLegacyStreamStart } from '@/lib/ai/core/legacy-stream-start';
 import { readInlineReply } from '@/lib/ai/core/inline-reply';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
@@ -157,6 +158,22 @@ export interface UseChatSessionResult {
     conversationId: string;
     options?: ChatSessionSendOptions;
   }) => Promise<{ dispatched: boolean }>;
+  /**
+   * Record the user's answer to a paused tool call (the AI SDK's `needsApproval`
+   * pause) and, once every pending approval on the turn is answered, resume.
+   * Same `dispatched` contract as `addToolResult`. `scope` rides the request body
+   * as `toolApprovalScopes` so the server can write the standing grant the user
+   * asked for alongside "allow".
+   */
+  addToolApprovalResponse: (args: {
+    toolCallId: string;
+    approvalId: string;
+    approved: boolean;
+    reason?: string;
+    scope?: 'once' | 'conversation' | 'always';
+    conversationId: string;
+    options?: ChatSessionSendOptions;
+  }) => Promise<{ dispatched: boolean }>;
   /** The current conversation's send state. */
   status: ChatSessionStatus;
   /** The current conversation's send error. */
@@ -176,10 +193,9 @@ interface SendState {
  * the persisted assistant row), at which point the patch is redundant and composing it again
  * would be a no-op anyway. Keyed by toolCallId because that is what identifies the part.
  */
-interface ToolPatch {
-  toolCallId: string;
-  output: unknown;
-}
+type ToolPatch =
+  | { kind: 'output'; toolCallId: string; output: unknown }
+  | { kind: 'approval'; toolCallId: string; approval: { id: string; approved: boolean; reason?: string } };
 
 export const useChatSession = ({
   api,
@@ -191,6 +207,8 @@ export const useChatSession = ({
 }: UseChatSessionOptions): UseChatSessionResult => {
   const [sends, setSends] = useState<Record<string, SendState>>({});
   const patchesRef = useRef<ToolPatch[]>([]);
+  /** approvalId → scope, for the approvals patched but not yet dispatched. */
+  const approvalScopesRef = useRef<Record<string, 'once' | 'conversation' | 'always'>>({});
 
   // Read inside async continuations, so refs — see `getBaseMessages`'s docblock for why a
   // captured value is the stale-copy bug rather than a style preference.
@@ -215,12 +233,20 @@ export const useChatSession = ({
       if (message.role !== 'assistant') return message;
       let changed = false;
       const parts = message.parts.map((part) => {
-        if (part.type !== `tool-${ASK_USER_TOOL_NAME}`) return part;
+        if (!part.type.startsWith('tool-')) return part;
         const toolCallId = (part as { toolCallId?: unknown }).toolCallId;
         const patch = patches.find((candidate) => candidate.toolCallId === toolCallId);
         if (!patch) return part;
+        if (patch.kind === 'output') {
+          // Only ask_user carries a CLIENT-produced output; never overwrite a real tool's.
+          if (part.type !== `tool-${ASK_USER_TOOL_NAME}`) return part;
+          changed = true;
+          return { ...part, state: 'output-available', output: patch.output };
+        }
+        // An approval answer applies to any paused tool part.
+        if ((part as { state?: string }).state !== 'approval-requested') return part;
         changed = true;
-        return { ...part, state: 'output-available', output: patch.output };
+        return { ...part, state: 'approval-responded', approval: patch.approval };
       });
       return changed ? { ...message, parts } : message;
     }) as UIMessage[];
@@ -381,6 +407,7 @@ export const useChatSession = ({
       // answers into the persisted row by now, and carrying them forward would re-apply them
       // over whatever the reload returns.
       patchesRef.current = [];
+      approvalScopesRef.current = {};
       const outbound = [...getBaseMessagesRef.current(targetConversationId), message];
       await dispatch(targetConversationId, { ...(options?.body ?? {}) }, outbound);
     },
@@ -416,7 +443,7 @@ export const useChatSession = ({
     }): Promise<{ dispatched: boolean }> => {
       patchesRef.current = [
         ...patchesRef.current.filter((patch) => patch.toolCallId !== toolCallId),
-        { toolCallId, output },
+        { kind: 'output', toolCallId, output },
       ];
 
       const patched = composeMessages(targetConversationId);
@@ -433,6 +460,50 @@ export const useChatSession = ({
     [composeMessages, dispatch],
   );
 
+  const addToolApprovalResponse = useCallback(
+    async ({
+      toolCallId,
+      approvalId,
+      approved,
+      reason,
+      scope,
+      conversationId: targetConversationId,
+      options,
+    }: {
+      toolCallId: string;
+      approvalId: string;
+      approved: boolean;
+      reason?: string;
+      scope?: 'once' | 'conversation' | 'always';
+      conversationId: string;
+      options?: ChatSessionSendOptions;
+    }): Promise<{ dispatched: boolean }> => {
+      patchesRef.current = [
+        ...patchesRef.current.filter((patch) => patch.toolCallId !== toolCallId),
+        { kind: 'approval', toolCallId, approval: { id: approvalId, approved, ...(reason ? { reason } : {}) } },
+      ];
+      if (approved && scope && scope !== 'once') {
+        approvalScopesRef.current = { ...approvalScopesRef.current, [approvalId]: scope };
+      }
+
+      const patched = composeMessages(targetConversationId);
+
+      // Resume ONLY once every paused call on the last assistant message is answered — the
+      // approval twin of the ask_user rule above.
+      if (!toolApprovalsComplete({ messages: patched })) return { dispatched: false };
+
+      const toolApprovalScopes = approvalScopesRef.current;
+      approvalScopesRef.current = {};
+      await dispatch(
+        targetConversationId,
+        { ...(options?.body ?? {}), ...(Object.keys(toolApprovalScopes).length > 0 ? { toolApprovalScopes } : {}) },
+        patched,
+      );
+      return { dispatched: true };
+    },
+    [composeMessages, dispatch],
+  );
+
   const currentSend = conversationId ? sends[conversationId] : undefined;
 
   const clearError = useCallback(() => {
@@ -444,6 +515,7 @@ export const useChatSession = ({
     sendMessage,
     regenerate,
     addToolResult,
+    addToolApprovalResponse,
     status: currentSend?.status ?? 'ready',
     error: currentSend?.error,
     clearError,

@@ -39,6 +39,16 @@ export interface UseDualModeChatReturn {
     conversationId: string;
     options?: { body?: Record<string, unknown> };
   }) => Promise<{ dispatched: boolean }>;
+  /** Answer a paused (needsApproval) tool call — mode-selected, same `dispatched` contract. */
+  addToolApprovalResponse: (args: {
+    toolCallId: string;
+    approvalId: string;
+    approved: boolean;
+    reason?: string;
+    scope?: 'once' | 'conversation' | 'always';
+    conversationId: string;
+    options?: { body?: Record<string, unknown> };
+  }) => Promise<{ dispatched: boolean }>;
 }
 
 /** One mode's binding. Both modes take the same shape; only their endpoint and ids differ. */
@@ -162,6 +172,19 @@ export function useDualModeChat({
     [],
   );
 
+  const addToolApprovalResponse = useCallback(
+    (args: {
+      toolCallId: string;
+      approvalId: string;
+      approved: boolean;
+      reason?: string;
+      scope?: 'once' | 'conversation' | 'always';
+      conversationId: string;
+      options?: { body?: Record<string, unknown> };
+    }) => active().addToolApprovalResponse(args),
+    [],
+  );
+
   const clearError = useCallback(() => active().clearError(), []);
 
   const status = selectedAgent ? agentChat.status : globalChat.status;
@@ -175,6 +198,7 @@ export function useDualModeChat({
       clearError,
       regenerate,
       addToolResult,
+      addToolApprovalResponse,
       globalStatus: globalChat.status,
       agentStatus: agentChat.status,
     }),
@@ -185,6 +209,7 @@ export function useDualModeChat({
       clearError,
       regenerate,
       addToolResult,
+      addToolApprovalResponse,
       globalChat.status,
       agentChat.status,
     ],

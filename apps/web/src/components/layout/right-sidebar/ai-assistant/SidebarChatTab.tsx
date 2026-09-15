@@ -46,6 +46,8 @@ import { createId } from '@paralleldrive/cuid2';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useSendHandoff, useCacheMessageActions, useResumeBootstrap, useAnswerAskUser, useChatErrorCause, buildGlobalChatRequestBody } from '@/lib/ai/shared';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
+import { ToolApprovalProvider } from '@/components/ai/shared/chat/approvals/ToolApprovalContext';
+import { useRespondToApproval } from '@/lib/ai/shared/hooks/useRespondToApproval';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { VoiceCallBarForConversation } from '@/components/ai/voice/realtime';
 import { useVoiceRebindStore } from '@/stores/useVoiceRebindStore';
@@ -285,6 +287,7 @@ const SidebarChatTab: React.FC = () => {
     clearError,
     regenerate,
     addToolResult,
+    addToolApprovalResponse,
   } = useDualModeChat({
     selectedAgent,
     triggeredBy: sendIdentity,
@@ -742,6 +745,20 @@ const SidebarChatTab: React.FC = () => {
     ),
   });
 
+  // The approval twin, on the same answerability inputs.
+  const toolApprovals = useRespondToApproval({
+    conversationId: currentConversationId,
+    renderedMessages,
+    isConversationBusy: displayIsStreaming,
+    addToolApprovalResponse,
+    wrapSend,
+    releasePendingSend,
+    buildBody: useCallback(
+      () => buildSidebarChatRequestBody(buildFreshContextRef(), !writeMode),
+      [buildSidebarChatRequestBody, buildFreshContextRef, writeMode],
+    ),
+  });
+
   // NO heldStreamMsgIdRef (PR 5A): the stream's assistant messageId was latched here on the
   // first 'streaming' render and held so Stop could name it after the surface moved on. The store
   // entry already holds exactly that, written once at stream_start — `activeStream.messageId`.
@@ -858,6 +875,7 @@ const SidebarChatTab: React.FC = () => {
 
   return (
     <AskUserAnswerProvider value={askUserAnswering}>
+    <ToolApprovalProvider value={toolApprovals}>
     <div data-testid="sidebar-chat-tab" className="flex flex-col h-full">
       {/* Header */}
       <div className="flex flex-col border-b border-gray-200 dark:border-[var(--separator)] bg-card">
@@ -1017,6 +1035,7 @@ const SidebarChatTab: React.FC = () => {
         onSuccess={handleUndoSuccess}
       />
     </div>
+    </ToolApprovalProvider>
     </AskUserAnswerProvider>
   );
 };

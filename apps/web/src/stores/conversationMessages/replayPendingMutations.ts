@@ -2,6 +2,7 @@ import type { UIMessage } from 'ai';
 import { applyMessageEdit } from '@/lib/ai/streams/applyMessageEdit';
 import { applyMessageDelete } from '@/lib/ai/streams/applyMessageDelete';
 import { applyAskUserAnswer } from '@/lib/ai/streams/applyAskUserAnswer';
+import { applyToolApprovalResponse } from '@/lib/ai/streams/applyToolApprovalResponse';
 import type { PendingMutation } from './seedEmpty';
 import { UNVERSIONED_REV } from '@/lib/realtime/conversation-apply';
 
@@ -78,6 +79,9 @@ export const replayPendingMutations = (
     }
     if (mutation.type === 'askUserAnswer') {
       return applyAskUserAnswer(acc, mutation.payload);
+    }
+    if (mutation.type === 'toolApprovalResponse') {
+      return applyToolApprovalResponse(acc, mutation.payload);
     }
     return applyMessageDelete(acc, mutation.messageId);
   }, messages);
