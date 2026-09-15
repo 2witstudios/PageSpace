@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // MACHINE_MARKUP_BPS is computed at module-import time from an env var, so
 // each test re-imports the module with different env conditions (same
@@ -7,6 +7,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 describe('MACHINE_MARKUP_BPS floor clamp', () => {
   beforeEach(() => {
     vi.resetModules();
+    delete process.env.MACHINE_MARKUP_BPS;
+    delete process.env.CREDIT_MARKUP_BPS;
+  });
+
+  // lib vitest runs files sequentially in ONE forked process (pool: 'forks',
+  // fileParallelism: false), so process.env leaks into the next file. The
+  // last test here leaves CREDIT_MARKUP_BPS='5000' set; chat-pricing.ts reads
+  // MARKUP_BPS at import and its test then sees 5 instead of 15.
+  afterEach(() => {
     delete process.env.MACHINE_MARKUP_BPS;
     delete process.env.CREDIT_MARKUP_BPS;
   });
@@ -57,6 +66,10 @@ describe('realtime session constants', () => {
 
   beforeEach(() => {
     vi.resetModules();
+    for (const key of KEYS) delete process.env[key];
+  });
+
+  afterEach(() => {
     for (const key of KEYS) delete process.env[key];
   });
 
