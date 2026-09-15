@@ -17,8 +17,6 @@ import type { UIMessage } from 'ai';
  * both.
  */
 
-export type ApprovalToolPartState = 'approval-requested' | 'approval-responded';
-
 interface ApprovalCarryingPart {
   type: string;
   toolCallId?: string;
