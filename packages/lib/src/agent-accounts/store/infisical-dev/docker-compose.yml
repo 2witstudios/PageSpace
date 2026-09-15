@@ -27,7 +27,9 @@ services:
       - infisical-dev
 
   redis:
-    image: redis:7-alpine
+    # Pinned, not the floating 7-alpine tag (verified same digest as 7-alpine at pin time —
+    # sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf).
+    image: redis:7.4.11-alpine
     container_name: infisical-dev-redis
     restart: unless-stopped
     environment:
@@ -76,6 +78,10 @@ services:
       - infisical-dev
     volumes:
       - infisical_dev_metadata_data:/var/lib/postgresql/data
+      # postgres's official image runs every *.sql file here, in order, against POSTGRES_DB
+      # on first init (only — an existing data dir is left alone). ONE owner for this DDL
+      # (Control Board §1): plane-metadata.sql; nothing else pastes it.
+      - ./plane-metadata.sql:/docker-entrypoint-initdb.d/plane-metadata.sql:ro
     healthcheck:
       test: "pg_isready --username=plane_metadata"
       interval: 5s

@@ -244,21 +244,15 @@ jobs:
             docker compose logs
             exit 1
           }
-          docker exec -i infisical-dev-metadata psql -U plane_metadata -d plane_metadata <<'SQL'
-          CREATE TABLE IF NOT EXISTS agent_account_secret_versions (
-            tenant_id text NOT NULL,
-            account_id text NOT NULL,
-            kind text NOT NULL,
-            current_version integer NOT NULL,
-            previous_version integer,
-            bindings jsonb NOT NULL,
-            rotated_at timestamptz,
-            revoked_at timestamptz,
-            revoke_reason text,
-            created_at timestamptz NOT NULL DEFAULT now(),
-            PRIMARY KEY (tenant_id, account_id, kind)
-          );
-          SQL
+          # plane-metadata.sql (the ONE owner of this DDL, Control Board §1) is mounted into
+          # the metadata service's /docker-entrypoint-initdb.d/, so postgres's own entrypoint
+          # already ran it against a fresh volume above — this just confirms that happened
+          # rather than assuming it silently.
+          docker exec -i infisical-dev-metadata psql -U plane_metadata -d plane_metadata -c \
+            "SELECT 1 FROM agent_account_secret_versions LIMIT 0" || {
+            echo "::error::agent_account_secret_versions was not created by plane-metadata.sql's initdb mount"
+            exit 1
+          }
 
       - name: Bootstrap Infisical dev admin (CI-only, throwaway instance)
         run: |

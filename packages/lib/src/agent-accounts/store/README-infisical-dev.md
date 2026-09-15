@@ -41,25 +41,19 @@ docker compose up -d
 
 Wait for the backend to report healthy (`docker logs infisical-dev-backend`
 should show "PostgreSQL - Connected successfully" / "Redis successfully
-connected" and start serving on :8080), then create the metadata table once:
+connected" and start serving on :8080). The metadata table needs no separate
+step: `plane-metadata.sql` (the one owner of this DDL — Control Board §1;
+`plane-metadata-repository.ts` is the other side of the same contract) is
+mounted into the `metadata` service's `/docker-entrypoint-initdb.d/`, so
+postgres's own entrypoint creates it automatically the first time that
+service's volume is initialized. To confirm it landed:
 
 ```bash
-docker exec -i infisical-dev-metadata psql -U plane_metadata -d plane_metadata <<'SQL'
-CREATE TABLE IF NOT EXISTS agent_account_secret_versions (
-  tenant_id text NOT NULL,
-  account_id text NOT NULL,
-  kind text NOT NULL,
-  current_version integer NOT NULL,
-  previous_version integer,
-  bindings jsonb NOT NULL,
-  rotated_at timestamptz,
-  revoked_at timestamptz,
-  revoke_reason text,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (tenant_id, account_id, kind)
-);
-SQL
+docker exec -i infisical-dev-metadata psql -U plane_metadata -d plane_metadata -c '\d agent_account_secret_versions'
 ```
+
+If you ever need to re-run the DDL by hand (e.g. against a volume that
+predates this file), it is plain SQL — `psql ... < plane-metadata.sql`.
 
 ## Admin bootstrap (once per fresh instance)
 
@@ -100,8 +94,12 @@ skipping when `INFISICAL_DEV_ADMIN_TOKEN` is unset — set
 
 ## What CI needs to replicate this
 
-1. `docker compose -f packages/lib/src/agent-accounts/store/infisical-dev/docker-compose.yml up -d` and wait for the backend health check.
-2. Create the `agent_account_secret_versions` table (above) — a one-time `psql` step, not a Drizzle migration (this table lives in the plane's own metadata DB, not `packages/db`'s schema).
-3. Run the bootstrap curl above once per fresh run, capture `INFISICAL_DEV_ADMIN_TOKEN` / `INFISICAL_DEV_ORG_ID` as job env vars.
-4. Run the integration test as shown above.
-5. `docker compose down -v` to tear down (frees the CI runner's disk for the next job).
+See `.github/workflows/ci.yml`'s "Bring up local Infisical OSS" /
+"Bootstrap Infisical dev admin" / "Run Infisical store adapter integration
+suite" / "Tear down local Infisical OSS" steps for the actual implementation
+(part of the `unit-tests` job). In outline:
+
+1. `docker compose -f packages/lib/src/agent-accounts/store/infisical-dev/docker-compose.yml up -d` and wait for the backend health check — `plane-metadata.sql`'s `/docker-entrypoint-initdb.d/` mount creates the metadata table automatically, no separate step.
+2. Run the bootstrap curl above once per fresh run, capture `INFISICAL_DEV_ADMIN_TOKEN` / `INFISICAL_DEV_ORG_ID` as job env vars.
+3. Run the integration test as shown above — CI runs it with `--reporter=json` and fails the step if the suite didn't fully execute (not just if it failed), so a broken bring-up can't silently report as skipped.
+4. `docker compose down -v` to tear down (frees the CI runner's disk for the next job).
