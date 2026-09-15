@@ -156,13 +156,13 @@ describe('runAgentWithRetry', () => {
   });
 
   it('a needsApproval pause (tool-approval-request on the response) is terminal awaiting-user-input: one attempt, one envelope, no error part', async () => {
-    const paused: ModelMessage = {
+    const paused = {
       role: 'assistant',
       content: [
         { type: 'tool-call', toolCallId: 'c1', toolName: 'trash_page', input: {} },
         { type: 'tool-approval-request', approvalId: 'ap1', toolCallId: 'c1' },
-      ] as unknown as Exclude<ModelMessage['content'], string>,
-    };
+      ],
+    } as unknown as ModelMessage;
     const { result, chunks } = await run([{ finishReason: 'tool-calls', responseMessages: [paused] }]);
     assert({
       given: 'a first attempt that paused for tool approval',

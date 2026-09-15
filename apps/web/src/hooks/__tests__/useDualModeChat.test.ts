@@ -21,6 +21,7 @@ import type { AgentInfo } from '@/types/agent';
 const globalSession = {
   sendMessage: vi.fn(async () => {}),
   regenerate: vi.fn(async () => {}),
+  addToolApprovalResponse: vi.fn().mockResolvedValue({ dispatched: true }),
   addToolResult: vi.fn(async () => ({ dispatched: true })),
   clearError: vi.fn(),
   status: 'ready' as const,
@@ -29,6 +30,7 @@ const globalSession = {
 const agentSession = {
   sendMessage: vi.fn(async () => {}),
   regenerate: vi.fn(async () => {}),
+  addToolApprovalResponse: vi.fn().mockResolvedValue({ dispatched: true }),
   addToolResult: vi.fn(async () => ({ dispatched: true })),
   clearError: vi.fn(),
   status: 'ready' as const,

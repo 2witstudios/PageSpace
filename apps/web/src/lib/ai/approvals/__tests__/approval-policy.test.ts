@@ -238,7 +238,7 @@ describe('applyApprovalPolicy', () => {
     execute_tool: mk({ inputSchema: z.object({ tool_name: z.string(), parameters: z.record(z.string(), z.unknown()) }) }),
     ask_user: { description: 'pause', inputSchema: schema },
     mcp__srv__do_thing: mk(),
-    provider_thing: mk({ type: 'provider' } as Partial<Tool>),
+    provider_thing: { ...mk(), type: 'provider' } as unknown as Tool,
   };
 
   it('returns the very same set in auto mode and in a non-interactive turn', () => {

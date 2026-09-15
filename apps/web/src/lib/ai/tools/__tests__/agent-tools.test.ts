@@ -152,7 +152,7 @@ describe('agent-tools', () => {
         includePageTree: false,
         pageTreeScope: null,
         sandboxEnabled: false,
-        toolExposureMode: 'upfront' as const,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -196,7 +196,7 @@ describe('agent-tools', () => {
         includePageTree: false,
         pageTreeScope: null,
         sandboxEnabled: false,
-        toolExposureMode: 'upfront' as const,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -242,7 +242,7 @@ describe('agent-tools', () => {
         includePageTree: false,
         pageTreeScope: null,
         sandboxEnabled: false,
-        toolExposureMode: 'upfront' as const,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const,
         userScopedAccess: false,
         revision: 2,
       };
@@ -309,7 +309,7 @@ describe('agent-tools', () => {
         systemPrompt: null, enabledTools: ['read_page'], aiProvider: null, aiModel: null,
         agentDefinition: null, visibleToGlobalAssistant: false, includeDrivePrompt: false,
         includePageTree: false, pageTreeScope: null, sandboxEnabled: false,
-        toolExposureMode: 'upfront' as const, userScopedAccess: false, revision: 2,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const, userScopedAccess: false, revision: 2,
       };
       mockAgentRepository.findById
         .mockResolvedValueOnce(mockAgent)
@@ -334,7 +334,7 @@ describe('agent-tools', () => {
         systemPrompt: null, enabledTools: [] as string[], aiProvider: null, aiModel: null,
         agentDefinition: null, visibleToGlobalAssistant: false, includeDrivePrompt: false,
         includePageTree: false, pageTreeScope: null, sandboxEnabled: false,
-        toolExposureMode: 'upfront' as const, userScopedAccess: false, revision: 2,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const, userScopedAccess: false, revision: 2,
       };
       mockAgentRepository.findById
         .mockResolvedValueOnce(mockAgent)
@@ -357,7 +357,7 @@ describe('agent-tools', () => {
         systemPrompt: 'Old prompt', enabledTools: ['read_page'], aiProvider: null, aiModel: null,
         agentDefinition: null, visibleToGlobalAssistant: false, includeDrivePrompt: false,
         includePageTree: false, pageTreeScope: null, sandboxEnabled: false,
-        toolExposureMode: 'upfront' as const, userScopedAccess: false, revision: 2,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const, userScopedAccess: false, revision: 2,
       };
       mockAgentRepository.findById
         .mockResolvedValueOnce(mockAgent)
@@ -390,7 +390,7 @@ describe('agent-tools', () => {
         includePageTree: false,
         pageTreeScope: null,
         sandboxEnabled: false,
-        toolExposureMode: 'upfront' as const,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const,
         userScopedAccess: false,
         revision: 3,
       };
@@ -460,7 +460,7 @@ describe('agent-tools', () => {
         includePageTree: false,
         pageTreeScope: null,
         sandboxEnabled: false,
-        toolExposureMode: 'upfront' as const,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -505,7 +505,7 @@ describe('agent-tools', () => {
         includePageTree: false,
         pageTreeScope: null,
         sandboxEnabled: false,
-        toolExposureMode: 'upfront' as const,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -543,7 +543,7 @@ describe('agent-tools', () => {
         includePageTree: false,
         pageTreeScope: null,
         sandboxEnabled: false,
-        toolExposureMode: 'upfront' as const,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -581,7 +581,7 @@ describe('agent-tools', () => {
         includePageTree: false,
         pageTreeScope: null,
         sandboxEnabled: false,
-        toolExposureMode: 'upfront' as const,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -633,7 +633,7 @@ describe('agent-tools', () => {
         includePageTree: false,
         pageTreeScope: null,
         sandboxEnabled: false,
-        toolExposureMode: 'upfront' as const,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const,
         userScopedAccess: false,
         revision: 4,
       };
@@ -700,7 +700,7 @@ describe('agent-tools', () => {
         includePageTree: false,
         pageTreeScope: null,
         sandboxEnabled: false,
-        toolExposureMode: 'upfront' as const,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -741,7 +741,7 @@ describe('agent-tools', () => {
         includePageTree: false,
         pageTreeScope: null,
         sandboxEnabled: false,
-        toolExposureMode: 'upfront' as const,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -925,7 +925,7 @@ describe('agent-tools', () => {
         includePageTree: false,
         pageTreeScope: null,
         sandboxEnabled: false,
-        toolExposureMode: 'upfront' as const,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const,
         userScopedAccess: false,
         revision: 1,
       };
@@ -968,7 +968,7 @@ describe('agent-tools', () => {
         includePageTree: false,
         pageTreeScope: null,
         sandboxEnabled: false,
-        toolExposureMode: 'upfront' as const,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const,
         userScopedAccess: false,
         revision: 1,
       };

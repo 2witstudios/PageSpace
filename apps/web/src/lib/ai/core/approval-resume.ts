@@ -287,9 +287,9 @@ async function recordApprovedToolOutcome(
   const fetched = await adapter.fetchById(args.messageId);
   if (!fetched) return { recorded: false, message: null };
 
-  const part = fetched.message.parts.find(
-    (candidate): candidate is ApprovalToolPart => isToolPart(candidate) && candidate.toolCallId === args.toolCallId,
-  );
+  const part = (fetched.message.parts as Array<{ type: string }>).find(
+    (candidate) => isToolPart(candidate) && candidate.toolCallId === args.toolCallId,
+  ) as ApprovalToolPart | undefined;
   if (!part || part.state !== 'approval-responded') return { recorded: false, message: fetched };
 
   const next: ApprovalToolPart = args.outcome.ok
