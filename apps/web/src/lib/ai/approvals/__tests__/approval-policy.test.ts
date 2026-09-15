@@ -231,7 +231,7 @@ describe('isToolApprovalMode', () => {
 describe('applyApprovalPolicy', () => {
   const exec = async () => ({ ok: true });
   const schema = z.object({});
-  const mk = (over: Partial<Tool> = {}): Tool => ({ description: 'd', inputSchema: schema, execute: exec, ...over });
+  const mk = (over: Partial<Tool> = {}): Tool => ({ description: 'd', inputSchema: schema, execute: exec, ...over }) as unknown as Tool;
   const tools: ToolSet = {
     read_page: mk(),
     trash_page: mk(),

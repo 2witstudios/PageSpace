@@ -137,6 +137,7 @@ const mockAgent = (overrides: Partial<{
   aiProvider: string | null;
   aiModel: string | null;
   toolExposureMode: 'upfront' | 'search' | null;
+  toolApprovalMode: 'ask' | 'auto' | null;
   sandboxEnabled: boolean;
   defaultEnvId: string | null;
   isTrashed: boolean;
@@ -151,6 +152,7 @@ const mockAgent = (overrides: Partial<{
   aiProvider: overrides.aiProvider ?? 'openrouter',
   aiModel: overrides.aiModel ?? 'claude-3-opus',
   toolExposureMode: overrides.toolExposureMode ?? 'upfront',
+  toolApprovalMode: overrides.toolApprovalMode ?? 'ask',
   sandboxEnabled: overrides.sandboxEnabled ?? false,
   defaultEnvId: overrides.defaultEnvId ?? null,
   isTrashed: overrides.isTrashed ?? false,

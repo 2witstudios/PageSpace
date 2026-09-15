@@ -797,6 +797,7 @@ describe('agent-tools', () => {
         pageTreeScope: null,
         sandboxEnabled: false,
         toolExposureMode: 'upfront' as 'upfront' | 'search',
+        toolApprovalMode: 'ask' as 'ask' | 'auto',
         userScopedAccess: false,
         revision: 1,
         ...over,
@@ -879,6 +880,7 @@ describe('agent-tools', () => {
             agentFixture({
               enabledTools: ['read_page', 'list_drives'],
               toolExposureMode: 'search',
+              toolApprovalMode: 'ask' as const,
             })
           );
         mockCanUserEditPage.mockResolvedValue(true);
@@ -900,6 +902,7 @@ describe('agent-tools', () => {
             // deferral is reported as its own thing and never as a block.
             toolsReachedBySearch: [],
             toolExposureMode: 'search',
+            toolApprovalMode: 'ask' as const,
           },
         });
       });

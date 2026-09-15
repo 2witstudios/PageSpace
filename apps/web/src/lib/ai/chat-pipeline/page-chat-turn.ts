@@ -1747,7 +1747,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // Timer marks are first-wins, so the approval re-assembly's second call
     // leaves the turn's timings untouched.
     const loadConversationHistory = async (): Promise<UIMessage[]> => {
-      const dbMessages = await messageRepository.getPageConversationMessages(pageId, conversationId);
+      const dbMessages = await messageRepository.getPageConversationMessages(pageId, conversationId!);
       turnTimer.mark('history_loaded');
       const converted = await Promise.all(dbMessages.map(msg =>
       convertDbMessageToUIMessage({
