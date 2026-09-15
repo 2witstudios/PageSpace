@@ -11,9 +11,10 @@ Jono; this compose file never runs there).
 
 `docker-compose.yml` brings up three images:
 
-- `infisical/infisical:latest` — the backend (pin to an exact tag before this
-  becomes a CI fixture people rely on long-term; `latest` is fine for local
-  iteration).
+- `infisical/infisical:v0.165.10` — the backend, pinned (this is a CI fixture
+  now — see `.github/workflows/ci.yml`'s "Run Infisical store adapter
+  integration suite" step). Bump deliberately, not by a surprise `:latest`
+  re-pull.
 - `postgres:14-alpine` — Infisical's own database (`db` service).
 - `redis:7-alpine` — Infisical's cache/queue.
 

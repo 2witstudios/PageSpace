@@ -14,7 +14,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-    image: infisical/infisical:latest
+    # Pinned, not :latest (verified same digest as :latest at the time this was pinned —
+    # sha256:204bd63c7a281d9157752ce0bf8d506e7380cac5a0665324eeab8d580b069266). CI needs a
+    # reproducible bring-up; bump deliberately, not by surprise on a re-pull.
+    image: infisical/infisical:v0.165.10
     env_file: env.dev-fixture
     ports:
       - "8080:8080"
