@@ -233,6 +233,61 @@
       "import": "./dist/agent-accounts/replay-store-repository.js",
       "require": "./dist/agent-accounts/replay-store-repository.js"
     },
+    "./agent-accounts/grant-constants": {
+      "types": "./dist/agent-accounts/grant-constants.d.ts",
+      "import": "./dist/agent-accounts/grant-constants.js",
+      "require": "./dist/agent-accounts/grant-constants.js"
+    },
+    "./agent-accounts/encode-grant": {
+      "types": "./dist/agent-accounts/encode-grant.d.ts",
+      "import": "./dist/agent-accounts/encode-grant.js",
+      "require": "./dist/agent-accounts/encode-grant.js"
+    },
+    "./agent-accounts/parse-grant": {
+      "types": "./dist/agent-accounts/parse-grant.d.ts",
+      "import": "./dist/agent-accounts/parse-grant.js",
+      "require": "./dist/agent-accounts/parse-grant.js"
+    },
+    "./agent-accounts/verify-grant": {
+      "types": "./dist/agent-accounts/verify-grant.d.ts",
+      "import": "./dist/agent-accounts/verify-grant.js",
+      "require": "./dist/agent-accounts/verify-grant.js"
+    },
+    "./agent-accounts/decide-sandbox-binding": {
+      "types": "./dist/agent-accounts/decide-sandbox-binding.d.ts",
+      "import": "./dist/agent-accounts/decide-sandbox-binding.js",
+      "require": "./dist/agent-accounts/decide-sandbox-binding.js"
+    },
+    "./agent-accounts/collapse-verdict": {
+      "types": "./dist/agent-accounts/collapse-verdict.d.ts",
+      "import": "./dist/agent-accounts/collapse-verdict.js",
+      "require": "./dist/agent-accounts/collapse-verdict.js"
+    },
+    "./agent-accounts/grant-gate-executor": {
+      "types": "./dist/agent-accounts/grant-gate-executor.d.ts",
+      "import": "./dist/agent-accounts/grant-gate-executor.js",
+      "require": "./dist/agent-accounts/grant-gate-executor.js"
+    },
+    "./agent-accounts/decide-approval": {
+      "types": "./dist/agent-accounts/decide-approval.d.ts",
+      "import": "./dist/agent-accounts/decide-approval.js",
+      "require": "./dist/agent-accounts/decide-approval.js"
+    },
+    "./agent-accounts/bind-approval": {
+      "types": "./dist/agent-accounts/bind-approval.d.ts",
+      "import": "./dist/agent-accounts/bind-approval.js",
+      "require": "./dist/agent-accounts/bind-approval.js"
+    },
+    "./agent-accounts/always-allowed-by-class": {
+      "types": "./dist/agent-accounts/always-allowed-by-class.d.ts",
+      "import": "./dist/agent-accounts/always-allowed-by-class.js",
+      "require": "./dist/agent-accounts/always-allowed-by-class.js"
+    },
+    "./permissions/decide-account-access": {
+      "types": "./dist/permissions/decide-account-access.d.ts",
+      "import": "./dist/permissions/decide-account-access.js",
+      "require": "./dist/permissions/decide-account-access.js"
+    },
     "./permissions/account-permissions": {
       "types": "./dist/permissions/account-permissions.d.ts",
       "import": "./dist/permissions/account-permissions.js",
