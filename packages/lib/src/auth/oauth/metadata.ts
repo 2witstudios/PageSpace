@@ -7,11 +7,22 @@
  * @module @pagespace/lib/auth/oauth/metadata
  */
 
+/** RFC 7523 §2.1 — the auth.md `identity_assertion` (our opaque `ps_agent_*` secret) is presented under this URN (ADR 0005 Decision 5). */
+export const AGENT_ASSERTION_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
+
+/** The agent polls its claim with this grant; on approval it receives a fresh token pair for ITSELF (ADR 0005 Decision 7). */
+export const AGENT_CLAIM_GRANT_TYPE = 'urn:pagespace:agent-auth:grant-type:claim';
+
 const GRANT_TYPES_SUPPORTED = [
   'authorization_code',
   'refresh_token',
   'urn:ietf:params:oauth:grant-type:device_code',
+  AGENT_ASSERTION_GRANT_TYPE,
+  AGENT_CLAIM_GRANT_TYPE,
 ] as const;
+
+/** auth.md: the only identity type we can verify is "none" — no vendor-verifiable agent identity exists. */
+const AGENT_IDENTITY_TYPES_SUPPORTED = ['anonymous'] as const;
 
 const RESPONSE_TYPES_SUPPORTED = ['code'] as const;
 
@@ -27,6 +38,23 @@ export interface OAuthServerConfig {
   issuer: string;
 }
 
+/**
+ * auth.md agent-registration block (ADR 0005 Decision 12), served inside the
+ * RFC 8414 document so a generic auth.md client can discover the agent doors
+ * from the same URL it already reads. Every URL is derived from the issuer.
+ */
+export interface AgentAuthMetadata {
+  /** The human/agent-readable recipe: `/auth.md`. */
+  skill: string;
+  identity_endpoint: string;
+  claim_endpoint: string;
+  /** PageSpace extension: where to fetch the proof-of-work challenge before registering. */
+  challenge_endpoint: string;
+  identity_types_supported: readonly string[];
+  assertion_grant_type: string;
+  claim_grant_type: string;
+}
+
 export interface OAuthServerMetadata {
   issuer: string;
   authorization_endpoint: string;
@@ -38,6 +66,7 @@ export interface OAuthServerMetadata {
   code_challenge_methods_supported: readonly string[];
   token_endpoint_auth_methods_supported: readonly string[];
   scopes_supported: readonly string[];
+  agent_auth: AgentAuthMetadata;
 }
 
 /**
@@ -68,5 +97,14 @@ export function buildServerMetadata(config: OAuthServerConfig): OAuthServerMetad
     code_challenge_methods_supported: CODE_CHALLENGE_METHODS_SUPPORTED,
     token_endpoint_auth_methods_supported: TOKEN_ENDPOINT_AUTH_METHODS_SUPPORTED,
     scopes_supported: SCOPES_SUPPORTED,
+    agent_auth: {
+      skill: `${issuer}/auth.md`,
+      identity_endpoint: `${issuer}/api/agent/identity`,
+      claim_endpoint: `${issuer}/api/agent/claim`,
+      challenge_endpoint: `${issuer}/api/agent/challenge`,
+      identity_types_supported: AGENT_IDENTITY_TYPES_SUPPORTED,
+      assertion_grant_type: AGENT_ASSERTION_GRANT_TYPE,
+      claim_grant_type: AGENT_CLAIM_GRANT_TYPE,
+    },
   };
 }

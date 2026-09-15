@@ -21,7 +21,8 @@
       "entry": [
         "src/app/**/page.tsx",
         "src/app/**/layout.tsx",
-        "src/app/**/route.ts"
+        "src/app/**/route.ts",
+        "src/lib/agent-auth/auth-md.ts"
       ],
       "project": [
         "src/**/*.{ts,tsx}",

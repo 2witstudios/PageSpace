@@ -4,7 +4,7 @@
  * DB `oauth_clients` table exists only for future dynamic registration.
  */
 import { describe, it, expect } from 'vitest';
-import { getRegisteredClient, validateRedirectUri, PAGESPACE_CLI_CLIENT_ID } from '../clients';
+import { getRegisteredClient, validateRedirectUri, PAGESPACE_CLI_CLIENT_ID, PAGESPACE_AGENT_CLIENT_ID } from '../clients';
 
 describe('getRegisteredClient', () => {
   it('returns the pagespace-cli client for its client_id', () => {
@@ -98,5 +98,45 @@ describe('validateRedirectUri', () => {
 
   it('zero-trust audit: an encoded dot-segment (literal %2e%2e, never decoded into a path separator) is rejected as an unregistered path', () => {
     expect(validateRedirectUri(client, 'http://127.0.0.1:5000/callback%2e%2e/evil')).toBe(false);
+  });
+});
+
+describe('getRegisteredClient — pagespace-agent (ADR 0005 Decision 5)', () => {
+  it('returns a public, first-party client with exactly jwt-bearer, claim and refresh_token grants', () => {
+    const client = getRegisteredClient(PAGESPACE_AGENT_CLIENT_ID);
+    expect(client).not.toBeNull();
+    expect(client?.clientId).toBe('pagespace-agent');
+    expect(client?.type).toBe('public');
+    expect(client?.firstParty).toBe(true);
+    expect(client?.allowedGrantTypes).toEqual([
+      'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      'urn:pagespace:agent-auth:grant-type:claim',
+      'refresh_token',
+    ]);
+  });
+
+  it('has no redirect URIs — nothing browser-shaped can ever be authorized for it', () => {
+    const client = getRegisteredClient(PAGESPACE_AGENT_CLIENT_ID)!;
+    expect(client.redirectUris).toEqual([]);
+    expect(validateRedirectUri(client, 'http://127.0.0.1:51234/callback')).toBe(false);
+  });
+
+  it('cannot use the CLI’s grants (authorization_code, device_code)', () => {
+    const client = getRegisteredClient(PAGESPACE_AGENT_CLIENT_ID)!;
+    expect(client.allowedGrantTypes).not.toContain('authorization_code');
+    expect(client.allowedGrantTypes).not.toContain('urn:ietf:params:oauth:grant-type:device_code');
+  });
+
+  it('leaves pagespace-cli byte-for-byte unchanged', () => {
+    const cli = getRegisteredClient(PAGESPACE_CLI_CLIENT_ID);
+    expect(cli).toEqual({
+      clientId: 'pagespace-cli',
+      name: 'PageSpace CLI',
+      type: 'public',
+      redirectUris: ['http://127.0.0.1/callback', 'http://[::1]/callback'],
+      allowedGrantTypes: ['authorization_code', 'urn:ietf:params:oauth:grant-type:device_code', 'refresh_token'],
+      firstParty: true,
+    });
+    expect(cli?.allowedGrantTypes).not.toContain('urn:ietf:params:oauth:grant-type:jwt-bearer');
   });
 });

@@ -31,7 +31,32 @@ const PAGESPACE_CLI_CLIENT: RegisteredClient = {
   firstParty: true,
 };
 
-const STATIC_CLIENT_REGISTRY = new Map<string, RegisteredClient>([[PAGESPACE_CLI_CLIENT.clientId, PAGESPACE_CLI_CLIENT]]);
+export const PAGESPACE_AGENT_CLIENT_ID = 'pagespace-agent';
+
+/**
+ * ADR 0005 Decision 5 — the client agents present on the token endpoint. A
+ * separate id keeps agent grants out of the CLI's allowed set (and vice
+ * versa) and separates audit/rate-limit keys. No redirect URIs: nothing
+ * browser-shaped is ever authorized for it. Additive only — the Sign-in
+ * epic is converting this registry to DB-backed lookup.
+ */
+const PAGESPACE_AGENT_CLIENT: RegisteredClient = {
+  clientId: PAGESPACE_AGENT_CLIENT_ID,
+  name: 'PageSpace Agent',
+  type: 'public',
+  redirectUris: [],
+  allowedGrantTypes: [
+    'urn:ietf:params:oauth:grant-type:jwt-bearer',
+    'urn:pagespace:agent-auth:grant-type:claim',
+    'refresh_token',
+  ],
+  firstParty: true,
+};
+
+const STATIC_CLIENT_REGISTRY = new Map<string, RegisteredClient>([
+  [PAGESPACE_CLI_CLIENT.clientId, PAGESPACE_CLI_CLIENT],
+  [PAGESPACE_AGENT_CLIENT.clientId, PAGESPACE_AGENT_CLIENT],
+]);
 
 /** Static registry lookup. Unknown `client_id` → null (caller fails closed with `invalid_client`). */
 export function getRegisteredClient(clientId: string): RegisteredClient | null {
