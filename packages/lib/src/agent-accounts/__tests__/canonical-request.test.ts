@@ -297,6 +297,14 @@ describe('canonicalizeRequest normalization', () => {
     expect(actual).toEqual(once);
   });
 
+  it.each(['https://localhost/x', 'https://internal.corp/x', 'https://metadata.google.internal/x'])(
+    'given a name that RESOLVES privately (%s), should admit it here — canonicalization is not the SSRF boundary, the connect-time address check is (G2)',
+    (url) => {
+      const actual = canonicalizeRequest(makeInput({ url, body: new Uint8Array(0), headers: {} }));
+      expect(actual.ok).toBe(true);
+    },
+  );
+
   it('given a relay method, should accept the closed relay set as-is', () => {
     const actual = canonical({ channel: 'relay-runner', method: 'git-receive-pack', body: new Uint8Array(0), headers: {} }).method;
     expect(actual).toBe('git-receive-pack');
