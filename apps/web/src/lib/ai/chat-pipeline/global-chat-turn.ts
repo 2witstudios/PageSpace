@@ -23,6 +23,19 @@ import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
 import { resolveHomeDriveHint } from '@/lib/ai/core/home-drive-hint';
 import {
+  extractClientToolApprovalResponses,
+  applyToolApprovalResponsesToGlobalMessage,
+  dismissPendingToolApprovalsForGlobalConversation,
+  recordApprovedToolOutcomeOnGlobalMessage,
+  readToolApprovalScopes,
+  type ApprovedToolExecution,
+} from '@/lib/ai/core/approval-resume';
+import { applyApprovalPolicy, isToolApprovalMode, DEFAULT_TOOL_APPROVAL_MODE, type ApprovalPolicyContext } from '@/lib/ai/approvals/approval-policy';
+import { gatedIntegrationToolNames } from '@/lib/ai/approvals/integration-approval';
+import { approvalResumeRefusal, executeApprovedCallsAndReassemble } from '@/lib/ai/chat-pipeline/approval-turn-support';
+import { toolApprovalRepository } from '@/lib/repositories/tool-approval-repository';
+import { getConfig as getGlobalAssistantConfig } from '@pagespace/lib/integrations/repositories/config-repository';
+import {
   extractClientAskUserResults,
   applyAskUserResultsToGlobalMessage,
   dismissPendingAskUserForGlobalConversation,
@@ -87,6 +100,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
 import type { LocationContext } from '@/lib/ai/shared/chat-types';
+import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { calculateTotalContextSize } from '@pagespace/lib/monitoring/ai-context-calculator';
@@ -188,6 +202,12 @@ interface GlobalChatRequestBody {
   imageGenEnabled?: boolean;
   showPageTree?: boolean;
   mcpTools?: MCPTool[];
+  /**
+   * Tool-approval resume only: approvalId → the standing grant the user chose
+   * with "allow" ('once' | 'conversation' | 'always'). Validated server-side;
+   * unknown keys/values are ignored.
+   */
+  toolApprovalScopes?: Record<string, string>;
 }
 
 export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Response> {
@@ -491,6 +511,8 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // down) and joined right before the history load, so its DB round trip
     // overlaps with the independent setup in between instead of blocking it.
     let askUserSyncPromise: Promise<unknown> | undefined;
+    // Approved (claimed) calls from a tool-approval resume, run inside execute().
+    let approvedExecutions: ApprovedToolExecution[] = [];
     if (userMessage && userMessage.role === 'user') {
       try {
         const messageId = resolveMessageId(userMessage.id);
@@ -602,9 +624,16 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       // (not awaited) and joined via askUserSyncPromise just before the
       // history load below, so its DB round trip overlaps with the
       // independent setup in between instead of blocking it.
-      askUserSyncPromise = dismissPendingAskUserForGlobalConversation({ conversationId }).catch((error) => {
-        loggers.api.error('Global Assistant Chat API: Failed to dismiss pending ask_user question', error as Error);
-      });
+      askUserSyncPromise = Promise.all([
+        dismissPendingAskUserForGlobalConversation({ conversationId }).catch((error) => {
+          loggers.api.error('Global Assistant Chat API: Failed to dismiss pending ask_user question', error as Error);
+        }),
+        // Same for a pending tool approval: typing past the card is a denial
+        // (claimed, so a concurrent approve from another tab loses cleanly).
+        dismissPendingToolApprovalsForGlobalConversation({ conversationId, userId }).catch((error) => {
+          loggers.api.error('Global Assistant Chat API: Failed to dismiss pending tool approvals', error as Error);
+        }),
+      ]);
     } else if (userMessage?.role === 'assistant') {
       // Resume request: the client answered a pending ask_user question via
       // addToolResult (no new user message). Merge the answer into the
@@ -619,6 +648,26 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         }).catch((error) => {
           loggers.api.error('Global Assistant Chat API: Failed to merge ask_user answer', error as Error);
         });
+      }
+
+      // Tool-approval resume: the client answered a paused gated call. Unlike
+      // ask_user this is AWAITED here, because its outcome decides the response:
+      // a stale card or an already-decided approval must be refused before any
+      // generation starts (nothing to run, nothing to bill), and the approved
+      // calls it returns are executed inside execute() below with the real tool
+      // context, before the model continues.
+      const approvalResponses = extractClientToolApprovalResponses(userMessage);
+      if (approvalResponses.length > 0) {
+        const applied = await applyToolApprovalResponsesToGlobalMessage({
+          messageId: userMessage.id,
+          conversationId,
+          userId,
+          responses: approvalResponses,
+          scopes: readToolApprovalScopes(requestBody.toolApprovalScopes),
+        });
+        const refusal = approvalResumeRefusal(applied);
+        if (refusal) return refusal;
+        if (applied.kind === 'applied') approvedExecutions = applied.approved;
       }
     }
 
@@ -740,6 +789,17 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // overlap with the independent setup between there and here.
     if (askUserSyncPromise) await askUserSyncPromise;
 
+    // The user's approval mode and standing grants for this conversation. Read
+    // once per turn, after the resume merge above so a grant written by THIS
+    // resume ("always allow") is honoured by the continuation.
+    const [assistantConfig, toolApprovalGrants] = await Promise.all([
+      getGlobalAssistantConfig(db, userId),
+      toolApprovalRepository.listGrants(userId, conversationId),
+    ]);
+    const toolApprovalMode = isToolApprovalMode(assistantConfig?.toolApprovalMode)
+      ? assistantConfig.toolApprovalMode
+      : DEFAULT_TOOL_APPROVAL_MODE;
+
     // Read ALL active messages from database (source of truth). Exclude 'streaming'
     // placeholders — this load is the model-context source AND the compaction source, so a
     // placeholder here would both poison this job's own turn and risk being silently
@@ -750,10 +810,9 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // always the global leg, so no rows move — what changes is that the one
     // reader for durable messages is now the same seam the page chat uses, and
     // the query stops being spelled out a second time here.
-    const dbMessages = await messageRepository.getMessagesByConversationId(conversationId);
-
-    // Convert database messages to UI format
-    const conversationHistory = await Promise.all(dbMessages.map(msg =>
+    const loadConversationHistory = async (): Promise<UIMessage[]> => {
+      const dbMessages = await messageRepository.getMessagesByConversationId(conversationId);
+      return Promise.all(dbMessages.map(msg =>
       convertGlobalAssistantMessageToUIMessage({
         id: msg.id,
         conversationId: msg.conversationId,
@@ -768,6 +827,8 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         status: msg.status,
       })
     ));
+    };
+    const conversationHistory = await loadConversationHistory();
 
     loggers.api.debug('Global Assistant Chat API: Loaded conversation history from database', {
       messageCount: conversationHistory.length,
@@ -998,6 +1059,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       conversationType: conversation.type,
       conversationContextId: conversation.contextId,
       includeAskUser: true,
+      toolApprovals: toolApprovalMode === 'ask' && agentDispatchDepth === 0,
       drivePromptSection,
       agentAwareness: agentAwarenessPrompt,
       nonCoreToolNames: nonCoreToolNamesPrompt,
@@ -1137,13 +1199,31 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // (execute_tool would crash on an execute-less tool).
     finalTools = { ...finalTools, ...askUserTools } as ToolSet;
 
+    // Tool approvals — the human-in-the-loop gate. Applied LAST, over the fully
+    // merged set (integration + MCP + finish + ask_user), so nothing merged after
+    // it could slip past. Interactive means a human can answer: a browser
+    // session drove this turn and it is not a dispatched worker turn; anything
+    // else runs as `auto` whatever the user's mode says.
+    const approvalPolicy: ApprovalPolicyContext = {
+      mode: toolApprovalMode,
+      interactive: agentDispatchDepth === 0,
+      conversationId,
+      grants: toolApprovalGrants,
+      gatedIntegrationToolNames: gatedIntegrationToolNames(Object.keys(finalTools)),
+    };
+    finalTools = applyApprovalPolicy(finalTools, approvalPolicy);
+
     // Sanitize, compact, and elide via the unified seam.
     // finalSystemPrompt + finalTools are now known — pass for accurate token budgeting.
-    // IIFE keeps the outputs const (each is assigned exactly once).
-    const { modelMessages, stableBoundaryIndex, scheduleCompaction, contextMessagesForTracking } =
-      await (async () => {
+    // A named local rather than an IIFE because a tool-approval resume runs it
+    // TWICE: once here, and again inside execute() after the approved call has
+    // run and its result has been written onto the original row — the model
+    // must see that result this turn, and re-assembling is strictly simpler and
+    // safer than patching ModelMessages by hand (elision, capping and cache
+    // breakpoints all stay correct).
+    const assembleModelRequest = async (history: UIMessage[]) => {
         const prepared = await prepareHistoryForModel({
-          history: conversationHistory,
+          history,
           conversationId,
           source: 'global',
           model: currentModel,
@@ -1186,7 +1266,12 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
           scheduleCompaction: prepared.scheduleCompaction,
           contextMessagesForTracking,
         };
-      })();
+      };
+    const assembled = await assembleModelRequest(conversationHistory);
+    const { scheduleCompaction, contextMessagesForTracking } = assembled;
+    // `let`: a tool-approval resume re-assembles inside execute() once the
+    // approved call's result is on the original row.
+    let { modelMessages, stableBoundaryIndex } = assembled;
 
     loggers.api.debug('Global Assistant Chat API: Starting streamText', { model: currentModel, isReadOnly: readOnlyMode });
 
@@ -1300,6 +1385,62 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         });
         // Resolve once outside the per-attempt factory (the factory is synchronous).
         const modelCapabilitiesForTools = await getModelCapabilities(currentModel, currentProvider);
+        // ONE context object for the whole turn: every streamText attempt AND
+        // the execution of a tool-approval resume's approved call share this
+        // instance, so a tool that shifts focus in place (create_page →
+        // currentWorkingPage) is seen by everything that runs after it.
+        const toolExecutionContext: ToolExecutionContext = {
+          userId,
+          timezone: userTimezone,
+          aiProvider: currentProvider,
+          aiModel: currentModel,
+          conversationId,
+          locationContext,
+          // Turn-start snapshot of the agent's working page — tools that
+          // shift focus (e.g. create_page) mutate this in place so later
+          // tool calls in the same turn track the agent's own actions
+          // rather than staying pinned to the turn-start snapshot.
+          currentWorkingPage: locationContext?.currentPage ? {
+            id: locationContext.currentPage.id,
+            title: locationContext.currentPage.title,
+            type: locationContext.currentPage.type,
+          } : undefined,
+          modelCapabilities: modelCapabilitiesForTools,
+          isAdmin: auth.role === 'admin',
+          subscriptionTier: userSubscriptionTier,
+          imageGenerationModel: userImageGenerationModel ?? DEFAULT_IMAGE_MODEL,
+          chatSource: { type: 'global' as const },
+          // Worker-dispatch chain depth (spawn_session/send_session) — the
+          // X-Agent-Dispatch-Depth header is how depth survives the HTTP
+          // hop; forging it low is the default, forging it high only
+          // restricts the forger. 0 for a direct user request.
+          agentCallDepth: agentDispatchDepth,
+        };
+        // Tool-approval resume: run the approved calls NOW — the stream is open
+        // (a long bash run cannot trip a proxy timeout), the tool context exists,
+        // and the result is written onto the ORIGINAL message so the continuation
+        // below sees it and the SDK never runs its own execute-on-resume. Then
+        // re-assemble the model request from the updated row.
+        if (approvedExecutions.length > 0) {
+          ({ modelMessages, stableBoundaryIndex } = await executeApprovedCallsAndReassemble({
+            executions: approvedExecutions,
+            tools: finalTools,
+            toolOptions: { abortSignal: generationAbortSignal, experimental_context: toolExecutionContext },
+            record: (execution, result) =>
+              recordApprovedToolOutcomeOnGlobalMessage({
+                conversationId,
+                messageId: userMessage!.id,
+                toolCallId: execution.toolCallId,
+                approvalId: execution.approvalId,
+                outcome: result,
+              }),
+            loadHistory: loadConversationHistory,
+            assemble: assembleModelRequest,
+            logger: loggers.api,
+            logContext: { surface: 'global', conversationId },
+          }));
+        }
+
         // Server-side, in-request retry: transparently re-drive the loop under one
         // message envelope when an attempt drops mid-loop or ends without finishing.
         // The loop lives inside execute(), so onFinish still fires exactly once below.
@@ -1346,33 +1487,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
             onStepFinish: onStepFinishForCredits
               ? async ({ usage }) => { onStepFinishForCredits(usage); }
               : undefined,
-            experimental_context: {
-              userId,
-              timezone: userTimezone,
-              aiProvider: currentProvider,
-              aiModel: currentModel,
-              conversationId,
-              locationContext,
-              // Turn-start snapshot of the agent's working page — tools that
-              // shift focus (e.g. create_page) mutate this in place so later
-              // tool calls in the same turn track the agent's own actions
-              // rather than staying pinned to the turn-start snapshot.
-              currentWorkingPage: locationContext?.currentPage ? {
-                id: locationContext.currentPage.id,
-                title: locationContext.currentPage.title,
-                type: locationContext.currentPage.type,
-              } : undefined,
-              modelCapabilities: modelCapabilitiesForTools,
-              isAdmin: auth.role === 'admin',
-              subscriptionTier: userSubscriptionTier,
-              imageGenerationModel: userImageGenerationModel ?? DEFAULT_IMAGE_MODEL,
-              chatSource: { type: 'global' as const },
-              // Worker-dispatch chain depth (spawn_session/send_session) — the
-              // X-Agent-Dispatch-Depth header is how depth survives the HTTP
-              // hop; forging it low is the default, forging it high only
-              // restricts the forger. 0 for a direct user request.
-              agentCallDepth: agentDispatchDepth,
-            },
+            experimental_context: toolExecutionContext,
             maxRetries: 20,
             onAbort: () => {
               loggers.api.info('Global Assistant Chat API: Stream aborted by user', {

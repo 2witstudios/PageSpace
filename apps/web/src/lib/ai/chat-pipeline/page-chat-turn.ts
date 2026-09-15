@@ -144,6 +144,20 @@ import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetr
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { locationContextToPageContext, pageContextToLocationContext } from '@/lib/ai/shared/buildPageContext';
 import type { LocationContext } from '@/lib/ai/shared/chat-types';
+import type { ToolExecutionContext } from '@/lib/ai/core/types';
+import {
+  extractClientToolApprovalResponses,
+  applyToolApprovalResponsesToPageMessage,
+  dismissPendingToolApprovalsForPageConversation,
+  recordApprovedToolOutcomeOnPageMessage,
+  readToolApprovalScopes,
+  type ApprovedToolExecution,
+} from '@/lib/ai/core/approval-resume';
+import { applyApprovalPolicy, isToolApprovalMode, DEFAULT_TOOL_APPROVAL_MODE, type ApprovalPolicyContext } from '@/lib/ai/approvals/approval-policy';
+import { gatedIntegrationToolNames } from '@/lib/ai/approvals/integration-approval';
+import { approvalResumeRefusal, executeApprovedCallsAndReassemble } from '@/lib/ai/chat-pipeline/approval-turn-support';
+import { toolApprovalRepository } from '@/lib/repositories/tool-approval-repository';
+import { isSessionAuthResult } from '@/lib/auth';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
@@ -179,6 +193,8 @@ interface PageChatRequestBody {
   selectedModel?: string;
   /** MCP tool schemas from desktop (client-side execution). */
   mcpTools?: MCPTool[];
+  /** Tool-approval resume only: approvalId → 'once' | 'conversation' | 'always'. Validated server-side. */
+  toolApprovalScopes?: Record<string, string>;
   /** Optional read-only mode toggle. */
   isReadOnly?: boolean;
   /** Optional web search toggle (defaults to false). */
@@ -808,6 +824,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // and joined right before the history load, so its DB round trip overlaps
     // with the independent setup in between instead of blocking it.
     let askUserSyncPromise: Promise<unknown> | undefined;
+    // Approved (claimed) calls from a tool-approval resume, run inside execute().
+    let approvedExecutions: ApprovedToolExecution[] = [];
     if (userMessage && userMessage.role === 'user') {
       try {
         const messageId = resolveMessageId(userMessage.id);
@@ -1012,12 +1030,23 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       // history load below, so its DB round trip overlaps with the
       // independent setup in between instead of blocking it — same pattern
       // as userProfilePromise a few lines down.
-      askUserSyncPromise = dismissPendingAskUserForPageConversation({
-        pageId: chatId as string,
-        conversationId,
-      }).catch((error) => {
-        loggers.ai.error('AI Chat API: Failed to dismiss pending ask_user question', error as Error);
-      });
+      askUserSyncPromise = Promise.all([
+        dismissPendingAskUserForPageConversation({
+          pageId: chatId as string,
+          conversationId,
+        }).catch((error) => {
+          loggers.ai.error('AI Chat API: Failed to dismiss pending ask_user question', error as Error);
+        }),
+        // Same for a pending tool approval: typing past the card is a denial
+        // (claimed, so a concurrent approve from another tab loses cleanly).
+        dismissPendingToolApprovalsForPageConversation({
+          pageId: chatId as string,
+          conversationId,
+          userId,
+        }).catch((error) => {
+          loggers.ai.error('AI Chat API: Failed to dismiss pending tool approvals', error as Error);
+        }),
+      ]);
     } else if (userMessage?.role === 'assistant') {
       // Resume request: the client answered a pending ask_user question via
       // addToolResult (no new user message). Merge the answer into the
@@ -1033,6 +1062,25 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         }).catch((error) => {
           loggers.ai.error('AI Chat API: Failed to merge ask_user answer', error as Error);
         });
+      }
+
+      // Tool-approval resume — AWAITED, because its outcome decides the
+      // response (see the global turn for the full reasoning): a stale or
+      // already-decided approval is refused before any generation starts, and
+      // the approved calls run inside execute() with the real tool context.
+      const approvalResponses = extractClientToolApprovalResponses(userMessage);
+      if (approvalResponses.length > 0) {
+        const applied = await applyToolApprovalResponsesToPageMessage({
+          messageId: userMessage.id,
+          pageId: chatId as string,
+          conversationId,
+          userId,
+          responses: approvalResponses,
+          scopes: readToolApprovalScopes(requestBody.toolApprovalScopes),
+        });
+        const refusal = approvalResumeRefusal(applied);
+        if (refusal) return refusal;
+        if (applied.kind === 'applied') approvedExecutions = applied.approved;
       }
     }
 
@@ -1315,6 +1363,19 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // search mode too — routing it through execute_tool would hit that tool's
     // allowlist check and be rejected whenever the agent's saved enabledTools omit it.
     const toolExposureMode = (page.toolExposureMode as 'upfront' | 'search' | null) ?? 'upfront';
+
+    // Tool approvals — the per-AGENT mode, and whether a human can answer at
+    // all. Interactive = a browser session drove this turn (not an MCP client,
+    // which has no card to click, and not a dispatched worker turn under
+    // service auth). Anything else runs as `auto` whatever the mode says.
+    // Workflow, trigger and channel-mention runs never come through this turn
+    // (they drive streamText themselves), so they are `auto` by construction.
+    const toolApprovalMode = isToolApprovalMode(page.toolApprovalMode) ? page.toolApprovalMode : DEFAULT_TOOL_APPROVAL_MODE;
+    const toolApprovalsInteractive = isSessionAuthResult(authResult) && agentDispatchDepth === 0;
+    const toolApprovalGrants =
+      toolApprovalsInteractive && toolApprovalMode === 'ask'
+        ? await toolApprovalRepository.listGrants(userId, conversationId ?? null)
+        : [];
     // Capture BEFORE exposure so capability sections (TASK_MANAGEMENT, AGENTS, etc.) are
     // correctly included in search mode where non-core tools become callable via execute_tool
     // and disappear from filteredTools.
@@ -1491,6 +1552,17 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     filteredTools = { ...filteredTools, ...askUserTools } as ToolSet;
     allowedToolNames.push(ASK_USER_TOOL_NAME);
 
+    // Tool approvals — applied LAST, over the fully merged set, so nothing
+    // merged after it could slip past the gate.
+    const approvalPolicy: ApprovalPolicyContext = {
+      mode: toolApprovalMode,
+      interactive: toolApprovalsInteractive,
+      conversationId: conversationId ?? null,
+      grants: toolApprovalGrants,
+      gatedIntegrationToolNames: gatedIntegrationToolNames(Object.keys(filteredTools)),
+    };
+    filteredTools = applyApprovalPolicy(filteredTools, approvalPolicy);
+
     // Guard against a stale read_page tool-result (image bytes delivered on an
     // earlier turn when the model had vision) being re-embedded as an image when
     // convertToModelMessages re-converts history for a model that no longer has
@@ -1605,6 +1677,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       memberDriveContextPrefix,
       agentMemory: agentMemoryPrompt,
       toolDiscovery: toolDiscoveryPrompt,
+      toolApprovals: toolApprovalsInteractive && toolApprovalMode === 'ask',
     });
 
     loggers.ai.debug('AI Chat API: Loading conversation history', {
@@ -1629,9 +1702,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // poison this job's own turn (it hasn't finished writing yet) and risk being silently
     // summarized into a durable compaction. 'interrupted' rows stay included — they are
     // terminal, real partial output. See Server Stream Durability epic PR 2.
-    const dbMessages = await messageRepository.getPageConversationMessages(pageId, conversationId);
-
-    const conversationHistory: UIMessage[] = await Promise.all(dbMessages.map(msg =>
+    const loadConversationHistory = async (): Promise<UIMessage[]> => {
+      const dbMessages = await messageRepository.getPageConversationMessages(pageId, conversationId);
+      return Promise.all(dbMessages.map(msg =>
       convertDbMessageToUIMessage({
         id: msg.id,
         pageId: msg.pageId,
@@ -1647,6 +1720,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         status: msg.status,
       })
     ));
+    };
+    const conversationHistory = await loadConversationHistory();
 
     loggers.ai.debug('AI Chat API: Loaded conversation from database', {
       messageCount: conversationHistory.length,
@@ -1656,22 +1731,31 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // Sanitize, compact, and elide — all in the unified seam.
     // createUIMessageStream keeps the FULL conversationHistory for the UI;
     // only the model-facing messages go through the seam.
-    const prepared = await prepareHistoryForModel({
-      history: conversationHistory,
-      conversationId: conversationId!,
-      source: 'page',
-      pageId,
-      model: resolvedModelName ?? currentModel,
-      provider: resolvedProvider ?? currentProvider,
-      systemPrompt: systemPrompt,
-      tools: filteredTools as Record<string, unknown>,
-      user: user ? { id: user.id, role: user.role } : null,
-    });
-    const { scheduleCompaction } = prepared;
-    const { modelMessages, stableBoundaryIndex } = await finishModelRequest({
-      prepared,
-      tools: filteredTools,
-    });
+    // A named local rather than inline because a tool-approval resume runs it
+    // TWICE: once here, and again inside execute() after the approved call has
+    // run and its result has been written onto the original row.
+    const assembleModelRequest = async (history: UIMessage[]) => {
+      const prepared = await prepareHistoryForModel({
+        history,
+        conversationId: conversationId!,
+        source: 'page',
+        pageId,
+        model: resolvedModelName ?? currentModel,
+        provider: resolvedProvider ?? currentProvider,
+        systemPrompt: systemPrompt,
+        tools: filteredTools as Record<string, unknown>,
+        user: user ? { id: user.id, role: user.role } : null,
+      });
+      const { modelMessages, stableBoundaryIndex } = await finishModelRequest({
+        prepared,
+        tools: filteredTools,
+      });
+      return { modelMessages, stableBoundaryIndex, scheduleCompaction: prepared.scheduleCompaction };
+    };
+    const assembled = await assembleModelRequest(conversationHistory);
+    const { scheduleCompaction } = assembled;
+    // `let`: a tool-approval resume re-assembles inside execute() (see above).
+    let { modelMessages, stableBoundaryIndex } = assembled;
 
     // Intentional second sanitize (prepareHistoryForModel already sanitized once):
     // createUIMessageStream must receive the FULL conversation history for the UI
@@ -1779,6 +1863,92 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           // PageSpace alias in currentModel — vision/tool detection pattern-matches the
           // model string, so an alias yields wrong capability flags.
           const modelCapabilitiesForTools = await getModelCapabilities(resolvedModelName!, currentProvider);
+          // ONE context object for the whole turn: every streamText attempt AND
+          // the execution of a tool-approval resume's approved call share this
+          // instance, so a tool that shifts focus in place is seen by everything
+          // that runs after it.
+          const toolExecutionContext: ToolExecutionContext = {
+            userId,
+            timezone: userTimezone,
+            aiProvider: currentProvider,
+            aiModel: currentModel,
+            conversationId,
+            // Same normalized location the model prompt was built from, so
+            // the two can never disagree about which workspace is in view.
+            locationContext: turnLocation ? {
+              currentPage: turnLocation.currentPage ?? undefined,
+              currentDrive: turnLocation.currentDrive ?? undefined,
+              breadcrumbs: turnLocation.breadcrumbs,
+            } : undefined,
+            // Turn-start snapshot of the agent's working page — tools that
+            // shift focus (e.g. create_page) mutate this in place so later
+            // tool calls in the same turn track the agent's own actions
+            // rather than staying pinned to the turn-start snapshot. Derived
+            // from the same turnLocation as everything else above, so there
+            // is exactly one answer to "where is the user" in this route.
+            currentWorkingPage: turnLocation?.currentPage ? {
+              id: turnLocation.currentPage.id,
+              title: turnLocation.currentPage.title,
+              type: turnLocation.currentPage.type,
+            } : undefined,
+            modelCapabilities: modelCapabilitiesForTools,
+            isAdmin: isAdminUser,
+            subscriptionTier: user?.subscriptionTier,
+            imageGenerationModel: user?.imageGenerationModel ?? DEFAULT_IMAGE_MODEL,
+            chatSource: {
+              type: 'page' as const,
+              agentPageId: chatId,
+              agentTitle: page.title,
+            },
+            enabledTools: agentEnabledTools ?? null,
+            // Bind tool execution to the MCP token's drive scope and RBAC role
+            // so a scoped token cannot reach drives outside its scope — or
+            // exceed its own membership role — via the agent's broader ACL.
+            mcpAllowedDriveIds: getAllowedDriveIds(authResult),
+            // Also carried across an agent-dispatch hop: a worker turn
+            // arrives under service auth, whose `originatingMcpTokenId` is
+            // the token that started the chain. Dropping it there would drop
+            // the app-member RBAC ceiling `actor-permissions` applies on top
+            // of the drive scope — the scope alone does not imply the role.
+            mcpTokenId: isMCPAuthResult(authResult)
+              ? authResult.tokenId
+              : isServiceAuthResult(authResult)
+                ? authResult.originatingMcpTokenId
+                : undefined,
+            // How deep in an agent-dispatch chain this turn already runs —
+            // 0 for a direct user request, N for a worker turn dispatched
+            // by spawn_session/send_session (the X-Agent-Dispatch-Depth
+            // header parsed above). The session tools' depth cap reads it.
+            agentCallDepth: agentDispatchDepth,
+          };
+
+          // Tool-approval resume: run the approved calls NOW (stream open, tool
+          // context ready), write each result onto the ORIGINAL message, then
+          // re-assemble the model request so the continuation sees it. See the
+          // global turn and core/approval-resume.ts.
+          if (approvedExecutions.length > 0) {
+            ({ modelMessages, stableBoundaryIndex } = await executeApprovedCallsAndReassemble({
+              executions: approvedExecutions,
+              tools: filteredTools,
+              toolOptions: {
+                abortSignal: creditAbortController ? AbortSignal.any([abortSignal, creditAbortController.signal]) : abortSignal,
+                experimental_context: toolExecutionContext,
+              },
+              record: (execution, result) =>
+                recordApprovedToolOutcomeOnPageMessage({
+                  pageId,
+                  conversationId: conversationId!,
+                  messageId: userMessage!.id,
+                  toolCallId: execution.toolCallId,
+                  approvalId: execution.approvalId,
+                  outcome: result,
+                }),
+              loadHistory: loadConversationHistory,
+              assemble: assembleModelRequest,
+              logger: loggers.ai,
+              logContext: { surface: 'page', pageId },
+            }));
+          }
           // Server-side, in-request retry: if an attempt drops mid-loop (OpenRouter
           // disconnect) or ends mid-tool without the finish tool, transparently
           // re-drive the loop under one message envelope. The loop lives inside
@@ -1837,60 +2007,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
               onStepFinish: onStepFinishForCredits
                 ? async ({ usage }) => { onStepFinishForCredits(usage); }
                 : undefined,
-              experimental_context: {
-                userId,
-                timezone: userTimezone,
-                aiProvider: currentProvider,
-                aiModel: currentModel,
-                conversationId,
-                // Same normalized location the model prompt was built from, so
-                // the two can never disagree about which workspace is in view.
-                locationContext: turnLocation ? {
-                  currentPage: turnLocation.currentPage ?? undefined,
-                  currentDrive: turnLocation.currentDrive ?? undefined,
-                  breadcrumbs: turnLocation.breadcrumbs,
-                } : undefined,
-                // Turn-start snapshot of the agent's working page — tools that
-                // shift focus (e.g. create_page) mutate this in place so later
-                // tool calls in the same turn track the agent's own actions
-                // rather than staying pinned to the turn-start snapshot. Derived
-                // from the same turnLocation as everything else above, so there
-                // is exactly one answer to "where is the user" in this route.
-                currentWorkingPage: turnLocation?.currentPage ? {
-                  id: turnLocation.currentPage.id,
-                  title: turnLocation.currentPage.title,
-                  type: turnLocation.currentPage.type,
-                } : undefined,
-                modelCapabilities: modelCapabilitiesForTools,
-                isAdmin: isAdminUser,
-                subscriptionTier: user?.subscriptionTier,
-                imageGenerationModel: user?.imageGenerationModel ?? DEFAULT_IMAGE_MODEL,
-                chatSource: {
-                  type: 'page' as const,
-                  agentPageId: chatId,
-                  agentTitle: page.title,
-                },
-                enabledTools: agentEnabledTools ?? null,
-                // Bind tool execution to the MCP token's drive scope and RBAC role
-                // so a scoped token cannot reach drives outside its scope — or
-                // exceed its own membership role — via the agent's broader ACL.
-                mcpAllowedDriveIds: getAllowedDriveIds(authResult),
-                // Also carried across an agent-dispatch hop: a worker turn
-                // arrives under service auth, whose `originatingMcpTokenId` is
-                // the token that started the chain. Dropping it there would drop
-                // the app-member RBAC ceiling `actor-permissions` applies on top
-                // of the drive scope — the scope alone does not imply the role.
-                mcpTokenId: isMCPAuthResult(authResult)
-                  ? authResult.tokenId
-                  : isServiceAuthResult(authResult)
-                    ? authResult.originatingMcpTokenId
-                    : undefined,
-                // How deep in an agent-dispatch chain this turn already runs —
-                // 0 for a direct user request, N for a worker turn dispatched
-                // by spawn_session/send_session (the X-Agent-Dispatch-Depth
-                // header parsed above). The session tools' depth cap reads it.
-                agentCallDepth: agentDispatchDepth,
-              }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
+              experimental_context: toolExecutionContext,
               maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
               onAbort: () => {
                 loggers.ai.info('AI Chat API: Stream aborted by user', {
