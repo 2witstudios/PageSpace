@@ -151,3 +151,40 @@ describe('allowanceRefills / isOneTimeAllowanceTier', () => {
     expect(isOneTimeAllowanceTier('normal')).toBe(false);
   });
 });
+
+describe('starterGrantCents (ADR 0005 Decision 9 — no starter grant for agents)', () => {
+  it('is 0 for an agent on the free tier', async () => {
+    const { starterGrantCents } = await import('../credit-pricing');
+    expect(starterGrantCents({ tier: 'free', accountType: 'agent' })).toBe(0);
+  });
+
+  it('is 0 for an agent on EVERY tier, including an unknown tier', async () => {
+    const { starterGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    for (const tier of Object.keys(TIER_MONTHLY_ALLOWANCE_CENTS)) {
+      expect(starterGrantCents({ tier, accountType: 'agent' })).toBe(0);
+    }
+    expect(starterGrantCents({ tier: 'legacy-tier', accountType: 'agent' })).toBe(0);
+  });
+
+  it('is the free allowance for a human on the free tier', async () => {
+    const { starterGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    expect(starterGrantCents({ tier: 'free', accountType: 'human' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+    expect(starterGrantCents({ tier: 'free', accountType: 'human' })).toBe(500);
+  });
+
+  it('is the tier allowance for a human on a known tier (the gate’s existing lazy-init amount)', async () => {
+    const { starterGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    expect(starterGrantCents({ tier: 'pro', accountType: 'human' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
+    expect(starterGrantCents({ tier: 'business', accountType: 'human' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.business);
+  });
+
+  it('falls back to the free allowance for a human on an unknown tier (matches the gate’s `?? free`)', async () => {
+    const { starterGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    expect(starterGrantCents({ tier: 'legacy-tier', accountType: 'human' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+  });
+
+  it('does not pick up prototype keys as tiers', async () => {
+    const { starterGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    expect(starterGrantCents({ tier: 'toString', accountType: 'human' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+  });
+});

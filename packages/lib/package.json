@@ -2372,6 +2372,21 @@
       "types": "./dist/auth/agent/claim-decision.d.ts",
       "import": "./dist/auth/agent/claim-decision.js",
       "require": "./dist/auth/agent/claim-decision.js"
+    },
+    "./auth/agent/account-type": {
+      "types": "./dist/auth/agent/account-type.d.ts",
+      "import": "./dist/auth/agent/account-type.js",
+      "require": "./dist/auth/agent/account-type.js"
+    },
+    "./auth/agent/lifecycle-decision": {
+      "types": "./dist/auth/agent/lifecycle-decision.d.ts",
+      "import": "./dist/auth/agent/lifecycle-decision.js",
+      "require": "./dist/auth/agent/lifecycle-decision.js"
+    },
+    "./billing/agent-payer": {
+      "types": "./dist/billing/agent-payer.d.ts",
+      "import": "./dist/billing/agent-payer.js",
+      "require": "./dist/billing/agent-payer.js"
     }
   },
   "typesVersions": {
