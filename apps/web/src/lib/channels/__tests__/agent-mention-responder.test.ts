@@ -33,6 +33,7 @@ vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
 }));
 vi.mock('@/lib/ai/tools/actor-permissions', () => ({
   canActorEditPage: vi.fn().mockResolvedValue(true),
+  canActorConsultAgent: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserViewPage: vi.fn(),
@@ -92,8 +93,7 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
 
 import { db } from '@pagespace/db/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import { hasAgentDriveMembership } from '@pagespace/lib/permissions/agent-permissions';
-import { canActorEditPage } from '@/lib/ai/tools/actor-permissions';
+import { canActorEditPage, canActorConsultAgent } from '@/lib/ai/tools/actor-permissions';
 import { executeAskAgent } from '@/lib/ai/tools/agent-communication-tools';
 import { channelTools } from '@/lib/ai/tools/channel-tools';
 import {
@@ -105,8 +105,8 @@ import {
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
-const mockHasAgentDriveMembership = vi.mocked(hasAgentDriveMembership);
 const mockCanActorEditPage = vi.mocked(canActorEditPage);
+const mockCanActorConsultAgent = vi.mocked(canActorConsultAgent);
 
 const sendChannelExecute = channelTools.send_channel_message.execute;
 
@@ -181,8 +181,8 @@ describe('agent-mention-responder', () => {
     mockPagesFindMany.mockResolvedValue([]);
     mockChannelMessagesFindMany.mockResolvedValue([]);
     mockCanUserViewPage.mockResolvedValue(true);
-    mockHasAgentDriveMembership.mockResolvedValue(false);
     mockCanActorEditPage.mockResolvedValue(true);
+    mockCanActorConsultAgent.mockResolvedValue(true);
     mockAskAgentExecute.mockResolvedValue(createAskAgentSuccess('Agent reply'));
     mockSendChannelExecute.mockResolvedValue(createSendChannelSuccess());
     mockInsertChannelThreadReply.mockResolvedValue({
@@ -285,18 +285,18 @@ describe('agent-mention-responder', () => {
         'Ping @[Budget Agent](agent-1:page) and @[Budget Agent](agent-1:page)',
     });
 
-    expect(mockCanUserViewPage).toHaveBeenCalledTimes(1);
+    expect(mockCanActorConsultAgent).toHaveBeenCalledTimes(1);
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
     expect(mockAskAgentExecute.mock.calls[0][0].agentId).toBe('agent-1');
     expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
   });
 
-  it('given mention of agent user cannot view, should skip that agent', async () => {
+  it('given mention of an agent the user may not consult, should skip that agent', async () => {
     mockPagesFindMany.mockResolvedValue([
       { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
       { id: 'agent-2', title: 'Ops Agent', enabledTools: ['send_channel_message'] },
     ]);
-    mockCanUserViewPage.mockImplementation(async (_userId, pageId) => pageId === 'agent-1');
+    mockCanActorConsultAgent.mockImplementation(async (_ctx, agentId) => agentId === 'agent-1');
 
     await triggerMentionedAgentResponses({
       ...baseParams,
@@ -304,7 +304,7 @@ describe('agent-mention-responder', () => {
         '@[Budget Agent](agent-1:page) and @[Ops Agent](agent-2:page)',
     });
 
-    expect(mockCanUserViewPage).toHaveBeenCalledTimes(2);
+    expect(mockCanActorConsultAgent).toHaveBeenCalledTimes(2);
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
     expect(mockAskAgentExecute.mock.calls[0][0].agentId).toBe('agent-1');
     expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
@@ -367,29 +367,36 @@ describe('agent-mention-responder', () => {
     expect(mockSendChannelExecute).not.toHaveBeenCalled();
   });
 
-  it('given a guest agent member whose home page the mentioner cannot view, replies because membership in the channel drive is the grant', async () => {
+  it('asks the shared consult rule AS the mentioner, with the channel drive, so a guest agent member replies', async () => {
     mockPagesFindMany.mockResolvedValue([
       { id: 'agent-1', title: 'Guest Agent', enabledTools: ['send_channel_message'] },
     ]);
-    mockCanUserViewPage.mockResolvedValue(false);
-    mockHasAgentDriveMembership.mockResolvedValue(true);
+    mockCanUserViewPage.mockResolvedValue(false); // home page not viewable — irrelevant now
 
     await triggerMentionedAgentResponses({
       ...baseParams,
       content: 'Need input @[Guest Agent](agent-1:page)',
     });
 
-    expect(mockHasAgentDriveMembership).toHaveBeenCalledWith('agent-1', 'drive-1');
-    expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
+    expect(mockCanActorConsultAgent).toHaveBeenCalledTimes(1);
+    const [consultCtx, consultAgentId, consultDriveId] = mockCanActorConsultAgent.mock.calls[0];
+    expect(consultAgentId).toBe('agent-1');
+    expect(consultDriveId).toBe('drive-1');
+    expect(consultCtx.userId).toBe('user-1');
+    expect(consultCtx.chatSource).toBeUndefined(); // the human asks, not the agent
+    expect(consultCtx.locationContext?.currentDrive?.id).toBe('drive-1');
+    // The consult itself runs under the SAME context shape, so executeAskAgent's
+    // own canActorConsultAgent check reaches the same answer.
+    const askContext = mockAskAgentExecute.mock.calls[0][1].experimental_context;
+    expect(askContext.locationContext?.currentDrive?.id).toBe('drive-1');
     expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
   });
 
-  it('given no driveId, falls back to the mentioner view check alone', async () => {
+  it('given no driveId, still asks the consult rule (with null) and skips when it denies', async () => {
     mockPagesFindMany.mockResolvedValue([
       { id: 'agent-1', title: 'Guest Agent', enabledTools: ['send_channel_message'] },
     ]);
-    mockCanUserViewPage.mockResolvedValue(false);
-    mockHasAgentDriveMembership.mockResolvedValue(true);
+    mockCanActorConsultAgent.mockResolvedValue(false);
 
     await triggerMentionedAgentResponses({
       ...baseParams,
@@ -397,7 +404,7 @@ describe('agent-mention-responder', () => {
       content: 'Need input @[Guest Agent](agent-1:page)',
     });
 
-    expect(mockHasAgentDriveMembership).not.toHaveBeenCalled();
+    expect(mockCanActorConsultAgent.mock.calls[0][2]).toBeNull();
     expect(mockAskAgentExecute).not.toHaveBeenCalled();
     expect(mockSendChannelExecute).not.toHaveBeenCalled();
   });

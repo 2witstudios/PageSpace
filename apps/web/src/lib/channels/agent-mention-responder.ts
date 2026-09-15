@@ -2,9 +2,7 @@ import { db } from '@pagespace/db/db'
 import { and, desc, eq, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { channelMessages } from '@pagespace/db/schema/chat';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
-import { hasAgentDriveMembership } from '@pagespace/lib/permissions/agent-permissions'
-import { canActorEditPage } from '@/lib/ai/tools/actor-permissions'
+import { canActorEditPage, canActorConsultAgent } from '@/lib/ai/tools/actor-permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -409,24 +407,24 @@ function canAgentSendChannelMessages(enabledTools: string[] | null): boolean {
 }
 
 /**
- * Whether the mentioner may summon this agent from this channel.
- *
- * Viewing the agent's home page is sufficient (the rule this replaces). It is
- * not necessary: an agent added to the channel's drive as a member — possibly
- * a guest homed in another drive the mentioner cannot see — was put there by
- * an owner/admin/member precisely so the drive's members can talk to it, and
- * the drive's agent-members list already shows it to every member. Membership
- * in the channel's drive is the grant. Without a driveId there is nothing to
- * check membership against, so only the view rule applies.
+ * The execution context the mentioner's consult runs under — a plain user
+ * context (no agent chatSource: the human asks, the agent answers), located
+ * in the channel's drive. It is passed to BOTH the preliminary
+ * canActorConsultAgent gate and executeAskAgent, whose own gate is the same
+ * function, so the two can never disagree about a guest agent.
  */
-async function canMentionerReachAgent(
-  mentionerUserId: string,
-  agentPageId: string,
-  channelDriveId: string | null,
-): Promise<boolean> {
-  if (await canUserViewPage(mentionerUserId, agentPageId)) return true;
-  if (!channelDriveId) return false;
-  return hasAgentDriveMembership(agentPageId, channelDriveId);
+function buildMentionerContext(
+  params: TriggerMentionedAgentResponsesParams,
+  conversationId: string,
+  locationContext: ToolExecutionContext['locationContext'],
+): ToolExecutionContext {
+  return {
+    userId: params.userId,
+    conversationId,
+    locationContext,
+    requestOrigin: 'user',
+    agentCallDepth: 0,
+  } as ToolExecutionContext;
 }
 
 /**
@@ -609,21 +607,20 @@ export async function triggerMentionedAgentResponses(
     const locationContext = buildLocationContext(params);
 
     // Three gates, cheapest first, all before any model call: the agent's
-    // allowlist lets it talk in channels; the mentioner may summon it; and
-    // it can actually post in THIS channel as itself (a plain MEMBER agent
-    // can, in a non-private channel — the same rule as a member user).
+    // allowlist lets it talk in channels; the mentioner may consult it (the
+    // same rule executeAskAgent applies — view its page, or it is a member of
+    // the channel's drive); and it can actually post in THIS channel as
+    // itself (a plain MEMBER agent can, in a non-private channel — the same
+    // rule as a member user).
     const eligibleAgentChecks = await Promise.all(
       mentionedAgents.map(async (agent) => {
         if (!canAgentSendChannelMessages(agent.enabledTools)) return { agent, eligible: false };
-        if (!(await canMentionerReachAgent(params.userId, agent.id, params.driveId ?? null))) {
+        const conversationId = mentionConversationIdFor(params.channelId, agent.id);
+        const mentionerContext = buildMentionerContext(params, conversationId, locationContext);
+        if (!(await canActorConsultAgent(mentionerContext, agent.id, params.driveId ?? null))) {
           return { agent, eligible: false };
         }
-        const actorContext = buildAgentActorContext(
-          params,
-          agent,
-          mentionConversationIdFor(params.channelId, agent.id),
-          locationContext,
-        );
+        const actorContext = buildAgentActorContext(params, agent, conversationId, locationContext);
         return { agent, eligible: await canActorEditPage(actorContext, params.channelId) };
       })
     );
@@ -739,13 +736,7 @@ export async function triggerMentionedAgentResponses(
             {
               toolCallId: `channel-mention-ask-${params.sourceMessageId}-${agent.id}`,
               messages: [],
-              experimental_context: {
-                userId: params.userId,
-                conversationId: mentionConversationId,
-                locationContext,
-                requestOrigin: 'user',
-                agentCallDepth: 0,
-              } as ToolExecutionContext,
+              experimental_context: buildMentionerContext(params, mentionConversationId, locationContext),
             }
           );
 
