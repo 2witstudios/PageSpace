@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
-import { MONTHLY_CREDITS, FREE_STARTER_CREDITS, creditPacksPhrase } from "@/lib/credits";
+import { MONTHLY_CREDITS, FREE_STARTER_CREDITS_DISPLAY, creditPacksPhrase } from "@/lib/credits";
 import { JsonLd, createFaqSchema } from "@/lib/schema";
 import { FAQHashOpener } from "./hash-opener";
 
@@ -75,7 +75,7 @@ const faqs: FAQItem[] = [
   {
     id: "is-there-a-free-plan",
     question: "Is there a free plan?",
-    answer: `Yes. The Free plan includes 500 MB of storage and ${FREE_STARTER_CREDITS} credits to get started — a one-time grant that meters your AI usage. No credit card required.`,
+    answer: `Yes. The Free plan includes 500 MB of storage and ${FREE_STARTER_CREDITS_DISPLAY} credits to get started — a one-time grant that meters your AI usage. No credit card required.`,
     category: "Pricing and plans",
   },
   {
@@ -97,7 +97,7 @@ const faqs: FAQItem[] = [
   {
     id: "how-ai-credits-work",
     question: "How do credits work?",
-    answer: `Free accounts start with ${FREE_STARTER_CREDITS} credits, once; paid plans include a monthly credit allowance. Each AI action draws down credits based on what the underlying model actually costs, so a quick reply with a lightweight model costs far less than a long answer from a frontier model. Credits never expire — on paid plans, unused monthly credits roll over and accumulate.`,
+    answer: `Free accounts start with ${FREE_STARTER_CREDITS_DISPLAY} credits, once; paid plans include a monthly credit allowance. Each AI action draws down credits based on what the underlying model actually costs, so a quick reply with a lightweight model costs far less than a long answer from a frontier model. Credits never expire — on paid plans, unused monthly credits roll over and accumulate.`,
     category: "Pricing and plans",
   },
   {

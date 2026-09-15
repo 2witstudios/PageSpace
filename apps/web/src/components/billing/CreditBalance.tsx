@@ -14,7 +14,7 @@ import { useCreditBalance } from '@/hooks/useCreditBalance';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
 import { UpgradeTierButton } from '@/components/billing/UpgradeTierButton';
-import { centsToCredits, formatCreditCount } from '@/lib/subscription/credits';
+import { creditsFromCents, formatCreditCount } from '@/lib/subscription/credits';
 
 /** Percentage of the allowance remaining below which we warn the user. */
 const LOW_BALANCE_THRESHOLD_PCT = 15;
@@ -55,7 +55,7 @@ export function CreditBalance() {
   const isLow = inDebt || (monthly.allowance > 0 && netMonthly / monthly.allowance <= LOW_BALANCE_THRESHOLD_PCT / 100);
   const monthlyStr = formatCreditCount(netMonthly);
   const allowanceStr = formatCreditCount(monthly.allowance);
-  const topupCredits = centsToCredits(topup.remaining);
+  const topupCredits = creditsFromCents(topup.remaining);
   const topupStr = formatCreditCount(topup.remaining);
   // Surface in-flight reservations as a quiet signal, not in the headline number.
   const hasInFlight = reserved > 0;

@@ -8,6 +8,7 @@ import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
 import { getCreditPack, CREDIT_TOPUP_MIN_CENTS, CREDIT_TOPUP_MAX_CENTS } from '@pagespace/lib/billing/credit-pricing';
 import { validateTopupAmountCents } from '@pagespace/lib/billing/credit-core';
+import { formatDollars } from '@pagespace/lib/billing/money-model';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -60,7 +61,7 @@ export async function POST(request: NextRequest) {
       if (cents === null) {
         return NextResponse.json(
           {
-            error: `Enter an amount between $${CREDIT_TOPUP_MIN_CENTS / 100} and $${CREDIT_TOPUP_MAX_CENTS / 100}.`,
+            error: `Enter an amount between ${formatDollars(CREDIT_TOPUP_MIN_CENTS)} and ${formatDollars(CREDIT_TOPUP_MAX_CENTS)}.`,
           },
           { status: 400 },
         );

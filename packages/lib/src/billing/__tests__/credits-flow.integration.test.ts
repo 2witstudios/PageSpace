@@ -417,11 +417,19 @@ import { consumeCredits } from '../credit-consume';
 import { backfillCredits } from '../credit-backfill';
 import { reconcileOpenRouterCosts, type GenerationFetcher } from '../cost-reconcile';
 import {
-  TIER_MONTHLY_ALLOWANCE_CENTS,
   RESERVE_FLOOR_CENTS,
   MARKUP_BPS,
   MACHINE_MARKUP_BPS,
 } from '../credit-pricing';
+import { tierAllowanceCents } from '../money-model';
+
+// The allowances the flow grants when no invoice sizes them (MON-2 derivation
+// from the list price; with MONEY_MODEL_V2 off these equal the old table).
+const TIER_MONTHLY_ALLOWANCE_CENTS = {
+  free: tierAllowanceCents('free'),
+  pro: tierAllowanceCents('pro'),
+  business: tierAllowanceCents('business'),
+} as const;
 
 // ── test helpers over the shared store ──────────────────────────────────────────
 const store = H.store;

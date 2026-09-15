@@ -15,6 +15,7 @@ import { Loader2, AlertCircle, ArrowUp, ArrowDown } from 'lucide-react';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import type { PlanDefinition } from '@/lib/subscription/plans';
 import { PromoCodeInput, type AppliedPromo } from './PromoCodeInput';
+import { dollarsFromCents } from '@/lib/subscription/credits';
 
 interface PlanChangeConfirmationProps {
   open: boolean;
@@ -141,7 +142,7 @@ export function PlanChangeConfirmation({
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
-    }).format(cents / 100);
+    }).format(dollarsFromCents(cents));
   };
 
   return (

@@ -118,17 +118,18 @@ describe('realtime session constants', () => {
 
 describe('TIER_ALLOWANCE_REFILLS', () => {
   it('names every tier, and only the free tier is a one-time (non-refilling) grant', async () => {
-    const { TIER_ALLOWANCE_REFILLS, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
-    expect(Object.keys(TIER_ALLOWANCE_REFILLS).sort()).toEqual(Object.keys(TIER_MONTHLY_ALLOWANCE_CENTS).sort());
+    const { TIER_ALLOWANCE_REFILLS } = await import('../credit-pricing');
+    const { TIERS } = await import('../subscription-tiers');
+    expect(Object.keys(TIER_ALLOWANCE_REFILLS).sort()).toEqual([...TIERS].sort());
     expect(TIER_ALLOWANCE_REFILLS.free).toBe(false);
     expect(TIER_ALLOWANCE_REFILLS.pro).toBe(true);
     expect(TIER_ALLOWANCE_REFILLS.founder).toBe(true);
     expect(TIER_ALLOWANCE_REFILLS.business).toBe(true);
   });
 
-  it('free starter grant is $5 of credit value by default', async () => {
-    const { TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
-    expect(TIER_MONTHLY_ALLOWANCE_CENTS.free).toBe(500);
+  it('MON-1 credit-pricing no longer tabulates an allowance — the money model derives it', async () => {
+    const pricing: Record<string, unknown> = await import('../credit-pricing');
+    expect(pricing.TIER_MONTHLY_ALLOWANCE_CENTS).toBeUndefined();
   });
 });
 

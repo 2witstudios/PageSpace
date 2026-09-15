@@ -34,7 +34,6 @@ import {
 } from './credit-core';
 import {
   RESERVE_FLOOR_CENTS,
-  TIER_MONTHLY_ALLOWANCE_CENTS,
   allowanceRefills,
   isOneTimeAllowanceTier,
   CREDIT_HOLD_ESTIMATE_CENTS,
@@ -43,6 +42,8 @@ import {
   dailyExposureCapForTier,
 } from './credit-pricing';
 import { readSpendableCents } from './credit-balance';
+import { tierAllowanceCents } from './money-model';
+import { isSubscriptionTier } from './subscription-tiers';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 // The partial unique index credit_ledger_stripe_ref_unique is defined WHERE
@@ -277,10 +278,10 @@ export async function canConsumeAI(
   // debt-clearing top-up would have its debt collected twice (the reset re-nets the
   // already-paid debt). Reading the row under the lock closes both interleavings.
   const windowExpired = row !== null && (row.monthlyPeriodEnd === null || row.monthlyPeriodEnd < now);
-  // Only tiers with a defined allowance may roll: callers pass users.subscriptionTier
+  // Only tiers in the canonical vocabulary may roll: callers pass users.subscriptionTier
   // through unchecked casts, and a legacy/unknown value (e.g. 'normal') reaching
   // computeMonthlyRefill would silently rewrite the account to the free allowance.
-  const tierHasAllowance = tier in TIER_MONTHLY_ALLOWANCE_CENTS;
+  const tierHasAllowance = isSubscriptionTier(tier);
   // Free never refills, so the (rare) subscription lookup is only ever reached by a
   // refilling tier with an expired window.
   if (
@@ -326,9 +327,10 @@ export async function canConsumeAI(
       // Compute the refill from the LOCKED, current balance so unspent credits roll
       // over and outstanding debt is netted against the up-to-date carry (matching the
       // paid invoice.paid path), not against the stale pre-transaction snapshot.
+      // No invoice on this path (comped / no-subscription paid account): the grant is
+      // derived from the tier's list price (MON-2).
       const refill = computeMonthlyRefill(
-        tier,
-        TIER_MONTHLY_ALLOWANCE_CENTS,
+        tierAllowanceCents(tier),
         locked.monthlyRemainingCents ?? 0,
         locked.debtCents ?? 0,
       );
@@ -375,7 +377,7 @@ export async function canConsumeAI(
   // judges the REAL persisted balance under a row lock, never our assumed allowance,
   // so we can't allow when a racing request already drew the row down.
   if (!row) {
-    const monthly = TIER_MONTHLY_ALLOWANCE_CENTS[tier] ?? TIER_MONTHLY_ALLOWANCE_CENTS.free;
+    const monthly = tierAllowanceCents(tier);
     await db.transaction(async (tx) => {
       const balanceInserted = await tx
         .insert(creditBalances)
@@ -416,7 +418,7 @@ export async function canConsumeAI(
   // never double-fund. The increment is one relative UPDATE, atomic against a
   // concurrent top-up's own locked write to the same row.
   if (row && row.monthlyPeriodEnd === null && isOneTimeAllowanceTier(tier)) {
-    const monthly = TIER_MONTHLY_ALLOWANCE_CENTS[tier];
+    const monthly = tierAllowanceCents(tier);
     await db.transaction(async (tx) => {
       const granted = await tx
         .insert(creditLedger)

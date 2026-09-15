@@ -52,10 +52,8 @@ import { listSuppressedEmails } from '@pagespace/lib/compliance/erasure/resend-s
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { isValidEmail } from '@pagespace/lib/validators/email';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
-import {
-  TIER_MONTHLY_ALLOWANCE_CENTS,
-  CREDIT_TOPUP_MIN_CENTS,
-} from '@pagespace/lib/billing/credit-pricing';
+import { CREDIT_TOPUP_MIN_CENTS } from '@pagespace/lib/billing/credit-pricing';
+import { formatCreditCount, formatDollars, tierAllowanceCents } from '@pagespace/lib/billing/money-model';
 import { FreeCreditsChangeEmail } from '@pagespace/lib/email-templates/FreeCreditsChangeEmail';
 import { renderEmailToHtml } from '@pagespace/lib/email-templates/render-email';
 import {
@@ -96,15 +94,9 @@ const NOTIFICATION_TYPE = 'PRODUCT_UPDATE' as const;
 const IDEMPOTENCY_PREFIX = 'free-credits-change-2026-09';
 
 /** Whole cents → credit units for display ("5", "3.2"). Mirrors apps/web's formatCreditCount. */
-function formatCredits(cents: number): string {
-  const units = cents / 100;
-  return Number.isInteger(units) ? `${units}` : units.toFixed(1);
-}
-
-function formatDollars(cents: number): string {
-  const dollars = cents / 100;
-  return Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`;
-}
+// Credit and dollar strings come from the one money model (MON-5): a credit count
+// with no currency symbol, and a dollar price for the real top-up minimum.
+const formatCredits = formatCreditCount;
 
 function defaultLogPath(): string {
   const fromEnv = process.env.FREE_CREDITS_CHANGE_EMAIL_LOG_PATH?.trim();
@@ -158,8 +150,8 @@ async function main(): Promise<number> {
   const baseUrl = resolveBaseUrl();
   const planUrl = `${baseUrl}/settings/plan`;
   const usageUrl = `${baseUrl}/settings/usage`;
-  const starterCredits = formatCredits(TIER_MONTHLY_ALLOWANCE_CENTS.free);
-  const proMonthlyCredits = formatCredits(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
+  const starterCredits = formatCredits(tierAllowanceCents('free'));
+  const proMonthlyCredits = formatCredits(tierAllowanceCents('pro'));
   const minTopup = formatDollars(CREDIT_TOPUP_MIN_CENTS);
 
   console.log('📢 Free-plan credits change notice');
@@ -271,7 +263,7 @@ async function main(): Promise<number> {
       continue;
     }
     const debt = r.debtCents ?? 0;
-    const pendingStarter = r.monthlyPeriodEnd === null ? TIER_MONTHLY_ALLOWANCE_CENTS.free : 0;
+    const pendingStarter = r.monthlyPeriodEnd === null ? tierAllowanceCents('free') : 0;
     const funded = r.monthlyRemainingCents + r.topupRemainingCents + pendingStarter;
     const spendable = debt > 0 ? funded - debt : Math.max(0, funded);
     balanceByUserId.set(

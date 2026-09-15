@@ -1,0 +1,170 @@
+/**
+ * money-model — THE definition of price, credits, and the ratio between them
+ * (Spec MON-1..MON-8, A-11).
+ *
+ * A credit is not a dollar. This module is the only place that states:
+ *   - MARKUP_BPS: what real provider cost is marked up by before it is charged;
+ *   - CREDITS_PER_DOLLAR: the purchase and display rate of a credit;
+ *   - INCLUDED_CREDIT_RATIO_BPS: the share of a subscription's price paid that is
+ *     granted back as credit value each period;
+ *   - FREE_STARTER_CREDITS: the one-time free grant, a plain count;
+ *   - the conversions between cents, credits, and dollars, and the one formatter
+ *     that renders a credit amount.
+ *
+ * No other file may tabulate an allowance, a pack size, or a credit-to-money
+ * conversion (money-model-guard.test.ts greps for `/ 100` and `* 100` on any cents
+ * or credit value outside this file). Balances are still stored in whole cents of
+ * credit VALUE — `creditBalances.*Cents`, the ledger, holds — and this module is how
+ * those cents become the counts a person sees.
+ *
+ * MONEY_MODEL_V2 (server env; deleted in Wave G) gates only the RATIO. Off, a paid
+ * tier is granted 100% of its price as credit value, which is exactly today's
+ * tabulated allowance (Pro $15 → 1500¢), so balances compute as before until the
+ * migration day flips it. The rate and the formatter are not gated: a credit is
+ * CREDITS_PER_DOLLAR⁻¹ of a dollar everywhere, immediately.
+ *
+ * Client bundles inline `process.env` at build time, so on the client the flag and
+ * MARKUP_BPS reflect the build's defaults — correct for plan copy; the authoritative
+ * live balance always comes from `GET /api/credits`.
+ */
+
+import { envBool, envInt, type EnvSource } from './env-parse';
+import { TIER_PLAN_LIMITS, isSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
+
+/** Markup applied to real provider cost, in basis points. 15000 = 1.5×. */
+export const MARKUP_BPS = envInt('CREDIT_MARKUP_BPS', 15000);
+
+/** One dollar is 100 cents. Stated once; every cents↔dollars conversion goes through here. */
+const CENTS_PER_DOLLAR = 100;
+
+/** The purchase and display rate: a dollar of credit value is this many credits (A-11). */
+export const CREDITS_PER_DOLLAR = 100;
+
+/**
+ * Share of a subscription's PAID amount granted as credit value each period, in
+ * basis points (A-11: 60% for Pro and Business; free pays nothing and derives
+ * nothing). Keyed by the canonical vocabulary, so removing a tier from TIERS (lane
+ * A2 removes Founder, A-9) makes its row a compile error until it is removed too —
+ * the two tables cannot drift apart.
+ */
+export const INCLUDED_CREDIT_RATIO_BPS: Record<SubscriptionTier, number> = {
+  free: 0,
+  pro: 6000,
+  // Founder is removed from the vocabulary by lane A2 (A-9); until then it derives
+  // at the same ratio as the other paid tiers.
+  founder: 6000,
+  business: 6000,
+};
+
+/**
+ * The ratio in force before MONEY_MODEL_V2: the whole price paid becomes credit
+ * value, which reproduces the old tabulated allowances exactly.
+ */
+const LEGACY_INCLUDED_CREDIT_RATIO_BPS = 10_000;
+
+/**
+ * One-time starter grant for the free tier, as a plain credit count (MON-8). Not
+ * derived from any price. 500 credits = $5 of credit value at CREDITS_PER_DOLLAR,
+ * unchanged from the previous $5 starter grant.
+ */
+export const FREE_STARTER_CREDITS = 500;
+
+/**
+ * Whether the decoupled money model (the 60% ratio) is switched on. Reads
+ * MONEY_MODEL_V2 at call time; `env` is injectable for callers evaluating a
+ * supplied environment.
+ */
+export function isMoneyModelV2Enabled(env: EnvSource = process.env): boolean {
+  return envBool('MONEY_MODEL_V2', false, env);
+}
+
+/**
+ * The included-credit ratio for `tier`, in basis points. 0 for the free tier and for
+ * any unknown/legacy value (nothing is paid, so nothing derives). Accepts the raw
+ * `users.subscriptionTier` string.
+ */
+export function includedCreditRatioBps(tier: string): number {
+  if (!isSubscriptionTier(tier)) return 0;
+  const ratio = INCLUDED_CREDIT_RATIO_BPS[tier];
+  if (ratio <= 0) return 0;
+  return isMoneyModelV2Enabled() ? ratio : LEGACY_INCLUDED_CREDIT_RATIO_BPS;
+}
+
+/**
+ * MON-2: allowanceCents = paidCents × ratio, computed from what the invoice actually
+ * paid so a price change, a promo, or a partial period flows through without a
+ * table edit. Floored to whole cents (never grants more than the ratio of what was
+ * paid); fails closed — a negative or non-finite amount, or a tier with no ratio,
+ * grants nothing.
+ */
+export function allowanceCentsForPaidCents(paidCents: number, tier: SubscriptionTier): number {
+  if (!Number.isFinite(paidCents) || paidCents <= 0) return 0;
+  const ratio = includedCreditRatioBps(tier);
+  if (ratio <= 0) return 0;
+  return Math.floor((paidCents * ratio) / 10_000);
+}
+
+/** A tier's monthly list price in whole cents, from the canonical tier table. */
+export function tierListPriceCents(tier: SubscriptionTier): number {
+  return centsFromDollars(TIER_PLAN_LIMITS[tier].priceMonthlyUsd);
+}
+
+/**
+ * The grant a tier receives when there is no invoice to size it from: the gate's
+ * own period roll for comped/no-subscription paid accounts, the lazy-init of a
+ * brand-new balance row, and display of an account that has never been granted.
+ * Paid tiers derive from the list price; free is the starter grant; an
+ * unknown/legacy value (e.g. a stale `users.subscriptionTier`) is treated as free so
+ * it is never handed a paid allowance. Accepts the raw column string.
+ */
+export function tierAllowanceCents(tier: string): number {
+  if (isSubscriptionTier(tier) && tier !== 'free') {
+    return allowanceCentsForPaidCents(tierListPriceCents(tier), tier);
+  }
+  return centsFromCredits(FREE_STARTER_CREDITS);
+}
+
+/** Cents of credit value → credit count. */
+export function creditsFromCents(cents: number): number {
+  return (cents / CENTS_PER_DOLLAR) * CREDITS_PER_DOLLAR;
+}
+
+/** Credit count → cents of credit value. */
+export function centsFromCredits(credits: number): number {
+  return (credits / CREDITS_PER_DOLLAR) * CENTS_PER_DOLLAR;
+}
+
+/** Whole cents → dollars (real money, for prices, invoices, and top-up purchases). */
+export function dollarsFromCents(cents: number): number {
+  return cents / CENTS_PER_DOLLAR;
+}
+
+/** Dollars → whole cents (real money), rounded to the nearest cent. */
+export function centsFromDollars(dollars: number): number {
+  return Math.round(dollars * CENTS_PER_DOLLAR);
+}
+
+const creditCountFormat = new Intl.NumberFormat('en-US', {
+  maximumFractionDigits: 0,
+  useGrouping: true,
+});
+
+/**
+ * MON-5 / UI-12: render cents of credit value as an integer credit count with
+ * thousands separators — "900", "1,200", "9,000" — never a decimal, never a dollar
+ * sign. Rounds to the nearest whole credit; an overage (negative) keeps its minus.
+ */
+export function formatCreditCount(cents: number): string {
+  const credits = Math.round(creditsFromCents(cents));
+  // Math.round(-0.2) is -0, which would print as "-0".
+  return creditCountFormat.format(credits === 0 ? 0 : credits);
+}
+
+/**
+ * Format whole cents as a dollar price string ("$10", "$10.50"), dropping a trailing
+ * ".00" for whole dollars. Real money only: plan prices, seat prices, top-up bounds.
+ */
+export function formatDollars(cents: number): string {
+  const dollars = dollarsFromCents(cents);
+  return Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`;
+}

@@ -14,7 +14,6 @@
  * Spend always draws monthly first.
  */
 
-import type { SubscriptionTier } from '../services/subscription-utils';
 // Type-only import (erased at compile time, zero runtime cost) — usage-source.ts
 // is itself a pure, zero-I/O module, so this doesn't break the invariant above.
 import type { AIUsageSource } from '../monitoring/usage-source';
@@ -282,21 +281,24 @@ export interface MonthlyRefill {
 
 /**
  * Compute the rollover state for a new billing period: outstanding debt is netted
- * against the carried balance, then the tier allowance is added. Credits accumulate
+ * against the carried balance, then `allowanceCents` is added. Credits accumulate
  * across periods (rollover); debt is absorbed into `monthlyRemainingCents`, not
  * forwarded as a field. `monthlyRemainingCents` is clamped to 0 — the DB schema
  * enforces `monthlyRemainingCents >= 0`, and any debt exceeding (remaining + allowance)
  * is forgiven rather than written as a negative balance. Defaults to 0 for backward
- * compat when no prior balance or debt exists. Unknown tiers fall back to the free
- * allowance.
+ * compat when no prior balance or debt exists.
+ *
+ * The allowance is DERIVED by the caller (MON-2): `allowanceCentsForPaidCents` from
+ * the invoice that was actually paid, or `tierAllowanceCents` from the list price
+ * when there is no invoice. This function never looks a tier up in a table. A
+ * negative or non-finite allowance grants nothing.
  */
 export function computeMonthlyRefill(
-  tier: SubscriptionTier,
-  allowanceTable: Record<SubscriptionTier, number>,
+  allowanceCents: number,
   currentRemainingCents: number = 0,
   currentDebtCents: number = 0,
 ): MonthlyRefill {
-  const allowance = allowanceTable[tier] ?? allowanceTable.free;
+  const allowance = Number.isFinite(allowanceCents) ? Math.max(0, Math.floor(allowanceCents)) : 0;
   const netCarried = currentRemainingCents - Math.max(0, currentDebtCents);
   // Clamp to 0: the DB schema enforces monthlyRemainingCents >= 0. Excess debt beyond
   // (remaining + allowance) is absorbed here rather than written as a negative balance.

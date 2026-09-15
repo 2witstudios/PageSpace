@@ -14,12 +14,11 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { CreditCard, Loader2 } from 'lucide-react';
 import { post } from '@/lib/auth/auth-fetch';
+import { CREDIT_PACK_LIST, formatDollars, dollarsFromCents, centsFromDollars } from '@/lib/subscription/credits';
 import {
-  CREDIT_PACK_LIST,
-  formatCreditDollars,
-  TOPUP_MIN_CENTS,
-  TOPUP_MAX_CENTS,
-} from '@/lib/subscription/credits';
+  CREDIT_TOPUP_MIN_CENTS as TOPUP_MIN_CENTS,
+  CREDIT_TOPUP_MAX_CENTS as TOPUP_MAX_CENTS,
+} from '@pagespace/lib/billing/credit-pricing';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { useCreditBalance } from '@/hooks/useCreditBalance';
 
@@ -80,10 +79,10 @@ export function BuyCreditsButton({
       setError('Enter a dollar amount.');
       return;
     }
-    const cents = Math.round(dollars * 100);
+    const cents = centsFromDollars(dollars);
     if (cents < TOPUP_MIN_CENTS || cents > TOPUP_MAX_CENTS) {
       setError(
-        `Enter an amount between ${formatCreditDollars(TOPUP_MIN_CENTS)} and ${formatCreditDollars(TOPUP_MAX_CENTS)}.`,
+        `Enter an amount between ${formatDollars(TOPUP_MIN_CENTS)} and ${formatDollars(TOPUP_MAX_CENTS)}.`,
       );
       return;
     }
@@ -161,8 +160,8 @@ export function BuyCreditsButton({
             <Input
               type="number"
               inputMode="decimal"
-              min={TOPUP_MIN_CENTS / 100}
-              max={TOPUP_MAX_CENTS / 100}
+              min={dollarsFromCents(TOPUP_MIN_CENTS)}
+              max={dollarsFromCents(TOPUP_MAX_CENTS)}
               step="1"
               placeholder="25"
               value={customDollars}
