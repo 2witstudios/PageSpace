@@ -91,6 +91,7 @@ export async function GET(
       includePageTree: page.includePageTree ?? false,
       pageTreeScope: page.pageTreeScope ?? 'children',
       toolExposureMode: page.toolExposureMode ?? 'upfront',
+      toolApprovalMode: page.toolApprovalMode ?? 'ask',
       sandboxEnabled: page.sandboxEnabled ?? false,
       defaultEnvId: page.defaultEnvId ?? null,
     });
@@ -128,6 +129,7 @@ export async function PATCH(
       includePageTree,
       pageTreeScope,
       toolExposureMode,
+      toolApprovalMode,
       sandboxEnabled,
       defaultEnvId,
       expectedRevision,
@@ -230,6 +232,13 @@ export async function PATCH(
       // Validate mode value
       if (toolExposureMode === 'upfront' || toolExposureMode === 'search') {
         updateData.toolExposureMode = toolExposureMode;
+      }
+    }
+
+    if (toolApprovalMode !== undefined) {
+      // 'ask' pauses gated writes for the owner's approval; 'auto' never pauses.
+      if (toolApprovalMode === 'ask' || toolApprovalMode === 'auto') {
+        updateData.toolApprovalMode = toolApprovalMode;
       }
     }
 
@@ -356,6 +365,7 @@ export async function PATCH(
       includePageTree: responsePage.includePageTree ?? false,
       pageTreeScope: responsePage.pageTreeScope ?? 'children',
       toolExposureMode: responsePage.toolExposureMode ?? 'upfront',
+      toolApprovalMode: responsePage.toolApprovalMode ?? 'ask',
       sandboxEnabled: responsePage.sandboxEnabled ?? false,
       defaultEnvId: responsePage.defaultEnvId ?? null,
     });
