@@ -303,6 +303,21 @@
       "import": "./dist/agent-accounts/audit-gate-executor.js",
       "require": "./dist/agent-accounts/audit-gate-executor.js"
     },
+    "./agent-accounts/account-authority-key": {
+      "types": "./dist/agent-accounts/account-authority-key.d.ts",
+      "import": "./dist/agent-accounts/account-authority-key.js",
+      "require": "./dist/agent-accounts/account-authority-key.js"
+    },
+    "./agent-accounts/sign-grant": {
+      "types": "./dist/agent-accounts/sign-grant.d.ts",
+      "import": "./dist/agent-accounts/sign-grant.js",
+      "require": "./dist/agent-accounts/sign-grant.js"
+    },
+    "./auth/account-authority-signing-key": {
+      "types": "./dist/auth/account-authority-signing-key.d.ts",
+      "import": "./dist/auth/account-authority-signing-key.js",
+      "require": "./dist/auth/account-authority-signing-key.js"
+    },
     "./agent-accounts/always-allowed-by-class": {
       "types": "./dist/agent-accounts/always-allowed-by-class.d.ts",
       "import": "./dist/agent-accounts/always-allowed-by-class.js",
