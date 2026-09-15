@@ -8,7 +8,20 @@ import { z } from 'zod';
 import { defineRow, type GitToolRow } from './types';
 import { cwdField } from './fields';
 import { evaluatePushGuard } from '../core/refspec';
+import { validateFlagSafe } from '../core/validators';
 import { buildFetchArgs, buildPullArgs, buildPushArgs } from '../core/command-specs/remote';
+
+/**
+ * remote and branch are bare argv positionals on fetch/pull/push, so a
+ * flag-shaped value (`--mirror`, `--force`, `--upload-pack=…`) would be parsed
+ * as an OPTION. Reject both before any args are built; the builders also emit
+ * "--" as defense-in-depth.
+ */
+function validateRemoteAndBranch({ remote, branch }: { remote?: string; branch?: string }) {
+  const remoteOk = remote === undefined ? { ok: true as const } : validateFlagSafe(remote, 'remote');
+  if (!remoteOk.ok) return remoteOk;
+  return branch === undefined ? { ok: true as const } : validateFlagSafe(branch, 'branch');
+}
 
 export const REMOTE_TOOL_ROWS: GitToolRow[] = [
   defineRow({
@@ -20,6 +33,7 @@ export const REMOTE_TOOL_ROWS: GitToolRow[] = [
     schema: z
       .object({ remote: z.string().optional(), branch: z.string().optional(), cwd: cwdField })
       .strict(),
+    validate: validateRemoteAndBranch,
     buildArgs: ({ remote, branch }) => ({ args: buildFetchArgs({ remote, branch }) }),
   }),
   defineRow({
@@ -36,6 +50,7 @@ export const REMOTE_TOOL_ROWS: GitToolRow[] = [
         cwd: cwdField,
       })
       .strict(),
+    validate: validateRemoteAndBranch,
     buildArgs: ({ remote, branch, rebase }) => ({ args: buildPullArgs({ remote, branch, rebase }) }),
   }),
   defineRow({
@@ -54,7 +69,14 @@ export const REMOTE_TOOL_ROWS: GitToolRow[] = [
         cwd: cwdField,
       })
       .strict(),
-    validate: ({ force, branch }) => evaluatePushGuard({ force, branch }),
+    // A flag-shaped remote/branch (`--force`, `--mirror`) would bypass the push
+    // guard below (which only inspects the force boolean and the refspec shape).
+    // Reject those first; only then evaluate the guard on the real destination.
+    validate: ({ remote, branch, force }) => {
+      const safe = validateRemoteAndBranch({ remote, branch });
+      if (!safe.ok) return safe;
+      return evaluatePushGuard({ force, branch });
+    },
     buildArgs: ({ remote, branch, force, set_upstream }) => ({
       args: buildPushArgs({ remote, branch, force, set_upstream }),
     }),
