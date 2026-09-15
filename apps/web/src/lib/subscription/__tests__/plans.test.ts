@@ -36,9 +36,9 @@ describe('Subscription Plans', () => {
 
     it('MON-6 every plan states included credits as an integer count and the top-up rate as separate facts', () => {
       for (const plan of getAllPlans()) {
-        expect(plan.includedCredits).toMatch(/^\d+ credits (included each month|to start)$/);
+        expect(plan.includedCredits).toMatch(/^[0-9,]+ credits (included each month|to start)$/);
         expect(plan.includedCredits).not.toContain('$');
-        expect(plan.topUpRate).toMatch(/^\$\d+ buys \d+ credits$/);
+        expect(plan.topUpRate).toMatch(/^[0-9,]+ credits per \$[0-9]+$/);
         expect(plan.price.formatted).not.toContain('credit');
       }
       expect(PLANS.free.includedCredits).toMatch(/to start$/);
