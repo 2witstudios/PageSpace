@@ -66,7 +66,7 @@ describe('decideClaimPoll', () => {
 
   it('returns ok with the agent + owner grant for an approved claim, ignoring the poll throttle', () => {
     const rec: ClaimRecord = {
-      ...pending({ lastPolledAt: new Date(NOW.getTime() - 1) }),
+      ...pending({ lastPolledAt: new Date(NOW.getTime() - 1), agentOwnerUserId: 'human-1' }),
       status: 'approved',
       ownerUserId: 'human-1',
     };
@@ -74,6 +74,33 @@ describe('decideClaimPoll', () => {
       status: 'ok',
       grant: { agentUserId: 'agent-1', ownerUserId: 'human-1' },
     });
+  });
+
+  it('returns access_denied when the approving owner has since unlinked (current owner null) — never a stale grant', () => {
+    const rec: ClaimRecord = {
+      ...pending({ agentOwnerUserId: null }),
+      status: 'approved',
+      ownerUserId: 'human-1',
+    };
+    expect(decideClaimPoll(rec, NOW)).toEqual({ status: 'access_denied' });
+  });
+
+  it('returns access_denied when the current owner differs from the approving owner', () => {
+    const rec: ClaimRecord = {
+      ...pending({ agentOwnerUserId: 'human-9' }),
+      status: 'approved',
+      ownerUserId: 'human-1',
+    };
+    expect(decideClaimPoll(rec, NOW)).toEqual({ status: 'access_denied' });
+  });
+
+  it('returns ok only when the approving owner is still the CURRENT owner', () => {
+    const rec: ClaimRecord = {
+      ...pending({ agentOwnerUserId: 'human-1' }),
+      status: 'approved',
+      ownerUserId: 'human-1',
+    };
+    expect(decideClaimPoll(rec, NOW).status).toBe('ok');
   });
 
   it('returns already_redeemed for a claim whose grant was exchanged, even after expiry', () => {

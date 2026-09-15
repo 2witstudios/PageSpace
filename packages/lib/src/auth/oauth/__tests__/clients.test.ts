@@ -4,7 +4,7 @@
  * DB `oauth_clients` table exists only for future dynamic registration.
  */
 import { describe, it, expect } from 'vitest';
-import { getRegisteredClient, validateRedirectUri, PAGESPACE_CLI_CLIENT_ID, PAGESPACE_AGENT_CLIENT_ID } from '../clients';
+import { getRegisteredClient, validateRedirectUri, clientAllowsGrant, PAGESPACE_CLI_CLIENT_ID, PAGESPACE_AGENT_CLIENT_ID } from '../clients';
 
 describe('getRegisteredClient', () => {
   it('returns the pagespace-cli client for its client_id', () => {
@@ -141,5 +141,36 @@ describe('getRegisteredClient — pagespace-agent (ADR 0005 Decision 5)', () => 
       firstParty: true,
     });
     expect(cli?.allowedGrantTypes).not.toContain('urn:ietf:params:oauth:grant-type:jwt-bearer');
+  });
+});
+
+describe('clientAllowsGrant — the ONE allowedGrantTypes guard every grant door shares', () => {
+  const cli = getRegisteredClient(PAGESPACE_CLI_CLIENT_ID)!;
+  const agent = getRegisteredClient(PAGESPACE_AGENT_CLIENT_ID)!;
+
+  it('allows exactly the grants in allowedGrantTypes', () => {
+    expect(clientAllowsGrant(cli, 'authorization_code')).toBe(true);
+    expect(clientAllowsGrant(cli, 'urn:ietf:params:oauth:grant-type:device_code')).toBe(true);
+    expect(clientAllowsGrant(cli, 'refresh_token')).toBe(true);
+    expect(clientAllowsGrant(agent, 'urn:ietf:params:oauth:grant-type:jwt-bearer')).toBe(true);
+    expect(clientAllowsGrant(agent, 'urn:pagespace:agent-auth:grant-type:claim')).toBe(true);
+    expect(clientAllowsGrant(agent, 'refresh_token')).toBe(true);
+  });
+
+  it('refuses the device-code grant for pagespace-agent (the device_authorization door must fail closed)', () => {
+    expect(clientAllowsGrant(agent, 'urn:ietf:params:oauth:grant-type:device_code')).toBe(false);
+    expect(clientAllowsGrant(agent, 'authorization_code')).toBe(false);
+  });
+
+  it('refuses the agent grants for pagespace-cli', () => {
+    expect(clientAllowsGrant(cli, 'urn:ietf:params:oauth:grant-type:jwt-bearer')).toBe(false);
+    expect(clientAllowsGrant(cli, 'urn:pagespace:agent-auth:grant-type:claim')).toBe(false);
+  });
+
+  it('is an exact match — no prefix, case or whitespace leniency', () => {
+    expect(clientAllowsGrant(cli, 'refresh_token ')).toBe(false);
+    expect(clientAllowsGrant(cli, 'Refresh_Token')).toBe(false);
+    expect(clientAllowsGrant(cli, 'refresh')).toBe(false);
+    expect(clientAllowsGrant(cli, '')).toBe(false);
   });
 });

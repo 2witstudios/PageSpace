@@ -69,7 +69,9 @@ export type ClaimPollDecision =
  * Precedence mirrors decideDevicePoll:
  *  1. already_redeemed — stays dead regardless of the clock.
  *  2. expired_token — absolute boundary, exactly-at-expiry fails closed.
- *  3. A settled record reports its outcome regardless of throttle.
+ *  3. A settled record reports its outcome regardless of throttle; an
+ *     approved record whose approving owner is no longer the current owner
+ *     reports access_denied, never a stale grant.
  *  4. pending — slow_down only when polled strictly faster than the interval.
  */
 export function decideClaimPoll(record: ClaimRecord, now: Date): ClaimPollDecision {
@@ -86,6 +88,13 @@ export function decideClaimPoll(record: ClaimRecord, now: Date): ClaimPollDecisi
   }
 
   if (record.status === 'approved') {
+    // The approving owner must still be the agent's CURRENT owner. If they
+    // unlinked (or another owner replaced them) between approve and poll, the
+    // historical grant is stale: report it as denied — the same wire shape a
+    // human denial produces, so a poller learns nothing about ownership churn.
+    if (record.agentOwnerUserId !== record.ownerUserId) {
+      return { status: 'access_denied' };
+    }
     return {
       status: 'ok',
       grant: { agentUserId: record.agentUserId, ownerUserId: record.ownerUserId },

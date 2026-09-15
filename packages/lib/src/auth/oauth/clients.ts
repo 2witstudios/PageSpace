@@ -67,6 +67,19 @@ export function getRegisteredClient(clientId: string): RegisteredClient | null {
   return STATIC_CLIENT_REGISTRY.get(clientId) ?? null;
 }
 
+/**
+ * The ONE `allowedGrantTypes` guard. Every door that mints from a
+ * `client_id` — the token endpoint for each grant, and the device-
+ * authorization endpoint before it persists a device code — must consult
+ * this, not re-derive `includes` inline: a door that resolves a client but
+ * never checks its grant list mints codes for a client that can never redeem
+ * them (and, with `pagespace-agent` in the registry, would mint a device code
+ * for a client that only ever presents an agent secret). Exact match only.
+ */
+export function clientAllowsGrant(client: Pick<RegisteredClient, 'allowedGrantTypes'>, grantType: string): boolean {
+  return client.allowedGrantTypes.includes(grantType);
+}
+
 /** The two loopback literals RFC 8252 §7.3 allows a wildcard port on. `localhost` is deliberately excluded (§8.3). */
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', '[::1]']);
 

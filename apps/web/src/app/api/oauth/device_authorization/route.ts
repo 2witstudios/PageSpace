@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes } from 'crypto';
 import { getClientIP } from '@/lib/auth';
-import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
+import { getRegisteredClient, clientAllowsGrant } from '@pagespace/lib/auth/oauth/clients';
 import { parseScopeList, formatScopeSet, hasNewKeyName, isAllDrivesGrant, isPureDriveGrant } from '@pagespace/lib/auth/oauth/scopes';
 import { generateUserCode, normalizeUserCode } from '@pagespace/lib/auth/oauth/user-code';
 import { generateToken, hashToken } from '@pagespace/lib/auth/token-utils';
@@ -46,6 +46,17 @@ export async function POST(req: NextRequest) {
 
   const client = getRegisteredClient(clientId);
   if (!client) {
+    return noStoreJson({ error: 'invalid_client' }, 400);
+  }
+
+  // A client whose allowedGrantTypes exclude the device-code grant (ADR 0005:
+  // `pagespace-agent` holds only jwt-bearer / claim / refresh_token) must be
+  // refused HERE, before a device code is minted — /token would refuse the
+  // redemption anyway, but a minted-yet-unredeemable code is still a row, a
+  // user code burned from the short code space, and an /activate prompt for a
+  // client that has no business in the device flow. Same shape as an unknown
+  // client so the two are indistinguishable on the wire.
+  if (!clientAllowsGrant(client, 'urn:ietf:params:oauth:grant-type:device_code')) {
     return noStoreJson({ error: 'invalid_client' }, 400);
   }
 
