@@ -49,6 +49,18 @@ export interface ClientToolApprovalResponse {
 /** approvalId → the standing grant the user asked for alongside "allow". */
 export type ToolApprovalScopes = Readonly<Record<string, ToolApprovalScope>>;
 
+const TOOL_APPROVAL_SCOPES: ReadonlySet<string> = new Set(['once', 'conversation', 'always']);
+
+/** The request body's `toolApprovalScopes`, kept only where both key and value are well-formed. */
+export function readToolApprovalScopes(raw: unknown): ToolApprovalScopes {
+  if (typeof raw !== 'object' || raw === null) return {};
+  const out: Record<string, ToolApprovalScope> = {};
+  for (const [approvalId, scope] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof scope === 'string' && TOOL_APPROVAL_SCOPES.has(scope)) out[approvalId] = scope as ToolApprovalScope;
+  }
+  return out;
+}
+
 /** An approved, claimed call the TURN must now run (with its real tool context). */
 export interface ApprovedToolExecution {
   approvalId: string;

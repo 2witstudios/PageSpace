@@ -301,6 +301,18 @@ export const ASK_USER_SECTION = `ASKING THE USER:
 • The result may be {"dismissed": true} — the user replied in chat instead of picking an option; treat their message as the answer`;
 
 /**
+ * Guidance for the tool-approval gate (human-in-the-loop). Appended only when
+ * the turn can actually pause — an interactive turn under `ask` mode — so an
+ * `auto` agent or an unattended run is never told about a pause that cannot
+ * happen. Exported for the same reason as ASK_USER_SECTION: one wording.
+ */
+export const TOOL_APPROVAL_SECTION = `ACTION APPROVAL:
+• Some actions (edits, creates, deletions, messages, commands) pause for the user's approval before they run — this is automatic; do not ask permission in text first, just make the call
+• When a call pauses, your turn ends; it resumes once the user answers, and the call's result (or its denial) arrives as that tool's result
+• A denied call is final for that request — do not retry it or work around it; acknowledge briefly and continue with what the user does want
+• Batch independent writes in one step where sensible, so the user approves them together rather than one at a time`;
+
+/**
  * MENTIONS section. This lives in the stable prompt, so it can't assume a
  * driveId is available this turn (that's turn-volatile LOCATION data,
  * injected separately — see location-prompt.ts) — always points the model
