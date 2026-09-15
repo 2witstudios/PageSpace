@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockIsBillingEnabled = vi.hoisted(() => vi.fn(() => true));
 const mockDb = vi.hoisted(() => ({
   select: vi.fn(),
+  insert: vi.fn(),
   transaction: vi.fn(),
 }));
 const mockApiLogger = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
@@ -12,6 +13,9 @@ vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('@pagespace/db/schema/credits', () => ({
   creditBalances: { userId: 'cb.userId', topupRemainingCents: 'cb.topup', debtCents: 'cb.debt' },
   creditLedger: { id: 'cl.id', stripeRef: 'cl.stripeRef' },
+}));
+vi.mock('@pagespace/db/schema/subscriptions', () => ({
+  subscriptions: { userId: 's.userId', gifted: 's.gifted', status: 's.status' },
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'u.id', stripeCustomerId: 'u.stripeCustomerId', subscriptionTier: 'u.subscriptionTier' },
@@ -24,7 +28,7 @@ vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled
 vi.mock('../../logging/logger-config', () => ({ loggers: { api: mockApiLogger } }));
 
 import { applyStripeFunding } from '../credit-funding';
-import { tierAllowanceCents, allowanceCentsForPaidCents } from '../money-model';
+import { tierAllowanceCents, allowanceCentsForPaidCents, tierListPriceCents } from '../money-model';
 
 // Capture bag for what each db call was handed.
 interface Captured {
@@ -105,9 +109,29 @@ function topupTx(
   };
 }
 
-// resolveUser(): db.select({...}).from(users).where(...).limit(1) -> rows
-function userSelectReturning(rows: Array<{ id: string; subscriptionTier: string }>) {
-  return { from: () => ({ where: () => ({ limit: () => Promise.resolve(rows) }) }) };
+// resolveUser(): db.select({...}).from(users).where(...).limit(1) -> rows.
+// The same chain also answers isGiftedSubscriber()'s db.select().from().where()
+// (awaited without limit) when a test sets it as the persistent return value: user
+// rows carry no `gifted`, so the subscriber reads as not gifted.
+function userSelectReturning(rows: Array<Record<string, unknown>>) {
+  const where = () => Object.assign(Promise.resolve(rows), { limit: () => Promise.resolve(rows) });
+  return { from: () => ({ where }) };
+}
+
+// Queue the user lookup, then the subscriptions lookup (gifted / status rows).
+function selectUserThenSubscriptions(user: Array<Record<string, unknown>>, subs: Array<{ gifted: boolean; status: string }>) {
+  mockDb.select.mockReset();
+  mockDb.select.mockReturnValueOnce(userSelectReturning(user)).mockReturnValueOnce(userSelectReturning(subs));
+}
+
+// Capture a top-level (non-tx) ledger insert — the missed_grant row.
+function missedGrantInsert(cap: Captured) {
+  return {
+    values: (v: Record<string, unknown>) => {
+      cap.ledgerValues = v;
+      return { onConflictDoNothing: (arb: { target?: unknown; where?: unknown }) => { cap.arbiter = arb; return Promise.resolve(undefined); } };
+    },
+  };
 }
 
 const PRO_USER = [{ id: 'u1', subscriptionTier: 'pro' }];
@@ -121,12 +145,12 @@ const invoiceEvent = {
 };
 
 // Same invoice shape with a different amount actually paid (promo, proration, $0 trial start).
-function paidInvoiceEvent(amountPaid: number | undefined) {
+function paidInvoiceEvent(amountPaid: number | undefined, extra: Record<string, unknown> = {}) {
   return {
     id: 'evt_inv',
     type: 'invoice.paid',
     data: {
-      object: { id: 'in_123', customer: 'cus_1', amount_paid: amountPaid, period_start: 1_700_000_000, period_end: 1_702_592_000 },
+      object: { id: 'in_123', customer: 'cus_1', amount_paid: amountPaid, period_start: 1_700_000_000, period_end: 1_702_592_000, ...extra },
     },
   };
 }
@@ -547,7 +571,7 @@ describe('applyStripeFunding', () => {
         expect(cap.balanceSet).toBeUndefined();
         expect(mockApiLogger.info).toHaveBeenCalledWith(
           'credit funding: invoice grants nothing',
-          expect.objectContaining({ userId: 'u1', paidCents: 0, stripeRef: 'in_123', reason: 'zero-amount invoice' }),
+          expect.objectContaining({ userId: 'u1', paidCents: 0, stripeRef: 'in_123', reason: 'zero_amount' }),
         );
       }
     });
@@ -562,20 +586,113 @@ describe('applyStripeFunding', () => {
       expect(cap.ledgerValues).toBeUndefined();
     });
 
-    it('MON-2 a PAID invoice whose tier resolves to free (no ratio) grants nothing and warns loudly for follow-up', async () => {
+    it('MON-2 a PAID invoice whose tier resolves to free (no ratio) fails closed, logs at ERROR, and writes a missed_grant row keyed on the invoice', async () => {
       mockDb.select.mockReturnValue(userSelectReturning([{ id: 'u1', subscriptionTier: 'free' }]));
       const cap: Captured = {};
+      mockDb.insert.mockReturnValueOnce(missedGrantInsert(cap));
       mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
         await cb(refillTx(cap, [{ id: 'led_x' }], 0));
       });
 
       await applyStripeFunding(paidInvoiceEvent(1500)); // no invoice-derived tier, stored tier still free
 
-      expect(mockDb.transaction).not.toHaveBeenCalled();
-      expect(mockApiLogger.warn).toHaveBeenCalledWith(
-        'credit funding: invoice grants nothing',
-        expect.objectContaining({ paidCents: 1500, tier: 'free', reason: 'no ratio for resolved tier' }),
+      expect(mockDb.transaction).not.toHaveBeenCalled(); // no balance change
+      expect(mockApiLogger.error).toHaveBeenCalledWith(
+        'credit funding: MISSED grant — paid invoice resolved to a tier with no ratio',
+        undefined,
+        expect.objectContaining({ eventId: 'evt_inv', invoiceId: 'in_123', userId: 'u1', storedTier: 'free', paidCents: 1500 }),
       );
+      expect(cap.ledgerValues).toMatchObject({
+        userId: 'u1',
+        entryType: 'missed_grant',
+        bucket: 'monthly',
+        amountCents: 0,
+        paidCents: 1500,
+        stripeRef: 'in_123',
+        consumeStatus: 'applied',
+      });
+      // Dedupes on the invoice like a grant does, so a redelivery cannot double-record it.
+      expect(cap.arbiter).toHaveProperty('target');
+    });
+
+    describe('D-OW-16: grants we deliberately fund', () => {
+      it('MON-2 (a) a gifted subscription grants list price × ratio although it paid nothing', async () => {
+        process.env.MONEY_MODEL_V2 = 'true';
+        selectUserThenSubscriptions(PRO_USER, [{ gifted: true, status: 'active' }]);
+        const cap: Captured = {};
+        mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+          await cb(refillTx(cap, [{ id: 'led_gift' }], 0));
+        });
+
+        await applyStripeFunding(paidInvoiceEvent(0, { subtotal: 1500, billing_reason: 'subscription_cycle' }), { tier: 'pro' });
+
+        const list = allowanceCentsForPaidCents(tierListPriceCents('pro'), 'pro');
+        expect(list).toBe(900);
+        expect(cap.ledgerValues).toMatchObject({ amountCents: list, paidCents: 0, stripeRef: 'in_123' });
+        expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: list, monthlyAllowanceCents: list });
+        expect(mockApiLogger.info).toHaveBeenCalledWith(
+          'credit funding: monthly refill applied',
+          expect.objectContaining({ basis: 'list', reason: 'gifted', paidCents: 0 }),
+        );
+      });
+
+      it('MON-2 (a) a subscription created with a trial (subscription_create, $0, subtotal 0) grants list price × ratio', async () => {
+        process.env.MONEY_MODEL_V2 = 'true';
+        selectUserThenSubscriptions(PRO_USER, [{ gifted: false, status: 'trialing' }]);
+        const cap: Captured = {};
+        mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+          await cb(refillTx(cap, [{ id: 'led_trial' }], 0));
+        });
+
+        await applyStripeFunding(paidInvoiceEvent(0, { subtotal: 0, billing_reason: 'subscription_create' }), { tier: 'pro' });
+
+        expect(cap.ledgerValues).toMatchObject({ amountCents: 900, paidCents: 0 });
+        expect(mockApiLogger.info).toHaveBeenCalledWith(
+          'credit funding: monthly refill applied',
+          expect.objectContaining({ basis: 'list', reason: 'trial' }),
+        );
+      });
+
+      it('MON-2 (b) a proration-only / subscription_update invoice that paid $0 grants nothing', async () => {
+        process.env.MONEY_MODEL_V2 = 'true';
+        const cap: Captured = {};
+        refill(cap);
+
+        await applyStripeFunding(paidInvoiceEvent(0, { subtotal: 0, billing_reason: 'subscription_update' }), { tier: 'pro' });
+
+        expect(mockDb.transaction).not.toHaveBeenCalled();
+        expect(cap.ledgerValues).toBeUndefined();
+        expect(mockApiLogger.info).toHaveBeenCalledWith(
+          'credit funding: invoice grants nothing',
+          expect.objectContaining({ reason: 'zero_amount' }),
+        );
+      });
+
+      it('MON-2 (c) a partial discount grants from amount_paid: 20% off Pro → 1200 × ratio', async () => {
+        process.env.MONEY_MODEL_V2 = 'true';
+        const cap: Captured = {};
+        refill(cap);
+
+        await applyStripeFunding(paidInvoiceEvent(1200, { subtotal: 1500, billing_reason: 'subscription_cycle' }), { tier: 'pro' });
+
+        expect(cap.ledgerValues).toMatchObject({ amountCents: allowanceCentsForPaidCents(1200, 'pro'), paidCents: 1200 });
+        expect(allowanceCentsForPaidCents(1200, 'pro')).toBe(720);
+      });
+
+      it('MON-2 (d) a 100% coupon on a NON-gifted subscription grants nothing — admin gifting is the door', async () => {
+        process.env.MONEY_MODEL_V2 = 'true';
+        selectUserThenSubscriptions(PRO_USER, [{ gifted: false, status: 'active' }]);
+        const cap: Captured = {};
+        mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+          await cb(refillTx(cap, [{ id: 'led_coupon' }], 0));
+        });
+
+        // subtotal is the list price, total/paid 0: a coupon, not a trial.
+        await applyStripeFunding(paidInvoiceEvent(0, { subtotal: 1500, billing_reason: 'subscription_create' }), { tier: 'pro' });
+
+        expect(mockDb.transaction).not.toHaveBeenCalled();
+        expect(cap.ledgerValues).toBeUndefined();
+      });
     });
 
     it('MON-2 with MONEY_MODEL_V2 off a full-price invoice grants 100% of what it paid, which is today\'s amount', async () => {

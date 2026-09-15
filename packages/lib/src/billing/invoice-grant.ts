@@ -1,23 +1,67 @@
 /**
- * invoice-grant — pure sizing of a monthly credit grant from what a Stripe invoice
- * actually paid (Spec MON-2, MON-3). No I/O; credit-funding is the shell.
+ * invoice-grant — pure sizing of a monthly credit grant from a Stripe invoice
+ * (Spec MON-2, MON-3; ruling D-OW-16). No I/O; credit-funding is the shell.
  *
- * Personal subscriptions: the grant is invoice.amount_paid × ratio.
- * Org subscriptions (Phase 3): the grant is (Business base + extra-seat line items)
- * paid × ratio — {@link grantForInvoiceLines} is the seam Phase 3 calls with the
- * subscription's line items. Proration lines (positive for the new plan, negative
- * credit for the unused old plan) are plain amounts and sum naturally; a net
- * negative sum grants nothing.
+ * Entitlement follows the amount ACTUALLY PAID, except for grants we deliberately
+ * fund ourselves (D-OW-16):
+ *   (a) a gifted subscription (subscriptions.gifted), or a subscription created
+ *       with a trial, is us fronting the plan: grant list price × ratio;
+ *   (b) a proration-only or subscription_update invoice that paid nothing: nothing;
+ *   (c) a partial discount: amount_paid × ratio, per MON-2;
+ *   (d) a 100% coupon on a non-gifted subscription: nothing — admin gifting sets
+ *       the flag, and that is the intended door.
+ *
+ * Org subscriptions (Phase 3): the pool refill is (Business base + extra-seat line
+ * items) paid × ratio — {@link grantForInvoiceLines} is the seam Phase 3 calls.
+ * Proration lines (positive for the new plan, negative credit for the unused old
+ * plan) are plain amounts and sum naturally; a net negative sum grants nothing.
  */
 
 import type { SubscriptionTier } from './subscription-tiers';
-import { allowanceCentsForPaidCents } from './money-model';
+import { allowanceCentsForPaidCents, tierListPriceCents } from './money-model';
+
+/** What the grant was sized from. */
+export type GrantBasis =
+  /** amount_paid × ratio (MON-2). */
+  | 'paid'
+  /** list price × ratio — a gift or a trial we fund ourselves (D-OW-16a). */
+  | 'list'
+  /** nothing granted. */
+  | 'none';
+
+export type GrantReason =
+  | 'paid'
+  | 'gifted'
+  | 'trial'
+  /** amount_paid is 0 and neither gifted nor a trial (D-OW-16 b, d). */
+  | 'zero_amount'
+  /** something was paid but the resolved tier has no ratio (free/unknown): a MISSED grant. */
+  | 'no_ratio';
 
 export interface InvoiceGrant {
-  /** What the invoice paid, in whole cents — recorded on the ledger row for audit. */
+  /** What the invoice actually paid, in whole cents — recorded on the ledger row for audit. */
   paidCents: number;
-  /** Credit value granted for it: paidCents × the tier's included-credit ratio. */
+  /** Credit value granted. */
   allowanceCents: number;
+  basis: GrantBasis;
+  reason: GrantReason;
+}
+
+export interface InvoiceGrantInput {
+  /** Stripe invoice.amount_paid (minor units). */
+  amountPaidCents: number | null | undefined;
+  /**
+   * Stripe invoice.subtotal — the line items BEFORE discounts. Distinguishes a trial
+   * (the plan costs nothing this period: subtotal 0) from a 100% coupon (subtotal is
+   * the list price, total 0). Read off the invoice, so it is race-free against the
+   * subscription webhook.
+   */
+  subtotalCents?: number | null;
+  /** Stripe invoice.billing_reason ('subscription_create' | 'subscription_cycle' | 'subscription_update' | …). */
+  billingReason?: string | null;
+  /** subscriptions.gifted for the paying subscription. */
+  gifted?: boolean;
+  tier: SubscriptionTier;
 }
 
 /**
@@ -34,14 +78,35 @@ function toCents(value: unknown): number {
 }
 
 /**
- * Size the grant for a PERSONAL subscription invoice from the amount it paid.
- * A zero or missing amount (trial start, 100% promo, proration-only) grants nothing.
+ * A subscription created with a trial: the first invoice charges nothing AND the
+ * plan itself cost nothing this period (subtotal 0). A 100% coupon also pays 0 but
+ * its subtotal is the list price, so it does not match — D-OW-16(d).
  */
-export function grantForInvoice(
-  input: { amountPaidCents: number | null | undefined; tier: SubscriptionTier },
-): InvoiceGrant {
+function isTrialCreate(input: InvoiceGrantInput, paidCents: number): boolean {
+  return input.billingReason === 'subscription_create'
+    && paidCents === 0
+    && toCents(input.subtotalCents) === 0;
+}
+
+/** Size the grant for a PERSONAL subscription invoice (D-OW-16 a–d). */
+export function grantForInvoice(input: InvoiceGrantInput): InvoiceGrant {
   const paidCents = Math.max(0, toCents(input.amountPaidCents));
-  return { paidCents, allowanceCents: allowanceCentsForPaidCents(paidCents, input.tier) };
+
+  const funded: GrantReason | null = input.gifted === true ? 'gifted' : isTrialCreate(input, paidCents) ? 'trial' : null;
+  if (funded) {
+    // We front the plan: the grant is what a full-price invoice would derive.
+    const allowanceCents = allowanceCentsForPaidCents(tierListPriceCents(input.tier), input.tier);
+    return allowanceCents > 0
+      ? { paidCents, allowanceCents, basis: 'list', reason: funded }
+      : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
+  }
+
+  if (paidCents === 0) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'zero_amount' };
+
+  const allowanceCents = allowanceCentsForPaidCents(paidCents, input.tier);
+  return allowanceCents > 0
+    ? { paidCents, allowanceCents, basis: 'paid', reason: 'paid' }
+    : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
 }
 
 /**
@@ -56,5 +121,9 @@ export function grantForInvoiceLines(
   let sum = 0;
   for (const line of lines) sum += toCents(line?.amount);
   const paidCents = Math.max(0, sum);
-  return { paidCents, allowanceCents: allowanceCentsForPaidCents(paidCents, tier) };
+  if (paidCents === 0) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'zero_amount' };
+  const allowanceCents = allowanceCentsForPaidCents(paidCents, tier);
+  return allowanceCents > 0
+    ? { paidCents, allowanceCents, basis: 'paid', reason: 'paid' }
+    : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
 }

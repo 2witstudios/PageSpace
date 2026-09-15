@@ -59,7 +59,7 @@ const H = vi.hoisted(() => {
   ]);
   const creditHolds = cols('creditHolds', ['id', 'userId', 'estCents', 'aiUsageLogId', 'createdAt', 'expiresAt']);
   const users = cols('users', ['id', 'stripeCustomerId', 'subscriptionTier']);
-  const subscriptions = cols('subscriptions', ['id', 'userId', 'status']);
+  const subscriptions = cols('subscriptions', ['id', 'userId', 'status', 'gifted']);
   const aiUsageLogs = cols('aiUsageLogs', [
     'id', 'userId', 'cost', 'timestamp', 'success', 'provider', 'source',
     'metadata', 'reconcileStatus', 'reconcileAttempts', 'reconciledAt',
@@ -448,8 +448,8 @@ function seedUser(id: string, customer: string, tier: string) {
 }
 
 /** A Stripe-backed subscription in a renewal-capable status — makes invoice.paid (not the gate) authoritative for this user's period roll. */
-function seedLiveSubscription(userId: string, status = 'active') {
-  store.subscriptions.push({ id: `sub_${userId}`, userId, status });
+function seedLiveSubscription(userId: string, status = 'active', gifted = false) {
+  store.subscriptions.push({ id: `sub_${userId}`, userId, status, gifted });
 }
 
 function balanceOf(userId: string) {
@@ -534,6 +534,50 @@ describe('credits flow — grants sized from the invoice paid (MON-2, MONEY_MODE
 
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
     expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
+  });
+
+  // D-OW-16: grants we deliberately fund, read from the real subscriptions row and the invoice.
+  const withReason = (evt: ReturnType<typeof invoicePaid>, subtotal: number, billingReason: string) => ({
+    ...evt,
+    data: { object: { ...evt.data.object, subtotal, billing_reason: billingReason } },
+  });
+
+  it('MON-2 (a) a gifted subscription (subscriptions.gifted) grants list × ratio from a $0 invoice, paidCents 0', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    seedLiveSubscription('u1', 'active', true);
+    await applyStripeFunding(withReason(invoicePaid('in_gift', 'cus_1', PERIOD_START, PERIOD_END, 0), 1500, 'subscription_cycle'));
+
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
+    expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_gift')).toMatchObject({ entryType: 'monthly_grant', amountCents: 900, paidCents: 0 });
+  });
+
+  it('MON-2 (a) a trial-created subscription ($0, subtotal 0, subscription_create) grants list × ratio', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    seedLiveSubscription('u1', 'trialing');
+    await applyStripeFunding(withReason(invoicePaid('in_trial', 'cus_1', PERIOD_START, PERIOD_END, 0), 0, 'subscription_create'));
+
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
+  });
+
+  it('MON-2 (d) a 100% coupon on a non-gifted subscription grants nothing', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    seedLiveSubscription('u1', 'active');
+    await applyStripeFunding(withReason(invoicePaid('in_coupon', 'cus_1', PERIOD_START, PERIOD_END, 0), 1500, 'subscription_create'));
+
+    expect(ledgerOf('u1')).toHaveLength(0);
+    expect(balanceOf('u1')).toBeUndefined();
+  });
+
+  it('MON-2 a paid invoice on a free-resolved tier writes ONE missed_grant row (dedupes on the invoice) and no balance', async () => {
+    seedUser('u1', 'cus_1', 'free'); // stale stored tier, and no invoice-derived tier
+    const evt = invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500);
+    await applyStripeFunding(evt);
+    await applyStripeFunding(evt); // redelivery
+
+    const missed = ledgerOf('u1').filter((r) => r.entryType === 'missed_grant');
+    expect(missed).toHaveLength(1);
+    expect(missed[0]).toMatchObject({ amountCents: 0, paidCents: 1500, stripeRef: 'in_missed', consumeStatus: 'applied' });
+    expect(balanceOf('u1')).toBeUndefined();
   });
 });
 
