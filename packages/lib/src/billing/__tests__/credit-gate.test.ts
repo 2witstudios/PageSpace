@@ -549,16 +549,17 @@ describe('canConsumeAI', () => {
       // 2nd: subscription lookup — no live subscription rows
       .mockReturnValueOnce(selectReturning([]))
       // 3rd: balance re-read after the reset
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 10000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 5000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
     const sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {};
     mockResetTransaction(sink, { monthlyRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: PAST });
-    mockTransaction({ monthlyRemainingCents: 10000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+    mockTransaction({ monthlyRemainingCents: 5000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'business');
 
-    // Business tier allowance (10000¢) granted, window rolled.
-    expect(sink.set).toMatchObject({ monthlyRemainingCents: 10000, monthlyAllowanceCents: 10000 });
-    expect(sink.ledgerValues).toMatchObject({ entryType: 'monthly_grant', amountCents: 10000 });
+    // Business tier allowance: SEAT-2 lists Business at $50/month (the org plan);
+    // tierAllowanceCents derives 100% of that with MONEY_MODEL_V2 off (5000¢).
+    expect(sink.set).toMatchObject({ monthlyRemainingCents: 5000, monthlyAllowanceCents: 5000 });
+    expect(sink.ledgerValues).toMatchObject({ entryType: 'monthly_grant', amountCents: 5000 });
     expect(r.allowed).toBe(true);
     expect(r.reason).toBe('ok');
   });
