@@ -54,12 +54,12 @@ const H = vi.hoisted(() => {
   ]);
   const creditLedger = cols('creditLedger', [
     'id', 'userId', 'entryType', 'bucket', 'amountCents', 'appliedCents', 'chargeMillicents',
-    'aiUsageLogId', 'realCostCents', 'markupBps', 'stripeRef', 'consumeStatus',
+    'aiUsageLogId', 'realCostCents', 'markupBps', 'stripeRef', 'paidCents', 'consumeStatus',
     'reconcileGenerationKey', 'createdAt',
   ]);
   const creditHolds = cols('creditHolds', ['id', 'userId', 'estCents', 'aiUsageLogId', 'createdAt', 'expiresAt']);
   const users = cols('users', ['id', 'stripeCustomerId', 'subscriptionTier']);
-  const subscriptions = cols('subscriptions', ['id', 'userId', 'status']);
+  const subscriptions = cols('subscriptions', ['id', 'userId', 'status', 'gifted']);
   const aiUsageLogs = cols('aiUsageLogs', [
     'id', 'userId', 'cost', 'timestamp', 'success', 'provider', 'source',
     'metadata', 'reconcileStatus', 'reconcileAttempts', 'reconciledAt',
@@ -125,7 +125,7 @@ const H = vi.hoisted(() => {
     if (table === 'creditLedger') {
       return {
         appliedCents: null, chargeMillicents: null, aiUsageLogId: null, realCostCents: null,
-        stripeRef: null, reconcileGenerationKey: null, markupBps: 15000, consumeStatus: 'pending',
+        stripeRef: null, paidCents: null, reconcileGenerationKey: null, markupBps: 15000, consumeStatus: 'pending',
         id: nextId('led'), createdAt: new Date(),
         ...v,
       };
@@ -416,12 +416,13 @@ import { canConsumeAI } from '../credit-gate';
 import { consumeCredits } from '../credit-consume';
 import { backfillCredits } from '../credit-backfill';
 import { reconcileOpenRouterCosts, type GenerationFetcher } from '../cost-reconcile';
+import { reconcileMissedGrants } from '../missed-grant-reconcile';
 import {
   RESERVE_FLOOR_CENTS,
   MARKUP_BPS,
   MACHINE_MARKUP_BPS,
 } from '../credit-pricing';
-import { tierAllowanceCents } from '../money-model';
+import { tierAllowanceCents, allowanceCentsForPaidCents } from '../money-model';
 
 // The allowances the flow grants when no invoice sizes them (MON-2 derivation
 // from the list price; with MONEY_MODEL_V2 off these equal the old table).
@@ -448,8 +449,8 @@ function seedUser(id: string, customer: string, tier: string) {
 }
 
 /** A Stripe-backed subscription in a renewal-capable status — makes invoice.paid (not the gate) authoritative for this user's period roll. */
-function seedLiveSubscription(userId: string, status = 'active') {
-  store.subscriptions.push({ id: `sub_${userId}`, userId, status });
+function seedLiveSubscription(userId: string, status = 'active', gifted = false) {
+  store.subscriptions.push({ id: `sub_${userId}`, userId, status, gifted });
 }
 
 function balanceOf(userId: string) {
@@ -467,10 +468,12 @@ function chargeMc(costDollars: number): number {
   return Math.round(costDollars * (MARKUP_BPS / 10000) * 100_000);
 }
 
-const invoicePaid = (id: string, customer: string, periodStart: number, periodEnd: number) => ({
+// A Pro renewal at list price unless `amountPaid` says otherwise: the grant is sized
+// from what the invoice PAID (MON-2), so every fixture states it.
+const invoicePaid = (id: string, customer: string, periodStart: number, periodEnd: number, amountPaid = 1500) => ({
   id: `evt_${id}`,
   type: 'invoice.paid',
-  data: { object: { id, customer, period_start: periodStart, period_end: periodEnd } },
+  data: { object: { id, customer, amount_paid: amountPaid, period_start: periodStart, period_end: periodEnd } },
 });
 
 const creditPackCheckout = (id: string, customer: string, packCents: number) => ({
@@ -489,15 +492,185 @@ beforeEach(() => {
   reset();
   vi.clearAllMocks();
   H.isBillingEnabled.mockReturnValue(true);
+  delete process.env.MONEY_MODEL_V2;
+});
+
+describe('credits flow — grants sized from the invoice paid (MON-2, MONEY_MODEL_V2 on)', () => {
+  beforeEach(() => {
+    process.env.MONEY_MODEL_V2 = 'true';
+  });
+
+  it('MON-2 the ledger row records paidCents and the grant is amount_paid × ratio', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    await applyStripeFunding(invoicePaid('in_full', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+
+    const grant = ledgerOf('u1').find((r) => r.entryType === 'monthly_grant' && r.stripeRef === 'in_full')!;
+    expect(grant.paidCents).toBe(1500);
+    expect(grant.amountCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
+    expect(grant.amountCents).toBe(900);
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
+  });
+
+  it('MON-2 a 50%-off invoice grants half', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    await applyStripeFunding(invoicePaid('in_half', 'cus_1', PERIOD_START, PERIOD_END, 750));
+
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(allowanceCentsForPaidCents(1500, 'pro') / 2);
+    expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_half')!.paidCents).toBe(750);
+  });
+
+  it('MON-2 a zero-amount invoice grants nothing: no grant row, no balance row', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    await applyStripeFunding(invoicePaid('in_zero', 'cus_1', PERIOD_START, PERIOD_END, 0));
+
+    expect(ledgerOf('u1')).toHaveLength(0);
+    expect(balanceOf('u1')).toBeUndefined();
+  });
+
+  it('MON-2 replaying the same invoice (stripeRef dedupe) grants once', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    const evt = invoicePaid('in_replay', 'cus_1', PERIOD_START, PERIOD_END, 1500);
+    await applyStripeFunding(evt);
+    await applyStripeFunding(evt);
+
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
+  });
+
+  // D-OW-16: grants we deliberately fund, read from the real subscriptions row and the invoice.
+  const withReason = (evt: ReturnType<typeof invoicePaid>, subtotal: number, billingReason: string) => ({
+    ...evt,
+    data: { object: { ...evt.data.object, subtotal, billing_reason: billingReason } },
+  });
+
+  it('MON-2 (a) a gifted subscription (subscriptions.gifted) grants list × ratio from a $0 invoice, paidCents 0', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    seedLiveSubscription('u1', 'active', true);
+    await applyStripeFunding(withReason(invoicePaid('in_gift', 'cus_1', PERIOD_START, PERIOD_END, 0), 1500, 'subscription_cycle'));
+
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
+    expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_gift')).toMatchObject({ entryType: 'monthly_grant', amountCents: 900, paidCents: 0 });
+  });
+
+  it('MON-2 (a) a trial-created subscription ($0, subtotal 0, subscription_create) grants list × ratio', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    seedLiveSubscription('u1', 'trialing');
+    await applyStripeFunding(withReason(invoicePaid('in_trial', 'cus_1', PERIOD_START, PERIOD_END, 0), 0, 'subscription_create'));
+
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
+  });
+
+  it('MON-2 (d) a 100% coupon on a non-gifted subscription grants nothing', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    seedLiveSubscription('u1', 'active');
+    await applyStripeFunding(withReason(invoicePaid('in_coupon', 'cus_1', PERIOD_START, PERIOD_END, 0), 1500, 'subscription_create'));
+
+    expect(ledgerOf('u1')).toHaveLength(0);
+    expect(balanceOf('u1')).toBeUndefined();
+  });
+
+  it('MON-2 a paid invoice on a free-resolved tier writes ONE missed_grant row (dedupes on the invoice) and no balance', async () => {
+    seedUser('u1', 'cus_1', 'free'); // stale stored tier, and no invoice-derived tier
+    const evt = invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500);
+    await applyStripeFunding(evt);
+    await applyStripeFunding(evt); // redelivery
+
+    const missed = ledgerOf('u1').filter((r) => r.entryType === 'missed_grant');
+    expect(missed).toHaveLength(1);
+    expect(missed[0]).toMatchObject({ amountCents: 0, paidCents: 1500, stripeRef: 'in_missed', consumeStatus: 'applied' });
+    expect(balanceOf('u1')).toBeUndefined();
+  });
+});
+
+describe('credits flow — missed-grant reconcile (MON-2, WAL-5)', () => {
+  it('MON-2 missed grant: re-resolves the tier from the LIVE subscription and grants amount_paid × ratio once the tier repaired', async () => {
+    seedUser('u1', 'cus_1', 'free'); // at funding time: stale stored tier, invoice grants nothing
+    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
+    expect(balanceOf('u1')).toBeUndefined();
+
+    // The tier gets repaired (e.g. the subscription webhook catches up).
+    const user = store.users.find((r) => r.id === 'u1')!;
+    user.subscriptionTier = 'pro';
+
+    const result = await reconcileMissedGrants();
+
+    expect(result).toEqual({ reconciled: 1, stillMissing: 0 });
+    // The row is now a real monthly_grant — no missed_grant rows remain.
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(0);
+    const grant = ledgerOf('u1').find((r) => r.entryType === 'monthly_grant' && r.stripeRef === 'in_missed')!;
+    expect(grant.amountCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
+    expect(grant.paidCents).toBe(1500); // unchanged — what was actually paid
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
+  });
+
+  it('MON-2 missed grant: a row whose tier is STILL free is left untouched (not dropped, not double-counted)', async () => {
+    seedUser('u1', 'cus_1', 'free');
+    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+
+    const result = await reconcileMissedGrants();
+
+    expect(result).toEqual({ reconciled: 0, stillMissing: 1 });
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
+    expect(balanceOf('u1')).toBeUndefined();
+  });
+
+  it('MON-2 missed grant: rolls over onto whatever balance already exists (netted with debt, same arithmetic as a normal renewal)', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    // A normal grant lands first, leaving a carried balance and some debt.
+    await applyStripeFunding(invoicePaid('in_normal', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    store.creditBalances.find((r) => r.userId === 'u1')!.debtCents = 100;
+
+    // Then a SEPARATE missed invoice (different tier resolution failure) lands.
+    seedUser('u2', 'cus_2', 'free');
+    await applyStripeFunding(invoicePaid('in_missed2', 'cus_2', PERIOD_START, PERIOD_END, 1500));
+    const u2 = store.users.find((r) => r.id === 'u2')!;
+    u2.subscriptionTier = 'pro';
+
+    const before = balanceOf('u1')!.monthlyRemainingCents;
+    const result = await reconcileMissedGrants();
+
+    expect(result.reconciled).toBe(1);
+    // u1's normal grant is untouched — reconcile only acts on missed_grant rows.
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(before);
+    expect(balanceOf('u2')!.monthlyRemainingCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
+  });
+
+  it('MON-2 missed grant: running the sweep twice reconciles once — the row conversion is itself the dedupe', async () => {
+    seedUser('u1', 'cus_1', 'free');
+    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    const user = store.users.find((r) => r.id === 'u1')!;
+    user.subscriptionTier = 'pro';
+
+    await reconcileMissedGrants();
+    const balanceAfterFirst = balanceOf('u1')!.monthlyRemainingCents;
+    const result = await reconcileMissedGrants(); // nothing left to sweep
+
+    expect(result).toEqual({ reconciled: 0, stillMissing: 0 });
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(balanceAfterFirst);
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
+  });
+
+  it('WAL-5 billing disabled (tenant/onprem): the sweep is a no-op and leaves missed_grant rows untouched', async () => {
+    seedUser('u1', 'cus_1', 'free');
+    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    H.isBillingEnabled.mockReturnValue(false);
+
+    const result = await reconcileMissedGrants();
+
+    expect(result).toEqual({ reconciled: 0, stillMissing: 0 });
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
+    H.isBillingEnabled.mockReturnValue(true);
+  });
 });
 
 describe('credits flow — happy path (fund → gate → consume → top-up → drained)', () => {
   it('funds $5/mo, draws monthly-first, accepts a top-up, then blocks at out_of_credits', async () => {
-    seedUser('u1', 'cus_1', 'free'); // free tier = 500¢ monthly allowance
+    seedUser('u1', 'cus_1', 'pro'); // a $5 promo-priced Pro invoice → 500¢ (flag off: 100% of paid)
 
-    // ── FUND: invoice.paid grants the monthly allowance and sets the period ──────
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free); // 500
+    // ── FUND: invoice.paid grants what the invoice paid and sets the period ──────
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END, 500));
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(500);
     expect(balanceOf('u1')!.topupRemainingCents).toBe(0);
     const grants = ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant');
     expect(grants).toHaveLength(1);
@@ -660,8 +833,8 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
 
 describe('credits flow — idempotency', () => {
   it('consuming the same aiUsageLogId twice debits exactly once', async () => {
-    seedUser('u1', 'cus_1', 'free');
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
+    seedUser('u1', 'cus_1', 'pro');
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END, 500)); // $5 paid → 500¢
 
     await consumeCredits({ aiUsageLogId: 'log_dup', userId: 'u1', costDollars: 1 }); // 150¢
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(350);

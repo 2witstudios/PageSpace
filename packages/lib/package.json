@@ -433,6 +433,16 @@
       "import": "./dist/billing/credit-funding.js",
       "require": "./dist/billing/credit-funding.js"
     },
+    "./billing/invoice-grant": {
+      "types": "./dist/billing/invoice-grant.d.ts",
+      "import": "./dist/billing/invoice-grant.js",
+      "require": "./dist/billing/invoice-grant.js"
+    },
+    "./billing/missed-grant-reconcile": {
+      "types": "./dist/billing/missed-grant-reconcile.d.ts",
+      "import": "./dist/billing/missed-grant-reconcile.js",
+      "require": "./dist/billing/missed-grant-reconcile.js"
+    },
     "./billing/cost-reconcile": {
       "types": "./dist/billing/cost-reconcile.d.ts",
       "import": "./dist/billing/cost-reconcile.js",
@@ -2419,6 +2429,15 @@
       ],
       "billing/credit-funding": [
         "./dist/billing/credit-funding.d.ts"
+      ],
+      "billing/money-model": [
+        "./dist/billing/money-model.d.ts"
+      ],
+      "billing/invoice-grant": [
+        "./dist/billing/invoice-grant.d.ts"
+      ],
+      "billing/missed-grant-reconcile": [
+        "./dist/billing/missed-grant-reconcile.d.ts"
       ],
       "billing/live-concurrency-query": [
         "./dist/billing/live-concurrency-query.d.ts"
