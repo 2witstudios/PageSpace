@@ -79,6 +79,26 @@ export function calledFinishTool(messages: ModelMessage[], finishToolName: strin
 }
 
 /**
+ * Returns true if any assistant message in this attempt carries a
+ * `tool-approval-request` — the SDK's native human-in-the-loop pause. The step
+ * ended with a client tool call that has no output (the model asked to run a
+ * gated tool and the harness is waiting for the user), so the loop halted with
+ * `finishReason: 'tool-calls'` by design. `toResponseMessages` places the
+ * request part on the assistant message itself, beside the tool-call.
+ */
+export function hasPendingToolApproval(messages: ModelMessage[]): boolean {
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue;
+    const content = message.content;
+    if (typeof content === 'string') continue;
+    for (const part of content) {
+      if (part.type === 'tool-approval-request') return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Classify a single agent attempt. See the table in the plan/README for the full
  * decision matrix. Key invariant from the AI SDK: a multi-step loop can only end
  * on a `tool-calls` step when `stopWhen` matched (finish tool or step cap) or the
@@ -115,6 +135,13 @@ export function classifyAttempt(args: ClassifyAttemptArgs): AttemptOutcome {
       // the distinct reason keeps observability from conflating it with a
       // broken tool-calls-no-finish turn.
       if (args.pauseToolNames?.some((name) => calledFinishTool(args.responseMessages, name))) {
+        return { kind: 'terminal', reason: 'awaiting-user-input' };
+      }
+      // Same shape, different mechanism: a gated tool's `needsApproval` paused
+      // the loop. Terminal for the same reason — a retry would re-ask — and
+      // the same reason string, because to the retry shell and to
+      // observability it IS awaiting user input.
+      if (hasPendingToolApproval(args.responseMessages)) {
         return { kind: 'terminal', reason: 'awaiting-user-input' };
       }
       // A multi-step loop with stopWhen [hasToolCall(finish), stepCountIs(N)] only
