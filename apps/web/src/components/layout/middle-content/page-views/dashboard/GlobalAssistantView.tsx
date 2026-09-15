@@ -76,6 +76,8 @@ import {
 } from '@/lib/ai/shared';
 import { buildContextRef, type ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
+import { ToolApprovalProvider } from '@/components/ai/shared/chat/approvals/ToolApprovalContext';
+import { useRespondToApproval } from '@/lib/ai/shared/hooks/useRespondToApproval';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
 import { canResumeRecovery } from '@/lib/ai/streams/canResumeRecovery';
@@ -333,6 +335,7 @@ const GlobalAssistantView: React.FC = () => {
     clearError: agentClearError,
     regenerate: agentRegenerate,
     addToolResult: agentAddToolResult,
+    addToolApprovalResponse: agentAddToolApprovalResponse,
   } = useChatSession({
     api: '/api/ai/chat',
     channelId: selectedAgent?.id ?? null,
@@ -351,6 +354,7 @@ const GlobalAssistantView: React.FC = () => {
     clearError: globalClearError,
     regenerate: globalRegenerate,
     addToolResult: globalAddToolResult,
+    addToolApprovalResponse: globalAddToolApprovalResponse,
   } = useChatSession({
     api: globalConversationId
       ? `/api/ai/global/${encodeURIComponent(globalConversationId)}/messages`
@@ -379,6 +383,7 @@ const GlobalAssistantView: React.FC = () => {
   const clearError = selectedAgent ? agentClearError : globalClearError;
   const regenerate = selectedAgent ? agentRegenerate : globalRegenerate;
   const addToolResult = selectedAgent ? agentAddToolResult : globalAddToolResult;
+  const addToolApprovalResponse = selectedAgent ? agentAddToolApprovalResponse : globalAddToolApprovalResponse;
 
   // ============================================
   // STREAM/STOP — one selector read per mode (PR 5A)
@@ -929,6 +934,17 @@ const GlobalAssistantView: React.FC = () => {
     buildBody: buildRequestBody,
   });
 
+  // The approval twin, on the same answerability inputs.
+  const toolApprovals = useRespondToApproval({
+    conversationId: currentConversationId,
+    renderedMessages,
+    isConversationBusy: effectiveIsStreaming,
+    addToolApprovalResponse,
+    wrapSend,
+    releasePendingSend,
+    buildBody: buildRequestBody,
+  });
+
   // ============================================
   // RENDER
   // ============================================
@@ -957,6 +973,7 @@ const GlobalAssistantView: React.FC = () => {
 
   return (
     <AskUserAnswerProvider value={askUserAnswering}>
+    <ToolApprovalProvider value={toolApprovals}>
     <div data-testid="global-assistant-view" className="flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between gap-2 p-4 border-[var(--separator)]">
@@ -1170,6 +1187,7 @@ const GlobalAssistantView: React.FC = () => {
       />
 
     </div>
+    </ToolApprovalProvider>
     </AskUserAnswerProvider>
   );
 };

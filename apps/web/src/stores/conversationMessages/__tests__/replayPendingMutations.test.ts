@@ -82,6 +82,17 @@ describe('replayPendingMutations', () => {
     expect(result).toEqual([msg('m1')]);
   });
 
+  it('given a toolApprovalResponse mutation, should replay the answer onto the paused part (and no-op when the message is absent)', () => {
+    const pausedMessage: UIMessage = {
+      id: 'm1',
+      role: 'assistant',
+      parts: [{ type: 'tool-trash_page', toolCallId: 'tc1', state: 'approval-requested', input: {}, approval: { id: 'ap1' } } as unknown as UIMessage['parts'][number]],
+    };
+    const mutation = { type: 'toolApprovalResponse', payload: { messageId: 'm1', toolCallId: 'tc1', approval: { id: 'ap1', approved: false, reason: 'no' } } } as PendingMutation;
+    expect(replayPendingMutations([pausedMessage], [mutation])[0].parts[0]).toMatchObject({ state: 'approval-responded', approval: { id: 'ap1', approved: false, reason: 'no' } });
+    expect(replayPendingMutations([msg('m1')], [mutation])).toEqual([msg('m1')]);
+  });
+
   it('given a delete mutation for an id present in the base, should remove it', () => {
     const result = replayPendingMutations(
       [msg('m1'), msg('m2')],

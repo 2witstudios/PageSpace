@@ -27,6 +27,7 @@ import { GeneratedImageRenderer } from './GeneratedImageRenderer';
 import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { AskUserQuestionCard } from '../ask-user/AskUserQuestionCard';
+import { ToolApprovalCard } from '../approvals/ToolApprovalCard';
 import { renderToolContent } from './registry';
 import { dispatchToolCall, resolveIntegrationToolLabel } from './tool-call-dispatch';
 
@@ -34,7 +35,7 @@ export interface ToolPart {
   type: string;
   toolName?: string;
   toolCallId?: string;
-  state?: 'input-streaming' | 'input-available' | 'output-available' | 'output-error' | 'done' | 'streaming';
+  state?: 'input-streaming' | 'input-available' | 'approval-requested' | 'approval-responded' | 'output-available' | 'output-error' | 'output-denied' | 'done' | 'streaming';
   input?: unknown;
   output?: unknown;
   errorText?: string;
@@ -176,6 +177,8 @@ export function useCompactToolCallDisplay(part: ToolPart, toolName: string, isEx
         return <Loader2 className={`${iconClass} text-primary animate-spin`} />;
       case 'output-error':
         return <AlertCircle className={`${iconClass} text-red-500`} />;
+      case 'output-denied':
+        return <AlertCircle className={`${iconClass} text-orange-500`} />;
       default:
         return <Clock className={`${iconClass} text-gray-400`} />;
     }
@@ -384,6 +387,8 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = m
       return <PageAgentConversationRenderer part={dispatch.part} />;
     case 'question':
       return <AskUserQuestionCard part={dispatch.part} />;
+    case 'approval':
+      return <ToolApprovalCard part={dispatch.part} />;
     case 'image':
       return <GeneratedImageRenderer part={dispatch.part} />;
     case 'generic':

@@ -4,6 +4,7 @@ import type { ConversationCacheEntry } from '@/stores/conversationMessages/seedE
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import type { AskUserAnswerPayload, AskUserAnswerRevertPayload } from '@/lib/ai/streams/applyAskUserAnswer';
 import { persistQueuedSends } from '@/stores/conversationMessages/queuedSendsPersistence';
+import type { ToolApprovalResponsePayload, ToolApprovalRevertPayload } from '@/lib/ai/streams/applyToolApprovalResponse';
 
 /**
  * Facade — the sanctioned way for a component to WRITE to
@@ -74,6 +75,12 @@ export const conversationMessagesActions = {
   /** Reverts an optimistic ask_user answer (the resume POST rejected) back to input-available. */
   revertAskUserAnswer: (conversationId: string, payload: AskUserAnswerRevertPayload): void =>
     useConversationMessagesStore.getState().revertAskUserAnswer(conversationId, payload),
+  /** Optimistic tool-approval answer patch — the resume POST's own commit reconciles it once persisted. */
+  applyToolApprovalResponse: (conversationId: string, payload: ToolApprovalResponsePayload): void =>
+    useConversationMessagesStore.getState().applyToolApprovalResponse(conversationId, payload),
+  /** Reverts an optimistic approval answer (the resume POST rejected) back to approval-requested. */
+  revertToolApprovalResponse: (conversationId: string, payload: ToolApprovalRevertPayload): void =>
+    useConversationMessagesStore.getState().revertToolApprovalResponse(conversationId, payload),
   /**
    * Appends a broadcast user message, reconciling it out of `optimisticSends` if
    * present. No-ops if the id is already confirmed — correct for a user message,

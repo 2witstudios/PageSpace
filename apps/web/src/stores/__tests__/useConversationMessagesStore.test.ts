@@ -265,6 +265,32 @@ describe('useConversationMessagesStore', () => {
     expect(revertedPart.output).toBeUndefined();
   });
 
+  it('given applyToolApprovalResponse then revertToolApprovalResponse for the same tool call, should patch to approval-responded then back to approval-requested keeping only the approval id', () => {
+    const { startLoad, applyLoad, applyToolApprovalResponse, revertToolApprovalResponse, getEntry } = useConversationMessagesStore.getState();
+    const gen = startLoad('c1');
+    const pausedMessage: UIMessage = {
+      id: 'm1',
+      role: 'assistant',
+      parts: [{ type: 'tool-trash_page', toolCallId: 'tc1', state: 'approval-requested', input: {}, approval: { id: 'ap1' } } as unknown as UIMessage['parts'][number]],
+    };
+    applyLoad('c1', gen, [pausedMessage]);
+
+    applyToolApprovalResponse('c1', { messageId: 'm1', toolCallId: 'tc1', approval: { id: 'ap1', approved: true } });
+    expect(getEntry('c1').messages[0].parts[0]).toMatchObject({ state: 'approval-responded', approval: { id: 'ap1', approved: true } });
+    expect(getEntry('c1').pendingMutationsSinceLoad).toEqual([
+      { type: 'toolApprovalResponse', payload: { messageId: 'm1', toolCallId: 'tc1', approval: { id: 'ap1', approved: true } } },
+    ]);
+
+    revertToolApprovalResponse('c1', { messageId: 'm1', toolCallId: 'tc1' });
+    expect(getEntry('c1').messages[0].parts[0]).toEqual({ type: 'tool-trash_page', toolCallId: 'tc1', state: 'approval-requested', input: {}, approval: { id: 'ap1' } });
+  });
+
+  it('given revertToolApprovalResponse for an untracked conversation, should leave the store untouched', () => {
+    const before = useConversationMessagesStore.getState().byConversationId;
+    useConversationMessagesStore.getState().revertToolApprovalResponse('nope', { messageId: 'm1', toolCallId: 'tc1' });
+    expect(useConversationMessagesStore.getState().byConversationId).toBe(before);
+  });
+
   it('given applyConfirmedMessage for a new id, should append it; for an existing id, should replace its content in place', () => {
     const { startLoad, applyLoad, applyConfirmedMessage, getEntry } = useConversationMessagesStore.getState();
     const gen = startLoad('c1');

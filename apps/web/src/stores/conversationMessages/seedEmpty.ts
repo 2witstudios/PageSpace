@@ -1,13 +1,15 @@
 import type { UIMessage } from 'ai';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import type { AskUserAnswerPayload } from '@/lib/ai/streams/applyAskUserAnswer';
+import type { ToolApprovalResponsePayload } from '@/lib/ai/streams/applyToolApprovalResponse';
 
 type PendingMutationKind =
   | { type: 'remoteMessage'; message: UIMessage }
   | { type: 'confirmedMessage'; message: UIMessage }
   | { type: 'edit'; payload: MessageEditPayload }
   | { type: 'delete'; messageId: string }
-  | { type: 'askUserAnswer'; payload: AskUserAnswerPayload };
+  | { type: 'askUserAnswer'; payload: AskUserAnswerPayload }
+  | { type: 'toolApprovalResponse'; payload: ToolApprovalResponsePayload };
 
 /**
  * A live mutation (remote broadcast) recorded while a load is in flight, so

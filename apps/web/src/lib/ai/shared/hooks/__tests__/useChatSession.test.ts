@@ -454,3 +454,71 @@ describe('useChatSession — regenerate', () => {
     expect((requestBody().messages as UIMessage[]).map((m) => m.id)).toEqual(['u-the question']);
   });
 });
+
+describe('useChatSession — tool approval resume', () => {
+  const paused = (toolCallId: string, approvalId: string) =>
+    ({ type: 'tool-trash_page', toolCallId, state: 'approval-requested', input: { pageId: 'p' }, approval: { id: approvalId } });
+  const message = (parts: unknown[]): UIMessage => ({ id: 'msg-persisted', role: 'assistant', parts }) as unknown as UIMessage;
+
+  it('flips the paused part to approval-responded on the PERSISTED message and resumes, carrying the scope in the body', async () => {
+    const base = [message([paused('call-1', 'ap-1')])];
+    const { result } = mount({ getBaseMessages: () => base });
+
+    await act(async () => {
+      const outcome = await result.current.addToolApprovalResponse({
+        toolCallId: 'call-1',
+        approvalId: 'ap-1',
+        approved: true,
+        scope: 'conversation',
+        conversationId: 'conv-1',
+      });
+      expect(outcome).toEqual({ dispatched: true });
+    });
+
+    expect(fetchWithAuth).toHaveBeenCalledTimes(1);
+    const body = requestBody();
+    const part = (body.messages as UIMessage[])[0].parts[0] as unknown as { state: string; approval: unknown };
+    expect(part.state).toBe('approval-responded');
+    expect(part.approval).toEqual({ id: 'ap-1', approved: true });
+    expect(body.toolApprovalScopes).toEqual({ 'ap-1': 'conversation' });
+  });
+
+  it('does NOT resume while another approval on the turn is still pending, then resumes once it is answered', async () => {
+    const base = [message([paused('call-1', 'ap-1'), paused('call-2', 'ap-2')])];
+    const { result } = mount({ getBaseMessages: () => base });
+
+    await act(async () => {
+      const first = await result.current.addToolApprovalResponse({
+        toolCallId: 'call-1', approvalId: 'ap-1', approved: true, scope: 'always', conversationId: 'conv-1',
+      });
+      expect(first).toEqual({ dispatched: false });
+    });
+    expect(fetchWithAuth).not.toHaveBeenCalled();
+
+    await act(async () => {
+      const second = await result.current.addToolApprovalResponse({
+        toolCallId: 'call-2', approvalId: 'ap-2', approved: false, reason: 'no', conversationId: 'conv-1',
+      });
+      expect(second).toEqual({ dispatched: true });
+    });
+    expect(fetchWithAuth).toHaveBeenCalledTimes(1);
+    const body = requestBody();
+    const parts = (body.messages as UIMessage[])[0].parts as unknown as Array<{ state: string; approval: Record<string, unknown> }>;
+    expect(parts.map((p) => p.state)).toEqual(['approval-responded', 'approval-responded']);
+    expect(parts[1].approval).toEqual({ id: 'ap-2', approved: false, reason: 'no' });
+    // 'once' is the default and never rides the body; only the 'always' grant does.
+    expect(body.toolApprovalScopes).toEqual({ 'ap-1': 'always' });
+  });
+
+  it('an approval answer never touches a part that is not paused', async () => {
+    const base = [message([{ type: 'tool-trash_page', toolCallId: 'call-1', state: 'output-available', output: { ok: true } }])];
+    const { result } = mount({ getBaseMessages: () => base });
+    await act(async () => {
+      const outcome = await result.current.addToolApprovalResponse({
+        toolCallId: 'call-1', approvalId: 'ap-1', approved: true, conversationId: 'conv-1',
+      });
+      expect(outcome).toEqual({ dispatched: false });
+    });
+    expect(fetchWithAuth).not.toHaveBeenCalled();
+  });
+});
