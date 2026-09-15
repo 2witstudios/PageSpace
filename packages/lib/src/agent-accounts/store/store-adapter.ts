@@ -23,7 +23,7 @@ import type {
   SessionFormat,
   TenantId,
 } from '@pagespace/db/schema/agent-accounts';
-import type { AgentAccountGrant, ExecutorChannel, PresenterChannel } from '../grant';
+import type { AgentAccountGrant, BindingDigest, HashBytes, PresenterChannel } from '../grant';
 import type { CanonicalOrigin } from '../canonical-request';
 
 /** Maps to the Infisical path `/<tenantProject>/<accountId>/<kind>`. */
@@ -96,16 +96,33 @@ export type SecretMaterial = {
 }[AccountKind];
 
 /**
- * Which kinds each channel may resolve (ADR 0005 §4.2). `password` is the
- * browser-fill executor's alone; the HTTP executor's type excludes it, so a
- * call site that tries does not compile (mutation pair required at G1b).
+ * Which kinds each channel may resolve through `resolve` (ADR 0005 §4.2).
+ * `password` is the browser-fill executor's alone; `session` reaches the HTTP
+ * executor ONLY through `resolveSessionOverHttp` under the account's
+ * default-off `session_http` permission (Codex P1 on PR #2637). A call site
+ * that tries otherwise does not compile (mutation pair required at G1b).
  */
 export type ResolvableBy<C extends PresenterChannel> = {
-  readonly 'http-executor': 'api_key' | 'bearer' | 'oauth2' | 'session';
+  readonly 'http-executor': 'api_key' | 'bearer' | 'oauth2';
   readonly 'relay-runner': 'api_key' | 'bearer' | 'oauth2';
   readonly 'browser-worker': 'session' | 'password';
   readonly 'refresh-worker': 'oauth2';
 }[C];
+
+/** `oauth2` as ordinary executors see it: the access token only, never the refresh token. */
+export type OAuth2AccessMaterial = Omit<SecretMaterialByKind['oauth2'], 'refreshToken'>;
+
+/**
+ * The material a CHANNEL receives per kind. Only the refresh worker ever
+ * receives `oauth2.refreshToken`; every other channel gets
+ * `OAuth2AccessMaterial` (Codex P1 on PR #2637: a compromised HTTP executor
+ * must not expose long-lived refresh authority).
+ */
+export type MaterialForChannel<C extends PresenterChannel, K extends AccountKind> = C extends 'refresh-worker'
+  ? SecretMaterialByKind[K]
+  : K extends 'oauth2'
+    ? OAuth2AccessMaterial
+    : SecretMaterialByKind[K];
 
 /** The tenant-scoped machine identity handle an executor holds. A parameter so a wrong-tenant identity is testable. */
 export type StoreIdentity = {
@@ -131,10 +148,23 @@ export type PutResult =
   | { readonly ok: true; readonly version: CredentialVersion }
   | { readonly ok: false; readonly reason: 'version_conflict' | 'write_unverified' | 'lock_unavailable' | 'store_unavailable' | 'kind_mismatch' };
 
-export type ResolveInput<C extends ExecutorChannel | 'refresh-worker'> = {
-  readonly ref: SecretRef & { readonly kind: ResolvableBy<C> };
+export type ResolveInput<C extends PresenterChannel, K extends ResolvableBy<C> = ResolvableBy<C>> = {
+  readonly ref: SecretRef & { readonly kind: K };
   readonly version: CredentialVersion;
   readonly grant: VerifiedGrant & { readonly aud: C };
+  readonly identity: StoreIdentity;
+};
+
+/**
+ * The ONE audited exception by which a `session` kind reaches the HTTP
+ * executor: the grant must carry `sessionHttp: true`, which the authority
+ * signs only when the account's `sessionHttpEnabled` flag is on and
+ * `decideAccountAccess` granted `session_http` (ADR 0004 §4.1).
+ */
+export type SessionHttpResolveInput = {
+  readonly ref: SecretRef & { readonly kind: 'session' };
+  readonly version: CredentialVersion;
+  readonly grant: VerifiedGrant & { readonly aud: 'http-executor'; readonly sessionHttp: true };
   readonly identity: StoreIdentity;
 };
 
@@ -146,8 +176,8 @@ export type ResolveDenyReason =
   | 'not_found'
   | 'store_unavailable';
 
-export type ResolveResult<K extends AccountKind> =
-  | { readonly ok: true; readonly material: Extract<SecretMaterial, { readonly kind: K }>; readonly version: CredentialVersion }
+export type ResolveResult<C extends PresenterChannel, K extends AccountKind> =
+  | { readonly ok: true; readonly kind: K; readonly material: MaterialForChannel<C, K>; readonly version: CredentialVersion }
   | { readonly ok: false; readonly reason: ResolveDenyReason };
 
 export type RotateInput = {
@@ -190,7 +220,9 @@ export type DescribeResult =
 /** The interface (ADR 0005 §2.2). Executors are the only `resolve` callers; the web process never holds a reading identity. */
 export type StoreAdapter = {
   readonly put: (input: PutInput) => Promise<PutResult>;
-  readonly resolve: <C extends ExecutorChannel | 'refresh-worker'>(input: ResolveInput<C>) => Promise<ResolveResult<ResolvableBy<C>>>;
+  readonly resolve: <C extends PresenterChannel, K extends ResolvableBy<C>>(input: ResolveInput<C, K>) => Promise<ResolveResult<C, K>>;
+  /** See `SessionHttpResolveInput`; unrepresentable without `grant.sessionHttp: true`. */
+  readonly resolveSessionOverHttp: (input: SessionHttpResolveInput) => Promise<ResolveResult<'http-executor', 'session'>>;
   readonly rotate: (input: RotateInput) => Promise<RotateResult>;
   readonly revoke: (input: RevokeInput) => Promise<RevokeResult>;
   readonly delete: (input: DeleteInput) => Promise<DeleteResult>;
@@ -229,11 +261,19 @@ export type StoredSecretFacts = {
 
 export type ResolveDecision = { readonly ok: true } | { readonly ok: false; readonly reason: ResolveDenyReason };
 
-/** `decideResolve` — every refusal in ADR 0005 §8 F1–F5, F10 as data. G1b implements. */
+/** `digestBindings` — `hash(canonicalJson(bindings))`, the same bytes on the authority and the store side. G1b implements. */
+export type DigestBindings = (input: { readonly bindings: PlaneBindings; readonly hash: HashBytes }) => BindingDigest;
+
+/**
+ * `decideResolve` — every refusal in ADR 0005 §8 F1–F5, F10 as data. The
+ * bindings check is `digestBindings(stored.bindings) === grant.bindingDigest`
+ * (constant-time), so the comparison needs no main-DB fact. G1b implements.
+ */
 export type DecideResolve = (input: {
   readonly grant: VerifiedGrant;
   readonly ref: SecretRef;
   readonly stored: StoredSecretFacts | null;
   readonly now: number;
   readonly rotationGraceMs: StoreLimits['rotationGraceMs'];
+  readonly hash: HashBytes;
 }) => ResolveDecision;

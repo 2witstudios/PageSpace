@@ -47,6 +47,8 @@ export type Nonce = Brand<string, 'Nonce'>;
 export type ApprovalId = Brand<string, 'ApprovalId'>;
 export type PresenterKeyId = Brand<string, 'PresenterKeyId'>;
 export type RequestDigest = Brand<string, 'RequestDigest'>;
+/** `hash(canonicalJson(PlaneBindings))` — the authority's signed copy of the plane bindings (ADR 0005 §2.4). */
+export type BindingDigest = Brand<string, 'BindingDigest'>;
 
 /** The issuer constant. A grant with any other `iss` is `wrong_audience`. */
 export type GrantIssuer = 'pagespace-account-authority';
@@ -130,8 +132,23 @@ export type AgentAccountGrant = {
   readonly accountKind: AccountKind;
   readonly credentialVersion: CredentialVersion;
   readonly policyVersion: PolicyVersion;
+  /**
+   * The authority's signed digest of the plane bindings it evaluated
+   * `(tenantId, ownerRef, allowedOrigins, policyVersion, kind)`. The store
+   * compares it with the digest of ITS copy at resolve, so a main-DB writer
+   * who reassigns the owner or widens origins cannot produce a grant the
+   * plane honours (threat model A9; Codex P1 on PR #2637).
+   */
+  readonly bindingDigest: BindingDigest;
   readonly operation: OperationRef;
   readonly requestDigest: RequestDigest;
+  /**
+   * True only when the account's default-off `session_http` permission is
+   * enabled AND `decideAccountAccess` granted it; the sole way a `session`
+   * kind may reach the HTTP executor (ADR 0005 §4.2). Always false for every
+   * other kind and channel.
+   */
+  readonly sessionHttp: boolean;
   /** The consumed approval, or the `'policy'` sentinel for a bounded always-allow (ADR 0004 §4.3). */
   readonly approvalId: ApprovalId | 'policy';
   /** ms since epoch. */
@@ -159,6 +176,7 @@ export type GrantDenyReason =
   | 'wrong_audience'
   | 'ceiling'
   | 'tenant_mismatch'
+  | 'principal_mismatch'
   | 'version_mismatch'
   | 'policy_epoch'
   | 'no_delegation'
@@ -192,7 +210,13 @@ export type NonceState = 'fresh' | 'consumed' | 'unknown';
 
 /** The approval row's facts, fetched by the repository (ADR 0004 §4.3). */
 export type ApprovalFact =
-  | { readonly kind: 'concrete'; readonly approvalId: ApprovalId; readonly requestDigest: RequestDigest; readonly consumed: boolean }
+  /**
+   * An allow-once row is consumed BY the grant issuance that used it, so the
+   * verifier accepts it only when `consumedByGrantId` equals the signed
+   * `grantId`: `null` means never issued against (a forged/unissued grant),
+   * another id means a competing issuance won (Codex P1 on PR #2637).
+   */
+  | { readonly kind: 'concrete'; readonly approvalId: ApprovalId; readonly requestDigest: RequestDigest; readonly consumedByGrantId: GrantId | null }
   | { readonly kind: 'policy'; readonly policyVersion: PolicyVersion; readonly expired: boolean; readonly limitsExceeded: boolean }
   | { readonly kind: 'none' };
 
@@ -206,10 +230,19 @@ export type DelegationFact =
  * Everything the verifier compares the grant against — all FACTS the adapter
  * fetched, never handles. Deliberately no field can carry a guest-supplied
  * header or IP (ADR 0006 §8 assertion 4).
+ *
+ * The CURRENT execution principals (`human`, `agentPageId`, `conversationId`,
+ * `runId`) come from the presenter's own run context, never from the grant,
+ * so a valid unused grant issued for another agent page, thread or run that
+ * reaches the same presenter is `principal_mismatch` (Codex P1 on PR #2637).
  */
 export type ExpectedBinding = {
   readonly aud: PresenterChannel;
   readonly presenter: GrantPresenter;
+  readonly human: GrantHuman;
+  readonly agentPageId: AgentPageId | null;
+  readonly conversationId: ConversationId;
+  readonly runId: RunId;
   readonly tenantId: TenantId;
   readonly accountId: AccountId;
   readonly accountKind: AccountKind;

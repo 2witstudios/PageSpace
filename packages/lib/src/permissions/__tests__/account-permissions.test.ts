@@ -3,7 +3,7 @@ import { describe, it } from 'vitest';
 // ADR 0004 §4 + §8.14–16 — RED at G1b before decide-account-access.ts exists.
 
 describe('decideAccountAccess — what never grants anything (ADR 0004 §4.2)', () => {
-  it.todo('given every page permission true and no account relationship, should return view/use/manage/grant all false [0004 §8.14]');
+  it.todo('given every page permission true and no account relationship, should return view/use/manage/grant/session_http all false [0004 §8.14]');
   it.todo('given drive membership, workspace ownership and conversation access with no account relationship, should return all false');
 });
 
@@ -19,6 +19,13 @@ describe('manage and grant', () => {
   it.todo('given drive role ADMIN, should return manage true and grant true [0004 §8.16]');
   it.todo('given only the agent own drive membership (no human role), should never yield manage [0004 §8.16; B0 B-24]');
   it.todo('given a user-owned account and a non-owner ADMIN of the agent drive, should return manage false');
+});
+
+describe('session_http (default off; PR #2637 P1)', () => {
+  it.todo('given sessionHttpEnabled false, should return session_http false whatever else is true [0005 §10.18]');
+  it.todo('given sessionHttpEnabled true and use false, should return session_http false [0005 §10.18]');
+  it.todo('given sessionHttpEnabled true and use true, should return session_http true [0005 §10.18]');
+  it.todo('given AccountAccessLevel, should be a Record over every AccountPermission including session_http (typecheck fails on an added permission)');
 });
 
 describe('view', () => {

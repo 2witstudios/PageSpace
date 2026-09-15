@@ -18,8 +18,14 @@
 import type { AccountId, AccountKind, AccountOwnerRef, AccountStatus } from '@pagespace/db/schema/agent-accounts';
 import type { AgentPageId, CallerCeiling, DelegationFact, DriveId, UserId } from '../agent-accounts/grant';
 
-/** THE one canonical union. `Record<AccountPermission, V>` everywhere per-permission data exists. */
-export type AccountPermission = 'view' | 'use' | 'manage' | 'grant';
+/**
+ * THE one canonical union. `Record<AccountPermission, V>` everywhere
+ * per-permission data exists. `session_http` is the default-off exception
+ * that lets a `session` kind be resolved by the HTTP executor; it is true
+ * only when the account's `sessionHttpEnabled` flag is on (set through
+ * `manage`) AND `use` is true (Codex P1 on PR #2637; ADR 0005 §4.2).
+ */
+export type AccountPermission = 'view' | 'use' | 'manage' | 'grant' | 'session_http';
 
 export type AccountAccessLevel = Readonly<Record<AccountPermission, boolean>>;
 
@@ -50,6 +56,8 @@ export type AccountAccessFacts = {
   /** Whether that agent page is bound to this account (`agent_account_bindings`, unrevoked). */
   readonly agentBoundToAccount: boolean;
   readonly delegation: DelegationFact;
+  /** `agent_accounts.sessionHttpEnabled` — default false; meaningful only for kind `session`. */
+  readonly sessionHttpEnabled: boolean;
   readonly callerCeiling: CallerCeiling;
   /** `isDriveWithinCredentialScope(callerCeiling.allowedDriveIds, accountDriveId)` — computed by the repository. */
   readonly ceilingAdmitsAccount: boolean;

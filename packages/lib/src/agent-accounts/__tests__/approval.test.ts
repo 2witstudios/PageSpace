@@ -10,5 +10,7 @@ describe('decideApproval', () => {
   it.todo('given class privilege, should return concrete with stepUp true [0004 §3.4]');
   it.todo('given class unknown and no explicit generic-capability policy, should return concrete');
   it.todo('given an origin outside policy.scope.origins, should return refuse(out_of_scope)');
+  it.todo('given an always policy whose scope.resources names repo A and request resources naming repo B, should return refuse(out_of_scope) [0004 §8.22; PR #2637 P1]');
+  it.todo('given an always policy whose scope.resources names repo A and request resources naming repo A, should return policy [0004 §8.22]');
   it.todo('given AlwaysAllowedByClass, should be a Record over every OperationClass (typecheck fails on an added class)');
 });

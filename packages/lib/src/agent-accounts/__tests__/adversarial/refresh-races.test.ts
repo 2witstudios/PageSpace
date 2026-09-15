@@ -8,4 +8,5 @@ describe('adversarial: refresh-races', () => {
   it.todo('given a crash between write and verify, should reconcile so currentVersion equals the store and the stale version is unresolvable');
   it.todo('given a grant naming the pre-rotation version inside rotationGraceMs, should resolve; outside it, version_mismatch');
   it.todo('given a provider token endpoint differing from the pinned one, should refuse the refresh (issuer confusion)');
+  it.todo('given a compromised http-executor or relay-runner identity, should be unable to obtain a refreshToken from resolve (OAuth2AccessMaterial has no such field) [PR #2637 P1]');
 });

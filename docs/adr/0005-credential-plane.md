@@ -42,7 +42,8 @@ Exactly three executor classes may call `resolve`: the HTTP executor (G2), the r
 | Op | Signature (options object; result unions, never throws for expected outcomes) | Semantics |
 |---|---|---|
 | `put` | `({ ref: SecretRef; material: SecretMaterial; expectedVersion: CredentialVersion \| null; bindings: PlaneBindings; identity: StoreIdentity }) → PutResult` | creates (`expectedVersion: null`) or replaces. **CAS**: refuses with `version_conflict` if the current version ≠ `expectedVersion`. Writes `bindings` beside the material as secret metadata. Returns the new `CredentialVersion` |
-| `resolve` | `({ ref; version: CredentialVersion; grant: VerifiedGrant; identity }) → ResolveResult` | returns material **only** if `version` is the current version **and** the grant's `(tenantId, accountId, credentialVersion)` equal the ref's **and** the stored `bindings` agree with the grant's `(tenantId, ownerRef, policyVersion)` **and** `grant.aud` may resolve this `kind` (§4.3). Anything else is one of `version_mismatch \| binding_mismatch \| kind_not_resolvable \| revoked \| not_found` |
+| `resolve` | `<C, K>({ ref; version: CredentialVersion; grant: VerifiedGrant & { aud: C }; identity }) → ResolveResult<C, K>` | returns material **only** if `version` is the current version **and** the grant's `(tenantId, accountId, credentialVersion)` equal the ref's **and** `digestBindings(stored bindings) === grant.bindingDigest` **and** `grant.aud` may resolve this `kind` (§4.2). The material is **channel-shaped**: `oauth2` resolves to `OAuth2AccessMaterial` (no `refreshToken`) for every channel but `refresh-worker`. Anything else is one of `version_mismatch \| binding_mismatch \| kind_not_resolvable \| revoked \| not_found` |
+| `resolveSessionOverHttp` | `({ ref: kind 'session'; version; grant: VerifiedGrant & { aud: 'http-executor'; sessionHttp: true }; identity }) → ResolveResult<'http-executor','session'>` | the ONE audited path by which a `session` kind reaches the HTTP executor; unrepresentable without `grant.sessionHttp: true`, which the authority signs only under the default-off `session_http` permission (ADR 0004 §4.1) |
 | `rotate` | `({ ref; expectedVersion; next: SecretMaterial; bindings; identity }) → RotateResult` | `put` with the extra rule that the previous version stays readable for `ROTATION_GRACE_MS` (grants in flight) and is then unreadable; only the refresh worker's identity may call it |
 | `revoke` | `({ ref; reason: RevokeReason; identity }) → RevokeResult` | marks the ref **broker-denied**: every future `resolve` returns `revoked`; the material is retained for `REVOKE_RETENTION_MS` so an upstream-revocation attempt can still be made; bumps nothing upstream |
 | `delete` | `({ ref; identity; upstream: UpstreamRevocation }) → DeleteResult` | removes the material and all versions. `upstream` records whether an upstream revocation was attempted and its outcome (`'revoked' \| 'unsupported' \| 'failed' \| 'not_attempted'`); the result carries both facts so the UI can say "removed from PageSpace; the key is still valid at the provider" |
@@ -63,9 +64,9 @@ commit= plane metadata row { ref, currentVersion: v', previousVersion: v, rotate
 
 The lock serializes writers per secret across replicas; the verify catches an overlapping write that slipped past the lock (a second Infisical writer that is not us). `write_unverified` is a refusal to *report success*, not a rollback — the material may have landed; the reconciler (G3) resolves it by re-reading and re-binding. The pure decision `decideStoreWrite({ expectedVersion, observedBefore, observedAfter })` returns `commit | version_conflict | write_unverified` and is table-tested; the adapter only acts on it.
 
-### 2.4 Bindings are compared at resolve
+### 2.4 Bindings are compared at resolve — through the grant's signed digest
 
-`resolve` compares the stored `PlaneBindings` with the grant's claims using `secureCompare` over a canonical JSON. A main-DB writer who reassigns `agent_accounts.ownerUserId` or widens `allowedOrigins` produces a grant whose bindings disagree with the plane's copy → `binding_mismatch`. Widening therefore requires the `put`/`rotate` path with step-up (ADR 0004 §4.4), which rewrites the bindings under the owner's authenticated consent.
+The grant carries `bindingDigest = hash(canonicalJson(PlaneBindings))`, computed by the authority over the bindings it evaluated and signed with the grant (ADR 0004 §2.1). `decideResolve` recomputes `digestBindings(stored.bindings)` with the injected hash and compares the two in constant time; **no main-DB fact is consulted at resolve**. A main-DB writer who reassigns `agent_accounts.ownerUserId` or widens `allowedOrigins` therefore either (a) gets a grant signed over the tampered rows, whose digest differs from the plane's copy → `binding_mismatch`, or (b) cannot get a grant at all. (Codex P1 on PR #2637: the original signature handed `decideResolve` the store's bindings and nothing independently signed to compare against.) Widening therefore requires the `put`/`rotate` path with step-up (ADR 0004 §4.4), which rewrites the bindings under the owner's authenticated consent.
 
 ### 2.5 Plane metadata tables (G1b creates; main DB is acceptable for metadata because none of it is secret and all of it is cross-checked against the store)
 
@@ -116,6 +117,7 @@ The bar (Λ4): *no identity can read every tenant*. Identities are billed per id
 | `policyVersion` | int | bumped by every authority-relevant change (ADR 0004 §4.4) |
 | `acknowledgment` | `AccountAcknowledgment = 'dedicated_agent_account' \| 'personal_login_acknowledged'` | **required**; the add-account UI defaults to `dedicated_agent_account` and requires an explicit tick for `personal_login_acknowledged` (Λ3 copy, threat-model §9). A `password` or `session` kind with `dedicated_agent_account` still stores the acknowledgment so the UI can show which one was given |
 | `sessionFormat` | `'cookie-jar-v1' \| 'storage-state-v1' \| 'human-relogin' \| null` | non-null iff `kind = 'session'` (S3 §5) |
+| `sessionHttpEnabled` | boolean, default **false** | set only through `manage` (step-up); when true the HTTP executor may resolve this `session` account under the `session_http` permission via `resolveSessionOverHttp`; CHECK false for every kind but `session` |
 | `status` | `'active' \| 'revoked' \| 'needs_reauth' \| 'deleted'` | `revoked` = broker-denied; `needs_reauth` = upstream expired/invalid |
 | `upstreamRevocation` | `'not_attempted' \| 'revoked' \| 'unsupported' \| 'failed' \| null` | set by `delete` (§2.2) |
 | `lastUsedAt`, `createdAt`, `updatedAt`, `revokedAt` | timestamps (UTC) | |
@@ -128,8 +130,8 @@ The bar (Λ4): *no identity can read every tenant*. Identities are billed per id
 |---|---|---|
 | `api_key` | `{ value }` + placement descriptor (header/query name) | `http-executor`, `relay-runner` |
 | `bearer` | `{ token; expiresAt \| null }` | `http-executor`, `relay-runner` |
-| `oauth2` | `{ accessToken; accessExpiresAt; refreshToken \| null; scopes; issuer; tokenEndpoint }` | `http-executor`, `relay-runner` (access token only); `refresh-worker` (refresh token) |
-| `session` | `{ format; cookies; storage? }` per S3 §5 | `browser-worker`; `http-executor` only under a separate `session-http` permission on the account (default off) |
+| `oauth2` | `{ accessToken; accessExpiresAt; refreshToken \| null; scopes; issuer; tokenEndpoint }` | `http-executor`, `relay-runner` receive **`OAuth2AccessMaterial`** (the type omits `refreshToken`); only `refresh-worker` receives the full material (`MaterialForChannel`) |
+| `session` | `{ format; cookies; storage? }` per S3 §5 | `browser-worker`; `http-executor` **only** through `resolveSessionOverHttp` with `grant.sessionHttp: true` — the default-off `session_http` permission in `permissions/account-permissions.ts` (ADR 0004 §4.1); `ResolvableBy<'http-executor'>` excludes `session` |
 | `password` | `{ username; password; totpSecret \| null }` | **`browser-worker` only** (the fill executor, L5c). The type `ResolvableBy<'http-executor'>` excludes `password`; the adapter additionally refuses with `kind_not_resolvable`. Mutation pair required (Control Board §7.4) |
 
 ### 4.3 Bindings for agent pages
@@ -170,9 +172,10 @@ Executors run as their own processes/Sprites with: no request-body telemetry; co
 | # | Situation | Behaviour |
 |---|---|---|
 | F1 | `resolve` with a grant whose `aud` is not an executor channel | unrepresentable by type; adapter returns `kind_not_resolvable` if reached |
-| F2 | `resolve` of kind `password` by any channel but `browser-worker` | `kind_not_resolvable` |
+| F2 | `resolve` of kind `password` by any channel but `browser-worker`; `resolve` of kind `session` by `http-executor` (only `resolveSessionOverHttp` with `sessionHttp: true` may) | `kind_not_resolvable` |
+| F2a | `oauth2` resolved by any channel but `refresh-worker` | material is `OAuth2AccessMaterial`; `refreshToken` is absent by type and stripped by the adapter |
 | F3 | `resolve` with `version ≠ current` (rotation happened) | `version_mismatch`; the previous version is readable only inside `ROTATION_GRACE_MS` and only by a grant that named it |
-| F4 | Stored bindings ≠ grant bindings (owner/tenant/origins/policyVersion) | `binding_mismatch` |
+| F4 | `digestBindings(stored bindings) ≠ grant.bindingDigest` (owner/tenant/origins/policyVersion/kind) | `binding_mismatch` |
 | F5 | Identity scoped to tenant X resolving a ref in tenant Y | `not_found` (the store refuses; the adapter does not distinguish) |
 | F6 | `put`/`rotate` with `expectedVersion ≠ observed` | `version_conflict`; nothing written |
 | F7 | Post-write verify disagrees | `write_unverified`; success is not reported; reconciliation runs |
@@ -203,9 +206,12 @@ export type DecideStoreWrite = (input: { expectedVersion: CredentialVersion | nu
   bindingsAfter: PlaneBindings | null; bindingsWritten: PlaneBindings }) =>
   { outcome: 'commit'; version: CredentialVersion } | { outcome: 'version_conflict' } | { outcome: 'write_unverified' };
 
-// store/decide-resolve.ts (G1b) — every refusal in §8 F1–F5, F10 as data
+// store/digest-bindings.ts (G1b) — the same bytes on the authority and the store side
+export type DigestBindings = (input: { bindings: PlaneBindings; hash: HashBytes }) => BindingDigest;
+
+// store/decide-resolve.ts (G1b) — every refusal in §8 F1–F5, F10 as data; bindings via the signed digest
 export type DecideResolve = (input: { grant: VerifiedGrant; ref: SecretRef; stored: StoredSecretFacts | null;
-  now: number; rotationGraceMs: number }) => ResolveDecision;
+  now: number; rotationGraceMs: number; hash: HashBytes }) => ResolveDecision;
 
 // tenant.ts
 export type DeriveTenantId = (input: { owner: AccountOwnerRef }) => TenantId;
@@ -226,7 +232,7 @@ export type DecideRefresh = (input: { material: OAuth2Material; now: number; mar
 2. Given `deriveTenantId` for a user-owned account, returns `user:<userId>`; for an agent-page-owned account, `drive:<driveId>`; the same owner always derives the same id (idempotent, pure).
 3. Given `decideResolve` with a `password` kind and channel `http-executor`, returns `kind_not_resolvable`; with `browser-worker`, `ok`. The type `ResolvableBy<'http-executor'>` does not include `password` (`// @ts-expect-error` test).
 4. Given `decideResolve` with `version` one behind current inside `rotationGraceMs`, `ok` for a grant that named the old version; outside it, `version_mismatch`.
-5. Given stored bindings whose `policyVersion` differs from the grant's, `binding_mismatch`; given a changed `ownerRef`, the same; comparison is over canonical JSON (key order irrelevant).
+5. Given stored bindings whose `policyVersion`, `ownerRef` or `allowedOrigins` differ from those the grant's `bindingDigest` was computed over, `binding_mismatch`; `digestBindings` is key-order-independent (canonical JSON) so a reordered-but-equal copy matches.
 6. Given `decideStoreWrite` with `observedBefore ≠ expectedVersion`, `version_conflict`; with `observedAfter ≠ observedBefore + 1` or bindings mismatch, `write_unverified`; else `commit` with the new version.
 7. Given the Infisical integration test (sandbox project, synthetic material): `put` → `describe` returns the version and bindings and **never** the material; `resolve` with the wrong-tenant identity → `not_found`; `resolve` after `revoke` → `revoked`; `delete` → subsequent `describe` → `not_found`.
 8. Given two concurrent `rotate` calls with the same `expectedVersion` against the real store, exactly one commits and the other returns `version_conflict` (the advisory lock test, `*.integration.test.ts` against `:5433`).
@@ -237,6 +243,10 @@ export type DecideRefresh = (input: { material: OAuth2Material; now: number; mar
 13. Given a crash injected between `write` and `verify` in the refresh worker's integration test, the reconciler ends with `currentVersion` equal to the store's and no grant able to resolve the stale version.
 14. Given the migration of an `integration_connections` row, its material is `describe`-able in the plane at `credentialVersion 1`, the source column is null, and `git grep decryptCredentials` returns zero call sites outside `packages/lib/src/encryption/` (G3 exit).
 15. Mutation pairs: break the `aud` gate in `decideResolve`, the `kind_not_resolvable` rule for `password`, the bindings compare, and the `expectedVersion` check by line index → red; restore → green.
+16. Given `resolve` of an `oauth2` ref by `http-executor` or `relay-runner`, the result's material has no `refreshToken` key (type-level: `MaterialForChannel<'http-executor','oauth2'>` lacks it, `// @ts-expect-error` on access; runtime: the adapter strips it before return); by `refresh-worker`, the field is present (PR #2637 P1).
+17. Given `resolve` of a `session` ref by `http-executor`, does not compile (`ResolvableBy<'http-executor'>` excludes `session`) and returns `kind_not_resolvable` if reached; given `resolveSessionOverHttp` with a grant whose `sessionHttp` is `false`, does not compile; with `true`, `ok` (PR #2637 P1).
+18. Given `decideAccountAccess` with `sessionHttpEnabled: false`, `session_http` is `false` whatever else is true; with `true` and `use: false`, still `false`; with both, `true`.
+19. Given the authority issuing a grant, `bindingDigest` equals `digestBindings` over the bindings it read; a grant whose digest was computed over any other bindings fails at the plane, never at the authority (the plane is the independent check).
 
 ## 11. Consequences
 

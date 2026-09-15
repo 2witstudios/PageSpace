@@ -17,6 +17,10 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it.todo('given callerCeiling.allowedDriveIds=[d1] and an account in drive d2, should return ceiling before any account fact is consulted [0004 §8.5]');
   it.todo('given callerCeiling.allowedDriveIds=[], should admit every drive [0004 §8.5]');
   it.todo('given tenantId differing from the account row, should return tenant_mismatch [0004 F4]');
+  it.todo('given a valid unused grant whose agentPageId differs from the presenter current run, should return principal_mismatch before any version or delegation fact [0004 §8.20; PR #2637 P1]');
+  it.todo('given a grant whose conversationId or runId differs from the presenter current run, should return principal_mismatch [0004 §8.20]');
+  it.todo('given a grant whose human.userId differs from the acting human of the run, should return principal_mismatch [0004 §8.20]');
+  it.todo('given ExpectedBinding, should carry the CURRENT human/agentPageId/conversationId/runId from the presenter context, never from the grant (type-level) [0004 §2.1]');
   it.todo('given credentialVersion one behind current, should return version_mismatch [0004 §8.6]');
   it.todo('given policyVersion one behind current, should return policy_epoch [0004 §8.6]');
   it.todo('given human.sessionId null and delegationId null, should return no_delegation [0004 §8.7]');
@@ -33,9 +37,14 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it.todo('given every pairwise two-fault input, should return the earlier reason in the fixed order F1→F17 (table test) [0004 §8.10]');
   it.todo('given nonceState consumed, should return replayed [0004 §8.11]');
   it.todo('given nonceState unknown, should return replay_store_unavailable, never assume fresh [0004 §8.11]');
-  it.todo('given approvalId naming a consumed approval or one bound to a different digest, should return approval_mismatch [0004 F14]');
+  it.todo('given a concrete approval fact with consumedByGrantId null, should return approval_mismatch [0004 §8.21; PR #2637 P1]');
+  it.todo('given a concrete approval fact consumed by another grantId, should return approval_mismatch [0004 §8.21]');
+  it.todo('given a concrete approval fact whose consumedByGrantId equals this grantId, should verify ok [0004 §8.21]');
+  it.todo('given approvalId naming an approval bound to a different digest, should return approval_mismatch [0004 F14]');
   it.todo('given operation class irreversible or privilege with approvalId policy, should return approval_mismatch [0004 §8.12]');
   it.todo('given kind password with aud other than browser-worker, should return kind_not_resolvable [0004 F17]');
+  it.todo('given kind session with aud http-executor and sessionHttp false, should return kind_not_resolvable [0004 §8.23; PR #2637 P1]');
+  it.todo('given a grant without bindingDigest or sessionHttp, should return malformed (every field required) [0004 §8.24]');
   it.todo('given a deny toward an untrusted caller, should collapse to one constant-shape refusal with the reason in audit only [0004 F16]');
 });
 

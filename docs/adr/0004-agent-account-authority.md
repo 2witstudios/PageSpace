@@ -14,7 +14,7 @@ What is the unit of authorization for a credentialed operation, who may hold it,
 
 1. **A signed, one-use, ≤ 15-minute action grant** is the only thing the credential plane accepts. It binds every principal in threat-model §3 plus the operation and a **canonical request digest**; every field is required. It is Ed25519-signed under an **issuer key separate from the env-bridge's**, with its own audience. Verification is a pure function with a fixed deny order; replay state is a Postgres table shared across replicas.
 2. **The digest covers the frozen request** — method, normalized destination, the reserved-header set, exact body bytes, and operation-specific resources — and is computed from a canonical projection defined once, on both the issuer and the executor side (the `grant-args.ts` discipline).
-3. **Four distinct account permissions — `view` / `use` / `manage` / `grant`** — live in `packages/lib/src/permissions/account-permissions.ts` as a pure decision over facts the repository fetched. `canUserViewPage` and every page permission grant **nothing** on an account.
+3. **Four distinct account permissions — `view` / `use` / `manage` / `grant` — plus the default-off `session_http` exception** live in `packages/lib/src/permissions/account-permissions.ts` as a pure decision over facts the repository fetched. `canUserViewPage` and every page permission grant **nothing** on an account.
 4. **Unattended runs need a recorded delegation with an expiry**; user-owned accounts never silently attach to a shared agent; copies, moves, ownership transfers and membership changes invalidate bindings by bumping `policyVersion`.
 5. **Approval outcomes are `allow_once | always | deny`**, bound to the digest (once) or to a bounded policy (always: scope, trigger, duration, limits, approver). An approval is an authenticated human decision received by the authority directly; model text never carries authority.
 
@@ -54,6 +54,8 @@ Every field is **required**. Absence is encoded as `null` only where the field's
 | `accountId` | `AccountId` | the account | the row |
 | `credentialVersion` | `CredentialVersion` | the store version the executor may resolve | `resolve` refuses any other version |
 | `policyVersion` | `PolicyVersion` | the account policy this grant was evaluated under | the row's current `policyVersion` |
+| `bindingDigest` | `BindingDigest` | `hash(canonicalJson(PlaneBindings))` — the authority's signed copy of `(tenantId, ownerRef, allowedOrigins, policyVersion, kind)` it evaluated | the store's own `PlaneBindings` digest at resolve (ADR 0005 §2.4); a tampered main-DB row cannot produce a matching grant |
+| `sessionHttp` | `boolean` | whether the default-off `session_http` permission was granted for this use (§4.1); the only way a `session` kind reaches the HTTP executor | the account's `sessionHttpEnabled` flag and `decideAccountAccess` |
 | `operation` | `OperationRef` (`{ class: OperationClass; name: string }`) | the typed operation (§3.4) | the request's operation |
 | `requestDigest` | `RequestDigest` | `hash(canonicalizeRequest(request))` | recomputed by the presenter from the frozen request |
 | `approvalId` | `ApprovalId` | the approval decision consumed (§4.3); the `'policy'` sentinel id when a bounded always-allow applied | the approvals table |
@@ -62,6 +64,8 @@ Every field is **required**. Absence is encoded as `null` only where the field's
 | `presenter` | `{ keyId: PresenterKeyId; channel: PresenterChannel }` | the executor key that must sign the *use* | the executor's own key; `channel === aud` |
 
 Principal types are **branded** (`Brand<string, 'UserId'>` etc.): a `RunId` is not assignable to a `SandboxInstanceId`. `type`, never `interface`; readonly everywhere.
+
+**What the verifier compares against.** `ExpectedBinding` carries the presenter's *current* execution principals — `human`, `agentPageId`, `conversationId`, `runId` — taken from the presenter's own run context, never from the grant. A valid, unused grant issued for another agent page, thread or run that reaches the same presenter is refused as `principal_mismatch` (F4a). This is what makes the cross-agent and cross-run substitution rows in the threat model (A3) decidable by a pure function rather than by convention (Codex P1 on PR #2637).
 
 ### 2.2 Signing
 
@@ -128,8 +132,9 @@ Provider tool catalogues (`integrations/providers/*.ts`) are reclassified to thi
 | `use` | cause an operation to be issued under this account | user-owned: the owning user only, and only when they are the acting human of the run (never when *another* user invokes a shared agent that user configured — Codex); agent-page-owned: the acting human must have `use` **and** the agent page must be bound to the account **and** the caller ceiling must admit the drive |
 | `manage` | change allowed origins, operations, approval policy, limits, kind-specific settings; rotate; revoke; delete; **edit the agent's instructions when the agent is bound to an account** (Λ15) | user-owned: the owner; agent-page-owned: drive OWNER/ADMIN of the *human* actor (an agent's own drive membership never confers `manage`, B0 B-24) |
 | `grant` | bind the account to an agent page, create/extend a delegation, widen a policy | user-owned: the owner; agent-page-owned: drive OWNER/ADMIN; **always** through step-up for widening |
+| `session_http` | let the HTTP executor resolve a `session` kind (a cookie jar over plain HTTP, outside the browser worker). **Default off.** | true only when `use` is true **and** the account's `sessionHttpEnabled` flag is on; the flag is set through `manage` (step-up, since it widens where a post-MFA session may be replayed). The grant carries `sessionHttp: true` and the adapter exposes it only through `resolveSessionOverHttp` (ADR 0005 §4.2) |
 
-`view` does not imply `use`; `use` does not imply `manage`; `manage` does not imply `grant`. Each is decided independently by `decideAccountAccess` (§7) over the `AccountAccessFacts` the repository fetched — no tool-only policy, no route-local check.
+`view` does not imply `use`; `use` does not imply `manage`; `manage` does not imply `grant`; `session_http` requires `use` and the flag. Each is decided independently by `decideAccountAccess` (§7) over the `AccountAccessFacts` the repository fetched — no tool-only policy, no route-local check.
 
 ### 4.2 What never grants anything
 
@@ -148,7 +153,7 @@ Provider tool catalogues (`integrations/providers/*.ts`) are reclassified to thi
   approver: UserId }
 ```
 
-`always` writes a bounded policy row; a later grant under it carries `approvalId = 'policy'` and the policy's version is folded into `policyVersion`. `allow_once` writes an approval row bound to the digest and consumed exactly once. `deny` writes an audit row and issues nothing. Approvals are received from the authenticated human session (or step-up for `privilege`) through the approval route; the `ask_user`-style presentation is a renderer only.
+`always` writes a bounded policy row; a later grant under it carries `approvalId = 'policy'` and the policy's version is folded into `policyVersion`. `allow_once` writes an approval row bound to the digest and consumed exactly once — **by the grant issuance that used it**: the row records `consumedByGrantId`, and the verifier accepts a concrete approval only when that id equals the signed `grantId` (`null` = never issued against; another id = a competing issuance won). A bare "consumed" flag cannot tell first legitimate use from reuse (Codex P1 on PR #2637). `deny` writes an audit row and issues nothing. Approvals are received from the authenticated human session (or step-up for `privilege`) through the approval route; the `ask_user`-style presentation is a renderer only.
 
 ### 4.4 Delegation and binding invalidation
 
@@ -167,6 +172,7 @@ Provider tool catalogues (`integrations/providers/*.ts`) are reclassified to thi
 | F2 | `iss` or `aud` not the expected constants; `presenter.channel ≠ aud` | `wrong_audience` |
 | F3 | Caller ceiling does not admit the account's drive (`isDriveWithinCredentialScope` false); `manage_keys`-only credential | `ceiling` — asked before anything else that needs a DB fact |
 | F4 | `tenantId` ≠ the account row's tenant | `tenant_mismatch` |
+| F4a | `human.userId`, `agentPageId`, `conversationId` or `runId` ≠ the presenter's current execution principals | `principal_mismatch` |
 | F5 | `accountId` unknown, revoked, or `credentialVersion` ≠ current | `version_mismatch` (unknown and revoked collapse into it toward the presenter) |
 | F6 | `policyVersion` ≠ current | `policy_epoch` |
 | F7 | `delegationId` null while `human.sessionId` null; delegation expired/revoked/foreign account | `no_delegation` |
@@ -176,10 +182,10 @@ Provider tool catalogues (`integrations/providers/*.ts`) are reclassified to thi
 | F11 | Signature invalid, undecodable, or under any key but the pinned issuer key | `bad_signature` |
 | F12 | Nonce already consumed, or the replay store is unreachable | `replayed` / `replay_store_unavailable` — never "assume fresh" |
 | F13 | Audit record cannot be durably accepted before execution | `audit_unavailable`; the executor does not act |
-| F14 | `approvalId` names an approval already consumed, bound to a different digest, or `'policy'` while the policy is expired/exceeded | `approval_mismatch` |
+| F14 | `approvalId` names an approval whose `consumedByGrantId` ≠ this `grantId` (null or another grant), bound to a different digest, or `'policy'` while the policy is expired/exceeded | `approval_mismatch` |
 | F15 | Operation class `irreversible`/`privilege` with `approvalId = 'policy'` | `approval_mismatch` (always-allow never covers these classes) |
 | F16 | Any deny toward an untrusted caller (the model, the sandbox) | one constant-shape refusal; the reason goes to audit only |
-| F17 | `password` kind requested by `aud ≠ 'browser-worker'` | `kind_not_resolvable` (also unrepresentable by type, ADR 0005 §4) |
+| F17 | `password` kind requested by `aud ≠ 'browser-worker'`; `session` kind requested by `aud = 'http-executor'` without `sessionHttp: true` | `kind_not_resolvable` (also unrepresentable by type, ADR 0005 §4) |
 | F18 | Request canonicalization refuses (userinfo, wildcard, reserved header, `..` after decode, IP literal) | no grant is issued; the refusal names the rule, to the human only |
 
 ## 7. Pure-function signatures (G1b implements behind thin adapters)
@@ -193,9 +199,9 @@ export type ParseGrant = (input: { readonly grant: unknown }) => ParseGrantVerdi
 
 export type VerifyGrant = (input: VerifyGrantInput) => GrantVerdict;
 //   VerifyGrantInput: { grant: unknown; signature: string; issuerPublicKey: Uint8Array;
-//     now: number; expected: ExpectedBinding;   // aud, presenter, tenant, account row facts,
-//                                                // current credential/policy versions, delegation fact,
-//                                                // sandbox binding, callerCeiling fact (drive admitted?)
+//     now: number; expected: ExpectedBinding;   // aud, presenter, CURRENT human/agentPageId/conversationId/runId,
+//                                                // tenant, account row facts, current credential/policy versions,
+//                                                // delegation fact, sandbox binding, callerCeiling fact (drive admitted?)
 //     request: CanonicalRequest; nonceState: 'fresh' | 'consumed' | 'unknown';
 //     approval: ApprovalFact; verify: Ed25519Verify; hash: HashBytes }
 //   GrantVerdict: { ok: true; grant } | { ok: false; reason: GrantDenyReason }
@@ -215,7 +221,8 @@ export type ClassifyOperation = (input: { channel: PresenterChannel; canonical: 
 
 // decide-approval.ts (G1b)
 export type DecideApproval = (input: { operation: OperationRef; policy: AccountApprovalPolicy | null;
-  requestDigest: RequestDigest; now: number; usage: UsageCounters }) => ApprovalRequirement;
+  requestDigest: RequestDigest; origin: CanonicalOrigin; resources: readonly (readonly [string, string])[];
+  now: number; usage: UsageCounters }) => ApprovalRequirement;   // resources compared against policy.scope.resources
 //   { kind: 'policy' } | { kind: 'concrete'; stepUp: boolean } | { kind: 'refuse'; reason }
 
 // packages/lib/src/permissions/account-permissions.ts
@@ -253,6 +260,11 @@ Adapters (I/O, G1b): `grant-repository.ts` (nonce consume, approvals, delegation
 17. Given `decideApproval` for class `write` under an `always` policy whose `limits.maxUsesPerHour` is exhausted, returns `refuse`; under a policy whose `duration.until` has passed, `concrete`.
 18. Given `buildAuditRecord` with a body and a resolved credential in scope, the record contains neither (property test over random bodies: `JSON.stringify(record)` never includes the body bytes or the secret).
 19. Mutation pairs (Control Board §7.4): break the digest compare, the nonce-only-on-ok rule, the ceiling-first rule, and the `aud` check by line index → the corresponding assertion goes red; restore → green.
+20. Given a valid unused grant whose `agentPageId`, `conversationId`, `runId` or `human.userId` differs from `expected` (the presenter's current run), returns `principal_mismatch` before any version or delegation fact is consulted (PR #2637 P1).
+21. Given a concrete approval fact with `consumedByGrantId = null`, returns `approval_mismatch`; with another grant's id, `approval_mismatch`; with this `grantId`, verifies `ok` (PR #2637 P1).
+22. Given `decideApproval` under an `always` policy whose `scope.resources` names repo A and a request whose `resources` name repo B, returns `refuse(out_of_scope)`; with repo A, `policy` (PR #2637 P1).
+23. Given a `session` kind and `aud: 'http-executor'` with `sessionHttp: false`, returns `kind_not_resolvable`; `decideAccountAccess` returns `session_http: true` only when `sessionHttpEnabled` and `use` are both true (PR #2637 P1).
+24. Given a grant whose `bindingDigest` was computed over bindings that differ from the store's copy in owner or origins, the plane returns `binding_mismatch` (ADR 0005 §10.5); the grant type requires the field (a grant without it is `malformed`).
 
 ## 9. Consequences
 

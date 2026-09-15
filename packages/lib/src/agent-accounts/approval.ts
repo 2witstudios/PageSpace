@@ -62,6 +62,8 @@ export type DecideApproval = (input: {
   readonly policy: AccountApprovalPolicy | null;
   readonly requestDigest: RequestDigest;
   readonly origin: CanonicalOrigin;
+  /** The canonical resource pairs of the request — compared against `policy.scope.resources` (Codex P1 on PR #2637). */
+  readonly resources: readonly (readonly [string, string])[];
   readonly now: number;
   readonly usage: UsageCounters;
 }) => ApprovalRequirement;

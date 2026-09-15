@@ -18,9 +18,15 @@ describe('decideResolve (ADR 0005 F1–F5, F10; §10.3–5)', () => {
   it.todo('given a grant whose aud is not an executor channel, should be unrepresentable by type and kind_not_resolvable if reached [F1]');
   it.todo('given version one behind current inside rotationGraceMs, should return ok for a grant that named the old version [§10.4]');
   it.todo('given version one behind current outside rotationGraceMs, should return version_mismatch [§10.4]');
-  it.todo('given stored bindings whose policyVersion differs from the grant, should return binding_mismatch [§10.5]');
-  it.todo('given a changed ownerRef in stored bindings, should return binding_mismatch [§10.5]');
-  it.todo('given bindings differing only in key order, should compare equal (canonical JSON) [§10.5]');
+  it.todo('given stored bindings whose policyVersion differs from those the grant bindingDigest was computed over, should return binding_mismatch [§10.5; PR #2637 P1]');
+  it.todo('given stored bindings with a changed ownerRef or allowedOrigins versus the grant bindingDigest, should return binding_mismatch [§10.5]');
+  it.todo('given stored bindings differing only in key order from those digested, should compare equal (digestBindings is canonical) [§10.5]');
+  it.todo('given decideResolve, should consult no main-DB fact — the bindings check is digestBindings(stored) versus grant.bindingDigest with the injected hash [0005 §2.4]');
+  it.todo('given resolve of an oauth2 ref by http-executor or relay-runner, should return material with no refreshToken key (type: MaterialForChannel lacks it; runtime: adapter strips) [§10.16; PR #2637 P1]');
+  it.todo('given resolve of an oauth2 ref by refresh-worker, should return material including refreshToken [§10.16]');
+  it.todo('given resolve of a session ref by http-executor, should not compile (ResolvableBy excludes session) and return kind_not_resolvable if reached [§10.17; PR #2637 P1]');
+  it.todo('given resolveSessionOverHttp with a grant whose sessionHttp is false, should not compile; with true, should return ok [§10.17]');
+  it.todo('given the authority issuing a grant, bindingDigest should equal digestBindings over the bindings it read [§10.19]');
   it.todo('given stored null (wrong-tenant identity or absent), should return not_found [F5]');
   it.todo('given revokedAt set, should return revoked regardless of version [F10]');
 });
