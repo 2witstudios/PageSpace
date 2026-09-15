@@ -65,7 +65,7 @@ export interface ToolPart {
   toolName: string;
   input?: Record<string, unknown>;
   output?: unknown;
-  state: 'input-streaming' | 'input-available' | 'output-available' | 'output-error';
+  state: 'input-streaming' | 'input-available' | 'approval-requested' | 'approval-responded' | 'output-available' | 'output-error' | 'output-denied';
 }
 
 /**
@@ -93,7 +93,7 @@ export interface ProcessedToolPart {
   toolName: string;
   input?: Record<string, unknown>;
   output?: unknown;
-  state: 'input-streaming' | 'input-available' | 'output-available' | 'output-error' | 'done' | 'streaming';
+  state: 'input-streaming' | 'input-available' | 'approval-requested' | 'approval-responded' | 'output-available' | 'output-error' | 'output-denied' | 'done' | 'streaming';
 }
 
 /**
@@ -135,7 +135,7 @@ export type GroupedPart = TextGroupPart | FileGroupPart | ProcessedToolPart | Co
 /**
  * Valid tool states for type checking
  */
-export const VALID_TOOL_STATES = ['input-streaming', 'input-available', 'output-available', 'output-error', 'done', 'streaming'] as const;
+export const VALID_TOOL_STATES = ['input-streaming', 'input-available', 'approval-requested', 'approval-responded', 'output-available', 'output-error', 'output-denied', 'done', 'streaming'] as const;
 export type ValidToolState = typeof VALID_TOOL_STATES[number];
 
 /**
