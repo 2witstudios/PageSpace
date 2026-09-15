@@ -102,3 +102,43 @@ export type PlanRelayTransfer = (input: { operation: GitRelayOperation; guestSta
 - L4's exit ("hostile-guest extraction sweep finds nothing; push + API call via the relay; restored-generation replay denied; `git-tool-runners.ts` injection removed") follows directly from D1–D3; Λ1 is retired and Λ6 bounded there.
 - Until L4, Λ1 stands as accepted under D-23, with B0's two widenings (another user's local daemon; shared drive-env collaborators) recorded in the threat model and D-25 as the interim bound.
 - The env-bridge (local machines) is unchanged by this ADR: its daemon is a *user-owned* trust boundary with its own enrolled key; Codex's note that a compromised local host can be asked to sign applies and is recorded in the threat model, not solved here.
+
+---
+
+## Amendment 2026-09-15 — the server-opened duplex channel is a caller-identity primitive; L4 design deferred to G4
+
+**Why this amendment exists.** §1.4 and D3.2 above were written on S1's first-draft claim that "there is no reciprocal channel on which guest-resident code authenticates itself to the broker" and that the provisioner's channel "is server→guest only". The PR #2633 review (thread on S1 §3.4) showed that claim to be overstated, and S1 §3.4/§5 were corrected in `eb24f4e46`. This section records the correction here so the ADR does not freeze a design on a false premise. Nothing in D1–D3 is *withdrawn*; D3.2 is *narrowed*, and a second design is recorded as an alternative for G4 to decide between.
+
+### A1. Corrected ground truth (replaces the last clause of §1.4)
+
+- **True, verified (S1 §3.3):** the guest cannot **originate** an authenticated connection to anything outside the VM. No metadata endpoint, the gateway refuses every port, `api.sprites.dev` answers 401 to no/forged tokens, and the `/v1/sprites/{name}/proxy` handshake is rejected with a forged or absent token.
+- **True, verified (S1 §3.4):** exec / `createSession` / `proxyPort` are opened by the **server**, authenticated by the org token the server holds, and addressed by sprite name; the server independently verifies `(name, instance id)` via `getSprite`.
+- **Overstated in the first draft:** "the channel is server→guest only". Once open, the channel is **duplex**. The proxy tunnel carries whatever the guest sends to the tunnelled port back to the server; an exec stream carries stdout/stderr back. Those bytes arrive on a connection the server authenticated and bound to that sprite instance. So guest-originated *requests* can carry a server-established identity — the identity being "this sprite instance, generation N", established by the server's binding and never by anything the guest presents.
+
+### A2. Two sound designs for L4, both with the decision and the credential on the server side
+
+| | (a) Relay-only (D1 as written) | (b) Bound reverse-request relay (the alternative recorded here) |
+|---|---|---|
+| Who originates the credentialed operation | the relay runner | guest code, over a channel the runner opened |
+| Caller identity | the runner's own key; the sandbox is bound by `SandboxBinding` | the channel binding: `(spriteName, instanceId, generation)` verified by the runner at open **and** re-checked at presentation |
+| What the guest can send | nothing that is an input to any decision (F4) | request bytes that are **hostile input with a trustworthy source** — authorized per request by digest, origin pin and approval exactly as (a) |
+| Credential placement | resolved in the plane, used by the runner | resolved in the plane, substituted host-side *after* authorization; never enters the guest |
+| Moving parts | fewest; no parsing of hostile bytes per request | a request parser and a per-request authorization path on the runner side; channel lifecycle tied to generation |
+| Frozen-shape impact | none | none — `SandboxBinding`, `presenter` and `aud` are unchanged; the presenter is still the runner's key, `aud` is still `'relay-runner'`, and the binding is still the three-tuple |
+
+**Caveats that apply to (b), each a RED test if it is built:**
+1. The channel identifies the **sprite**, not a benign process inside it. Root authors every byte, so a request over the channel gets exactly the trust a request from a hostile principal gets: narrowly scoped, digest-authorized, approved on write. The channel supplies *source*, never *legitimacy*.
+2. **Replay/generation binding is still required.** A channel must be closed on any generation bump (restore *or* recreate, ADR 0004 F9 / this ADR F2–F3), and the binding is re-checked at presentation, not only at open; `getSprite` unreachable ⇒ refuse (F5).
+3. **Identity never comes from request contents** (F4 stands): no header, bearer, or guest-read `/info` id is an input to any decision. The verifier's input type still carries only `sandbox`.
+4. Nothing about (b) lets a private key or bearer inside the guest substitute for host-side substitution (D3.1, D3.3, D3.4 stand unchanged).
+
+### A3. What changes in the text above
+
+- **§1.4**, last sentence "It is server→guest only." → read as "It is server-**opened**; once open it is duplex (A1)."
+- **D3.2** "No guest→broker request path … because nothing the guest could send authenticates it" → narrowed to: **no guest-*originated* request path**, and no path in which the guest's *contents* authenticate it. A request path that rides a server-opened bound channel is design (b), not excluded by D3, and is decided at G4.
+- **D4** (what would change this ADR) stands for the *guest-originated* case: the duplex channel is not (b) of D4, because the guest cannot open it and its identity is the server's binding, not a guest-held secret — which is exactly why it is usable.
+- **S1 §5** (as amended): relay-only is the recommended v1; (b) is the primitive if L4 needs guest-originated requests.
+
+### A4. Decision status
+
+**Deferred to G4.** G4's brief chooses (a) or (b) — or (a) for git/CLI with (b) reserved for L7+ — against the caveats in A2. Whichever it picks, the L4 exit is unchanged: hostile-guest extraction sweep finds nothing; restored/recreated-generation replay denied; `git-tool-runners.ts` injection removed. If G4 chooses (b), assertions 1–9 in §8 still hold and it adds: (10) a request arriving over a channel whose generation has since bumped is refused before parsing; (11) a request whose bytes carry any identity claim is authorized identically to one without (the claim is not an input); (12) the same canonical request sent over two channels bound to different sprites yields two different digests bound to two different `sandbox` facts.
