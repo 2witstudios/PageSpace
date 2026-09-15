@@ -178,6 +178,36 @@
       "import": "./dist/env-bridge/grant.js",
       "require": "./dist/env-bridge/grant.js"
     },
+    "./agent-accounts/grant": {
+      "types": "./dist/agent-accounts/grant.d.ts",
+      "import": "./dist/agent-accounts/grant.js",
+      "require": "./dist/agent-accounts/grant.js"
+    },
+    "./agent-accounts/canonical-request": {
+      "types": "./dist/agent-accounts/canonical-request.d.ts",
+      "import": "./dist/agent-accounts/canonical-request.js",
+      "require": "./dist/agent-accounts/canonical-request.js"
+    },
+    "./agent-accounts/approval": {
+      "types": "./dist/agent-accounts/approval.d.ts",
+      "import": "./dist/agent-accounts/approval.js",
+      "require": "./dist/agent-accounts/approval.js"
+    },
+    "./agent-accounts/audit": {
+      "types": "./dist/agent-accounts/audit.d.ts",
+      "import": "./dist/agent-accounts/audit.js",
+      "require": "./dist/agent-accounts/audit.js"
+    },
+    "./agent-accounts/store/store-adapter": {
+      "types": "./dist/agent-accounts/store/store-adapter.d.ts",
+      "import": "./dist/agent-accounts/store/store-adapter.js",
+      "require": "./dist/agent-accounts/store/store-adapter.js"
+    },
+    "./permissions/account-permissions": {
+      "types": "./dist/permissions/account-permissions.d.ts",
+      "import": "./dist/permissions/account-permissions.js",
+      "require": "./dist/permissions/account-permissions.js"
+    },
     "./env-bridge/policy-types": {
       "types": "./dist/env-bridge/policy-types.d.ts",
       "import": "./dist/env-bridge/policy-types.js",
