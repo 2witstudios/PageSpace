@@ -159,7 +159,7 @@ import {
 import { applyApprovalPolicy, isToolApprovalMode, DEFAULT_TOOL_APPROVAL_MODE, type ApprovalPolicyContext } from '@/lib/ai/approvals/approval-policy';
 import { gatedIntegrationToolNames } from '@/lib/ai/approvals/integration-approval';
 import { approvalResumeRefusal, executeApprovedCallsAndReassemble } from '@/lib/ai/chat-pipeline/approval-turn-support';
-import { toolApprovalRepository } from '@/lib/repositories/tool-approval-repository';
+import { loadToolApprovalGrants } from '@/lib/ai/approvals/load-approval-context';
 import { isSessionAuthResult } from '@/lib/auth';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
@@ -1378,9 +1378,10 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // (they drive streamText themselves), so they are `auto` by construction.
     const toolApprovalMode = isToolApprovalMode(page.toolApprovalMode) ? page.toolApprovalMode : DEFAULT_TOOL_APPROVAL_MODE;
     const toolApprovalsInteractive = isSessionAuthResult(authResult) && agentDispatchDepth === 0;
+    // Fails SAFE (no grants) — see load-approval-context.ts.
     const toolApprovalGrants =
       toolApprovalsInteractive && toolApprovalMode === 'ask'
-        ? await toolApprovalRepository.listGrants(userId!, conversationId ?? null)
+        ? await loadToolApprovalGrants(userId!, conversationId ?? null, loggers.ai)
         : [];
     // Capture BEFORE exposure so capability sections (TASK_MANAGEMENT, AGENTS, etc.) are
     // correctly included in search mode where non-core tools become callable via execute_tool
