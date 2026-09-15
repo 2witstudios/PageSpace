@@ -101,6 +101,10 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
   }): Promise<PutResult> {
     const { ref, material, expectedVersion, bindings, identity } = input;
     if (ref.tenantId !== identity.tenantId) return { ok: false, reason: 'store_unavailable' };
+    // PutInput does not type-correlate ref.kind with SecretMaterial's discriminant — a caller
+    // could otherwise submit e.g. password material under an api_key ref (Codex review PR #2646
+    // P2). Reject before any I/O.
+    if (ref.kind !== material.kind) return { ok: false, reason: 'kind_mismatch' };
 
     const project = await deps.resolveProject(ref.tenantId);
     const credentials = await deps.resolveCredentials({ tenantId: ref.tenantId, identityId: identity.identityId });
