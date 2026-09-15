@@ -230,6 +230,13 @@ export const globalAssistantConfig = pgTable('global_assistant_config', {
   // Whether to include drive integrations by default
   inheritDriveIntegrations: boolean('inherit_drive_integrations').default(true).notNull(),
 
+  // Tool approvals (human-in-the-loop gate for writes). 'ask' = pause on every
+  // gated write the user has not granted; 'auto' = never pause. Default 'ask':
+  // on by default. Read per turn by the approval policy; non-interactive turns
+  // (worker dispatch, workflows, triggers, channel mentions) run as 'auto'
+  // whatever this says — there is nobody to ask.
+  toolApprovalMode: text('tool_approval_mode', { enum: ['ask', 'auto'] }).default('ask').notNull(),
+
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { mode: 'date' })
     .defaultNow()
