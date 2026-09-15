@@ -75,7 +75,7 @@ const EMPTY: AllUserData = {
   sessions: [],
   notifications: [],
   displayPreferences: [],
-  settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [] },
+  settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [], toolApprovalGrants: [], toolApprovalDecisions: [] },
   personalization: null,
   personalizationCandidates: [],
   agentWorkspaces: [],
