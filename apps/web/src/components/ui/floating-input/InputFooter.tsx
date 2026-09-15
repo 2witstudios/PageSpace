@@ -28,6 +28,11 @@ export interface InputFooterProps {
   writeMode?: boolean;
   /** Callback when write mode is toggled */
   onWriteModeToggle?: (enabled: boolean) => void;
+  /** Tool approvals (global assistant only — omit to hide). */
+  toolApprovalMode?: 'ask' | 'auto';
+  onToolApprovalModeToggle?: (ask: boolean) => void;
+  trustedTools?: Array<{ id: string; toolName: string; conversationId: string | null }>;
+  onRevokeTrustedTool?: (grantId: string) => void;
   /** Whether to show workspace page tree context to AI */
   showPageTree?: boolean;
   /** Callback when page tree context is toggled */
@@ -88,6 +93,10 @@ export function InputFooter({
   canUseImageGen = false,
   writeMode = true,
   onWriteModeToggle,
+  toolApprovalMode,
+  onToolApprovalModeToggle,
+  trustedTools,
+  onRevokeTrustedTool,
   showPageTree = false,
   onShowPageTreeToggle,
   mcpRunningServers = 0,
@@ -128,6 +137,10 @@ export function InputFooter({
           canUseImageGen={canUseImageGen}
           writeMode={writeMode}
           onWriteModeToggle={onWriteModeToggle}
+          toolApprovalMode={toolApprovalMode}
+          onToolApprovalModeToggle={onToolApprovalModeToggle}
+          trustedTools={trustedTools}
+          onRevokeTrustedTool={onRevokeTrustedTool}
           showPageTree={showPageTree}
           onShowPageTreeToggle={onShowPageTreeToggle}
           mcpRunningServers={mcpRunningServers}
