@@ -253,6 +253,28 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
     expect(result).toEqual({ ok: false, reason: 'revoked' });
   });
 
+  // Codex review PR #2646 (P1, store-adapter-infisical.ts:225): revoke never compared
+  // ref.tenantId against identity.tenantId (unlike resolve/describe/writeSecret), so a
+  // tenant-B identity could deny a tenant-A account outright.
+  it('given revoke with a wrong-tenant identity, should return not_found and leave the account unrevoked', async () => {
+    if (!available) return;
+    const adapter = makeAdapter();
+    const accountId = `acct-revoke-cross-tenant-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identityForTenantA = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const wrongTenantIdentity = { tenantId: TENANT_B, identityId: identityBWrongTenant.identityId, blastRadius: 'tenant' as const };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity: identityForTenantA });
+
+    const revokeResult = await adapter.revoke({ ref, reason: 'admin', identity: wrongTenantIdentity });
+    expect(revokeResult).toEqual({ ok: false, reason: 'not_found' });
+
+    const described = await adapter.describe({ ref, identity: identityForTenantA });
+    expect(described.ok).toBe(true);
+    if (described.ok) expect(described.revokedAt).toBeNull();
+  });
+
   it('given delete then describe, should return not_found', async () => {
     if (!available) return;
     const adapter = makeAdapter();
