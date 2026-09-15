@@ -30,6 +30,7 @@ import {
 } from './system-prompt';
 import {
   ASK_USER_SECTION,
+  TOOL_APPROVAL_SECTION,
   buildInlineInstructions,
   buildGlobalAssistantInstructions,
 } from './inline-instructions';
@@ -65,6 +66,12 @@ interface SharedAgentPromptInput {
   readonly activePlan: string;
   /** The workspace-structure block, when the agent is configured to carry one. */
   readonly pageTree: string;
+  /**
+   * Whether gated writes can PAUSE this turn for the user's approval (an
+   * interactive turn in `ask` mode). Adds the ACTION APPROVAL guidance; an
+   * `auto` agent or an unattended run is told nothing, because nothing pauses.
+   */
+  readonly toolApprovals?: boolean;
 }
 
 interface PageAgentPromptInput extends SharedAgentPromptInput {
@@ -198,6 +205,7 @@ export function buildAgentSystemPrompt(input: AgentSystemPromptInput): string {
       toolDiscovery +
       globalAssistantGuidance(input.conversationType, input.conversationContextId) +
       (input.includeAskUser ? `\n\n${ASK_USER_SECTION}` : '') +
+      (input.toolApprovals ? `\n\n${TOOL_APPROVAL_SECTION}` : '') +
       input.drivePromptSection;
 
     return (
@@ -241,6 +249,11 @@ export function buildAgentSystemPrompt(input: AgentSystemPromptInput): string {
       input.allowedToolNames,
     );
     systemPrompt += buildInlineInstructions(input.allowedToolNames);
+  }
+  // Both branches: an owner's custom prompt opts out of OUR persona, not out of
+  // the gate — their agent still pauses, so it still needs to know.
+  if (input.toolApprovals) {
+    systemPrompt += `\n\n${TOOL_APPROVAL_SECTION}`;
   }
 
   // Cross-drive membership applies uniformly, unlike drivePromptPrefix above.
