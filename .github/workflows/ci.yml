@@ -217,6 +217,80 @@ jobs:
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
         run: bun run --filter '@pagespace/lib' test:integration
 
+      # store-adapter-infisical.integration.test.ts is included in the general
+      # test:integration glob above too, but that step has no Infisical service, so its own
+      # describe.skipIf(!reachable) lets it skip quietly there — correct for a plain local run
+      # with no Infisical up. CI as a whole must not settle for that: the plane's credential
+      # store adapter is the thing this epic's L1·G1b-store gate exists to prove, against the
+      # real backend, never a mock (Control Board §7.3). These three steps bring up the exact
+      # pinned compose stack `store/infisical-dev/README-infisical-dev.md` documents, bootstrap
+      # a throwaway CI-only admin the same way, and re-run ONLY that one file — the last step
+      # parses vitest's own JSON summary and fails outright if anything reports skipped, so a
+      # regression in the reachability probe (or a silently broken bring-up) cannot vanish into
+      # an otherwise-green job the way the crash this replaced did.
+      - name: Bring up local Infisical OSS (store adapter integration suite)
+        working-directory: packages/lib/src/agent-accounts/store/infisical-dev
+        run: |
+          docker compose up -d
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/api/status > /dev/null 2>&1; then
+              echo "Infisical backend answered after $((i * 2))s"
+              break
+            fi
+            sleep 2
+          done
+          curl -sf http://localhost:8080/api/status || {
+            echo "::error::Infisical backend never became healthy"
+            docker compose logs
+            exit 1
+          }
+          # plane-metadata.sql (the ONE owner of this DDL, Control Board §1) is mounted into
+          # the metadata service's /docker-entrypoint-initdb.d/, so postgres's own entrypoint
+          # already ran it against a fresh volume above — this just confirms that happened
+          # rather than assuming it silently.
+          docker exec -i infisical-dev-metadata psql -U plane_metadata -d plane_metadata -c \
+            "SELECT 1 FROM agent_account_secret_versions LIMIT 0" || {
+            echo "::error::agent_account_secret_versions was not created by plane-metadata.sql's initdb mount"
+            exit 1
+          }
+
+      - name: Bootstrap Infisical dev admin (CI-only, throwaway instance)
+        run: |
+          boot=$(curl -sf -X POST http://localhost:8080/api/v1/admin/bootstrap \
+            -H "Content-Type: application/json" \
+            -d "{\"email\":\"ci-g1b-store@dev.local\",\"password\":\"$(openssl rand -hex 16)\",\"organization\":\"pagespace-ci\"}")
+          token=$(node -pe "JSON.parse(process.argv[1]).identity.credentials.token" "$boot")
+          org=$(node -pe "JSON.parse(process.argv[1]).organization.id" "$boot")
+          echo "::add-mask::$token"
+          {
+            echo "INFISICAL_DEV_ADMIN_TOKEN=$token"
+            echo "INFISICAL_DEV_ORG_ID=$org"
+            echo "INFISICAL_DEV_URL=http://localhost:8080"
+          } >> "$GITHUB_ENV"
+
+      - name: Run Infisical store adapter integration suite
+        working-directory: packages/lib
+        env:
+          TZ: UTC
+        run: |
+          bunx vitest run --config vitest.integration.config.ts \
+            src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts \
+            --reporter=json --outputFile=infisical-result.json
+          node -e "
+            const r = require('./infisical-result.json');
+            const passed = r.numPassedTests ?? 0;
+            const failed = r.numFailedTests ?? 0;
+            const total = r.numTotalTests ?? 0;
+            console.log(\`passed=\${passed} failed=\${failed} total=\${total}\`);
+            if (failed > 0) { console.error('::error::store-adapter-infisical suite has failing tests'); process.exit(1); }
+            if (total === 0 || passed !== total) { console.error('::error::store-adapter-infisical suite did not fully run (skipped or partial) — the reachability probe or the Infisical bring-up above must have failed silently'); process.exit(1); }
+          "
+
+      - name: Tear down local Infisical OSS
+        if: always()
+        working-directory: packages/lib/src/agent-accounts/store/infisical-dev
+        run: docker compose down -v
+
       # infrastructure/ is not a bun workspace (see infrastructure/vitest.config.ts
       # for why it should not become one), so turbo never sees it and its ~15 test
       # files — including upgrade-doc.test.ts, the only check on the operator
