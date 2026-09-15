@@ -18,7 +18,7 @@
  * No decision logic lives here: the gate is `decideAuditGate`, the record is
  * `buildAuditRecord`. Integration-tested against the real chain.
  */
-import type { AgentAccountGrant, GrantDenyReason } from './grant';
+import type { AgentAccountGrant, GrantDenyReason, HashBytes } from './grant';
 import type { AuditOutcome } from './audit';
 import type { CanonicalRequest } from './canonical-request';
 import { buildAuditRecord } from './build-audit-record';
@@ -35,6 +35,8 @@ export type AuditedExecutor = {
     readonly grant: AgentAccountGrant;
     readonly canonical: CanonicalRequest;
     readonly now: number;
+    /** The resource keys this operation's catalogue entry declares (ADR 0004 §5 amendment). */
+    readonly declaredResourceKeys: readonly string[];
     readonly act: () => Promise<AuditOutcome>;
   }) => Promise<AuditedExecution>;
   /** Record a refusal. Nothing is executed; the reason is for the audit and the human, never the caller. */
@@ -43,13 +45,23 @@ export type AuditedExecutor = {
     readonly canonical: CanonicalRequest;
     readonly reason: GrantDenyReason;
     readonly now: number;
+    readonly declaredResourceKeys: readonly string[];
   }) => Promise<{ readonly ok: boolean }>;
 };
 
-export function createAuditedExecutor({ auditRepository }: { readonly auditRepository: AgentAccountAuditRepository }): AuditedExecutor {
+export function createAuditedExecutor({
+  auditRepository,
+  hash,
+}: {
+  readonly auditRepository: AgentAccountAuditRepository;
+  /** SHA3-256 in production; injected so this file performs no crypto of its own. */
+  readonly hash: HashBytes;
+}): AuditedExecutor {
   return {
-    async execute({ grant, canonical, now, act }) {
-      const acceptance = await auditRepository.accept({ record: buildAuditRecord({ grant, canonical, outcome: { kind: 'allowed' }, at: now }) });
+    async execute({ grant, canonical, now, declaredResourceKeys, act }) {
+      const acceptance = await auditRepository.accept({
+        record: buildAuditRecord({ grant, canonical, outcome: { kind: 'allowed' }, at: now, hash, declaredResourceKeys }),
+      });
       const gate = decideAuditGate({ acceptance });
       if (gate.action === 'refuse') return { ok: false, reason: gate.reason };
 
@@ -60,12 +72,14 @@ export function createAuditedExecutor({ auditRepository }: { readonly auditRepos
         // The request was sent; upstream may have acted. Never "failed".
         outcome = { kind: 'unknown' };
       }
-      await auditRepository.accept({ record: buildAuditRecord({ grant, canonical, outcome, at: now }) });
+      await auditRepository.accept({ record: buildAuditRecord({ grant, canonical, outcome, at: now, hash, declaredResourceKeys }) });
       return { ok: true, outcome };
     },
 
-    async recordDenial({ grant, canonical, reason, now }) {
-      const acceptance = await auditRepository.accept({ record: buildAuditRecord({ grant, canonical, outcome: { kind: 'denied', reason }, at: now }) });
+    async recordDenial({ grant, canonical, reason, now, declaredResourceKeys }) {
+      const acceptance = await auditRepository.accept({
+        record: buildAuditRecord({ grant, canonical, outcome: { kind: 'denied', reason }, at: now, hash, declaredResourceKeys }),
+      });
       return { ok: acceptance.kind === 'accepted' };
     },
   };

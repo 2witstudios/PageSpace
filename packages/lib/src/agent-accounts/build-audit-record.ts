@@ -5,9 +5,10 @@
  * What it carries: every principal by id, the account and its versions, the
  * policy and approval ids, the presenter, the request DIGEST, and a
  * normalized action. What it never carries: a raw credential, a request or
- * response body, or any header VALUE — only header NAMES, and only the ones
- * the canonical projection already admitted. The body is provable without
- * being stored because `bodySha256` is part of the frozen projection.
+ * response body, any header VALUE (only header NAMES, and only the ones the
+ * canonical projection already admitted), the URL PATH, or a resource key the
+ * operation did not declare. The body and the path are provable without being
+ * stored, because `bodySha256` and `pathDigest` are part of the projection.
  *
  * The record is REBUILT field by field from the typed grant and canonical
  * request, so nothing outside the frozen shape can reach the row even if a
@@ -20,21 +21,29 @@
  */
 import type { AgentAccountAuditRecord, BuildAuditRecord, NormalizedAction } from './audit';
 import type { CanonicalRequest } from './canonical-request';
+import type { HashBytes } from './grant';
 
-function normalize(canonical: CanonicalRequest): NormalizedAction {
+function normalize(canonical: CanonicalRequest, hash: HashBytes, declaredResourceKeys: readonly string[]): NormalizedAction {
+  const declared = new Set(declaredResourceKeys);
   return {
     channel: canonical.channel,
     method: canonical.method,
     origin: canonical.origin,
-    path: canonical.path,
+    // The path is DIGESTED, never stored: plenty of real APIs carry a
+    // credential in the URL, and this chain cannot be erased afterwards.
+    // The digest still correlates every row for the same endpoint.
+    pathDigest: hash(new TextEncoder().encode(canonical.path)),
     headerNames: canonical.headers.map(([name]) => name),
     bodySha256: canonical.bodySha256,
-    resources: canonical.resources.map(([key, value]) => [key, value] as const),
+    // Only the keys the TYPED OPERATION declares. A caller that passes
+    // anything else contributes nothing to the row — the projection belongs
+    // to the catalogue, not to whoever built the request.
+    resourceIds: canonical.resources.filter(([key]) => declared.has(key)).map(([key, value]) => [key, value] as const),
     operation: { class: canonical.operation.class, name: canonical.operation.name },
   };
 }
 
-export const buildAuditRecord: BuildAuditRecord = ({ grant, canonical, outcome, at }): AgentAccountAuditRecord => ({
+export const buildAuditRecord: BuildAuditRecord = ({ grant, canonical, outcome, at, hash, declaredResourceKeys }): AgentAccountAuditRecord => ({
   grantId: grant.grantId,
   principal: {
     tenantId: grant.tenantId,
@@ -58,7 +67,7 @@ export const buildAuditRecord: BuildAuditRecord = ({ grant, canonical, outcome, 
   policyVersion: grant.policyVersion,
   approvalId: grant.approvalId,
   requestDigest: grant.requestDigest,
-  normalizedAction: normalize(canonical),
+  normalizedAction: normalize(canonical, hash, declaredResourceKeys),
   presenter: { keyId: grant.presenter.keyId, channel: grant.presenter.channel },
   outcome,
   at,

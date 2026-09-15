@@ -38,6 +38,9 @@ import type {
 import type { AccountId, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 
 const hash: HashBytes = (bytes) => createHash('sha256').update(bytes).digest('hex');
+/** The amended record digests the path with SHA3-256 — the repo's hash for secret-adjacent values. */
+const sha3: HashBytes = (bytes) => createHash('sha3-256').update(bytes).digest('hex');
+const DECLARED_RESOURCE_KEYS = ['repo', 'org'] as const;
 const AT = 1_800_000_000_000;
 
 const SECRET = 'ghp_canary_9f3a2b7c4d1e';
@@ -91,43 +94,60 @@ function makeGrant(overrides: Partial<AgentAccountGrant> = {}): AgentAccountGran
 }
 
 const build = (outcome: AuditOutcome, grant = makeGrant(), c = canonical()): AgentAccountAuditRecord =>
-  buildAuditRecord({ grant, canonical: c, outcome, at: AT });
+  buildAuditRecord({ grant, canonical: c, outcome, at: AT, hash: sha3, declaredResourceKeys: [...DECLARED_RESOURCE_KEYS] });
 
 describe('buildAuditRecord', () => {
-  it('given a canonical request with a body and a resolved credential in scope, should produce a record containing neither (property test over random bodies, query strings and header values) [0004 §8.18]', () => {
+  it('given a canonical request with a body and a resolved credential in scope, should produce a record containing neither (property test over random bodies, query strings, header values, path segments and undeclared resources) [0004 §8.18]', () => {
     const leaks: string[] = [];
     for (let i = 0; i < 200; i += 1) {
       const secret = randomBytes(16).toString('hex');
       const bodyText = `{"note":"${randomBytes(8).toString('hex')}","token":"${secret}"}`;
       const inQuery = randomBytes(12).toString('hex');
       const inHeader = randomBytes(12).toString('hex');
+      const inPath = randomBytes(12).toString('hex');
+      const inResource = randomBytes(12).toString('hex');
       const record = build(
         { kind: 'executed', upstreamStatus: 201 },
         makeGrant(),
         canonical({
           body: new TextEncoder().encode(bodyText),
-          url: `https://api.github.com/repos/octo/hello/issues?token=${inQuery}`,
+          url: `https://api.github.com/v1/tokens/${inPath}?token=${inQuery}`,
           headers: { accept: `application/vnd.${inHeader}+json` },
+          resources: { reset_code: inResource },
         }),
       );
       const serialized = JSON.stringify(record);
-      for (const value of [secret, bodyText, inQuery, inHeader]) {
+      for (const value of [secret, bodyText, inQuery, inHeader, inPath, inResource]) {
         if (serialized.includes(value)) leaks.push(value);
       }
     }
     expect(leaks).toEqual([]);
   });
 
-  it('given a credential carried in the PATH or a resource, should land in the record — the shape carries both, so a URL-embedded secret reaches the chain (stated, not hidden)', () => {
-    // Recorded deliberately rather than fixed here: `normalizedAction.path`
-    // and `resources` are part of the frozen record shape (ADR 0004 §5), and
-    // the chain cannot be erased afterwards. Keeping a credential out of a
-    // path is the operation catalogue's job, and narrowing the shape is a
-    // [D-n]. This test exists so the property above is never read as a
-    // guarantee it does not make.
-    const record = build({ kind: 'allowed' }, makeGrant(), canonical({ url: 'https://api.github.com/v1/tokens/ghp_in_the_path', resources: { repo: 'ghp_in_a_resource' } }));
+  it('given a path containing a token-shaped segment and an undeclared resource, should contain no substring of either [0004 §8.25]', () => {
+    const token = 'ghp_9f3a2b7c4d1e5f6a7b8c';
+    const undeclared = 'sk_live_undeclared_5c1d9a';
+    const record = build({ kind: 'allowed' }, makeGrant(), canonical({ url: `https://api.github.com/v1/tokens/${token}`, resources: { repo: 'octo/hello', reset_code: undeclared } }));
     const serialized = JSON.stringify(record);
-    expect({ path: serialized.includes('ghp_in_the_path'), resource: serialized.includes('ghp_in_a_resource') }).toEqual({ path: true, resource: true });
+    expect({
+      token: serialized.includes(token),
+      undeclared: serialized.includes(undeclared),
+      undeclaredKey: serialized.includes('reset_code'),
+      declaredKept: record.normalizedAction.resourceIds,
+    }).toEqual({ token: false, undeclared: false, undeclaredKey: false, declaredKept: [['repo', 'octo/hello']] });
+  });
+
+  it('given two requests to the same path, should produce the same pathDigest; given different paths, different digests (correlation survives)', () => {
+    const a = build({ kind: 'allowed' }, makeGrant(), canonical({ url: 'https://api.github.com/repos/octo/hello/issues' }));
+    const b = build({ kind: 'executed', upstreamStatus: 201 }, makeGrant(), canonical({ url: 'https://api.github.com/repos/octo/hello/issues?state=open' }));
+    const other = build({ kind: 'allowed' }, makeGrant(), canonical({ url: 'https://api.github.com/repos/octo/hello/pulls' }));
+    expect({ same: a.normalizedAction.pathDigest === b.normalizedAction.pathDigest, different: a.normalizedAction.pathDigest !== other.normalizedAction.pathDigest }).toEqual({ same: true, different: true });
+  });
+
+  it('given a canonical path, should digest it with the INJECTED hash over the path bytes (SHA3-256 in production)', () => {
+    const c = canonical();
+    const actual = build({ kind: 'allowed' }, makeGrant(), c).normalizedAction.pathDigest;
+    expect(actual).toBe(sha3(new TextEncoder().encode(c.path)));
   });
 
   it('given a canonical request, should carry header NAMES only, never values', () => {
@@ -137,10 +157,10 @@ describe('buildAuditRecord', () => {
     expect(serialized).not.toContain('application/json');
   });
 
-  it('given a canonical request with a query string, should carry the path without it (the digest pins the exact request)', () => {
+  it('given a canonical request with a query string, should carry neither the query nor the path itself (the request digest pins the exact request)', () => {
     const record = build({ kind: 'allowed' });
-    expect(record.normalizedAction.path).toBe('/repos/octo/hello/issues');
-    expect(JSON.stringify(record)).not.toContain('state=open');
+    const serialized = JSON.stringify(record);
+    expect({ query: serialized.includes('state=open'), path: serialized.includes('/repos/octo/hello/issues') }).toEqual({ query: false, path: false });
   });
 
   it('given every principal on the grant, should carry each by id', () => {
@@ -233,6 +253,11 @@ describe('buildAuditRecord', () => {
       'principal',
       'requestDigest',
     ].sort());
+  });
+
+  it('given a record, should carry the amended normalizedAction field set (no path, no free-form resources)', () => {
+    const actual = Object.keys(build({ kind: 'allowed' }).normalizedAction).sort();
+    expect(actual).toEqual(['bodySha256', 'channel', 'headerNames', 'method', 'operation', 'origin', 'pathDigest', 'resourceIds']);
   });
 
   it('given the same inputs twice, should produce the same record (pure)', () => {
