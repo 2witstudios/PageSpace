@@ -213,4 +213,21 @@ describe('decideResolve', () => {
     });
     expect(actual).toEqual({ ok: true });
   });
+
+  // Codex review PR #2646 (P1, decide-resolve.ts:25): PlaneBindings and its digest carry no
+  // accountId, so a verified grant for account A and a ref naming account B in the same tenant
+  // with identical bindings/kind/version passed decideResolve. Pin that the grant must name the
+  // SAME account as the ref, independent of whether the bindings happen to match.
+  it('given a verified grant for account A and a ref naming a different account B with identical bindings/kind/version, should refuse (not ok, even though bindingDigest matches)', () => {
+    const grantForAccountA = makeGrant({ accountId: 'acct_A' as AccountId });
+    const refForAccountB = { tenantId: 'user:u1' as TenantId, accountId: 'acct_B' as AccountId, kind: 'api_key' as const };
+    const storedForAccountB = makeStored(); // identical bindings/version to account A's — the confusable case
+    const actual = decideResolve({ grant: grantForAccountA, ref: refForAccountB, stored: storedForAccountB, now: NOW, rotationGraceMs: ROTATION_GRACE_MS, hash: fakeHash });
+    expect(actual.ok).toBe(false);
+  });
+
+  it('given a verified grant and a ref both naming the same account, should still return ok (the new check does not break the honest path)', () => {
+    const actual = decideResolve({ grant: makeGrant({ accountId: 'acct_1' as AccountId }), ref: { ...REF, accountId: 'acct_1' as AccountId }, stored: makeStored(), now: NOW, rotationGraceMs: ROTATION_GRACE_MS, hash: fakeHash });
+    expect(actual).toEqual({ ok: true });
+  });
 });
