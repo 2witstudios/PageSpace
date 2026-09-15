@@ -1395,7 +1395,14 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
           aiProvider: currentProvider,
           aiModel: currentModel,
           conversationId,
-          locationContext: locationContext ?? undefined,
+          // LocationContext allows null members; the tool context does not.
+          locationContext: locationContext
+            ? {
+                currentPage: locationContext.currentPage ?? undefined,
+                currentDrive: locationContext.currentDrive ?? undefined,
+                breadcrumbs: locationContext.breadcrumbs,
+              }
+            : undefined,
           // Turn-start snapshot of the agent's working page — tools that
           // shift focus (e.g. create_page) mutate this in place so later
           // tool calls in the same turn track the agent's own actions
