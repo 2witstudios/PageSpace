@@ -7,6 +7,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Multi-question prompts from the assistant have Back and Next buttons** — when the assistant
+  asks several questions at once, you could only switch between them by tapping the small
+  numbered tabs or pressing the arrow keys, which is awkward on a phone. Each question now has a
+  Back / Next row with a "2 of 3" counter under it, sized for a finger, and it works on a card you
+  have already answered too. The tabs and arrow keys still work as before.
 - **The Home screen now tells you what's actually waiting for you** — opening the dashboard used
   to show a generic "How can I help you today?" with no sign of what changed across your drives,
   and the only place that context lived (the sidebar's Pulse note) disappeared the moment you
