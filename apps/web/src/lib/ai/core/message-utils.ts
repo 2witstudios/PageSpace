@@ -63,6 +63,20 @@ function debugLogAI(message: string, data?: Record<string, unknown>): void {
   }
 }
 
+/**
+ * The SDK's human-in-the-loop record on a tool part: the approval id minted
+ * when the step paused (`tool-approval-request`), then the user's answer once
+ * given. Persisted on the CALL row so a pending approval survives a refresh
+ * (a call with no result row and no approval reloads as `input-available`,
+ * which is unanswerable) and so the resume can check the client's approval id
+ * against the one the server actually issued.
+ */
+export interface ToolApproval {
+  id: string;
+  approved?: boolean;
+  reason?: string;
+}
+
 export interface ToolCall {
   toolCallId: string;
   toolName: string;
@@ -70,13 +84,21 @@ export interface ToolCall {
   // Track the SDK's tool-part state directly so it can't drift from the lifecycle
   // (incl. the v6 human-in-the-loop approval states).
   state: ToolUIPart['state'];
+  approval?: ToolApproval;
 }
 
 export interface ToolResult {
   toolCallId: string;
   toolName: string;
   output: unknown;
-  state: 'output-available' | 'output-error';
+  /**
+   * `output-denied` is a RESULT with no output: the user refused the call. It
+   * lives here (not only on the call row) so `toolResult?.state` — the one
+   * source reconstruction trusts for terminal states — reports it, and so the
+   * model-context sanitizer can keep it (convertToModelMessages turns it into a
+   * tool-result the model can read).
+   */
+  state: 'output-available' | 'output-error' | 'output-denied';
   /** Populated when state is 'output-error' so the renderer can show the failure after refresh. */
   errorText?: string;
 }
@@ -88,8 +110,31 @@ interface ToolPart {
   toolName: string;
   input?: Record<string, unknown>;
   output?: unknown;
-  state: 'input-streaming' | 'input-available' | 'output-available' | 'output-error';
+  state:
+    | 'input-streaming'
+    | 'input-available'
+    | 'approval-requested'
+    | 'approval-responded'
+    | 'output-available'
+    | 'output-error'
+    | 'output-denied';
+  approval?: ToolApproval;
 }
+
+/** The two call-row states that mean "waiting on the user", which no result row can express. */
+const PENDING_APPROVAL_STATES: ReadonlySet<string> = new Set(['approval-requested', 'approval-responded']);
+
+const readApproval = (part: { approval?: unknown }): ToolApproval | undefined => {
+  const approval = part.approval;
+  if (typeof approval !== 'object' || approval === null) return undefined;
+  const { id, approved, reason } = approval as { id?: unknown; approved?: unknown; reason?: unknown };
+  if (typeof id !== 'string') return undefined;
+  return {
+    id,
+    ...(typeof approved === 'boolean' ? { approved } : {}),
+    ...(typeof reason === 'string' ? { reason } : {}),
+  };
+};
 
 /** Extended UIMessage with extra fields stored in our database */
 type MessageStatus = 'streaming' | 'complete' | 'interrupted';
@@ -236,12 +281,17 @@ export function extractToolCalls(message: UIMessage): ToolCall[] {
 
   return message.parts
     .filter(isToolInvocationPart)
-    .map(toolPart => ({
-      toolCallId: toolPart.toolCallId,
-      toolName: toolPart.toolName || toolPart.type.replace('tool-', ''),
-      input: (toolPart.input as Record<string, unknown>) || {},
-      state: toolPart.state,
-    }));
+    .map(toolPart => {
+      const call: ToolCall = {
+        toolCallId: toolPart.toolCallId,
+        toolName: toolPart.toolName || toolPart.type.replace('tool-', ''),
+        input: (toolPart.input as Record<string, unknown>) || {},
+        state: toolPart.state,
+      };
+      const approval = readApproval(toolPart as { approval?: unknown });
+      if (approval) call.approval = approval;
+      return call;
+    });
 }
 
 /**
@@ -252,13 +302,18 @@ export function extractToolResults(message: UIMessage): ToolResult[] {
 
   return message.parts
     .filter(isToolInvocationPart)
-    .filter(toolPart => toolPart.state === 'output-available' || toolPart.state === 'output-error')
+    .filter(
+      toolPart =>
+        toolPart.state === 'output-available' ||
+        toolPart.state === 'output-error' ||
+        toolPart.state === 'output-denied'
+    )
     .map(toolPart => {
-      const state = toolPart.state as 'output-available' | 'output-error';
+      const state = toolPart.state as ToolResult['state'];
       const result: ToolResult = {
         toolCallId: toolPart.toolCallId,
         toolName: toolPart.toolName || toolPart.type.replace('tool-', ''),
-        output: 'output' in toolPart ? toolPart.output : undefined,
+        output: state === 'output-available' && 'output' in toolPart ? toolPart.output : undefined,
         state,
       };
       if (state === 'output-error') {
@@ -448,16 +503,26 @@ async function reconstructFromStructuredContent(
       const toolResult = toolResultsMap.get(partOrder.toolCallId);
 
       if (toolCall) {
+        // A result row is the source of truth for terminal states. Without one,
+        // the CALL row's own state decides between "still running" and "waiting
+        // on the user": an approval-requested/-responded call must reload as
+        // exactly that, or a pending approval reappears as an unanswerable
+        // input-available spinner after a refresh.
+        const pendingState = PENDING_APPROVAL_STATES.has(toolCall.state)
+          ? (toolCall.state as 'approval-requested' | 'approval-responded')
+          : 'input-available';
         const reconstructed: ToolPart = {
           type: partOrder.type,
           toolCallId: toolCall.toolCallId,
           toolName: toolCall.toolName,
           input: toolCall.input,
-          state: toolResult?.state ?? 'input-available',
+          state: toolResult?.state ?? pendingState,
         };
+        const approval = readApproval(toolCall);
+        if (approval) reconstructed.approval = approval;
         if (reconstructed.state === 'output-error' && toolResult?.errorText) {
           (reconstructed as ToolPart & { errorText?: string }).errorText = toolResult.errorText;
-        } else if (toolResult && reconstructed.state !== 'output-error') {
+        } else if (toolResult && reconstructed.state === 'output-available') {
           reconstructed.output = toolResult.output;
         }
         parts.push(reconstructed);
@@ -610,6 +675,13 @@ export async function convertGlobalAssistantMessageToUIMessage(dbMessage: Global
  *   and trips the AI SDK's prompt-injection warning ("System messages in the prompt or messages
  *   fields can be a security risk..."), which floods logs inside agent retry loops.
  * - Filters out tool parts without results to prevent "input-available" state errors.
+ *   `output-denied` IS a result (the user refused; convertToModelMessages emits a
+ *   tool-result the model can read) and is kept. `approval-requested` and
+ *   `approval-responded` are NOT: a call + approval response with no result is
+ *   precisely the shape that makes the SDK run its own execute-on-resume step,
+ *   whose output would land under the OLD toolCallId in a NEW message and be lost
+ *   — the approval resume must have turned every responded part into a result
+ *   before history is assembled (see core/approval-resume.ts).
  */
 export function sanitizeMessagesForModel(msgs: UIMessage[]): UIMessage[] {
   return msgs.filter(message => message.role !== 'system').map(message => ({
@@ -623,7 +695,8 @@ export function sanitizeMessagesForModel(msgs: UIMessage[]): UIMessage[] {
 
       // For tool parts, only keep those with results
       if (isToolInvocationPart(part)) {
-        // Only include tool parts that have output (completed executions)
+        // Only include tool parts that have a result (completed or refused executions)
+        if (part.state === 'output-denied') return true;
         return part.state === 'output-available' && 'output' in part && part.output !== undefined;
       }
 

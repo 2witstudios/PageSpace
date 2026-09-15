@@ -121,6 +121,7 @@ type PageLookupResult = {
   includePageTree: boolean;
   pageTreeScope: PageTreeScope | null;
   toolExposureMode: 'upfront' | 'search';
+  toolApprovalMode: 'ask' | 'auto';
   userScopedAccess: boolean;
   sandboxEnabled: boolean;
   defaultEnvId: string | null;
@@ -169,6 +170,7 @@ const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupRe
   includePageTree: false,
   pageTreeScope: 'children',
   toolExposureMode: 'upfront',
+  toolApprovalMode: 'ask',
   userScopedAccess: false,
   sandboxEnabled: false,
   defaultEnvId: null,

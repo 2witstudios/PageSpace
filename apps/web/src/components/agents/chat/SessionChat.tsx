@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button';
 import { ChatInput } from '@/components/ai/chat/input';
 import { UndoAiChangesDialog } from '@/components/ai/shared/chat';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
+import { ToolApprovalProvider } from '@/components/ai/shared/chat/approvals/ToolApprovalContext';
 import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
 import { ChatMessagesArea } from '@/components/ai/shared/chat/ChatMessagesArea';
 import { Conversation, ConversationScrollButton } from '@/components/ai/ui/conversation';
@@ -148,6 +149,7 @@ export function SessionChatView({
     // outside a chat surface entirely — so AskUserQuestionCard's options and
     // Submit stay disabled instead of letting a viewer attempt a 403'd resume.
     <AskUserAnswerProvider value={isReadOnly ? null : chat.askUserAnswering}>
+    <ToolApprovalProvider value={isReadOnly ? null : chat.toolApprovals}>
     <div
       data-testid="session-chat"
       className="@container flex h-full min-w-0 min-h-0 flex-col bg-background"
@@ -247,6 +249,7 @@ export function SessionChatView({
         />
       )}
     </div>
+    </ToolApprovalProvider>
     </AskUserAnswerProvider>
   );
 }

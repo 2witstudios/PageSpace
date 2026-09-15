@@ -79,6 +79,7 @@ export async function PUT(
       agentDefinition,
       visibleToGlobalAssistant,
       toolExposureMode,
+      toolApprovalMode,
       sandboxEnabled,
       defaultEnvId,
       expectedRevision,
@@ -188,6 +189,17 @@ export async function PUT(
       }
       updateData.toolExposureMode = toolExposureMode;
       updatedFields.push('toolExposureMode');
+    }
+
+    if (toolApprovalMode !== undefined) {
+      if (toolApprovalMode !== 'ask' && toolApprovalMode !== 'auto') {
+        return NextResponse.json(
+          { error: 'toolApprovalMode must be "ask" or "auto"' },
+          { status: 400 }
+        );
+      }
+      updateData.toolApprovalMode = toolApprovalMode;
+      updatedFields.push('toolApprovalMode');
     }
     if (sandboxEnabled !== undefined) {
       // REJECTED, not coerced (CodeRabbit): `Boolean("false")` is `true`, and
@@ -327,6 +339,7 @@ export async function PUT(
         aiModel: aiModel || agent.aiModel || 'default',
         hasSystemPrompt: !!(systemPrompt || agent.systemPrompt),
         toolExposureMode: updatedAgent.toolExposureMode ?? 'upfront',
+        toolApprovalMode: updatedAgent.toolApprovalMode ?? 'ask',
         sandboxEnabled: Boolean(updatedAgent.sandboxEnabled),
         defaultEnvId: updatedAgent.defaultEnvId ?? null,
         ...toolSurfaceEcho(toolSurface),

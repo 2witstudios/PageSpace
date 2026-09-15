@@ -266,3 +266,127 @@ describe('convertDbMessageToUIMessage — the authoring transport', () => {
     expect((converted as { source?: string | null }).source).toBeNull();
   });
 });
+
+// ─── Tool approval states (human-in-the-loop) ─────────────────────────────────
+
+describe('tool approval states — extract', () => {
+  it('given a tool part carrying an approval record, extractToolCalls should persist it on the call row', () => {
+    const msg = makeMessage([
+      {
+        type: 'tool-trash_page',
+        toolCallId: 'tc1',
+        toolName: 'trash_page',
+        input: { pageId: 'p1' },
+        state: 'approval-requested',
+        approval: { id: 'ap1' },
+      } as unknown as UIMessage['parts'][number],
+    ]);
+    expect(extractToolCalls(msg)).toEqual([
+      { toolCallId: 'tc1', toolName: 'trash_page', input: { pageId: 'p1' }, state: 'approval-requested', approval: { id: 'ap1' } },
+    ]);
+  });
+
+  it('given an output-denied part, extractToolResults should keep it as a result with no output', () => {
+    const msg = makeMessage([
+      {
+        type: 'tool-trash_page',
+        toolCallId: 'tc1',
+        toolName: 'trash_page',
+        input: { pageId: 'p1' },
+        state: 'output-denied',
+        approval: { id: 'ap1', approved: false, reason: 'no' },
+      } as unknown as UIMessage['parts'][number],
+    ]);
+    expect(extractToolResults(msg)).toEqual([
+      { toolCallId: 'tc1', toolName: 'trash_page', output: undefined, state: 'output-denied' },
+    ]);
+  });
+
+  it('given approval-requested / approval-responded parts, extractToolResults should produce no result row (they are not terminal)', () => {
+    const msg = makeMessage([
+      { type: 'tool-a', toolCallId: 'tc1', toolName: 'a', input: {}, state: 'approval-requested', approval: { id: 'ap1' } },
+      { type: 'tool-b', toolCallId: 'tc2', toolName: 'b', input: {}, state: 'approval-responded', approval: { id: 'ap2', approved: true } },
+    ] as unknown as UIMessage['parts']);
+    expect(extractToolResults(msg)).toEqual([]);
+  });
+});
+
+describe('tool approval states — round trip through the DB shape', () => {
+  const row = (calls: unknown[], results: unknown[]) => ({
+    id: 'msg-ap',
+    pageId: 'page-1',
+    userId: 'user-1',
+    role: 'assistant',
+    content: JSON.stringify({ textParts: [], partsOrder: [{ index: 0, type: 'tool-trash_page', toolCallId: 'tc1' }], originalContent: '' }),
+    toolCalls: JSON.stringify(calls),
+    toolResults: JSON.stringify(results),
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+    isActive: true,
+  });
+
+  it('given a call row in approval-requested with no result row, should reconstruct approval-requested with its approval id (not input-available)', async () => {
+    const msg = makeMessage([
+      { type: 'tool-trash_page', toolCallId: 'tc1', toolName: 'trash_page', input: { pageId: 'p1' }, state: 'approval-requested', approval: { id: 'ap1' } },
+    ] as unknown as UIMessage['parts']);
+    const reconstructed = await convertDbMessageToUIMessage(row(extractToolCalls(msg), extractToolResults(msg)));
+    expect(reconstructed.parts).toEqual([
+      { type: 'tool-trash_page', toolCallId: 'tc1', toolName: 'trash_page', input: { pageId: 'p1' }, state: 'approval-requested', approval: { id: 'ap1' } },
+    ]);
+  });
+
+  it('given a call row in approval-responded, should reconstruct approval-responded with the answer', async () => {
+    const msg = makeMessage([
+      { type: 'tool-trash_page', toolCallId: 'tc1', toolName: 'trash_page', input: { pageId: 'p1' }, state: 'approval-responded', approval: { id: 'ap1', approved: true } },
+    ] as unknown as UIMessage['parts']);
+    const reconstructed = await convertDbMessageToUIMessage(row(extractToolCalls(msg), extractToolResults(msg)));
+    expect(reconstructed.parts).toEqual([
+      { type: 'tool-trash_page', toolCallId: 'tc1', toolName: 'trash_page', input: { pageId: 'p1' }, state: 'approval-responded', approval: { id: 'ap1', approved: true } },
+    ]);
+  });
+
+  it('given an output-denied part, should reconstruct output-denied with the approval reason and no output', async () => {
+    const msg = makeMessage([
+      { type: 'tool-trash_page', toolCallId: 'tc1', toolName: 'trash_page', input: { pageId: 'p1' }, state: 'output-denied', approval: { id: 'ap1', approved: false, reason: 'nope' } },
+    ] as unknown as UIMessage['parts']);
+    const reconstructed = await convertDbMessageToUIMessage(row(extractToolCalls(msg), extractToolResults(msg)));
+    expect(reconstructed.parts).toEqual([
+      { type: 'tool-trash_page', toolCallId: 'tc1', toolName: 'trash_page', input: { pageId: 'p1' }, state: 'output-denied', approval: { id: 'ap1', approved: false, reason: 'nope' } },
+    ]);
+  });
+
+  it('given an approved call that was then executed (output-available + approval), should reconstruct both the output and the approval', async () => {
+    const msg = makeMessage([
+      { type: 'tool-trash_page', toolCallId: 'tc1', toolName: 'trash_page', input: { pageId: 'p1' }, state: 'output-available', output: { ok: true }, approval: { id: 'ap1', approved: true } },
+    ] as unknown as UIMessage['parts']);
+    const reconstructed = await convertDbMessageToUIMessage(row(extractToolCalls(msg), extractToolResults(msg)));
+    expect(reconstructed.parts).toEqual([
+      { type: 'tool-trash_page', toolCallId: 'tc1', toolName: 'trash_page', input: { pageId: 'p1' }, state: 'output-available', output: { ok: true }, approval: { id: 'ap1', approved: true } },
+    ]);
+  });
+
+  it('given a malformed approval record on the call row, should drop it rather than reconstruct garbage', async () => {
+    const reconstructed = await convertDbMessageToUIMessage(
+      row([{ toolCallId: 'tc1', toolName: 'trash_page', input: {}, state: 'approval-requested', approval: { nope: 1 } }], []),
+    );
+    expect(reconstructed.parts).toEqual([
+      { type: 'tool-trash_page', toolCallId: 'tc1', toolName: 'trash_page', input: {}, state: 'approval-requested' },
+    ]);
+  });
+});
+
+describe('sanitizeMessagesForModel — approval states', () => {
+  const part = (state: string, extra: Record<string, unknown> = {}) =>
+    ({ type: 'tool-trash_page', toolCallId: `tc-${state}`, toolName: 'trash_page', input: {}, state, ...extra }) as unknown as UIMessage['parts'][number];
+
+  it('keeps output-denied (a result the model can read) and drops approval-requested / approval-responded (no result yet)', () => {
+    const [out] = sanitizeMessagesForModel([
+      makeMessage([
+        part('output-denied', { approval: { id: 'a', approved: false } }),
+        part('approval-requested', { approval: { id: 'b' } }),
+        part('approval-responded', { approval: { id: 'c', approved: true } }),
+        part('output-available', { output: { ok: true } }),
+      ]),
+    ]);
+    expect(out.parts.map((p) => (p as { state?: string }).state)).toEqual(['output-denied', 'output-available']);
+  });
+});

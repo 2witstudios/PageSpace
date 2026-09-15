@@ -38,6 +38,7 @@ import {
   useAnswerAskUser,
   buildGlobalChatRequestBody,
 } from '@/lib/ai/shared';
+import { useRespondToApproval } from '@/lib/ai/shared/hooks/useRespondToApproval';
 import { buildContextRef, type ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
@@ -136,6 +137,7 @@ export function useAssistantSessionChat({
     clearError,
     regenerate,
     addToolResult,
+    addToolApprovalResponse,
   } = useChatSession({
     api: `/api/ai/global/${encodeURIComponent(conversationId)}/messages`,
     channelId,
@@ -228,6 +230,17 @@ export function useAssistantSessionChat({
     renderedMessages,
     isConversationBusy: isConversationBusyForAskUser,
     addToolResult,
+    wrapSend,
+    releasePendingSend,
+    buildBody,
+  });
+
+  // The approval twin, on the same answerability inputs.
+  const toolApprovals = useRespondToApproval({
+    conversationId,
+    renderedMessages,
+    isConversationBusy: isConversationBusyForAskUser,
+    addToolApprovalResponse,
     wrapSend,
     releasePendingSend,
     buildBody,
@@ -326,5 +339,6 @@ export function useAssistantSessionChat({
     errorCause,
     dismissError,
     askUserAnswering,
+    toolApprovals,
   };
 }

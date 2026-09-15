@@ -23,6 +23,14 @@ describe('dispatchToolCall', () => {
     expect(result.kind).toBe('agent');
   });
 
+  it('routes a paused (approval-requested) call to the approval branch whatever the tool, keeping the ORIGINAL part', () => {
+    const paused = part({ type: 'tool-execute_tool', toolName: 'execute_tool', toolCallId: 'tc1', state: 'approval-requested', input: { tool_name: 'create_task', parameters: {} } });
+    const result = dispatchToolCall(paused, TASK_TOOL_NAMES);
+    expect(result).toEqual({ kind: 'approval', part: paused, toolName: 'create_task' });
+    expect(dispatchToolCall(part({ toolName: 'create_task', state: 'approval-responded' }), TASK_TOOL_NAMES).kind).toBe('approval');
+    expect(dispatchToolCall(part({ toolName: 'create_task', state: 'output-denied' }), TASK_TOOL_NAMES).kind).toBe('task');
+  });
+
   it('routes generate_image to the image branch', () => {
     const result = dispatchToolCall(part({ toolName: 'generate_image' }), TASK_TOOL_NAMES);
     expect(result.kind).toBe('image');

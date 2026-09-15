@@ -119,9 +119,11 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
           state,
         };
 
-        if (isStandaloneTool(effectiveToolName)) {
+        if (isStandaloneTool(effectiveToolName) || state === 'approval-requested' || state === 'approval-responded') {
           // Diff-producing edits and SPECIAL_HANDLED_TOOLS (tasks, ask_agent)
-          // always stand alone, breaking any run.
+          // always stand alone, breaking any run — and so does a call paused
+          // for the user's approval, whose card must never fold into a
+          // "Ran N commands" summary.
           flushToolRun();
           groups.push(processedPart);
         } else {
