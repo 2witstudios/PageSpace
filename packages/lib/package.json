@@ -203,6 +203,21 @@
       "import": "./dist/agent-accounts/store/store-adapter.js",
       "require": "./dist/agent-accounts/store/store-adapter.js"
     },
+    "./agent-accounts/canonicalize-request": {
+      "types": "./dist/agent-accounts/canonicalize-request.d.ts",
+      "import": "./dist/agent-accounts/canonicalize-request.js",
+      "require": "./dist/agent-accounts/canonicalize-request.js"
+    },
+    "./agent-accounts/digest-request": {
+      "types": "./dist/agent-accounts/digest-request.d.ts",
+      "import": "./dist/agent-accounts/digest-request.js",
+      "require": "./dist/agent-accounts/digest-request.js"
+    },
+    "./agent-accounts/render-approval-subject": {
+      "types": "./dist/agent-accounts/render-approval-subject.d.ts",
+      "import": "./dist/agent-accounts/render-approval-subject.js",
+      "require": "./dist/agent-accounts/render-approval-subject.js"
+    },
     "./permissions/account-permissions": {
       "types": "./dist/permissions/account-permissions.d.ts",
       "import": "./dist/permissions/account-permissions.js",
