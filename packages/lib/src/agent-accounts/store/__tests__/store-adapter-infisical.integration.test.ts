@@ -513,4 +513,38 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
       expect(newResolve.material).toEqual({ value: 'sk-new-value', placement: { in: 'header', name: 'Authorization' } });
     }
   });
+
+  // Defense-in-depth for the same race as above, one step removed: two rotations back-to-back
+  // (v1->v2, v2->v3) overwrite the grace companion to represent v2; a resolveCore call whose
+  // metadata read is stale (still sees previousVersion=1) must not be served v2's content
+  // mislabeled as v1. Simulated as an out-of-band overwrite of the companion secret.
+  it('given the grace companion secret represents a different version than the authorizing metadata read expected, should refuse', async () => {
+    if (!available) return;
+    const adapter = makeAdapter();
+    const accountId = `acct-grace-stale-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    await adapter.rotate({ ref, expectedVersion: 1 as never, next: { kind: 'api_key', material: { value: 'sk-v2', placement: { in: 'header', name: 'Authorization' } } }, bindings, identity: refreshIdentity });
+
+    // Out-of-band: overwrite the grace companion to claim it represents v2 (what a second, racing
+    // rotation would leave behind), without touching the plane metadata row (still says
+    // currentVersion 2 / previousVersion 1 from the single rotate above).
+    const rawInfisical = createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' });
+    await rawInfisical.updateSecret({
+      projectId: projectAId,
+      credentials: identityA,
+      secretKey: `${accountId}__api_key__previous`,
+      secretValue: JSON.stringify({ kind: 'api_key', material: { value: 'sk-v2-impersonating-v1', placement: { in: 'header', name: 'Authorization' } } }),
+      secretComment: JSON.stringify({ __version: 2 }),
+    });
+
+    const grant = makeGrant({ accountId, credentialVersion: 1 as never, bindingDigest: digestBindings({ bindings, hash }) });
+    const result = await adapter.resolve({ ref, version: 1 as never, grant, identity });
+    expect(result.ok).toBe(false);
+    expect(JSON.stringify(result)).not.toContain('sk-v2-impersonating-v1');
+  });
 });

@@ -83,6 +83,23 @@ function secretKeyFor(accountId: string, kind: AccountKind): string {
   return `${accountId}__${kind}`;
 }
 
+/**
+ * The rotation-grace companion secret: a snapshot of the material `rotate`
+ * is about to replace, so a grant that named the OLD version can still be
+ * served real material inside `rotationGraceMs` (ADR 0005 §2.2 `rotate`).
+ * Self-hosted Infisical OSS exposes no secret-version-history read API (the
+ * `/api/v1/secret/{id}/secret-versions` route returned 403 against a fresh
+ * instance, consistent with point-in-time recovery being a paid-tier
+ * feature) — this is the OSS-compatible substitute: the grace copy lives in
+ * Infisical too (never our metadata DB, which holds no secret material),
+ * tagged with the version it represents so a resolve can verify freshness.
+ */
+function previousSecretKeyFor(accountId: string, kind: AccountKind): string {
+  return `${accountId}__${kind}__previous`;
+}
+
+type PreviousSnapshotComment = { readonly __version: number };
+
 function stripRefreshToken<K extends AccountKind>(kind: K, material: SecretMaterial['material'], aud: PresenterChannel): unknown {
   if (kind !== 'oauth2' || aud === 'refresh-worker') return material;
   const { refreshToken: _refreshToken, ...rest } = material as SecretMaterialByKind['oauth2'];
@@ -98,8 +115,10 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     readonly expectedVersion: CredentialVersion | null;
     readonly bindings: PlaneBindings;
     readonly identity: PutInput['identity'];
+    /** Only `rotate` sets this — snapshot the material being replaced for grace resolves. */
+    readonly snapshotPreviousOnRotate?: boolean;
   }): Promise<PutResult> {
-    const { ref, material, expectedVersion, bindings, identity } = input;
+    const { ref, material, expectedVersion, bindings, identity, snapshotPreviousOnRotate = false } = input;
     if (ref.tenantId !== identity.tenantId) return { ok: false, reason: 'store_unavailable' };
     // PutInput does not type-correlate ref.kind with SecretMaterial's discriminant — a caller
     // could otherwise submit e.g. password material under an api_key ref (Codex review PR #2646
@@ -124,6 +143,24 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
       if (preCheck.outcome === 'version_conflict') return preCheck;
 
       const secretKey = secretKeyFor(ref.accountId, ref.kind);
+
+      // Snapshot the CURRENT material into the grace companion before it is overwritten, so a
+      // grant that named `observedBefore` can still be served real material inside
+      // `rotationGraceMs` (ADR 0005 §2.2; Codex review PR #2646 P1 — resolveCore always claimed
+      // `stored.currentVersion` regardless of which version was actually authorized/fetched, and
+      // OSS Infisical exposes no version-history read API to serve the old value honestly).
+      if (snapshotPreviousOnRotate && before !== null) {
+        const current = await deps.infisical.getSecret({ projectId: project.projectId, credentials, secretKey });
+        if (!current.ok) return { outcome: 'write_unverified' as const };
+        const previousKey = previousSecretKeyFor(ref.accountId, ref.kind);
+        const previousComment: PreviousSnapshotComment = { __version: observedBefore as number };
+        const previousWrite = await deps.infisical.getSecret({ projectId: project.projectId, credentials, secretKey: previousKey });
+        const snapshotResult = previousWrite.ok
+          ? await deps.infisical.updateSecret({ projectId: project.projectId, credentials, secretKey: previousKey, secretValue: current.secret.secretValue, secretComment: JSON.stringify(previousComment) })
+          : await deps.infisical.createSecret({ projectId: project.projectId, credentials, secretKey: previousKey, secretValue: current.secret.secretValue, secretComment: JSON.stringify(previousComment) });
+        if (!snapshotResult.ok) return { outcome: 'write_unverified' as const };
+      }
+
       // `material` is the discriminated SecretMaterial wrapper ({ kind, material: perKindPayload });
       // store only the per-kind payload so resolve hands callers exactly the shape they expect
       // (Codex review PR #2646 P1 — the wrapper was stored whole, doubly nesting the payload and
@@ -195,9 +232,28 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     const credentials = await deps.resolveCredentials({ tenantId: ref.tenantId, identityId: identity.identityId });
     if (project === null || credentials === null) return { ok: false, reason: 'store_unavailable' };
 
-    const secretKey = secretKeyFor(ref.accountId, ref.kind);
+    // decideResolve already confirmed grant.credentialVersion is EITHER stored.currentVersion or
+    // (within grace) stored.previousVersion; fetch the matching Infisical copy and return the
+    // version actually served, not always the current one (Codex review PR #2646 P1).
+    const servedFromCurrent = grant.credentialVersion === stored!.currentVersion;
+    const secretKey = servedFromCurrent ? secretKeyFor(ref.accountId, ref.kind) : previousSecretKeyFor(ref.accountId, ref.kind);
     const got = await deps.infisical.getSecret({ projectId: project.projectId, credentials, secretKey });
     if (!got.ok) return { ok: false, reason: got.reason === 'not_found' ? 'not_found' : 'store_unavailable' };
+
+    if (servedFromCurrent) {
+      // Race guard: a rotation could have landed between our metadata read and this fetch, in
+      // which case Infisical's own version has moved past what decideResolve authorized — refuse
+      // rather than serve rotated material mislabeled as the old version (Codex review PR #2646 P1).
+      if (got.secret.version !== stored!.currentVersion) return { ok: false, reason: 'store_unavailable' };
+    } else {
+      let previousComment: PreviousSnapshotComment;
+      try {
+        previousComment = JSON.parse(got.secret.secretComment) as PreviousSnapshotComment;
+      } catch {
+        return { ok: false, reason: 'store_unavailable' };
+      }
+      if (previousComment.__version !== stored!.previousVersion) return { ok: false, reason: 'store_unavailable' };
+    }
 
     let parsed: { readonly kind: AccountKind; readonly material: unknown };
     try {
@@ -207,7 +263,7 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     }
 
     const material = stripRefreshToken(parsed.kind, parsed.material as never, grant.aud);
-    return { ok: true, kind: parsed.kind, material, version: stored!.currentVersion as CredentialVersion };
+    return { ok: true, kind: parsed.kind, material, version: grant.credentialVersion as CredentialVersion };
   }
 
   return {
@@ -230,7 +286,7 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     },
 
     async rotate(input: RotateInput): Promise<RotateResult> {
-      return writeSecret({ ref: input.ref, material: input.next, expectedVersion: input.expectedVersion, bindings: input.bindings, identity: input.identity });
+      return writeSecret({ ref: input.ref, material: input.next, expectedVersion: input.expectedVersion, bindings: input.bindings, identity: input.identity, snapshotPreviousOnRotate: true });
     },
 
     async revoke(input: RevokeInput): Promise<RevokeResult> {
