@@ -116,7 +116,11 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
       if (preCheck.outcome === 'version_conflict') return preCheck;
 
       const secretKey = secretKeyFor(ref.accountId, ref.kind);
-      const secretValue = JSON.stringify({ kind: ref.kind, material });
+      // `material` is the discriminated SecretMaterial wrapper ({ kind, material: perKindPayload });
+      // store only the per-kind payload so resolve hands callers exactly the shape they expect
+      // (Codex review PR #2646 P1 — the wrapper was stored whole, doubly nesting the payload and
+      // hiding oauth2's refreshToken one level deeper than stripRefreshToken looked).
+      const secretValue = JSON.stringify({ kind: ref.kind, material: material.material });
       const secretComment = JSON.stringify(bindings);
       const writeResult =
         before === null
