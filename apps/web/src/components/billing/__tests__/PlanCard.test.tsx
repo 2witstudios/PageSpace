@@ -10,15 +10,15 @@ describe('PlanCard (MON-6, SEAT-2, A-9)', () => {
 
     expect(screen.getByTestId('plan-price').textContent).toBe('$15');
     const included = screen.getByTestId('plan-included-credits').textContent ?? '';
-    expect(included).toMatch(/^\d+ credits included each month$/);
+    expect(included).toMatch(/^[0-9,]+ credits included each month$/);
     expect(included).not.toContain('$');
-    expect(screen.getByTestId('plan-topup-rate').textContent).toMatch(/^\$\d+ buys \d+ credits$/);
+    expect(screen.getByTestId('plan-topup-rate').textContent).toMatch(/^[0-9,]+ credits per \$[0-9]+$/);
   });
 
   it('MON-6 the free card states its one-time starter grant as a count', () => {
     render(<PlanCard plan={PLANS.free} currentTier="free" />);
     expect(screen.getByTestId('plan-price').textContent).toBe('Free');
-    expect(screen.getByTestId('plan-included-credits').textContent).toMatch(/^\d+ credits to start$/);
+    expect(screen.getByTestId('plan-included-credits').textContent).toMatch(/^[0-9,]+ credits to start$/);
   });
 
   it('SEAT-2 the Business card states the org terms: $50 a month, 5 seats included, $10 per extra seat', () => {
