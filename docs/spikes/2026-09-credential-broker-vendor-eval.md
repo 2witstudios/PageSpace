@@ -482,12 +482,16 @@ Self-hosted second plane (option A), flat regardless of credential count: `nango
 
 ## 9. Onprem (deprioritized, D-21): compose join and gated env vars (requirement 2)
 
-Documented so the path exists; it does not drive the recommendation. The snippet joins `infrastructure/docker-compose.tenant.yml` (`networks: internal` is `internal: true`; `traefik` is external; Traefik labels use `${TENANT_SLUG}`). It adds a **third network, `credential_plane`**, so the store is reachable only from the executor/proxy, never from `web`, `processor` or `realtime` — the plane's "own network segment". The Infisical UI is exposed on its own host, not under the tenant's app host, so a tenant's app session can never be a vault session.
+Documented so the path exists; it does not drive the recommendation. The snippet joins `infrastructure/docker-compose.tenant.yml` (`networks: internal` is `internal: true`; `traefik` is external; Traefik labels use `${TENANT_SLUG}`). It adds a **third network, `credential_plane`**, and the store, its Postgres and its Redis have an interface on **that network only**: `web`, `processor` and `realtime` never join it, and `agent-proxy` is the sole bridge — the plane's "own network segment". *Amended 2026-09-15 (PR #2633 review)*: the first draft attached `infisical` to the external `traefik` network to carry its ingress labels. That broke the boundary it claimed — `web` and `realtime` already join `traefik` (`docker-compose.tenant.yml`), and so does every other tenant project on the host, so Infisical's port would have been reachable laterally from the app containers of this and other tenants. The corrected snippet keeps `infisical` off `traefik` and exposes the UI through a **`vault-ingress` sidecar**: a reverse proxy that carries the Traefik labels, joins `credential_plane` + `traefik`, and forwards only HTTP to `infisical:8080`. Say plainly what that gives: the store container, its DB and its Redis have no interface any app container can reach; what is reachable laterally via the sidecar is exactly the authenticated HTTP surface that `vault-${TENANT_SLUG}.pagespace.ai` already publishes to the internet — no wider — and the sidecar can narrow it further (IP allowlist, forward-auth, or a path allowlist for the UI/login routes). The stricter variant, if the operator can afford a provisioner step, is a **dedicated per-tenant ingress network** (`vault_ingress_${TENANT_SLUG}`, non-internal bridge) that only the shared Traefik container is connected to (`docker network connect` in `tenant-stack.sh`); then nothing on `traefik` reaches even the sidecar. Either way the resolving machine identity lives only in `agent-proxy`. The Infisical UI is exposed on its own host, not under the tenant's app host, so a tenant's app session can never be a vault session.
 
 ```yaml
 # --- credential plane (Agent Accounts epic; onprem path, D-21 deprioritized) ---
-# Joins docker-compose.tenant.yml. web/processor/realtime stay on `internal` and
-# never join `credential_plane`; only the agent-proxy bridges the two.
+# Joins docker-compose.tenant.yml. web/processor/realtime stay on `internal` (+ `traefik`
+# for web/realtime) and never join `credential_plane`; only the agent-proxy bridges
+# `internal` and `credential_plane`. infisical / its postgres / its redis are on
+# `credential_plane` ONLY — never on the shared external `traefik` network, which
+# web, realtime and every other tenant project on the host also join. The UI reaches
+# Traefik through the `vault-ingress` sidecar below.
 services:
   infisical-postgres:
     image: postgres:17.5-alpine            # same pin as the app DB
@@ -535,12 +539,30 @@ services:
     tmpfs: ["/tmp:noexec,nosuid,size=100m"]
     security_opt: ["no-new-privileges:true"]
     logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+    networks: [credential_plane]             # ONLY here — no interface on `traefik` or `internal`
+
+  # UI/API ingress for the vault host. The only thing on the shared `traefik` network that
+  # can reach Infisical, and it forwards HTTP to infisical:8080 and nothing else. Lateral
+  # reach to this container == the authenticated surface already public on the vault host.
+  # Stricter variant: replace `traefik` here with a per-tenant `vault_ingress` network that
+  # only the shared Traefik container is connected to (docker network connect, tenant-stack.sh).
+  vault-ingress:
+    image: nginx:1.28.0-alpine               # pin the real tag at G1b; config = one `location / { proxy_pass http://infisical:8080; }` with websocket upgrade headers
+    restart: unless-stopped
+    depends_on:
+      infisical: { condition: service_started }
+    expose: ["80"]
+    read_only: true
+    tmpfs: ["/var/cache/nginx", "/var/run", "/tmp:noexec,nosuid,size=16m"]
+    security_opt: ["no-new-privileges:true"]
+    deploy: { resources: { limits: { memory: 32M } } }
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.${TENANT_SLUG}-vault.rule=Host(`vault-${TENANT_SLUG}.pagespace.ai`)"
       - "traefik.http.routers.${TENANT_SLUG}-vault.entrypoints=websecure"
       - "traefik.http.routers.${TENANT_SLUG}-vault.tls.certresolver=le"
-      - "traefik.http.services.${TENANT_SLUG}-vault.loadbalancer.server.port=8080"
+      - "traefik.http.services.${TENANT_SLUG}-vault.loadbalancer.server.port=80"
     networks: [credential_plane, traefik]
 
   # The egress broker. Bridges `internal` (so the executor / sandbox path can reach
