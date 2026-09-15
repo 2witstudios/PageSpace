@@ -431,4 +431,86 @@ describe.skipIf(!INFISICAL_ADMIN_TOKEN && ALLOW_SKIP)('createInfisicalStoreAdapt
     const described = await adapter.describe({ ref, identity });
     expect(described).toEqual({ ok: false, reason: 'not_found' });
   });
+
+  // Codex review PR #2646 (P1, store-adapter-infisical.ts:188): resolveCore never compared the
+  // fetched Infisical record's version against the metadata read that authorized it, so a write
+  // landing between the two reads hands a grant material from a version it never named — labeled
+  // with the STALE metadata version. Simulated here as an out-of-band Infisical write (standing
+  // in for a rotation slipping in between resolveCore's metadata.read and infisical.getSecret).
+  it('given the Infisical secret changed after the authorizing metadata read (a race), should refuse rather than serve mismatched material', async () => {
+    if (!available) return;
+    const adapter = makeAdapter();
+    const accountId = `acct-race-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+
+    // Out-of-band write: bumps the Infisical secret to v2 WITHOUT touching the plane metadata row,
+    // standing in for a rotation that committed to Infisical between resolveCore's metadata read
+    // and its Infisical fetch. Metadata still says currentVersion 1.
+    const rawInfisical = createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' });
+    await rawInfisical.updateSecret({
+      projectId: projectAId,
+      credentials: identityA,
+      secretKey: `${accountId}__api_key`,
+      secretValue: JSON.stringify({ kind: 'api_key', material: { value: 'sk-v2-raced-in', placement: { in: 'header', name: 'Authorization' } } }),
+      secretComment: JSON.stringify(bindings),
+    });
+
+    const grant = makeGrant({ accountId, credentialVersion: 1 as never, bindingDigest: digestBindings({ bindings, hash }) });
+    const result = await adapter.resolve({ ref, version: 1 as never, grant, identity });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).not.toBe('ok');
+    expect(JSON.stringify(result)).not.toContain('sk-v2-raced-in');
+  });
+
+  // Codex review PR #2646 (P1, store-adapter-infisical.ts:210): decideResolve correctly allows a
+  // grant naming `previousVersion` inside the grace window, but resolveCore always fetched and
+  // returned CURRENT material/version — an honest caller naming the old version was rejected by
+  // the downstream version_mismatch check (result.version came back as the NEW version), while a
+  // caller pairing an old grant with the NEW input.version got the rotated secret.
+  it('given a grant naming the version just rotated away, inside rotationGraceMs, should resolve to the OLD material at the OLD version — never the new one', async () => {
+    if (!available) return;
+    const adapter = makeAdapter();
+    const accountId = `acct-grace-content-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-old-value', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    const rotateResult = await adapter.rotate({
+      ref,
+      expectedVersion: 1 as never,
+      next: { kind: 'api_key', material: { value: 'sk-new-value', placement: { in: 'header', name: 'Authorization' } } },
+      bindings,
+      identity: refreshIdentity,
+    });
+    expect(rotateResult).toEqual({ ok: true, version: 2 });
+
+    // Honest caller: a grant naming version 1, presented with version 1 (what it actually holds).
+    const oldGrant = makeGrant({ accountId, credentialVersion: 1 as never, bindingDigest: digestBindings({ bindings, hash }) });
+    const oldResolve = await adapter.resolve({ ref, version: 1 as never, grant: oldGrant, identity });
+    expect(oldResolve.ok).toBe(true);
+    if (oldResolve.ok) {
+      expect(oldResolve.version).toBe(1);
+      expect(oldResolve.material).toEqual({ value: 'sk-old-value', placement: { in: 'header', name: 'Authorization' } });
+    }
+
+    // Attacker shape: the SAME old grant (names version 1), but the presented version bumped to
+    // the new one — must not be satisfied with the rotated secret.
+    const mismatchedResolve = await adapter.resolve({ ref, version: 2 as never, grant: oldGrant, identity });
+    expect(mismatchedResolve.ok).toBe(false);
+
+    // The new version is still resolvable on its own honest terms.
+    const newGrant = makeGrant({ accountId, credentialVersion: 2 as never, bindingDigest: digestBindings({ bindings, hash }) });
+    const newResolve = await adapter.resolve({ ref, version: 2 as never, grant: newGrant, identity });
+    expect(newResolve.ok).toBe(true);
+    if (newResolve.ok) {
+      expect(newResolve.version).toBe(2);
+      expect(newResolve.material).toEqual({ value: 'sk-new-value', placement: { in: 'header', name: 'Authorization' } });
+    }
+  });
 });
