@@ -13,7 +13,7 @@ import { computeCronSignature } from '@/lib/auth/cron-auth';
  *
  * Key behaviors to test:
  * 1. Authentication via HMAC-SHA256 + nonce (see cron-auth.ts)
- * 2. Only processes paying users (pro, founder, business)
+ * 2. Only processes paying users (pro, business)
  * 3. Skips users with personalization disabled
  * 4. Handles errors for individual users without failing entire job
  * 5. Returns summary of processed/updated/errors

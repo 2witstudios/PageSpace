@@ -1,5 +1,5 @@
 {
-  "id": "ce2e25b9-0e33-473d-a19a-112044dfc240",
+  "id": "b79084c2-cda8-4d36-b89d-df588fc24012",
   "prevId": "bacd1577-68d6-471d-8c5e-21eecd837d36",
   "version": "7",
   "dialect": "postgresql",
@@ -886,6 +886,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'free'"
+        },
+        "subscriptionGrandfathered": {
+          "name": "subscriptionGrandfathered",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "tosAcceptedAt": {
           "name": "tosAcceptedAt",
@@ -18275,12 +18282,6 @@
         "stripeRef": {
           "name": "stripeRef",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "paidCents": {
-          "name": "paidCents",
-          "type": "integer",
           "primaryKey": false,
           "notNull": false
         },

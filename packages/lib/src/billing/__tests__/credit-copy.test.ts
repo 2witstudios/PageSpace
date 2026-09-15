@@ -69,3 +69,29 @@ describe('MON-5 the web formatter, the marketing mirror, and admin consume one c
     expect(creditPacksPhrase()).toBe('$10, $25, or $50');
   });
 });
+
+describe('MON-6 plan-card facts (SEAT-2 lane A2)', () => {
+  it('MON-6 includedCreditsPhrase is an integer credit count with no dollar sign, per tier', async () => {
+    const { includedCreditsPhrase, MONTHLY_CREDITS } = await load({ MONEY_MODEL_V2: 'true' });
+    expect(includedCreditsPhrase('free')).toBe(`${MONTHLY_CREDITS.free} credits to start`);
+    expect(includedCreditsPhrase('pro')).toBe(`${MONTHLY_CREDITS.pro} credits included each month`);
+    expect(includedCreditsPhrase('business')).toBe(`${MONTHLY_CREDITS.business} credits included each month`);
+    for (const tier of TIERS) {
+      expect(includedCreditsPhrase(tier), tier).not.toContain('$');
+      expect(includedCreditsPhrase(tier), tier).toMatch(/^\d/);
+    }
+  });
+
+  it('MON-6 / MON-4 topUpRatePhrase states the smallest pack as a credit count over a real purchase price, no ratio applied', async () => {
+    const { topUpRatePhrase } = await load();
+    // A-11: a $10 pack is 1,000 credits.
+    expect(topUpRatePhrase()).toBe('1,000 credits per $10');
+  });
+
+  it('MON-6 the ratio flag changes included credits but never the top-up rate (MON-4: top-ups apply no ratio)', async () => {
+    const off = await load({ MONEY_MODEL_V2: 'false' });
+    const on = await load({ MONEY_MODEL_V2: 'true' });
+    expect(off.includedCreditsPhrase('pro')).not.toBe(on.includedCreditsPhrase('pro'));
+    expect(off.topUpRatePhrase()).toBe(on.topUpRatePhrase());
+  });
+});

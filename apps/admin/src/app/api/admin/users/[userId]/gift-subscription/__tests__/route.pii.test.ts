@@ -122,7 +122,7 @@ vi.mock('@/lib/stripe-errors', () => ({
 
 vi.mock('@/lib/stripe-config', () => ({
   stripeConfig: {
-    priceIds: { pro: 'price_pro', founder: 'price_founder', business: 'price_business' },
+    priceIds: { pro: 'price_pro', business: 'price_business' },
   },
 }));
 

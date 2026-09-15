@@ -9,7 +9,7 @@
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 /** Tiers for which Memory (conversation learning) is available. */
-export const MEMORY_PAYING_TIERS: readonly SubscriptionTier[] = ['pro', 'founder', 'business'];
+export const MEMORY_PAYING_TIERS: readonly SubscriptionTier[] = ['pro', 'business'];
 
 /** Memory is a paid feature; free users see it locked. */
 export function isMemoryAvailable(tier: SubscriptionTier): boolean {

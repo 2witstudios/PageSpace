@@ -11,7 +11,7 @@ import { giftSubscription, revokeSubscription } from './actions';
 import { tierLabel } from './user-format';
 import type { AdminUser, SubscriptionTier } from './types';
 
-const GIFTABLE_TIERS: Array<Exclude<SubscriptionTier, 'free'>> = ['pro', 'founder', 'business'];
+const GIFTABLE_TIERS: Array<Exclude<SubscriptionTier, 'free'>> = ['pro', 'business'];
 
 // Env-aware Stripe dashboard link — never hardcode test mode.
 const STRIPE_DASHBOARD_BASE = `https://dashboard.stripe.com/${stripeMode === 'test' ? 'test/' : ''}`;
@@ -62,7 +62,7 @@ export function SubscriptionControls({ user, onActionComplete }: SubscriptionCon
           <span className="text-sm text-muted-foreground">Current Plan:</span>
           <Badge variant={
             user.subscriptionTier === 'business' ? 'destructive' :
-              user.subscriptionTier === 'founder' || user.subscriptionTier === 'pro' ? 'default' : 'secondary'
+              user.subscriptionTier === 'pro' ? 'default' : 'secondary'
           }>
             {user.subscription?.isGifted && <Gift className="h-3 w-3 mr-1" />}
             {!user.subscription?.isGifted && user.subscriptionTier !== 'free' && <Crown className="h-3 w-3 mr-1" />}

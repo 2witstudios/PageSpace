@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata, APP_URL } from "@/lib/metadata";
-import { creditsPhrase } from "@/lib/credits";
+import { creditsPhrase, includedCreditsPhrase, topUpRatePhrase } from "@/lib/credits";
 import {
   TIERS as PLAN_ORDER,
   TIER_PLAN_LIMITS,
@@ -19,6 +19,15 @@ interface Plan {
   name: string;
   price: string;
   period?: string;
+  /**
+   * SEAT-2: the organization plan's seat terms ("5 seats included · $10 per
+   * extra seat"); absent on a personal plan.
+   */
+  seatTerms?: string;
+  /** MON-6: included credits as an integer count — the second fact on the card. */
+  includedCredits: string;
+  /** MON-6: the top-up rate — the third fact on the card. */
+  topUpRate: string;
   description: string;
   cta: string;
   ctaVariant: "default" | "outline";
@@ -57,16 +66,9 @@ const PLAN_COPY: Record<
     models: "Standard + Pro",
     prioritySupport: true,
   },
-  founder: {
-    description: "Serious AI capability for power users and small teams, sandbox included",
-    cta: "Upgrade to Founder",
-    ctaVariant: "outline",
-    models: "Standard + Pro",
-    prioritySupport: true,
-  },
   business: {
-    description: "Maximum capacity, priority support, and sandbox access for the whole team",
-    cta: "Upgrade to Business",
+    description: "For teams: an organization with seats, a shared credit pool, org-owned drives, and sandbox access for everyone",
+    cta: "Start an organization",
     ctaVariant: "outline",
     models: "Standard + Pro",
     prioritySupport: true,
@@ -80,6 +82,11 @@ const plans: Plan[] = PLAN_ORDER.map((tier) => {
     name: limits.name,
     price: limits.priceMonthlyUsd === 0 ? "$0" : `$${limits.priceMonthlyUsd}`,
     period: limits.priceMonthlyUsd === 0 ? undefined : "/month",
+    seatTerms: limits.isOrgPlan
+      ? `per organization · ${limits.includedSeats} seats included · $${limits.extraSeatUsd} per extra seat`
+      : undefined,
+    includedCredits: includedCreditsPhrase(tier),
+    topUpRate: topUpRatePhrase(),
     description: copy.description,
     cta: copy.cta,
     ctaVariant: copy.ctaVariant,
@@ -134,7 +141,7 @@ export default function PricingPage() {
       {/* Pricing Cards */}
       <section className="pb-16 md:pb-24">
         <div className="container mx-auto px-4 md:px-6">
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-7xl mx-auto">
+          <div className="grid md:grid-cols-3 gap-6 max-w-6xl mx-auto">
             {plans.map((plan) => (
               <div
                 key={plan.name}
@@ -152,23 +159,31 @@ export default function PricingPage() {
                 <div className="mb-6">
                   <h3 className="text-xl font-semibold mb-2">{plan.name}</h3>
                   <div className="flex items-baseline gap-1 mb-2">
-                    <span className="text-4xl font-bold">{plan.price}</span>
+                    <span className="text-4xl font-bold" data-testid="plan-price">{plan.price}</span>
                     {plan.period && (
                       <span className="text-muted-foreground">{plan.period}</span>
                     )}
                   </div>
+                  {plan.seatTerms && (
+                    <p className="text-xs text-muted-foreground mb-2" data-testid="plan-seats">{plan.seatTerms}</p>
+                  )}
                   <p className="text-sm text-muted-foreground">{plan.description}</p>
                 </div>
 
                 <div className="space-y-4 flex-1">
+                  {/* MON-6: price (above), included credits, and the top-up rate are three separate facts. */}
                   <div className="space-y-3">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">Included</span>
+                      <span className="font-medium" data-testid="plan-included-credits">{plan.includedCredits}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">Top up</span>
+                      <span className="font-medium" data-testid="plan-topup-rate">{plan.topUpRate}</span>
+                    </div>
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-muted-foreground">Storage</span>
                       <span className="font-medium">{plan.features.storage}</span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Credits</span>
-                      <span className="font-medium">{plan.features.monthlyCredits}</span>
                     </div>
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-muted-foreground">Models</span>

@@ -56,7 +56,7 @@ describe('/api/cron/reconcile-subscription-tiers', () => {
       details: [
         {
           userId: 'u1',
-          storedTier: 'founder',
+          storedTier: 'business',
           expectedTier: 'free',
           repaired: true,
           indeterminate: false,

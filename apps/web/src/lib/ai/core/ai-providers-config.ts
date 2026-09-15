@@ -60,7 +60,7 @@ export const ADMIN_ONLY_PROVIDERS = new Set<string>(['glm']);
 
 /**
  * Models available to the FREE subscription tier. Every paid tier
- * (`pro`/`founder`/`business`) gets the full catalog; free users are limited to
+ * (`pro`/`business`) gets the full catalog; free users are limited to
  * this curated set of cheaper models. `DEFAULT_MODEL` must be a member.
  */
 export const FREE_TIER_MODELS = new Set<string>([

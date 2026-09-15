@@ -52,6 +52,8 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       subscriptionTier,
+      // A-9: a legacy $100 personal Business subscriber kept at their price.
+      subscriptionGrandfathered: user.subscriptionGrandfathered === true,
       stripeCustomerId: user.stripeCustomerId,
       subscription: subscription ? {
         status: subscription.status,

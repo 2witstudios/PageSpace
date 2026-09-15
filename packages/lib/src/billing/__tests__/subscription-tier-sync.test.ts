@@ -10,7 +10,9 @@ import type { SubscriptionTier } from '../subscription-tiers';
 const priceTier = (map: Record<string, SubscriptionTier>) =>
   (priceId: string): SubscriptionTier => map[priceId] ?? 'free';
 
-const KNOWN = priceTier({ price_pro: 'pro', price_founder: 'founder', price_business: 'business' });
+// A-9: the legacy founder price resolves to its migration target (pro) — a
+// GRANDFATHERED price-id entry in stripe-config, never a tier of its own.
+const KNOWN = priceTier({ price_pro: 'pro', price_founder: 'pro', price_business: 'business' });
 
 describe('ENTITLED_SUBSCRIPTION_STATUSES', () => {
   it('matches the webhook entitlement set', () => {
@@ -40,8 +42,8 @@ describe('deriveTierFromSubscriptions', () => {
 
   it('treats trialing as entitled', () => {
     expect(
-      deriveTierFromSubscriptions([{ status: 'trialing', stripePriceId: 'price_founder' }], KNOWN),
-    ).toEqual({ tier: 'founder', indeterminate: false });
+      deriveTierFromSubscriptions([{ status: 'trialing', stripePriceId: 'price_business' }], KNOWN),
+    ).toEqual({ tier: 'business', indeterminate: false });
   });
 
   it('takes the highest-ranked tier across multiple entitled rows', () => {
@@ -85,11 +87,22 @@ describe('computeTierDrift', () => {
   });
 
   it('reports drift when stored and derived mismatch, regardless of indeterminacy', () => {
-    expect(computeTierDrift({ storedTier: 'founder', derived: { tier: 'free', indeterminate: false } })).toEqual({
+    expect(computeTierDrift({ storedTier: 'business', derived: { tier: 'free', indeterminate: false } })).toEqual({
       drifted: true,
-      storedTier: 'founder',
+      storedTier: 'business',
       expectedTier: 'free',
     });
+  });
+
+  it('A-9 a stored legacy "founder" value is drift against the tier its (grandfathered) price now derives to', () => {
+    // 'founder' is outside the vocabulary: it coerces to free, so the
+    // reconciler repairs the row to what the founder price id maps to (pro).
+    expect(
+      computeTierDrift({
+        storedTier: 'founder',
+        derived: deriveTierFromSubscriptions([{ status: 'active', stripePriceId: 'price_founder' }], KNOWN),
+      }),
+    ).toEqual({ drifted: true, storedTier: 'free', expectedTier: 'pro' });
   });
 
   it('an indeterminate derivation that happens to match stored is not drift', () => {
@@ -115,7 +128,7 @@ describe('isTierDriftRepairable', () => {
     // downgrade path, not the unmigrated-legacy-user case below.
     expect(
       isTierDriftRepairable({
-        storedTier: 'founder',
+        storedTier: 'business',
         derived: { tier: 'free', indeterminate: false },
         hasAnySubscriptionRecord: true,
       }),
@@ -143,7 +156,7 @@ describe('isTierDriftRepairable', () => {
     it('is NOT repairable for a non-free stored tier with no subscription record', () => {
       expect(
         isTierDriftRepairable({
-          storedTier: 'founder',
+          storedTier: 'business',
           derived: { tier: 'free', indeterminate: false },
           hasAnySubscriptionRecord: false,
         }),
@@ -165,7 +178,7 @@ describe('isTierDriftRepairable', () => {
     it('does not apply the no-record guard once a subscription record exists (normal cancel path)', () => {
       expect(
         isTierDriftRepairable({
-          storedTier: 'founder',
+          storedTier: 'business',
           derived: { tier: 'free', indeterminate: false },
           hasAnySubscriptionRecord: true,
         }),

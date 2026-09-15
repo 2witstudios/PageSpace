@@ -94,7 +94,6 @@ describe('isSandboxAvailable — the gate', () => {
     vi.stubEnv('DEPLOYMENT_MODE', 'cloud');
     expect(isSandboxAvailable('free')).toBe(false);
     expect(isSandboxAvailable('pro')).toBe(true);
-    expect(isSandboxAvailable('founder')).toBe(true);
     expect(isSandboxAvailable('business')).toBe(true);
   });
 

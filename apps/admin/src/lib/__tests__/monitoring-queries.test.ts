@@ -140,7 +140,6 @@ describe('getActiveSubscriptionsByTier', () => {
     expect(result).toEqual(expect.arrayContaining([
       { tier: 'free', count: 0 },
       { tier: 'pro', count: 2 },
-      { tier: 'founder', count: 0 },
       { tier: 'business', count: 1 },
     ]));
   });
@@ -149,7 +148,7 @@ describe('getActiveSubscriptionsByTier', () => {
     resetQueue([
       { stripePriceId: 'price_legacy_pro' },
       { stripePriceId: 'price_legacy_pro' },
-      { stripePriceId: stripeConfig.priceIds.founder },
+      { stripePriceId: stripeConfig.priceIds.business },
     ]);
     mockPricesRetrieve.mockResolvedValue({ unit_amount: 2999 }); // legacy $29.99 pro
 
@@ -160,7 +159,7 @@ describe('getActiveSubscriptionsByTier', () => {
     expect(mockPricesRetrieve).toHaveBeenCalledWith('price_legacy_pro');
     expect(result).toEqual(expect.arrayContaining([
       { tier: 'pro', count: 2 },
-      { tier: 'founder', count: 1 },
+      { tier: 'business', count: 1 },
       { tier: 'free', count: 0 },
     ]));
   });

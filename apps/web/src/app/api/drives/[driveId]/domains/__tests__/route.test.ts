@@ -63,7 +63,7 @@ vi.mock('@/lib/canvas/custom-domain-mirror', () => ({
 vi.mock('@/lib/subscription/plans', () => ({
   getPlan: vi.fn((tier: string) => ({
     limits: {
-      maxCustomDomains: tier === 'free' ? 0 : tier === 'pro' ? 1 : tier === 'founder' ? 3 : 10,
+      maxCustomDomains: tier === 'free' ? 0 : tier === 'pro' ? 1 : 10,
     },
   })),
 }));
@@ -369,15 +369,6 @@ describe('POST /api/drives/[driveId]/domains', () => {
     expect(res.status).toBe(403);
     const body = await res.json();
     expect(body.error).toMatch(/maximum of 1 custom domain/i);
-  });
-
-  it('returns 403 when the drive is at the founder tier cap (3 domains)', async () => {
-    mockPostSelects({ ownerTier: 'founder', domainCount: 3 });
-
-    const res = await POST(makeReq({ hostname: 'fourth.com' }), ctx());
-    expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body.error).toMatch(/maximum of 3 custom domains/i);
   });
 
   it('normalizes the hostname before insert (strips scheme/path)', async () => {

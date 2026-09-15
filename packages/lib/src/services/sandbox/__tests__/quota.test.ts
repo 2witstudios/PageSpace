@@ -38,9 +38,6 @@ describe('code execution concurrency semaphore', () => {
       getCodeExecutionConcurrencyLimit('pro'),
     );
     expect(getCodeExecutionConcurrencyLimit('pro')).toBeLessThan(
-      getCodeExecutionConcurrencyLimit('founder'),
-    );
-    expect(getCodeExecutionConcurrencyLimit('founder')).toBeLessThan(
       getCodeExecutionConcurrencyLimit('business'),
     );
   });
@@ -48,7 +45,6 @@ describe('code execution concurrency semaphore', () => {
   it('should default each tier to its documented ceiling', () => {
     expect(getCodeExecutionConcurrencyLimit('free')).toBe(1);
     expect(getCodeExecutionConcurrencyLimit('pro')).toBe(10);
-    expect(getCodeExecutionConcurrencyLimit('founder')).toBe(20);
     expect(getCodeExecutionConcurrencyLimit('business')).toBe(50);
   });
 
@@ -106,7 +102,6 @@ describe('CONCURRENCY_LIMITS env overrides', () => {
   const ENV_KEYS = [
     'CODE_EXEC_CONCURRENCY_FREE',
     'CODE_EXEC_CONCURRENCY_PRO',
-    'CODE_EXEC_CONCURRENCY_FOUNDER',
     'CODE_EXEC_CONCURRENCY_BUSINESS',
   ] as const;
   const original = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
@@ -130,9 +125,9 @@ describe('CONCURRENCY_LIMITS env overrides', () => {
   });
 
   it('falls back to the default when the env value is invalid', async () => {
-    process.env.CODE_EXEC_CONCURRENCY_FOUNDER = 'not-a-number';
+    process.env.CODE_EXEC_CONCURRENCY_PRO = 'not-a-number';
     const { getCodeExecutionConcurrencyLimit: getLimit } = await import('../quota');
-    expect(getLimit('founder')).toBe(20);
+    expect(getLimit('pro')).toBe(10);
   });
 });
 
@@ -454,15 +449,14 @@ describe('checkDriveEnvAllowance', () => {
     expect(countEnvsOwnedBy).toHaveBeenCalledWith('drive-owner');
   });
 
-  it('should carry the documented per-tier ceilings — free 0 / pro 2 / founder 5 / business 10', () => {
+  it('should carry the documented per-tier ceilings — free 0 / pro 2 / business 10', () => {
     // The placeholder numbers pending the economics sign-off, pinned so a
     // silent retune is a test change rather than a billing surprise.
     expect([
       getDriveEnvLimit('free'),
       getDriveEnvLimit('pro'),
-      getDriveEnvLimit('founder'),
       getDriveEnvLimit('business'),
-    ]).toEqual([0, 2, 5, 10]);
+    ]).toEqual([0, 2, 10]);
   });
 
   it('given an override ABOVE the listing cap, should clamp it — an env a listing cannot show must not be creatable', async () => {

@@ -191,7 +191,7 @@ const mockStripeSubscription = (overrides: Partial<{
 
 describe('POST /api/stripe/update-subscription', () => {
   const mockUserId = 'user_123';
-  const mockPriceId = 'price_founder_monthly';
+  const mockPriceId = 'price_business_monthly';
 
   beforeEach(() => {
     vi.clearAllMocks();

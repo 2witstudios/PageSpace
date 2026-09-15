@@ -138,7 +138,6 @@ describe('ai-providers-config', () => {
   describe('isModelAllowedForTier', () => {
     it('allows any paid tier the full catalog', () => {
       expect(isModelAllowedForTier('anthropic/claude-opus-4.8', 'pro')).toBe(true);
-      expect(isModelAllowedForTier('anthropic/claude-opus-4.8', 'founder')).toBe(true);
       expect(isModelAllowedForTier('anthropic/claude-opus-4.8', 'business')).toBe(true);
     });
 
