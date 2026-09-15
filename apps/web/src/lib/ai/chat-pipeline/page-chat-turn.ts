@@ -1709,7 +1709,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // summarized into a durable compaction. 'interrupted' rows stay included — they are
     // terminal, real partial output. See Server Stream Durability epic PR 2.
     const loadConversationHistory = async (): Promise<UIMessage[]> => {
-      const dbMessages = await messageRepository.getPageConversationMessages(pageId, conversationId);
+      const dbMessages = await messageRepository.getPageConversationMessages(pageId, conversationId!);
       return Promise.all(dbMessages.map(msg =>
       convertDbMessageToUIMessage({
         id: msg.id,
