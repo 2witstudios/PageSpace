@@ -18,9 +18,9 @@ name: Test Suite
 # change.
 on:
   push:
-    branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent]
+    branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent, pu/org-wallets]
   pull_request:
-    branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent]
+    branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent, pu/org-wallets]
   workflow_dispatch:
 
 jobs:
