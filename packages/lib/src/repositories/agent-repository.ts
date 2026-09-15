@@ -33,6 +33,7 @@ export interface AgentRecord {
    */
   sandboxEnabled: boolean;
   toolExposureMode: 'upfront' | 'search';
+  toolApprovalMode: 'ask' | 'auto';
   userScopedAccess: boolean;
   revision: number;
   stateHash?: string | null;
@@ -74,6 +75,7 @@ export const agentRepository = {
         pageTreeScope: pages.pageTreeScope,
         sandboxEnabled: pages.sandboxEnabled,
         toolExposureMode: pages.toolExposureMode,
+        toolApprovalMode: pages.toolApprovalMode,
         userScopedAccess: pages.userScopedAccess,
         revision: pages.revision,
         stateHash: pages.stateHash,
@@ -98,6 +100,7 @@ export const agentRepository = {
       includePageTree: agent.includePageTree ?? false,
       sandboxEnabled: agent.sandboxEnabled ?? false,
       toolExposureMode: agent.toolExposureMode ?? 'upfront',
+      toolApprovalMode: agent.toolApprovalMode ?? 'ask',
       userScopedAccess: agent.userScopedAccess ?? false,
     };
   },
