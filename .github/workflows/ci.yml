@@ -231,6 +231,14 @@ jobs:
       - name: Check evidence manifest
         run: bun run scripts/check-evidence-manifest.ts
 
+      # Organizations & Wallets: every requirement ID in the Spec must be named by a live test
+      # ("MON-2 ..."). Reads the committed snapshot (docs/specs/organizations-wallets.md; CI has
+      # no pagespace credential), scans every *.test.ts(x) under packages/ and apps/, and fails
+      # on an ID with no test that scripts/spec-coverage-allowlist.txt does not excuse — and on
+      # an allowlisted ID a test now names, so the allowlist only shrinks as lanes land.
+      - name: Check spec ID coverage
+        run: bun run scripts/check-spec-coverage.ts --offline
+
       - name: Coverage report
         if: always()
         run: node scripts/coverage-report.mjs

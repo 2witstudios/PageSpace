@@ -36,6 +36,8 @@
   "include": [
     "collab-seed-audit.ts",
     "lib/seed-audit/**/*.ts",
-    "__tests__/collab-seed-audit*.test.ts"
+    "__tests__/collab-seed-audit*.test.ts",
+    "check-spec-coverage.ts",
+    "__tests__/check-spec-coverage.test.ts"
   ]
 }
