@@ -173,6 +173,8 @@ describe('executeHttpRequest', () => {
     ['a hostile Retry-After of ~23 days', '2000000', MAX_RETRY_AFTER_MS],
     ['a non-numeric Retry-After', 'soon', 1000],
     ['a negative Retry-After', '-5', 1000],
+    ['a space-padded Retry-After of 5 s', ' 5 ', 5000],
+    ['an HTTP-date Retry-After', 'Wed, 21 Oct 2026 07:28:00 GMT', 1000],
   ])('given 429 with %s, should retry after a bounded delay', async (_label, retryAfter, expectedDelayMs) => {
     mockFetch
       .mockResolvedValueOnce(createMockResponse(429, { error: 'Too many requests' }, { 'Retry-After': retryAfter }))
