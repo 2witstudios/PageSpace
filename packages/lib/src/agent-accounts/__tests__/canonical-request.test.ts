@@ -239,8 +239,8 @@ describe('operation is derived, never declared (ADR 0004 §3.4 amendment, §8.30
 
   it('given a template placeholder, should match exactly one whole non-empty segment — never zero, never several', () => {
     const match = (path: string) => lookupOperation({ registry: TEST_REGISTRY, providerSlug: TEST_PROVIDER, channel: 'http-executor', method: 'PUT', path })?.entry.operation.name ?? null;
-    const actual = [match('/repos/a/b/pulls/7/merge'), match('/repos/a/b/pulls//merge'), match('/repos/a/b/c/pulls/7/merge'), match('/repos/a/b/pulls/7/merge/x')];
-    expect(actual).toEqual(['merge_pr', null, null, null]);
+    const actual = [match('/repos/a/b/pulls/7/merge'), match('/repos/a/b/pulls//merge'), match('/repos/a/b/c/pulls/7/merge'), match('/repos/a/b/pulls/7/merge/x'), match('/repos/a/b/pulls/7/merge/')];
+    expect(actual).toEqual(['merge_pr', null, null, null, null]);
   });
 
   it('given a registry with two entries matching the same provider, channel, method and path, should report the conflict at registry load, never resolve it by order', () => {
