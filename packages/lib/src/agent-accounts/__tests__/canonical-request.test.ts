@@ -268,6 +268,13 @@ describe('operation is derived, never declared (ADR 0004 §3.4 amendment, §8.30
   });
 });
 
+describe('resources come from the path, never the caller (ADR 0004 §3.2, §8.35; G1a review M8)', () => {
+  it.todo('given CanonicalRequestInput, should have no resources key (type-level test)');
+  it.todo('given a registry entry /repos/{owner}/{repo}/contents/{path} and a request to /repos/acme/B/contents/x, should set canonical.resources to [[owner,acme],[path,x],[repo,B]] sorted by slot');
+  it.todo('given a request no registry entry matches, should set operation generic_request and resources []');
+  it.todo('given a pathTemplate that uses the same slot name twice, should be refused at registry load');
+});
+
 describe('canonicalizeRequest normalization', () => {
   it('given a mixed-case IDNA host, should lowercase and IDNA→ASCII it', () => {
     const actual = canonical({ url: 'https://BÜCHER.Example.com/x' }).origin;

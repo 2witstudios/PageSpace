@@ -59,10 +59,11 @@ export type ProjectedHeader = 'accept' | 'content-type' | 'content-length';
 
 /**
  * What the tool layer hands the authority: untrusted, before any
- * normalization. It carries NO operation and NO declared headers: a tool that
- * could name its own operation could call a DELETE a `read` and ride an
- * always-allow policy. Both are derived server-side from the
- * `OperationRegistry` (G1a review M1).
+ * normalization. It carries NO operation, NO declared headers and NO
+ * resources: a tool that could name its own operation could call a DELETE a
+ * `read`, and a tool that could name its own resources could claim repo A
+ * while the URL targets repo B. All three are derived server-side from the
+ * `OperationRegistry` and the ACTUAL path (G1a review M1, M8).
  */
 export type CanonicalRequestInput = {
   readonly channel: ExecutorChannel;
@@ -71,8 +72,6 @@ export type CanonicalRequestInput = {
   readonly headers: Readonly<Record<string, string>>;
   /** Exact body bytes; the empty body is `new Uint8Array(0)`, never null. */
   readonly body: Uint8Array;
-  /** Operation-specific identifiers the policy restricts on (repo, org, recipient, webhook target, frame origin). */
-  readonly resources: Readonly<Record<string, string>>;
 };
 
 /**
@@ -85,13 +84,18 @@ export type OperationRegistryEntry = {
   readonly providerSlug: string | null;
   readonly channel: ExecutorChannel;
   readonly method: MethodFor[ExecutorChannel];
-  /** Canonical path with `{name}` placeholders for whole segments, e.g. `/repos/{owner}/{repo}/pulls/{number}/merge`. */
+  /**
+   * Canonical path with `{name}` placeholders for whole segments, e.g.
+   * `/repos/{owner}/{repo}/pulls/{number}/merge`. Each placeholder is a NAMED
+   * RESOURCE SLOT: its value is the matching segment of the actual canonical
+   * path, so `canonical.resources` is extracted from the URL being sent and
+   * the placeholder names are the operation's declared resource keys (audit
+   * projection, ADR 0004 §5). A placeholder name used twice is a registry defect.
+   */
   readonly pathTemplate: string;
   readonly operation: OperationRef;
   /** Extra headers this operation may carry, lowercase; projected into the digest. */
   readonly declaredHeaders: readonly string[];
-  /** The resource keys this operation declares (audit projection, ADR 0004 §5). */
-  readonly resourceKeys: readonly string[];
 };
 
 export type OperationRegistry = readonly OperationRegistryEntry[];
@@ -122,7 +126,11 @@ export type CanonicalRequest = {
   readonly headers: readonly (readonly [string, string])[];
   /** Hex SHA-256 of the exact body bytes; the empty body hashes to the digest of zero bytes. */
   readonly bodySha256: string;
-  /** Sorted `[key, value]` pairs. */
+  /**
+   * Sorted `[slot, segment]` pairs extracted from `path` by the matched
+   * registry entry's `pathTemplate` — never supplied by the caller. `[]` for a
+   * `generic_request` (no match) (G1a review M8).
+   */
   readonly resources: readonly (readonly [string, string])[];
   readonly operation: OperationRef;
 };
@@ -168,8 +176,9 @@ export type ApprovalSubject = {
 
 /**
  * `lookupOperation` — pure. The entry whose provider, channel, method and
- * path template match the CANONICAL method and path; `null` when none does
- * (the caller then uses `GenericOperation` and no declared headers). More
+ * path template match the CANONICAL method and path, with the slot values it
+ * bound; `null` when none does (the caller then uses `GenericOperation`, no
+ * declared headers and no resources). More
  * than one match is a registry defect, refused at registry load, never
  * resolved by order. G1b implements.
  */
@@ -179,7 +188,7 @@ export type LookupOperation = (input: {
   readonly channel: ExecutorChannel;
   readonly method: MethodFor[ExecutorChannel];
   readonly path: string;
-}) => OperationRegistryEntry | null;
+}) => { readonly entry: OperationRegistryEntry; readonly resources: readonly (readonly [string, string])[] } | null;
 
 /**
  * `canonicalizeRequest` — pure, total. `providerSlug` comes from the account

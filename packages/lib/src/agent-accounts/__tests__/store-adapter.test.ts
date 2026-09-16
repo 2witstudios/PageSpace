@@ -16,7 +16,9 @@ describe('decideResolve (ADR 0005 F1–F5, F10; §10.3–5)', () => {
   it.todo('given kind password and channel http-executor, should return kind_not_resolvable; and ResolvableBy<http-executor> should exclude password (@ts-expect-error) [§10.3]');
   it.todo('given kind password and channel browser-worker, should return ok [§10.3]');
   it.todo('given a grant whose aud is not an executor channel, should be unrepresentable by type and kind_not_resolvable if reached [F1]');
-  it.todo('given version one behind current inside rotationGraceMs, should return ok for a grant that named the old version [§10.4]');
+  it.todo('given version one behind current inside rotationGraceMs, should return ok for a grant that named the old version and was issued before rotatedAt [§10.4]');
+  it.todo('given version one behind current inside rotationGraceMs but grant.iat >= rotatedAt, should return version_mismatch [§10.4; G1a review M7]');
+  it.todo('given revoke after a rotation, should clear previousVersion and rotatedAt so the old version returns revoked, never grace [§2.2; G1a review M7]');
   it.todo('given version one behind current outside rotationGraceMs, should return version_mismatch [§10.4]');
   it.todo('given stored bindings whose policyVersion differs from those the grant bindingDigest was computed over, should return binding_mismatch [§10.5; PR #2637 P1]');
   it.todo('given stored bindings with a changed ownerRef or allowedOrigins versus the grant bindingDigest, should return binding_mismatch [§10.5]');

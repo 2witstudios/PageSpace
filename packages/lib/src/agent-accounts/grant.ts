@@ -22,6 +22,7 @@
  * expected (Control Board §7.5).
  */
 import type { AgentDispatchPayload } from '../auth/agent-dispatch-payload';
+import type { StoreLimits } from './store/store-adapter';
 import type { AccountId, AccountKind, AccountStatus, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 
 // ---------------------------------------------------------------------------
@@ -291,6 +292,16 @@ export type ExpectedBinding = {
   readonly accountStatus: AccountStatus;
   readonly accountDriveId: DriveId | null;
   readonly currentCredentialVersion: CredentialVersion;
+  /**
+   * PLANE-ATTESTED rotation facts (`agent_account_secret_versions`, written
+   * only by the plane's CAS). A grant naming `previousCredentialVersion` is
+   * admitted only while `now < rotatedAt + rotationGraceMs` AND
+   * `grant.iat < rotatedAt` — a grant issued after the rotation never gets the
+   * old material. Both null when there is no admissible previous version;
+   * `revoke` clears them (ADR 0004 F5a; G1a review M7).
+   */
+  readonly previousCredentialVersion: CredentialVersion | null;
+  readonly rotatedAt: number | null;
   readonly currentPolicyVersion: PolicyVersion;
   readonly delegation: DelegationFact;
   /**
@@ -324,6 +335,8 @@ export type VerifyGrantInput = {
   readonly approval: ApprovalFact;
   readonly verify: Ed25519Verify;
   readonly hash: HashBytes;
+  /** The plane's frozen grace window (ADR 0005 §2.2), injected so F5a and `decideResolve` agree. */
+  readonly rotationGraceMs: StoreLimits['rotationGraceMs'];
 };
 
 /** `parseGrant` — schema + structural sanity only (F1). G1b implements. */
