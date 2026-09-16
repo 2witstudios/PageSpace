@@ -109,7 +109,10 @@ export const pinnedFetch: PinnedFetch = (url, init) => {
   const target = new URL(url);
   const isTls = target.protocol === 'https:';
   const request = isTls ? https.request : http.request;
-  const hostnameIsIp = isIP(target.hostname.replace(/^\[|\]$/g, '')) !== 0;
+  // URL keeps IPv6 literals bracketed; node:https would check the certificate
+  // against "[::1]". Pass the bare host (Node still brackets it in Host).
+  const hostname = target.hostname.replace(/^\[|\]$/g, '');
+  const hostnameIsIp = isIP(hostname) !== 0;
   // Defaults global fetch supplied and node:http does not: a User-Agent (GitHub
   // REST rejects requests without one) and, for a body, its byte length (Node
   // otherwise streams it chunked, which some servers refuse with 411). Caller
@@ -126,7 +129,7 @@ export const pinnedFetch: PinnedFetch = (url, init) => {
   return new Promise<Response>((resolve, reject) => {
     const req = request({
       protocol: target.protocol,
-      hostname: target.hostname,
+      hostname,
       port: target.port || undefined,
       path: `${target.pathname}${target.search}`,
       method,
@@ -137,7 +140,7 @@ export const pinnedFetch: PinnedFetch = (url, init) => {
       // connected to an address from an earlier validation.
       agent: false,
       // TLS verifies the certificate against the hostname, never the pinned IP.
-      ...(isTls && !hostnameIsIp ? { servername: target.hostname } : {}),
+      ...(isTls && !hostnameIsIp ? { servername: hostname } : {}),
     });
 
     let activeResponse: http.IncomingMessage | null = null;
@@ -170,14 +173,22 @@ export const pinnedFetch: PinnedFetch = (url, init) => {
       if (NULL_BODY_STATUSES.has(status)) {
         res.resume();
       } else {
-        responseBody = Readable.toWeb(decodeBody(res, res.headers['content-encoding'])) as ReadableStream;
+        // A HEAD response or a zero-length body has nothing to decode; running a
+        // decoder over it fails with "unexpected end of file" where fetch reads ''.
+        const hasNoBody = method.toUpperCase() === 'HEAD' || res.headers['content-length'] === '0';
+        const contentEncoding = hasNoBody ? undefined : res.headers['content-encoding'];
+        responseBody = Readable.toWeb(decodeBody(res, contentEncoding)) as ReadableStream;
       }
+
+      // Response rejects a reason phrase outside HTAB / SP / VCHAR / obs-text;
+      // fetch drops such a phrase rather than failing the request.
+      const statusText = /^[\t\x20-\x7e\x80-\xff]*$/.test(res.statusMessage ?? '') ? (res.statusMessage ?? '') : '';
 
       // Response only represents 200-599; node:http accepts any three-digit
       // status. Throwing here would escape the socket listener uncaught and
       // leave this promise pending forever, so refuse it as a failed request.
       try {
-        resolve(new Response(responseBody, { status, statusText: res.statusMessage ?? '', headers: responseHeaders }));
+        resolve(new Response(responseBody, { status, statusText, headers: responseHeaders }));
       } catch {
         res.destroy();
         reject(new Error(`Upstream returned an unsupported HTTP status (${status})`));
