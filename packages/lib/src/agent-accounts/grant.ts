@@ -223,10 +223,26 @@ export type ApprovalFact =
   | { readonly kind: 'policy'; readonly policyVersion: PolicyVersion; readonly expired: boolean; readonly limitsExceeded: boolean }
   | { readonly kind: 'none' };
 
-/** The delegation row's facts (ADR 0004 §4.4). */
+/**
+ * The delegation row's facts (ADR 0004 §4.4). A delegation is consent from ONE
+ * human for ONE account on ONE agent page: the verifier compares
+ * `delegationId`, `accountId`, `agentPageId` (against `grant.agentPageId`) and
+ * `delegatedBy` (against `grant.human.userId`), so a delegation recorded for
+ * page P by user U never verifies for page Q or human V (G1a review H3).
+ */
 export type DelegationFact =
   | { readonly kind: 'live_session' }
-  | { readonly kind: 'delegation'; readonly delegationId: DelegationId; readonly accountId: AccountId; readonly expired: boolean; readonly revoked: boolean }
+  | {
+      readonly kind: 'delegation';
+      readonly delegationId: DelegationId;
+      readonly accountId: AccountId;
+      /** `agent_account_delegations.agentPageId`; null only for a delegation to the global assistant. */
+      readonly agentPageId: AgentPageId | null;
+      /** `agent_account_delegations.delegatedByUserId`. */
+      readonly delegatedBy: UserId;
+      readonly expired: boolean;
+      readonly revoked: boolean;
+    }
   | { readonly kind: 'none' };
 
 /**

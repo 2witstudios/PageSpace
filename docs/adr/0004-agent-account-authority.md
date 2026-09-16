@@ -159,7 +159,7 @@ Provider tool catalogues (`integrations/providers/*.ts`) are reclassified to thi
 
 ### 4.4 Delegation and binding invalidation
 
-- **Unattended run** (cron, workflow, a worker dispatched with no live session): the authority requires a `agent_account_delegations` row `(delegationId, accountId, agentPageId, delegatedBy, expiresAt, revokedAt, scope)` that is unexpired and unrevoked; the grant carries `delegationId` and `human.sessionId = null`. No delegation → `no_delegation`.
+- **Unattended run** (cron, workflow, a worker dispatched with no live session): the authority requires a `agent_account_delegations` row `(delegationId, accountId, agentPageId, delegatedBy, expiresAt, revokedAt, scope)` that is unexpired and unrevoked **and names this account, this agent page and this human** — the verifier's `DelegationFact` carries all four ids and F7 compares each against the signed grant, so a delegation for page P by user U never serves page Q or human V (G1a review H3); the grant carries `delegationId` and `human.sessionId = null`. No delegation → `no_delegation`.
 - **Invalidation** is one mechanism: `policyVersion` bumps whenever the account's owner, tenant, origins, operations, approval policy, or bound agent page changes; when the agent page is copied, moved across drives, or has its ownership transferred; when the bound agent's instructions or tool surface change (Λ15); and when drive membership of the owner changes. Every bump is written to the plane through `rebind` (ADR 0005 §2.2) under the consent of the human whose action caused it; a grant issued under the previous `policyVersion` is `policy_epoch` at the verifier and `binding_mismatch` at the plane. Bindings are therefore invalidated, not re-evaluated by whoever views the conversation later.
 
 ## 5. Decision D4 — audit record shape (frozen; `packages/lib/src/agent-accounts/audit.ts`)
@@ -188,7 +188,7 @@ Provider tool catalogues (`integrations/providers/*.ts`) are reclassified to thi
 | F4a | `human.userId`, `agentPageId`, `conversationId` or `runId` ≠ the presenter's current execution principals | `principal_mismatch` |
 | F5 | `accountId` unknown, revoked, or `credentialVersion` ≠ current | `version_mismatch` (unknown and revoked collapse into it toward the presenter) |
 | F6 | `policyVersion` ≠ current | `policy_epoch` |
-| F7 | `delegationId` null while `human.sessionId` null; delegation expired/revoked/foreign account | `no_delegation` |
+| F7 | `delegationId` null while `human.sessionId` null; delegation expired/revoked; delegation fact whose `delegationId`, `accountId`, `agentPageId` or `delegatedBy` ≠ the grant's `delegationId`, `accountId`, `agentPageId` or `human.userId` | `no_delegation` |
 | F8 | `operation` ≠ the presented request's operation; `requestDigest` ≠ recomputed digest | `digest_mismatch` (constant-time compare) |
 | F9 | `sandbox` present and `(instanceId, generation)` ≠ the presenter's current binding | `generation_mismatch` |
 | F10 | `exp - iat > 15 min`; `iat > now + skew`; `now < nbf`; `now > exp` | `ttl_too_long` / `clock_skew` / `not_yet_valid` / `expired` |
@@ -284,6 +284,7 @@ Adapters (I/O, G1b): `grant-repository.ts` (nonce consume, approvals, delegation
 24. Given a grant whose `bindingDigest` was computed over bindings that differ from the store's copy in owner or origins, the plane returns `binding_mismatch` (ADR 0005 §10.5); the grant type requires the field (a grant without it is `malformed`).
 25. Given a canonical request whose PATH contains a token-shaped segment (`/v1/tokens/ghp_…`) and whose `resources` carry an undeclared key, `buildAuditRecord` produces a record containing **no substring** of either: the path is present only as `pathDigest`, and the undeclared resource is absent entirely. Two requests to the same path still produce the same `pathDigest`, and two different paths produce different ones (G1b review amendment; §5).
 26. Given query pairs `?to=a+b`/`?to=a%2Bb`, `?q=/safe`/`?q=%2Fsafe` and `?x=a&b`/`?x=a%26b`, `digestRequest` returns different digests for each pair; given lower-case escape hex or an escaped unreserved character, the same digest as the normalized form; given a body with and without a correct `content-length`, the same digest; given an admitted header value containing CR or LF, or a `content-length` that disagrees with the body, `canonicalizeRequest` refuses `malformed`. The §8.13 round-trip input is built verbatim, never re-encoded by the test (G1b review amendment; §3.2).
+27. Given `human.sessionId = null` and a live, unexpired delegation fact for this account whose `agentPageId` names another agent page, `no_delegation`; whose `delegatedBy` names another user than `grant.human.userId`, `no_delegation`; whose four ids all match, the delegation check passes (G1a review H3).
 
 ## 9. Consequences
 

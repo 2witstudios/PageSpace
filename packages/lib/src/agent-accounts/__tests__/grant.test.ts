@@ -25,6 +25,9 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it.todo('given policyVersion one behind current, should return policy_epoch [0004 §8.6]');
   it.todo('given human.sessionId null and delegationId null, should return no_delegation [0004 §8.7]');
   it.todo('given an expired or revoked delegation fact, should return no_delegation [0004 §8.7]');
+  it.todo('given a live delegation fact for this account whose agentPageId names another agent page than grant.agentPageId, should return no_delegation [0004 §8.27; G1a review H3]');
+  it.todo('given a live delegation fact whose delegatedBy is another user than grant.human.userId, should return no_delegation [0004 §8.27]');
+  it.todo('given a live delegation fact whose delegationId, accountId, agentPageId and delegatedBy all match the grant, should pass the delegation check [0004 §8.27]');
   it.todo('given a request body differing by one byte from the digested one, should return digest_mismatch [0004 §8.8]');
   it.todo('given headers reordered, host uppercased, or :443 omitted, should verify ok (digest identical) [0004 §8.8]');
   it.todo('given operation differing from the presented request operation, should return digest_mismatch [0004 F8]');

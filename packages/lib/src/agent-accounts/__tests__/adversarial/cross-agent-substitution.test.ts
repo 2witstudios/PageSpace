@@ -9,4 +9,5 @@ describe('adversarial: cross-agent-substitution', () => {
   it.todo('given a drive-scoped MCP token whose ceiling excludes the account drive, should read the account as nonexistent (ceiling first) [B0 B-10]');
   it.todo('given a grant for account X and a request naming account Y in resources, should return digest_mismatch');
   it.todo('given the same human, two agent pages, and a delegation for only one, should deny the other with no_delegation');
+  it.todo('given a delegation recorded for agent page P by user U and an unattended run of agent page Q (or acting as human V) presenting a grant naming that delegationId, should return no_delegation (the fact carries agentPageId and delegatedBy) [G1a review H3]');
 });
