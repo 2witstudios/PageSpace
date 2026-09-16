@@ -25,6 +25,7 @@ import { mintAgentSecret, isAgentSecretShape } from '../auth/agent/secret';
 import { agentSyntheticEmail } from '../auth/agent/reserved-email';
 import { decideAgentSignin, type AgentSigninDecision } from '../auth/agent/signin-decision';
 import { provisionHomeDriveIfNeeded } from '../onboarding/home-drive';
+import { loggers } from '../logging/logger-config';
 
 /** Prefix of the claim token an agent hands a human (auth.md "Fund"). Hash-only at rest. */
 export const AGENT_CLAIM_TOKEN_PREFIX = 'ps_claim';
@@ -110,7 +111,14 @@ export async function createAgentAccount(input: CreateAgentAccountInput): Promis
     throw error;
   }
 
-  await provisionHomeDriveIfNeeded(userId);
+  // The account is committed, and the secret below exists nowhere else — a
+  // provisioning failure must not throw it away. `provisionHomeDriveIfNeeded`
+  // is idempotent, so a later sign-in can retry it (passkey signup's posture).
+  try {
+    await provisionHomeDriveIfNeeded(userId);
+  } catch (error) {
+    loggers.auth.error('Failed to provision Home drive for agent', error as Error, { userId });
+  }
 
   return {
     ok: true,

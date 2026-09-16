@@ -13,7 +13,24 @@
  *   DATABASE_URL=postgresql://user:password@localhost:5433/pagespace_test \
  *     bun run --filter '@pagespace/lib' test:integration -- src/services/__tests__/agent-identities.integration.test.ts
  */
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, vi } from 'vitest';
+
+// Real provisioning by default; a test flips the flag to prove a failure after
+// commit never swallows the one-time secret.
+const homeDrive = vi.hoisted(() => ({ failNext: false }));
+vi.mock('../../onboarding/home-drive', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../onboarding/home-drive')>();
+  return {
+    ...actual,
+    provisionHomeDriveIfNeeded: async (userId: string) => {
+      if (homeDrive.failNext) {
+        homeDrive.failNext = false;
+        throw new Error('simulated home drive failure');
+      }
+      return actual.provisionHomeDriveIfNeeded(userId);
+    },
+  };
+});
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
@@ -113,6 +130,16 @@ describe('createAgentAccount', () => {
     const home = await db.select({ id: drives.id }).from(drives)
       .where(and(eq(drives.ownerId, result.data.userId), eq(drives.kind, 'HOME')));
     expect(home).toHaveLength(1);
+  });
+
+  it('given home drive provisioning fails after the commit, should still return the one-time secret (the account exists; provisioning is retried lazily)', async () => {
+    homeDrive.failNext = true;
+
+    const result = await signUp(await issueChallenge());
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect((await verifyAgentSecret({ secret: result.data.secret, now: new Date() })).decision).toEqual({ status: 'ok' });
   });
 
   it('given a fresh agent (D-31 option A), should be refused by the isEmailVerified gate that guards DMs, invites and uploads', async () => {
