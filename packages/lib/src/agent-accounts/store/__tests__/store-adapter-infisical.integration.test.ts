@@ -17,15 +17,17 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
-import { createHash } from 'node:crypto';
+import { createHash, createPublicKey, generateKeyPairSync, sign as nodeSign, verify as nodeVerify } from 'node:crypto';
 import { get } from 'node:http';
 import type { AccountId, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalOrigin } from '../../canonical-request';
+import { canonicalJson } from '../../canonical-json';
 import type {
   AgentAccountGrant,
   ApprovalId,
   BindingDigest,
   ConversationId,
+  Ed25519Verify,
   GrantId,
   GrantIssuer,
   HashBytes,
@@ -38,7 +40,7 @@ import type {
   SessionId,
   UserId,
 } from '../../grant';
-import type { PlaneBindings, PolicyDigest, VerifiedGrant } from '../store-adapter';
+import type { OwnerConsent, PlaneBindings, PolicyDigest, VerifiedGrant } from '../store-adapter';
 import { digestBindings } from '../digest-bindings';
 import { createInfisicalClient } from '../infisical-client';
 import { createPlaneMetadataRepository, type PlaneMetadataRepository } from '../plane-metadata-repository';
@@ -49,6 +51,21 @@ const INFISICAL_ADMIN_TOKEN = process.env.INFISICAL_DEV_ADMIN_TOKEN;
 const METADATA_URL = process.env.PLANE_METADATA_DEV_URL ?? 'postgres://plane_metadata:plane_metadata@127.0.0.1:55433/plane_metadata';
 
 const hash: HashBytes = (bytes) => createHash('sha3-256').update(bytes).digest('hex');
+const consentKey = generateKeyPairSync('ed25519');
+const CONSENT_PUBLIC_KEY = new Uint8Array(consentKey.publicKey.export({ type: 'spki', format: 'der' }));
+const verifyEd25519: Ed25519Verify = (message, signature, publicKey) =>
+  nodeVerify(null, message, createPublicKey({ key: Buffer.from(publicKey), type: 'spki', format: 'der' }), signature);
+
+function ownerConsentTo(bindings: PlaneBindings, consentingUserId = 'u1'): OwnerConsent {
+  const fields = {
+    consentId: `consent-${consentingUserId}-${bindings.policyVersion}`,
+    consentingUserId: consentingUserId as UserId,
+    stepUpChallengeId: 'challenge-itest',
+    bindingsDigest: digestBindings({ bindings, hash }),
+    issuedAt: Date.now(),
+  };
+  return { ...fields, signature: nodeSign(null, new TextEncoder().encode(canonicalJson(fields)), consentKey.privateKey).toString('base64') };
+}
 const NOW = Date.now();
 const TENANT_A = `user:itest-${NOW}-a` as TenantId;
 const TENANT_B = `user:itest-${NOW}-b` as TenantId;
@@ -167,6 +184,8 @@ function makeAdapter({ wrapMetadata = (m: PlaneMetadataRepository) => m }: { rea
     resolveCredentials: async ({ identityId }) => identities[identityId] ?? null,
     hash,
     now: () => Date.now(),
+    consentPublicKey: CONSENT_PUBLIC_KEY,
+    verify: verifyEd25519,
   });
 }
 
@@ -800,6 +819,119 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const row = await pool.query('SELECT revoke_reason FROM agent_account_secret_versions WHERE tenant_id = $1 AND account_id = $2 AND kind = $3', [TENANT_A, accountId, 'api_key']);
     const actual = row.rows[0]?.revoke_reason ?? null;
     const expected = 'rotation_replay';
+    expect(actual).toEqual(expected);
+  });
+
+  // G1a review H2 (ADR 0005 §2.2 rebind, §10.21): the one path that rewrites the plane's bindings,
+  // CAS on policyVersion under the per-secret lock, gated on an owner consent to exactly the new
+  // bindings. After it, a grant signed over the OLD bindings no longer resolves; one over the new does.
+  it('given rebind with a manage identity and an owner consent to exactly the next bindings, should rewrite the plane bindings so only grants over the new bindings resolve', async () => {
+    const adapter = makeAdapter();
+    const accountId = `acct-rebind-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: 'policy-digest-fixture' as PolicyDigest, kind: 'api_key' };
+    const next: PlaneBindings = { ...bindings, allowedOrigins: [...bindings.allowedOrigins, 'https://uploads.example.com' as CanonicalOrigin], policyVersion: 2 as PolicyVersion, policyDigest: 'policy-digest-widened' as PolicyDigest };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const manageIdentity = { ...identity, audience: 'manage' as const };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    const rebound = await adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, consent: ownerConsentTo(next), identity: manageIdentity });
+    const described = await adapter.describe({ ref, identity });
+    const oldGrant = makeGrant({ accountId, bindingDigest: digestBindings({ bindings, hash }) });
+    const newGrant = makeGrant({ accountId, bindingDigest: digestBindings({ bindings: next, hash }) });
+
+    const actual = {
+      rebound,
+      bindings: described.ok ? described.bindings : null,
+      oldGrant: (await adapter.resolve({ ref, version: 1 as never, grant: oldGrant, identity })).ok ? 'resolved' : 'refused',
+      newGrant: (await adapter.resolve({ ref, version: 1 as never, grant: newGrant, identity })).ok ? 'resolved' : 'refused',
+    };
+    const expected = { rebound: { ok: true, policyVersion: 2 }, bindings: next, oldGrant: 'refused', newGrant: 'resolved' };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given rebind with a wrong-tenant identity, an absent ref, a consent from someone other than the stored owner, or a stale expectedVersion, should refuse with not_found, not_found, consent_invalid and version_conflict and leave the bindings untouched', async () => {
+    const adapter = makeAdapter();
+    const accountId = `acct-rebind-refusals-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: 'policy-digest-fixture' as PolicyDigest, kind: 'api_key' };
+    const next: PlaneBindings = { ...bindings, policyVersion: 2 as PolicyVersion, policyDigest: 'policy-digest-widened' as PolicyDigest };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const manageIdentity = { ...identity, audience: 'manage' as const };
+    const wrongTenantManage = { tenantId: TENANT_B, identityId: identityBWrongTenant.identityId, blastRadius: 'tenant' as const, audience: 'manage' as const };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    const actual = {
+      wrongTenant: await adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, consent: ownerConsentTo(next), identity: wrongTenantManage }),
+      absent: await adapter.rebind({ ref: { ...ref, accountId: `acct-rebind-absent-${NOW}` as AccountId }, expectedVersion: 1 as PolicyVersion, bindings: next, consent: ownerConsentTo(next), identity: manageIdentity }),
+      notOwner: await adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, consent: ownerConsentTo(next, 'attacker'), identity: manageIdentity }),
+      stale: await adapter.rebind({ ref, expectedVersion: 7 as PolicyVersion, bindings: next, consent: ownerConsentTo(next), identity: manageIdentity }),
+      bindingsAfter: await adapter.describe({ ref, identity }).then((described) => (described.ok ? described.bindings : null)),
+    };
+    const expected = {
+      wrongTenant: { ok: false, reason: 'not_found' },
+      absent: { ok: false, reason: 'not_found' },
+      notOwner: { ok: false, reason: 'consent_invalid' },
+      stale: { ok: false, reason: 'version_conflict' },
+      bindingsAfter: bindings,
+    };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given two concurrent rebinds from the same expectedVersion, should apply exactly one and return version_conflict for the other', async () => {
+    const adapter = makeAdapter();
+    const accountId = `acct-rebind-race-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: 'policy-digest-fixture' as PolicyDigest, kind: 'api_key' };
+    const nextA: PlaneBindings = { ...bindings, policyVersion: 2 as PolicyVersion, policyDigest: 'policy-digest-a' as PolicyDigest };
+    const nextB: PlaneBindings = { ...bindings, policyVersion: 2 as PolicyVersion, policyDigest: 'policy-digest-b' as PolicyDigest };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const manageIdentity = { ...identity, audience: 'manage' as const };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    const results = await Promise.all([
+      adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: nextA, consent: ownerConsentTo(nextA), identity: manageIdentity }),
+      adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: nextB, consent: ownerConsentTo(nextB), identity: manageIdentity }),
+    ]);
+    const actual = results.map((result) => (result.ok ? 'rebind' : result.reason)).sort();
+    const expected = ['rebind', 'version_conflict'];
+    expect(actual).toEqual(expected);
+  });
+
+  it('given rebind while the plane metadata DB is unavailable, should return store_unavailable rather than throwing', async () => {
+    const outage = async (): Promise<never> => {
+      throw new Error('synthetic plane metadata outage');
+    };
+    const adapter = makeAdapter({ wrapMetadata: (m) => ({ ...m, read: outage }) });
+    const ref = { tenantId: TENANT_A, accountId: `acct-rebind-outage-${NOW}` as AccountId, kind: 'api_key' as const };
+    const next: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 2 as PolicyVersion, policyDigest: 'policy-digest-fixture' as PolicyDigest, kind: 'api_key' };
+    const manageIdentity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const, audience: 'manage' as const };
+
+    const actual = await adapter
+      .rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, consent: ownerConsentTo(next), identity: manageIdentity })
+      .catch((error: unknown) => ({ threw: String(error) }));
+    const expected = { ok: false, reason: 'store_unavailable' };
+    expect(actual).toEqual(expected);
+  });
+
+  // G1a review M7 (ADR 0005 §2.2 revoke): revocation clears previousVersion and rotatedAt, so no
+  // rotation grace — and no plane attestation of a previous version — survives a revoke.
+  it('given revoke after a rotation, should clear the previous version and rotation time', async () => {
+    const adapter = makeAdapter();
+    const accountId = `acct-revoke-clears-grace-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: 'policy-digest-fixture' as PolicyDigest, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    await adapter.rotate({ ref, expectedVersion: 1 as never, next: { kind: 'api_key', material: { value: 'sk-v2', placement: { in: 'header', name: 'Authorization' } } }, bindings, identity: refreshIdentity });
+    await adapter.revoke({ ref, reason: 'owner_revoked', identity });
+
+    const row = await pool.query('SELECT previous_version, rotated_at FROM agent_account_secret_versions WHERE tenant_id = $1 AND account_id = $2 AND kind = $3', [TENANT_A, accountId, 'api_key']);
+    const described = await adapter.describe({ ref, identity });
+    const actual = { previousVersion: row.rows[0]?.previous_version ?? 'no row', rotatedAt: row.rows[0]?.rotated_at ?? 'no row', describedRotatedAt: described.ok ? described.rotatedAt : 'not described' };
+    const expected = { previousVersion: null, rotatedAt: null, describedRotatedAt: null };
     expect(actual).toEqual(expected);
   });
 });

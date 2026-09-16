@@ -140,7 +140,7 @@ describe('decideResolve', () => {
 
   it('given version one behind current inside rotationGraceMs, should return ok for a grant that named the old version', () => {
     const actual = decideResolve({
-      grant: makeGrant({ credentialVersion: 3 as CredentialVersion }),
+      grant: makeGrant({ credentialVersion: 3 as CredentialVersion, iat: NOW - 2_000 }),
       ref: REF,
       stored: makeStored({ currentVersion: 4 as CredentialVersion, previousVersion: 3 as CredentialVersion, rotatedAt: NOW - 1_000 }),
       now: NOW,
@@ -160,6 +160,58 @@ describe('decideResolve', () => {
       hash: fakeHash,
     });
     expect(actual).toEqual({ ok: false, reason: 'version_mismatch' });
+  });
+
+  // G1a review M7 (ADR 0005 §8 F3, the same rule as ADR 0004 F5a): grace is for a grant IN FLIGHT
+  // across the rotation. One issued at or after `rotatedAt` never gets the old version.
+  it('given a grant naming the previous version issued at or after rotatedAt, inside rotationGraceMs, should return version_mismatch', () => {
+    const rotatedAt = NOW - 1_000;
+    const actual = [rotatedAt, rotatedAt + 1].map((iat) =>
+      decideResolve({
+        grant: makeGrant({ credentialVersion: 3 as CredentialVersion, iat }),
+        ref: REF,
+        stored: makeStored({ currentVersion: 4 as CredentialVersion, previousVersion: 3 as CredentialVersion, rotatedAt }),
+        now: NOW,
+        rotationGraceMs: ROTATION_GRACE_MS,
+        hash: fakeHash,
+      }),
+    );
+    const expected = [{ ok: false, reason: 'version_mismatch' }, { ok: false, reason: 'version_mismatch' }];
+    expect(actual).toEqual(expected);
+  });
+
+  // G1a review M7: the window is `now < rotatedAt + ROTATION_GRACE_MS` — the last admitted instant is
+  // one ms before the boundary, and the boundary itself is outside.
+  it('given a pre-rotation grant naming the previous version, should admit it one ms before rotatedAt + rotationGraceMs and refuse it at that instant', () => {
+    const rotatedAt = NOW - ROTATION_GRACE_MS;
+    const decideAt = (now: number) =>
+      decideResolve({
+        grant: makeGrant({ credentialVersion: 3 as CredentialVersion, iat: rotatedAt - 1 }),
+        ref: REF,
+        stored: makeStored({ currentVersion: 4 as CredentialVersion, previousVersion: 3 as CredentialVersion, rotatedAt }),
+        now,
+        rotationGraceMs: ROTATION_GRACE_MS,
+        hash: fakeHash,
+      });
+    const actual = { justInside: decideAt(NOW - 1), atBoundary: decideAt(NOW) };
+    const expected = { justInside: { ok: true }, atBoundary: { ok: false, reason: 'version_mismatch' } };
+    expect(actual).toEqual(expected);
+  });
+
+  // G1a review H1 (ADR 0005 §10.20): a main-DB writer can widen the approval policy, a resource
+  // restriction or the bound agent pages while leaving `policyVersion` untouched; only the
+  // `policyDigest` changes, and that alone must break the binding.
+  it('given stored bindings whose policyDigest differs from the one the grant bindingDigest covers, with policyVersion unchanged, should return binding_mismatch', () => {
+    const actual = decideResolve({
+      grant: makeGrant(),
+      ref: REF,
+      stored: makeStored({ bindings: { ...BINDINGS, policyDigest: 'policy-digest-widened' as PolicyDigest } }),
+      now: NOW,
+      rotationGraceMs: ROTATION_GRACE_MS,
+      hash: fakeHash,
+    });
+    const expected = { ok: false, reason: 'binding_mismatch' };
+    expect(actual).toEqual(expected);
   });
 
   it('given stored bindings whose policyVersion differs from those the grant bindingDigest was computed over, should return binding_mismatch', () => {

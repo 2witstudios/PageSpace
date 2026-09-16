@@ -97,13 +97,13 @@ describe('decideResolve (ADR 0005 F1-F5, F10; §10.3-5)', () => {
   });
 
   it('given version one behind current inside rotationGraceMs, should return ok for a grant that named the old version [§10.4]', () => {
-    const actual = decideResolve({ grant: grant({ credentialVersion: 3 as CredentialVersion }), ref: REF, stored: stored(), now: NOW, rotationGraceMs: 300_000, hash });
+    const actual = decideResolve({ grant: grant({ credentialVersion: 3 as CredentialVersion, iat: NOW - 2_000 }), ref: REF, stored: stored(), now: NOW, rotationGraceMs: 300_000, hash });
     expect(actual).toEqual({ ok: true });
   });
 
   it('given version one behind current outside rotationGraceMs, should return version_mismatch [§10.4]', () => {
     const actual = decideResolve({
-      grant: grant({ credentialVersion: 3 as CredentialVersion }),
+      grant: grant({ credentialVersion: 3 as CredentialVersion, iat: NOW - 2_000 }),
       ref: REF,
       stored: stored({ rotatedAt: NOW - 300_001 }),
       now: NOW,
@@ -156,9 +156,12 @@ describe('decideResolve (ADR 0005 F1-F5, F10; §10.3-5)', () => {
     expect(decideResolve({ grant: grant(), ref: REF, stored: stored({ revokedAt: NOW - 1 }), now: NOW, rotationGraceMs: 300_000, hash })).toEqual({ ok: false, reason: 'revoked' });
   });
 
-  it.todo('given version one behind current inside rotationGraceMs but grant.iat >= rotatedAt, should return version_mismatch [§10.4; G1a review M7]');
-  it.todo('given revoke after a rotation, should clear previousVersion and rotatedAt so the old version returns revoked, never grace [§2.2; G1a review M7]');
-  it.todo('given stored bindings whose policyDigest covers a wider approval policy scope, one more resourceRestrictions repo, or one more bound agent page than the grant bindingDigest, with policyVersion unchanged, should return binding_mismatch [§10.20; G1a review H1]');
+  it('given version one behind current inside rotationGraceMs but grant.iat >= rotatedAt, should return version_mismatch [§10.4; G1a review M7]', () => {
+    const actual = decideResolve({ grant: grant({ credentialVersion: 3 as CredentialVersion, iat: NOW - 1_000 }), ref: REF, stored: stored({ rotatedAt: NOW - 1_000 }), now: NOW, rotationGraceMs: 300_000, hash });
+    expect(actual).toEqual({ ok: false, reason: 'version_mismatch' });
+  });
+  it.todo('given revoke after a rotation, should clear previousVersion and rotatedAt so the old version returns revoked, never grace [§2.2; G1a review M7] — adapter I/O row, asserted in store/__tests__/store-adapter-infisical.integration.test.ts');
+  it.todo('given stored bindings whose policyDigest covers a wider approval policy scope, one more resourceRestrictions repo, or one more bound agent page than the grant bindingDigest, with policyVersion unchanged, should return binding_mismatch [§10.20; G1a review H1] — asserted in store/__tests__/decide-resolve.test.ts and store/__tests__/digest-plane-scope.test.ts');
 });
 
 describe('decideRebind (ADR 0005 §2.2, F15–F18, §10.21; G1a review H2)', () => {
