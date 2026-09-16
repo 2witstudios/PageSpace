@@ -149,6 +149,30 @@ describe('canonicalizeRequest refusals (ADR 0004 F18)', () => {
     expect(actual).toBe('malformed');
   });
 
+  it.each([
+    ['headers missing', { headers: undefined }],
+    ['headers null', { headers: null }],
+    ['headers an array', { headers: [['accept', 'x']] }],
+    ['a header value that is not a string', { headers: { accept: 42 } }],
+    ['body missing', { body: undefined }],
+    ['body a string', { body: '{"title":"hello"}' }],
+    ['declaredHeaders not an array', { declaredHeaders: 'x-trace-id' }],
+    ['a declared header that is not a string', { declaredHeaders: [7] }],
+    ['resources missing', { resources: undefined }],
+    ['resources an array', { resources: ['octo/hello'] }],
+    ['a resource value that is not a string', { resources: { repo: { id: 1 } } }],
+  ])('given untrusted input with %s, should refuse with malformed rather than throw', (_label, override) => {
+    const input = { ...makeInput(), ...override } as unknown as CanonicalRequestInput;
+    let actual: CanonicalizeRefusal | 'ok' | 'threw';
+    try {
+      const result = canonicalizeRequest(input);
+      actual = result.ok ? 'ok' : result.reason;
+    } catch {
+      actual = 'threw';
+    }
+    expect(actual).toBe('malformed');
+  });
+
   it('given a URL that does not parse, should refuse with malformed', () => {
     const actual = refusal({ url: 'https://' });
     expect(actual).toBe('malformed');
