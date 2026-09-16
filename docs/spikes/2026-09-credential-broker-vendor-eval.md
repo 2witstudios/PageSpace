@@ -679,7 +679,10 @@ configs:
   # (apps/web/src/app/api/user/integrations/route.ts:23), so an override starts PENDING: refused by
   # the proxy and not executed, until a tenant owner/admin approves the origin. Only approved origins
   # enter the tenant ACL; rejection or delete removes them. Custom providers created by non-admins follow
-  # the same pending rule. Regenerated on every approval, provider change or connection change. An ACL change is applied by regenerating the
+  # the same pending rule. Regenerated and executor-egress restarted on every approval, provider change or
+  # connection change, AND on every application rollout. `tenant-stack.sh up` regenerates the ACL before
+  # starting executor-egress, and the executor refuses to start if the mounted ACL's builtin-definition
+  # hash differs from the hash of its own builtinProviderList, so a moved builtin host cannot run stale. An ACL change is applied by regenerating the
   # config and restarting executor-egress (hot reload unverified at G2); until then that webhook is refused. Schema per smokescreen's egress ACL docs; verify at G2.
   # Residual: a host allowlist bounds destinations, not accounts. A compromised executor can still send
   # data to an attacker-owned account on an allowed shared host (e.g. api.github.com). Per-account origin
