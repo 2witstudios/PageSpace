@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'node:http';
 import zlib from 'node:zlib';
-import type { AddressInfo } from 'node:net';
+import net, { type AddressInfo } from 'node:net';
 import { pinnedFetch, DEFAULT_USER_AGENT } from './pinned-fetch';
 
 type Received = {
@@ -81,6 +81,33 @@ afterAll(async () => {
 });
 
 describe('pinnedFetch', () => {
+  it.each([['999'], ['600']])(
+    'given an upstream status %s that Response cannot represent, should reject instead of throwing inside the socket listener',
+    async (status) => {
+      // A raw socket, because node:http servers refuse to write such statuses.
+      const raw = net.createServer((socket) => {
+        socket.once('data', () => socket.end(`HTTP/1.1 ${status} Weird\r\nContent-Length: 2\r\n\r\nok`));
+      });
+      await new Promise<void>((resolve) => raw.listen(0, '127.0.0.1', resolve));
+      const rawPort = (raw.address() as AddressInfo).port;
+      try {
+        const outcome = await Promise.race([
+          pinnedFetch(`http://pinned-host.invalid:${rawPort}/hook`, { method: 'GET', pinnedAddresses: ['127.0.0.1'] }).then(
+            (response) => `resolved ${response.status}`,
+            (error: Error) => `rejected: ${error.message}`
+          ),
+          new Promise<string>((resolve) => setTimeout(() => resolve('HUNG'), 1000)),
+        ]);
+
+        const actual = outcome;
+        const expected = `rejected: Upstream returned an unsupported HTTP status (${status})`;
+        expect(actual).toEqual(expected);
+      } finally {
+        await new Promise<void>((resolve) => raw.close(() => resolve()));
+      }
+    }
+  );
+
   it.each([['gzip'], ['x-gzip'], ['deflate'], ['br'], ['deflate, gzip'], ['GZIP']])(
     'given a %s-encoded response, should decode it before the body is read (as fetch did)',
     async (coding) => {
