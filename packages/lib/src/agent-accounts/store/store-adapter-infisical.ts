@@ -48,6 +48,7 @@ import type { PlaneMetadataRepository } from './plane-metadata-repository';
 import { lockKeyFor } from './plane-metadata-repository';
 import { decideCas } from './decide-cas';
 import { decideRebind } from './decide-rebind';
+import { decideWriteBindings } from './decide-write-bindings';
 import { decideResolve } from './decide-resolve';
 import { withAdvisoryLock, type AdvisoryLockPool, type WithAdvisoryLockResult } from '@pagespace/db/advisory-lock';
 
@@ -170,6 +171,8 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
       // §2.2 revoke: "every future resolve returns revoked"). Refuse under the SAME lock a write
       // would use, before touching Infisical or the metadata row (Codex review PR #2646 P1).
       if (before !== null && before.revokedAt !== null) return { outcome: 'write_unverified' as const };
+      // Only `rebind` (owner consent) rewrites bindings; a put/rotate must carry the stored ones (H2).
+      if (!decideWriteBindings({ stored: before?.bindings ?? null, written: bindings }).ok) return { outcome: 'version_conflict' as const };
       const observedBefore = (before?.currentVersion ?? null) as CredentialVersion | null;
 
       const assumedNextVersion = ((observedBefore ?? 0) + 1) as CredentialVersion;
