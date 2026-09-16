@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { executeHttpRequest, type HttpRequest } from './http-executor';
+import { executeHttpRequest, MAX_RETRY_AFTER_MS, type HttpRequest } from './http-executor';
 import type { PinnedFetch } from './pinned-fetch';
 import type { IntegrationTargetDecision } from '../validation/validate-base-url';
 
@@ -167,6 +167,33 @@ describe('executeHttpRequest', () => {
 
     expect(result.success).toBe(true);
     expect(result.retries).toBe(1);
+  });
+
+  it.each([
+    ['a hostile Retry-After of ~23 days', '2000000', MAX_RETRY_AFTER_MS],
+    ['a non-numeric Retry-After', 'soon', 1000],
+    ['a negative Retry-After', '-5', 1000],
+  ])('given 429 with %s, should retry after a bounded delay', async (_label, retryAfter, expectedDelayMs) => {
+    mockFetch
+      .mockResolvedValueOnce(createMockResponse(429, { error: 'Too many requests' }, { 'Retry-After': retryAfter }))
+      .mockResolvedValueOnce(createMockResponse(200, { data: 'success' }));
+
+    const resultPromise = executeHttpRequest(
+      { url: 'https://api.example.com/data', method: 'GET' },
+      { maxRetries: 1, retryDelayMs: 1000 },
+      mockFetch as unknown as PinnedFetch,
+      allowAll
+    );
+
+    await vi.advanceTimersByTimeAsync(expectedDelayMs - 1);
+    const callsBeforeDelay = mockFetch.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(1);
+    const callsAfterDelay = mockFetch.mock.calls.length;
+    const result = await resultPromise;
+
+    const actual = { callsBeforeDelay, callsAfterDelay, success: result.success };
+    const expected = { callsBeforeDelay: 1, callsAfterDelay: 2, success: true };
+    expect(actual).toEqual(expected);
   });
 
   it('given max retries exceeded, should return last error', async () => {
