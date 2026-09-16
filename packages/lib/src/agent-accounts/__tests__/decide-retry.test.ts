@@ -38,6 +38,17 @@ describe('decideRetry', () => {
     expect(actual).toEqual({ action: 'report', outcome: { kind: 'upstream_failed', upstreamStatus: 503 } });
   });
 
+  it.each([502, 504])(
+    'given a non-idempotent class and a gateway %i, should report unknown — a gateway lost the origin response, so the write may have landed',
+    (status) => {
+      const actual = (['write', 'irreversible', 'privilege', 'unknown'] as const).map((operationClass) =>
+        decideRetry({ operationClass, failure: { kind: 'upstream_status', status }, attempt: 1, maxAttempts: 3 }),
+      );
+      const expected = [0, 1, 2, 3].map(() => ({ action: 'report', outcome: { kind: 'unknown' } }));
+      expect(actual).toEqual(expected);
+    },
+  );
+
   it('given class read and a 5xx upstream status, should allow a retry under a new grant while attempts remain', () => {
     const actual = decideRetry({ operationClass: 'read', failure: { kind: 'upstream_status', status: 502 }, attempt: 1, maxAttempts: 3 });
     expect(actual).toEqual({ action: 'retry_with_new_grant' });
