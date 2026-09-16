@@ -78,8 +78,8 @@ describe('buildInitArgs', () => {
   test('path', () => assert({ given: 'a resolved path', should: 'emit init <path>', actual: buildInitArgs('/workspace'), expected: ['init', '/workspace'] }));
 });
 describe('buildConfigArgs', () => {
-  test('global', () => assert({ given: 'global: true', should: 'include --global', actual: buildConfigArgs({ key: 'user.name', value: 'Bot', global: true }), expected: ['config', '--global', 'user.name', 'Bot'] }));
-  test('local', () => assert({ given: 'no global', should: 'omit --global', actual: buildConfigArgs({ key: 'user.name', value: 'Bot' }), expected: ['config', 'user.name', 'Bot'] }));
+  test('global', () => assert({ given: 'global: true', should: 'include --global', actual: buildConfigArgs({ key: 'user.name', value: 'Bot', global: true }), expected: ['config', '--global', '--', 'user.name', 'Bot'] }));
+  test('local', () => assert({ given: 'no global', should: 'omit --global', actual: buildConfigArgs({ key: 'user.name', value: 'Bot' }), expected: ['config', '--', 'user.name', 'Bot'] }));
 });
 describe('buildRemoteAddArgs', () => {
   test('adds a remote', () => assert({ given: 'name + url', should: 'emit remote add', actual: buildRemoteAddArgs({ name: 'origin', url: 'https://x/r.git' }), expected: ['remote', 'add', 'origin', 'https://x/r.git'] }));
@@ -164,18 +164,19 @@ describe('buildBranchArgs', () => {
 
 // ── remote ───────────────────────────────────────────────────────────────
 describe('buildFetchArgs', () => {
-  test('defaults', () => assert({ given: 'nothing', should: 'fetch origin', actual: buildFetchArgs({}), expected: ['fetch', 'origin'] }));
-  test('remote + branch', () => assert({ given: 'remote+branch', should: 'fetch remote branch', actual: buildFetchArgs({ remote: 'up', branch: 'main' }), expected: ['fetch', 'up', 'main'] }));
+  test('defaults', () => assert({ given: 'nothing', should: 'fetch origin', actual: buildFetchArgs({}), expected: ['fetch', '--', 'origin'] }));
+  test('remote + branch', () => assert({ given: 'remote+branch', should: 'fetch remote branch', actual: buildFetchArgs({ remote: 'up', branch: 'main' }), expected: ['fetch', '--', 'up', 'main'] }));
 });
 describe('buildPullArgs', () => {
-  test('rebase', () => assert({ given: 'rebase', should: '--rebase origin', actual: buildPullArgs({ rebase: true }), expected: ['pull', '--rebase', 'origin'] }));
-  test('plain', () => assert({ given: 'nothing', should: 'pull origin', actual: buildPullArgs({}), expected: ['pull', 'origin'] }));
-  test('remote + branch', () => assert({ given: 'remote + branch', should: 'pull remote branch', actual: buildPullArgs({ remote: 'up', branch: 'main' }), expected: ['pull', 'up', 'main'] }));
+  test('rebase', () => assert({ given: 'rebase', should: '--rebase origin', actual: buildPullArgs({ rebase: true }), expected: ['pull', '--rebase', '--', 'origin'] }));
+  test('plain', () => assert({ given: 'nothing', should: 'pull origin', actual: buildPullArgs({}), expected: ['pull', '--', 'origin'] }));
+  test('remote + branch', () => assert({ given: 'remote + branch', should: 'pull remote branch', actual: buildPullArgs({ remote: 'up', branch: 'main' }), expected: ['pull', '--', 'up', 'main'] }));
 });
 describe('buildPushArgs', () => {
-  test('force + upstream default', () => assert({ given: 'force + branch', should: '--force-with-lease -u origin branch', actual: buildPushArgs({ force: true, branch: 'feat' }), expected: ['push', '--force-with-lease', '-u', 'origin', 'feat'] }));
-  test('set_upstream false omits -u', () => assert({ given: 'set_upstream false', should: 'omit -u', actual: buildPushArgs({ branch: 'feat', set_upstream: false }), expected: ['push', 'origin', 'feat'] }));
-  test('no branch', () => assert({ given: 'nothing', should: '-u origin only', actual: buildPushArgs({}), expected: ['push', '-u', 'origin'] }));
+  test('force + upstream default', () => assert({ given: 'force + branch', should: '--force-with-lease -u -- origin branch', actual: buildPushArgs({ force: true, branch: 'feat' }), expected: ['push', '--force-with-lease', '-u', '--', 'origin', 'feat'] }));
+  test('set_upstream false omits -u', () => assert({ given: 'set_upstream false', should: 'omit -u', actual: buildPushArgs({ branch: 'feat', set_upstream: false }), expected: ['push', '--', 'origin', 'feat'] }));
+  test('no branch', () => assert({ given: 'nothing', should: '-u -- origin only', actual: buildPushArgs({}), expected: ['push', '-u', '--', 'origin'] }));
+  test('end-of-options precedes the free-string positionals', () => assert({ given: 'a flag-shaped branch that slipped past validation', should: 'sit after "--" so git treats it as a refspec, not an option', actual: buildPushArgs({ branch: '--force', set_upstream: false }), expected: ['push', '--', 'origin', '--force'] }));
 });
 
 // ── pr ───────────────────────────────────────────────────────────────────
