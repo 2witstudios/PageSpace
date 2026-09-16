@@ -1,7 +1,7 @@
 # Agent Signup — Threat Model
 
 - **Scope:** the two agent signup doors (API/auth.md and browser), the agent secret, the claim ceremony, and the billing link to a human owner. Contract: ADR 0005 (`docs/adr/0005-agent-accounts.md`).
-- **Date:** 2026-09-14 (Phase 0). Revised when [D-29] is answered (§6).
+- **Date:** 2026-09-14 (Phase 0). Revised when [D-31] is answered (§6).
 - **Posture:** zero trust as everywhere else in this repo — fail closed, opaque tokens hashed at rest, constant-shape errors, rate-limit every new endpoint, a control must reach where the effect lives.
 
 ## 1. Principals
@@ -9,7 +9,7 @@
 | Principal | What it holds | What it can do |
 |---|---|---|
 | **Anonymous IP** | Nothing. | Fetch metadata and `/auth.md`; request a PoW challenge; attempt signup (PoW + rate limits); attempt sign-in with a guessed secret (rate-limited, constant 401); start a claim from a claim token it somehow holds. |
-| **Unclaimed agent** | Its own `ps_agent_*` secret; the `ps_at_`/`ps_rt_` tokens it exchanged for; any `mcp_` keys it minted; its claim token. | Everything a free-tier user can do that costs nothing: drives, pages, keys, OAuth grants, API/CLI/MCP. **No AI spend** (402 `requires_funding`). Whether it can DM, invite or upload is [D-29] (§6). |
+| **Unclaimed agent** | Its own `ps_agent_*` secret; the `ps_at_`/`ps_rt_` tokens it exchanged for; any `mcp_` keys it minted; its claim token. | Everything a free-tier user can do that costs nothing: drives, pages, keys, OAuth grants, API/CLI/MCP. **No AI spend** (402 `requires_funding`). Whether it can DM, invite or upload is [D-31] (§6). |
 | **Claimed agent** | The same credentials (pre-claim tokens survive the claim). | Everything above, plus AI calls billed to its owner at the owner's tier. |
 | **Owner (human)** | A normal human account, signed in. | Claim an agent by user code; list, rotate, revoke or unlink the agents it owns; pays for their AI usage. |
 | **Server** | Hashes only: `secretHash`, `claimTokenHash`, `userCodeHash`, `challengeHash`. | Never holds a plaintext secret after the signup response is sent. |
@@ -60,9 +60,9 @@ At rest the server stores `hashToken(secret)` (SHA3-256) and a 12-character pref
 | T13 | Deployment where the door should not exist (onprem without opt-in). | `isAgentSignupEnabled` is the single predicate; disabled ⇒ routes and page 404; `decideAgentSignup` reports `disabled` before revealing any challenge state. | `enabled.ts`, `signup-decision.ts`. |
 | T14 | Issuer / URL injection into discovery documents. | `buildServerMetadata` and `buildAuthMd` derive every URL from the configured issuer only, never a request `Host`. | `metadata.ts`, `auth-md.ts`. |
 
-## 6. Unclaimed agents reaching humans — pending D-29
+## 6. Unclaimed agents reaching humans — pending D-31
 
-**pending D-29.** The decision whether an unclaimed agent may initiate DMs, invitations and uploads is open on the global Decisions list (D-29). It is implemented through exactly one mechanism — when `emailVerified` is stamped on the agent's `users` row (at signup, or at claim) — because the seven `isEmailVerified` gates and four `isNotNull(emailVerified)` filters already enforce it. No gate is edited either way. When the orchestrator posts the answer in the epic channel, this section is replaced by its one-sentence consequence for unclaimed agents, and Phase 1 stamps accordingly.
+**pending D-31.** The decision whether an unclaimed agent may initiate DMs, invitations and uploads is open on the global Decisions list (D-31). It is implemented through exactly one mechanism — when `emailVerified` is stamped on the agent's `users` row (at signup, or at claim) — because the seven `isEmailVerified` gates and four `isNotNull(emailVerified)` filters already enforce it. No gate is edited either way. When the orchestrator posts the answer in the epic channel, this section is replaced by its one-sentence consequence for unclaimed agents, and Phase 1 stamps accordingly.
 
 ## 7. Residual risk accepted
 
