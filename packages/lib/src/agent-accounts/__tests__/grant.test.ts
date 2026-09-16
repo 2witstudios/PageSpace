@@ -203,6 +203,8 @@ function run(grant: unknown, opts: RunOpts = {}) {
 }
 
 const deny = (reason: GrantDenyReason) => ({ ok: false as const, reason });
+/** An `ok` verdict: the grant as parsed, branded by the verifier with its audience (G1c R9). */
+const verified = (grant: AgentAccountGrant) => ({ ok: true as const, grant: { ...grant, [VERIFIED_GRANT]: grant.aud } });
 
 /** A concrete approval fact for the default grant, with the M3 fields filled in; override what a case varies. */
 const concreteFact = (overrides: Partial<Extract<ApprovalFact, { kind: 'concrete' }>> = {}): ApprovalFact => ({
@@ -331,7 +333,7 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it('given a well-formed grant signed by the issuer, bound to this run, request, nonce and approval, should return ok with the parsed grant', () => {
     const grant = makeGrant();
     const actual = run(grant);
-    expect(actual).toEqual({ ok: true, grant });
+    expect(actual).toEqual(verified(grant));
   });
 
   it('given a grant signed with the env-bridge key, should return bad_signature [0004 §8.4]', () => {
@@ -415,7 +417,7 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it('given callerCeiling.allowedDriveIds=[], should admit every drive [0004 §8.5]', () => {
     const grant = makeGrant({ callerCeiling: { allowedDriveIds: [], originatingMcpTokenId: null } });
     const actual = run(grant, { expected: { accountDriveId: 'drive_anything' as DriveId } });
-    expect(actual).toEqual({ ok: true, grant });
+    expect(actual).toEqual(verified(grant));
   });
 
   it('given a scoped ceiling and a global-assistant account with no drive, should return ceiling (a scoped credential never gets the benefit of a null drive)', () => {
@@ -525,7 +527,7 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
     it('given a grant for the previous version issued before the rotation, inside the grace window, should pass the version check', () => {
       const grant = makeGrant({ iat: R - 1, nbf: R - 1, exp: R + 600_000 });
       const actual = run(grant, { now: R + GRACE_MS - 1, expected: rotated(grant) });
-      expect(actual).toEqual({ ok: true, grant });
+      expect(actual).toEqual(verified(grant));
     });
 
     it('given the same grant at now = rotatedAt + rotationGraceMs, should return version_mismatch', () => {
@@ -572,7 +574,7 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it('given expected.accountStatus active, should pass the status check [0004 §8.28]', () => {
     const grant = makeGrant();
     const actual = run(grant, { expected: { accountStatus: 'active' } });
-    expect(actual).toEqual({ ok: true, grant });
+    expect(actual).toEqual(verified(grant));
   });
 
   it('given a live delegation fact for this account whose agentPageId names another agent page, or whose delegatedBy is another user, should return no_delegation [0004 §8.27]', () => {
@@ -584,13 +586,13 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
       run(grant, { expected: { human: grant.human, delegation: { ...live, delegatedBy: 'user_other' as UserId } } }),
       run(grant, { expected: { human: grant.human, delegation: live } }),
     ];
-    expect(actual).toEqual([deny('no_delegation'), deny('no_delegation'), deny('no_delegation'), { ok: true, grant }]);
+    expect(actual).toEqual([deny('no_delegation'), deny('no_delegation'), deny('no_delegation'), verified(grant)]);
   });
 
   it('given a live delegation for an unattended run, should verify ok', () => {
     const grant = makeGrant({ human: { userId: 'user_1' as UserId, sessionId: null }, delegationId: 'dlg_1' as DelegationId });
     const actual = run(grant, { expected: { human: grant.human } });
-    expect(actual).toEqual({ ok: true, grant });
+    expect(actual).toEqual(verified(grant));
   });
 
   it('given a live session but the adapter reports no live-session authority, should return no_delegation', () => {
@@ -608,7 +610,7 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
     const grant = makeGrant();
     const variant = digestOf({ ...REQUEST_INPUT, url: 'https://API.GITHUB.COM:443/repos/octo/hello/issues', headers: { Accept: 'application/json' } });
     const actual = run(grant, { requestDigest: variant });
-    expect(actual).toEqual({ ok: true, grant });
+    expect(actual).toEqual(verified(grant));
   });
 
   it('given operation differing from the presented request operation, should return digest_mismatch [0004 F8]', () => {
@@ -654,7 +656,7 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it('given a relay grant whose sandbox binding matches the presenter view, should verify ok', () => {
     const grant = makeGrant({ aud: 'relay-runner' });
     const actual = run(grant);
-    expect(actual).toEqual({ ok: true, grant });
+    expect(actual).toEqual(verified(grant));
   });
 
   it('given exp - iat = 15 min + 1 ms, should return ttl_too_long [0004 §8.10]', () => {
@@ -665,7 +667,7 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it('given exp - iat = 15 min exactly, should verify ok', () => {
     const grant = makeGrant({ iat: NOW - 1_000, nbf: NOW - 1_000, exp: NOW - 1_000 + GRANT_LIMITS.maxTtlMs });
     const actual = run(grant);
-    expect(actual).toEqual({ ok: true, grant });
+    expect(actual).toEqual(verified(grant));
   });
 
   it('given iat > now + 30 s, should return clock_skew [0004 F10]', () => {
@@ -712,7 +714,7 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it('given a concrete approval fact whose consumedByGrantId equals this grantId, should verify ok [0004 §8.21]', () => {
     const grant = makeGrant();
     const actual = run(grant, { approval: concreteFact({ approvalId: grant.approvalId as ApprovalId, requestDigest: REQUEST_DIGEST, consumedByGrantId: grant.grantId }) });
-    expect(actual).toEqual({ ok: true, grant });
+    expect(actual).toEqual(verified(grant));
   });
 
   it('given a concrete approval fact consumed by this grant for this digest but recorded for another account, should return approval_mismatch [0004 §8.31]', () => {
@@ -724,7 +726,7 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it('given a concrete approval fact whose expiresAt is one ms before grant.iat, should return approval_mismatch; at exactly iat, should pass the approval check [0004 §8.31]', () => {
     const grant = makeGrant();
     const actual = [run(grant, { approval: concreteFact({ expiresAt: grant.iat - 1 }) }), run(grant, { approval: concreteFact({ expiresAt: grant.iat }) })];
-    expect(actual).toEqual([deny('approval_mismatch'), { ok: true, grant }]);
+    expect(actual).toEqual([deny('approval_mismatch'), verified(grant)]);
   });
 
   it('given approvalId naming an approval bound to a different digest, should return approval_mismatch [0004 F14]', () => {
@@ -757,7 +759,7 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it('given approvalId policy under a live bounded policy for a write, should verify ok', () => {
     const grant = makeGrant({ approvalId: 'policy' });
     const actual = run(grant);
-    expect(actual).toEqual({ ok: true, grant });
+    expect(actual).toEqual(verified(grant));
   });
 
   it.each(['irreversible', 'privilege'] as const)('given operation class %s with approvalId policy, should return approval_mismatch [0004 §8.12]', (operationClass) => {
@@ -776,7 +778,7 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it('given kind password with aud browser-worker, should verify ok', () => {
     const grant = makeGrant({ aud: 'browser-worker', accountKind: 'password', presenter: { keyId: 'pk' as PresenterKeyId, channel: 'browser-worker' } });
     const actual = run(grant);
-    expect(actual).toEqual({ ok: true, grant });
+    expect(actual).toEqual(verified(grant));
   });
 
   it('given kind session with aud http-executor and sessionHttp false, should return kind_not_resolvable [0004 §8.23; PR #2637 P1]', () => {
@@ -787,7 +789,7 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it('given kind session with aud http-executor and sessionHttp true, should verify ok (the one audited path)', () => {
     const grant = makeGrant({ accountKind: 'session', sessionHttp: true });
     const actual = run(grant);
-    expect(actual).toEqual({ ok: true, grant });
+    expect(actual).toEqual(verified(grant));
   });
 
   it.each([
@@ -875,7 +877,7 @@ describe('verifyGrant two-fault table (ADR 0004 §8.10)', () => {
   it('given the base scenario with no fault, should verify ok', () => {
     const s = base();
     const actual = runScenario(s);
-    expect(actual).toEqual({ ok: true, grant: s.grant });
+    expect(actual).toEqual(verified(s.grant));
   });
 });
 
