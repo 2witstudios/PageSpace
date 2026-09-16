@@ -167,7 +167,15 @@ export const pinnedFetch: PinnedFetch = (url, init) => {
         responseBody = Readable.toWeb(decodeBody(res, res.headers['content-encoding'])) as ReadableStream;
       }
 
-      resolve(new Response(responseBody, { status, statusText: res.statusMessage ?? '', headers: responseHeaders }));
+      // Response only represents 200-599; node:http accepts any three-digit
+      // status. Throwing here would escape the socket listener uncaught and
+      // leave this promise pending forever, so refuse it as a failed request.
+      try {
+        resolve(new Response(responseBody, { status, statusText: res.statusMessage ?? '', headers: responseHeaders }));
+      } catch {
+        res.destroy();
+        reject(new Error(`Upstream returned an unsupported HTTP status (${status})`));
+      }
     });
 
     if (body !== undefined) req.write(body);

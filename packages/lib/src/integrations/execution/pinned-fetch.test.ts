@@ -81,6 +81,29 @@ afterAll(async () => {
 });
 
 describe('pinnedFetch', () => {
+  it('given an unrepresentable status from an upstream that never ends the body, should close the socket rather than leave it open', async () => {
+    let serverSocketClosed: Promise<void> = Promise.resolve();
+    const raw = net.createServer((socket) => {
+      serverSocketClosed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
+      socket.once('data', () => socket.write('HTTP/1.1 999 Weird\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n'));
+    });
+    await new Promise<void>((resolve) => raw.listen(0, '127.0.0.1', resolve));
+    const rawPort = (raw.address() as AddressInfo).port;
+    try {
+      await pinnedFetch(`http://pinned-host.invalid:${rawPort}/hook`, { method: 'GET', pinnedAddresses: ['127.0.0.1'] }).catch(
+        () => undefined
+      );
+      const actual = await Promise.race([
+        serverSocketClosed.then(() => 'closed'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('still open'), 1000)),
+      ]);
+      const expected = 'closed';
+      expect(actual).toEqual(expected);
+    } finally {
+      raw.close();
+    }
+  });
+
   it.each([['999'], ['600']])(
     'given an upstream status %s that Response cannot represent, should reject instead of throwing inside the socket listener',
     async (status) => {
