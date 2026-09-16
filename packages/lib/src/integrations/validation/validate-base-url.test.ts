@@ -81,13 +81,13 @@ describe('validateIntegrationTargetUrl', () => {
     it('given a public IP literal, should accept it as the pinned address without resolving', async () => {
       const resolve = vi.fn(publicResolver);
       const decision = await validateIntegrationTargetUrl(`https://${PUBLIC}/api`, { resolve });
-      expect(decision).toEqual({ ok: true, address: PUBLIC });
+      expect(decision).toEqual({ ok: true, addresses: [PUBLIC] });
       expect(resolve).not.toHaveBeenCalled();
     });
 
     it('given a public IPv6 literal, should accept it as the pinned address', async () => {
       const decision = await validateIntegrationTargetUrl('https://[2606:2800:220:1:248:1893:25c8:1946]/api', { resolve: publicResolver });
-      expect(decision).toEqual({ ok: true, address: '2606:2800:220:1:248:1893:25c8:1946' });
+      expect(decision).toEqual({ ok: true, addresses: ['2606:2800:220:1:248:1893:25c8:1946'] });
     });
   });
 
@@ -114,7 +114,7 @@ describe('validateIntegrationTargetUrl', () => {
 
     it('given an https:// URL with a public target, should accept (control)', async () => {
       const decision = await validateIntegrationTargetUrl('https://hooks.example.com/x', { resolve: publicResolver });
-      expect(decision).toEqual({ ok: true, address: PUBLIC });
+      expect(decision).toEqual({ ok: true, addresses: [PUBLIC] });
     });
   });
 
@@ -176,11 +176,12 @@ describe('validateIntegrationTargetUrl', () => {
       expect(decision.ok).toBe(false);
     });
 
-    it('given a hostname resolving only to public addresses, should accept and pin the first address', async () => {
-      const decision = await validateIntegrationTargetUrl('https://api.github.com/', {
-        resolve: async () => ['140.82.112.6', '140.82.113.6'],
+    it('given a hostname resolving only to public addresses, should accept and keep every validated address in resolver order', async () => {
+      const actual = await validateIntegrationTargetUrl('https://api.github.com/', {
+        resolve: async () => ['2606:50c0:8000::154', '140.82.112.6', '140.82.113.6'],
       });
-      expect(decision).toEqual({ ok: true, address: '140.82.112.6' });
+      const expected = { ok: true, addresses: ['2606:50c0:8000::154', '140.82.112.6', '140.82.113.6'] };
+      expect(actual).toEqual(expected);
     });
 
     it('given no resolver, should resolve through dns.lookup with every address', async () => {
@@ -214,7 +215,7 @@ describe('validateIntegrationTargetUrl', () => {
 
     it('given no signal and a resolver that answers before the deadline, should accept normally', async () => {
       const actual = await validateIntegrationTargetUrl('https://api.github.com/', { resolve: publicResolver });
-      const expected = { ok: true, address: PUBLIC };
+      const expected = { ok: true, addresses: [PUBLIC] };
       expect(actual).toEqual(expected);
     });
 
@@ -258,7 +259,7 @@ describe('validateIntegrationTargetUrl', () => {
     it('given a signal that never aborts, should resolve normally', async () => {
       const controller = new AbortController();
       const decision = await validateIntegrationTargetUrl('https://api.github.com/', { resolve: publicResolver, signal: controller.signal });
-      expect(decision).toEqual({ ok: true, address: PUBLIC });
+      expect(decision).toEqual({ ok: true, addresses: [PUBLIC] });
     });
   });
 });

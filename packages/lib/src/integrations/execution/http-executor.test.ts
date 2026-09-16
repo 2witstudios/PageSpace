@@ -18,7 +18,7 @@ vi.mock('dns', () => ({
 }));
 
 const PUBLIC = '93.184.216.34';
-const allowAll = async (): Promise<IntegrationTargetDecision> => ({ ok: true, address: PUBLIC });
+const allowAll = async (): Promise<IntegrationTargetDecision> => ({ ok: true, addresses: [PUBLIC] });
 
 // Mock fetch for testing
 const mockFetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>();
@@ -393,7 +393,7 @@ describe('executeHttpRequest target guard', () => {
     // Same origin but the validator (DNS re-resolution) now says private: rebinding mid-request.
     const validateTarget = vi
       .fn<() => Promise<IntegrationTargetDecision>>()
-      .mockResolvedValueOnce({ ok: true, address: PUBLIC })
+      .mockResolvedValueOnce({ ok: true, addresses: [PUBLIC] })
       .mockResolvedValueOnce({ ok: false, reason: 'rebound' });
     mockFetch.mockResolvedValueOnce(withLocation(302, '/moved'));
     mockFetch.mockResolvedValue(createMockResponse(200, { leaked: true }));
@@ -526,20 +526,19 @@ describe('executeHttpRequest connection pinning and validation deadline', () => 
     vi.clearAllMocks();
   });
 
-  it('should pass the validated address to the fetch as the pinned connect address', async () => {
+  it('should pass every validated address to the fetch as the pinned connect addresses', async () => {
     mockFetch.mockResolvedValue(createMockResponse(200, { ok: true }));
 
     await executeHttpRequest(
       { url: 'https://api.example.com/data', method: 'GET', headers: { Authorization: 'Bearer s3cret' } },
       { maxRetries: 0 },
       mockFetch as unknown as PinnedFetch,
-      async () => ({ ok: true, address: '140.82.112.6' })
+      async () => ({ ok: true, addresses: ['2606:50c0:8000::154', '140.82.112.6'] })
     );
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      'https://api.example.com/data',
-      expect.objectContaining({ pinnedAddress: '140.82.112.6' })
-    );
+    const actual = mockFetch.mock.calls[0][1];
+    const expected = expect.objectContaining({ pinnedAddresses: ['2606:50c0:8000::154', '140.82.112.6'] });
+    expect(actual).toEqual(expected);
   });
 
   it('given DNS that flips public→private between lookups, should connect to the validated public address only', async () => {
@@ -558,7 +557,7 @@ describe('executeHttpRequest connection pinning and validation deadline', () => 
     expect(result.success).toBe(true);
     expect(dns.lookup).toHaveBeenCalledTimes(1);
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(mockFetch.mock.calls[0][1]).toEqual(expect.objectContaining({ pinnedAddress: PUBLIC }));
+    expect(mockFetch.mock.calls[0][1]).toEqual(expect.objectContaining({ pinnedAddresses: [PUBLIC] }));
   });
 
   it('should hand the request abort signal to the target validator', async () => {
