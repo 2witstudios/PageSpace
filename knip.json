@@ -110,6 +110,7 @@
         "src/operators.ts",
         "src/provision-admin-users.ts",
         "src/schema.ts",
+        "src/schema/agent-accounts.ts",
         "src/schema/ai-compaction.ts",
         "src/schema/ai-streams.ts",
         "src/schema/auth-handoff-tokens.ts",
@@ -177,6 +178,11 @@
     },
     "packages/lib": {
       "entry": [
+        "src/agent-accounts/grant.ts",
+        "src/agent-accounts/canonical-request.ts",
+        "src/agent-accounts/approval.ts",
+        "src/agent-accounts/audit.ts",
+        "src/agent-accounts/store/store-adapter.ts",
         "src/agent-workspaces/session-contract.ts",
         "src/agent-workspaces/workspace-fractions.ts",
         "src/agent-workspaces/shells-contract.ts",
@@ -377,6 +383,7 @@
         "src/observability/error-resolutions.ts",
         "src/onprem-defaults.ts",
         "src/pages/circular-reference-guard.ts",
+        "src/permissions/account-permissions.ts",
         "src/permissions/accessible-page-ids.ts",
         "src/permissions/agent-permissions.ts",
         "src/permissions/app-permissions.ts",
