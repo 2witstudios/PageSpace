@@ -15,8 +15,9 @@
  * "is this address public?" decision from `security/web-fetch-ssrf`
  * (`isPublicIp`, fail-closed for anything that is not an IP). Hostnames are
  * resolved with `dns.lookup` (the resolver `fetch` uses) and EVERY returned
- * address must be public. On success the decision carries the address the
- * caller must connect to, so the connection is pinned to what was validated.
+ * address must be public. On success the decision carries every validated
+ * address (resolver order); the caller connects only to those, so the
+ * connection is pinned to what was validated and can still fall back between them.
  */
 
 import { promises as dns } from 'dns';
@@ -43,7 +44,7 @@ export const DEFAULT_LOOKUP_TIMEOUT_MS = 5000;
 export const LOOKUP_TIMED_OUT_MESSAGE = 'Hostname lookup timed out';
 
 export type IntegrationTargetDecision =
-  | { ok: true; address: string }
+  | { ok: true; addresses: readonly string[] }
   | { ok: false; reason: string };
 
 export type HostnameResolver = (hostname: string) => Promise<string[]>;
@@ -125,7 +126,7 @@ export const validateIntegrationTargetUrl = async (
   // An IP literal: the URL parser already normalized it; it must be public.
   const literal = shape.resolvedIPs?.[0];
   if (literal !== undefined) {
-    return isPublicIp(literal) ? { ok: true, address: literal } : { ok: false, reason: BLOCKED_TARGET_MESSAGE };
+    return isPublicIp(literal) ? { ok: true, addresses: [literal] } : { ok: false, reason: BLOCKED_TARGET_MESSAGE };
   }
 
   let addresses: string[];
@@ -151,5 +152,5 @@ export const validateIntegrationTargetUrl = async (
     }
   }
 
-  return { ok: true, address: addresses[0] };
+  return { ok: true, addresses };
 };

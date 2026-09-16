@@ -139,7 +139,7 @@ const fetchGuarded = async (
       body,
       signal,
       redirect: 'manual',
-      pinnedAddress: decision.address,
+      pinnedAddresses: decision.addresses,
     });
 
     if (!REDIRECT_STATUSES.has(response.status)) {

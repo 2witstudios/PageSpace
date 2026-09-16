@@ -2,7 +2,7 @@
  * Pinned fetch
  *
  * A minimal `fetch`-shaped HTTP client (node:http / node:https) whose TCP
- * connection is pinned to an address the caller has already validated. The
+ * connection is pinned to addresses the caller has already validated. The
  * hostname is still used for the Host header and TLS SNI / certificate
  * verification, but no DNS lookup happens here — so a DNS answer that changes
  * between validation and connect (rebinding) cannot redirect a credentialed
@@ -25,8 +25,14 @@ export interface PinnedRequestInit {
   headers?: Record<string, string>;
   body?: string;
   signal?: AbortSignal;
-  /** The validated address to connect to. Required: this client never resolves names. */
-  pinnedAddress: string;
+  /**
+   * The validated addresses to connect to, in preference order. Required and
+   * non-empty: this client never resolves names. Node's address fallback
+   * (`net` autoSelectFamily, on by default) tries them in turn, so a dual-stack
+   * target whose first address is unreachable still connects — but only ever
+   * to these addresses.
+   */
+  pinnedAddresses: readonly string[];
   /** Accepted for parity with `fetch`; redirects are never followed regardless. */
   redirect?: 'manual';
 }
@@ -41,9 +47,9 @@ const abortError = (): Error => {
   return error;
 };
 
-/** Answers every lookup with the pinned address, in both single and `all` forms. */
-const pinnedLookup = (address: string): LookupFunction => {
-  const family = isIP(address);
+/** Answers every lookup with the pinned addresses, in both single and `all` forms. */
+const pinnedLookup = (addresses: readonly string[]): LookupFunction => {
+  const records = addresses.map((address) => ({ address, family: isIP(address) }));
   return (_hostname, options, callback) => {
     const cb = callback as (
       err: NodeJS.ErrnoException | null,
@@ -51,18 +57,18 @@ const pinnedLookup = (address: string): LookupFunction => {
       family?: number
     ) => void;
     if (typeof options === 'object' && options.all) {
-      cb(null, [{ address, family }]);
+      cb(null, records);
     } else {
-      cb(null, address, family);
+      cb(null, records[0].address, records[0].family);
     }
   };
 };
 
 export const pinnedFetch: PinnedFetch = (url, init) => {
-  const { method, headers = {}, body, signal, pinnedAddress } = init;
+  const { method, headers = {}, body, signal, pinnedAddresses } = init;
 
-  if (!pinnedAddress || isIP(pinnedAddress) === 0) {
-    return Promise.reject(new Error('pinnedFetch requires a validated pinned address'));
+  if (pinnedAddresses.length === 0 || pinnedAddresses.some((address) => isIP(address) === 0)) {
+    return Promise.reject(new Error('pinnedFetch requires validated pinned addresses'));
   }
   if (signal?.aborted) return Promise.reject(abortError());
 
@@ -86,7 +92,11 @@ export const pinnedFetch: PinnedFetch = (url, init) => {
       path: `${target.pathname}${target.search}`,
       method,
       headers: requestHeaders,
-      lookup: pinnedLookup(pinnedAddress),
+      lookup: pinnedLookup(pinnedAddresses),
+      // Never reuse a pooled keep-alive socket: the pool is keyed by host:port,
+      // so a reused socket would skip this request's pinned lookup and could be
+      // connected to an address from an earlier validation.
+      agent: false,
       // TLS verifies the certificate against the hostname, never the pinned IP.
       ...(isTls && !hostnameIsIp ? { servername: target.hostname } : {}),
     });
