@@ -48,13 +48,22 @@ export type PinnedFetch = (url: string, init: PinnedRequestInit) => Promise<Resp
 
 const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
 
-/** Decoders for the content codings global fetch decoded. */
+/**
+ * Decoders for the content codings global fetch decoded, with fetch's (undici's)
+ * lenient flush so an empty or cleanly cut-off body decodes to what arrived
+ * instead of failing with "unexpected end of file".
+ */
+const ZLIB_OPTIONS = { flush: zlib.constants.Z_SYNC_FLUSH, finishFlush: zlib.constants.Z_SYNC_FLUSH };
+const BROTLI_OPTIONS = {
+  flush: zlib.constants.BROTLI_OPERATION_FLUSH,
+  finishFlush: zlib.constants.BROTLI_OPERATION_FLUSH,
+};
 const DECODERS: Record<string, () => Transform> = {
-  gzip: () => zlib.createGunzip(),
-  'x-gzip': () => zlib.createGunzip(),
+  gzip: () => zlib.createGunzip(ZLIB_OPTIONS),
+  'x-gzip': () => zlib.createGunzip(ZLIB_OPTIONS),
   // Some servers send raw deflate instead of zlib-wrapped; unzip detects both.
-  deflate: () => zlib.createUnzip(),
-  br: () => zlib.createBrotliDecompress(),
+  deflate: () => zlib.createUnzip(ZLIB_OPTIONS),
+  br: () => zlib.createBrotliDecompress(BROTLI_OPTIONS),
 };
 
 /**
