@@ -725,4 +725,81 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const expected = { ok: false, reason: 'write_unverified' };
     expect(actual).toEqual(expected);
   });
+
+  // Codex review PR #2646 (P2): `metadata.read` rejects when the plane metadata DB is down, and the
+  // rejection escaped every operation instead of becoming the contract's `store_unavailable` — an
+  // executor saw a thrown 500 rather than a fail-closed store verdict.
+  it('given the plane metadata DB is unavailable, should return store_unavailable from every operation rather than throwing', async () => {
+    const accountId = `acct-metadata-down-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
+    const outage = async (): Promise<never> => {
+      throw new Error('synthetic plane metadata outage');
+    };
+    const adapter = makeAdapter({ wrapMetadata: (m) => ({ ...m, read: outage, markRevoked: outage, remove: outage }) });
+    const grant = makeGrant({ accountId, bindingDigest: digestBindings({ bindings, hash }) });
+    const material = { kind: 'api_key' as const, material: { value: 'sk-synthetic', placement: { in: 'header' as const, name: 'Authorization' } } };
+    const settle = (promise: Promise<unknown>) => promise.catch((error: unknown) => ({ threw: String(error) }));
+
+    const actual = {
+      put: await settle(adapter.put({ ref, material, expectedVersion: null, bindings, identity })),
+      rotate: await settle(adapter.rotate({ ref, expectedVersion: 1 as never, next: material, bindings, identity: refreshIdentity })),
+      resolve: await settle(adapter.resolve({ ref, version: 1 as never, grant, identity })),
+      revoke: await settle(adapter.revoke({ ref, reason: 'admin', identity })),
+      delete: await settle(adapter.delete({ ref, identity, upstream: 'not_attempted' })),
+      describe: await settle(adapter.describe({ ref, identity })),
+    };
+    const expected = {
+      put: { ok: false, reason: 'store_unavailable' },
+      rotate: { ok: false, reason: 'store_unavailable' },
+      resolve: { ok: false, reason: 'store_unavailable' },
+      revoke: { ok: false, reason: 'store_unavailable' },
+      delete: { ok: false, reason: 'store_unavailable' },
+      describe: { ok: false, reason: 'store_unavailable' },
+    };
+    expect(actual).toEqual(expected);
+  });
+
+  // Codex review PR #2646 (P2): a `put` replacing an existing secret recorded the old version as
+  // `previousVersion` and opened a grace window, but only `rotate` snapshots the grace companion —
+  // so a grant for the replaced version was admitted and then failed on a missing companion
+  // (not_found) instead of being refused as the version mismatch it is.
+  it('given a put that replaces an existing secret, should open no rotation grace for the replaced version', async () => {
+    const adapter = makeAdapter();
+    const accountId = `acct-put-replace-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v2', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: 1 as never, bindings, identity });
+
+    const oldGrant = makeGrant({ accountId, credentialVersion: 1 as never, bindingDigest: digestBindings({ bindings, hash }) });
+    const actual = await adapter.resolve({ ref, version: 1 as never, grant: oldGrant, identity });
+    const expected = { ok: false, reason: 'version_mismatch' };
+    expect(actual).toEqual(expected);
+  });
+
+  // Codex review PR #2646 (P2): revoke dropped `input.reason`, although the plane DDL has
+  // `revoke_reason` and the contract distinguishes rotation_replay from erasure from admin — a
+  // refresh-token replay became indistinguishable from an administrative action. The FIRST
+  // revocation's reason is the one kept, like its time.
+  it('given revoke, should persist the first revocation reason with the revocation', async () => {
+    const adapter = makeAdapter();
+    const accountId = `acct-revoke-reason-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    await adapter.revoke({ ref, reason: 'rotation_replay', identity });
+    await adapter.revoke({ ref, reason: 'admin', identity });
+
+    const row = await pool.query('SELECT revoke_reason FROM agent_account_secret_versions WHERE tenant_id = $1 AND account_id = $2 AND kind = $3', [TENANT_A, accountId, 'api_key']);
+    const actual = row.rows[0]?.revoke_reason ?? null;
+    const expected = 'rotation_replay';
+    expect(actual).toEqual(expected);
+  });
 });
