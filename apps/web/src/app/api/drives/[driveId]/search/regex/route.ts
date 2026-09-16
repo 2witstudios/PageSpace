@@ -1,15 +1,14 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveMember, getPrincipalDriveMembership, getPrincipalAccessiblePagesInDrive, isDriveScopedPrincipal } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { checkDriveAccessForSearch, regexSearchPages } from '@pagespace/lib/services/drive-search-service'
-import { hasAppDriveMembership, getAppDriveMembership, getAppAccessiblePagesInDrive } from '@pagespace/lib/permissions/app-permissions';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const };
 
 /**
  * GET /api/drives/[driveId]/search/regex
@@ -49,10 +48,10 @@ export async function GET(
     // Check drive access. A scoped MCP token is its own drive member — gate on
     // the TOKEN's membership, not the owning user's.
     let drive: { id: string; slug: string | null; name: string } | null;
-    if (isScopedMCPAuth(auth)) {
+    if (isDriveScopedPrincipal(auth)) {
       // Membership gate only — results below are filtered per page by the
       // TOKEN's own access, so per-page custom-role grants still work.
-      if (!(await hasAppDriveMembership(auth.tokenId, driveId))) {
+      if (!(await isPrincipalDriveMember(auth, driveId))) {
         return NextResponse.json(
           { error: "You don't have access to this drive" },
           { status: 403 }
@@ -64,6 +63,7 @@ export async function GET(
         .where(eq(drives.id, driveId));
       drive = row ?? null;
     } else {
+      // user-identity: unscoped-user branch only — drive-scoped credentials took the principal branch above.
       const accessInfo = await checkDriveAccessForSearch(driveId, userId);
 
       if (!accessInfo.hasAccess) {
@@ -88,11 +88,11 @@ export async function GET(
     // Inherited keys (role null) act as their owner, so the service's default
     // user filter is already correct for them.
     let tokenViewablePageIds: Set<string> | null = null;
-    if (isScopedMCPAuth(auth)) {
-      const explicitMembership = await getAppDriveMembership(auth.tokenId, driveId);
+    if (isDriveScopedPrincipal(auth)) {
+      const explicitMembership = await getPrincipalDriveMembership(auth, driveId);
       if (explicitMembership && explicitMembership.role !== null) {
         tokenViewablePageIds = new Set(
-          (await getAppAccessiblePagesInDrive(auth.tokenId, driveId))
+          (await getPrincipalAccessiblePagesInDrive(auth, driveId))
             .filter((p) => p.permissions.canView)
             .map((p) => p.id),
         );

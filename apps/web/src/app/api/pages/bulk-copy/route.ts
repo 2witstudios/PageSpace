@@ -10,14 +10,13 @@ import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { copySheetRows } from '@pagespace/lib/sheets/store';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { driveMembers } from '@pagespace/db/schema/members';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult, isScopedMCPAuth, canPrincipalViewPage } from '@/lib/auth';
-import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult, canPrincipalViewPage, getPrincipalDriveMembership, isDriveScopedPrincipal } from '@/lib/auth';
 import { createId } from '@paralleldrive/cuid2';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { ensureTaskItemForPage } from '@/services/api/task-sync-service';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 const requestSchema = z.object({
   pageIds: z.array(z.string()).min(1, 'At least one page ID is required'),
@@ -64,10 +63,10 @@ export async function POST(request: Request) {
     // Check the principal has edit access to target drive. A scoped MCP token
     // is its own drive member — use the TOKEN's role, not its owning user's.
     let canEditDrive: boolean;
-    const tokenMembership = isScopedMCPAuth(auth)
-      ? await getAppDriveMembership(auth.tokenId, targetDriveId)
+    const tokenMembership = isDriveScopedPrincipal(auth)
+      ? await getPrincipalDriveMembership(auth, targetDriveId)
       : null;
-    if (isScopedMCPAuth(auth) && tokenMembership?.role !== null) {
+    if (isDriveScopedPrincipal(auth) && tokenMembership?.role !== null) {
       // Explicit-role keys need OWNER/ADMIN; inherited keys (role null) fall
       // through to the owner's own authority below.
       canEditDrive = tokenMembership?.role === 'OWNER' || tokenMembership?.role === 'ADMIN';

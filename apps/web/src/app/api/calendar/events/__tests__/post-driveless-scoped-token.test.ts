@@ -99,11 +99,13 @@ const checkMCPCreateScope = vi.fn((_auth: unknown, targetDriveId: string | null)
 });
 
 vi.mock('@/lib/auth', () => ({
+  // The personal-event rule (personal-event-scope.ts) asks whether the caller is an OAuth application.
+  isScopedOAuthAuth: (auth: { tokenType?: string; scopes?: { account?: boolean } }) => auth?.tokenType === 'oauth' && !auth.scopes?.account,
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => typeof r === 'object' && r !== null && 'error' in r),
   checkMCPDriveScope: vi.fn(() => null),
   checkMCPCreateScope: (...args: [unknown, string | null]) => checkMCPCreateScope(...args),
-  isScopedMCPAuth: vi.fn(() => true),
+  isDriveScopedPrincipal: vi.fn(() => true),
   filterDrivesByMCPScope: vi.fn((_: unknown, ids: string[]) => ids),
   isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');

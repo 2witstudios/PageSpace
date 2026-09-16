@@ -55,13 +55,15 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
 }));
 
 vi.mock('@/lib/auth', () => ({
-  authenticateMCPRequest: vi.fn(),
+  authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(() => false),
-  isMCPAuthResult: vi.fn(() => false),
+  isDriveScopedPrincipal: vi.fn(() => false),
+  getAllowedDriveIds: vi.fn(() => []),
+  getPrincipalDriveMembership: vi.fn(),
 }));
 
 import { POST } from '../route';
-import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const mockSessionAuth = (userId = 'user-1') => ({
   userId,
@@ -77,7 +79,7 @@ const mockSessionAuth = (userId = 'user-1') => ({
 describe('POST /api/mcp/drives — reserved name guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(authenticateMCPRequest).mockResolvedValue(mockSessionAuth());
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth());
     vi.mocked(isAuthError).mockReturnValue(false);
   });
 

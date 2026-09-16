@@ -417,7 +417,11 @@ const scopeRow = (driveId: string, role: 'ADMIN' | 'MEMBER' | null, customRoleId
 });
 
 describe('getScopedAccessLevel', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // The token's user is still a member unless a case says otherwise.
+    vi.mocked(isUserDriveMember).mockResolvedValue(true);
+  });
 
   it('returns null when no drive-scope row matches the target drive', async () => {
     vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'DOCUMENT' }]));
@@ -465,9 +469,10 @@ describe('hasScopedDriveMembership', () => {
     expect(await hasScopedDriveMembership([scopeRow('other-drive', null)], OWNER_ID, DRIVE_ID)).toBe(false);
   });
 
-  it('explicit role row → true regardless of owner membership', async () => {
+  it('explicit role row → true while the token\'s user is still a member of the drive', async () => {
+    vi.mocked(isUserDriveMember).mockResolvedValue(true);
     expect(await hasScopedDriveMembership([scopeRow(DRIVE_ID, 'MEMBER')], OWNER_ID, DRIVE_ID)).toBe(true);
-    expect(isUserDriveMember).not.toHaveBeenCalled();
+    expect(isUserDriveMember).toHaveBeenCalledWith(OWNER_ID, DRIVE_ID);
   });
 
   it('inherit row counts ONLY while the owner still has drive access', async () => {
@@ -483,19 +488,64 @@ describe('hasScopedDriveMembership', () => {
 });
 
 describe('getScopedDriveMembership', () => {
-  it('returns nullable role + customRoleId for a matching row', () => {
-    expect(getScopedDriveMembership([scopeRow(DRIVE_ID, 'ADMIN', null)], DRIVE_ID)).toEqual({
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isUserDriveMember).mockResolvedValue(true);
+  });
+
+  it('returns nullable role + customRoleId for a matching row', async () => {
+    expect(await getScopedDriveMembership([scopeRow(DRIVE_ID, 'ADMIN', null)], OWNER_ID, DRIVE_ID)).toEqual({
       role: 'ADMIN', customRoleId: null,
     });
   });
 
-  it('returns null when no row matches', () => {
-    expect(getScopedDriveMembership([scopeRow('other-drive', null)], DRIVE_ID)).toBeNull();
+  it('returns null when no row matches', async () => {
+    expect(await getScopedDriveMembership([scopeRow('other-drive', null)], OWNER_ID, DRIVE_ID)).toBeNull();
+  });
+});
+
+// ADR 0002 Decision 2: grant-time authority is not resolution-time authority.
+// An OAuth token's scope rows are frozen at consent, so an EXPLICIT-role row
+// must stop granting the moment its user stops being a member or owner of the
+// drive — by removal, leaving or transfer — exactly as that user's explicit-role
+// mcp_ key rows are deleted on removal. Inherit rows already resolve the user's
+// own live access.
+describe('explicit-role OAuth scope rows end with the user\'s drive membership', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isUserDriveMember).mockResolvedValue(false);
+  });
+
+  it('getScopedAccessLevel → null', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'DOCUMENT' }]));
+    expect(await getScopedAccessLevel([scopeRow(DRIVE_ID, 'ADMIN')], OWNER_ID, PAGE_ID)).toBeNull();
+    expect(isUserDriveMember).toHaveBeenCalledWith(OWNER_ID, DRIVE_ID);
+  });
+
+  it('hasScopedDriveMembership → false', async () => {
+    expect(await hasScopedDriveMembership([scopeRow(DRIVE_ID, 'ADMIN')], OWNER_ID, DRIVE_ID)).toBe(false);
+  });
+
+  it('getScopedDriveMembership → null', async () => {
+    expect(await getScopedDriveMembership([scopeRow(DRIVE_ID, 'ADMIN')], OWNER_ID, DRIVE_ID)).toBeNull();
+  });
+
+  it('getScopedDriveAccessLevel → null', async () => {
+    expect(await getScopedDriveAccessLevel([scopeRow(DRIVE_ID, 'MEMBER')], OWNER_ID, DRIVE_ID)).toBeNull();
+  });
+
+  it('getScopedAccessiblePagesInDrive → [] without enumerating the drive', async () => {
+    expect(await getScopedAccessiblePagesInDrive([scopeRow(DRIVE_ID, 'ADMIN')], OWNER_ID, DRIVE_ID)).toEqual([]);
+    expect(db.select).not.toHaveBeenCalled();
   });
 });
 
 describe('getScopedDriveAccessLevel', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // The token's user is still a member unless a case says otherwise.
+    vi.mocked(isUserDriveMember).mockResolvedValue(true);
+  });
 
   it('null when no scope row matches the drive', async () => {
     expect(await getScopedDriveAccessLevel([scopeRow('other-drive', null)], OWNER_ID, DRIVE_ID)).toBeNull();
@@ -519,7 +569,11 @@ describe('getScopedDriveAccessLevel', () => {
 });
 
 describe('getScopedAccessiblePagesInDrive', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // The token's user is still a member unless a case says otherwise.
+    vi.mocked(isUserDriveMember).mockResolvedValue(true);
+  });
 
   it('returns [] when no scope row matches the drive', async () => {
     expect(await getScopedAccessiblePagesInDrive([scopeRow('other-drive', null)], OWNER_ID, DRIVE_ID)).toEqual([]);

@@ -6,8 +6,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPAuthResult, isScopedMCPAuth, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
-import { getAppDriveMembership, getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPAuthResult, isDriveScopedPrincipal, isPrincipalDriveOwnerOrAdmin, getPrincipalDriveAccessLevel, getPrincipalDriveMembership } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { syncPublishedHomeRoot, regeneratePublishedSiteFiles } from '@/lib/canvas/publish-page';
@@ -15,7 +14,7 @@ import { resolveUploadedImageAssetUrl } from '@/lib/canvas/asset-pipeline';
 import { db } from '@pagespace/db/db';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 const patchSchema = z.object({
   name: z.string().optional(),
@@ -60,20 +59,22 @@ export async function GET(
 
     const userId = auth.userId;
 
-    // A scoped MCP token is its own drive member — gate on and report the
-    // TOKEN's membership, not the owning user's.
-    if (isScopedMCPAuth(auth)) {
+    // A drive-scoped credential (mcp_ key or OAuth drive grant) is its own drive
+    // member — gate on and report the CREDENTIAL's membership, not the owning
+    // user's.
+    if (isDriveScopedPrincipal(auth)) {
       const drive = await getDriveById(driveId);
       if (!drive) {
         return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
       }
-      const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+      const level = await getPrincipalDriveAccessLevel(auth, driveId);
       if (!level?.canView) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 });
       }
-      const membership = await getAppDriveMembership(auth.tokenId, driveId);
+      const membership = await getPrincipalDriveMembership(auth, driveId);
       if (membership?.role === null) {
         // Inherit: the key is its owner — present the owner's own relationship.
+        // user-identity: an INHERIT-role credential is its user in this drive, so the user's own relationship is the truthful answer.
         const inherited = await getDriveWithAccess(driveId, userId);
         if (inherited) return NextResponse.json(inherited);
       }
@@ -86,6 +87,7 @@ export async function GET(
       });
     }
 
+    // user-identity: unscoped-user branch only — drive-scoped credentials took the principal branch above.
     const driveWithAccess = await getDriveWithAccess(driveId, userId);
 
     if (!driveWithAccess) {

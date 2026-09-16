@@ -8,6 +8,7 @@
  * (`validateOAuthAccessToken`), never from a database column.
  */
 import type { ScopeSet } from '@pagespace/lib/auth/oauth/scopes';
+import type { AuthResult } from './index';
 
 /**
  * `full` — the whole profile (the CLI's `login`/`whoami`, or an `account` grant, which already is the user).
@@ -24,4 +25,26 @@ export function decideIdentityDisclosure(token: {
   if (token.clientFirstParty === true) return 'full';
   if (token.scopes.profile) return 'profile';
   return 'deny';
+}
+
+/**
+ * The same decision for any authenticated principal, as an explicit allow.
+ *
+ * A SESSION is the person at their own browser or app: the full profile. An
+ * OAuth token gets what its consent released. EVERY other principal — an
+ * `mcp_` key (its own drive-member principal, ADR 0002 Decision 2; its owner's
+ * email is not its to hand out) or a service result — is denied. Written as a
+ * closed switch rather than `tokenType === 'oauth' ? … : 'full'`, so widening
+ * `/api/auth/me`'s allow list can never reopen the identity leak Phase 1a
+ * closed through a default branch.
+ */
+export function decidePrincipalIdentityDisclosure(principal: AuthResult): IdentityDisclosure {
+  switch (principal.tokenType) {
+    case 'session':
+      return 'full';
+    case 'oauth':
+      return decideIdentityDisclosure(principal);
+    default:
+      return 'deny';
+  }
 }

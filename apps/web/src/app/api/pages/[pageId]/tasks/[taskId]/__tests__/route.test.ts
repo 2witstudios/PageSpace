@@ -38,6 +38,7 @@ vi.mock('@/lib/workflows/task-trigger-helpers', () => ({
   fireCompletionTrigger: vi.fn().mockResolvedValue(undefined),
   disableTaskTriggers: vi.fn().mockResolvedValue(undefined),
   createTaskTriggerWorkflow: vi.fn().mockResolvedValue(undefined),
+  getArmedTaskTriggerTypes: vi.fn().mockResolvedValue(new Set()),
 }));
 
 vi.mock('@/lib/ai/tools/task-helpers', () => ({
@@ -178,7 +179,7 @@ import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { createTaskAssignedNotification, createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import { checkSubTasksComplete } from '@/lib/tasks/completion-guard';
-import { createTaskTriggerWorkflow, syncTaskDueDateTrigger } from '@/lib/workflows/task-trigger-helpers';
+import { createTaskTriggerWorkflow, syncTaskDueDateTrigger, fireCompletionTrigger, getArmedTaskTriggerTypes } from '@/lib/workflows/task-trigger-helpers';
 import { reorderTaskPeers } from '@/lib/ai/tools/task-helpers';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
 
@@ -1248,6 +1249,107 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     const response = await PATCH(createPatchRequest({ position: 99 }), context);
     expect(response.status).toBe(200);
     expect(reorderTaskPeers).toHaveBeenCalledWith(mockPageId, mockTaskId, 99, { userId: mockUserId });
+  });
+
+  // Agent triggers are held from OAuth applications (point-guard ruling,
+  // pending Phase 2b / [D-15]): setting/clearing one, or completing a task whose
+  // completion trigger is armed, is refused before any write; the rest of PATCH
+  // stays at mcp parity.
+  describe('agent triggers held from OAuth', () => {
+    const HELD = { error: 'Agent triggers are not available to OAuth applications' };
+    const oauthGrant = {
+      tokenType: 'oauth', userId: mockUserId, role: 'user', tokenVersion: 0, adminRoleVersion: 0, tokenId: 'oauth-row',
+      scopes: { account: false, offlineAccess: false, manageKeys: false, allDrives: false, profile: false, updateKeyId: null, activateKeyId: null, newKeyName: null, drives: new Map() },
+      driveScopes: [{ driveId: 'drive-1', role: 'ADMIN', customRoleId: null }], allowedDriveIds: ['drive-1'], clientFirstParty: false,
+    };
+    const statuses = [{ slug: 'open', group: 'todo' }, { slug: 'finished', group: 'done' }];
+
+    beforeEach(() => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(oauthGrant as never);
+      setupCanEdit(true);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+      vi.mocked(getArmedTaskTriggerTypes).mockResolvedValue(new Set());
+    });
+
+    for (const [label, agentTrigger] of [
+      ['setting', { agentPageId: 'agent-1', prompt: 'go', triggerType: 'completion' }],
+      ['clearing', null],
+    ] as const) {
+      it(`refuses ${label} an agentTrigger — nothing written`, async () => {
+        setupTaskLookup({ id: mockTaskListId }, { ...baseTask });
+        setupTransaction(baseTask);
+        const response = await PATCH(createPatchRequest({ title: 'Renamed', agentTrigger }), context);
+        expect(response.status).toBe(403);
+        expect(await response.json()).toEqual(HELD);
+        expect(db.transaction).not.toHaveBeenCalled();
+        expect(createTaskTriggerWorkflow).not.toHaveBeenCalled();
+      });
+    }
+
+    it('refuses completing a task whose completion trigger is armed — nothing written, nothing fired', async () => {
+      setupTaskLookup({ id: mockTaskListId }, { ...baseTask, completedAt: null });
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue(statuses as never);
+      vi.mocked(getArmedTaskTriggerTypes).mockResolvedValue(new Set(['completion']));
+      setupTransaction({ ...baseTask, status: 'finished', completedAt: new Date() });
+
+      const response = await PATCH(createPatchRequest({ status: 'finished' }), context);
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual(HELD);
+      expect(getArmedTaskTriggerTypes).toHaveBeenCalledWith(mockTaskId);
+      expect(db.transaction).not.toHaveBeenCalled();
+      expect(fireCompletionTrigger).not.toHaveBeenCalled();
+    });
+
+    // Review finding: moving or clearing the due date of an armed due-date
+    // trigger re-aims (a past date fires it on the next cron) or disables it.
+    for (const [label, dueDate] of [['moving', '2020-01-01T00:00:00Z'], ['clearing', null]] as const) {
+      it(`refuses ${label} the due date of a task whose due-date trigger is armed — nothing written`, async () => {
+        setupTaskLookup({ id: mockTaskListId }, { ...baseTask, dueDate: new Date('2030-01-01') });
+        vi.mocked(getArmedTaskTriggerTypes).mockResolvedValue(new Set(['due_date']));
+        setupTransaction(baseTask);
+
+        const response = await PATCH(createPatchRequest({ dueDate, timezone: 'UTC' }), context);
+
+        expect(response.status).toBe(403);
+        expect(await response.json()).toEqual(HELD);
+        expect(db.transaction).not.toHaveBeenCalled();
+        expect(syncTaskDueDateTrigger).not.toHaveBeenCalled();
+      });
+    }
+
+    it('refuses completing a task whose DUE-DATE trigger is armed (completion cancels it)', async () => {
+      setupTaskLookup({ id: mockTaskListId }, { ...baseTask, completedAt: null });
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue(statuses as never);
+      vi.mocked(getArmedTaskTriggerTypes).mockResolvedValue(new Set(['due_date']));
+      setupTransaction({ ...baseTask, status: 'finished', completedAt: new Date() });
+
+      const response = await PATCH(createPatchRequest({ status: 'finished' }), context);
+
+      expect(response.status).toBe(403);
+      expect(db.transaction).not.toHaveBeenCalled();
+    });
+
+    it('moves the due date of a task with no armed trigger (parity)', async () => {
+      setupTaskLookup({ id: mockTaskListId }, { ...baseTask, dueDate: new Date('2030-01-01') });
+      const updatedTask = { ...baseTask, dueDate: new Date('2031-01-01') };
+      setupTransaction(updatedTask);
+      setupRelationsLookup({ ...updatedTask, assignee: null, assigneeAgent: null, user: null, assignees: [] });
+
+      const response = await PATCH(createPatchRequest({ dueDate: '2031-01-01T00:00:00Z', timezone: 'UTC' }), context);
+      expect(response.status).toBe(200);
+    });
+
+    it('completes a task with no armed completion trigger (parity)', async () => {
+      setupTaskLookup({ id: mockTaskListId }, { ...baseTask, completedAt: null });
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue(statuses as never);
+      const updatedTask = { ...baseTask, status: 'finished', completedAt: new Date() };
+      setupTransaction(updatedTask);
+      setupRelationsLookup({ ...updatedTask, assignee: null, assigneeAgent: null, user: null, assignees: [] });
+
+      const response = await PATCH(createPatchRequest({ status: 'finished' }), context);
+      expect(response.status).toBe(200);
+    });
   });
 
   it('creates an agent trigger workflow when agentTrigger is provided', async () => {

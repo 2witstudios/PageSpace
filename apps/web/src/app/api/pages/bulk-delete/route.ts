@@ -15,7 +15,7 @@ import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activit
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { syncTaskItemOnMove } from '@/services/api/task-sync-service';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 const requestSchema = z.object({
   pageIds: z.array(z.string()).min(1, 'At least one page ID is required'),

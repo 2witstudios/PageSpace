@@ -24,8 +24,13 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(),
-  isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
+  isDriveScopedPrincipal: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
     auth?.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0,
+  // Mirrors the real principal dispatch for the mcp fixtures used here.
+  getPrincipalDriveMembership: async (auth: { tokenId: string }, driveId: string) => {
+    const { getAppDriveMembership } = await import('@pagespace/lib/permissions/app-permissions');
+    return getAppDriveMembership(auth.tokenId, driveId);
+  },
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserEditPage(auth.userId, pageId);

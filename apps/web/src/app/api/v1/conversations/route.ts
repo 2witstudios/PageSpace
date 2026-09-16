@@ -15,7 +15,7 @@ import {
   buildConversationListQuery,
 } from '@/lib/ai/openai-api/v1-conversations';
 
-const AUTH_OPTIONS = { allow: ['mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['mcp', 'oauth'] as const, requireCSRF: false };
 
 export async function POST(request: Request): Promise<Response> {
   const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS);

@@ -85,6 +85,8 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
 }));
 
 vi.mock('@/lib/auth', () => ({
+  // The personal-event rule (personal-event-scope.ts) asks whether the caller is an OAuth application.
+  isScopedOAuthAuth: (auth: { tokenType?: string; scopes?: { account?: boolean } }) => auth?.tokenType === 'oauth' && !auth.scopes?.account,
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => typeof r === 'object' && r !== null && 'error' in r),
   checkMCPDriveScope: vi.fn(() => null),
@@ -92,7 +94,7 @@ vi.mock('@/lib/auth', () => ({
   isPrincipalDriveMember: vi.fn().mockResolvedValue(true),
   getPrincipalDriveIds: vi.fn().mockResolvedValue(['drive-1']),
   canPrincipalViewPage: vi.fn().mockResolvedValue(true),
-  isScopedMCPAuth: vi.fn(() => false),
+  isDriveScopedPrincipal: vi.fn(() => false),
 }));
 
 vi.mock('@/lib/websocket/calendar-events', () => ({

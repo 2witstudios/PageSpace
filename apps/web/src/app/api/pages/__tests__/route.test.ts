@@ -26,7 +26,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
   checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default
   isMCPAuthResult: vi.fn().mockReturnValue(false),
-  isScopedMCPAuth: vi.fn().mockReturnValue(false),
+  isDriveScopedPrincipal: vi.fn().mockReturnValue(false),
   canPrincipalEditPage: vi.fn().mockResolvedValue(true),
 }));
 

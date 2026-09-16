@@ -7,7 +7,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '
 import { canPrincipalViewPage } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 
 /**
  * GET /api/pages/[pageId]/task

@@ -215,6 +215,25 @@ export async function cancelTaskDueDateTrigger(taskId: string, reason: string): 
  * Atomically claims the matching task_triggers row (lastFiredAt IS NULL guard) so
  * one fire ever happens per row, then loads the linked workflow and executes it.
  */
+/**
+ * The task's ARMED agent triggers by type: enabled and not yet fired — the rows
+ * `fireCompletionTrigger` would claim, and `syncTaskDueDateTrigger` /
+ * `cancelTaskDueDateTrigger` would re-aim or disable.
+ */
+export async function getArmedTaskTriggerTypes(taskId: string): Promise<ReadonlySet<'due_date' | 'completion'>> {
+  const rows = await db
+    .select({ triggerType: taskTriggers.triggerType })
+    .from(taskTriggers)
+    .where(
+      and(
+        eq(taskTriggers.taskItemId, taskId),
+        eq(taskTriggers.isEnabled, true),
+        isNull(taskTriggers.lastFiredAt),
+      ),
+    );
+  return new Set(rows.map((row) => row.triggerType));
+}
+
 export async function fireCompletionTrigger(taskId: string): Promise<void> {
   try {
     const [completionTrigger] = await db

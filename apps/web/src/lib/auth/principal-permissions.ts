@@ -237,7 +237,7 @@ export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: st
     return membership.role === 'OWNER' || membership.role === 'ADMIN';
   }
   if (isScopedOAuthAuth(auth)) {
-    const membership = getScopedDriveMembership(auth.driveScopes, driveId);
+    const membership = await getScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
     if (!membership) return false;
     if (membership.role === null) return isDriveOwnerOrAdmin(auth.userId, driveId);
     return membership.role === 'ADMIN';
@@ -321,7 +321,7 @@ export async function getPrincipalDriveMembership(
     return membership && { role: membership.role, customRoleId: membership.customRoleId };
   }
   if (isScopedOAuthAuth(auth)) {
-    const membership = getScopedDriveMembership(auth.driveScopes, driveId);
+    const membership = await getScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
     return membership && { role: membership.role, customRoleId: membership.customRoleId };
   }
 
@@ -348,8 +348,16 @@ export async function getPrincipalDriveIds(auth: AuthResult): Promise<string[]> 
   if (isScopedOAuthAuth(auth)) {
     // The drive ROWS, not `allowedDriveIds`: a profile-only principal carries a
     // no-drive sentinel there (see `validateOAuthAccessToken`), which must
-    // never surface as a drive id in a caller's query.
-    return auth.driveScopes.map((scope) => scope.driveId);
+    // never surface as a drive id in a caller's query. And only the rows that
+    // still grant: a token's rows are frozen at consent, so a drive its user has
+    // since left — by removal, leaving, or a rolled-back membership — drops out
+    // (ADR 0002 D2; the same live-membership rule the scope resolvers apply).
+    const live = await Promise.all(
+      auth.driveScopes.map(async (scope) =>
+        (await hasScopedDriveMembership(auth.driveScopes, auth.userId, scope.driveId)) ? scope.driveId : null,
+      ),
+    );
+    return live.filter((driveId): driveId is string => driveId !== null);
   }
   return getDriveIdsForUser(auth.userId);
 }

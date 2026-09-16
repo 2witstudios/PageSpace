@@ -48,6 +48,7 @@ async function getWorkflowWithAuth(workflowId: string, auth: AuthResult) {
   if (scopeError) return { error: scopeError };
 
   if (!(await isPrincipalDriveOwnerOrAdmin(auth, workflow.driveId))) {
+    // user-identity: only picks 404 vs 403 after isPrincipalDriveOwnerOrAdmin(auth) already refused.
     const access = await checkDriveAccess(workflow.driveId, auth.userId);
     if (!access.drive) return { error: NextResponse.json({ error: 'Drive not found' }, { status: 404 }) };
     return { error: NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 }) };

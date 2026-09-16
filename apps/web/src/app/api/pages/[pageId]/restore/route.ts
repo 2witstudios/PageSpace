@@ -14,7 +14,7 @@ import { ensureTaskItemForPage } from '@/services/api/task-sync-service';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 async function recursivelyRestore(
   pageId: string,

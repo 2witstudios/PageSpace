@@ -29,6 +29,8 @@ vi.mock('@pagespace/lib/services/drive-role-service', async () => {
 });
 
 vi.mock('@/lib/auth', () => ({
+  // Session fixtures: the credential's own role is the user's; the user-side access mock decides.
+  isPrincipalDriveOwnerOrAdmin: async () => true,
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(),

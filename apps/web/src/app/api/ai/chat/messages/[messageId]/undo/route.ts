@@ -27,8 +27,8 @@ const undoBodySchema = z.object({
   force: z.boolean().optional().default(false),
 });
 
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const };
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 /**
  * Check undo permissions based on preview source

@@ -1434,6 +1434,51 @@ beforeEach(() => {
       expect(getUserTimezone).not.toHaveBeenCalled();
     });
 
+    // Agent triggers are held from OAuth applications (point-guard ruling,
+    // pending Phase 2b / [D-15]); the rest of POST stays at mcp parity.
+    describe('agent triggers held from OAuth', () => {
+      const oauthGrant = {
+        tokenType: 'oauth', userId: mockUserId, role: 'user', tokenVersion: 0, adminRoleVersion: 0, tokenId: 'oauth-row',
+        scopes: { account: false, offlineAccess: false, manageKeys: false, allDrives: false, profile: false, updateKeyId: null, activateKeyId: null, newKeyName: null, drives: new Map() },
+        driveScopes: [{ driveId: 'drive-123', role: 'ADMIN', customRoleId: null }], allowedDriveIds: ['drive-123'], clientFirstParty: false,
+      };
+
+      const arrangeCreate = () => {
+        const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium', position: 0 };
+        const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT' };
+        transactionPageResult = [mockNewPage];
+        transactionTaskResult = [mockNewTask];
+        vi.mocked(authenticateRequestWithOptions).mockResolvedValue(oauthGrant as never);
+        vi.mocked(canUserEditPage).mockResolvedValue(true);
+        vi.mocked(db.query.pages.findFirst)
+          .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never)
+          .mockResolvedValueOnce(null as never);
+        vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+        vi.mocked(db.query.taskItems.findFirst)
+          .mockResolvedValueOnce(null as never)
+          .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never);
+      };
+
+      it('refuses an OAuth drive:X:admin grant creating a task with an agentTrigger — nothing persisted', async () => {
+        arrangeCreate();
+        const response = await POST(createRequest({
+          title: 'Task', dueDate: '2025-12-31', timezone: 'UTC', agentTrigger: { agentPageId: 'agent-1', prompt: 'go' },
+        }), { params: mockParams });
+
+        expect(response.status).toBe(403);
+        expect(await response.json()).toEqual({ error: 'Agent triggers are not available to OAuth applications' });
+        expect(db.transaction).not.toHaveBeenCalled();
+        expect(createTaskTriggerWorkflow).not.toHaveBeenCalled();
+      });
+
+      it('creates the same task without the agentTrigger', async () => {
+        arrangeCreate();
+        const response = await POST(createRequest({ title: 'Task', dueDate: '2025-12-31', timezone: 'UTC' }), { params: mockParams });
+        expect(response.status).toBe(201);
+        expect(db.transaction).toHaveBeenCalled();
+      });
+    });
+
     it('falls back to the user profile timezone for the agent trigger workflow when body omits it', async () => {
       const mockTaskList = { id: mockTaskListId };
       const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium', position: 0 };

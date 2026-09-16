@@ -67,6 +67,12 @@ vi.mock('@/lib/websocket', () => ({
 // instead of picking rooms itself. Its own room-set and best-effort behavior
 // are covered by packages/lib/src/permissions/__tests__/revocation-kick.test.ts;
 // here we only assert the route wires it up with the right arguments.
+// The OAuth family revocation's own query/matching is covered by
+// oauth-grant-ends-with-membership.integration.test.ts; here only the wiring.
+vi.mock('@/lib/repositories/oauth-repository', () => ({
+  revokeOAuthFamiliesNamingDrive: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock('@pagespace/lib/permissions/revocation-kick', () => ({
   kickForDriveMembershipRevocation: vi.fn().mockResolvedValue(undefined),
 }));
@@ -1285,6 +1291,16 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
       expect(db.transaction).toHaveBeenCalledTimes(1);
       const transactionCallback = vi.mocked(db.transaction).mock.calls[0][0];
       expect(typeof transactionCallback).toBe('function');
+    });
+
+    it("revokes the removed user's OAuth families naming this drive, inside the removal transaction", async () => {
+      const { revokeOAuthFamiliesNamingDrive } = await import('@/lib/repositories/oauth-repository');
+      await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(revokeOAuthFamiliesNamingDrive).toHaveBeenCalledTimes(1);
+      const [txArg, input] = vi.mocked(revokeOAuthFamiliesNamingDrive).mock.calls[0];
+      expect(txArg).not.toBe(db);
+      expect(input).toMatchObject({ userId: mockTargetUserId, driveId: mockDriveId });
     });
 
     it('should track drive operation', async () => {

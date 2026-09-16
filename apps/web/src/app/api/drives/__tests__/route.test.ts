@@ -52,7 +52,7 @@ vi.mock('@/lib/websocket', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
-  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+  isDriveScopedPrincipal: vi.fn(() => false), // Session/unscoped fixtures by default
   isScopedOAuthAuth: vi.fn(() => false),
   isManageKeysOnly: vi.fn(() => false),
   checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default
@@ -138,7 +138,7 @@ describe('GET /api/drives', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session', 'mcp', 'oauth'], requireCSRF: false }
+        { allow: ['session', 'mcp', 'oauth'], requireCSRF: false, admitNoContentOAuth: true }
       );
     });
   });
@@ -295,7 +295,7 @@ describe('POST /api/drives', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session', 'mcp'], requireCSRF: true }
+        { allow: ['session', 'mcp', 'oauth'], requireCSRF: true }
       );
     });
   });

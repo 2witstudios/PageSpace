@@ -13,7 +13,7 @@ import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 // Auth options: PATCH and DELETE are write operations requiring CSRF protection
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 /**
  * PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]
@@ -267,6 +267,7 @@ export async function DELETE(
       const outcome = await expelConversationFromSession({
         conversationId,
         workspaceId,
+        // user-identity: the workspace-tree bookkeeping actor, after canPrincipalEditPage authorized the credential.
         actingUserId: auth.userId,
       });
 
@@ -286,6 +287,7 @@ export async function DELETE(
     // WRITE. A thread with no workspace is exactly what
     // `claimConversationInSession` admits, so a conditional call could never
     // reach the branch that needed it most.
+    // user-identity: the workspace-tree bookkeeping actor, after canPrincipalEditPage authorized the credential.
     await expelAfterDelete({ conversationId, actingUserId: auth.userId });
 
     // Audit log the deletion for security and compliance

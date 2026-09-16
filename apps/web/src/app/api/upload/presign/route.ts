@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isScopedMCPAuth } from '@/lib/auth';
-import { getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, getPrincipalDriveAccessLevel, isDriveScopedPrincipal } from '@/lib/auth';
 import {
   validateContentHash,
   validateFileSize,
@@ -15,7 +14,7 @@ import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 const PRESIGN_TTL = 900;
 
 interface PresignRequestBody {
@@ -51,12 +50,13 @@ export async function POST(request: Request) {
 
   // A scoped MCP token is its own drive member — uploads require the TOKEN's
   // role to grant edit, not the owning user's.
-  if (isScopedMCPAuth(auth)) {
-    const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+  if (isDriveScopedPrincipal(auth)) {
+    const level = await getPrincipalDriveAccessLevel(auth, driveId);
     if (!level?.canEdit) {
       return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
     }
   } else {
+    // user-identity: unscoped-user branch only — drive-scoped credentials took the principal branch above.
     const drivePerms = await getUserDrivePermissions(userId, driveId);
     if (!drivePerms) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });

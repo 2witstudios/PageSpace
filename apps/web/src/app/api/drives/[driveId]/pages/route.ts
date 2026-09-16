@@ -7,10 +7,10 @@ import { pagePermissions, driveMembers } from '@pagespace/db/schema/members'
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, getPrincipalAccessiblePagesInDrive } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getPrincipalAccessiblePagesInDrive, isDriveScopedPrincipal } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 
 // Cutoff date for unread indicators on never-viewed pages
 // For pages the user has never viewed, only show as unread if there's activity after this date
@@ -124,7 +124,7 @@ export async function GET(
 
     let pageResults;
 
-    if (isScopedMCPAuth(auth)) {
+    if (isDriveScopedPrincipal(auth)) {
       // A scoped MCP token is its own drive member — list the pages the TOKEN's
       // role can see, not the owning user's.
       const accessible = await getPrincipalAccessiblePagesInDrive(auth, driveId);

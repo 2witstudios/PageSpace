@@ -8,7 +8,6 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import {
   validateCommandTrigger,
   validateCommandDescription,
@@ -19,6 +18,8 @@ import {
   toCommandResponse,
   isUniqueViolation,
   validateEntryPage,
+  refuseScopedPersonalCommand,
+  canManageDriveCommands,
 } from '../command-route-helpers';
 
 type RouteContext = { params: Promise<{ commandId: string }> };
@@ -45,13 +46,15 @@ async function loadCommandForManage(
     if (command.userId !== userId) {
       return { error: NextResponse.json({ error: 'Command not found' }, { status: 404 }) };
     }
+    const personalRefusal = refuseScopedPersonalCommand(auth);
+    if (personalRefusal) return { error: personalRefusal };
     return { command };
   }
 
   const scopeError = checkMCPDriveScope(auth, command.driveId as string);
   if (scopeError) return { error: scopeError };
 
-  const allowed = await isDriveOwnerOrAdmin(userId, command.driveId as string);
+  const allowed = await canManageDriveCommands(auth, command.driveId as string);
   if (!allowed) {
     return {
       error: NextResponse.json(

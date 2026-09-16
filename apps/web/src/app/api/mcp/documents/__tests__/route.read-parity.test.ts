@@ -18,7 +18,7 @@ const mockSerializeTaskItem = vi.fn();
 const mockSelectFrom = vi.fn();
 
 vi.mock('@/lib/auth', () => ({
-  authenticateMCPRequest: vi.fn().mockResolvedValue({
+  authenticateRequestWithOptions: vi.fn().mockResolvedValue({
     userId: 'user_123',
     tokenType: 'mcp',
     tokenId: 'token_123',
@@ -28,6 +28,8 @@ vi.mock('@/lib/auth', () => ({
     allowedDriveIds: [],
   }),
   isAuthError: (result: unknown) => 'error' in (result as object),
+  // Mirrors the real helper for the mcp fixtures used here (their own ceiling).
+  getAllowedDriveIds: (auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? [],
   isMCPAuthResult: () => true,
   getPrincipalAccessLevel: vi.fn().mockResolvedValue({
     canView: true,

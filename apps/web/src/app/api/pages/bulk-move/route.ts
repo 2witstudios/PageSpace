@@ -7,12 +7,11 @@ import { db } from '@pagespace/db/db'
 import { and, eq, isNotNull } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult, isScopedMCPAuth, canPrincipalEditPage } from '@/lib/auth';
-import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult, canPrincipalEditPage, getPrincipalDriveMembership, isDriveScopedPrincipal } from '@/lib/auth';
 import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 const requestSchema = z.object({
   pageIds: z.array(z.string()).min(1, 'At least one page ID is required'),
@@ -70,10 +69,10 @@ export async function POST(request: Request) {
             columns: { ownerId: true },
           });
 
-          const tokenMembership = isScopedMCPAuth(auth)
-            ? await getAppDriveMembership(auth.tokenId, driveId)
+          const tokenMembership = isDriveScopedPrincipal(auth)
+            ? await getPrincipalDriveMembership(auth, driveId)
             : null;
-          if (isScopedMCPAuth(auth) && tokenMembership?.role !== null) {
+          if (isDriveScopedPrincipal(auth) && tokenMembership?.role !== null) {
             // Explicit-role keys need OWNER/ADMIN; inherited keys (role null) fall
             // through to the owner's own authority below.
             return tokenMembership?.role === 'OWNER' || tokenMembership?.role === 'ADMIN';
