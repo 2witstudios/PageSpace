@@ -28,6 +28,7 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 }));
 vi.mock('../actor-permissions', () => ({
   canActorViewPage: vi.fn(),
+  canActorConsultAgent: vi.fn(),
   canActorEditPage: vi.fn(),
   canActorDeletePage: vi.fn(),
   canActorAccessDrive: vi.fn(),
@@ -183,7 +184,7 @@ vi.mock('../../core/ai-providers-config', () => ({
 
 import { agentCommunicationTools, executeAskAgent } from '../agent-communication-tools';
 import { db } from '@pagespace/db/db';
-import { canActorViewPage, isMcpScoped, resolveActingAgentId, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope } from '../actor-permissions';
+import { canActorViewPage, canActorConsultAgent, isMcpScoped, resolveActingAgentId, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope } from '../actor-permissions';
 import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { createAIProvider } from '../../core/provider-factory';
@@ -198,6 +199,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 
 const mockDb = vi.mocked(db);
 const mockCanActorViewPage = vi.mocked(canActorViewPage);
+const mockCanActorConsultAgent = vi.mocked(canActorConsultAgent);
 
 interface MockDb {
   select: ReturnType<typeof vi.fn>;
@@ -354,6 +356,7 @@ describe('agent-communication-tools', () => {
   describe('executeAskAgent', () => {
     beforeEach(() => {
       mockCanActorViewPage.mockResolvedValue(true);
+      mockCanActorConsultAgent.mockResolvedValue(true);
       vi.mocked(mockDb.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
@@ -423,7 +426,7 @@ describe('agent-communication-tools', () => {
         aiProvider: null,
         aiModel: null,
       });
-      mockCanActorViewPage.mockResolvedValue(false);
+      mockCanActorConsultAgent.mockResolvedValue(false);
 
       const context = {
         toolCallId: '1', messages: [],
@@ -442,6 +445,36 @@ describe('agent-communication-tools', () => {
       if (!('error' in result)) throw new Error('Expected error result');
       expect(result.success).toBe(false);
       expect(result.error).toContain('Insufficient permissions');
+    });
+
+    it('authorizes through canActorConsultAgent, not the page view check, so a guest agent member of the current drive can be consulted', async () => {
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+        id: 'agent-1',
+        title: 'Guest Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-home',
+        systemPrompt: 'I am helpful',
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+      });
+      // The mentioner cannot view the agent's home page; membership in the
+      // current drive is the grant, and only the shared rule knows that.
+      mockCanActorViewPage.mockResolvedValue(false);
+      mockCanActorConsultAgent.mockResolvedValue(true);
+
+      const experimental_context = {
+        userId: 'user-123',
+        locationContext: { currentDrive: { id: 'drive-1', name: 'D', slug: 'd' } },
+      } as ToolExecutionContext;
+
+      const result = await executeAskAgent(
+        { agentPath: '/Guest Agent', agentId: 'agent-1', question: 'Test question' },
+        { toolCallId: '1', messages: [], experimental_context }
+      );
+
+      expect(mockCanActorConsultAgent).toHaveBeenCalledWith(experimental_context, 'agent-1');
+      expect(result.success).toBe(true);
     });
 
     it('enforces max recursion depth', async () => {
