@@ -42,7 +42,6 @@ export const CACHE_READ_DISCOUNT_FACTOR_BPS = envInt('CACHE_READ_DISCOUNT_FACTOR
 export const TIER_ALLOWANCE_REFILLS: Record<SubscriptionTier, boolean> = {
   free: false,
   pro: true,
-  founder: true,
   business: true,
 };
 

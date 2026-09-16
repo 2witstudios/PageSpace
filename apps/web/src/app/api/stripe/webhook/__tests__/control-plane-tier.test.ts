@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { isSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { resolveControlPlaneTier, resolveWebhookMetadataTierForControlPlane } from '../control-plane-tier';
 
 describe('resolveControlPlaneTier', () => {
@@ -8,10 +9,10 @@ describe('resolveControlPlaneTier', () => {
     expect(resolveControlPlaneTier('business')).toBe('business');
   });
 
-  it('maps founder to the closest control-plane tier instead of failing validation', () => {
-    // Regression for #2148: control-plane's VALID_TIERS has no 'founder' —
-    // forwarding the raw SaaS tier string fails tenant-validation.ts.
-    expect(resolveControlPlaneTier('founder')).toBe('business');
+  it('A-9 the removed founder tier is not a canonical tier the bridge accepts', () => {
+    // Regression for #2148 kept in negative form: 'founder' used to need a
+    // founder→business remap here; it is now outside the vocabulary entirely.
+    expect(isSubscriptionTier('founder')).toBe(false);
   });
 
   it('is exhaustive over every canonical SubscriptionTier (compile-time via assertNeverTier)', () => {
@@ -23,8 +24,12 @@ describe('resolveControlPlaneTier', () => {
 
 describe('resolveWebhookMetadataTierForControlPlane', () => {
   it('remaps a canonical SaaS tier through resolveControlPlaneTier', () => {
-    expect(resolveWebhookMetadataTierForControlPlane('founder')).toBe('business');
+    expect(resolveWebhookMetadataTierForControlPlane('business')).toBe('business');
     expect(resolveWebhookMetadataTierForControlPlane('pro')).toBe('pro');
+  });
+
+  it('A-9 passes the retired founder string through UNCHANGED (control-plane rejects it, this bridge does not invent a tier)', () => {
+    expect(resolveWebhookMetadataTierForControlPlane('founder')).toBe('founder');
   });
 
   it('passes a control-plane-only value (enterprise) through UNCHANGED', () => {

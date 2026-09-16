@@ -13,7 +13,7 @@
  * are wrong for a hosting charge:
  *
  *   - a hosting subscription carries a price the tier map does not know, so the
- *     tier derives to `free` and a paying Pro/Founder/Business customer is
+ *     tier derives to `free` and a paying Pro/Business customer is
  *     DEMOTED by buying more. The reconcile cron then reads their unmapped
  *     entitled row as `indeterminate` and deliberately refuses to auto-repair it,
  *     so the demotion is permanent and invisible to the machinery built for

@@ -84,10 +84,11 @@ const faqs: FAQItem[] = [
     answer: (
       <>
         More credits, access to Pro models, and more storage. Each plan
-        includes a monthly credit allowance — {MONTHLY_CREDITS.pro}/month on
-        Pro ($15/month), {MONTHLY_CREDITS.founder}/month on Founder ($50/month),
-        and {MONTHLY_CREDITS.business}/month on Business ($100/month) — and you
-        can buy more credits anytime. All plans include real-time collaboration
+        includes a monthly credit allowance — {MONTHLY_CREDITS.pro} credits a
+        month on Pro ($15/month) and {MONTHLY_CREDITS.business} credits a month
+        on Business ($50/month, the plan for an organization with 5 seats
+        included and $10 per extra seat) — and you can buy more credits
+        anytime. All plans include real-time collaboration
         and AI agents. Full comparison on the{" "}
         {docsLink("/pricing", "Pricing page")}.
       </>

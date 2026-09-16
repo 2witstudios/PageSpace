@@ -14,12 +14,14 @@ import { EmbeddedCheckoutForm } from '@/components/billing/EmbeddedCheckoutForm'
 import { PlanChangeConfirmation } from '@/components/billing/PlanChangeConfirmation';
 import { PlanCard } from '@/components/billing/PlanCard';
 import { BillingGuard } from '@/components/billing/BillingGuard';
-import { getAllPlans, getPlan, getTierFromPriceId, type SubscriptionTier, type PlanDefinition } from '@/lib/subscription/plans';
+import { getPersonalPlans, getPlan, getTierFromPriceId, type SubscriptionTier, type PlanDefinition } from '@/lib/subscription/plans';
 import { creditsCellPhrase } from '@/lib/subscription/credits';
 import type { AppliedPromo } from '@/components/billing/PromoCodeInput';
 
 interface SubscriptionData {
   subscriptionTier: SubscriptionTier;
+  /** A-9: a legacy $100 personal Business subscriber kept at their price. */
+  subscriptionGrandfathered?: boolean;
   subscription?: {
     status: string;
     currentPeriodStart: string;
@@ -296,7 +298,9 @@ export default function PlanPage() {
     );
   }
 
-  const plans = getAllPlans();
+  // SEAT-2: Business is the org plan and is not offered to a lone user; it
+  // appears here only as the viewer's own (grandfathered) current plan.
+  const plans = getPersonalPlans(subscriptionData?.subscriptionTier);
   const currentPlan = subscriptionData ? getPlan(subscriptionData.subscriptionTier) : getPlan('free');
   const scheduledTier = subscriptionData?.subscription?.scheduledPriceId
     ? getTierFromPriceId(subscriptionData.subscription.scheduledPriceId)
@@ -396,7 +400,7 @@ export default function PlanPage() {
 
       {/* Plan Cards - Only show when not in checkout */}
       {!checkoutPlan && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 pt-6 pb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 pt-6 pb-4">
           {plans.map((plan) => (
             <PlanCard
               key={plan.id}
@@ -409,6 +413,7 @@ export default function PlanPage() {
               onManageBilling={() => router.push('/settings/billing')}
               onCancelSchedule={handleCancelSchedule}
               cancellingSchedule={cancellingSchedule}
+              grandfathered={subscriptionData?.subscriptionGrandfathered === true}
               className={plan.highlighted ? 'relative z-10' : ''}
             />
           ))}

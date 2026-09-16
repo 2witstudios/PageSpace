@@ -15,8 +15,7 @@ const { mockStripeWebhooksConstructEvent, StripeError, mockGetTierFromPrice } = 
     mockGetTierFromPrice: vi.fn((priceId: string, priceAmount?: number) => {
       // Map price amounts to tiers for testing
       if (priceAmount === 1500 || priceAmount === 2999) return 'pro';
-      if (priceAmount === 5000) return 'founder';
-      if (priceAmount === 10000 || priceAmount === 19999) return 'business';
+      if (priceAmount === 5000 || priceAmount === 10000 || priceAmount === 19999) return 'business';
       return 'pro'; // Default fallback
     }),
   };
@@ -517,8 +516,8 @@ describe('POST /api/stripe/webhook', () => {
       );
     });
 
-    it('should handle subscription.updated and update tier to founder', async () => {
-      const subscription = mockSubscription({ priceAmount: 5000 }); // $50 = Founder
+    it('SEAT-2 should handle subscription.updated and update tier to business ($50 org plan)', async () => {
+      const subscription = mockSubscription({ priceAmount: 5000 }); // $50 = Business
       const event = mockStripeEvent('customer.subscription.updated', subscription);
       mockStripeWebhooksConstructEvent.mockReturnValue(event);
 
@@ -537,7 +536,7 @@ describe('POST /api/stripe/webhook', () => {
       expect(body.received).toBe(true);
       expect(mockUpdateSet).toHaveBeenCalledWith(
         expect.objectContaining({
-          subscriptionTier: 'founder',
+          subscriptionTier: 'business',
         })
       );
     });
@@ -634,8 +633,8 @@ describe('POST /api/stripe/webhook', () => {
     const tierPriceTests = [
       { priceAmount: 1500, expectedTier: 'pro', description: '$15 = Pro (new)' },
       { priceAmount: 2999, expectedTier: 'pro', description: '$29.99 = Pro (legacy)' },
-      { priceAmount: 5000, expectedTier: 'founder', description: '$50 = Founder (new)' },
-      { priceAmount: 10000, expectedTier: 'business', description: '$100 = Business (new)' },
+      { priceAmount: 5000, expectedTier: 'business', description: '$50 = Business, the org plan (SEAT-2)' },
+      { priceAmount: 10000, expectedTier: 'business', description: '$100 = legacy personal Business (grandfathered, A-9)' },
       { priceAmount: 19999, expectedTier: 'business', description: '$199.99 = Business (legacy)' },
       { priceAmount: 999, expectedTier: 'pro', description: 'Fallback to pro for unknown price' },
     ];
@@ -706,7 +705,7 @@ describe('POST /api/stripe/webhook', () => {
       expect(response.status).toBe(200);
       expect(mockUpdateSet).toHaveBeenCalledWith(
         expect.objectContaining({
-          subscriptionTier: 'founder',
+          subscriptionTier: 'business',
         })
       );
     });
@@ -1195,12 +1194,12 @@ describe('POST /api/stripe/webhook', () => {
       );
     });
 
-    it('remaps a founder checkout to control-plane business instead of failing tenant-validation (#2148)', async () => {
+    it('forwards a business checkout to control-plane as business (the #2148 bridge, now without a founder remap)', async () => {
       const session = mockCheckoutSession({
         mode: 'subscription',
         customer: 'cus_new123',
         customerEmail: 'admin@acme.com',
-        metadata: { slug: 'acme', tier: 'founder' },
+        metadata: { slug: 'acme', tier: 'business' },
       });
       const event = mockStripeEvent('checkout.session.completed', session);
       mockStripeWebhooksConstructEvent.mockReturnValue(event);

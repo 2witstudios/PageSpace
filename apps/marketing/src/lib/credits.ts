@@ -10,4 +10,6 @@ export {
   FREE_STARTER_CREDITS_DISPLAY,
   creditsPhrase,
   creditPacksPhrase,
+  includedCreditsPhrase,
+  topUpRatePhrase,
 } from "@pagespace/lib/billing/credit-copy";

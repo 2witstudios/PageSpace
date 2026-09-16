@@ -3,7 +3,6 @@ import type { SubscriptionTier } from './types';
 const TIER_LABELS: Record<SubscriptionTier, string> = {
   free: 'Free',
   pro: 'Pro',
-  founder: 'Founder',
   business: 'Business',
 };
 

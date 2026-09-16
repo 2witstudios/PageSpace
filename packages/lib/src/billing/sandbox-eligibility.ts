@@ -24,7 +24,7 @@ import { resolveSessionPayerId } from './sandbox-payer';
 import type { SubscriptionTier } from './subscription-tiers';
 
 /** Tiers for which the sandbox (Sprite compute, code execution, terminal) is available. */
-export const SANDBOX_ELIGIBLE_TIERS: readonly SubscriptionTier[] = ['pro', 'founder', 'business'];
+export const SANDBOX_ELIGIBLE_TIERS: readonly SubscriptionTier[] = ['pro', 'business'];
 
 /**
  * The tier a TENANT deployment's payers are treated as holding for every sandbox

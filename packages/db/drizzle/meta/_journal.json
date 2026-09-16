@@ -2066,6 +2066,13 @@
       "when": 1789494364786,
       "tag": "0294_bent_corsair",
       "breakpoints": true
+    },
+    {
+      "idx": 295,
+      "version": "7",
+      "when": 1789521895584,
+      "tag": "0295_public_brother_voodoo",
+      "breakpoints": true
     }
   ]
 }

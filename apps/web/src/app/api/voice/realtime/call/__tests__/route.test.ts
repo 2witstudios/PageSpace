@@ -37,7 +37,7 @@ vi.mock('@/lib/repositories/ai-settings-repository', () => ({
   aiSettingsRepository: { getUserSettings: mockGetUserSettings },
 }));
 vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
-  PAID_TIERS: new Set(['pro', 'founder', 'business']),
+  PAID_TIERS: new Set(['pro', 'business']),
 }));
 vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
   createSignedBroadcastHeaders: mockSignHeaders,

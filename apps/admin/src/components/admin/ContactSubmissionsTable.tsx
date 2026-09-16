@@ -86,7 +86,6 @@ function truncateText(text: string, maxLength: number = 100) {
 function tierColor(tier: string | null): string {
   switch (tier) {
     case 'pro': return 'bg-info/15 text-info';
-    case 'founder': return 'bg-primary/15 text-primary';
     case 'business': return 'bg-success/15 text-success';
     default: return 'bg-muted text-muted-foreground';
   }

@@ -38,11 +38,10 @@ export interface VersionHistoryPage {
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-// Default retention days by tier (ordered: free < pro < founder < business)
+// Default retention days by tier (ordered: free < pro < business)
 const DEFAULT_RETENTION: Record<string, number> = {
   free: 7,
   pro: 30,
-  founder: 90,
   business: -1, // unlimited
 };
 const FREE_RETENTION = DEFAULT_RETENTION.free;

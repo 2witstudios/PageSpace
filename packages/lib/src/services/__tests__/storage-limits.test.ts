@@ -89,7 +89,6 @@ describe('storage-limits', () => {
     it('STORAGE_TIERS_allTiers_areDefined', () => {
       expect(STORAGE_TIERS.free).toBeDefined();
       expect(STORAGE_TIERS.pro).toBeDefined();
-      expect(STORAGE_TIERS.founder).toBeDefined();
       expect(STORAGE_TIERS.business).toBeDefined();
     });
 

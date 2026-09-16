@@ -68,7 +68,6 @@ vi.mock('@/lib/stripe-config', () => ({
   stripeConfig: {
     priceIds: {
       pro: 'price_pro_mock',
-      founder: 'price_founder_mock',
       business: 'price_business_mock',
     },
   },

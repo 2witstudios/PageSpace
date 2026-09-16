@@ -6,7 +6,7 @@
  * handler assumes every one of them IS that customer's plan. If a hosting
  * subscription ever reaches `handleSubscriptionChange`, it derives an account tier
  * from a price the tier map does not know — `free` — and writes that over a paying
- * Pro / Founder / Business customer's `users.subscriptionTier`. The reconcile cron
+ * Pro / Business customer's `users.subscriptionTier`. The reconcile cron
  * then reads their entitled-but-unmapped row as `indeterminate` and deliberately
  * refuses to auto-repair it, so the demotion is permanent AND invisible to the
  * machinery built for exactly that failure. The same fork protects the credit
