@@ -81,9 +81,44 @@ afterAll(async () => {
 });
 
 describe('pinnedFetch', () => {
+  it.each([['identity'], ['gzip'], ['deflate, gzip']])(
+    'given a %s body that is cancelled before it ends (as the executor does on a redirect hop), should close the socket',
+    async (coding) => {
+      let serverSocketClosed: Promise<void> = Promise.resolve();
+      const partial = encodeBody(coding, Buffer.from('x'.repeat(4096))).subarray(0, 16);
+      const raw = net.createServer((socket) => {
+        socket.on('error', () => undefined); // the client may reset the connection
+        serverSocketClosed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
+        socket.once('data', () => {
+          socket.write(`HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Encoding: ${coding}\r\nContent-Length: 100000\r\n\r\n`);
+          socket.write(partial);
+        });
+      });
+      await new Promise<void>((resolve) => raw.listen(0, '127.0.0.1', resolve));
+      const rawPort = (raw.address() as AddressInfo).port;
+      try {
+        const response = await pinnedFetch(`http://pinned-host.invalid:${rawPort}/hook`, {
+          method: 'GET',
+          pinnedAddresses: ['127.0.0.1'],
+        });
+        await response.body?.cancel();
+
+        const actual = await Promise.race([
+          serverSocketClosed.then(() => 'closed'),
+          new Promise<string>((resolve) => setTimeout(() => resolve('still open'), 1000)),
+        ]);
+        const expected = 'closed';
+        expect(actual).toEqual(expected);
+      } finally {
+        raw.close();
+      }
+    }
+  );
+
   it('given a signal that aborts while the body is still arriving, should fail the body read and close the socket', async () => {
     let serverSocketClosed: Promise<void> = Promise.resolve();
     const raw = net.createServer((socket) => {
+        socket.on('error', () => undefined); // the client may reset the connection
       serverSocketClosed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
       socket.once('data', () => socket.write('HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nok'));
     });
@@ -118,6 +153,7 @@ describe('pinnedFetch', () => {
   it('given an unrepresentable status from an upstream that never ends the body, should close the socket rather than leave it open', async () => {
     let serverSocketClosed: Promise<void> = Promise.resolve();
     const raw = net.createServer((socket) => {
+        socket.on('error', () => undefined); // the client may reset the connection
       serverSocketClosed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
       socket.once('data', () => socket.write('HTTP/1.1 999 Weird\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n'));
     });
@@ -143,6 +179,7 @@ describe('pinnedFetch', () => {
     async (status) => {
       // A raw socket, because node:http servers refuse to write such statuses.
       const raw = net.createServer((socket) => {
+        socket.on('error', () => undefined); // the client may reset the connection
         socket.once('data', () => socket.end(`HTTP/1.1 ${status} Weird\r\nContent-Length: 2\r\n\r\nok`));
       });
       await new Promise<void>((resolve) => raw.listen(0, '127.0.0.1', resolve));
