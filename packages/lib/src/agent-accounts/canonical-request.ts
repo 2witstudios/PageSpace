@@ -104,7 +104,13 @@ export type CanonicalRequest = {
   readonly channel: ExecutorChannel;
   readonly method: MethodFor[ExecutorChannel];
   readonly origin: CanonicalOrigin;
-  /** Dot-segments resolved, each segment percent-decoded once, re-encoded canonically; an encoded `/` stays encoded. */
+  /**
+   * Dot-segments resolved. A DECODED copy is used only for the traversal and
+   * control-character checks; the digested segments are normalized like a query
+   * component (upper-case hex, only unreserved unescaped), never decoded — so
+   * `foo;bar` ≠ `foo%3Bbar`, `+` ≠ `%2B`, `@` ≠ `%40`, `=` ≠ `%3D`, and `%2F` stays
+   * encoded (ADR 0004 §3.2, second amendment).
+   */
   readonly path: string;
   /**
    * Sorted `[name, value]` pairs; duplicates kept in input order. Each half is

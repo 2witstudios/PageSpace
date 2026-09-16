@@ -8,7 +8,7 @@ describe('canonicalizeRequest refusals (ADR 0004 F18)', () => {
   it.todo('given an IP-literal host (v4 or v6, incl. decimal/hex encodings), should refuse with ip_literal_host');
   it.todo('given an http:// URL, should refuse with scheme_not_https');
   it.todo('given an authorization, cookie, host, proxy-* or x-forwarded-* header supplied by the caller, should refuse with reserved_header (never strip)');
-  it.todo('given a path containing .. or a NUL after one percent-decode, should refuse with path_traversal / path_control_char');
+  it.todo('given a path containing .. or a NUL in its decoded check-only copy (e.g. /x/%2e%2e/y), should refuse with path_traversal / path_control_char');
   it.todo('given a method outside the channel closed set, should refuse with method_not_allowed');
   it.todo('given an admitted header (accept, content-type or a declared header) whose VALUE carries CR, LF or another control character, should refuse with malformed (a name-only check lets CRLF smuggle authorization:) [0004 §8.26]');
   it.todo('given a caller-supplied content-length that disagrees with the body bytes, should refuse with malformed [0004 §8.26]');
@@ -40,6 +40,11 @@ describe('digestRequest', () => {
   it.todo('given two inputs differing only by header order, key order, host case or :443, should produce the same digest');
   it.todo('given two inputs differing in one body byte, should produce different digests');
   it.todo('given queries ?to=a+b vs ?to=a%2Bb, ?q=%2Fsafe vs ?q=/safe, and ?x=a%26b vs ?x=a&b, should produce different digests — the query is normalized, never decoded [0004 §8.26]');
+  it.todo('given paths /x/foo;bar vs /x/foo%3Bbar, should produce different digests — the digested path is normalized, never decoded [0004 §3.2 second amendment, §8.26]');
+  it.todo('given paths /x/a+b vs /x/a%2Bb, should produce different digests [0004 §8.26]');
+  it.todo('given paths /x/u@h vs /x/u%40h, should produce different digests [0004 §8.26]');
+  it.todo('given paths /x/k=v vs /x/k%3Dv, should produce different digests [0004 §8.26]');
+  it.todo('given a path escape in lower-case hex (/x/%3b) or an escaped unreserved character (/x/%41), should normalize to /x/%3B and /x/A — the same digest as the normalized form [0004 §8.26]');
   it.todo('given the same canonical request and operation {class,name} differing, should produce different digests (op discriminator)');
 });
 
