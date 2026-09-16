@@ -599,7 +599,7 @@ services:
     image: pagespace/credential-executor:0.0.0   # placeholder; built at G2, pinned by digest (§10)
     configs:
       - source: executor_egress_acl              # the SAME generated ACL executor-egress enforces, mounted
-        target: /etc/credential-executor/egress-acl.yaml   # read-only for the startup builtin-hash guard
+        target: /etc/credential-executor/egress-acl.yaml   # read-only for the startup canonical-destinations hash guard
     restart: unless-stopped
     depends_on:
       infisical: { condition: service_started }
@@ -680,8 +680,9 @@ configs:
   # GET), so a DB-only render at `up` step 3 would drop every shipped provider. It also unions a STATIC list for the
   # shipped integrations OUTSIDE the provider registry: Google Calendar and Zoom live in their own apps/web
   # tables and handlers and never appear in `listEnabledProviders` or `builtinProviderList`. G3 moves their
-  # hosts (www.googleapis.com, oauth2.googleapis.com, api.zoom.us, zoom.us) into a canonical destination
-  # definition beside builtinProviderList, and the builtin-hash guard covers it too. The ACL is taken from that resolved config.baseUrl, tokenUrl
+  # hosts (www.googleapis.com, oauth2.googleapis.com, api.zoom.us, zoom.us, and the `*.zoom.us` suffix that
+  # zoom-api-client.ts `isTrustedZoomHost` accepts for regional transcript downloads such as us02web.zoom.us)
+  # into a canonical destination definition beside builtinProviderList. The ACL is taken from that resolved config.baseUrl, tokenUrl
   # and revokeUrl, so a release that moves a builtin host cannot leave the ACL stale (refresh must not
   # fail closed). Connection destinations (execute-tool.ts:206: `baseUrlOverride || baseUrl`) are added
   # ONLY AFTER APPROVAL. Today any authenticated user can submit an arbitrary `baseUrlOverride`
@@ -690,9 +691,10 @@ configs:
   # enter the tenant ACL; rejection or delete removes them. Custom providers created by non-admins follow
   # the same pending rule. Regenerated and executor-egress restarted on every approval, provider change or
   # connection change, AND on every application rollout. `tenant-stack.sh up` regenerates the ACL before
-  # starting executor-egress, and the executor refuses to start if the mounted ACL's builtin-definition
-  # hash differs from the hash of its own builtinProviderList, so a moved builtin host cannot run stale.
-  # The generator writes that hash as a header line (`# builtin-definitions-sha3-256: <hex>`) into this one
+  # starting executor-egress, and the executor refuses to start if the mounted ACL's canonical-destinations
+  # hash differs from its own: a SHA3-256 over BOTH builtinProviderList destinations AND the external-
+  # integration list (Google Calendar, Zoom), so a moved host in either collection cannot run stale.
+  # The generator writes that hash as a header line (`# canonical-destinations-sha3-256: <hex>`) into this one
   # config, which is mounted into BOTH executor-egress (enforced) and credential-executor (verified). An ACL change is applied by regenerating the
   # config and restarting executor-egress (hot reload unverified at G2); until then that webhook is refused. Schema per smokescreen's egress ACL docs; verify at G2.
   # Residual: a host allowlist bounds destinations, not accounts. A compromised executor can still send
@@ -702,12 +704,12 @@ configs:
     # A GENERATED per-tenant artifact, not inline content. `tenant-stack.sh up` renders it from the
     # sources above, then both services mount it. The sources live in the tenant Postgres, so `up` is staged:
     #   1. if the file is missing, write a DENY-ALL seed (empty allowed_domains, hash header of the current
-    #      builtinProviderList), so the compose project config is valid;
+    #      canonical destinations: builtinProviderList + external-integration list), so the config is valid;
     #   2. `compose up -d postgres postgres-admin migrate` and wait for migrations;
     #   3. render the real ACL from the database (a one-shot generator run on `internal`);
     #   4. `compose up -d` the rest, which starts executor-egress and credential-executor on the real file.
     # A failure at step 3 leaves the deny-all seed in place: fail closed, never open. Illustrative rendering:
-  #   # builtin-definitions-sha3-256: <hex>
+  #   # canonical-destinations-sha3-256: <hex>
   #   version: v1
   #   services: []
   #   default:
@@ -723,6 +725,7 @@ configs:
   #       - oauth2.googleapis.com       # Google token refresh endpoint
   #       - api.zoom.us                 # Zoom API
   #       - zoom.us                     # zoom token-refresh.ts (/oauth/token)
+  #       - "*.zoom.us"                 # regional transcript hosts, e.g. us02web.zoom.us (isTrustedZoomHost suffix; wildcard syntax to verify at G2)
   #       # + generated: approved custom-provider baseUrls and approved connection baseUrlOverride origins
     file: ./generated/executor-egress-acl.${TENANT_SLUG}.yaml
   vault_ingress_nginx:                  # inline `content` needs Docker Compose >= 2.23.1
