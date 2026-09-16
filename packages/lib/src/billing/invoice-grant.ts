@@ -2,8 +2,18 @@
  * invoice-grant — pure sizing of a monthly credit grant from a Stripe invoice
  * (Spec MON-2, MON-3; ruling D-OW-16). No I/O; credit-funding is the shell.
  *
- * Entitlement follows the amount ACTUALLY PAID, except for grants we deliberately
- * fund ourselves (D-OW-16):
+ * SECURITY: only a REAL subscription invoice may grant at all — billing_reason must
+ * be subscription_cycle or subscription_create. routeInvoice classifies a manual or
+ * otherwise parentless invoice as account_plan (it has no subscription to be
+ * anything else), and that invoice can still carry a large amount_paid from an
+ * existing paid customer; without this gate that invoice would derive a large
+ * grant it has nothing to do with (Codex P1, "Restrict derived grants to
+ * account-plan invoices"). Every other billing_reason — subscription_update,
+ * manual, threshold, upcoming, anything unrecognised or absent — grants nothing,
+ * regardless of amount.
+ *
+ * Entitlement otherwise follows the amount ACTUALLY PAID, except for grants we
+ * deliberately fund ourselves (D-OW-16):
  *   (a) a gifted subscription (subscriptions.gifted), or a subscription created
  *       with a trial, is us fronting the plan: grant list price × ratio;
  *   (b) a proration-only or subscription_update invoice that paid nothing: nothing;
@@ -36,7 +46,15 @@ export type GrantReason =
   /** amount_paid is 0 and neither gifted nor a trial (D-OW-16 b, d). */
   | 'zero_amount'
   /** something was paid but the resolved tier has no ratio (free/unknown): a MISSED grant. */
-  | 'no_ratio';
+  | 'no_ratio'
+  /**
+   * billing_reason is not subscription_cycle or subscription_create: not a real
+   * subscription renewal/creation, so never a grant regardless of amount paid
+   * (Codex P1 security fix). Distinct from 'zero_amount' — this is refused on the
+   * invoice's KIND, not its amount, and is never a missed_grant candidate: there is
+   * no tier to repair here, the invoice itself is simply not eligible.
+   */
+  | 'not_a_subscription_invoice';
 
 export interface InvoiceGrant {
   /** What the invoice actually paid, in whole cents — recorded on the ledger row for audit. */
@@ -77,6 +95,13 @@ function toCents(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : 0;
 }
 
+/** The only billing_reason values a derived grant may ever fire on. */
+const GRANT_ELIGIBLE_BILLING_REASONS = new Set(['subscription_cycle', 'subscription_create']);
+
+function isGrantEligibleInvoice(billingReason: string | null | undefined): boolean {
+  return typeof billingReason === 'string' && GRANT_ELIGIBLE_BILLING_REASONS.has(billingReason);
+}
+
 /**
  * A subscription created with a trial: the first invoice charges nothing AND the
  * plan itself cost nothing this period (subtotal 0). A 100% coupon also pays 0 but
@@ -91,6 +116,14 @@ function isTrialCreate(input: InvoiceGrantInput, paidCents: number): boolean {
 /** Size the grant for a PERSONAL subscription invoice (D-OW-16 a–d). */
 export function grantForInvoice(input: InvoiceGrantInput): InvoiceGrant {
   const paidCents = Math.max(0, toCents(input.amountPaidCents));
+
+  // SECURITY gate FIRST, ahead of gifted/trial: an invoice that is not a real
+  // subscription renewal or creation never grants, no matter what `gifted` says.
+  // This is what confines D-OW-16's gifted/trial carve-outs to invoices that are
+  // actually subscription invoices in the first place.
+  if (!isGrantEligibleInvoice(input.billingReason)) {
+    return { paidCents, allowanceCents: 0, basis: 'none', reason: 'not_a_subscription_invoice' };
+  }
 
   const funded: GrantReason | null = input.gifted === true ? 'gifted' : isTrialCreate(input, paidCents) ? 'trial' : null;
   if (funded) {

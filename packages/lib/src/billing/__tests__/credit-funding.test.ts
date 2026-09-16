@@ -136,11 +136,21 @@ function missedGrantInsert(cap: Captured) {
 
 const PRO_USER = [{ id: 'u1', subscriptionTier: 'pro' }];
 
+// billing_reason defaults to 'subscription_cycle' — an ordinary renewal — since
+// that is what nearly every fixture in this file represents; the SECURITY tests
+// below override it explicitly to exercise every other reason.
 const invoiceEvent = {
   id: 'evt_inv',
   type: 'invoice.paid',
   data: {
-    object: { id: 'in_123', customer: 'cus_1', amount_paid: 1500, period_start: 1_700_000_000, period_end: 1_702_592_000 },
+    object: {
+      id: 'in_123',
+      customer: 'cus_1',
+      amount_paid: 1500,
+      billing_reason: 'subscription_cycle',
+      period_start: 1_700_000_000,
+      period_end: 1_702_592_000,
+    },
   },
 };
 
@@ -150,7 +160,15 @@ function paidInvoiceEvent(amountPaid: number | undefined, extra: Record<string, 
     id: 'evt_inv',
     type: 'invoice.paid',
     data: {
-      object: { id: 'in_123', customer: 'cus_1', amount_paid: amountPaid, period_start: 1_700_000_000, period_end: 1_702_592_000, ...extra },
+      object: {
+        id: 'in_123',
+        customer: 'cus_1',
+        amount_paid: amountPaid,
+        billing_reason: 'subscription_cycle',
+        period_start: 1_700_000_000,
+        period_end: 1_702_592_000,
+        ...extra,
+      },
     },
   };
 }
@@ -247,6 +265,7 @@ describe('applyStripeFunding', () => {
           id: 'in_renewal',
           customer: 'cus_1',
           amount_paid: 1500,
+          billing_reason: 'subscription_cycle',
           period_start: OLD_START,
           period_end: OLD_END,
           lines: { data: [{ period: { start: NEW_START, end: NEW_END } }] },
@@ -278,6 +297,7 @@ describe('applyStripeFunding', () => {
           id: 'in_change',
           customer: 'cus_1',
           amount_paid: 1500,
+          billing_reason: 'subscription_cycle',
           period_start: 1_697_000_000,
           period_end: 1_700_000_000,
           lines: { data: [prorationLine, newPlanLine] },
@@ -653,7 +673,7 @@ describe('applyStripeFunding', () => {
         );
       });
 
-      it('MON-2 (b) a proration-only / subscription_update invoice that paid $0 grants nothing', async () => {
+      it('MON-2 (b) a proration-only / subscription_update invoice that paid $0 grants nothing (excluded by the subscription_cycle/subscription_create SECURITY gate)', async () => {
         process.env.MONEY_MODEL_V2 = 'true';
         const cap: Captured = {};
         refill(cap);
@@ -664,7 +684,7 @@ describe('applyStripeFunding', () => {
         expect(cap.ledgerValues).toBeUndefined();
         expect(mockApiLogger.info).toHaveBeenCalledWith(
           'credit funding: invoice grants nothing',
-          expect.objectContaining({ reason: 'zero_amount' }),
+          expect.objectContaining({ reason: 'not_a_subscription_invoice' }),
         );
       });
 

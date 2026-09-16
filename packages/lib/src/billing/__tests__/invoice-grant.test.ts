@@ -16,13 +16,14 @@ describe('invoice-grant derives every grant through allowanceCentsForPaidCents',
   it('MON-2 derives the allowance for EVERY tier as paidCents × ratio, never from a table', () => {
     for (const tier of TIERS) {
       const listCents = TIER_PLAN_LIMITS[tier].priceMonthlyUsd * 100;
-      expect(grantForInvoice({ amountPaidCents: listCents, tier }).allowanceCents).toBe(ratio(tier, listCents));
-      expect(grantForInvoice({ amountPaidCents: listCents, tier }).allowanceCents).toBe(allowanceCentsForPaidCents(listCents, tier));
+      const input = { amountPaidCents: listCents, billingReason: 'subscription_cycle', tier };
+      expect(grantForInvoice(input).allowanceCents).toBe(ratio(tier, listCents));
+      expect(grantForInvoice(input).allowanceCents).toBe(allowanceCentsForPaidCents(listCents, tier));
     }
   });
 
   it('MON-2 Pro at list price ($15) includes 900 credits of value (A-11)', () => {
-    expect(grantForInvoice({ amountPaidCents: 1500, tier: 'pro' }).allowanceCents).toBe(900);
+    expect(grantForInvoice({ amountPaidCents: 1500, billingReason: 'subscription_cycle', tier: 'pro' }).allowanceCents).toBe(900);
   });
 
   it('MON-8 the free tier has no ratio: a paid amount on free grants nothing here', () => {
@@ -32,7 +33,7 @@ describe('invoice-grant derives every grant through allowanceCentsForPaidCents',
 
 describe('grantForInvoice (personal subscriptions)', () => {
   it('MON-2 sizes the grant from what the invoice paid and records paidCents', () => {
-    expect(grantForInvoice({ amountPaidCents: 1500, tier: 'pro' })).toEqual({
+    expect(grantForInvoice({ amountPaidCents: 1500, billingReason: 'subscription_cycle', tier: 'pro' })).toEqual({
       paidCents: 1500,
       allowanceCents: ratio('pro', 1500),
       basis: 'paid',
@@ -72,9 +73,9 @@ describe('grantForInvoice — D-OW-16: entitlement follows amount paid except gr
       .toEqual({ paidCents: 0, allowanceCents: list(), basis: 'list', reason: 'trial' });
   });
 
-  it('MON-2 (b) a proration-only or subscription_update invoice that paid 0 grants nothing', () => {
+  it('MON-2 (b) a proration-only or subscription_update invoice that paid 0 grants nothing (also now excluded by the subscription_cycle/subscription_create SECURITY gate)', () => {
     expect(grantForInvoice({ amountPaidCents: 0, subtotalCents: 0, billingReason: 'subscription_update', tier: 'pro' }))
-      .toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'zero_amount' });
+      .toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'not_a_subscription_invoice' });
     expect(grantForInvoice({ amountPaidCents: 0, subtotalCents: 300, billingReason: 'subscription_update', tier: 'pro' }).allowanceCents).toBe(0);
   });
 
@@ -91,12 +92,34 @@ describe('grantForInvoice — D-OW-16: entitlement follows amount paid except gr
   });
 
   it('MON-2 a paid invoice whose tier has no ratio is a missed grant (reason no_ratio), never silently zero_amount', () => {
-    expect(grantForInvoice({ amountPaidCents: 1500, tier: 'free' }))
+    expect(grantForInvoice({ amountPaidCents: 1500, billingReason: 'subscription_cycle', tier: 'free' }))
       .toEqual({ paidCents: 1500, allowanceCents: 0, basis: 'none', reason: 'no_ratio' });
   });
 
   it('MON-2 a gift on a tier with no ratio funds nothing (no list price to derive from)', () => {
     expect(grantForInvoice({ amountPaidCents: 0, gifted: true, tier: 'free' }).allowanceCents).toBe(0);
+  });
+});
+
+describe('SECURITY (Codex P1, thread "Restrict derived grants to account-plan invoices"): only real subscription invoices may grant', () => {
+  it('a manual/parentless invoice for an existing paid user grants NOTHING even for a large payment — reproduces the exact defect: routeInvoice classifies a parentless invoice as account_plan, and nothing downstream checked billing_reason before deriving a grant from amount_paid', () => {
+    // The exact scenario Codex named: a $1,000 manual invoice on a Business
+    // subscriber must not mint $600 of AI credit.
+    const result = grantForInvoice({ amountPaidCents: 100_000, billingReason: 'manual', tier: 'business' });
+    expect(result).toMatchObject({ allowanceCents: 0, basis: 'none' });
+  });
+
+  it('only billing_reason subscription_cycle or subscription_create may grant; every other reason (including no reason at all) grants nothing regardless of amount', () => {
+    for (const reason of ['manual', 'subscription_update', 'subscription_threshold', 'upcoming', 'automatic_pending_invoice_item_invoice', undefined, null]) {
+      expect(grantForInvoice({ amountPaidCents: 100_000, billingReason: reason, tier: 'business' }).allowanceCents).toBe(0);
+    }
+    expect(grantForInvoice({ amountPaidCents: 100_000, billingReason: 'subscription_cycle', tier: 'business' }).allowanceCents).toBeGreaterThan(0);
+    expect(grantForInvoice({ amountPaidCents: 100_000, billingReason: 'subscription_create', tier: 'business' }).allowanceCents).toBeGreaterThan(0);
+  });
+
+  it('a gifted subscription is still restricted to a real subscription invoice: a manual invoice on a gifted account grants nothing even with gifted: true', () => {
+    const result = grantForInvoice({ amountPaidCents: 0, subtotalCents: 5000, billingReason: 'manual', gifted: true, tier: 'business' });
+    expect(result.allowanceCents).toBe(0);
   });
 });
 
@@ -132,6 +155,6 @@ describe('grantForInvoiceLines (org subscriptions seam, Phase 3)', () => {
   });
 
   it('MON-2/MON-3 the org seam and the personal path apply the SAME ratio to the same paid amount', () => {
-    expect(grantForInvoiceLines([{ amount: 1500 }], 'pro')).toEqual(grantForInvoice({ amountPaidCents: 1500, tier: 'pro' }));
+    expect(grantForInvoiceLines([{ amount: 1500 }], 'pro')).toEqual(grantForInvoice({ amountPaidCents: 1500, billingReason: 'subscription_cycle', tier: 'pro' }));
   });
 });
