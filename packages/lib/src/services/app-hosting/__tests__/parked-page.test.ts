@@ -84,19 +84,19 @@ describe('retryAfterFor — back a caller off by how long the state will last', 
 // state are route-level outages logged server-side and surfaced to nobody.
 describe('the unavailable page does not promise the owner an explanation', () => {
   it('given a failed app, should not claim the owner can see the reason', () => {
-    const html = renderAppRouterPage(failed, 'acme.pagespace.app');
+    const html = renderAppRouterPage(failed, 'acme.pagespace.io');
     expect(html).not.toContain('has been able to see');
     expect(html).not.toMatch(/owner.{0,30}(see|knows) why/i);
   });
 
   it('given a failed app, should point the one reader who can act at where to look', () => {
-    expect(renderAppRouterPage(failed, 'acme.pagespace.app')).toContain('check its status in PageSpace');
+    expect(renderAppRouterPage(failed, 'acme.pagespace.io')).toContain('check its status in PageSpace');
   });
 });
 
 describe('renderAppRouterPage — self-contained, and it escapes the host header', () => {
   it('given any decision, should reference no external asset that would need fetching', () => {
-    const html = renderAppRouterPage(parked, 'acme.pagespace.app');
+    const html = renderAppRouterPage(parked, 'acme.pagespace.io');
     expect(html).not.toMatch(/<link|<script|<img|url\(/i);
   });
 
@@ -107,9 +107,9 @@ describe('renderAppRouterPage — self-contained, and it escapes the host header
   });
 
   it('given a parked app, should explain that credits ran out and nothing was lost', () => {
-    const html = renderAppRouterPage(parked, 'acme.pagespace.app');
+    const html = renderAppRouterPage(parked, 'acme.pagespace.io');
     expect(html).toMatch(/credits/i);
-    expect(html).toContain('acme.pagespace.app');
+    expect(html).toContain('acme.pagespace.io');
   });
 
   it.each([
@@ -118,7 +118,7 @@ describe('renderAppRouterPage — self-contained, and it escapes the host header
     ['failed', failed],
     ['not_found', missing],
   ])('given a %s decision, should render a complete document with a title', (_label, decision) => {
-    const html = renderAppRouterPage(decision, 'acme.pagespace.app');
+    const html = renderAppRouterPage(decision, 'acme.pagespace.io');
     expect(html.startsWith('<!doctype html>')).toBe(true);
     expect(html).toMatch(/<title>.+<\/title>/);
   });
@@ -138,7 +138,7 @@ describe('manageHref — the owner link deep-links to the app pane, not the driv
   it('given a decision with both driveId and envId, should link to the drive dashboard with an env deep-link', () => {
     const html = renderAppRouterPage(
       { kind: 'parked', reason: 'out_of_credits', driveId: 'drive_1', envId: 'env_1' },
-      'acme.pagespace.app',
+      'acme.pagespace.io',
     );
     expect(html).toContain('https://app.pagespace.ai/dashboard/drive_1?env=env_1');
   });
@@ -146,7 +146,7 @@ describe('manageHref — the owner link deep-links to the app pane, not the driv
   it('given a DEPLOYING decision with driveId and envId, should still include the manage link — an owner must be able to open the app pane while it is deploying', () => {
     const html = renderAppRouterPage(
       { kind: 'unavailable', reason: 'deploying', driveId: 'drive_1', envId: 'env_1' },
-      'acme.pagespace.app',
+      'acme.pagespace.io',
     );
     expect(html).toContain('https://app.pagespace.ai/dashboard/drive_1?env=env_1');
   });
@@ -154,14 +154,14 @@ describe('manageHref — the owner link deep-links to the app pane, not the driv
   it('given a decision with driveId but no envId, should degrade to the drive root', () => {
     const html = renderAppRouterPage(
       { kind: 'unavailable', reason: 'failed', driveId: 'drive_1' },
-      'acme.pagespace.app',
+      'acme.pagespace.io',
     );
     expect(html).toContain('https://app.pagespace.ai/dashboard/drive_1');
     expect(html).not.toContain('?env=');
   });
 
   it('given a decision with no driveId at all, should render no manage link', () => {
-    const html = renderAppRouterPage({ kind: 'unavailable', reason: 'hosting_disabled' }, 'acme.pagespace.app');
+    const html = renderAppRouterPage({ kind: 'unavailable', reason: 'hosting_disabled' }, 'acme.pagespace.io');
     expect(html).not.toContain('/dashboard/');
   });
 });

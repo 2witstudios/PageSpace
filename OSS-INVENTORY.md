@@ -1,490 +1,38 @@
-# PageSpace — IP & OSS Due Diligence Disclosure
+# PageSpace — Third-Party Open-Source Inventory
 
-**Prepared:** 2026-04-17
-**For:** Pending sale of PageSpace
-**Repository:** `2witstudios/pagespace` (entire monorepo)
-**Branch:** `claude/legal-compliance-report-D8Poy`
-**Seller:** Jonathan Woodall, sole proprietor operating as 2witstudios
+This document is the complete third-party open-source inventory for the
+PageSpace repository: non-code assets (§1), iOS native dependencies (§2),
+Android native dependencies (§3), and the full npm / bun dependency graph
+(§4). Appendix A records the one non-SPDX license in the mobile runtime.
+Each section names its source of truth and includes a reproduction command
+so any entry can be independently re-verified.
 
-This disclosure answers counsel's three questions:
-
-1. Has anyone other than Jonathan Woodall touched the code? If so, are
-   IP assignments required?
-2. Is any GPL-licensed (or otherwise contaminating copyleft) software
-   present in the dependency tree?
-3. What is the complete list of OSS used?
-
----
-
-## 1. Seller's Confirmation
-
-> I, Jonathan Woodall, sole proprietor operating as 2witstudios
-> (GitHub: `2witstudios`, email: `2witstudios@gmail.com`), in connection
-> with the pending sale of PageSpace confirm for the
-> `2witstudios/pagespace` repository as of 2026-04-17:
->
-> 1. **Sole author.** To my knowledge, all human-authored source code
->    in the `2witstudios/pagespace` monorepo and in the predecessor
->    repositories listed in §2 (earliest commit 2025-04-08) was
->    written by me.
->
->    Git history across all branches shows four non-bot author
->    identities — "2Wits", "2witstudios", "DaisyDebate", and "Claude"
->    — all bound to my accounts and all representing me. "2Wits",
->    "2witstudios", and "DaisyDebate" are local display-name variants
->    bound to `2witstudios@gmail.com`; "DaisyDebate" is the earliest,
->    from when I committed under my personal GitHub account earlier
->    in the project. "Claude" (`noreply@anthropic.com`) identifies
->    commits made using Anthropic's Claude Code CLI under my personal
->    Anthropic account, as disclosed in §2. OpenAI's Codex CLI was
->    also used (commit subjects prefixed `[codex]`) under my personal
->    OpenAI account. Neither tool represents a third-party human
->    contributor.
->
->    This list of repositories is, to my knowledge, complete; I am not
->    aware of any other repository, location, or system containing
->    human-authored product source code. Read access to any
->    predecessor repository can be granted on request for independent
->    verification.
-> 2. **No third-party human contributors.** I am not aware of any
->    third-party human contributor whose work would require an IP
->    assignment. The only non-me contributor in git history is GitHub's
->    Dependabot bot, whose commits are limited to version bumps in CI
->    workflow YAML files (no product source, no dependency
->    declarations). See §2.
-> 3. **Copyleft posture.** Based on the scan described in §3, no
->    GPL, AGPL, or SSPL dependencies were identified. One package
->    (`jszip`) is dual-licensed MIT-or-GPL; PageSpace elects MIT.
->    LGPL-3.0 and MPL-2.0 dependencies are present and are enumerated
->    in §3.
-> 4. **OSS inventory scope.** The complete OSS inventory in §5 covers
->    the npm / bun dependency graph (the web, realtime, processor,
->    control-plane, marketing, desktop, and shared-library packages).
->    Native iOS (Swift Package Manager) dependencies for the Capacitor
->    iOS wrapper are inventoried in §5.2 below; native Android (Gradle
->    / Maven) dependencies for the Capacitor Android wrapper are
->    inventoried in §5.3 below.
-> 5. **Scope of this confirmation.** This confirmation addresses source
->    code authorship. Non-code assets bundled in the repository (fonts,
->    icons, logos, blog images, demo media) are inventoried in §5.1
->    below. The only third-party-licensed non-code assets are the two
->    OFL-1.1 fonts and the ISC-licensed `lucide-react` icon set; all
->    other non-code assets are seller-created.
->
-> Signed: __________________________  Date: __________
+The inventory was audited as of 2026-04-17. The committed lockfiles and
+manifests remain the live source of truth between audits: `bun.lock` for
+the workspace graph, `Package.resolved` for iOS, and the Gradle files named
+in §3 for Android. Formal dual-license elections (jszip → MIT, dompurify →
+Apache-2.0) are recorded in the repository LICENSE; full license texts for
+copyleft components live in `LICENSES/`.
 
 ---
 
-## 2. Authorship Evidence
-
-### Git authors — `master` branch (production / shipping)
-
-Counts below are for the `master` branch, which is the protected,
-default branch of the repository and represents the shipping
-codebase.
-
-| Commits | Author | Email | Identity |
-|---:|---|---|---|
-| 683 | 2Wits | `2witstudios@gmail.com` | Jonathan (current local git display-name variant) |
-| 531 | 2witstudios | `2witstudios@gmail.com` | Jonathan (local git display-name variant) |
-| 286 | DaisyDebate | `2witstudios@gmail.com` | Jonathan (earlier local display-name variant from when he committed under his personal GitHub account; appears through November 2025) |
-| 101 | Claude | `noreply@anthropic.com` | Jonathan via Anthropic's Claude Code CLI under his personal Anthropic account (see "AI coding-tool attribution" below) |
-| 23 | dependabot[bot] | `49699333+dependabot[bot]@users.noreply.github.com` | GitHub automation bot (CI workflow YAML only; see "Dependabot scope") |
-
-Total: 1,624 commits on `master`. All four non-bot author identities
-— "2Wits", "2witstudios", "DaisyDebate", and "Claude" — represent
-commits authored by Jonathan Woodall. The first three share
-`2witstudios@gmail.com` and differ only in local git display-name
-configuration at the time the commits were made; "DaisyDebate" is the
-earliest display name (from when Jonathan committed under his personal
-GitHub account), "2witstudios" appears throughout, and "2Wits" is the
-current variant. "Claude" identifies commits authored via the Claude
-Code CLI under Jonathan's personal Anthropic account. Committers on
-"2Wits" rows are typically `GitHub <noreply@github.com>` (PR
-squash-merges on github.com; authorship remains Jonathan's).
-
-Earliest commit on `master`: 2025-08-21 (DaisyDebate). Earliest commit
-in the wider project (across the predecessor repositories listed in
-the "Predecessor repositories" subsection below) is 2025-04-08.
-
-### Dependabot scope (23 commits on `master`, all CI-only)
-
-All Dependabot commits on `master` are automated GitHub Actions version
-bumps in `.github/workflows/*.yml`. Each is a single-line YAML edit; no
-product source or `package.json` is touched. Dependabot is an automated
-GitHub bot and claims no authorship over any code.
-
-### AI coding-tool attribution
-
-PageSpace development made extensive use of Anthropic's Claude
-(specifically Claude Code) as an AI coding assistant under Jonathan
-Woodall's personal Anthropic account. OpenAI's Codex CLI was also used
-for a smaller number of changes (commit subjects prefixed `[codex]`).
-Both tools are used by Jonathan under accounts he holds personally.
-
-The tools appear in git history in two ways:
-
-1. **Commits with `Co-Authored-By: Claude` trailers.** The Claude Code
-   CLI adds this trailer automatically to commits it assists with.
-   On `master`, 828 of 1,624 commits (~51%) include such a trailer, all
-   bound to `noreply@anthropic.com`. The primary author on these commits
-   is Jonathan (under the "2Wits", "2witstudios", or "DaisyDebate" display
-   names).
-2. **Commits primarily authored by "Claude"
-   `<noreply@anthropic.com>`.** 101 commits on `master` carry this author
-   identity. All are commits Jonathan made using Claude Code under his
-   personal Anthropic account; no separate human being is represented.
-
-Posture:
-
-- Jonathan Woodall is the author of each such commit. He is the
-  account holder on Anthropic and OpenAI, directed the prompts,
-  reviewed the output, and accepted it into the codebase. The creative
-  and editorial decisions reflected in the codebase are his.
-- Under Anthropic's applicable terms of service (both the Consumer
-  Terms at <https://www.anthropic.com/legal/consumer-terms> and the
-  Commercial Terms at <https://www.anthropic.com/legal/commercial-terms>),
-  Anthropic assigns to the user any rights Anthropic may have in
-  outputs. OpenAI's terms contain a comparable assignment. No residual
-  IP claim is retained by either vendor.
-- "Claude" — whether as primary author or in a Co-Authored-By trailer
-  — refers to Anthropic's software product, not a separate human
-  contributor, and does not represent an independent IP claim.
-
-No other AI coding tools were used in this project.
-
-### Predecessor repositories
-
-The `2witstudios/pagespace` monorepo was created on 2026-04-11. Before
-that, the project existed across several predecessor repositories under
-two of my own GitHub accounts — my personal `DaisyDebate` account
-(earlier work) and the organization account `2witstudios` (later work).
-Both accounts are operated by me. No outside contributor appears in any
-of their git histories; I am the sole human author across all of them.
-
-The earliest commit across the predecessor chain is dated **2025-04-08**
-in `github.com/DaisyDebate/214-team`. The project was initially
-prototyped there under the working name "TeamDoc" (per the
-2025-04-08 product requirements document), and subsequently evolved and
-was renamed through "samepage", "pagespace.team", and finally
-"PageSpace". The current PageSpace product is materially different from
-the original 214-team / TeamDoc prototype.
-
-All predecessor repositories are **private**. Counsel has been given the
-URL list below; read access can be granted on request for independent
-verification. The sole-author representation in §1 is the primary
-evidence of the contributor posture across these repos.
-
-**Complete list.**
-
-Under `DaisyDebate` (personal account):
-
-- `github.com/DaisyDebate/214-team` (earliest, 2025-04-08) — the origin
-  prototype. Same sole-author posture as the other predecessor repos.
-- `github.com/DaisyDebate/samepage`
-- `github.com/DaisyDebate/samepage-main`
-- `github.com/DaisyDebate/samepage-dev`
-- `github.com/DaisyDebate/samepage.team`
-
-Under `2witstudios` (organization account):
-
-- `github.com/2witstudios/samepage.team`
-- `github.com/2witstudios/pagespace.team-demo`
-- `github.com/2witstudios/pagespace.team-public`
-- `github.com/2witstudios/PageSpace.Team-dev`
-- `github.com/2witstudios/PageSpace-Cloud`
-- `github.com/2witstudios/pagespace-main`
-
-This list is complete as of 2026-04-17. `DaisyDebate/214-team` is the
-earliest (2025-04-08). Read access to any of these private repositories
-is available on request.
-
-The predecessor-era tech stack — per the origin product requirements
-document dated 2025-04-08, which I have retained and can provide to
-counsel on request — was: Next.js, Tailwind, shadcn/ui, Tiptap, Clerk,
-Supabase, and custom OpenAI/Anthropic wrappers. These are all
-permissive licenses (MIT / Apache-2.0 / ISC) or SaaS services (Clerk,
-Supabase, OpenAI, Anthropic) that do not impose copyleft on client
-code. No GPL-family or commercial-restrictive dependency is identified
-in the predecessor tech stack.
-
----
-
-## 3. Copyleft Posture
-
-Scan method: `bun install --ignore-scripts` against the committed
-`bun.lock` (2,104 unique packages), read each installed
-`package.json`'s `license` field, flag any of
-`GPL|LGPL|AGPL|MPL|EPL|CDDL|SSPL|OSL|EUPL`. Each match identified by
-the scan was then manually classified.
-
-### 3.1 GPL / AGPL / SSPL (strong copyleft)
-
-No packages matching GPL, AGPL, or SSPL were identified by the scan.
-
-### 3.2 Dual-licensed with a GPL option — permissive elected
-
-| Package | Version | Available | **Elected** |
-|---|---|---|---|
-| `jszip` | 3.10.1 | MIT **OR** GPL-3.0-or-later | **MIT** |
-
-Election recorded in this report. No GPL obligation attaches.
-
-### 3.3 LGPL-3.0-or-later (weak copyleft, dynamic linking)
-
-| Package | Version | Role |
-|---|---|---|
-| `@img/sharp-libvips-linux-x64` | 1.0.4, 1.2.3 | Pre-compiled native image-processing binary, dynamically loaded by `sharp` |
-| `@img/sharp-libvips-linuxmusl-x64` | 1.0.4, 1.2.3 | Same, musl variant |
-
-PageSpace neither modifies nor statically links these binaries. The
-library is consumed as a Combined Work in the sense of LGPL-3.0 §4,
-which permits conveyance of the Combined Work under proprietary terms
-subject to the conditions in §4(a)–(e). Those conditions and how they
-are addressed:
-
-- **§4(a)** — give prominent notice that the Library is used and is
-  covered by the LGPL: covered by this section of the report and by
-  the attribution in `LICENSES/`.
-- **§4(b)** — accompany the Combined Work with a copy of the GNU GPL
-  and the LGPL: the GPL-3.0 text is committed at
-  [`LICENSES/GPL-3.0.txt`](../../LICENSES/GPL-3.0.txt) and the LGPL-3.0
-  text is committed at [`LICENSES/LGPL-3.0.txt`](../../LICENSES/LGPL-3.0.txt).
-- **§4(c)** — for Combined Works that display copyright notices,
-  include a reference to the copyright notices of the Library:
-  satisfied by the attribution in `LICENSES/` and in this subsection.
-- **§4(d)** — provide either (i) the Minimal Corresponding Source for
-  user-recombination with a modified Library, or (ii) a suitable
-  shared-library mechanism. Satisfied by (ii): the libvips binaries are
-  dynamically loaded by `sharp` at runtime, and `sharp` supports
-  installing a user-compiled libvips build
-  (<https://sharp.pixelplumbing.com/install#custom-libvips>).
-- **§4(e)** — installation information for user-modified libraries in
-  User Products: same mechanism as §4(d).
-
-The libvips source is upstream at
-<https://github.com/lovell/sharp-libvips>.
-
-This arrangement does not obligate disclosure of PageSpace's
-proprietary source.
-
-### 3.4 MPL-2.0 (weak copyleft, per-file)
-
-MPL-2.0 attaches to files that are Covered Software. Unmodified use
-does not trigger MPL's source-disclosure obligations on surrounding
-code: MPL-2.0 §3.3 expressly permits distribution of the Covered
-Software as part of a "Larger Work" under separate terms, and MPL's
-modified-file disclosure obligation in MPL-2.0 §3.1–§3.2 only attaches
-to Modifications of the Covered Software itself. PageSpace ships each
-of the packages below unmodified.
-
-`dompurify` is dual-licensed **MPL-2.0 OR Apache-2.0** and is handled
-in §3.5.
-
-| Package | Version | Role | Shipped? |
-|---|---|---|---|
-| `@capgo/capacitor-social-login` | 7.20.0 | Direct prod dep (iOS + Android); Apple/Google sign-in | Mobile only |
-| `lightningcss` (+ linux-gnu, linux-musl variants) | 1.30.1 | Transitive dev-only; Tailwind v4 + Vite CSS compiler | No — build-time only |
-| `axe-core` | 4.10.3 | Transitive dev-only; accessibility linting via `eslint-plugin-jsx-a11y` | No — lint-time only |
-
-Full MPL-2.0 text committed at
-[`LICENSES/MPL-2.0.txt`](../../LICENSES/MPL-2.0.txt). No disclosure of
-PageSpace's proprietary source is required under MPL for any of these,
-given unmodified use.
-
-**MPL-2.0 §3.2 recipient-notice.** MPL-2.0 §3.2 requires that recipients
-of a Larger Work be informed that the source of the Covered Files is
-available. For PageSpace this notice is given in two places: (a) this
-disclosure, and (b) the application's third-party licenses screen at
-`/settings/legal/oss-licenses` in the web, desktop, and mobile UI, which
-links to the upstream `@capgo/capacitor-social-login` repository at
-`https://github.com/Cap-go/capacitor-social-login`.
-
-### 3.5 Formal elections (dual-licensed packages)
-
-Where a dependency is distributed under multiple licenses at the
-licensee's option, PageSpace elects the permissive option. Election
-recorded here:
-
-| Package | Version | Available | **Elected** |
-|---|---|---|---|
-| `dompurify` | 3.2.7 | MPL-2.0 **OR** Apache-2.0 | **Apache-2.0** |
-| `jszip` | 3.10.1 | MIT **OR** GPL-3.0-or-later | **MIT** (cross-reference §3.2) |
-
-### 3.6 Summary
-
-Based on the scan described at the top of §3, and in the seller's
-view, no dependency identified would require disclosure of PageSpace's
-proprietary source code under the conditions in which PageSpace uses
-them. The copyleft-family components present in the tree are the
-packages listed in §3.3 (LGPL-3.0, native binaries dynamically loaded)
-and §3.4 (MPL-2.0, used unmodified); §3.5 records the formal elections
-that remove `dompurify` and `jszip` from any copyleft posture.
-
-### 3.7 Non-SPDX license in mobile runtime — Facebook iOS SDK
-
-`facebook-ios-sdk@18.0.2` is a direct Swift Package Manager dependency of
-`apps/ios` (see §5.2 below). Unlike standard SPDX permissive licenses, the
-SDK ships under a custom Facebook Platform License that contains a
-**use-scope restriction**:
-
-> "You are hereby granted a non-exclusive, worldwide, royalty-free license to
-> use, copy, modify, and distribute this software in source code or binary
-> form **for use in connection with the web services and APIs provided by
-> Facebook**."
-
-The full verbatim text of the license is reproduced below for the avoidance
-of doubt; it is also available at
-`https://raw.githubusercontent.com/facebook/facebook-ios-sdk/v18.0.2/LICENSE`:
-
-> Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
->
-> You are hereby granted a non-exclusive, worldwide, royalty-free license to use, copy, modify, and distribute this software in source code or binary form for use in connection with the web services and APIs provided by Facebook.
->
-> As with any software that integrates with the Facebook platform, your use of this software is subject to the Facebook Platform Policy [http://developers.facebook.com/policy/]. This copyright notice shall be included in all copies or substantial portions of the software.
->
-> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-PageSpace's use of the SDK is limited to Sign-in-with-Facebook (via
-`@capgo/capacitor-social-login`) on the iOS build, which is "use in connection
-with the web services and APIs provided by Facebook." The use is therefore
-within scope. Counsel should be aware that the SDK license governs the SDK
-code itself and is distinct from the separate Meta / Facebook platform
-developer terms that govern runtime API usage; both apply independently.
-
-No source-disclosure or copyleft obligation attaches under this license.
-
----
-
-## 4. Asset and Account Transfers at Closing
-
-The buyer is redeploying the application stack onto their own
-infrastructure. Most hosting-layer assets are reconstituted on the buyer
-side rather than transferred as running services. The table below
-summarizes what transfers, what is recreated, and what is out of scope.
-
-### 4.1 Transferred as assets
-
-| Item | Current owner | Transfer mechanism |
-|---|---|---|
-| Domain `pagespace.ai` | Namecheap, under 2witstudios | Namecheap domain push or account-to-account transfer |
-| Domain `pagespace.team` | Namecheap, under 2witstudios | Same |
-| `ghcr.io/2witstudios/pagespace-{web,realtime,processor,cron,migrate}` container images | 2witstudios GitHub org | Buyer re-publishes to their own registry |
-| npm publisher account for `pagespace-mcp` | Jonathan's personal npm account | Transfer to buyer's npm org, or re-publish under buyer |
-| All code and documentation in `2witstudios/pagespace` | 2witstudios GitHub org | Per purchase agreement |
-| Common-law wordmarks `PageSpace` and `PageSpace.ai` | Seller (unregistered) | Per APA trademark schedule (assignment of unregistered common-law marks) |
-
-### 4.2 Recreated by buyer / key rotation
-
-Not transferred as accounts. The buyer stands up their own equivalent
-and the seller rotates or retires keys.
-
-| Item | Handling |
-|---|---|
-| Google OAuth client (Sign-in-with-Google) | Buyer creates a new OAuth client in their GCP; redirect URIs updated in code; seller's client retired. |
-| Apple Developer (Sign-in-with-Apple + iOS builds) | Buyer re-enrolls or the Apple team is enterprise-transferred; iOS builds re-signed. |
-| Firebase project `pagespace-f328e` (Android push) | Buyer creates a new Firebase project in their GCP; `google-services.json` regenerated; seller's project retired. |
-| Stripe | Buyer uses their own Stripe account; seller's keys and products retired. No account transfer. |
-| Resend (transactional email) | Buyer provisions their own account; API keys rotated. |
-| Brave Search API (`BRAVE_API_KEY`) | Buyer provisions their own key; seller's retired. |
-| AI-provider default key (`OPENROUTER_DEFAULT_API_KEY`) | Seller's key retired; buyer provisions their own OpenRouter key (every cloud model is routed through OpenRouter). |
-| Voice (STT/TTS) key (`OPENAI_DEFAULT_API_KEY`) | Seller's key retired; buyer provisions their own OpenAI key. Voice calls hit OpenAI directly (not OpenRouter); without this key the `/api/voice/*` endpoints are unavailable after cutover. |
-
-### 4.3 Not part of the transfer
-
-| Item | Reason |
-|---|---|
-| Production VPS (Postgres) | Decommissioned at cutover; user data migrated to buyer infrastructure per §4.5 before destruction. |
-| Per-user BYOK provider keys | Not applicable — the `user_ai_settings` table was retired and no per-user provider keys are stored. AI providers are managed at the deployment level via `*_DEFAULT_API_KEY` env vars (see §4.2). |
-| Predecessor GitHub repositories (§2) | Private legacy repos retained by the seller. At buyer's election, the seller will either (a) grant a perpetual read-only collaborator permission to a buyer-designated GitHub account on each predecessor repo listed in §2; or (b) deliver a `git clone --mirror` archive of each predecessor repo to the buyer at closing, which buyer may retain for forensic / chain-of-authorship purposes. Default unless buyer specifies otherwise: (b) clone-archive delivery. |
-
-### 4.4 Closing checklist
-
-- [ ] Namecheap domain transfers complete; DNS pointed at buyer's infra.
-- [ ] All keys listed in §4.2 rotated after cutover; seller's
-      credentials retired from production.
-- [ ] `ghcr.io/2witstudios/pagespace-*` images are no longer referenced
-      by any running buyer infrastructure.
-- [ ] `pagespace-mcp` on npm is published under an account the buyer
-      controls (or explicitly retained by the seller if the parties
-      agree).
-- [ ] User-data migration per §4.5 completed; buyer confirms data
-      integrity.
-- [ ] DPA assignment schedule executed.
-- [ ] Transfer-of-control email sent to all users; privacy notice
-      updated on `pagespace.ai`.
-- [ ] Seller VPS disk destroyed after rollback window; written
-      confirmation delivered to buyer.
-- [ ] Predecessor-repo archive (or read-only access) delivered per §4.3.
-
-### 4.5 User-data handover
-
-Because production users exist at cutover, §4.3's high-level handling for the
-VPS is specified below.
-
-**Scope of user data.** Workspaces, pages (all page types — Document, Code,
-Sheet, Canvas, Task List, Channel, AI Chat, File, Folder), uploaded files, AI
-chat history, integrations state (GitHub / Google Calendar / etc. OAuth
-tokens), audit logs, and session data. AI provider keys are not user-scoped —
-they live in deployment env vars and travel with the operator (see §4.2).
-Canonical table list: from `packages/db/src/schema/`.
-
-**Migration mechanism.** `pg_dump` from the seller's VPS Postgres to the
-buyer-provided Postgres over an encrypted transfer channel (SSH tunnel
-or signed S3-compatible upload with a short-lived credential). The production
-stack runs on Postgres only — there is no secondary datastore to coordinate.
-
-**DPA assignment.** Existing customer Data Processing Agreements are assigned
-to buyer at closing via an APA schedule; buyer becomes data controller /
-processor (as applicable) from the cutover timestamp.
-
-**Privacy-notice update.** Before cutover, a transfer-of-control email is
-sent to all users from the `pagespace.ai` domain explaining the change of
-controller, pointing to the updated privacy notice, and offering data export
-or deletion during a defined window (default: 30 days). The updated privacy
-notice is published at `pagespace.ai/privacy` on or before cutover.
-
-**Cutover sequence.**
-
-1. Maintenance window announced to users.
-2. Writes paused on seller VPS.
-3. `pg_dump` → encrypted transfer → restore on buyer Postgres.
-4. DNS cuts to buyer infrastructure.
-5. Users are unblocked.
-6. Seller VPS retained read-only for a short rollback window, then destroyed.
-
-**Data retention by seller post-cutover.** Zero. After the rollback window,
-seller destroys all backups and the VPS disk, and provides buyer with a
-written confirmation of destruction.
-
----
-
-## 5. Full OSS Inventory
-
-This section enumerates the complete OSS inventory across three ecosystems:
-non-code assets (§5.1), iOS native dependencies resolved by Swift Package
-Manager (§5.2), Android native dependencies declared in Gradle (§5.3), and
-the 2,104-package npm / bun dependency graph that backs the web, realtime,
-processor, control-plane, marketing, desktop, and shared-library packages
-(§5.4). Each subsection names its source of truth and includes a
-reproduction command so any entry can be independently re-verified.
-
-### 5.1 Non-code assets
+## 1. Non-code assets
 
 | Category | Inventory | License / provenance |
 |---|---|---|
-| Fonts | `@fontsource/ibm-plex-mono`, `@fontsource/space-grotesk` | OFL-1.1 (see rows in §5 inventory) |
-| Icons | `lucide-react` (only icon library imported by product code) | ISC (see rows in §5 inventory) |
-| Logos / app icons / splash screens | `apps/web/public/`, `apps/marketing/public/`, `apps/ios/ios/App/App/Assets.xcassets/` | Created by or for the seller; original work |
-| Blog hero images | `apps/marketing/public/blog/*.png` | Generated by the seller using Google image generation (Imagen via the Gemini app) under the seller's personal Google account. Under the Gemini Apps Additional Terms of Service in effect at the time of generation, Google does not claim ownership of generated content; ownership / rights in the outputs vest with the generating account-holder (subject to Google's limited license back for service provision and its generation policies). The seller transfers its rights in these images to the buyer as part of the sale. |
+| Fonts | `@fontsource/ibm-plex-mono`, `@fontsource/space-grotesk` | OFL-1.1 (see rows in §4) |
+| Icons | `lucide-react` (only icon library imported by product code) | ISC (see rows in §4) |
+| Logos / app icons / splash screens | `apps/web/public/`, `apps/marketing/public/`, `apps/ios/ios/App/App/Assets.xcassets/` | Created by or for 2witstudios; original work |
+| Blog hero images | `apps/marketing/public/blog/*.png` | Generated by 2witstudios using Google image generation (Imagen via the Gemini app) under a personal Google account. Under the Gemini Apps Additional Terms of Service in effect at the time of generation, Google does not claim ownership of generated content; ownership / rights in the outputs vest with the generating account-holder (subject to Google's limited license back for service provision and its generation policies). |
 | Demo media / marketing video | None bundled | n/a |
 
 No stock-photography licenses from Unsplash, Pexels, Getty, Shutterstock, or
 similar sources are used. No third-party logos or marks beyond the unmodified
-npm-distributed package icons referenced in the §5 inventory are present in
+npm-distributed package icons referenced in §4 are present in
 the repository.
 
-### 5.2 iOS native (Swift Package Manager)
+---
+## 2. iOS native (Swift Package Manager)
 
 **Scope:** Direct Swift Package Manager pins consumed by `apps/ios` as of commit `cca2d7572d3a7c7abf87dec3b2a557c80c37ed2b`.
 **Source of truth:** `apps/ios/ios/App/App.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`
@@ -499,7 +47,7 @@ Note: iOS uses Swift Package Manager (SPM), not CocoaPods. There is no Podfile i
 | app-check | 11.2.0 | Apache-2.0 | https://github.com/google/app-check |
 | AppAuth-iOS | 2.0.0 | Apache-2.0 | https://github.com/openid/AppAuth-iOS |
 | capacitor-swift-pm | 7.4.5 | MIT | https://github.com/ionic-team/capacitor-swift-pm |
-| facebook-ios-sdk | 18.0.2 | Facebook Platform License (custom, non-SPDX) — see §3.7 | https://github.com/facebook/facebook-ios-sdk |
+| facebook-ios-sdk | 18.0.2 | Facebook Platform License (custom, non-SPDX) — see Appendix A | https://github.com/facebook/facebook-ios-sdk |
 | GoogleSignIn-iOS | 9.1.0 | Apache-2.0 | https://github.com/google/GoogleSignIn-iOS |
 | GoogleUtilities | 8.1.0 | Apache-2.0 | https://github.com/google/GoogleUtilities |
 | gtm-session-fetcher | 3.5.0 | Apache-2.0 | https://github.com/google/gtm-session-fetcher |
@@ -508,7 +56,7 @@ Note: iOS uses Swift Package Manager (SPM), not CocoaPods. There is no Podfile i
 
 #### Notes
 
-**Facebook iOS SDK license — not MIT.** The verbatim Facebook Platform License text and the seller's usage analysis are in §3.7 above.
+**Facebook iOS SDK license — not MIT.** The verbatim Facebook Platform License text and the usage analysis are in Appendix A.
 
 **Transitive SPM dependencies.** The table above enumerates the direct pins recorded in `Package.resolved`. The full transitive SPM dependency tree is regenerable on demand via Xcode's `File > Packages > Resolve Package Versions` (which rewrites `Package.resolved`), or via `xcodebuild -resolvePackageDependencies` from the command line. The transitive tree is not separately enumerated in this inventory because SPM resolves it deterministically from the direct pins and the packages' own `Package.swift` manifests.
 
@@ -541,7 +89,8 @@ done
 curl -sfL "https://raw.githubusercontent.com/facebook/facebook-ios-sdk/v18.0.2/LICENSE"
 ```
 
-### 5.3 Android native (Gradle / Maven)
+---
+## 3. Android native (Gradle / Maven)
 
 **Scope:** Direct Gradle dependencies declared in `apps/android/android/app/build.gradle` plus Android Gradle Plugin and Gradle wrapper versions, as of commit `cca2d757`.
 **Source of truth:** `apps/android/android/app/build.gradle`, `apps/android/android/build.gradle`, `apps/android/android/variables.gradle`, `apps/android/android/gradle/wrapper/gradle-wrapper.properties`
@@ -579,7 +128,7 @@ curl -sfL "https://raw.githubusercontent.com/facebook/facebook-ios-sdk/v18.0.2/L
 - **JUnit 4 (junit:junit)** is licensed under the Eclipse Public License 1.0 (EPL-1.0). It is a test-only dependency (not shipped in the APK).
 - **Firebase BoM.** `apps/android/android/app/build.gradle` pins `platform('com.google.firebase:firebase-bom:34.8.0')` and only consumes `com.google.firebase:firebase-messaging` (push notifications). The BoM resolves the messaging artifact version; no other Firebase artifacts are declared.
 - **Capacitor Android runtime.** `project(':capacitor-android')` is a local Gradle project dep generated by `cap sync`, whose version tracks the `@capacitor/android` npm package declared in `apps/android/package.json` (`^7.0.3`, resolved to `7.4.5`). Capacitor is MIT-licensed by ionic-team.
-- **Transitive Maven graph.** The table above enumerates direct dependencies. The full transitive tree is regenerable on demand and is not enumerated here because the transitive graph for AndroidX alone is large and changes per release; on-demand resolution is sufficient for due-diligence purposes.
+- **Transitive Maven graph.** The table above enumerates direct dependencies. The full transitive tree is regenerable on demand and is not enumerated here because the transitive graph for AndroidX alone is large and changes per release; on-demand resolution is sufficient for verification purposes.
 
 #### Regeneration
 
@@ -595,7 +144,8 @@ cd apps/android/android
 ./gradlew :app:dependencies --configuration releaseRuntimeClasspath
 ```
 
-### 5.4 npm / bun dependency inventory (2,104 packages)
+---
+## 4. npm / bun dependency inventory (2,104 packages)
 
 Generated by traversing `node_modules/` after a
 clean `bun install --ignore-scripts` against the committed
@@ -2701,19 +2251,37 @@ package's `package.json` `license` field.
 | zwitch | 2.0.4 | MIT |
 
 ---
+## Appendix A. Non-SPDX license in mobile runtime — Facebook iOS SDK
 
-## 6. Trademarks and marks
+`facebook-ios-sdk@18.0.2` is a direct Swift Package Manager dependency of
+`apps/ios` (see §2). Unlike standard SPDX permissive licenses, the
+SDK ships under a custom Facebook Platform License that contains a
+**use-scope restriction**:
 
-The `PageSpace` and `PageSpace.ai` wordmarks are unregistered common-law marks
-held by the seller, accrued through use in commerce since 2025. Predecessor
-use under the `pagespace.team`, `samepage`, and `TeamDoc` working names is
-disclosed in §2 but is not separately asserted as a mark.
+> "You are hereby granted a non-exclusive, worldwide, royalty-free license to
+> use, copy, modify, and distribute this software in source code or binary
+> form **for use in connection with the web services and APIs provided by
+> Facebook**."
 
-No pending, published, or registered trademark filings with the USPTO or any
-other trademark office exist for `PageSpace` or `PageSpace.ai` as of
-2026-04-17.
+The full verbatim text of the license is reproduced below for the avoidance
+of doubt; it is also available at
+`https://raw.githubusercontent.com/facebook/facebook-ios-sdk/v18.0.2/LICENSE`:
 
-Transfer of the common-law marks is covered by the APA trademark schedule.
-Buyer is responsible for any subsequent registration filings.
+> Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+>
+> You are hereby granted a non-exclusive, worldwide, royalty-free license to use, copy, modify, and distribute this software in source code or binary form for use in connection with the web services and APIs provided by Facebook.
+>
+> As with any software that integrates with the Facebook platform, your use of this software is subject to the Facebook Platform Policy [http://developers.facebook.com/policy/]. This copyright notice shall be included in all copies or substantial portions of the software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-The `2witstudios` wordmark is retained by the seller and is not transferring.
+PageSpace's use of the SDK is limited to Sign-in-with-Facebook (via
+`@capgo/capacitor-social-login`) on the iOS build, which is "use in connection
+with the web services and APIs provided by Facebook." The use is therefore
+within scope. Note that the SDK license governs the SDK
+code itself and is distinct from the separate Meta / Facebook platform
+developer terms that govern runtime API usage; both apply independently.
+
+No source-disclosure or copyleft obligation attaches under this license.
+
+---

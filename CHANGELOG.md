@@ -12,6 +12,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   numbered tabs or pressing the arrow keys, which is awkward on a phone. Each question now has a
   Back / Next row with a "2 of 3" counter under it, sized for a finger, and it works on a card you
   have already answered too. The tabs and arrow keys still work as before.
+- **The marketing site follows your system theme, and light mode has its own hero** — the site used
+  to open in dark mode for everyone, and its space hero only worked on a dark page. Light mode now
+  has a white version of the same scene with dark text over it, and the site starts in whatever
+  theme your device uses (a theme you picked with the toggle still wins), and the browser's
+  address and status bar match whichever theme is showing. Switching themes, or your
+  device switching on its own, fades one hero picture into the other instead of cutting. The
+  preview card shown when a site link is shared now carries the current headline.
 - **The Home screen now tells you what's actually waiting for you** — opening the dashboard used
   to show a generic "How can I help you today?" with no sign of what changed across your drives,
   and the only place that context lived (the sidebar's Pulse note) disappeared the moment you
@@ -540,6 +547,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **The open-source licenses screen no longer references a private IP-sale disclosure** — the "Full
+  inventory" notice at Settings → Legal → Open-source licenses said the complete dependency
+  inventory was "maintained in the seller's IP disclosure and is available to recipients on
+  request" — language from a private acquisition process that never belonged in the product. The
+  notice now links directly to OSS-INVENTORY.md, the standalone sanitized inventory published in
+  the open-source PageSpace repository.
+- **The marketing site no longer goes down when a retina screen loads the home page** — the hero's
+  space backdrops were resized on the server the first time each size was asked for, and a
+  high-resolution screen asked for both the dark and light pictures at full 4K size at once, which ran
+  the site's server out of memory. It restarted, forgot every picture it had already made, and the
+  next visitor with a sharp screen took it down again. Every size of both pictures is now made once
+  when the site is built, so loading the page asks the server for nothing but files. The hero looks
+  and fades exactly as before.
 - **Sending several photos at once now makes one message with one gallery, and stops them appearing
   twice** — attaching a batch of photos used to send them as separate messages, one per file: the
   channel or DM filled with a column of single-photo bubbles, the typed text sat on the first one,

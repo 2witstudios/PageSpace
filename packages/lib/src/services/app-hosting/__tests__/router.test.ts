@@ -84,7 +84,7 @@ function row(overrides: Partial<PublishedAppRouteRow> = {}): PublishedAppRouteRo
 function deps(overrides: Partial<AppRouterDeps> = {}): AppRouterDeps {
   return {
     isEnabled: () => true,
-    apex: () => 'pagespace.app',
+    apex: () => 'pagespace.io',
     replaySecret: () => SECRET,
     findAppBySubdomain: async () => row(),
     findAppByCustomHost: async () => null,
@@ -101,7 +101,7 @@ describe('resolveAppRoute — the kill switch is checked before the database', (
   it('given hosting is disabled, should answer hosting_disabled without any lookup', async () => {
     const findAppBySubdomain = vi.fn();
     const decision = await resolveAppRoute(
-      'acme.pagespace.app',
+      'acme.pagespace.io',
       deps({ isEnabled: () => false, findAppBySubdomain }),
     );
     expect(decision).toEqual({ kind: 'unavailable', reason: 'hosting_disabled' });
@@ -112,7 +112,7 @@ describe('resolveAppRoute — the kill switch is checked before the database', (
 describe('resolveAppRoute — hostname resolution', () => {
   it('given the apex itself, should answer not_found without a lookup', async () => {
     const findAppBySubdomain = vi.fn();
-    const decision = await resolveAppRoute('pagespace.app', deps({ findAppBySubdomain }));
+    const decision = await resolveAppRoute('pagespace.io', deps({ findAppBySubdomain }));
     expect(decision).toEqual({ kind: 'not_found', reason: 'apex' });
     expect(findAppBySubdomain).not.toHaveBeenCalled();
   });
@@ -149,7 +149,7 @@ describe('resolveAppRoute — hostname resolution', () => {
 
   it('given a subdomain with no row, should answer no_such_app', async () => {
     const decision = await resolveAppRoute(
-      'nobody.pagespace.app',
+      'nobody.pagespace.io',
       deps({ findAppBySubdomain: async () => null }),
     );
     expect(decision).toEqual({ kind: 'not_found', reason: 'no_such_app' });
@@ -157,7 +157,7 @@ describe('resolveAppRoute — hostname resolution', () => {
 
   it('given a host with a port, should look up the normalized label', async () => {
     const findAppBySubdomain = vi.fn(async () => row());
-    await resolveAppRoute('ACME.pagespace.app:443', deps({ findAppBySubdomain }));
+    await resolveAppRoute('ACME.pagespace.io:443', deps({ findAppBySubdomain }));
     expect(findAppBySubdomain).toHaveBeenCalledWith('acme');
   });
 });
@@ -170,7 +170,7 @@ describe('resolveAppRoute — the balance is asked about the SAME payer the mete
     const hasSpendableBalance = vi.fn(async () => true);
     const resolveTier = vi.fn(async () => 'pro');
     await resolveAppRoute(
-      'acme.pagespace.app',
+      'acme.pagespace.io',
       deps({
         findAppBySubdomain: async () => row({ driveId: 'drive_xyz' }),
         resolvePayerId,
@@ -187,7 +187,7 @@ describe('resolveAppRoute — the balance is asked about the SAME payer the mete
     const resolveTier = vi.fn(async () => 'pro');
     const hasSpendableBalance = vi.fn(async () => true);
     const decision = await resolveAppRoute(
-      'acme.pagespace.app',
+      'acme.pagespace.io',
       deps({ resolvePayerId: async () => null, resolveTier, hasSpendableBalance }),
     );
     expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer', envId: 'env_1' });
@@ -197,7 +197,7 @@ describe('resolveAppRoute — the balance is asked about the SAME payer the mete
 
   it('given an insolvent payer, should park rather than replay', async () => {
     const decision = await resolveAppRoute(
-      'acme.pagespace.app',
+      'acme.pagespace.io',
       deps({ hasSpendableBalance: async () => false }),
     );
     expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer', envId: 'env_1' });
@@ -207,7 +207,7 @@ describe('resolveAppRoute — the balance is asked about the SAME payer the mete
     const hasSpendableBalance = vi.fn(async () => false);
     const resolveTier = vi.fn(async () => 'pro');
     const decision = await resolveAppRoute(
-      'acme.pagespace.app',
+      'acme.pagespace.io',
       deps({
         findAppBySubdomain: async () => row({ tier: 'dedicated' }),
         resolveTier,
@@ -222,7 +222,7 @@ describe('resolveAppRoute — the balance is asked about the SAME payer the mete
   it('given an app that is not servable anyway, should skip the balance read', async () => {
     const hasSpendableBalance = vi.fn(async () => true);
     const decision = await resolveAppRoute(
-      'acme.pagespace.app',
+      'acme.pagespace.io',
       deps({ findAppBySubdomain: async () => row({ status: 'parked' }), hasSpendableBalance }),
     );
     expect(decision).toEqual({ kind: 'parked', reason: 'parked_status', driveId: 'drive_payer', envId: 'env_1' });
@@ -232,7 +232,7 @@ describe('resolveAppRoute — the balance is asked about the SAME payer the mete
 
 describe('resolveAppRoute — the replay key must exist before traffic is replayed', () => {
   it('given a solvent servable app, should emit a replay carrying a derived state key', async () => {
-    const decision = await resolveAppRoute('acme.pagespace.app', deps());
+    const decision = await resolveAppRoute('acme.pagespace.io', deps());
     expect(decision.kind).toBe('replay');
     if (decision.kind !== 'replay') throw new Error('expected a replay');
     expect(decision.flyAppName).toBe('pgs-app-abc123');
@@ -242,13 +242,13 @@ describe('resolveAppRoute — the replay key must exist before traffic is replay
   });
 
   it('given an UNSET replay secret, should refuse rather than replay with a blank state', async () => {
-    const decision = await resolveAppRoute('acme.pagespace.app', deps({ replaySecret: () => '' }));
+    const decision = await resolveAppRoute('acme.pagespace.io', deps({ replaySecret: () => '' }));
     expect(decision).toEqual({ kind: 'unavailable', reason: 'failed', driveId: 'drive_payer', envId: 'env_1' });
   });
 
   it('given a too-short replay secret, should refuse', async () => {
     const decision = await resolveAppRoute(
-      'acme.pagespace.app',
+      'acme.pagespace.io',
       deps({ replaySecret: () => 'short' }),
     );
     expect(decision).toEqual({ kind: 'unavailable', reason: 'failed', driveId: 'drive_payer', envId: 'env_1' });
@@ -256,11 +256,11 @@ describe('resolveAppRoute — the replay key must exist before traffic is replay
 
   it('given two different apps, should derive different state keys', async () => {
     const a = await resolveAppRoute(
-      'a.pagespace.app',
+      'a.pagespace.io',
       deps({ findAppBySubdomain: async () => row({ flyAppName: 'pgs-app-aaa' }) }),
     );
     const b = await resolveAppRoute(
-      'b.pagespace.app',
+      'b.pagespace.io',
       deps({ findAppBySubdomain: async () => row({ flyAppName: 'pgs-app-bbb' }) }),
     );
     if (a.kind !== 'replay' || b.kind !== 'replay') throw new Error('expected replays');
@@ -272,7 +272,7 @@ describe('resolveAppRoute — an outage is not a miss', () => {
   it('given the lookup throws, should propagate so the caller can answer 503', async () => {
     await expect(
       resolveAppRoute(
-        'acme.pagespace.app',
+        'acme.pagespace.io',
         deps({
           findAppBySubdomain: async () => {
             throw new Error('connection terminated');
@@ -285,7 +285,7 @@ describe('resolveAppRoute — an outage is not a miss', () => {
   it('given the balance read throws, should propagate rather than park the app', async () => {
     await expect(
       resolveAppRoute(
-        'acme.pagespace.app',
+        'acme.pagespace.io',
         deps({
           hasSpendableBalance: async () => {
             throw new Error('ledger unavailable');
@@ -425,7 +425,7 @@ describe('resolveAppRoute — the last-hit stamp the idle reaper reads', () => {
     // has no evidence of demand and stops apps that are being used.
     const stampHit = vi.fn(async () => {});
 
-    const decision = await resolveAppRoute('acme.pagespace.app', deps({ stampHit }));
+    const decision = await resolveAppRoute('acme.pagespace.io', deps({ stampHit }));
 
     expect(decision.kind).toBe('replay');
     expect(stampHit).toHaveBeenCalledWith('app_1');
@@ -438,7 +438,7 @@ describe('resolveAppRoute — the last-hit stamp the idle reaper reads', () => {
     const stampHit = vi.fn(async () => {});
 
     const decision = await resolveAppRoute(
-      'acme.pagespace.app',
+      'acme.pagespace.io',
       deps({ stampHit, hasSpendableBalance: async () => false }),
     );
 
@@ -449,7 +449,7 @@ describe('resolveAppRoute — the last-hit stamp the idle reaper reads', () => {
   it('given an unknown host, should stamp nothing', async () => {
     const stampHit = vi.fn(async () => {});
 
-    await resolveAppRoute('nobody.pagespace.app', deps({ stampHit, findAppBySubdomain: async () => null }));
+    await resolveAppRoute('nobody.pagespace.io', deps({ stampHit, findAppBySubdomain: async () => null }));
 
     expect(stampHit).not.toHaveBeenCalled();
   });
@@ -462,7 +462,7 @@ describe('resolveAppRoute — the last-hit stamp the idle reaper reads', () => {
       throw new Error('write failed');
     });
 
-    const decision = await resolveAppRoute('acme.pagespace.app', deps({ stampHit }));
+    const decision = await resolveAppRoute('acme.pagespace.io', deps({ stampHit }));
 
     expect(decision.kind).toBe('replay');
   });
@@ -481,7 +481,7 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
     const wake = vi.fn(async () => ({ outcome: 'woken' as const, app: {} as never }));
 
     const decision = await resolveAppRoute(
-      'acme.pagespace.app',
+      'acme.pagespace.io',
       deps({ findAppBySubdomain: async () => stopped(), wake }),
     );
 
@@ -492,7 +492,7 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
   it('given an already RUNNING app, should not wake anything — the hot path stays three reads', async () => {
     const wake = vi.fn(async () => ({ outcome: 'woken' as const, app: {} as never }));
 
-    const decision = await resolveAppRoute('acme.pagespace.app', deps({ wake }));
+    const decision = await resolveAppRoute('acme.pagespace.io', deps({ wake }));
 
     expect(decision.kind).toBe('replay');
     expect(wake).not.toHaveBeenCalled();
@@ -504,7 +504,7 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
     const stampHit = vi.fn(async () => {});
 
     const decision = await resolveAppRoute(
-      'acme.pagespace.app',
+      'acme.pagespace.io',
       deps({
         findAppBySubdomain: async () => stopped(),
         wake: async () => ({ outcome: 'start_failed', error: 'fly said no' }),
@@ -518,14 +518,14 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
 
   it('given the wake GATE parked the app, should serve the parked page, told apart by reason', async () => {
     const outOfCredits = await resolveAppRoute(
-      'acme.pagespace.app',
+      'acme.pagespace.io',
       deps({
         findAppBySubdomain: async () => stopped(),
         wake: async () => ({ outcome: 'parked', reason: 'insufficient_credits' }),
       }),
     );
     const dailyCap = await resolveAppRoute(
-      'acme.pagespace.app',
+      'acme.pagespace.io',
       deps({
         findAppBySubdomain: async () => stopped(),
         wake: async () => ({ outcome: 'parked', reason: 'daily_awake_cap_exceeded' }),
@@ -549,7 +549,7 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
     // would serve the unavailable page for every asset of a page that is coming up
     // perfectly well.
     const decision = await resolveAppRoute(
-      'acme.pagespace.app',
+      'acme.pagespace.io',
       deps({ findAppBySubdomain: async () => stopped(), wake: async () => wake }),
     );
 
@@ -558,7 +558,7 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
 
   it('given the row vanished under the wake, should answer no_such_app', async () => {
     const decision = await resolveAppRoute(
-      'acme.pagespace.app',
+      'acme.pagespace.io',
       deps({
         findAppBySubdomain: async () => stopped(),
         wake: async () => ({ outcome: 'refused', reason: 'not_found' }),
@@ -570,7 +570,7 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
 
   it('given an unresolvable payer, should refuse rather than start a machine nobody pays for', async () => {
     const decision = await resolveAppRoute(
-      'acme.pagespace.app',
+      'acme.pagespace.io',
       deps({
         findAppBySubdomain: async () => stopped(),
         wake: async () => ({ outcome: 'refused', reason: 'unresolved_payer' }),
@@ -586,7 +586,7 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
     const wake = vi.fn(async () => ({ outcome: 'woken' as const, app: {} as never }));
 
     const decision = await resolveAppRoute(
-      'acme.pagespace.app',
+      'acme.pagespace.io',
       deps({ findAppBySubdomain: async () => stopped(), hasSpendableBalance: async () => false, wake }),
     );
 

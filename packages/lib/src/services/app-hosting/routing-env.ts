@@ -55,12 +55,16 @@ import { resolvePublishedAppsNetwork } from './app-hosting-env';
  * GA. This constant is the wiring for that decision; submitting the apex to the
  * PSL is an out-of-band action that is NOT performed by this repo. See
  * `ROUTING.md` in this directory for the submission checklist.
+ *
+ * `pagespace.io` is a domain we own. This was previously `pagespace.app`, which
+ * is registered to someone else — a default must never name a domain we do not
+ * control, or every app link it generates points at a stranger.
  */
-export const PUBLISHED_APPS_APEX_DEFAULT = 'pagespace.app';
+export const PUBLISHED_APPS_APEX_DEFAULT = 'pagespace.io';
 
 /**
  * The apex, normalized: lowercased, trailing dot and any leading `*.`/`.`
- * stripped, so `PUBLISHED_APPS_APEX=*.pagespace.app` and `pagespace.app.` both
+ * stripped, so `PUBLISHED_APPS_APEX=*.pagespace.io` and `pagespace.io.` both
  * resolve to the same value. An empty or whitespace-only override falls back to
  * the default rather than yielding `''` — an empty apex would make
  * {@link parseAppHost} treat EVERY hostname as a published-app subdomain.
