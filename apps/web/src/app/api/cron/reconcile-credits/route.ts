@@ -41,6 +41,16 @@ export async function GET(request: Request) {
       missedGrantsFailed: missedGrants.failed,
     };
 
+    if (missedGrants.indeterminate > 0) {
+      // Paid invoices no sweep can grant on its own: alert as loudly as a failure,
+      // with the ledger ids, but keep the 200 — a retry cannot resolve them.
+      loggers.system.error(
+        '[Cron] Credit reconcile: indeterminate missed grants need a human (entitled subscription on an unmapped price)',
+        undefined,
+        { ...counts, indeterminateLedgerIds: missedGrants.indeterminateLedgerIds },
+      );
+    }
+
     if (missedGrants.failed > 0) {
       loggers.system.error('[Cron] Credit reconcile: missed-grant rows failed to reconcile', undefined, counts);
       return NextResponse.json(

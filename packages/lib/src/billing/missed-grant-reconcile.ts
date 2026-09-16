@@ -29,6 +29,8 @@ import { emitCreditsUpdated } from './credit-emit';
 import { loggers } from '../logging/logger-config';
 
 const BATCH = 200;
+/** Cap on ledger ids echoed back for alerting, so a mass event cannot bloat the payload. */
+const MAX_INDETERMINATE_IDS = 50;
 
 export interface MissedGrantReconcileResult {
   /** Rows converted into a real monthly_grant this run. */
@@ -42,6 +44,8 @@ export interface MissedGrantReconcileResult {
    * they need a human (map the price, or grant by hand).
    */
   indeterminate: number;
+  /** Ledger ids of the indeterminate rows (capped), so the cron can alert with them. */
+  indeterminateLedgerIds: string[];
   /**
    * Rows whose lookup or grant transaction threw — left as 'missed_grant' for a
    * later sweep, logged at error, and surfaced so the cron can fail loudly.
@@ -51,11 +55,13 @@ export interface MissedGrantReconcileResult {
 
 interface MissedGrantReconcileOptions {
   /**
-   * Maps a Stripe price id to its tier; the web app injects getTierFromPrice. The
-   * missed invoice's paidCents is passed as the amount so an unmapped legacy price
-   * id still resolves through the exact-match legacy amount table, the same fallback
-   * the subscription webhook applies (the subscriptions table stores no amount).
-   * An amount that matches nothing leaves the derivation indeterminate.
+   * Maps a Stripe price id to its tier; the web app injects getTierFromPrice. When
+   * the user has exactly ONE subscription row (any status) the missed invoice must
+   * have been billed on it, so its paidCents is passed as the amount and an unmapped
+   * legacy price id still resolves through the exact-match legacy amount table (the
+   * subscriptions table stores no amount). With more than one row the invoice amount
+   * may describe a different subscription, so no amount is passed; an unmapped
+   * entitled row then stays indeterminate.
    */
   priceTier: (stripePriceId: string, amountCents: number | null) => SubscriptionTier;
 }
@@ -166,7 +172,13 @@ async function grantMissedRow(row: { id: string; userId: string }, allowanceCent
  * the row is final, so it must never be sized from a tier we know may be wrong.
  */
 export async function reconcileMissedGrants(options: MissedGrantReconcileOptions): Promise<MissedGrantReconcileResult> {
-  const result: MissedGrantReconcileResult = { reconciled: 0, stillMissing: 0, indeterminate: 0, failed: 0 };
+  const result: MissedGrantReconcileResult = {
+    reconciled: 0,
+    stillMissing: 0,
+    indeterminate: 0,
+    indeterminateLedgerIds: [],
+    failed: 0,
+  };
   if (!isBillingEnabled()) return result;
 
   const toEmit = new Set<string>();
@@ -206,15 +218,16 @@ export async function reconcileMissedGrants(options: MissedGrantReconcileOptions
 
     for (const row of page) {
       try {
-        const derived = deriveTierFromSubscriptions(rowsByUser.get(row.userId) ?? [], (priceId) =>
-          options.priceTier(priceId, row.paidCents),
-        );
+        const userSubs = rowsByUser.get(row.userId) ?? [];
+        const invoiceAmount = userSubs.length === 1 ? row.paidCents : null;
+        const derived = deriveTierFromSubscriptions(userSubs, (priceId) => options.priceTier(priceId, invoiceAmount));
         const plan = planMissedGrantReconcile(
           { id: row.id, userId: row.userId, paidCents: row.paidCents ?? 0 },
           derived.tier,
         );
         if (derived.indeterminate) {
           result.indeterminate++;
+          if (result.indeterminateLedgerIds.length < MAX_INDETERMINATE_IDS) result.indeterminateLedgerIds.push(row.id);
           loggers.api.warn('missed-grant reconcile: indeterminate tier (entitled subscription on an unmapped price) — needs a human', {
             ledgerId: row.id,
             userId: row.userId,
