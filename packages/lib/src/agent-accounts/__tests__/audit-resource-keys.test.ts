@@ -7,7 +7,22 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import type { OperationRegistryEntry } from '../canonical-request';
-import type { GrantDenyReason, HashBytes } from '../grant';
+import type { AccountId, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
+import type {
+  AgentAccountGrant,
+  ApprovalId,
+  BindingDigest,
+  ConversationId,
+  GrantDenyReason,
+  GrantId,
+  HashBytes,
+  Nonce,
+  PresenterKeyId,
+  RequestDigest,
+  RunId,
+  SessionId,
+  UserId,
+} from '../grant';
 import { auditResourceKeysFor } from '../audit-resource-keys-for';
 import { buildDeniedOutcome } from '../build-denied-outcome';
 import { canonicalizeRequest } from '../canonicalize-request';
@@ -15,6 +30,34 @@ import { buildAuditRecord } from '../build-audit-record';
 import { ENTRY_DEFAULTS, TEST_ORIGIN, TEST_PROVIDER } from './operation-registry.fixture';
 
 const sha3: HashBytes = (bytes) => createHash('sha3-256').update(bytes).digest('hex');
+
+const GRANT: AgentAccountGrant = {
+  grantId: 'grant_1' as GrantId,
+  iss: 'pagespace-account-authority',
+  aud: 'http-executor',
+  tenantId: 'user:u1' as TenantId,
+  human: { userId: 'u1' as UserId, sessionId: 's1' as SessionId },
+  delegationId: null,
+  agentPageId: null,
+  conversationId: 'c1' as ConversationId,
+  runId: 'r1' as RunId,
+  sandbox: null,
+  callerCeiling: { allowedDriveIds: [], originatingMcpTokenId: null },
+  accountId: 'acct_1' as AccountId,
+  accountKind: 'api_key',
+  credentialVersion: 1 as CredentialVersion,
+  policyVersion: 1 as PolicyVersion,
+  bindingDigest: 'bd' as BindingDigest,
+  operation: { class: 'privilege', name: 'github.tokens.get' },
+  requestDigest: 'rd' as RequestDigest,
+  sessionHttp: false,
+  approvalId: 'ap_1' as ApprovalId,
+  iat: 0,
+  nbf: 0,
+  exp: 60_000,
+  nonce: 'n1' as Nonce,
+  presenter: { keyId: 'pk' as PresenterKeyId, channel: 'http-executor' },
+};
 
 function tokenEntry(overrides: Partial<OperationRegistryEntry> = {}): OperationRegistryEntry {
   return {
@@ -56,7 +99,7 @@ describe('auditResourceKeysFor (G1c R6)', () => {
     });
     if (!result.ok) throw new Error(result.reason);
     const record = buildAuditRecord({
-      grant: {} as never,
+      grant: GRANT,
       canonical: result.canonical,
       outcome: { kind: 'allowed' },
       at: 1,
