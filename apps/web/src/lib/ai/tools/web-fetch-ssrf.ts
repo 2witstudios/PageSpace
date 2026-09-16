@@ -12,3 +12,4 @@ export {
   isIpLiteral,
   PRIVATE_HOST_MESSAGE,
 } from '@pagespace/lib/security/web-fetch-ssrf';
+export type { FetchTargetDecision } from '@pagespace/lib/security/web-fetch-ssrf';
