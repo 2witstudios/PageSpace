@@ -10,26 +10,29 @@
  *      otherwise from the committed snapshot `docs/specs/organizations-wallets.md` (CI has no
  *      credential, so CI always reads the snapshot; the orchestrator refreshes it).
  *   2. Extract every requirement ID.
- *   3. Scan every `*.test.ts(x)` / `*.spec.ts(x)` under `packages/` and `apps/` and collect the
- *      test NAMES via a real TypeScript parse (the `typescript` compiler API — NOT regex/text
- *      scanning, which cannot tell an executable declaration from a look-alike): the string
- *      literal argument to a `CallExpression` rooted at `it` / `test` / `describe` (and
- *      Playwright's `test.describe` / `test.step`), plus the `given:` / `should:` strings that
- *      are themselves arguments to the repo's riteway-style `assert({ given, should, … })`
- *      helper. None of this counts unless it can be PROVEN to execute unconditionally
- *      (fail-closed — an unrecognized shape is never guessed at as live): a declaration under
- *      `.skip` / `.todo` / `.fixme`; a curried `.skipIf(cond)(...)` / `.runIf(cond)(...)` — on a
- *      `describe` OR an individual `it`/`test`, and regardless of what the condition expression
- *      looks like, even a literal `true`/`false`; one nested at any depth inside such a block
- *      (however the wrapping condition or callback are themselves spelled — the callback is
- *      taken from the AST argument list, never by scanning for the next `{`); one whose own body
- *      calls Playwright's runtime skip guard (`test.skip(cond, reason)` called AS A STATEMENT,
- *      not as a declaration); one wrapped by a test-framework-rooted call this scanner does not
- *      recognize (an unfamiliar modifier such as `.each`); a `RegExp.test('MON-2 …')` method
- *      call (its callee resolves to a property access on some `pattern`, not to the
- *      `it`/`test`/`describe` identifier); or a plain object that merely has `given`/`should`
- *      keys without being passed to `assert(...)`.
- *   4. Print a table ID → files, and exit non-zero listing every ID that no test names.
+ *   3. Walk `packages/`, `apps/`, `scripts/`, and `infrastructure/` for every `test-results/*.json`
+ *      file and collect the full name (describe path + title) of every test that reports
+ *      `passed` — Vitest's and Playwright's own JSON reporters, uploaded as CI artifacts and
+ *      downloaded back to these same repo-relative paths.
+ *   4. Print a table ID → files, and exit non-zero listing every ID that no PASSING test names.
+ *
+ * COVERAGE SOURCE — read what CI actually RAN, not what the source merely names. Earlier
+ * revisions statically parsed test source with the TypeScript compiler API to decide which
+ * `it`/`test`/`describe` declarations execute unconditionally. Every fix (regex → brace-bounded
+ * regex → a real AST walk → fail-closed on runIf/skipIf/runtime-skip-guards/unknown modifiers)
+ * uncovered another shape the walk could not see through — a test gated behind an `if`/`&&`/
+ * ternary, one only reachable through a helper function, vitest's `ctx.skip()`/a destructured
+ * `skip`, `test.fixme(cond)`, a file-top-level `test.skip()` — because "does this test execute"
+ * is a RUNTIME question in general, not a static one. No static walk closes that gap; only the
+ * test runner itself can say what ran. So this gate no longer parses test SOURCE at all: an ID
+ * counts only when some test whose full name carries it reports `passed` in a real CI run.
+ * See `loadPassedTests` / `parseVitestJsonReport` / `parsePlaywrightJsonReport`.
+ *
+ * If no Playwright results are found (the e2e job did not run, was skipped, or failed before
+ * uploading), the gate says so explicitly on stdout — it does not fail mysteriously, and it does
+ * not silently treat e2e-only IDs as covered. It fails closed by construction: no Playwright
+ * results means no Playwright-sourced hits, so an e2e-only ID reports MISSING (or
+ * allowlisted-missing) exactly as if no test for it had ever run.
  *
  * The allowlist (`scripts/spec-coverage-allowlist.txt`) holds IDs not yet in scope. EVERY ID
  * starts allowlisted; a lane removes its IDs from the file in the same PR that lands the tests.
@@ -42,47 +45,44 @@
  *   --ids       check only these IDs (comma-separated); the allowlist still applies
  *   --offline   never call the pagespace CLI; read the snapshot only (what CI does)
  *   --json      machine-readable report on stdout instead of the table
- * Exit:   0 = every in-scope ID is named by at least one live test; 1 = at least one gap
- *         (or a stale / unknown allowlist entry, or the Spec could not be loaded).
+ * Exit:   0 = every in-scope ID is named by at least one passing test; 1 = at least one gap
+ *         (or a stale / unknown allowlist entry, or the Spec or the test results could not be
+ *         loaded).
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
 
 export const SPEC_PAGE_ID = 'drc7x34unhc0ty1dc0u1j3gy';
 export const DEFAULT_SNAPSHOT = 'docs/specs/organizations-wallets.md';
 export const DEFAULT_ALLOWLIST = 'scripts/spec-coverage-allowlist.txt';
-export const DEFAULT_SCAN_ROOTS = ['packages', 'apps'];
+/** Roots walked for `test-results/*.json` — every place a JSON test reporter can write in this repo. */
+export const RESULT_SCAN_ROOTS = ['packages', 'apps', 'scripts', 'infrastructure'];
 
 /** One requirement ID as it appears in the Spec, e.g. "MON-2". */
 export const REQUIREMENT_ID_PATTERN = /\b(ORG|DRV|SEAT|WAL|MON|SPEND|POL|SEC|AUD|UI|X)-\d+\b/g;
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.next', 'coverage', '.turbo', '.git', 'build', 'out']);
-// `.spec.ts(x)` too: apps/e2e's Playwright suite (the one that will carry most WAL/ORG/SEC UI
-// requirements) uses that extension exclusively, and several vitest configs in this repo accept
-// it as well. `.test.` remains the primary convention; `.spec.` is not a second, competing one.
-const TEST_FILE = /\.(test|spec)\.tsx?$/;
 
 export interface CoverageRow {
   id: string;
-  /** Repo-relative test files whose names carry the ID. */
+  /** Repo-relative test files with a PASSING test whose name carries the ID. */
   files: string[];
   allowlisted: boolean;
 }
 
 export interface CoverageReport {
   rows: CoverageRow[];
-  /** IDs with no test and not allowlisted — the gate failures. */
+  /** IDs with no passing test and not allowlisted — the gate failures. */
   missing: string[];
-  /** IDs with no test that the allowlist excuses. */
+  /** IDs with no passing test that the allowlist excuses. */
   allowlistedMissing: string[];
-  /** Allowlisted IDs that a test now names — must be removed from the allowlist. */
+  /** Allowlisted IDs that a passing test now names — must be removed from the allowlist. */
   staleAllowlist: string[];
   /** Allowlist tokens that are not IDs in the Spec. */
   unknownAllowlist: string[];
-  /** Number of test files scanned. */
+  /** Number of distinct files with at least one passing hit. */
   scannedFiles: number;
 }
 
@@ -116,219 +116,6 @@ export function stripLineNumberPrefixes(text: string): string {
     .join('\n');
 }
 
-const TEST_BASE_NAMES = new Set(['it', 'test', 'describe']);
-/** Modifiers that mean "this declaration never runs", unconditionally. */
-const SKIP_MODIFIERS = new Set(['skip', 'todo', 'fixme']);
-/** Modifiers that curry a runtime condition: `.skipIf(cond)(...)` / `.runIf(cond)(...)`. */
-const CONDITIONAL_MODIFIERS = new Set(['skipIf', 'runIf']);
-/** Every modifier this scanner understands. An unrecognized one (e.g. `.each`) means "don't guess". */
-const KNOWN_MODIFIERS = new Set(['only', 'concurrent', 'sequential', 'serial', 'describe', 'step', ...SKIP_MODIFIERS]);
-
-interface PropertyChain {
-  root: ts.Expression;
-  /** Dotted names between the root and the call, in source order (e.g. `test.describe.only` → `['describe', 'only']`). */
-  modifiers: string[];
-}
-
-/** Walks a `describe`/`describe.skip`/`test.describe.only`-shaped callee back to its root identifier. */
-function resolvePropertyChain(expr: ts.Expression): PropertyChain {
-  const modifiers: string[] = [];
-  let current: ts.Expression = expr;
-  while (ts.isPropertyAccessExpression(current)) {
-    modifiers.unshift(current.name.text);
-    current = current.expression;
-  }
-  return { root: current, modifiers };
-}
-
-interface ResolvedTestCall {
-  /** Modifiers other than a trailing conditional one, e.g. `['only']` for `it.only.skipIf(cond)`. */
-  modifiers: string[];
-  isDescribeFamily: boolean;
-  /** True for the curried `.skipIf(cond)(...)` / `.runIf(cond)(...)` form. */
-  isConditional: boolean;
-  conditionExpr: ts.Expression | undefined;
-  nameArg: ts.Expression | undefined;
-  callbackArg: ts.Expression | undefined;
-  extraArgs: ts.Expression[];
-}
-
-function isStringLiteralLike(expr: ts.Expression | undefined): expr is ts.StringLiteralLike {
-  return expr !== undefined && (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr));
-}
-
-/**
- * Resolves a `CallExpression` to a `describe`/`it`/`test` declaration shape, taking the name and
- * callback from the ARGUMENT LIST — never by scanning source text for the next brace — so a skip
- * condition containing its own object literal, function call, or anything else can never be
- * mistaken for the suite's callback. Returns `undefined` for anything this scanner does not
- * recognize (including `.each`, and any base identifier that is not literally `it`/`test`/
- * `describe`), so an unfamiliar shape is silently NOT counted rather than guessed at.
- */
-function resolveTestCall(call: ts.CallExpression): ResolvedTestCall | undefined {
-  let chain: PropertyChain;
-  let isConditional = false;
-  let conditionExpr: ts.Expression | undefined;
-
-  if (ts.isCallExpression(call.expression)) {
-    // Curried form: `it.skipIf(cond)(name, fn)` — `call.expression` is the `it.skipIf(cond)` call.
-    const inner = call.expression;
-    const innerChain = resolvePropertyChain(inner.expression);
-    const lastModifier = innerChain.modifiers.at(-1);
-    if (lastModifier === undefined || !CONDITIONAL_MODIFIERS.has(lastModifier)) return undefined;
-    isConditional = true;
-    conditionExpr = inner.arguments[0];
-    chain = { root: innerChain.root, modifiers: innerChain.modifiers.slice(0, -1) };
-  } else {
-    chain = resolvePropertyChain(call.expression);
-  }
-
-  if (!ts.isIdentifier(chain.root) || !TEST_BASE_NAMES.has(chain.root.text)) return undefined;
-  for (const modifier of chain.modifiers) if (!KNOWN_MODIFIERS.has(modifier)) return undefined;
-
-  const [nameArg, callbackArg, ...extraArgs] = call.arguments;
-  return {
-    modifiers: chain.modifiers,
-    isDescribeFamily: chain.root.text === 'describe' || chain.modifiers.includes('describe'),
-    isConditional,
-    conditionExpr,
-    nameArg,
-    callbackArg,
-    extraArgs,
-  };
-}
-
-/** A bare call to `assert(...)` (the repo's riteway-style helper) — not `foo.assert(...)`. */
-function isAssertCall(call: ts.CallExpression): boolean {
-  return ts.isIdentifier(call.expression) && call.expression.text === 'assert';
-}
-
-/**
- * True for a CallExpression rooted at `it`/`test`/`describe`, REGARDLESS of whether
- * `resolveTestCall` understood its modifier chain. Used only to decide whether an unrecognized
- * shape still needs fail-closed treatment (it might be a test-framework call this scanner simply
- * doesn't model yet), as opposed to an ordinary function call that happens to be a sibling.
- */
-function isTestFrameworkRootCall(call: ts.CallExpression): boolean {
-  const inner = ts.isCallExpression(call.expression) ? call.expression : call;
-  const chain = resolvePropertyChain(inner.expression);
-  return ts.isIdentifier(chain.root) && TEST_BASE_NAMES.has(chain.root.text);
-}
-
-/**
- * Playwright's runtime skip guard: `test.skip(condition, reason)` (or the bare `test.skip()`)
- * called AS A STATEMENT inside a test or describe body, as opposed to `it.skip('name', fn)`
- * which is a DECLARATION whose first argument is the test's own name. The two are structurally
- * identical to `resolveTestCall` (root + a single `skip` modifier + up to two more arguments) —
- * the only distinguishing signal is that a declaration's first argument is a string literal and
- * this guard's is not (a boolean, an identifier, or nothing at all).
- */
-function isRuntimeSkipCall(call: ts.CallExpression): boolean {
-  if (ts.isCallExpression(call.expression)) return false; // the curried skipIf/runIf(cond)(...) form is not this shape
-  const chain = resolvePropertyChain(call.expression);
-  if (!ts.isIdentifier(chain.root) || !TEST_BASE_NAMES.has(chain.root.text)) return false;
-  if (chain.modifiers.length !== 1 || chain.modifiers[0] !== 'skip') return false;
-  return !isStringLiteralLike(call.arguments[0]);
-}
-
-/**
- * Whether `node`'s own body — NOT the body of any test/describe declared inside it, which has
- * its own separate execution guarantee — contains a runtime skip guard. A describe (or test)
- * whose callback calls this cannot be proven to run its declared children unconditionally, so
- * fail-closed treats the whole subtree the same as a static `.skip`.
- */
-function containsRuntimeSkipGuard(node: ts.Node): boolean {
-  let found = false;
-  const walk = (n: ts.Node): void => {
-    if (found) return;
-    if (ts.isCallExpression(n)) {
-      if (isRuntimeSkipCall(n)) {
-        found = true;
-        return;
-      }
-      if (resolveTestCall(n) !== undefined) return; // a nested declaration owns its own body
-    }
-    ts.forEachChild(n, walk);
-  };
-  ts.forEachChild(node, walk);
-  return found;
-}
-
-/**
- * Test names declared LIVE in a source file: `it`/`test`/`describe` string (or template-literal-
- * without-substitutions) arguments, plus riteway `given:`/`should:` strings that are themselves
- * arguments to an `assert(...)` call. A real TypeScript parse — not text/regex scanning — decides
- * what counts, so:
- *   - a declaration under `.skip`/`.todo`/`.fixme`, or nested (at any depth) inside a
- *     `describe.skip(...)`/`describe.skipIf(...)(...)`/`describe.runIf(...)(...)` block, never
- *     counts, regardless of how the wrapping suite's condition expression or callback are spelled;
- *   - a curried `.skipIf(cond)(...)`/`.runIf(cond)(...)` never counts EITHER, on a `describe` or
- *     on an individual `it`/`test` — fail-closed applies the identical rule to both, even when
- *     the condition looks statically resolvable (`skipIf(true)`, `runIf(false)`);
- *   - a declaration whose own body calls Playwright's runtime skip guard
- *     (`test.skip(cond, reason)` used AS A STATEMENT, not `it.skip('name', fn)` as a
- *     declaration) never counts — its execution is not provably unconditional either;
- *   - a call rooted at `it`/`test`/`describe` with a modifier this scanner does not recognize
- *     (e.g. `.each`) never counts, and neither do any declarations nested inside it — an
- *     unfamiliar wrapper is never assumed to run its children;
- *   - `someRegex.test('MON-2 …')` is a property-access call on `pattern`, not a call rooted at the
- *     `it`/`test`/`describe` identifier, so it is never resolved as a declaration;
- *   - `{ given: 'WAL-1 …' }` only counts when it is literally `assert(...)`'s first argument, never
- *     an arbitrary object literal that happens to have those keys.
- */
-export function extractTestNames(source: string, fileName = 'source.test.tsx'): string[] {
-  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const names: string[] = [];
-
-  const visit = (node: ts.Node, skipDepth: number): void => {
-    if (ts.isCallExpression(node)) {
-      const resolved = resolveTestCall(node);
-      if (resolved) {
-        const isUnconditionalSkip = resolved.modifiers.some((m) => SKIP_MODIFIERS.has(m));
-        // A curried `.skipIf(cond)`/`.runIf(cond)` cannot be proven to run — a literal-looking
-        // condition (`skipIf(true)`, `runIf(false)`) is not evaluated specially, and neither is
-        // a describe treated any differently from an individual it/test: fail-closed applies the
-        // same rule to both, so this scanner never counts a conditionally-gated declaration.
-        const hasRuntimeSkipGuard = resolved.callbackArg !== undefined && containsRuntimeSkipGuard(resolved.callbackArg);
-        const treatAsSkip = isUnconditionalSkip || resolved.isConditional || hasRuntimeSkipGuard;
-        if (!treatAsSkip && skipDepth === 0 && isStringLiteralLike(resolved.nameArg)) {
-          names.push(resolved.nameArg.text);
-        }
-        if (resolved.conditionExpr) visit(resolved.conditionExpr, skipDepth);
-        if (resolved.callbackArg) visit(resolved.callbackArg, skipDepth + (treatAsSkip ? 1 : 0));
-        for (const extra of resolved.extraArgs) visit(extra, skipDepth);
-        return;
-      }
-      if (isAssertCall(node) && skipDepth === 0) {
-        const arg = node.arguments[0];
-        if (arg && ts.isObjectLiteralExpression(arg)) {
-          for (const prop of arg.properties) {
-            if (
-              ts.isPropertyAssignment(prop) &&
-              (ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name)) &&
-              (prop.name.text === 'given' || prop.name.text === 'should') &&
-              isStringLiteralLike(prop.initializer)
-            ) {
-              names.push(prop.initializer.text);
-            }
-          }
-        }
-      }
-      if (isTestFrameworkRootCall(node)) {
-        // A test-framework-rooted call `resolveTestCall` didn't understand (an unfamiliar
-        // modifier such as `.each`) might still wrap live children we cannot prove run — never
-        // guess: descend fail-closed, one skip level deeper, rather than at the same depth.
-        ts.forEachChild(node, (child) => visit(child, skipDepth + 1));
-        return;
-      }
-    }
-    ts.forEachChild(node, (child) => visit(child, skipDepth));
-  };
-
-  visit(sourceFile, 0);
-  return names;
-}
-
 /** True when `name` carries `id` as a whole token ("MON-2" does not match "MON-20"). */
 export function nameCarriesId(name: string, id: string): boolean {
   const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -355,7 +142,7 @@ export function parseAllowlist(text: string): string[] {
 
 export interface BuildReportInput {
   ids: readonly string[];
-  /** Repo-relative test file → the IDs its live test names carry. */
+  /** Repo-relative test file → the IDs a passing test in it names. */
   hitsByFile: ReadonlyMap<string, ReadonlySet<string>>;
   allowlist: readonly string[];
   /** Optional `--ids` filter; when set only these IDs are reported. */
@@ -404,10 +191,101 @@ export function formatTable(report: CoverageReport): string {
 }
 
 // ---------------------------------------------------------------------------
-// IO edges
+// CI test-results parsing — Vitest's and Playwright's own JSON reporters
 // ---------------------------------------------------------------------------
 
-export function findTestFiles(root: string, roots: readonly string[] = DEFAULT_SCAN_ROOTS): string[] {
+export interface PassedTest {
+  /** Repo-relative (or reporter-relative) source file the passing test belongs to. */
+  file: string;
+  /** describe path + title (Vitest) or ancestor suite titles + spec title (Playwright). */
+  fullName: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+/** Vitest's built-in `json` reporter: `{ testResults: [{ name, assertionResults: [...] }] }`. */
+export function isVitestJsonReport(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && Array.isArray(value.testResults);
+}
+
+/** Playwright's built-in `json` reporter: `{ suites: [...], config, stats, ... }`. */
+export function isPlaywrightJsonReport(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && Array.isArray(value.suites) && !Array.isArray(value.testResults);
+}
+
+/** Every `assertionResults` entry reporting `status: 'passed'`, one row per (file, test). */
+export function parseVitestJsonReport(report: unknown): PassedTest[] {
+  if (!isVitestJsonReport(report)) return [];
+  const out: PassedTest[] = [];
+  for (const fileResult of report.testResults as unknown[]) {
+    if (!isRecord(fileResult)) continue;
+    const file = typeof fileResult.name === 'string' ? fileResult.name : undefined;
+    const assertions = Array.isArray(fileResult.assertionResults) ? fileResult.assertionResults : [];
+    for (const assertion of assertions) {
+      if (!isRecord(assertion) || assertion.status !== 'passed') continue;
+      const ancestors = Array.isArray(assertion.ancestorTitles)
+        ? assertion.ancestorTitles.filter((t): t is string => typeof t === 'string')
+        : [];
+      const title = typeof assertion.title === 'string' ? assertion.title : '';
+      const fullName =
+        typeof assertion.fullName === 'string' && assertion.fullName.length > 0
+          ? assertion.fullName
+          : [...ancestors, title].filter(Boolean).join(' ');
+      if (file && fullName) out.push({ file, fullName });
+    }
+  }
+  return out;
+}
+
+/**
+ * Walks Playwright's `suites` tree (suites nest suites; a suite's own tests live in `specs`).
+ * A spec's full name is every ancestor suite title plus its own title, joined — matching how
+ * Playwright itself reports a test's location (`describe title > nested describe > test title`),
+ * so `nameCarriesId` sees the same string a human would read in the Playwright report. A spec
+ * counts only when at least one of its `tests[].results[]` reports `status: 'passed'` — a retry
+ * that eventually passed still counts; one that never did, does not.
+ */
+export function parsePlaywrightJsonReport(report: unknown): PassedTest[] {
+  if (!isPlaywrightJsonReport(report)) return [];
+  const out: PassedTest[] = [];
+
+  const walkSuite = (suite: unknown, ancestors: string[], inheritedFile: string | undefined): void => {
+    if (!isRecord(suite)) return;
+    const title = typeof suite.title === 'string' ? suite.title : undefined;
+    const file = typeof suite.file === 'string' ? suite.file : inheritedFile;
+    const nextAncestors = title ? [...ancestors, title] : ancestors;
+
+    for (const spec of Array.isArray(suite.specs) ? suite.specs : []) {
+      if (!isRecord(spec)) continue;
+      const specTitle = typeof spec.title === 'string' ? spec.title : '';
+      const specFile = typeof spec.file === 'string' ? spec.file : file;
+      const tests = Array.isArray(spec.tests) ? spec.tests : [];
+      const passed = tests.some(
+        (t) =>
+          isRecord(t) &&
+          Array.isArray(t.results) &&
+          t.results.some((r) => isRecord(r) && r.status === 'passed'),
+      );
+      if (passed && specFile) {
+        out.push({ file: specFile, fullName: [...nextAncestors, specTitle].filter(Boolean).join(' ') });
+      }
+    }
+
+    for (const nested of Array.isArray(suite.suites) ? suite.suites : []) walkSuite(nested, nextAncestors, file);
+  };
+
+  for (const suite of report.suites as unknown[]) walkSuite(suite, [], undefined);
+  return out;
+}
+
+function toRepoRelative(root: string, file: string): string {
+  return path.isAbsolute(file) ? path.relative(root, file) : file;
+}
+
+/** Every `test-results/*.json` file under the result-scan roots, repo-relative, sorted. */
+export function findResultFiles(root: string, roots: readonly string[] = RESULT_SCAN_ROOTS): string[] {
   const found: string[] = [];
   const walk = (dir: string): void => {
     let entries: fs.Dirent[];
@@ -419,7 +297,7 @@ export function findTestFiles(root: string, roots: readonly string[] = DEFAULT_S
     for (const entry of entries) {
       if (entry.isDirectory()) {
         if (!SKIP_DIRS.has(entry.name)) walk(path.join(dir, entry.name));
-      } else if (entry.isFile() && TEST_FILE.test(entry.name)) {
+      } else if (entry.isFile() && entry.name.endsWith('.json') && path.basename(dir) === 'test-results') {
         found.push(path.relative(root, path.join(dir, entry.name)));
       }
     }
@@ -428,14 +306,63 @@ export function findTestFiles(root: string, roots: readonly string[] = DEFAULT_S
   return found.sort();
 }
 
-export function scanTestFiles(root: string, files: readonly string[], ids: readonly string[]): Map<string, Set<string>> {
+export interface LoadedResults {
+  tests: PassedTest[];
+  resultFiles: string[];
+  sawVitest: boolean;
+  sawPlaywright: boolean;
+}
+
+/**
+ * Reads every `test-results/*.json` file found under the result-scan roots and parses each as
+ * whichever reporter shape it matches. A file that is neither shape (or fails to parse as JSON)
+ * is a hard error — a malformed or unexpected result file must never be silently ignored, since
+ * that is exactly the kind of gap that lets an ID pass without ever having run.
+ */
+export function loadPassedTests(root: string): LoadedResults {
+  const resultFiles = findResultFiles(root);
+  const tests: PassedTest[] = [];
+  let sawVitest = false;
+  let sawPlaywright = false;
+
+  for (const relFile of resultFiles) {
+    const absFile = path.join(root, relFile);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(absFile, 'utf8'));
+    } catch (error) {
+      throw new Error(`Could not parse test-results JSON at ${relFile}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (isVitestJsonReport(parsed)) {
+      sawVitest = true;
+      for (const t of parseVitestJsonReport(parsed)) tests.push({ file: toRepoRelative(root, t.file), fullName: t.fullName });
+    } else if (isPlaywrightJsonReport(parsed)) {
+      sawPlaywright = true;
+      for (const t of parsePlaywrightJsonReport(parsed)) tests.push({ file: toRepoRelative(root, t.file), fullName: t.fullName });
+    } else {
+      throw new Error(`${relFile} is neither a Vitest nor a Playwright JSON reporter file — unrecognized shape`);
+    }
+  }
+
+  return { tests, resultFiles, sawVitest, sawPlaywright };
+}
+
+/** Repo-relative file → the IDs a PASSING test in it names. Replaces the old static AST scan. */
+export function hitsFromPassedTests(tests: readonly PassedTest[], ids: readonly string[]): Map<string, Set<string>> {
   const hits = new Map<string, Set<string>>();
-  for (const file of files) {
-    const source = fs.readFileSync(path.join(root, file), 'utf8');
-    hits.set(file, idsNamedBy(extractTestNames(source, file), ids));
+  for (const t of tests) {
+    const named = idsNamedBy([t.fullName], ids);
+    if (named.size === 0) continue;
+    const existing = hits.get(t.file) ?? new Set<string>();
+    for (const id of named) existing.add(id);
+    hits.set(t.file, existing);
   }
   return hits;
 }
+
+// ---------------------------------------------------------------------------
+// Other IO edges
+// ---------------------------------------------------------------------------
 
 export interface SpecSource {
   text: string;
@@ -498,17 +425,37 @@ export function run(root: string, opts: CliOptions, log: (line: string) => void 
   const ids = extractRequirementIds(spec.text);
   const allowlistPath = path.resolve(root, opts.allowlist);
   const allowlist = fs.existsSync(allowlistPath) ? parseAllowlist(fs.readFileSync(allowlistPath, 'utf8')) : [];
-  const files = findTestFiles(root);
-  const hitsByFile = scanTestFiles(root, files, ids);
+
+  const { tests, resultFiles, sawVitest, sawPlaywright } = loadPassedTests(root);
+  if (resultFiles.length === 0) {
+    throw new Error(
+      'No test-results/*.json files found under packages/, apps/, scripts/, or infrastructure/ ' +
+        '— nothing to check coverage against. Did the Unit Tests and E2E jobs run and upload ' +
+        'their JSON reporter output before this gate ran?',
+    );
+  }
+
+  const hitsByFile = hitsFromPassedTests(tests, ids);
   const report = buildReport({ ids, hitsByFile, allowlist, onlyIds: opts.ids });
   const ok = reportPasses(report);
 
   if (opts.json) {
-    log(JSON.stringify({ origin: spec.origin, ok, ...report, rows: report.rows }, null, 2));
+    log(JSON.stringify({ origin: spec.origin, ok, sawVitest, sawPlaywright, resultFiles: resultFiles.length, ...report, rows: report.rows }, null, 2));
     return ok ? 0 : 1;
   }
 
-  log(`Spec source: ${spec.origin === 'page' ? `page ${SPEC_PAGE_ID}` : opts.snapshot} (${ids.length} IDs); scanned ${files.length} test files`);
+  log(`Spec source: ${spec.origin === 'page' ? `page ${SPEC_PAGE_ID}` : opts.snapshot} (${ids.length} IDs)`);
+  log(`Test results: ${resultFiles.length} file(s), ${tests.length} passing test(s) parsed`);
+  if (!sawVitest) {
+    log('WARNING: no Vitest JSON results found — every unit/integration-covered ID will show as MISSING or allowlisted this run.');
+  }
+  if (!sawPlaywright) {
+    log(
+      'WARNING: no Playwright JSON results found (the e2e job did not run, was skipped, or failed ' +
+        'before uploading) — every e2e-only ID will show as MISSING or allowlisted this run, ' +
+        'fail-closed rather than silently counted as covered.',
+    );
+  }
   log(formatTable(report));
   log('');
   const covered = report.rows.filter((r) => r.files.length > 0).length;
@@ -517,10 +464,10 @@ export function run(root: string, opts: CliOptions, log: (line: string) => void 
     log(`FAIL: allowlist entries that are not Spec IDs (typo?): ${report.unknownAllowlist.join(', ')}`);
   }
   if (report.staleAllowlist.length > 0) {
-    log(`FAIL: tests now name these allowlisted IDs — remove them from ${opts.allowlist}: ${report.staleAllowlist.join(', ')}`);
+    log(`FAIL: passing tests now name these allowlisted IDs — remove them from ${opts.allowlist}: ${report.staleAllowlist.join(', ')}`);
   }
   if (report.missing.length > 0) {
-    log(`FAIL: no live test names these IDs: ${report.missing.join(', ')}`);
+    log(`FAIL: no passing test names these IDs: ${report.missing.join(', ')}`);
   }
   log(ok ? 'spec-coverage: OK' : 'spec-coverage: FAILED');
   return ok ? 0 : 1;

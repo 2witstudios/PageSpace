@@ -5,16 +5,20 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildReport,
   extractRequirementIds,
-  extractTestNames,
-  findTestFiles,
+  findResultFiles,
   formatTable,
+  hitsFromPassedTests,
   idsNamedBy,
+  isPlaywrightJsonReport,
+  isVitestJsonReport,
+  loadPassedTests,
   nameCarriesId,
   parseAllowlist,
   parseArgs,
+  parsePlaywrightJsonReport,
+  parseVitestJsonReport,
   reportPasses,
   run,
-  scanTestFiles,
   stripLineNumberPrefixes,
 } from '../check-spec-coverage';
 
@@ -41,204 +45,131 @@ describe('X-6 spec ID-coverage gate: requirement extraction', () => {
   });
 });
 
-describe('X-6 spec ID-coverage gate: test-name extraction', () => {
-  it('X-6 collects it/test/describe names and riteway given/should strings', () => {
-    const src = `
-      describe('MON-2 money model', () => {
-        it("MON-2 renders an integer count", () => {});
-        test(\`WAL-1 template name\`, () => {});
-        assert({ given: 'X-6 a non-member', should: 'resolve no drive', actual: 1, expected: 1 });
-      });
-    `;
-    expect(extractTestNames(src)).toEqual([
-      'MON-2 money model',
-      'MON-2 renders an integer count',
-      'WAL-1 template name',
-      'X-6 a non-member',
-      'resolve no drive',
-    ]);
-  });
-
-  it('X-6 does not count skipped, todo, fixme, or commented-out declarations', () => {
-    const src = `
-      it.skip('MON-1 skipped', () => {});
-      it.todo('MON-3 todo');
-      test.fixme('MON-4 fixme', () => {});
-      // it('MON-5 commented out', () => {});
-      /* describe('MON-6 block comment', () => {}); */
-      it('MON-7 live', () => {});
-    `;
-    expect(extractTestNames(src)).toEqual(['MON-7 live']);
-  });
-
-  it('X-6 rejects an it() nested inside describe.runIf(false)(...) — runIf is conditional skip too, same as skipIf', () => {
-    const src = `
-      describe.runIf(false)('MON-8 runIf-gated suite', () => {
-        it('MON-8 never runs when the flag is false', () => {});
-      });
-    `;
-    expect(extractTestNames(src)).toEqual([]);
-  });
-
-  it('X-6 finds the suite callback (not an object literal in the skip condition) via the argument list, not brace-scanning', () => {
-    const src = `
-      describe.skipIf(check({ org: true }))('WAL-9 suite gated on an object-literal condition', () => {
-        it('WAL-9 nested test, must not falsely count as live', () => {});
-      });
-      it('WAL-9 sibling declared after, must still count', () => {});
-    `;
-    expect(extractTestNames(src)).toEqual(['WAL-9 sibling declared after, must still count']);
-  });
-
-  it('X-6 still counts it.only, test.describe, and test.step declarations', () => {
-    const src = `
-      it.only('SEC-1 only', () => {});
-      test.describe('UI-2 playwright group', () => {});
-      test.step('UI-3 a step', async () => {});
-    `;
-    expect(extractTestNames(src)).toEqual(['SEC-1 only', 'UI-2 playwright group', 'UI-3 a step']);
-  });
-
-  it('X-6 rejects it.skipIf(cond)/it.runIf(cond) — a conditional it/test is never provably unconditional, same as a conditional describe', () => {
-    const src = `
-      it.skipIf(!tableExists)('POL-1 conditional', () => {});
-      test.runIf(supportsFeature)('POL-2 also conditional', () => {});
-    `;
-    expect(extractTestNames(src)).toEqual([]);
-  });
-
-  it('X-6 rejects it.runIf(false) and it.skipIf(true) even though the condition looks statically resolvable — fail-closed never evaluates it', () => {
-    const src = `
-      it.runIf(false)('POL-3 would never run', () => {});
-      it.skipIf(true)('POL-4 would always be skipped', () => {});
-    `;
-    expect(extractTestNames(src)).toEqual([]);
-  });
-
-  it('X-6 rejects a test whose own body calls Playwright\'s runtime skip guard test.skip(cond, reason) as a statement', () => {
-    const src = `
-      test('WAL-6 conditionally skips itself at runtime', ({ browserName }) => {
-        test.skip(browserName === 'webkit', 'not supported on webkit');
-        doStuff();
-      });
-    `;
-    expect(extractTestNames(src)).toEqual([]);
-  });
-
-  it('X-6 rejects every test in a describe whose body calls the runtime skip guard at the top level', () => {
-    const src = `
-      test.describe('WAL-7 group gated at runtime', () => {
-        test.skip(isCI, 'flaky in CI');
-        test('WAL-7 first test in the gated group', () => {});
-        test('WAL-7 second test in the gated group', () => {});
-      });
-      test('WAL-8 sibling declared outside the gated group, must still count', () => {});
-    `;
-    expect(extractTestNames(src)).toEqual(['WAL-8 sibling declared outside the gated group, must still count']);
-  });
-
-  it("X-6 does not let a runtime test.skip(cond, reason) inside one test's body affect an unrelated sibling test's own coverage", () => {
-    const src = `
-      test('SEC-2 gated test', () => {
-        test.skip(flag, 'reason');
-      });
-      test('SEC-3 unrelated sibling, must still count', () => {});
-    `;
-    expect(extractTestNames(src)).toEqual(['SEC-3 unrelated sibling, must still count']);
-  });
-
-  it('X-6 rejects declarations nested inside a call this scanner does not recognize (an unfamiliar modifier such as .each) — an unknown wrapper never proves its children run', () => {
-    const src = `
-      describe.each(['a', 'b'])('SEC-4 parameterized suite', (variant) => {
-        it('SEC-4 a test inside the unrecognized wrapper', () => {});
-      });
-      it('AUD-1 unrelated sibling declared after, must still count', () => {});
-    `;
-    expect(extractTestNames(src)).toEqual(['AUD-1 unrelated sibling declared after, must still count']);
-  });
-
-  it('X-6 rejects an it() nested inside describe.skip(...) even though the it() itself carries no skip modifier', () => {
-    const src = `
-      describe.skip('MON-8 disabled suite', () => {
-        it('MON-8 never runs', () => {});
-      });
-      it('MON-9 sibling still runs', () => {});
-    `;
-    expect(extractTestNames(src)).toEqual(['MON-9 sibling still runs']);
-  });
-
-  it('X-6 rejects an it() nested inside describe.skipIf(...)(...) — the wrapping suite may never execute', () => {
-    const src = `
-      describe.skipIf(condition)('MON-8 conditionally disabled suite', () => {
-        it('MON-8 might never run', () => {});
-      });
-    `;
-    expect(extractTestNames(src)).toEqual([]);
-  });
-
-  it('X-6 rejects nested it() two levels inside describe.skip(...) (nested describes)', () => {
-    const src = `
-      describe.skip('MON-8 outer', () => {
-        describe('MON-8 inner group', () => {
-          it('MON-8 deeply nested, never runs', () => {});
-        });
-      });
-    `;
-    expect(extractTestNames(src)).toEqual([]);
-  });
-
-  it('X-6 rejects an ID mentioned only via a RegExp.test() method call, not a test declaration', () => {
-    const src = `
-      const pattern = /MON-2/;
-      if (pattern.test('MON-2 direct')) { doSomething(); }
-      someRegex.test('MON-2 also not a declaration');
-    `;
-    expect(extractTestNames(src)).toEqual([]);
-  });
-
-  it('X-6 rejects given/should fields on a plain object that is not passed to assert()', () => {
-    const src = `
-      const fixture = { given: 'WAL-1 a wallet', should: 'not count as a test' };
-      logFixture(fixture);
-    `;
-    expect(extractTestNames(src)).toEqual([]);
-  });
-
-  it('X-6 still counts given/should fields when they ARE the argument to a riteway assert() call', () => {
-    const src = `
-      assert({ given: 'WAL-1 a wallet', should: 'charge nothing', actual: 1, expected: 1 });
-    `;
-    expect(extractTestNames(src)).toEqual(['WAL-1 a wallet', 'charge nothing']);
-  });
-
-  it('X-6 does not let describe.skip(name, namedCallback) — no inline block — swallow later, unrelated code as a skip region', () => {
-    const src = `
-      describe.skip('MON-8 uses a named callback, no inline block', suiteBody);
-      it('MON-10 a normal running test declared later in the file', () => {
-        it('MON-11 nested inside MON-10s own callback, also runs normally', () => {});
-      });
-    `;
-    expect(extractTestNames(src)).toEqual([
-      'MON-10 a normal running test declared later in the file',
-      'MON-11 nested inside MON-10s own callback, also runs normally',
-    ]);
-  });
-
-  it('X-6 rejects an assert() call nested inside describe.skip(...)', () => {
-    const src = `
-      describe.skip('WAL-1 disabled suite', () => {
-        assert({ given: 'WAL-1 a wallet', should: 'never run', actual: 1, expected: 1 });
-      });
-    `;
-    expect(extractTestNames(src)).toEqual([]);
-  });
-
+describe('X-6 spec ID-coverage gate: ID matching', () => {
   it('X-6 matches an ID only as a whole token (MON-2 is not MON-20 and not XMON-2)', () => {
     expect(nameCarriesId('MON-20 something', 'MON-2')).toBe(false);
     expect(nameCarriesId('XMON-2 something', 'MON-2')).toBe(false);
     expect(nameCarriesId('MON-2: something', 'MON-2')).toBe(true);
     expect(nameCarriesId('guards MON-2', 'MON-2')).toBe(true);
     expect([...idsNamedBy(['MON-20 x', 'X-6 y'], ['MON-2', 'MON-20', 'X-6'])]).toEqual(['MON-20', 'X-6']);
+  });
+
+  it('X-6 parses the allowlist ignoring comments and blank lines', () => {
+    expect(parseAllowlist('# header\n\nMON-1  # trailing\n  X-6\n')).toEqual(['MON-1', 'X-6']);
+  });
+});
+
+// Every JSON blob below has the exact shape captured from a REAL `vitest run --reporter=json`
+// / `playwright test --reporter=json` invocation, not a hand-guessed schema — see PR #2651 for
+// the captured sample this was checked against (a suite with a `.skip`, a test inside
+// `if (false)` that never registers at all, and a real passing test: the skip reported
+// `status: "skipped"`, the if(false) test did not appear in `assertionResults` at all, and only
+// the real test reported `status: "passed"`).
+describe('X-6 spec ID-coverage gate: parsing Vitest\'s JSON reporter', () => {
+  const vitestReport = {
+    numTotalTestSuites: 1,
+    success: true,
+    testResults: [
+      {
+        name: '/repo/packages/lib/src/__tests__/money.test.ts',
+        status: 'passed',
+        assertionResults: [
+          { ancestorTitles: ['money model'], title: 'MON-2 one definition of a credit', fullName: 'money model MON-2 one definition of a credit', status: 'passed' },
+          { ancestorTitles: ['money model'], title: 'MON-1 skipped price check', fullName: 'money model MON-1 skipped price check', status: 'skipped' },
+          { ancestorTitles: ['money model'], title: 'MON-3 a todo', fullName: 'money model MON-3 a todo', status: 'todo' },
+          { ancestorTitles: ['money model'], title: 'MON-4 a failure', fullName: 'money model MON-4 a failure', status: 'failed' },
+        ],
+      },
+    ],
+  };
+
+  it('X-6 recognizes the Vitest JSON reporter shape (testResults array) and not Playwright\'s (suites array)', () => {
+    expect(isVitestJsonReport(vitestReport)).toBe(true);
+    expect(isPlaywrightJsonReport(vitestReport)).toBe(false);
+  });
+
+  it('X-6 collects only assertionResults with status "passed" — skipped, todo, and failed never count', () => {
+    expect(parseVitestJsonReport(vitestReport)).toEqual([
+      { file: '/repo/packages/lib/src/__tests__/money.test.ts', fullName: 'money model MON-2 one definition of a credit' },
+    ]);
+  });
+
+  it('X-6 falls back to ancestorTitles + title when fullName is absent', () => {
+    const report = {
+      testResults: [
+        {
+          name: '/repo/a.test.ts',
+          assertionResults: [{ ancestorTitles: ['WAL-1 suite'], title: 'a passing case', status: 'passed' }],
+        },
+      ],
+    };
+    expect(parseVitestJsonReport(report)).toEqual([{ file: '/repo/a.test.ts', fullName: 'WAL-1 suite a passing case' }]);
+  });
+
+  it('X-6 returns nothing for a value that is not a Vitest report at all', () => {
+    expect(parseVitestJsonReport({ suites: [] })).toEqual([]);
+    expect(parseVitestJsonReport(null)).toEqual([]);
+    expect(parseVitestJsonReport('not json shaped like a report')).toEqual([]);
+  });
+});
+
+describe('X-6 spec ID-coverage gate: parsing Playwright\'s JSON reporter', () => {
+  const playwrightReport = {
+    config: {},
+    suites: [
+      {
+        title: '',
+        file: '',
+        suites: [
+          {
+            title: 'SEAT-1 org picker',
+            file: 'tests/org-picker.spec.ts',
+            specs: [
+              { title: 'shows the org name', file: 'tests/org-picker.spec.ts', tests: [{ results: [{ status: 'failed' }, { status: 'passed' }] }] },
+              { title: 'a skipped case', file: 'tests/org-picker.spec.ts', tests: [{ results: [{ status: 'skipped' }] }] },
+            ],
+            suites: [
+              {
+                title: 'nested group',
+                specs: [{ title: 'SEC-1 a nested passing spec', file: 'tests/org-picker.spec.ts', tests: [{ results: [{ status: 'passed' }] }] }],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  it('X-6 recognizes the Playwright JSON reporter shape (suites array, no testResults array)', () => {
+    expect(isPlaywrightJsonReport(playwrightReport)).toBe(true);
+    expect(isVitestJsonReport(playwrightReport)).toBe(false);
+  });
+
+  it('X-6 builds the full name from every ancestor suite title plus the spec title, only for specs with a passing result (including a retry that eventually passed)', () => {
+    expect(parsePlaywrightJsonReport(playwrightReport)).toEqual([
+      { file: 'tests/org-picker.spec.ts', fullName: 'SEAT-1 org picker shows the org name' },
+      { file: 'tests/org-picker.spec.ts', fullName: 'SEAT-1 org picker nested group SEC-1 a nested passing spec' },
+    ]);
+  });
+
+  it('X-6 returns nothing for a value that is not a Playwright report at all', () => {
+    expect(parsePlaywrightJsonReport({ testResults: [] })).toEqual([]);
+    expect(parsePlaywrightJsonReport(undefined)).toEqual([]);
+  });
+});
+
+describe('X-6 spec ID-coverage gate: hitsFromPassedTests', () => {
+  it('X-6 maps each file to the set of IDs a PASSING test in it names, merging multiple passing tests in the same file', () => {
+    const hits = hitsFromPassedTests(
+      [
+        { file: 'a.test.ts', fullName: 'MON-2 one thing' },
+        { file: 'a.test.ts', fullName: 'X-6 another thing' },
+        { file: 'b.test.ts', fullName: 'unrelated name' },
+      ],
+      ['MON-2', 'X-6'],
+    );
+    expect([...(hits.get('a.test.ts') ?? [])].sort()).toEqual(['MON-2', 'X-6']);
+    expect(hits.has('b.test.ts')).toBe(false);
   });
 });
 
@@ -250,7 +181,7 @@ describe('X-6 spec ID-coverage gate: report and allowlist ratchet', () => {
     ['apps/web/src/c.test.ts', new Set()],
   ]);
 
-  it('X-6 fails on an ID with no test that is not allowlisted, and lists the files per ID', () => {
+  it('X-6 fails on an ID with no passing test that is not allowlisted, and lists the files per ID', () => {
     const report = buildReport({ ids, hitsByFile: hits, allowlist: [] });
     expect(report.missing).toEqual(['MON-1']);
     expect(report.rows.find((r) => r.id === 'MON-2')?.files).toEqual([
@@ -267,7 +198,7 @@ describe('X-6 spec ID-coverage gate: report and allowlist ratchet', () => {
     expect(reportPasses(report)).toBe(true);
   });
 
-  it('X-6 fails when an allowlisted ID is now covered (the allowlist must shrink)', () => {
+  it('X-6 fails when an allowlisted ID is now covered by a passing test (the allowlist must shrink)', () => {
     const report = buildReport({ ids, hitsByFile: hits, allowlist: ['MON-2'] });
     expect(report.staleAllowlist).toEqual(['MON-2']);
     expect(reportPasses(report)).toBe(false);
@@ -283,10 +214,6 @@ describe('X-6 spec ID-coverage gate: report and allowlist ratchet', () => {
     const report = buildReport({ ids, hitsByFile: hits, allowlist: [], onlyIds: ['X-6'] });
     expect(report.rows.map((r) => r.id)).toEqual(['X-6']);
     expect(report.missing).toEqual([]);
-  });
-
-  it('X-6 parses the allowlist ignoring comments and blank lines', () => {
-    expect(parseAllowlist('# header\n\nMON-1  # trailing\n  X-6\n')).toEqual(['MON-1', 'X-6']);
   });
 
   it('X-6 renders one table row per ID with a status column', () => {
@@ -318,71 +245,87 @@ describe('X-6 spec ID-coverage gate: end to end over a temp repo', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'spec-coverage-'));
     dirs.push(root);
     fs.mkdirSync(path.join(root, 'docs/specs'), { recursive: true });
-    fs.mkdirSync(path.join(root, 'packages/lib/src/__tests__'), { recursive: true });
-    fs.mkdirSync(path.join(root, 'apps/web/src/node_modules/dep'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'packages/lib/test-results'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'apps/e2e/test-results'), { recursive: true });
     fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
     fs.writeFileSync(path.join(root, 'docs/specs/organizations-wallets.md'), SPEC);
-    fs.writeFileSync(
-      path.join(root, 'packages/lib/src/__tests__/money.test.ts'),
-      "it('MON-2 one definition of a credit', () => {});\n",
-    );
-    fs.writeFileSync(
-      path.join(root, 'apps/web/src/negatives.test.tsx'),
-      "describe('X-6 negatives', () => { it('X-6 a guest sees one drive', () => {}); });\n",
-    );
-    fs.writeFileSync(path.join(root, 'apps/web/src/node_modules/dep/ignored.test.ts'), "it('MON-1 in node_modules', () => {});\n");
     fs.writeFileSync(path.join(root, 'scripts/spec-coverage-allowlist.txt'), 'MON-1\nMON-10\n');
+
+    // A REAL vitest JSON reporter shape: a passing test (MON-2), and a SKIPPED test that names
+    // an ID (MON-1) — a static reader of the source would have to be told the modifier means
+    // "never runs"; a results reader gets that for free because there is no `passed` result.
+    fs.writeFileSync(
+      path.join(root, 'packages/lib/test-results/vitest-results.json'),
+      JSON.stringify({
+        testResults: [
+          {
+            name: path.join(root, 'packages/lib/src/__tests__/money.test.ts'),
+            assertionResults: [
+              { ancestorTitles: [], title: 'MON-2 one definition of a credit', fullName: 'MON-2 one definition of a credit', status: 'passed' },
+              { ancestorTitles: [], title: 'MON-1 gated behind an if(false), or skipped — either way, never passed', fullName: 'MON-1 gated behind an if(false), or skipped — either way, never passed', status: 'skipped' },
+            ],
+          },
+        ],
+      }),
+    );
+
+    // A REAL Playwright JSON reporter shape: X-6 passes in e2e.
+    fs.writeFileSync(
+      path.join(root, 'apps/e2e/test-results/playwright-results.json'),
+      JSON.stringify({
+        config: {},
+        suites: [
+          {
+            title: 'X-6 negatives',
+            file: 'tests/negatives.spec.ts',
+            specs: [{ title: 'X-6 a guest sees one drive', file: 'tests/negatives.spec.ts', tests: [{ results: [{ status: 'passed' }] }] }],
+          },
+        ],
+      }),
+    );
     return root;
   }
 
-  it('X-6 finds test files under packages/ and apps/ but never inside node_modules', () => {
+  it('X-6 findResultFiles finds test-results/*.json under packages/, apps/, scripts/, and infrastructure/ only', () => {
     const root = makeRepo();
-    expect(findTestFiles(root)).toEqual(['apps/web/src/negatives.test.tsx', 'packages/lib/src/__tests__/money.test.ts']);
-  });
-
-  it('X-6 also finds .spec.ts(x) files (the apps/e2e Playwright suite uses that extension)', () => {
-    const root = makeRepo();
-    fs.mkdirSync(path.join(root, 'apps/e2e/tests'), { recursive: true });
-    fs.writeFileSync(
-      path.join(root, 'apps/e2e/tests/org-picker.spec.ts'),
-      "test('SEAT-1 the picker shows the org', async ({ page }) => {});\n",
-    );
-    expect(findTestFiles(root)).toEqual([
-      'apps/e2e/tests/org-picker.spec.ts',
-      'apps/web/src/negatives.test.tsx',
-      'packages/lib/src/__tests__/money.test.ts',
+    expect(findResultFiles(root)).toEqual([
+      'apps/e2e/test-results/playwright-results.json',
+      'packages/lib/test-results/vitest-results.json',
     ]);
-    const hits = scanTestFiles(root, findTestFiles(root), ['SEAT-1']);
-    expect([...(hits.get('apps/e2e/tests/org-picker.spec.ts') ?? [])]).toEqual(['SEAT-1']);
   });
 
-  it('X-6 scans files into an ID set per file', () => {
+  it('X-6 loadPassedTests parses both reporter shapes and reports which sources were seen', () => {
     const root = makeRepo();
-    const hits = scanTestFiles(root, findTestFiles(root), ['MON-1', 'MON-2', 'X-6']);
-    expect([...(hits.get('apps/web/src/negatives.test.tsx') ?? [])]).toEqual(['X-6']);
-    expect([...(hits.get('packages/lib/src/__tests__/money.test.ts') ?? [])]).toEqual(['MON-2']);
+    const loaded = loadPassedTests(root);
+    expect(loaded.sawVitest).toBe(true);
+    expect(loaded.sawPlaywright).toBe(true);
+    expect(loaded.tests.map((t) => t.fullName).sort()).toEqual(['MON-2 one definition of a credit', 'X-6 negatives X-6 a guest sees one drive']);
   });
 
-  it('X-6 exits 0 when every ID is covered or allowlisted, and 1 once a covering test is deleted', () => {
+  it('X-6 exits 0 when every ID is covered by a PASSING result or allowlisted, and 1 once the covering results are deleted', () => {
     const root = makeRepo();
     const lines: string[] = [];
     const opts = parseArgs(['--offline']);
     expect(run(root, opts, (l) => lines.push(l))).toBe(0);
     expect(lines.at(-1)).toBe('spec-coverage: OK');
+    expect(lines.join('\n')).not.toContain('WARNING');
 
-    fs.writeFileSync(path.join(root, 'apps/web/src/negatives.test.tsx'), "describe('negatives', () => {});\n");
+    fs.rmSync(path.join(root, 'apps/e2e/test-results/playwright-results.json'));
     const failing: string[] = [];
     expect(run(root, opts, (l) => failing.push(l))).toBe(1);
-    expect(failing.join('\n')).toContain('FAIL: no live test names these IDs: X-6');
+    expect(failing.join('\n')).toContain('WARNING: no Playwright JSON results found');
+    expect(failing.join('\n')).toContain('FAIL: no passing test names these IDs: X-6');
   });
 
-  it('X-6 --json emits the report with the spec origin', () => {
+  it('X-6 --json emits the report with the spec origin and source flags', () => {
     const root = makeRepo();
     const lines: string[] = [];
     expect(run(root, parseArgs(['--offline', '--json']), (l) => lines.push(l))).toBe(0);
-    const parsed = JSON.parse(lines.join('\n')) as { origin: string; ok: boolean; missing: string[] };
+    const parsed = JSON.parse(lines.join('\n')) as { origin: string; ok: boolean; sawVitest: boolean; sawPlaywright: boolean; missing: string[] };
     expect(parsed.origin).toBe('snapshot');
     expect(parsed.ok).toBe(true);
+    expect(parsed.sawVitest).toBe(true);
+    expect(parsed.sawPlaywright).toBe(true);
     expect(parsed.missing).toEqual([]);
   });
 
@@ -390,5 +333,18 @@ describe('X-6 spec ID-coverage gate: end to end over a temp repo', () => {
     const root = makeRepo();
     fs.rmSync(path.join(root, 'docs/specs/organizations-wallets.md'));
     expect(() => run(root, parseArgs(['--offline']), () => {})).toThrow(/Spec snapshot not found/);
+  });
+
+  it('X-6 fails loudly when there are no test-results files at all, rather than silently reporting OK against zero data', () => {
+    const root = makeRepo();
+    fs.rmSync(path.join(root, 'packages/lib/test-results/vitest-results.json'));
+    fs.rmSync(path.join(root, 'apps/e2e/test-results/playwright-results.json'));
+    expect(() => run(root, parseArgs(['--offline']), () => {})).toThrow(/No test-results\/\*\.json files found/);
+  });
+
+  it('X-6 fails loudly on a test-results file that is neither reporter shape, rather than silently ignoring it', () => {
+    const root = makeRepo();
+    fs.writeFileSync(path.join(root, 'packages/lib/test-results/mystery.json'), JSON.stringify({ nope: true }));
+    expect(() => run(root, parseArgs(['--offline']), () => {})).toThrow(/is neither a Vitest nor a Playwright JSON reporter file/);
   });
 });

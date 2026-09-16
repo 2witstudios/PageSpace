@@ -142,11 +142,19 @@ jobs:
       # turning that silent skip into a hard failure — which is exactly what it
       # was added to do. If you add another variable to a step below and the
       # tests still cannot see it, this is why.
+      # `-- --reporter=... --outputFile.json=...` is forwarded by turbo to EVERY filtered
+      # package's `vitest run --coverage`, each writing its own `test-results/vitest-results.json`
+      # relative to its own package directory. The spec-coverage job (below, and its own job in
+      # this file) reads these back after CI — see scripts/check-spec-coverage.ts's module
+      # comment for why coverage is derived from what actually PASSED rather than parsed from
+      # test source.
       - name: Run tests with coverage (Node 24)
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
-        run: bunx turbo run test:coverage --filter='!@pagespace/processor'
+        run: >-
+          bunx turbo run test:coverage --filter='!@pagespace/processor' --
+          --reporter=default --reporter=json --outputFile.json=test-results/vitest-results.json
 
       # apps/processor ships on Node 22 (apps/processor/Dockerfile). Magika's
       # onnxruntime native bindings fail to initialize on Node 24, so test the
@@ -164,7 +172,9 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
-        run: bunx turbo run test:coverage --filter='@pagespace/processor'
+        run: >-
+          bunx turbo run test:coverage --filter='@pagespace/processor' --
+          --reporter=default --reporter=json --outputFile.json=test-results/vitest-results.json
 
       # Backfill scripts have their own vitest context (scripts/vitest.config.ts)
       # and are not part of any workspace package, so the turbo test pipeline
@@ -186,7 +196,9 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
-        run: cd scripts && bunx vitest run
+        run: >-
+          cd scripts && bunx vitest run
+          --reporter=default --reporter=json --outputFile.json=test-results/vitest-results.json
 
       # packages/db's integration suites are EXCLUDED from its default vitest
       # config (they need a live Postgres), and until now nothing invoked the
@@ -198,7 +210,9 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
-        run: bun run --filter '@pagespace/db' test:integration
+        run: >-
+          bun run --filter '@pagespace/db' test:integration --
+          --reporter=default --reporter=json --outputFile.json=test-results/vitest-integration-results.json
 
       # packages/lib had the same gap: a `vitest.integration.config.ts` existed
       # but there was no script invoking it and no job running it, so ~25 suites
@@ -215,14 +229,18 @@ jobs:
           TZ: UTC
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
-        run: bun run --filter '@pagespace/lib' test:integration
+        run: >-
+          bun run --filter '@pagespace/lib' test:integration --
+          --reporter=default --reporter=json --outputFile.json=test-results/vitest-integration-results.json
 
       # infrastructure/ is not a bun workspace (see infrastructure/vitest.config.ts
       # for why it should not become one), so turbo never sees it and its ~15 test
       # files — including upgrade-doc.test.ts, the only check on the operator
       # upgrade notes — ran nowhere. Invoked directly instead.
       - name: Run infrastructure tests
-        run: bun run test:infra
+        run: >-
+          bun run test:infra --
+          --reporter=default --reporter=json --outputFile.json=test-results/vitest-results.json
       # The evidence manifest cites tests as proof of the epic's user-facing guarantees.
       # This is the gate that keeps those citations honest — it fails on a cited file that
       # moved, a cited test that was renamed or skipped, and a cited test living in a suite
@@ -230,14 +248,6 @@ jobs:
       # against the same tree. See docs/2.0-architecture/agent-sessions-evidence.md.
       - name: Check evidence manifest
         run: bun run scripts/check-evidence-manifest.ts
-
-      # Organizations & Wallets: every requirement ID in the Spec must be named by a live test
-      # ("MON-2 ..."). Reads the committed snapshot (docs/specs/organizations-wallets.md; CI has
-      # no pagespace credential), scans every *.test.ts(x) under packages/ and apps/, and fails
-      # on an ID with no test that scripts/spec-coverage-allowlist.txt does not excuse — and on
-      # an allowlisted ID a test now names, so the allowlist only shrinks as lanes land.
-      - name: Check spec ID coverage
-        run: bun run scripts/check-spec-coverage.ts --offline
 
       - name: Coverage report
         if: always()
@@ -252,6 +262,24 @@ jobs:
             apps/*/coverage/coverage-summary.json
             packages/*/coverage/coverage-summary.json
           retention-days: 30
+
+      # Organizations & Wallets spec ID-coverage gate (see scripts/check-spec-coverage.ts) reads
+      # these back in the `spec-coverage` job below, once both this job's and the e2e job's JSON
+      # reporter output exist — it needs the FULL picture (unit + integration + e2e), not just
+      # this job's slice. `if: always()` so a suite failure upstream still uploads whatever DID
+      # run, rather than hiding it from the gate behind a job-level short-circuit.
+      - name: Upload Vitest JSON test results (for the spec-coverage job)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vitest-json-results
+          path: |
+            packages/*/test-results/*.json
+            apps/*/test-results/*.json
+            scripts/test-results/*.json
+            infrastructure/test-results/*.json
+          retention-days: 7
+          if-no-files-found: warn
 
   # The epic's headline user stories — "a server dispatch renders live in an open pane",
   # "two windows both see both sides", "the pane grid converges across two devices" — are
@@ -412,6 +440,20 @@ jobs:
         run: bunx playwright test $E2E_SPECS
         working-directory: apps/e2e
 
+      # Read back by the spec-coverage job below regardless of pass/fail — `if: always()` so a
+      # spec failure (which would still leave passing specs on record) does not hide the whole
+      # e2e run from the gate. `if-no-files-found: warn` so a failure early enough that
+      # Playwright never wrote the file (e.g. the stack never came up) does not itself fail this
+      # job — check-spec-coverage.ts is the one that must say so, explicitly, not silently pass.
+      - name: Upload Playwright JSON results (for the spec-coverage job)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-json-results
+          path: apps/e2e/test-results/playwright-results.json
+          retention-days: 7
+          if-no-files-found: warn
+
       - name: Upload Playwright report and traces
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -463,3 +505,50 @@ jobs:
 
       - name: Knip (unused code gate)
         run: bun run knip:check
+
+  # Organizations & Wallets: every requirement ID in the Spec must be named by a test that
+  # actually PASSED in CI — not merely named in source. See scripts/check-spec-coverage.ts's
+  # module comment for why this reads Vitest's and Playwright's own JSON reporter output
+  # (uploaded by unit-tests and e2e above) instead of statically parsing test source: every
+  # static-parsing fix (regex -> brace-bounded regex -> a real AST walk -> fail-closed on
+  # runIf/skipIf/runtime-skip-guards/unknown modifiers) found another shape a static walk cannot
+  # see through, because "does this test execute" is a runtime question in general.
+  #
+  # `needs` both jobs but `if: always()` so this job still runs — and reports an HONEST result —
+  # even if unit-tests or e2e failed. A missing Playwright artifact (e2e skipped or failed
+  # before uploading) is handled by the script itself: it prints an explicit warning and simply
+  # has zero Playwright-sourced hits, so an e2e-only ID fails closed as MISSING rather than the
+  # gate crashing or silently treating it as covered.
+  spec-coverage:
+    name: Spec ID coverage
+    runs-on: ubuntu-latest
+    needs: [unit-tests, e2e]
+    if: always()
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      # The gate script only imports Node builtins (fs, path, node:child_process, node:url) — no
+      # `bun install` needed to run it, which keeps this job fast even when unit-tests or e2e
+      # failed early.
+      - name: Download Vitest JSON results
+        uses: actions/download-artifact@v8
+        with:
+          name: vitest-json-results
+
+      # No `continue-on-error` here: the unit-tests job's upload step runs unconditionally
+      # (`if: always()`), so a missing artifact means something more fundamental broke (the job
+      # never reached checkout, or the artifact name drifted) — that should fail this job loudly,
+      # not be swallowed the way a genuinely-absent e2e run is.
+      - name: Download Playwright JSON results
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: playwright-json-results
+
+      - name: Check spec ID coverage (from CI results)
+        run: bun run scripts/check-spec-coverage.ts --offline
