@@ -33,11 +33,13 @@
 import { secureCompare } from '../../auth/secure-compare';
 import { canonicalJson } from '../canonical-json';
 import { decodeBase64 } from '../decode-base64';
-import type { HashBytes, UserId } from '../grant';
-import type { DecideRebind, OwnerConsent, PlaneBindingsRecord, PlaneConsenters } from './store-adapter';
+import type { UserId } from '../grant';
+import type { DecideRebind, OwnerConsent, PlaneBindingsRecord } from './store-adapter';
+import { canonicalConsenters } from './canonical-consenters';
+import { consentersFitOwner } from './consenters-fit-owner';
 import { deriveTenantId } from './derive-tenant-id';
 import { digestBindings } from './digest-bindings';
-import { digestPlaneScope } from './digest-plane-scope';
+import { isRecordSelfConsistent } from './is-record-self-consistent';
 import { isScopeNarrowing } from './is-scope-narrowing';
 
 const NOT_FOUND = { outcome: 'refuse', reason: 'not_found' } as const;
@@ -51,22 +53,6 @@ function consentMessage({ consentId, consentingUserId, stepUpChallengeId, ref, b
   return new TextEncoder().encode(canonicalJson({ consentId, consentingUserId, stepUpChallengeId, ref, bindingsDigest, consenters, issuedAt }));
 }
 
-/** Canonical form of a consenter set: pinned ids sorted, so order never makes two sets differ. */
-function canonicalConsenters(consenters: PlaneConsenters): string {
-  return canonicalJson(consenters.kind === 'pinned' ? { kind: 'pinned', userIds: [...consenters.userIds].sort() } : { kind: 'owner' });
-}
-
-/** The record's scope hashes to its own policyDigest and its origin list is the bindings' origin list. */
-function selfConsistent(record: PlaneBindingsRecord, hash: HashBytes): boolean {
-  if (!secureCompare(digestPlaneScope({ scope: record.scope, hash }), record.bindings.policyDigest)) return false;
-  return canonicalJson([...record.scope.allowedOrigins].sort()) === canonicalJson([...record.bindings.allowedOrigins].sort());
-}
-
-function consentersFitOwner(record: PlaneBindingsRecord): boolean {
-  if (record.bindings.ownerRef.kind === 'user') return record.consenters.kind === 'owner';
-  return record.consenters.kind === 'pinned' && record.consenters.userIds.length > 0;
-}
-
 function isStoredConsenter(stored: PlaneBindingsRecord, consentingUserId: UserId): boolean {
   const { ownerRef } = stored.bindings;
   if (ownerRef.kind === 'user') return stored.consenters.kind === 'owner' && consentingUserId === ownerRef.userId;
@@ -75,8 +61,8 @@ function isStoredConsenter(stored: PlaneBindingsRecord, consentingUserId: UserId
 
 export const decideRebind: DecideRebind = ({ ref, stored, expectedVersion, next, consent, consentPublicKey, now, maxAgeMs, verify, hash }) => {
   if (stored === null) return NOT_FOUND;
-  if (!selfConsistent(stored, hash)) return STORE_UNAVAILABLE;
-  if (!selfConsistent(next, hash)) return VERSION_CONFLICT;
+  if (!isRecordSelfConsistent({ record: stored, hash })) return STORE_UNAVAILABLE;
+  if (!isRecordSelfConsistent({ record: next, hash })) return VERSION_CONFLICT;
 
   const was = stored.bindings;
   const will = next.bindings;
@@ -84,12 +70,12 @@ export const decideRebind: DecideRebind = ({ ref, stored, expectedVersion, next,
   if (will.ownerRef.kind !== was.ownerRef.kind || deriveTenantId({ owner: will.ownerRef }) !== was.tenantId) return IMMUTABLE_BINDING_CHANGED;
 
   if (was.policyVersion !== expectedVersion || will.policyVersion <= expectedVersion) return VERSION_CONFLICT;
-  if (!consentersFitOwner(next)) return CONSENT_INVALID;
+  if (!consentersFitOwner({ record: next })) return CONSENT_INVALID;
 
   const consentNeeded =
     !isScopeNarrowing({ stored: stored.scope, next: next.scope }) ||
     canonicalJson(will.ownerRef) !== canonicalJson(was.ownerRef) ||
-    canonicalConsenters(next.consenters) !== canonicalConsenters(stored.consenters);
+    canonicalConsenters({ consenters: next.consenters }) !== canonicalConsenters({ consenters: stored.consenters });
   if (consent === null) return consentNeeded ? CONSENT_REQUIRED : { outcome: 'rebind', consumeConsentId: null };
 
   const signature = decodeBase64(consent.signature);
@@ -103,7 +89,7 @@ export const decideRebind: DecideRebind = ({ ref, stored, expectedVersion, next,
   if (!signed) return CONSENT_INVALID;
   if (canonicalJson(consent.ref) !== canonicalJson(ref)) return CONSENT_INVALID;
   if (!secureCompare(consent.bindingsDigest, digestBindings({ bindings: will, hash }))) return CONSENT_INVALID;
-  if (canonicalConsenters(consent.consenters) !== canonicalConsenters(next.consenters)) return CONSENT_INVALID;
+  if (canonicalConsenters({ consenters: consent.consenters }) !== canonicalConsenters({ consenters: next.consenters })) return CONSENT_INVALID;
   if (consent.issuedAt > now || now - consent.issuedAt > maxAgeMs) return CONSENT_INVALID;
   if (!isStoredConsenter(stored, consent.consentingUserId)) return CONSENT_INVALID;
 
