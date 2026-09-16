@@ -519,10 +519,13 @@ beforeEach(() => {
 });
 
 // D-OW-17: MONEY_MODEL_V2_ACTIVE is a code constant (false in this PR), not an env
-// var — nothing in this file mutates process.env.MONEY_MODEL_V2 any more. The ratio
-// math at BOTH active states is covered directly, with no shell, in
-// money-model.test.ts and invoice-grant.test.ts; this suite proves the full webhook
-// → funding → balance path wires amount_paid through correctly under today's default.
+// var — nothing in this file mutates process.env.MONEY_MODEL_V2 any more. The pure
+// ratio SELECTION is covered directly, with no shell, in money-model.test.ts and
+// invoice-grant.test.ts — but with the constant false the ratio is 100%, so a
+// shell-level test at the default flag alone cannot tell "grant = paid × ratio"
+// from "grant = paid" (both produce the same number). The dedicated active:true
+// test below closes that gap by proving the full webhook → funding → balance path
+// actually applies the ratio, not just amount_paid, end to end.
 describe('credits flow — grants sized from the invoice paid (MON-2)', () => {
   it('MON-2 the ledger row records paidCents and the grant is amount_paid × the default ratio', async () => {
     seedUser('u1', 'cus_1', 'pro');
@@ -533,6 +536,17 @@ describe('credits flow — grants sized from the invoice paid (MON-2)', () => {
     expect(grant.amountCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
     expect(grant.amountCents).toBe(1500);
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
+  });
+
+  it('D-OW-17 test seam: { active: true } through the full webhook → funding → balance path applies the 60% ratio, not a 100% pass-through', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    await applyStripeFunding(invoicePaid('in_ratio', 'cus_1', PERIOD_START, PERIOD_END, 1500), { active: true });
+
+    const grant = ledgerOf('u1').find((r) => r.entryType === 'monthly_grant' && r.stripeRef === 'in_ratio')!;
+    expect(grant.paidCents).toBe(1500);
+    expect(grant.amountCents).toBe(allowanceCentsForPaidCents(1500, 'pro', true));
+    expect(grant.amountCents).toBe(900);
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
   });
 
   it('MON-2 a 50%-off invoice grants half', async () => {

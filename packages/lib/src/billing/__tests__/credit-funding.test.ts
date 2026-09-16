@@ -564,6 +564,25 @@ describe('applyStripeFunding', () => {
       expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: expected, monthlyAllowanceCents: expected });
     });
 
+    it('D-OW-17 test seam: passing { active: true } through applyStripeFunding actually applies the 60% ratio, proving the shell does not just pass amount_paid straight through', async () => {
+      // Distinguishes "the shell wires the ratio math" from "the shell forwards
+      // paidCents" — with the constant false (default), both look identical
+      // (100% pass-through). `active` is a test-only override on FundingOptions
+      // (never set by the real webhook route); reverting the `active` plumbing
+      // in credit-funding.ts, or the `active ? ratio : LEGACY_RATIO` branch in
+      // money-model.ts, makes this assertion fail while every default-flag test
+      // above stays green.
+      const cap: Captured = {};
+      refill(cap);
+
+      await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'pro', active: true });
+
+      const expected = allowanceCentsForPaidCents(1500, 'pro', true);
+      expect(expected).toBe(900);
+      expect(cap.ledgerValues).toMatchObject({ entryType: 'monthly_grant', amountCents: 900, paidCents: 1500 });
+      expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: 900, monthlyAllowanceCents: 900 });
+    });
+
     it('MON-2 a 50%-off invoice grants half the list grant', async () => {
       const cap: Captured = {};
       refill(cap);

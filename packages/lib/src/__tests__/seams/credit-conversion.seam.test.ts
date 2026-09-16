@@ -78,13 +78,24 @@ describe('X-6 seam: a credit is converted in one module (the Spec second-convers
  * bundle) without runtime coordination — so the env var must never come back,
  * anywhere, including inside money-model.ts itself.
  *
+ * The pattern matches the bare `process.env.MONEY_MODEL_V2` accessor AND the
+ * string literal `'MONEY_MODEL_V2'` / `"MONEY_MODEL_V2"` wherever it appears —
+ * not just as a `process.env` property, but as an argument to ANY accessor
+ * (`envBool('MONEY_MODEL_V2', …)`, `envInt(...)`, a config-lookup helper, etc).
+ * A first version of this guard only matched `process.env.MONEY_MODEL_V2` and
+ * missed `envBool('MONEY_MODEL_V2', false)` — the exact form D-OW-17 deleted —
+ * because that call site never writes `process.env` at all.
+ *
  * The allowlist is intentionally EMPTY: after this refactor no production file
- * reads this var. (money-model.test.ts itself briefly SETS it, in one test, to
- * prove that doing so has no effect — that file lives in a __tests__ directory,
- * which listSourceFiles always excludes, so it never reaches this seam.)
+ * reads this var. (money-model.test.ts itself briefly SETS `process.env.MONEY_MODEL_V2`,
+ * in one test, to prove that doing so has no effect — that file lives in a
+ * __tests__ directory, which listSourceFiles always excludes, so it never
+ * reaches this seam. money-model.ts's own doc comment mentions the string in
+ * prose, but only inside its top block comment, which findViolations strips
+ * before matching — no allowlist entry is needed for it either.)
  */
 export const MONEY_MODEL_ENV_READ =
-  /process\.env(?:\.MONEY_MODEL_V2\b|\[['"]MONEY_MODEL_V2['"]\])/;
+  /process\.env(?:\.MONEY_MODEL_V2\b|\[['"]MONEY_MODEL_V2['"]\])|(['"])MONEY_MODEL_V2\1/;
 
 export const MONEY_MODEL_ENV_ALLOWLIST: Readonly<Record<string, string>> = {};
 
@@ -110,11 +121,25 @@ describe('D-OW-17 seam: the money-model ratio flag is a code constant, never a r
     expect(Object.keys(MONEY_MODEL_ENV_ALLOWLIST)).toEqual([]);
   });
 
-  it('D-OW-17 the pattern matches both dot and bracket property access', () => {
+  it('D-OW-17 the pattern matches both dot and bracket property access on process.env', () => {
     expect(MONEY_MODEL_ENV_READ.test("process.env.MONEY_MODEL_V2 === 'true'")).toBe(true);
     expect(MONEY_MODEL_ENV_READ.test('process.env["MONEY_MODEL_V2"]')).toBe(true);
     expect(MONEY_MODEL_ENV_READ.test("process.env['MONEY_MODEL_V2']")).toBe(true);
     expect(MONEY_MODEL_ENV_READ.test('process.env.MONEY_MODEL_V2_ACTIVE')).toBe(false);
     expect(MONEY_MODEL_ENV_READ.test('const x = MONEY_MODEL_V2_ACTIVE;')).toBe(false);
+  });
+
+  it('D-OW-17 the pattern also matches the bare string literal passed to ANY accessor, not just process.env', () => {
+    // The exact form D-OW-17 deleted, and the exact false-negative a reviewer
+    // proved against the first version of this guard.
+    expect(MONEY_MODEL_ENV_READ.test("envBool('MONEY_MODEL_V2', false)")).toBe(true);
+    expect(MONEY_MODEL_ENV_READ.test('envBool("MONEY_MODEL_V2", false)')).toBe(true);
+    expect(MONEY_MODEL_ENV_READ.test("getFlag('MONEY_MODEL_V2')")).toBe(true);
+    // A quote must close immediately after V2 — MONEY_MODEL_V2_ACTIVE, quoted or
+    // not, never matches.
+    expect(MONEY_MODEL_ENV_READ.test("envBool('MONEY_MODEL_V2_ACTIVE', false)")).toBe(false);
+    expect(MONEY_MODEL_ENV_READ.test('const flag = MONEY_MODEL_V2_ACTIVE;')).toBe(false);
+    // Mismatched quote characters never match — not a real string literal.
+    expect(MONEY_MODEL_ENV_READ.test("envBool('MONEY_MODEL_V2\", false)")).toBe(false);
   });
 });
