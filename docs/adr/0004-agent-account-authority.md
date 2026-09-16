@@ -36,7 +36,7 @@ Everything below is the verified evidence and the exact, testable contract.
 
 ### 2.1 Shape (frozen; `packages/lib/src/agent-accounts/grant.ts`)
 
-Every field is **required**. Absence is encoded as `null` only where the field's documentation says a null is a legal state (there are two: `delegationId` when a live human session is the authority, and `originatingMcpTokenId` when the chain did not start at a scoped key). `undefined` and missing keys are malformed.
+Every field is **required**. Absence is encoded as `null` only where the field's documentation says a null is a legal state (there are five: `delegationId` when a live human session is the authority; `originatingMcpTokenId` when the chain did not start at a scoped key; `human.sessionId` when no live session exists (an unattended run, which then requires a delegation — F7); `agentPageId` when no agent page is in the chain; `sandbox` when `aud` is not `'relay-runner'`). `undefined` and missing keys are malformed.
 
 | Field | Type | Binds | Verified against |
 |---|---|---|---|
@@ -50,7 +50,7 @@ Every field is **required**. Absence is encoded as `null` only where the field's
 | `conversationId` | `ConversationId` | the thread | — |
 | `runId` | `RunId` | the one dispatched turn / workflow run | the presenter's current run |
 | `sandbox` | `{ instanceId: SandboxInstanceId; generation: SandboxGeneration } \| null` | the sandbox a relay op executes against; `null` for HTTP/browser | `getSprite().id` + the provisioner's generation (ADR 0006) |
-| `callerCeiling` | `{ allowedDriveIds: readonly DriveId[]; originatingMcpTokenId: string \| null }` | the inherited credential ceiling | `isDriveWithinCredentialScope(allowedDriveIds, account.driveId)` |
+| `callerCeiling` | `{ allowedDriveIds: AgentDispatchPayload['allowedDriveIds']; originatingMcpTokenId: string \| null }` | the inherited credential ceiling | `isDriveWithinCredentialScope(allowedDriveIds, account.driveId)` |
 | `accountId` | `AccountId` | the account | the row |
 | `credentialVersion` | `CredentialVersion` | the store version the executor may resolve | `resolve` refuses any other version |
 | `policyVersion` | `PolicyVersion` | the account policy this grant was evaluated under | the row's current `policyVersion` |
@@ -58,7 +58,7 @@ Every field is **required**. Absence is encoded as `null` only where the field's
 | `sessionHttp` | `boolean` | whether the default-off `session_http` permission was granted for this use (§4.1); the only way a `session` kind reaches the HTTP executor | the account's `sessionHttpEnabled` flag and `decideAccountAccess` |
 | `operation` | `OperationRef` (`{ class: OperationClass; name: string }`) | the typed operation (§3.4) | the request's operation |
 | `requestDigest` | `RequestDigest` | `hash(canonicalizeRequest(request))` | recomputed by the presenter from the frozen request |
-| `approvalId` | `ApprovalId` | the approval decision consumed (§4.3); the `'policy'` sentinel id when a bounded always-allow applied | the approvals table |
+| `approvalId` | `ApprovalId \| 'policy'` | the approval decision consumed (§4.3); the `'policy'` sentinel id when a bounded always-allow applied | the approvals table |
 | `iat`, `nbf`, `exp` | `number` (ms) | validity window; `exp - iat ≤ 15 min`; `nbf ≤ iat` | the injected clock |
 | `nonce` | `Nonce` | one-use | the replay store |
 | `presenter` | `{ keyId: PresenterKeyId; channel: PresenterChannel }` | the executor key that must sign the *use* | the executor's own key; `channel === aud` |
@@ -71,7 +71,7 @@ Principal types are **branded** (`Brand<string, 'UserId'>` etc.): a `RunId` is n
 
 - Ed25519 only, no `alg` field, over `encodeGrant(grant)` — a canonical JSON with a fixed key order rebuilt from the typed grant, never from the caller's object (env-bridge precedent).
 - **Separate signing authority**: a new key `ACCOUNT_AUTHORITY_SIGNING_KEY`, generated and pinned the way `auth/env-bridge-signing-key.ts` does it, with `iss`/`aud` distinct from the env-bridge's so a bridge grant can never verify as an account grant and vice versa (Codex: "separate audience and signing authority for account operations").
-- The web process holds **no unrestricted signing authority**: issuance happens in the authority service after the intersection (threat-model §4) is satisfied, and the key is not readable by route handlers (ADR 0005 §6 says where it lives).
+- The web process holds **no unrestricted signing authority**: issuance happens in the authority service after the intersection (threat-model §4) is satisfied, and the key is not readable by route handlers (ADR 0005 §7 says where it lives).
 
 ### 2.3 Lifetime
 
@@ -79,7 +79,7 @@ Principal types are **branded** (`Brand<string, 'UserId'>` etc.): a `RunId` is n
 
 ### 2.4 Replay store
 
-`agent_account_grant_nonces` (G1b creates it; ADR 0005 §2.5 names the table): `(nonce PK, grantId, exp, consumedAt)`. Consumption is one conditional insert-or-update that succeeds exactly once across every replica and survives restart; expired rows are swept opportunistically. The pure verifier takes the *result* of that I/O (`nonceState: 'fresh' | 'consumed' | 'unknown'`) — it never performs it — and the adapter records the nonce **only** when the whole verdict is `ok` (deny order §8 row F-last).
+`agent_account_grant_nonces` (G1b creates it; ADR 0005 §2.5 names the table): `(nonce PK, grantId, exp, consumedAt)`. Consumption is one conditional insert-or-update that succeeds exactly once across every replica and survives restart; expired rows are swept opportunistically. The pure verifier takes the *result* of that I/O (`nonceState: 'fresh' | 'consumed' | 'unknown'`) — it never performs it — and the adapter records the nonce **only** when the whole verdict is `ok` (§6 F12).
 
 ## 3. Decision D2 — canonical request and digest
 
@@ -89,7 +89,7 @@ The approval UI shows one representation; the executor must run exactly that one
 
 ### 3.2 Canonical projection (frozen; `canonical-request.ts`)
 
-`canonicalizeRequest(request: CanonicalRequestInput): CanonicalRequest | CanonicalizeRefusal` is pure and total. Fixed field set, fixed order; absent optionals are `null`/`[]`/`{}` never missing (env-bridge `grant-args.ts` rule).
+`canonicalizeRequest(input: CanonicalRequestInput): CanonicalizeResult` (`{ ok: true; canonical } | { ok: false; reason: CanonicalizeRefusal }`) is pure and total. Fixed field set, fixed order; absent optionals are `null`/`[]`/`{}` never missing (env-bridge `grant-args.ts` rule).
 
 | Field | Rule |
 |---|---|
@@ -140,7 +140,7 @@ Provider tool catalogues (`integrations/providers/*.ts`) are reclassified to thi
 
 ### 4.2 What never grants anything
 
-- `canUserViewPage`, `canUserEditPage`, drive membership, `hasAgentDriveMembership`, being in the conversation, being the workspace owner: none is an account permission. A test asserts that a caller holding every page permission and no account row still gets `{ view:false, use:false, manage:false, grant:false }`.
+- `canUserViewPage`, `canUserEditPage`, drive membership, `hasAgentDriveMembership`, being in the conversation, being the workspace owner: none is an account permission. A test asserts that a caller holding every page permission and no account row still gets `{ view:false, use:false, manage:false, grant:false, session_http:false }`.
 - A model-reported approval, a page body, a compaction summary, a command page: text has no authority.
 
 ### 4.3 Approval outcomes and policy
@@ -215,10 +215,13 @@ export type VerifyGrant = (input: VerifyGrantInput) => GrantVerdict;
 //     now: number; expected: ExpectedBinding;   // aud, presenter, CURRENT human/agentPageId/conversationId/runId,
 //                                                // tenant, account row facts, current credential/policy versions,
 //                                                // delegation fact, sandbox binding, callerCeiling fact (drive admitted?)
-//     request: CanonicalRequest; nonceState: 'fresh' | 'consumed' | 'unknown';
+//     requestDigest: RequestDigest;   // digestRequest over the request the presenter is about to send,
+//                                     // recomputed by the presenter's adapter — never taken from the grant
+//     requestOperation: OperationRef; nonceState: 'fresh' | 'consumed' | 'unknown';
 //     approval: ApprovalFact; verify: Ed25519Verify; hash: HashBytes }
 //   GrantVerdict: { ok: true; grant } | { ok: false; reason: GrantDenyReason }
-//   GrantDenyReason is the one canonical union (F1–F17); Record<GrantDenyReason, …> is used
+//   GrantDenyReason is the one canonical union of every reason §6 names (F1–F17, incl. F4a and
+//   F13 `audit_unavailable`, which the executor rather than the verifier returns); Record<GrantDenyReason, …> is used
 //   for the audit/UI mapping so an added reason fails typecheck everywhere it matters.
 
 // canonical-request.ts
@@ -268,7 +271,7 @@ Adapters (I/O, G1b): `grant-repository.ts` (nonce consume, approvals, delegation
 11. Given `nonceState = 'consumed'`, `replayed`; given `'unknown'`, `replay_store_unavailable`; the nonce is recorded only on `ok` (a grant failing F11 leaves the store untouched — the adapter test).
 12. Given a `privilege` or `irreversible` operation and `approvalId = 'policy'`, `approval_mismatch`.
 13. Given `canonicalizeRequest` with userinfo, a wildcard host, an IP literal, an `authorization`/`cookie`/`host` header, or `..` surviving decode, returns a refusal naming the rule; a valid input round-trips (`canonicalize ∘ canonicalize` is the identity).
-14. Given `decideAccountAccess` with every page permission true and no account relationship, returns all four `false`.
+14. Given `decideAccountAccess` with every page permission true and no account relationship, returns every `AccountPermission` (including `session_http`) `false`.
 15. Given a user-owned account and an acting human who is not the owner (a shared agent invoked by another member), `use` is `false` even when the agent page is bound.
 16. Given an agent-page-owned account and a human actor with drive role MEMBER, `manage` and `grant` are `false`; with ADMIN, `true`; an agent's own membership never yields `manage`.
 17. Given `decideApproval` for class `write` under an `always` policy whose `limits.maxUsesPerHour` is exhausted, returns `refuse`; under a policy whose `duration.until` has passed, `concrete`.

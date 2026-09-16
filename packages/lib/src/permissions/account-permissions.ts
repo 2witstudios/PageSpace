@@ -13,7 +13,7 @@
  *
  * `canUserViewPage` — and every page permission, drive membership, workspace
  * ownership or conversation access — grants NOTHING here. A caller holding
- * every page permission and no account relationship gets four `false`s.
+ * every page permission and no account relationship gets every permission `false`.
  */
 import type { AccountId, AccountKind, AccountOwnerRef, AccountStatus } from '@pagespace/db/schema/agent-accounts';
 import type { AgentPageId, CallerCeiling, DelegationFact, DriveId, UserId } from '../agent-accounts/grant';

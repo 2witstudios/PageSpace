@@ -306,6 +306,7 @@ function canonicalizeHeaders(
 }
 
 export const canonicalizeRequest: CanonicalizeRequest = (input): CanonicalizeResult => {
+  if (input === null || typeof input !== 'object') return refuse('malformed');
   if (!isExecutorChannel(input.channel)) return refuse('malformed');
   if (!isOperationRef(input.operation)) return refuse('malformed');
   if (typeof input.method !== 'string' || typeof input.url !== 'string') return refuse('malformed');

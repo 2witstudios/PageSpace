@@ -161,7 +161,7 @@ Nango runs on its own 6PN with its own Postgres, Redis, KMS-wrapped DEK and one 
 | `global_assistant_config` | **extend, minimally**: `enabledUserIntegrations` becomes `enabledAccountIds: AccountId[]`; no other change | it is a per-user preference list, not an authority; use still goes through `decideAccountAccess` with the acting human = owner | G2 |
 | `integration_audit_log` | **superseded by `agent_account_audit`** (ADR 0004 §5) for credentialed operations; left in place for non-credentialed integration calls until G3 | it lacks the principal set and the digest | G2 writes the new one; G3 reroutes |
 
-Executors: the credential-bearing part of `integrations/saga/execute-tool.ts:198-230` moves behind the plane in G2 (`applyAuth` is reused as a pure formatter inside the executor; the decrypt location is not reused). The G2 `http_request` executor is **new** and does not inherit `integrations/execution/http-executor.ts` (D-28, threat-model B-16).
+Executors: the credential-bearing part of `integrations/saga/execute-tool.ts:198-230` moves behind the plane in G2 (`applyAuth` is reused as a pure formatter inside the executor; the decrypt location is not reused). The G2 `http_request` executor is **new** and does not inherit `integrations/execution/http-executor.ts` (D-28, threat-model §6.2 Highs).
 
 ## 7. Decision D6 — operational posture of the plane (Codex "infrastructure" row)
 
@@ -193,7 +193,9 @@ Executors run as their own processes/Sprites with: no request-body telemetry; co
 // store/store-adapter.ts — the interface (type only; G1b: infisical-store-adapter.ts)
 export type StoreAdapter = {
   readonly put: (input: PutInput) => Promise<PutResult>;
-  readonly resolve: <C extends ExecutorChannel>(input: ResolveInput<C>) => Promise<ResolveResult<ResolvableBy<C>>>;
+  readonly resolve: <C extends PresenterChannel, K extends ResolvableBy<C>>(input: ResolveInput<C, K>) => Promise<ResolveResult<C, K>>;
+  // the ONE path by which `session` reaches the HTTP executor; unrepresentable without grant.sessionHttp: true (§4.1, F2)
+  readonly resolveSessionOverHttp: (input: SessionHttpResolveInput) => Promise<ResolveResult<'http-executor', 'session'>>;
   readonly rotate: (input: RotateInput) => Promise<RotateResult>;
   readonly revoke: (input: RevokeInput) => Promise<RevokeResult>;
   readonly delete: (input: DeleteInput) => Promise<DeleteResult>;

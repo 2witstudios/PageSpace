@@ -33,11 +33,18 @@ import type { CanonicalRequest } from './canonical-request';
 import { buildAuditRecord } from './build-audit-record';
 import { decideAuditGate } from './decide-audit-gate';
 import type { AgentAccountAuditRepository } from './audit-repository';
+import { buildDenialRecord } from './build-denial-record';
+import type { VerifiedCaller } from './denial-audit-record';
+
+/** What `act` may report: the effect has run, so only an operation outcome can follow it. */
+export type OperationOutcome = Extract<AuditOutcome, { readonly kind: 'executed' | 'upstream_failed' | 'unknown' }>;
+
+const OPERATION_OUTCOME_KINDS: readonly string[] = ['executed', 'upstream_failed', 'unknown'] satisfies readonly OperationOutcome['kind'][];
 
 export type AuditedExecution =
   | {
       readonly ok: true;
-      readonly outcome: AuditOutcome;
+      readonly outcome: OperationOutcome;
       /** Whether the chain accepted the outcome row. `false`: the effect happened but only `allowed` is durable. */
       readonly outcomeRecorded: boolean;
     }
@@ -52,15 +59,19 @@ export type AuditedExecutor = {
     /** The resource keys this operation's catalogue entry declares (ADR 0004 §5 amendment). */
     readonly declaredResourceKeys: readonly string[];
     /** The effect. Return `upstream_failed` (status null) for a failure known to precede sending; a throw is recorded as `unknown`. */
-    readonly act: () => Promise<AuditOutcome>;
+    readonly act: () => Promise<OperationOutcome>;
   }) => Promise<AuditedExecution>;
-  /** Record a refusal. Nothing is executed; the reason is for the audit and the human, never the caller. */
+  /**
+   * Record a refusal. Nothing is executed; the reason is for the audit and the
+   * human, never the caller. The refused grant is NOT an input: only the
+   * caller this executor authenticated and the raw claim bytes, which are
+   * digested (`denial-audit-record.ts`).
+   */
   readonly recordDenial: (input: {
-    readonly grant: AgentAccountGrant;
-    readonly canonical: CanonicalRequest;
+    readonly caller: VerifiedCaller;
+    readonly claim: Uint8Array;
     readonly reason: GrantDenyReason;
     readonly now: number;
-    readonly declaredResourceKeys: readonly string[];
   }) => Promise<{ readonly ok: boolean }>;
 };
 
@@ -80,9 +91,12 @@ export function createAuditedExecutor({
       const gate = decideAuditGate({ acceptance });
       if (gate.action === 'refuse') return { ok: false, reason: gate.reason };
 
-      let outcome: AuditOutcome;
+      let outcome: OperationOutcome;
       try {
-        outcome = await act();
+        const reported = await act();
+        // The effect has run. A pre-execution kind here (`allowed`, `denied`)
+        // would write a second grant event instead of saying what happened.
+        outcome = OPERATION_OUTCOME_KINDS.includes(reported.kind) ? reported : { kind: 'unknown' };
       } catch {
         // Where it stopped is unknown; upstream may have acted. Never "failed".
         outcome = { kind: 'unknown' };
@@ -93,9 +107,9 @@ export function createAuditedExecutor({
       return { ok: true, outcome, outcomeRecorded: outcomeAcceptance.kind === 'accepted' };
     },
 
-    async recordDenial({ grant, canonical, reason, now, declaredResourceKeys }) {
-      const acceptance = await auditRepository.accept({
-        record: buildAuditRecord({ grant, canonical, outcome: { kind: 'denied', reason }, at: now, hash, declaredResourceKeys }),
+    async recordDenial({ caller, claim, reason, now }) {
+      const acceptance = await auditRepository.acceptDenial({
+        record: buildDenialRecord({ caller, claim, reason, at: now, hash }),
       });
       return { ok: acceptance.kind === 'accepted' };
     },
