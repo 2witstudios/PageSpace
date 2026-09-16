@@ -35,7 +35,7 @@ export const CREDIT_CONVERSION_ALLOWLIST: Readonly<Record<string, string>> = {
   // re-exports of it now, so nothing is allowlisted.
 };
 
-describe('X-6 seam: a credit is converted in one module (the Spec second-conversion grep)', () => {
+describe('seam: a credit is converted in one module (the Spec second-conversion grep)', () => {
   const result = runSeam({
     files: listSourceFiles(['apps', 'packages']),
     pattern: CREDIT_CONVERSION_DEFINITION,
@@ -43,7 +43,7 @@ describe('X-6 seam: a credit is converted in one module (the Spec second-convers
     allowlist: CREDIT_CONVERSION_ALLOWLIST,
   });
 
-  it('X-6 no NEW file defines a cents/dollars to credits conversion outside money-model.ts', () => {
+  it('no NEW file defines a cents/dollars to credits conversion outside money-model.ts', () => {
     expect(
       result.newViolations,
       `Second credit conversion found. Import from ${MONEY_MODEL_PATH} instead:\n` +
@@ -51,14 +51,14 @@ describe('X-6 seam: a credit is converted in one module (the Spec second-convers
     ).toEqual([]);
   });
 
-  it('X-6 every allowlisted conversion file still defines one (the allowlist only shrinks)', () => {
+  it('every allowlisted conversion file still defines one (the allowlist only shrinks)', () => {
     expect(
       result.staleAllowlist,
       'These allowlisted files no longer define a conversion — remove them from CREDIT_CONVERSION_ALLOWLIST',
     ).toEqual([]);
   });
 
-  it('X-6 the pattern matches definitions and ignores calls', () => {
+  it('the pattern matches definitions and ignores calls', () => {
     expect(CREDIT_CONVERSION_DEFINITION.test('export function centsToCredits(cents: number) {')).toBe(true);
     expect(CREDIT_CONVERSION_DEFINITION.test('function formatCredits(cents: number): string {')).toBe(true);
     expect(CREDIT_CONVERSION_DEFINITION.test('export const CREDITS_PER_DOLLAR = 100;')).toBe(true);

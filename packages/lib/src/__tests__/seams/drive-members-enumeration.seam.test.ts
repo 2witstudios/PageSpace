@@ -114,7 +114,7 @@ export const DRIVE_MEMBERS_ENUMERATION_ALLOWLIST: Readonly<Record<string, string
     "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
 };
 
-describe('X-6 seam: drive_members is enumerated only inside packages/lib services and permissions', () => {
+describe('seam: drive_members is enumerated only inside packages/lib services and permissions', () => {
   const files = listSourceFiles(['apps', 'packages']).filter(
     (f) => !NOT_APPLICATION_CODE.some((p) => f.startsWith(p)),
   );
@@ -125,7 +125,7 @@ describe('X-6 seam: drive_members is enumerated only inside packages/lib service
     allowlist: DRIVE_MEMBERS_ENUMERATION_ALLOWLIST,
   });
 
-  it('X-6 no NEW file outside the membership seams reads drive_members', () => {
+  it('no NEW file outside the membership seams reads drive_members', () => {
     expect(
       result.newViolations,
       `New drive_members reads outside packages/lib/src/{services,permissions}. Route them through the ` +
@@ -134,14 +134,14 @@ describe('X-6 seam: drive_members is enumerated only inside packages/lib service
     ).toEqual([]);
   });
 
-  it('X-6 every allowlisted file still violates (the allowlist only shrinks)', () => {
+  it('every allowlisted file still violates (the allowlist only shrinks)', () => {
     expect(
       result.staleAllowlist,
       'These allowlisted files no longer read drive_members — remove them from DRIVE_MEMBERS_ENUMERATION_ALLOWLIST',
     ).toEqual([]);
   });
 
-  it('X-6 the pattern recognises each enumeration shape and ignores writes', () => {
+  it('the pattern recognises each enumeration shape and ignores writes', () => {
     expect(DRIVE_MEMBERS_READ.test('db.select().from(driveMembers)')).toBe(true);
     expect(DRIVE_MEMBERS_READ.test('.innerJoin(driveMembers, eq(...))')).toBe(true);
     expect(DRIVE_MEMBERS_READ.test('.leftJoin( driveMembers,')).toBe(true);

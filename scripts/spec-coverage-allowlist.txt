@@ -84,3 +84,11 @@ X-2
 X-3
 X-4
 X-5
+# X-6 (Negative tests: non-member sees no other org's Open drive; a guest sees exactly one
+# drive; a disabled policy refuses; an empty chosen wallet charges nothing; an automation never
+# charges a person) needs org/wallet resolution logic that does not exist until Wave B/C lands.
+# The seam guards and the Northwind fixture shape check in this lane are real tests but they
+# check code STRUCTURE, not these five authorization/spend behaviors — they do not prove X-6 and
+# their names no longer claim it (PR #2642 review thread PRRT_kwDOPhnPxc6ioz-F). Only remove this
+# line once a test exercises one of the five behaviors above against real resolution logic.
+X-6

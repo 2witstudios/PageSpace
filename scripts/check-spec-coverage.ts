@@ -10,11 +10,15 @@
  *      otherwise from the committed snapshot `docs/specs/organizations-wallets.md` (CI has no
  *      credential, so CI always reads the snapshot; the orchestrator refreshes it).
  *   2. Extract every requirement ID.
- *   3. Scan every `*.test.ts` / `*.test.tsx` under `packages/` and `apps/` and collect the
+ *   3. Scan every `*.test.ts(x)` / `*.spec.ts(x)` under `packages/` and `apps/` and collect the
  *      test NAMES: the string literal passed to `it` / `test` / `describe` (and playwright's
- *      `test.describe` / `test.step`), plus the `given:` / `should:` strings of the repo's
- *      riteway-style `assert({ given, should, … })` declarations. A declaration under
- *      `.skip` / `.todo` / `.fixme` does not count: it looks like coverage and runs nothing.
+ *      `test.describe` / `test.step`), plus the `given:` / `should:` strings that are themselves
+ *      arguments to the repo's riteway-style `assert({ given, should, … })` helper. None of this
+ *      counts unless it EXECUTES: a declaration under `.skip` / `.todo` / `.fixme`, one nested
+ *      inside a `describe.skip(...)` / `describe.skipIf(...)(...)` block (however the inner call
+ *      is itself spelled), a `RegExp.test('MON-2 …')` method call, or a plain object that merely
+ *      has `given`/`should` keys without being passed to `assert(...)` — none of these run a
+ *      test, so none of them count.
  *   4. Print a table ID → files, and exit non-zero listing every ID that no test names.
  *
  * The allowlist (`scripts/spec-coverage-allowlist.txt`) holds IDs not yet in scope. EVERY ID
@@ -45,7 +49,10 @@ export const DEFAULT_SCAN_ROOTS = ['packages', 'apps'];
 export const REQUIREMENT_ID_PATTERN = /\b(ORG|DRV|SEAT|WAL|MON|SPEND|POL|SEC|AUD|UI|X)-\d+\b/g;
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.next', 'coverage', '.turbo', '.git', 'build', 'out']);
-const TEST_FILE = /\.test\.tsx?$/;
+// `.spec.ts(x)` too: apps/e2e's Playwright suite (the one that will carry most WAL/ORG/SEC UI
+// requirements) uses that extension exclusively, and several vitest configs in this repo accept
+// it as well. `.test.` remains the primary convention; `.spec.` is not a second, competing one.
+const TEST_FILE = /\.(test|spec)\.tsx?$/;
 
 export interface CoverageRow {
   id: string;
@@ -107,19 +114,129 @@ export function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 }
 
+// `(?<![.\w])` (not `\b`) in front of the declaration name is load-bearing: `\b` only blocks a
+// preceding WORD character, so `someRegex.test('MON-2 ...')` — a RegExp method call, not a test
+// declaration — still starts with a word boundary (`.` to `t`) and would otherwise match. The
+// lookbehind blocks both a preceding identifier character AND a preceding `.` (member access).
 const DECLARATION =
-  /\b(?:it|test|describe)(?:\.(?:only|concurrent|sequential|serial|describe|step))*(?:\.(?:skipIf|runIf)\([^)]*\))?\s*\(\s*(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g;
+  /(?<![.\w])((?:it|test|describe)(?:\.(?:only|concurrent|sequential|serial|describe|step))*(?:\.(?:skipIf|runIf)\([^)]*\))?)\s*\(\s*(['"`])((?:\\.|(?!\2)[\s\S])*?)\2/g;
+/** A `describe`/`test.describe` head using `.skipIf`/`.runIf` — the suite's OWN name may never run. */
+const DESCRIBE_CONDITIONAL_SKIP = /^(?:test\.describe|describe)(?:\.[a-zA-Z]+)*\.(?:skipIf|runIf)\(/;
 const RITEWAY_FIELD = /\b(?:given|should)\s*:\s*(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g;
+const SKIP_BLOCK_TRIGGER = /(?<![.\w])(?:test\.describe|describe)\.(?:skip|skipIf)\b/g;
+const ASSERT_CALL = /(?<![.\w])assert\s*\(/g;
+
+/** Index of the character matching the opening quote/backtick at `start` (which must be one). */
+function skipStringLiteral(source: string, start: number): number {
+  const quote = source[start];
+  let i = start + 1;
+  while (i < source.length) {
+    if (source[i] === '\\') {
+      i += 2;
+      continue;
+    }
+    if (source[i] === quote) return i;
+    i++;
+  }
+  return source.length - 1;
+}
+
+/** First unquoted occurrence of `target` at or after `from`, skipping over string/template literals. */
+function findNextUnquoted(source: string, from: number, target: string): number {
+  let i = from;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '"' || ch === "'" || ch === '`') {
+      i = skipStringLiteral(source, i) + 1;
+      continue;
+    }
+    if (ch === target) return i;
+    i++;
+  }
+  return -1;
+}
+
+/**
+ * Index of the bracket matching the one at `openIndex` (`source[openIndex]` must be `openChar`),
+ * skipping over string/template literals so a brace or paren inside a description string is
+ * never mistaken for a real one.
+ */
+function findMatchingBracket(source: string, openIndex: number, openChar: string, closeChar: string): number {
+  let depth = 0;
+  for (let i = openIndex; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '"' || ch === "'" || ch === '`') {
+      i = skipStringLiteral(source, i);
+      continue;
+    }
+    if (ch === openChar) depth++;
+    else if (ch === closeChar) {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** True when `index` falls strictly inside one of `regions` (each an inclusive `[start, end]`). */
+function isWithinRegion(index: number, regions: readonly (readonly [number, number])[]): boolean {
+  return regions.some(([start, end]) => index > start && index < end);
+}
+
+/**
+ * Byte ranges of every `describe.skip(...)` / `describe.skipIf(...)(...)` (and Playwright's
+ * `test.describe.skip`/`test.describe.skipIf`) block body. A nested `it`/`test` inside one of
+ * these does not run when the wrapping suite is skipped, however the inner call itself is
+ * spelled — so it must not count as live coverage on its own.
+ */
+function findSkipRegions(source: string): Array<[number, number]> {
+  const regions: Array<[number, number]> = [];
+  for (const m of source.matchAll(SKIP_BLOCK_TRIGGER)) {
+    const braceIndex = findNextUnquoted(source, m.index + m[0].length, '{');
+    if (braceIndex === -1) continue;
+    const closeIndex = findMatchingBracket(source, braceIndex, '{', '}');
+    if (closeIndex === -1) continue;
+    regions.push([braceIndex, closeIndex]);
+  }
+  return regions;
+}
+
+/** Byte ranges of every `assert(...)` call's argument list (the repo's riteway-style helper). */
+function findAssertRegions(source: string): Array<[number, number]> {
+  const regions: Array<[number, number]> = [];
+  for (const m of source.matchAll(ASSERT_CALL)) {
+    const openParen = m.index + m[0].length - 1;
+    const closeParen = findMatchingBracket(source, openParen, '(', ')');
+    if (closeParen === -1) continue;
+    regions.push([openParen, closeParen]);
+  }
+  return regions;
+}
 
 /**
  * Test names declared LIVE in a source file: `it`/`test`/`describe` string arguments (no
- * `.skip`/`.todo`/`.fixme` in the chain) plus riteway `given:`/`should:` strings.
+ * `.skip`/`.todo`/`.fixme` in the chain, and not nested inside a `describe.skip`/`describe.skipIf`
+ * block) plus riteway `given:`/`should:` strings that are themselves arguments to an `assert(...)`
+ * call (not any object literal that merely happens to have those keys).
  */
 export function extractTestNames(source: string): string[] {
   const clean = stripComments(source);
+  const skipRegions = findSkipRegions(clean);
+  const assertRegions = findAssertRegions(clean);
   const names: string[] = [];
-  for (const m of clean.matchAll(DECLARATION)) names.push(m[2]);
-  for (const m of clean.matchAll(RITEWAY_FIELD)) names.push(m[2]);
+  for (const m of clean.matchAll(DECLARATION)) {
+    if (isWithinRegion(m.index, skipRegions)) continue;
+    // `describe.skipIf(cond)('name', …)` is curried like `it.skipIf`, so the modifier group
+    // above matches it — but unlike `it.skipIf`, a describe-level conditional skip means the
+    // SUITE's own declared name (not just its children) may never execute.
+    if (DESCRIBE_CONDITIONAL_SKIP.test(m[1])) continue;
+    names.push(m[3]);
+  }
+  for (const m of clean.matchAll(RITEWAY_FIELD)) {
+    if (!isWithinRegion(m.index, assertRegions)) continue;
+    if (isWithinRegion(m.index, skipRegions)) continue;
+    names.push(m[2]);
+  }
   return names;
 }
 

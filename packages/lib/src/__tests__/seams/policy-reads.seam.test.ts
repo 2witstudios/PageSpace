@@ -50,10 +50,10 @@ export function routesImportingPolicyTables(files: readonly string[]): string[] 
   return offenders;
 }
 
-describe('X-6 seam: API routes never import the organizations schema for policy reads', () => {
+describe('seam: API routes never import the organizations schema for policy reads', () => {
   const armed = organizationsSchemaExists();
 
-  it.skipIf(!armed)('X-6 no route under apps/web/src/app/api imports organizations/organizationPolicies from the schema', () => {
+  it.skipIf(!armed)('no route under apps/web/src/app/api imports organizations/organizationPolicies from the schema', () => {
     const offenders = routesImportingPolicyTables(listSourceFiles([API_ROOT]));
     expect(
       offenders,
@@ -61,7 +61,7 @@ describe('X-6 seam: API routes never import the organizations schema for policy 
     ).toEqual([]);
   });
 
-  it('X-6 the import detector recognises the table in a named, aliased, or type import', () => {
+  it('the import detector recognises the table in a named, aliased, or type import', () => {
     const dir = fs.mkdtempSync(path.join(REPO_ROOT, 'packages/lib/.seam-probe-'));
     try {
       const rel = path.relative(REPO_ROOT, dir).split(path.sep).join('/');

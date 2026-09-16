@@ -33,7 +33,7 @@ describe('Northwind Labs fixture (Sequence Spec Part 2)', () => {
     expect([byRole('owner'), byRole('admin'), byRole('member'), byRole('guest')]).toEqual([1, 2, 3, 2]);
   });
 
-  it('X-6 every guest resolves exactly one drive and no non-guest carries a guest drive', () => {
+  it('every guest resolves exactly one drive and no non-guest carries a guest drive', () => {
     for (const person of NORTHWIND_PEOPLE) {
       if (person.role === 'guest') {
         expect(person.guestOf, `${person.name} must be a guest of one drive`).toBeDefined();

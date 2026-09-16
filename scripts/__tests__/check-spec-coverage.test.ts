@@ -81,6 +81,69 @@ describe('X-6 spec ID-coverage gate: test-name extraction', () => {
     expect(extractTestNames(src)).toEqual(['SEC-1 only', 'UI-2 playwright group', 'UI-3 a step', 'POL-1 conditional']);
   });
 
+  it('X-6 rejects an it() nested inside describe.skip(...) even though the it() itself carries no skip modifier', () => {
+    const src = `
+      describe.skip('MON-8 disabled suite', () => {
+        it('MON-8 never runs', () => {});
+      });
+      it('MON-9 sibling still runs', () => {});
+    `;
+    expect(extractTestNames(src)).toEqual(['MON-9 sibling still runs']);
+  });
+
+  it('X-6 rejects an it() nested inside describe.skipIf(...)(...) — the wrapping suite may never execute', () => {
+    const src = `
+      describe.skipIf(condition)('MON-8 conditionally disabled suite', () => {
+        it('MON-8 might never run', () => {});
+      });
+    `;
+    expect(extractTestNames(src)).toEqual([]);
+  });
+
+  it('X-6 rejects nested it() two levels inside describe.skip(...) (nested describes)', () => {
+    const src = `
+      describe.skip('MON-8 outer', () => {
+        describe('MON-8 inner group', () => {
+          it('MON-8 deeply nested, never runs', () => {});
+        });
+      });
+    `;
+    expect(extractTestNames(src)).toEqual([]);
+  });
+
+  it('X-6 rejects an ID mentioned only via a RegExp.test() method call, not a test declaration', () => {
+    const src = `
+      const pattern = /MON-2/;
+      if (pattern.test('MON-2 direct')) { doSomething(); }
+      someRegex.test('MON-2 also not a declaration');
+    `;
+    expect(extractTestNames(src)).toEqual([]);
+  });
+
+  it('X-6 rejects given/should fields on a plain object that is not passed to assert()', () => {
+    const src = `
+      const fixture = { given: 'WAL-1 a wallet', should: 'not count as a test' };
+      logFixture(fixture);
+    `;
+    expect(extractTestNames(src)).toEqual([]);
+  });
+
+  it('X-6 still counts given/should fields when they ARE the argument to a riteway assert() call', () => {
+    const src = `
+      assert({ given: 'WAL-1 a wallet', should: 'charge nothing', actual: 1, expected: 1 });
+    `;
+    expect(extractTestNames(src)).toEqual(['WAL-1 a wallet', 'charge nothing']);
+  });
+
+  it('X-6 rejects an assert() call nested inside describe.skip(...)', () => {
+    const src = `
+      describe.skip('WAL-1 disabled suite', () => {
+        assert({ given: 'WAL-1 a wallet', should: 'never run', actual: 1, expected: 1 });
+      });
+    `;
+    expect(extractTestNames(src)).toEqual([]);
+  });
+
   it('X-6 matches an ID only as a whole token (MON-2 is not MON-20 and not XMON-2)', () => {
     expect(nameCarriesId('MON-20 something', 'MON-2')).toBe(false);
     expect(nameCarriesId('XMON-2 something', 'MON-2')).toBe(false);
@@ -186,6 +249,22 @@ describe('X-6 spec ID-coverage gate: end to end over a temp repo', () => {
   it('X-6 finds test files under packages/ and apps/ but never inside node_modules', () => {
     const root = makeRepo();
     expect(findTestFiles(root)).toEqual(['apps/web/src/negatives.test.tsx', 'packages/lib/src/__tests__/money.test.ts']);
+  });
+
+  it('X-6 also finds .spec.ts(x) files (the apps/e2e Playwright suite uses that extension)', () => {
+    const root = makeRepo();
+    fs.mkdirSync(path.join(root, 'apps/e2e/tests'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'apps/e2e/tests/org-picker.spec.ts'),
+      "test('SEAT-1 the picker shows the org', async ({ page }) => {});\n",
+    );
+    expect(findTestFiles(root)).toEqual([
+      'apps/e2e/tests/org-picker.spec.ts',
+      'apps/web/src/negatives.test.tsx',
+      'packages/lib/src/__tests__/money.test.ts',
+    ]);
+    const hits = scanTestFiles(root, findTestFiles(root), ['SEAT-1']);
+    expect([...(hits.get('apps/e2e/tests/org-picker.spec.ts') ?? [])]).toEqual(['SEAT-1']);
   });
 
   it('X-6 scans files into an ID set per file', () => {
