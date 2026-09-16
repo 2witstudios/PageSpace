@@ -100,6 +100,22 @@ function previousSecretKeyFor(accountId: string, kind: AccountKind): string {
 
 type PreviousSnapshotComment = { readonly __version: number };
 
+/**
+ * Plane metadata I/O (a Postgres the adapter does not control) can reject during an outage. Every
+ * operation's contract has a `store_unavailable` outcome for exactly that, so a rejection is turned
+ * into this marker at each call site and reported as data — never a throw an executor sees as a 500
+ * (Codex review PR #2646 P2).
+ */
+const METADATA_UNAVAILABLE = Symbol('metadata_unavailable');
+
+async function metadataCall<T>(call: () => Promise<T>): Promise<T | typeof METADATA_UNAVAILABLE> {
+  try {
+    return await call();
+  } catch {
+    return METADATA_UNAVAILABLE;
+  }
+}
+
 function stripRefreshToken<K extends AccountKind>(kind: K, material: SecretMaterial['material'], aud: PresenterChannel): unknown {
   if (kind !== 'oauth2' || aud === 'refresh-worker') return material;
   const { refreshToken: _refreshToken, ...rest } = material as SecretMaterialByKind['oauth2'];
@@ -141,7 +157,8 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     if (project === null || credentials === null) return { ok: false, reason: 'store_unavailable' };
 
     const lockResult = await withSecretLock(ref, async () => {
-      const before = await deps.metadata.read(ref);
+      const before = await metadataCall(() => deps.metadata.read(ref));
+      if (before === METADATA_UNAVAILABLE) return { outcome: 'metadata_unavailable' as const };
       // A revoked ref is broker-denied permanently, never reactivated by a later write (ADR 0005
       // §2.2 revoke: "every future resolve returns revoked"). Refuse under the SAME lock a write
       // would use, before touching Infisical or the metadata row (Codex review PR #2646 P1).
@@ -209,9 +226,11 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
         await deps.metadata.commit({
           ref,
           version: decision.version,
-          previousVersion: observedBefore,
+          // Only `rotate` snapshots the grace companion, so only `rotate` opens a grace window; a `put`
+          // replacing a secret leaves the replaced version unresolvable (Codex review PR #2646 P2).
+          previousVersion: snapshotPreviousOnRotate ? observedBefore : null,
           bindings,
-          rotatedAt: before === null ? null : deps.now(),
+          rotatedAt: snapshotPreviousOnRotate && before !== null ? deps.now() : null,
         });
       } catch {
         return { outcome: 'write_unverified' as const };
@@ -222,6 +241,7 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     if (lockResult.outcome === 'lock_busy') return { ok: false, reason: 'lock_unavailable' };
     if (lockResult.outcome === 'connection_error') return { ok: false, reason: 'store_unavailable' };
     const decision = lockResult.result;
+    if (decision.outcome === 'metadata_unavailable') return { ok: false, reason: 'store_unavailable' };
     if (decision.outcome === 'commit') return { ok: true, version: decision.version };
     if (decision.outcome === 'version_conflict') return { ok: false, reason: 'version_conflict' };
     return { ok: false, reason: 'write_unverified' };
@@ -235,7 +255,8 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     const { ref, grant, identity } = input;
     if (ref.tenantId !== identity.tenantId) return { ok: false, reason: 'not_found' };
 
-    const stored = await deps.metadata.read(ref);
+    const stored = await metadataCall(() => deps.metadata.read(ref));
+    if (stored === METADATA_UNAVAILABLE) return { ok: false, reason: 'store_unavailable' };
     const decision = decideResolve({ grant, ref, stored, now: deps.now(), rotationGraceMs, hash: deps.hash });
     if (!decision.ok) return decision;
 
@@ -302,12 +323,14 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
 
     async revoke(input: RevokeInput): Promise<RevokeResult> {
       if (input.ref.tenantId !== input.identity.tenantId) return { ok: false, reason: 'not_found' };
-      const stored = await deps.metadata.read(input.ref);
+      const stored = await metadataCall(() => deps.metadata.read(input.ref));
+      if (stored === METADATA_UNAVAILABLE) return { ok: false, reason: 'store_unavailable' };
       if (stored === null) return { ok: false, reason: 'not_found' };
       // The FIRST revocation is the one REVOKE_RETENTION_MS counts from; a repeated revoke must not
       // restart that clock.
       const revokedAt = stored.revokedAt ?? deps.now();
-      await deps.metadata.markRevoked({ ref: input.ref, revokedAt });
+      const marked = await metadataCall(() => deps.metadata.markRevoked({ ref: input.ref, revokedAt, reason: input.reason }));
+      if (marked === METADATA_UNAVAILABLE) return { ok: false, reason: 'store_unavailable' };
       return { ok: true, revokedAt };
     },
 
@@ -321,7 +344,8 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
       // delete and re-insert the metadata row (or re-write the grace companion) — an erasure that
       // does not stay erased.
       const lockResult = await withSecretLock(input.ref, async (): Promise<DeleteResult | null> => {
-        const stored = await deps.metadata.read(input.ref);
+        const stored = await metadataCall(() => deps.metadata.read(input.ref));
+        if (stored === METADATA_UNAVAILABLE) return { ok: false, reason: 'store_unavailable' };
         if (stored === null) return { ok: false, reason: 'not_found' };
 
         // The grace companion holds the material `rotate` replaced; erasing the account must erase
@@ -336,7 +360,8 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
         // after this step — finish it rather than leave a permanent ghost row (Codex review PR #2646 P2).
         if (!result.ok && result.reason !== 'not_found') return { ok: false, reason: 'store_unavailable' };
 
-        await deps.metadata.remove(input.ref);
+        const removed = await metadataCall(() => deps.metadata.remove(input.ref));
+        if (removed === METADATA_UNAVAILABLE) return { ok: false, reason: 'store_unavailable' };
         return null;
       });
 
@@ -347,7 +372,8 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
 
     async describe(input: DescribeInput): Promise<DescribeResult> {
       if (input.ref.tenantId !== input.identity.tenantId) return { ok: false, reason: 'not_found' };
-      const stored = await deps.metadata.read(input.ref);
+      const stored = await metadataCall(() => deps.metadata.read(input.ref));
+      if (stored === METADATA_UNAVAILABLE) return { ok: false, reason: 'store_unavailable' };
       if (stored === null) return { ok: false, reason: 'not_found' };
       return {
         ok: true,

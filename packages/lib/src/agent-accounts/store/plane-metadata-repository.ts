@@ -12,7 +12,7 @@
  */
 import type { Pool, PoolClient } from 'pg';
 import type { AdvisoryLockClient, AdvisoryLockPool } from '@pagespace/db/advisory-lock';
-import type { PlaneBindings, SecretRef, StoredSecretFacts } from './store-adapter';
+import type { PlaneBindings, RevokeReason, SecretRef, StoredSecretFacts } from './store-adapter';
 
 export type PlaneMetadataPool = AdvisoryLockPool & Pick<Pool, 'query'>;
 
@@ -36,7 +36,7 @@ export type PlaneMetadataRepository = {
     readonly bindings: PlaneBindings;
     readonly rotatedAt: number | null;
   }) => Promise<void>;
-  readonly markRevoked: (input: { readonly ref: SecretRef; readonly revokedAt: number }) => Promise<void>;
+  readonly markRevoked: (input: { readonly ref: SecretRef; readonly revokedAt: number; readonly reason: RevokeReason }) => Promise<void>;
   readonly remove: (ref: SecretRef) => Promise<void>;
 };
 
@@ -81,13 +81,14 @@ export function createPlaneMetadataRepository({ pool }: { readonly pool: PlaneMe
       );
     },
 
-    async markRevoked({ ref, revokedAt }) {
-      await pool.query('UPDATE agent_account_secret_versions SET revoked_at = $4 WHERE tenant_id = $1 AND account_id = $2 AND kind = $3', [
-        ref.tenantId,
-        ref.accountId,
-        ref.kind,
-        new Date(revokedAt),
-      ]);
+    // Only the FIRST revocation is written: its time is what REVOKE_RETENTION_MS counts from and its
+    // reason is what reconciliation and forensics read (a rotation_replay must stay distinguishable
+    // from a later admin revoke). A repeat revoke matches no row and changes nothing.
+    async markRevoked({ ref, revokedAt, reason }) {
+      await pool.query(
+        'UPDATE agent_account_secret_versions SET revoked_at = $4, revoke_reason = $5 WHERE tenant_id = $1 AND account_id = $2 AND kind = $3 AND revoked_at IS NULL',
+        [ref.tenantId, ref.accountId, ref.kind, new Date(revokedAt), reason],
+      );
     },
 
     async remove(ref) {
