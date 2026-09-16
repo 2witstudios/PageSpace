@@ -213,6 +213,13 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // `machine_sprite_reclaims` above, holding a Fly app name awaiting a
     // confirmed kill.
     'app_hosting_reclaims',
+    // The agent-account replay ledger (ADR 0004 §2.4): one row per SPENT grant
+    // nonce, holding a random nonce, the grant id it was spent by, and two
+    // timestamps. No credential, no request, no content — it exists so a
+    // one-use grant cannot be presented twice, and rows are swept once the
+    // grant they bound could no longer verify. The credentialed action itself
+    // IS disclosed, from the hash-chained security audit, not from here.
+    'agent_account_grant_nonces',
     // The published-app DEDICATED SUBSCRIPTION teardown outbox — same shape and
     // same reasoning as `app_hosting_reclaims` immediately above, just pointed
     // at a Stripe subscription id instead of a Fly app name. Nothing here is
