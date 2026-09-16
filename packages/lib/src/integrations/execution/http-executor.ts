@@ -25,6 +25,15 @@ type TargetValidator = (url: string, signal: AbortSignal) => Promise<Integration
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 5;
 
+/** Upper bound on a server-requested Retry-After wait, so a hostile upstream cannot stall a call for days. */
+export const MAX_RETRY_AFTER_MS = 60_000;
+
+/** Retry-After in whole seconds, bounded; null when absent, non-numeric or negative (use normal backoff). */
+const retryAfterMs = (header: string | null): number | null => {
+  if (header === null || !/^\s*\d+\s*$/.test(header)) return null;
+  return Math.min(Number(header) * 1000, MAX_RETRY_AFTER_MS);
+};
+
 /** Headers that describe a request body; dropped when a redirect rewrites the method to GET (Fetch spec). */
 const REQUEST_BODY_HEADERS = new Set([
   'content-length',
@@ -275,10 +284,8 @@ export const executeHttpRequest = async (
 
           if (attempt < maxRetries) {
             retryCount++;
-            const retryAfter = response.headers.get('Retry-After');
-            const delayMs = retryAfter
-              ? parseInt(retryAfter, 10) * 1000
-              : retryDelayMs * Math.pow(2, attempt);
+            const delayMs =
+              retryAfterMs(response.headers.get('Retry-After')) ?? retryDelayMs * Math.pow(2, attempt);
 
             await sleep(delayMs);
             continue;
