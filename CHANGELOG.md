@@ -535,6 +535,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Sign-in emails no longer lock you out of your own account** — every email PageSpace sends to
+  the same address (a sign-in link, an invite, a notification) shared one rate-limit bucket capped
+  at 3 per hour, and a failed send still used up one of those 3 — so a couple of sign-in attempts,
+  or one flaky delivery, could leave you unable to get a new sign-in link for the rest of the hour.
+  The cap is now 10 per hour per recipient, the sign-in link's own limit goes from 3 to 5 attempts
+  per 15 minutes, and a send that fails no longer counts against the limit at all — only emails
+  that actually go out do.
+
 - **Sending several photos at once now makes one message with one gallery, and stops them appearing
   twice** — attaching a batch of photos used to send them as separate messages, one per file: the
   channel or DM filled with a column of single-photo bubbles, the typed text sat on the first one,
