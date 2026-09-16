@@ -20,6 +20,12 @@ import https from 'node:https';
 import { isIP, type LookupFunction } from 'node:net';
 import { Readable } from 'node:stream';
 
+/**
+ * Sent when the caller sets no User-Agent. Global fetch always sent one, and
+ * some APIs (GitHub REST) reject requests without it.
+ */
+export const DEFAULT_USER_AGENT = 'PageSpace-Integrations';
+
 export interface PinnedRequestInit {
   method: string;
   headers?: Record<string, string>;
@@ -76,13 +82,18 @@ export const pinnedFetch: PinnedFetch = (url, init) => {
   const isTls = target.protocol === 'https:';
   const request = isTls ? https.request : http.request;
   const hostnameIsIp = isIP(target.hostname.replace(/^\[|\]$/g, '')) !== 0;
-  // Node streams a written body chunked unless a length is set; fetch sent the
-  // known byte length, and some servers refuse chunked requests (411).
-  const hasContentLength = Object.keys(headers).some((name) => name.toLowerCase() === 'content-length');
-  const requestHeaders =
-    body !== undefined && !hasContentLength
-      ? { ...headers, 'Content-Length': String(Buffer.byteLength(body, 'utf8')) }
-      : headers;
+  // Defaults global fetch supplied and node:http does not: a User-Agent (GitHub
+  // REST rejects requests without one) and, for a body, its byte length (Node
+  // otherwise streams it chunked, which some servers refuse with 411). Caller
+  // headers win in both cases.
+  const hasHeader = (wanted: string) => Object.keys(headers).some((name) => name.toLowerCase() === wanted);
+  const requestHeaders = {
+    ...(hasHeader('user-agent') ? {} : { 'User-Agent': DEFAULT_USER_AGENT }),
+    ...headers,
+    ...(body !== undefined && !hasHeader('content-length')
+      ? { 'Content-Length': String(Buffer.byteLength(body, 'utf8')) }
+      : {}),
+  };
 
   return new Promise<Response>((resolve, reject) => {
     const req = request({
