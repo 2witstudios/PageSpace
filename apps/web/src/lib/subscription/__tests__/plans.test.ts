@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   PLANS,
   PLAN_ORDER,
@@ -9,6 +9,8 @@ import {
   canDowngrade,
   getAllPlans,
   getPersonalPlans,
+  withCreditsCents,
+  withCreditOverrides,
   type SubscriptionTier,
 } from '../plans';
 
@@ -204,39 +206,45 @@ describe('Subscription Plans', () => {
   });
 });
 
-describe('MON-2 plan copy the settings/plan client component renders stays in sync with the rollout flag', () => {
-  const ORIGINAL_ENV = { ...process.env };
+describe('MON-2 the settings/plan client component patches its credit copy from server data, never from a client-side env read', () => {
+  describe('withCreditsCents', () => {
+    it('reproduces the reported defect and its fix: the module\'s own (potentially stale) number is replaced by a server-supplied one', () => {
+      // Simulates exactly what /api/subscriptions/status's planCredits carries when
+      // MONEY_MODEL_V2 is on server-side: Pro's real derivation is 900, not the
+      // module's own build-time 1,500 that a browser bundle would otherwise show.
+      const patched = withCreditsCents(PLANS.pro, 900);
+      expect(patched.limits.monthlyCreditsCents).toBe(900);
+      expect(patched.includedCredits).toBe('900 credits included each month');
+      expect(patched.features[0].name).toBe('900 credits/month');
+    });
 
-  afterEach(() => {
-    process.env = { ...ORIGINAL_ENV };
+    it('touches only the credit-derived fields — id, price, and every other feature are untouched', () => {
+      const patched = withCreditsCents(PLANS.pro, 900);
+      expect(patched.id).toBe(PLANS.pro.id);
+      expect(patched.price).toEqual(PLANS.pro.price);
+      expect(patched.features.slice(1)).toEqual(PLANS.pro.features.slice(1));
+    });
+
+    it('renders the one-time starter phrasing for a non-refilling tier (free)', () => {
+      const patched = withCreditsCents(PLANS.free, 500);
+      expect(patched.includedCredits).toBe('500 credits to start');
+      expect(patched.features[0].name).toBe('500 credits to start');
+    });
   });
 
-  async function loadPlans(env: Record<string, string | undefined>) {
-    vi.resetModules();
-    process.env = { ...ORIGINAL_ENV };
-    delete process.env.MONEY_MODEL_V2;
-    delete process.env.NEXT_PUBLIC_MONEY_MODEL_V2;
-    for (const [k, v] of Object.entries(env)) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
-    return import('../plans');
-  }
+  describe('withCreditOverrides', () => {
+    it('patches only the tiers present in the map; a tier with no entry keeps its own number unchanged', () => {
+      const [free, pro] = withCreditOverrides([PLANS.free, PLANS.pro], { pro: 900 });
+      expect(pro.limits.monthlyCreditsCents).toBe(900);
+      expect(free).toBe(PLANS.free); // untouched — same reference, not just equal
+    });
 
-  it('reproduces the reported defect: settings/plan is a client component, so it never sees the bare MONEY_MODEL_V2 the server set', async () => {
-    // The exact browser condition: Next.js inlined only the NEXT_PUBLIC_ mirror.
-    const { PLANS } = await loadPlans({ NEXT_PUBLIC_MONEY_MODEL_V2: 'true' });
-    // Fixed behavior: the plan the settings page renders shows the ratio figure
-    // (900), the same number the server actually granted — not the legacy 1,500
-    // this page rendered before the fix.
-    expect(PLANS.pro.limits.monthlyCreditsCents).toBe(900);
-    expect(PLANS.pro.includedCredits).toBe('900 credits included each month');
-    expect(PLANS.business.limits.monthlyCreditsCents).toBe(3000);
-  });
-
-  it('MON-2 with no client mirror set, the plan page still matches the server-off default (no regression)', async () => {
-    const { PLANS } = await loadPlans({});
-    expect(PLANS.pro.limits.monthlyCreditsCents).toBe(1500);
+    it('is a no-op (returns the same array) when no server data has arrived yet', () => {
+      const plans = [PLANS.free, PLANS.pro];
+      expect(withCreditOverrides(plans, undefined)).toBe(plans);
+      expect(withCreditOverrides(plans, {})).not.toBe(plans); // {} still maps, just patches nothing
+      expect(withCreditOverrides(plans, {}).every((p, i) => p === plans[i])).toBe(true);
+    });
   });
 });
 

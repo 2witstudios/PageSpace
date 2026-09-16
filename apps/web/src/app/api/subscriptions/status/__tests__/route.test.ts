@@ -47,6 +47,9 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
+vi.mock('@pagespace/lib/billing/money-model', () => ({
+  tierAllowanceCents: vi.fn((tier: string) => ({ free: 500, pro: 900, business: 3000 })[tier] ?? 0),
+}));
 
 // Import after mocks
 import { GET } from '../route';
@@ -321,6 +324,22 @@ describe('GET /api/subscriptions/status', () => {
         expect.anything(),
         expect.objectContaining({ eventType: 'data.read', userId: 'user_123', resourceType: 'subscription_status', resourceId: 'self' })
       );
+    });
+  });
+
+  describe('MON-2 planCredits', () => {
+    it('returns the server-derived included-credit figure per tier (the number a client-side read of MONEY_MODEL_V2 cannot see)', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser()]);
+
+      const request = new Request('https://example.com/api/subscriptions/status', {
+        method: 'GET',
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.planCredits).toEqual({ free: 500, pro: 900, business: 3000 });
     });
   });
 

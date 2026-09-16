@@ -5,8 +5,23 @@ import { eq, and, inArray, desc } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { getStorageConfigFromSubscription } from '@pagespace/lib/services/subscription-utils';
-import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { TIERS, toSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { tierAllowanceCents } from '@pagespace/lib/billing/money-model';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+
+/**
+ * MON-2: the included-credit figure per tier, computed HERE on the server (the only
+ * place `tierAllowanceCents` — which reads the real `MONEY_MODEL_V2` — may run).
+ * `settings/plan` is a `'use client'` component and cannot see that env var itself
+ * (Next.js never inlines a bare, non-`NEXT_PUBLIC_` name into the browser bundle);
+ * it fetches this route and patches its plan data with `planCredits` via
+ * `withCreditOverrides` (`@/lib/subscription/plans`) instead of reading any env
+ * client-side, or maintaining a second `NEXT_PUBLIC_` mirror that could disagree
+ * with this one.
+ */
+function planCreditsByTier(): Record<SubscriptionTier, number> {
+  return Object.fromEntries(TIERS.map((tier) => [tier, tierAllowanceCents(tier)])) as Record<SubscriptionTier, number>;
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -68,6 +83,9 @@ export async function GET(request: NextRequest) {
         quota: storageConfig.quotaBytes,
         tier: storageConfig.tier,
       },
+      // MON-2: server-authoritative included-credit figure per tier; see
+      // planCreditsByTier's doc comment above.
+      planCredits: planCreditsByTier(),
     });
 
   } catch (error) {

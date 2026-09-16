@@ -97,32 +97,25 @@ describe('MON-6 plan-card facts (SEAT-2 lane A2)', () => {
   });
 });
 
-describe('MON-2 plan copy stays in sync with the rollout flag in a browser context', () => {
-  it('reproduces the reported defect at the layer plan pages consume: MONTHLY_CREDIT_CENTS.pro read the wrong flag and rendered 1,500 in a browser', async () => {
-    // Same browser simulation as money-model.test.ts: only the NEXT_PUBLIC_ mirror
-    // is visible, MONEY_MODEL_V2 (what the server set) is not.
-    const stale = await load({ NEXT_PUBLIC_MONEY_MODEL_V2: 'true' });
-    // Before the fix this module computed MONTHLY_CREDIT_CENTS via tierAllowanceCents,
-    // which only reads the bare flag — so it would still be 1500 here even though the
-    // client mirror says the ratio is on. Assert the FIXED behavior: it now agrees.
-    expect(stale.creditsFromCents(stale.MONTHLY_CREDIT_CENTS.pro)).toBe(900);
-    expect(stale.MONTHLY_CREDITS.pro).toBe('900');
+describe('MON-2 the *ForCents siblings rebuild copy from a server-supplied number', () => {
+  it('includedCreditsPhraseForCents matches includedCreditsPhrase for the tier\'s own number, and differs for another', async () => {
+    const { includedCreditsPhraseForCents, includedCreditsPhrase, MONTHLY_CREDIT_CENTS } = await load();
+    expect(includedCreditsPhraseForCents('pro', MONTHLY_CREDIT_CENTS.pro)).toBe(includedCreditsPhrase('pro'));
+    // A server-supplied override (e.g. a promo invoice) renders its OWN number, not
+    // the module's build-time one — this is the seam withCreditOverrides depends on.
+    expect(includedCreditsPhraseForCents('pro', 740)).toBe('740 credits included each month');
+    expect(includedCreditsPhraseForCents('free', 500)).toBe('500 credits to start');
   });
 
-  it('MON-2 every plan-copy phrase built on MONTHLY_CREDIT_CENTS renders the ratio figure in a browser context', async () => {
-    const { includedCreditsPhrase, monthlyCreditsPhrase, creditsPhrase } = await load({
-      NEXT_PUBLIC_MONEY_MODEL_V2: 'true',
-    });
-    expect(includedCreditsPhrase('pro')).toBe('900 credits included each month');
-    expect(monthlyCreditsPhrase('pro')).toBe('900 credits/month');
-    expect(creditsPhrase('pro')).toBe('900/mo');
+  it('monthlyCreditsPhraseForCents matches monthlyCreditsPhrase for the tier\'s own number, and differs for another', async () => {
+    const { monthlyCreditsPhraseForCents, monthlyCreditsPhrase, MONTHLY_CREDIT_CENTS } = await load();
+    expect(monthlyCreditsPhraseForCents('pro', MONTHLY_CREDIT_CENTS.pro)).toBe(monthlyCreditsPhrase('pro'));
+    expect(monthlyCreditsPhraseForCents('business', 9000)).toBe('9,000 credits/month');
+    expect(monthlyCreditsPhraseForCents('free', 500)).toBe('500 credits to start');
   });
 
-  it('MON-2 with no client mirror set, plan copy still matches the server flag (no regression to the common path)', async () => {
-    const on = await load({ MONEY_MODEL_V2: 'true' });
-    expect(on.creditsFromCents(on.MONTHLY_CREDIT_CENTS.pro)).toBe(900);
-    const off = await load();
-    expect(off.creditsFromCents(off.MONTHLY_CREDIT_CENTS.pro)).toBe(1500);
+  it('MON-2 no client-visible mirror of the flag leaks into this module either', async () => {
+    const mod: Record<string, unknown> = await load();
+    expect(mod.isMoneyModelV2EnabledForDisplay).toBeUndefined();
   });
 });
-

@@ -8,7 +8,14 @@ import {
   type SubscriptionTier,
 } from '@pagespace/lib/billing/subscription-tiers';
 import { stripeConfig } from '../stripe-config';
-import { MONTHLY_CREDIT_CENTS, monthlyCreditsPhrase, includedCreditsPhrase, topUpRatePhrase } from './credits';
+import {
+  MONTHLY_CREDIT_CENTS,
+  monthlyCreditsPhrase,
+  monthlyCreditsPhraseForCents,
+  includedCreditsPhrase,
+  includedCreditsPhraseForCents,
+  topUpRatePhrase,
+} from './credits';
 
 export type { SubscriptionTier };
 
@@ -210,6 +217,53 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     ],
   },
 };
+
+/**
+ * MON-2: patch a plan's credit-derived fields with a server-supplied cents value.
+ *
+ * `PLANS` is a module-level constant built once, using this module's OWN evaluation
+ * of the money model (`MONTHLY_CREDIT_CENTS`, computed via the real MONEY_MODEL_V2).
+ * That is correct wherever this module runs on the server (marketing SSG, an API
+ * route, admin). It is NOT reliably correct in the browser: `settings/plan` is a
+ * `'use client'` component, and Next.js does not inline a bare (non-`NEXT_PUBLIC_`)
+ * env var into the client bundle — reading the flag there, or mirroring it through a
+ * second `NEXT_PUBLIC_` var that must be kept in lockstep with the first, both drift.
+ *
+ * The fix is to never derive the number in the browser at all: the plan page already
+ * makes an authenticated fetch (`GET /api/subscriptions/status`) before it renders,
+ * and that route computes the SAME derivation server-side and returns it as
+ * `planCredits`. This function is the one seam that patches a `PlanDefinition`'s
+ * credit-derived fields with that server number — `includedCredits`,
+ * `limits.monthlyCreditsCents`, and the credit line in `features[0]` (always the
+ * first feature listed for every tier above) — without touching anything else.
+ */
+export function withCreditsCents(plan: PlanDefinition, cents: number): PlanDefinition {
+  return {
+    ...plan,
+    includedCredits: includedCreditsPhraseForCents(plan.id, cents),
+    limits: { ...plan.limits, monthlyCreditsCents: cents },
+    features: plan.features.map((feature, i) =>
+      i === 0 ? { ...feature, name: monthlyCreditsPhraseForCents(plan.id, cents) } : feature,
+    ),
+  };
+}
+
+/**
+ * Apply `withCreditsCents` across a list of plans wherever `creditsCentsByTier` has
+ * an entry for that plan's tier; a plan with no entry is returned unchanged (the
+ * module's own build-time number, shown only for the instant before the server
+ * response with `planCredits` arrives).
+ */
+export function withCreditOverrides(
+  plans: PlanDefinition[],
+  creditsCentsByTier?: Partial<Record<SubscriptionTier, number>>,
+): PlanDefinition[] {
+  if (!creditsCentsByTier) return plans;
+  return plans.map((plan) => {
+    const cents = creditsCentsByTier[plan.id];
+    return cents === undefined ? plan : withCreditsCents(plan, cents);
+  });
+}
 
 export const PLAN_ORDER: readonly SubscriptionTier[] = CANONICAL_PLAN_ORDER;
 

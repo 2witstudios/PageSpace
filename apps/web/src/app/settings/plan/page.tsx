@@ -14,7 +14,14 @@ import { EmbeddedCheckoutForm } from '@/components/billing/EmbeddedCheckoutForm'
 import { PlanChangeConfirmation } from '@/components/billing/PlanChangeConfirmation';
 import { PlanCard } from '@/components/billing/PlanCard';
 import { BillingGuard } from '@/components/billing/BillingGuard';
-import { getPersonalPlans, getPlan, getTierFromPriceId, type SubscriptionTier, type PlanDefinition } from '@/lib/subscription/plans';
+import {
+  getPersonalPlans,
+  getPlan,
+  getTierFromPriceId,
+  withCreditOverrides,
+  type SubscriptionTier,
+  type PlanDefinition,
+} from '@/lib/subscription/plans';
 import { creditsCellPhrase } from '@/lib/subscription/credits';
 import type { AppliedPromo } from '@/components/billing/PromoCodeInput';
 
@@ -22,6 +29,12 @@ interface SubscriptionData {
   subscriptionTier: SubscriptionTier;
   /** A-9: a legacy $100 personal Business subscriber kept at their price. */
   subscriptionGrandfathered?: boolean;
+  /**
+   * MON-2: the server's real derivation, per tier, in whole cents — this page is a
+   * client component and cannot compute this number itself (see withCreditOverrides
+   * in @/lib/subscription/plans for why). Patched onto `plans` below.
+   */
+  planCredits?: Partial<Record<SubscriptionTier, number>>;
   subscription?: {
     status: string;
     currentPeriodStart: string;
@@ -300,7 +313,12 @@ export default function PlanPage() {
 
   // SEAT-2: Business is the org plan and is not offered to a lone user; it
   // appears here only as the viewer's own (grandfathered) current plan.
-  const plans = getPersonalPlans(subscriptionData?.subscriptionTier);
+  // MON-2: patch each plan's credit-derived fields with the server's real
+  // derivation — this client component cannot compute that number itself.
+  const plans = withCreditOverrides(
+    getPersonalPlans(subscriptionData?.subscriptionTier),
+    subscriptionData?.planCredits,
+  );
   const currentPlan = subscriptionData ? getPlan(subscriptionData.subscriptionTier) : getPlan('free');
   const scheduledTier = subscriptionData?.subscription?.scheduledPriceId
     ? getTierFromPriceId(subscriptionData.subscription.scheduledPriceId)

@@ -18,7 +18,7 @@ import {
   centsFromCredits,
   formatCreditCount,
   formatDollars,
-  tierAllowanceCentsForDisplay,
+  tierAllowanceCents,
 } from './money-model';
 import { TIERS, type SubscriptionTier } from './subscription-tiers';
 
@@ -30,13 +30,16 @@ function perTier<T>(f: (tier: SubscriptionTier) => T): Record<SubscriptionTier, 
  * Included credit value per tier, in whole cents, sized from the list price (MON-2).
  * The free row is the one-time starter grant (MON-8), not a monthly amount.
  *
- * Uses tierAllowanceCentsForDisplay, not tierAllowanceCents: this module is reached
- * from "use client" components (the settings/plan page), where the bare
- * MONEY_MODEL_V2 the server set is invisible — Next.js only inlines a NEXT_PUBLIC_-
- * prefixed var into the browser bundle. The display variant prefers that client-safe
- * mirror so plan copy agrees with what the server actually granted; see money-model.ts.
+ * SERVER-authoritative: computed once at module load from the real MONEY_MODEL_V2.
+ * A server render (marketing SSG, an API route, admin) always sees the correct
+ * number. A "use client" component (settings/plan) does NOT — Next.js never inlines
+ * a bare, non-NEXT_PUBLIC_ env var into the browser bundle — so it must not read this
+ * constant as the final word; it patches its plan data with the server-supplied
+ * number from `/api/subscriptions/status`'s `planCredits` instead (see
+ * `apps/web/src/lib/subscription/plans.ts`'s `withCreditOverrides`, and the
+ * `*ForCents` functions below it calls to rebuild the phrases from that number).
  */
-export const MONTHLY_CREDIT_CENTS: Record<SubscriptionTier, number> = perTier(tierAllowanceCentsForDisplay);
+export const MONTHLY_CREDIT_CENTS: Record<SubscriptionTier, number> = perTier(tierAllowanceCents);
 
 /** Included credits per tier as display counts ("900", "3,000"). */
 export const MONTHLY_CREDITS: Record<SubscriptionTier, string> = perTier((tier) =>
@@ -47,13 +50,23 @@ export const MONTHLY_CREDITS: Record<SubscriptionTier, string> = perTier((tier) 
 export const FREE_STARTER_CREDITS_DISPLAY: string = formatCreditCount(centsFromCredits(FREE_STARTER_CREDITS));
 
 /**
+ * Allowance phrase for an explicit cents value: "900 credits/month" for refilling
+ * paid tiers, "500 credits to start" for a one-time grant. The seam
+ * `withCreditOverrides` (apps/web/src/lib/subscription/plans.ts) uses to rebuild a
+ * plan's copy from a server-supplied number, without re-deriving the ratio itself.
+ */
+export function monthlyCreditsPhraseForCents(tier: SubscriptionTier, cents: number): string {
+  return TIER_ALLOWANCE_REFILLS[tier]
+    ? `${formatCreditCount(cents)} credits/month`
+    : `${formatCreditCount(cents)} credits to start`;
+}
+
+/**
  * Allowance phrase for a tier: "900 credits/month" for refilling paid tiers,
  * "500 credits to start" for the free tier's one-time starter grant.
  */
 export function monthlyCreditsPhrase(tier: SubscriptionTier): string {
-  return TIER_ALLOWANCE_REFILLS[tier]
-    ? `${MONTHLY_CREDITS[tier]} credits/month`
-    : `${MONTHLY_CREDITS[tier]} credits to start`;
+  return monthlyCreditsPhraseForCents(tier, MONTHLY_CREDIT_CENTS[tier]);
 }
 
 /** Short table-cell form: "900 credits/mo" or "500 credits to start". */
@@ -72,15 +85,24 @@ export function creditsPhrase(tier: SubscriptionTier): string {
 }
 
 /**
+ * Same fact as {@link includedCreditsPhrase}, for an explicit cents value. The seam
+ * `withCreditOverrides` uses to rebuild a plan card's copy from a server-supplied
+ * number without re-deriving the ratio.
+ */
+export function includedCreditsPhraseForCents(tier: SubscriptionTier, cents: number): string {
+  return TIER_ALLOWANCE_REFILLS[tier]
+    ? `${formatCreditCount(cents)} credits included each month`
+    : `${formatCreditCount(cents)} credits to start`;
+}
+
+/**
  * MON-6: the plan card's "included credits" fact — an integer credit COUNT, never a
  * dollar figure. "900 credits included each month" for refilling paid tiers, "500
  * credits to start" for the free tier's one-time grant. Sized by money-model, so the
  * MONEY_MODEL_V2 ratio flips this copy with a rebuild, not a code change.
  */
 export function includedCreditsPhrase(tier: SubscriptionTier): string {
-  return TIER_ALLOWANCE_REFILLS[tier]
-    ? `${MONTHLY_CREDITS[tier]} credits included each month`
-    : `${MONTHLY_CREDITS[tier]} credits to start`;
+  return includedCreditsPhraseForCents(tier, MONTHLY_CREDIT_CENTS[tier]);
 }
 
 /** Buyable top-up packs, sorted by ascending credit count. */
