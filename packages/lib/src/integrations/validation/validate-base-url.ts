@@ -33,6 +33,15 @@ const BLOCKED_TARGET_MESSAGE = 'Base URL must point at a public host';
 export const HTTPS_REQUIRED_MESSAGE =
   'Base URL must use HTTPS — an http:// target would send this connection\'s credentials in cleartext';
 
+/**
+ * Deadline for the DNS wait when the caller supplies no `signal` (the
+ * connection-creation routes). A caller with a signal (the executor) bounds the
+ * wait with that signal instead, so its own timeout result is unchanged.
+ */
+export const DEFAULT_LOOKUP_TIMEOUT_MS = 5000;
+
+export const LOOKUP_TIMED_OUT_MESSAGE = 'Hostname lookup timed out';
+
 export type IntegrationTargetDecision =
   | { ok: true; address: string }
   | { ok: false; reason: string };
@@ -42,7 +51,11 @@ export type HostnameResolver = (hostname: string) => Promise<string[]>;
 export interface ValidateTargetOptions {
   /** Hostname resolver; defaults to `dns.lookup(hostname, { all: true })`. */
   resolve?: HostnameResolver;
-  /** Bounds the DNS wait: an abort rejects with an `AbortError`. */
+  /**
+   * Bounds the DNS wait: an abort rejects with an `AbortError`. Without a
+   * signal the wait is bounded by `DEFAULT_LOOKUP_TIMEOUT_MS` and a timeout is
+   * a refusal (`LOOKUP_TIMED_OUT_MESSAGE`), never an unbounded hang.
+   */
   signal?: AbortSignal;
 }
 
@@ -55,6 +68,17 @@ const abortError = (): Error => {
   const error = new Error('Target validation aborted');
   error.name = 'AbortError';
   return error;
+};
+
+const TIMED_OUT = Symbol('lookup timed out');
+
+/** Settle with TIMED_OUT after `ms` unless `promise` settles first (the lookup itself is not cancellable). */
+const raceWithDeadline = <T>(promise: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), ms);
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 };
 
 /** Stop waiting on `promise` as soon as `signal` aborts (the work itself is not cancellable). */
@@ -106,7 +130,12 @@ export const validateIntegrationTargetUrl = async (
 
   let addresses: string[];
   try {
-    addresses = await raceWithAbort(resolve(shape.url.hostname), signal);
+    const lookup = resolve(shape.url.hostname);
+    const answer = signal
+      ? await raceWithAbort(lookup, signal)
+      : await raceWithDeadline(lookup, DEFAULT_LOOKUP_TIMEOUT_MS);
+    if (answer === TIMED_OUT) return { ok: false, reason: LOOKUP_TIMED_OUT_MESSAGE };
+    addresses = answer;
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') throw error;
     return { ok: false, reason: 'Could not resolve hostname' };
