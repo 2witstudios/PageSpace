@@ -78,7 +78,9 @@ re-running it.
 ```bash
 export INFISICAL_DEV_ADMIN_TOKEN=<from bootstrap>
 export INFISICAL_DEV_ORG_ID=<from bootstrap>
-bun run --filter @pagespace/lib test -- src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts
+cd packages/lib
+TZ=UTC bunx vitest run --config vitest.integration.config.ts \
+  src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts
 ```
 
 The test provisions two throwaway tenant projects + Universal Auth machine
@@ -88,9 +90,11 @@ fine, the whole instance is disposable (`docker compose down -v` resets it).
 
 Like every other `*.integration.test.ts` in this package, it is excluded
 from the default `test` / `test:coverage` run (`vitest.config.ts`
-`exclude` / `coverage.exclude`) and fails loudly rather than silently
-skipping when `INFISICAL_DEV_ADMIN_TOKEN` is unset — set
-`ALLOW_SKIP_DB_TESTS=1` for an explicit local opt-out (CI never sets it).
+`exclude` / `coverage.exclude`). When `INFISICAL_DEV_ADMIN_TOKEN` is unset
+or the instance does not answer `/api/status`, the suite reports itself as
+**skipped** (`describe.skipIf`) rather than crashing. CI does not accept that:
+its dedicated step runs the file with `--reporter=json` and fails unless every
+test actually passed.
 
 ## What CI needs to replicate this
 
