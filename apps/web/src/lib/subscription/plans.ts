@@ -234,16 +234,20 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
  * and that route computes the SAME derivation server-side and returns it as
  * `planCredits`. This function is the one seam that patches a `PlanDefinition`'s
  * credit-derived fields with that server number — `includedCredits`,
- * `limits.monthlyCreditsCents`, and the credit line in `features[0]` (always the
- * first feature listed for every tier above) — without touching anything else.
+ * `limits.monthlyCreditsCents`, and the credit line inside `features` — without
+ * touching anything else. The credit feature is matched by its CURRENT text
+ * (`monthlyCreditsPhrase(plan.id)`, exactly how `PLANS` built it above) rather than
+ * assumed to be at a fixed index, so reordering a tier's `features` array can never
+ * silently patch the wrong line.
  */
 export function withCreditsCents(plan: PlanDefinition, cents: number): PlanDefinition {
+  const creditFeatureName = monthlyCreditsPhrase(plan.id);
   return {
     ...plan,
     includedCredits: includedCreditsPhraseForCents(plan.id, cents),
     limits: { ...plan.limits, monthlyCreditsCents: cents },
-    features: plan.features.map((feature, i) =>
-      i === 0 ? { ...feature, name: monthlyCreditsPhraseForCents(plan.id, cents) } : feature,
+    features: plan.features.map((feature) =>
+      feature.name === creditFeatureName ? { ...feature, name: monthlyCreditsPhraseForCents(plan.id, cents) } : feature,
     ),
   };
 }
