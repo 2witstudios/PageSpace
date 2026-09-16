@@ -1,5 +1,5 @@
 /**
- * Pure signup-door decision for agent accounts (ADR 0005 Decisions 10, 11).
+ * Pure signup-door decision for agent accounts (ADR 0007 Decisions 10, 11).
  *
  * The route gathers the facts (is the door enabled for this deployment, what
  * did the challenge lookup return, did the PoW verify, were the terms

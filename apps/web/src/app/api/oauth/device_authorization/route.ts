@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
     return noStoreJson({ error: 'invalid_client' }, 400);
   }
 
-  // A client whose allowedGrantTypes exclude the device-code grant (ADR 0005:
+  // A client whose allowedGrantTypes exclude the device-code grant (ADR 0007:
   // `pagespace-agent` holds only jwt-bearer / claim / refresh_token) must be
   // refused HERE, before a device code is minted — /token would refuse the
   // redemption anyway, but a minted-yet-unredeemable code is still a row, a

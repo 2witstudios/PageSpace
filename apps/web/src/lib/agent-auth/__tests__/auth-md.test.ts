@@ -1,5 +1,5 @@
 /**
- * ADR 0005 Decision 12 — `/auth.md` is pure markdown built from the issuer,
+ * ADR 0007 Decision 12 — `/auth.md` is pure markdown built from the issuer,
  * and it is pinned to the RFC 8414 metadata by iterating over the metadata
  * object itself: a new agent_auth endpoint that is not documented here fails
  * this test, so the two documents cannot drift.

@@ -1,5 +1,5 @@
 /**
- * Agent synthetic email + reserved-domain predicate (ADR 0005 Decision 2).
+ * Agent synthetic email + reserved-domain predicate (ADR 0007 Decision 2).
  *
  * An agent is a real `users` row, and `users.email` is unique NOT NULL, so
  * every agent gets a synthetic address under an RFC 2606 `.invalid` domain

@@ -7,10 +7,10 @@
  * @module @pagespace/lib/auth/oauth/metadata
  */
 
-/** RFC 7523 §2.1 — the auth.md `identity_assertion` (our opaque `ps_agent_*` secret) is presented under this URN (ADR 0005 Decision 5). */
+/** RFC 7523 §2.1 — the auth.md `identity_assertion` (our opaque `ps_agent_*` secret) is presented under this URN (ADR 0007 Decision 5). */
 export const AGENT_ASSERTION_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
 
-/** The agent polls its claim with this grant; on approval it receives a fresh token pair for ITSELF (ADR 0005 Decision 7). */
+/** The agent polls its claim with this grant; on approval it receives a fresh token pair for ITSELF (ADR 0007 Decision 7). */
 export const AGENT_CLAIM_GRANT_TYPE = 'urn:pagespace:agent-auth:grant-type:claim';
 
 const GRANT_TYPES_SUPPORTED = [
@@ -39,7 +39,7 @@ export interface OAuthServerConfig {
 }
 
 /**
- * auth.md agent-registration block (ADR 0005 Decision 12), served inside the
+ * auth.md agent-registration block (ADR 0007 Decision 12), served inside the
  * RFC 8414 document so a generic auth.md client can discover the agent doors
  * from the same URL it already reads. Every URL is derived from the issuer.
  */

@@ -107,7 +107,7 @@ describe('buildServerMetadata', () => {
   });
 });
 
-describe('buildServerMetadata — agent_auth (ADR 0005 Decisions 5, 12)', () => {
+describe('buildServerMetadata — agent_auth (ADR 0007 Decisions 5, 12)', () => {
   const config = { issuer: 'https://pagespace.ai' };
 
   it('advertises the auth.md agent_auth block with every URL derived from the issuer only', () => {

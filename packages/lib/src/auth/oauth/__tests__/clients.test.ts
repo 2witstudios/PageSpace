@@ -101,7 +101,7 @@ describe('validateRedirectUri', () => {
   });
 });
 
-describe('getRegisteredClient — pagespace-agent (ADR 0005 Decision 5)', () => {
+describe('getRegisteredClient — pagespace-agent (ADR 0007 Decision 5)', () => {
   it('returns a public client with exactly jwt-bearer, claim and refresh_token grants', () => {
     const client = getRegisteredClient(PAGESPACE_AGENT_CLIENT_ID);
     expect(client).not.toBeNull();

@@ -65,7 +65,7 @@ describe('OAuth hardening sweep', () => {
     expect(violations.map((v) => v.path)).toEqual([]);
   });
 
-  it('every route that mints from a client_id enforces allowedGrantTypes through the shared clientAllowsGrant guard (ADR 0005: pagespace-agent must be refused at device_authorization)', () => {
+  it('every route that mints from a client_id enforces allowedGrantTypes through the shared clientAllowsGrant guard (ADR 0007: pagespace-agent must be refused at device_authorization)', () => {
     // The registry now holds a client (pagespace-agent) whose allowedGrantTypes
     // exclude the device-code grant. A door that resolves a client but never
     // consults its grant list mints codes that can only ever fail at /token —

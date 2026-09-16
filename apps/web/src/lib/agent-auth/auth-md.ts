@@ -1,5 +1,5 @@
 /**
- * `/auth.md` — the agent-registration recipe (ADR 0005 Decision 12), built
+ * `/auth.md` — the agent-registration recipe (ADR 0007 Decision 12), built
  * purely from the deployment issuer. Served by a one-line route through the
  * well-known rewrite list (Phase 2). Every URL comes from
  * `buildServerMetadata`, and the test pins this document to that metadata by

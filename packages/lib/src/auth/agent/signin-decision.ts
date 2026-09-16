@@ -1,5 +1,5 @@
 /**
- * Pure sign-in decision for the agent browser door (ADR 0005, threat model T3).
+ * Pure sign-in decision for the agent browser door (ADR 0007, threat model T3).
  *
  * The route hashes the presented secret, looks the account up by hash, and
  * hands the lookup here. The decision is TYPED internally so the route can

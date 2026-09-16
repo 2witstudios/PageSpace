@@ -1,5 +1,5 @@
 /**
- * Proof-of-work for the agent signup doors (ADR 0005 Decision 10).
+ * Proof-of-work for the agent signup doors (ADR 0007 Decision 10).
  *
  * Both doors require the caller to present a server-issued challenge and a
  * nonce such that SHA3-256(`${challenge}:${nonce}`) has at least

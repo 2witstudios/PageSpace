@@ -1,4 +1,4 @@
-/** ADR 0005 Decision 1 — the one discriminator between humans and agents. */
+/** ADR 0007 Decision 1 — the one discriminator between humans and agents. */
 import { describe, it, expect } from 'vitest';
 import { ACCOUNT_TYPES, isAccountType, type AccountType } from '../account-type';
 

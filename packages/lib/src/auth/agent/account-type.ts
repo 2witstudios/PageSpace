@@ -1,5 +1,5 @@
 /**
- * The one discriminator between humans and agents (ADR 0005 Decision 1).
+ * The one discriminator between humans and agents (ADR 0007 Decision 1).
  * Mirrors the `users.accountType` pgEnum Phase 1 adds: `human` first because
  * it is the column default, so every existing row is a human.
  *
