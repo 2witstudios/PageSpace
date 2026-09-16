@@ -18,7 +18,7 @@ import {
   centsFromCredits,
   formatCreditCount,
   formatDollars,
-  tierAllowanceCents,
+  tierAllowanceCentsForDisplay,
 } from './money-model';
 import { TIERS, type SubscriptionTier } from './subscription-tiers';
 
@@ -29,8 +29,14 @@ function perTier<T>(f: (tier: SubscriptionTier) => T): Record<SubscriptionTier, 
 /**
  * Included credit value per tier, in whole cents, sized from the list price (MON-2).
  * The free row is the one-time starter grant (MON-8), not a monthly amount.
+ *
+ * Uses tierAllowanceCentsForDisplay, not tierAllowanceCents: this module is reached
+ * from "use client" components (the settings/plan page), where the bare
+ * MONEY_MODEL_V2 the server set is invisible — Next.js only inlines a NEXT_PUBLIC_-
+ * prefixed var into the browser bundle. The display variant prefers that client-safe
+ * mirror so plan copy agrees with what the server actually granted; see money-model.ts.
  */
-export const MONTHLY_CREDIT_CENTS: Record<SubscriptionTier, number> = perTier(tierAllowanceCents);
+export const MONTHLY_CREDIT_CENTS: Record<SubscriptionTier, number> = perTier(tierAllowanceCentsForDisplay);
 
 /** Included credits per tier as display counts ("900", "3,000"). */
 export const MONTHLY_CREDITS: Record<SubscriptionTier, string> = perTier((tier) =>
@@ -67,7 +73,7 @@ export function creditsPhrase(tier: SubscriptionTier): string {
 
 /**
  * MON-6: the plan card's "included credits" fact — an integer credit COUNT, never a
- * dollar figure. "1,500 credits included each month" for refilling paid tiers, "500
+ * dollar figure. "900 credits included each month" for refilling paid tiers, "500
  * credits to start" for the free tier's one-time grant. Sized by money-model, so the
  * MONEY_MODEL_V2 ratio flips this copy with a rebuild, not a code change.
  */

@@ -7,6 +7,7 @@ async function load(env: Record<string, string> = {}) {
   vi.resetModules();
   process.env = { ...ORIGINAL_ENV, ...env };
   delete process.env.MONEY_MODEL_V2;
+  delete process.env.NEXT_PUBLIC_MONEY_MODEL_V2;
   for (const [k, v] of Object.entries(env)) process.env[k] = v;
   const copy = await import('../credit-copy');
   const model = await import('../money-model');
@@ -95,3 +96,33 @@ describe('MON-6 plan-card facts (SEAT-2 lane A2)', () => {
     expect(off.topUpRatePhrase()).toBe(on.topUpRatePhrase());
   });
 });
+
+describe('MON-2 plan copy stays in sync with the rollout flag in a browser context', () => {
+  it('reproduces the reported defect at the layer plan pages consume: MONTHLY_CREDIT_CENTS.pro read the wrong flag and rendered 1,500 in a browser', async () => {
+    // Same browser simulation as money-model.test.ts: only the NEXT_PUBLIC_ mirror
+    // is visible, MONEY_MODEL_V2 (what the server set) is not.
+    const stale = await load({ NEXT_PUBLIC_MONEY_MODEL_V2: 'true' });
+    // Before the fix this module computed MONTHLY_CREDIT_CENTS via tierAllowanceCents,
+    // which only reads the bare flag — so it would still be 1500 here even though the
+    // client mirror says the ratio is on. Assert the FIXED behavior: it now agrees.
+    expect(stale.creditsFromCents(stale.MONTHLY_CREDIT_CENTS.pro)).toBe(900);
+    expect(stale.MONTHLY_CREDITS.pro).toBe('900');
+  });
+
+  it('MON-2 every plan-copy phrase built on MONTHLY_CREDIT_CENTS renders the ratio figure in a browser context', async () => {
+    const { includedCreditsPhrase, monthlyCreditsPhrase, creditsPhrase } = await load({
+      NEXT_PUBLIC_MONEY_MODEL_V2: 'true',
+    });
+    expect(includedCreditsPhrase('pro')).toBe('900 credits included each month');
+    expect(monthlyCreditsPhrase('pro')).toBe('900 credits/month');
+    expect(creditsPhrase('pro')).toBe('900/mo');
+  });
+
+  it('MON-2 with no client mirror set, plan copy still matches the server flag (no regression to the common path)', async () => {
+    const on = await load({ MONEY_MODEL_V2: 'true' });
+    expect(on.creditsFromCents(on.MONTHLY_CREDIT_CENTS.pro)).toBe(900);
+    const off = await load();
+    expect(off.creditsFromCents(off.MONTHLY_CREDIT_CENTS.pro)).toBe(1500);
+  });
+});
+

@@ -9,6 +9,7 @@ async function load(env: Record<string, string | undefined> = {}) {
   vi.resetModules();
   process.env = { ...ORIGINAL_ENV };
   delete process.env.MONEY_MODEL_V2;
+  delete process.env.NEXT_PUBLIC_MONEY_MODEL_V2;
   delete process.env.CREDIT_MARKUP_BPS;
   for (const [k, v] of Object.entries(env)) {
     if (v === undefined) delete process.env[k];
@@ -261,6 +262,55 @@ describe('MON-4 top-ups buy credits at CREDITS_PER_DOLLAR with no ratio; packs a
     expect(creditsFromDollars(12.34)).toBe(1234);
     expect(creditsFromDollars(10)).toBe(1000);
     expect(centsFromCredits(creditsFromDollars(12.34))).toBe(1234);
+  });
+});
+
+describe('MON-2 client-visible display flag: a "use client" component never sees the bare server flag', () => {
+  it('reproduces the reported defect: in a browser (MONEY_MODEL_V2 absent) isMoneyModelV2Enabled() silently falls back to legacy, disagreeing with the server', async () => {
+    // The server sets MONEY_MODEL_V2 for itself; Next.js only inlines NEXT_PUBLIC_-
+    // prefixed vars into the client bundle, so the browser never sees a bare name —
+    // simulate that exact browser environment: NEXT_PUBLIC_MONEY_MODEL_V2 is what
+    // got inlined, MONEY_MODEL_V2 is absent.
+    const { isMoneyModelV2Enabled, tierAllowanceCents } = await load({ NEXT_PUBLIC_MONEY_MODEL_V2: 'true' });
+    expect(isMoneyModelV2Enabled()).toBe(false);
+    // This is the bug as reported: the browser-only derivation gives the legacy 1:1
+    // figure (1500) instead of the ratio figure the server actually granted (900).
+    expect(tierAllowanceCents('pro')).toBe(1500);
+  });
+
+  it('MON-2 isMoneyModelV2EnabledForDisplay prefers the client-visible mirror when it is set', async () => {
+    const { isMoneyModelV2EnabledForDisplay } = await load({ NEXT_PUBLIC_MONEY_MODEL_V2: 'true' });
+    expect(isMoneyModelV2EnabledForDisplay()).toBe(true);
+  });
+
+  it('MON-2 isMoneyModelV2EnabledForDisplay falls back to the server flag when no mirror is set (SSR, or a server-only process)', async () => {
+    const on = await load({ MONEY_MODEL_V2: 'true' });
+    expect(on.isMoneyModelV2EnabledForDisplay()).toBe(true);
+    const off = await load();
+    expect(off.isMoneyModelV2EnabledForDisplay()).toBe(false);
+  });
+
+  it('MON-2 tierAllowanceCentsForDisplay agrees with the server derivation using the mirror: Pro renders 900, not 1,500', async () => {
+    const { tierAllowanceCentsForDisplay, creditsFromCents } = await load({ NEXT_PUBLIC_MONEY_MODEL_V2: 'true' });
+    expect(creditsFromCents(tierAllowanceCentsForDisplay('pro'))).toBe(900);
+    expect(creditsFromCents(tierAllowanceCentsForDisplay('business'))).toBe(3000);
+  });
+
+  it('MON-2 tierAllowanceCentsForDisplay matches tierAllowanceCents whenever the mirror agrees with the server flag (the common, correctly-configured case)', async () => {
+    const on = await load({ MONEY_MODEL_V2: 'true', NEXT_PUBLIC_MONEY_MODEL_V2: 'true' });
+    for (const tier of TIERS) {
+      expect(on.tierAllowanceCentsForDisplay(tier), tier).toBe(on.tierAllowanceCents(tier));
+    }
+    const off = await load();
+    for (const tier of TIERS) {
+      expect(off.tierAllowanceCentsForDisplay(tier), tier).toBe(off.tierAllowanceCents(tier));
+    }
+  });
+
+  it('MON-2 the display path never gates a real grant: isMoneyModelV2Enabled() (used by the gate/funding) is unaffected by the mirror alone', async () => {
+    const { isMoneyModelV2Enabled } = await load({ NEXT_PUBLIC_MONEY_MODEL_V2: 'true' });
+    // Only MONEY_MODEL_V2 gates a real grant; the client mirror must never do that.
+    expect(isMoneyModelV2Enabled()).toBe(false);
   });
 });
 

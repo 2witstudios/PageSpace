@@ -25,9 +25,20 @@
  * migration day flips it. The rate and the formatter are not gated: a credit is
  * CREDITS_PER_DOLLAR⁻¹ of a dollar everywhere, immediately.
  *
- * Client bundles inline `process.env` at build time, so on the client the flag and
- * MARKUP_BPS reflect the build's defaults — correct for plan copy; the authoritative
- * live balance always comes from `GET /api/credits`.
+ * MONEY_MODEL_V2 is a SERVER-only flag: `isMoneyModelV2Enabled()` reads the bare
+ * name, which Next.js does NOT inline into the browser bundle (only a `NEXT_PUBLIC_`-
+ * prefixed literal member expression gets that treatment, and only when accessed
+ * directly — never through a dynamic `env[name]` lookup). A "use client" component
+ * that called the gate/funding derivation directly would therefore see `undefined`
+ * for a var the server actually set, and silently render the legacy 1:1 figure while
+ * the server had granted the ratio figure — exactly the plan-copy drift this module
+ * exists to prevent. `isMoneyModelV2EnabledForDisplay()` and
+ * `tierAllowanceCentsForDisplay()` are the client-safe path: they prefer the
+ * `NEXT_PUBLIC_MONEY_MODEL_V2` mirror (read via a literal `process.env.NEXT_PUBLIC_*`
+ * access below, so it IS inlined) and fall back to the server flag when no mirror is
+ * present (SSR, or a Node process with no browser at all). Ops flips both vars
+ * together; only the bare flag ever gates a real grant — the authoritative live
+ * balance always comes from `GET /api/credits`.
  */
 
 import { envBool, envInt, type EnvSource } from './env-parse';
@@ -77,16 +88,43 @@ export function isMoneyModelV2Enabled(env: EnvSource = process.env): boolean {
   return envBool('MONEY_MODEL_V2', false, env);
 }
 
+// Read via a literal `process.env.NEXT_PUBLIC_*` member expression (not a dynamic
+// `env[name]` lookup) so Next.js's webpack DefinePlugin can inline this exact value
+// into the CLIENT bundle at build time, wherever this module ends up in that bundle's
+// graph. Captured once at module load, matching how a bundler-inlined constant behaves.
+const NEXT_PUBLIC_MONEY_MODEL_V2_LITERAL = process.env.NEXT_PUBLIC_MONEY_MODEL_V2;
+
+/**
+ * Whether display copy should show the ratio-derived numbers. Prefers the
+ * client-visible mirror when it is set (so a browser and the server that rendered
+ * its first paint show the SAME copy without a round trip); falls back to the
+ * server flag otherwise. Never used to gate an actual grant — only
+ * `isMoneyModelV2Enabled()` does that; this exists solely so client-reachable
+ * display copy (credit-copy.ts) can agree with it.
+ */
+export function isMoneyModelV2EnabledForDisplay(env: EnvSource = process.env): boolean {
+  if (NEXT_PUBLIC_MONEY_MODEL_V2_LITERAL !== undefined) {
+    return envBool('NEXT_PUBLIC_MONEY_MODEL_V2', false, {
+      NEXT_PUBLIC_MONEY_MODEL_V2: NEXT_PUBLIC_MONEY_MODEL_V2_LITERAL,
+    });
+  }
+  return isMoneyModelV2Enabled(env);
+}
+
 /**
  * The included-credit ratio for `tier`, in basis points. 0 for the free tier and for
  * any unknown/legacy value (nothing is paid, so nothing derives). Accepts the raw
  * `users.subscriptionTier` string.
  */
-export function includedCreditRatioBps(tier: string): number {
+function includedCreditRatioBpsWith(tier: string, moneyModelV2Enabled: boolean): number {
   if (!isSubscriptionTier(tier)) return 0;
   const ratio = INCLUDED_CREDIT_RATIO_BPS[tier];
   if (ratio <= 0) return 0;
-  return isMoneyModelV2Enabled() ? ratio : LEGACY_INCLUDED_CREDIT_RATIO_BPS;
+  return moneyModelV2Enabled ? ratio : LEGACY_INCLUDED_CREDIT_RATIO_BPS;
+}
+
+export function includedCreditRatioBps(tier: string): number {
+  return includedCreditRatioBpsWith(tier, isMoneyModelV2Enabled());
 }
 
 /**
@@ -96,11 +134,15 @@ export function includedCreditRatioBps(tier: string): number {
  * paid); fails closed — a negative or non-finite amount, or a tier with no ratio,
  * grants nothing.
  */
-export function allowanceCentsForPaidCents(paidCents: number, tier: SubscriptionTier): number {
+function allowanceCentsForPaidCentsWith(paidCents: number, tier: SubscriptionTier, moneyModelV2Enabled: boolean): number {
   if (!Number.isFinite(paidCents) || paidCents <= 0) return 0;
-  const ratio = includedCreditRatioBps(tier);
+  const ratio = includedCreditRatioBpsWith(tier, moneyModelV2Enabled);
   if (ratio <= 0) return 0;
   return Math.floor((paidCents * ratio) / 10_000);
+}
+
+export function allowanceCentsForPaidCents(paidCents: number, tier: SubscriptionTier): number {
+  return allowanceCentsForPaidCentsWith(paidCents, tier, isMoneyModelV2Enabled());
 }
 
 /** A tier's monthly list price in whole cents, from the canonical tier table. */
@@ -116,11 +158,25 @@ export function tierListPriceCents(tier: SubscriptionTier): number {
  * unknown/legacy value (e.g. a stale `users.subscriptionTier`) is treated as free so
  * it is never handed a paid allowance. Accepts the raw column string.
  */
-export function tierAllowanceCents(tier: string): number {
+function tierAllowanceCentsWith(tier: string, moneyModelV2Enabled: boolean): number {
   if (isSubscriptionTier(tier) && tier !== 'free') {
-    return allowanceCentsForPaidCents(tierListPriceCents(tier), tier);
+    return allowanceCentsForPaidCentsWith(tierListPriceCents(tier), tier, moneyModelV2Enabled);
   }
   return centsFromCredits(FREE_STARTER_CREDITS);
+}
+
+export function tierAllowanceCents(tier: string): number {
+  return tierAllowanceCentsWith(tier, isMoneyModelV2Enabled());
+}
+
+/**
+ * Same derivation as {@link tierAllowanceCents}, but the ratio is decided by
+ * {@link isMoneyModelV2EnabledForDisplay} instead of the bare server flag. This is
+ * what client-reachable display copy (credit-copy.ts's MONTHLY_CREDIT_CENTS) uses,
+ * so a "use client" plan page renders the same figure the server actually granted.
+ */
+export function tierAllowanceCentsForDisplay(tier: string): number {
+  return tierAllowanceCentsWith(tier, isMoneyModelV2EnabledForDisplay());
 }
 
 /** Cents of credit value → credit count. */

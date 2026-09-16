@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
   PLANS,
   PLAN_ORDER,
@@ -203,3 +203,40 @@ describe('Subscription Plans', () => {
     });
   });
 });
+
+describe('MON-2 plan copy the settings/plan client component renders stays in sync with the rollout flag', () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  async function loadPlans(env: Record<string, string | undefined>) {
+    vi.resetModules();
+    process.env = { ...ORIGINAL_ENV };
+    delete process.env.MONEY_MODEL_V2;
+    delete process.env.NEXT_PUBLIC_MONEY_MODEL_V2;
+    for (const [k, v] of Object.entries(env)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    return import('../plans');
+  }
+
+  it('reproduces the reported defect: settings/plan is a client component, so it never sees the bare MONEY_MODEL_V2 the server set', async () => {
+    // The exact browser condition: Next.js inlined only the NEXT_PUBLIC_ mirror.
+    const { PLANS } = await loadPlans({ NEXT_PUBLIC_MONEY_MODEL_V2: 'true' });
+    // Fixed behavior: the plan the settings page renders shows the ratio figure
+    // (900), the same number the server actually granted — not the legacy 1,500
+    // this page rendered before the fix.
+    expect(PLANS.pro.limits.monthlyCreditsCents).toBe(900);
+    expect(PLANS.pro.includedCredits).toBe('900 credits included each month');
+    expect(PLANS.business.limits.monthlyCreditsCents).toBe(3000);
+  });
+
+  it('MON-2 with no client mirror set, the plan page still matches the server-off default (no regression)', async () => {
+    const { PLANS } = await loadPlans({});
+    expect(PLANS.pro.limits.monthlyCreditsCents).toBe(1500);
+  });
+});
+
