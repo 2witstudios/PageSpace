@@ -23,6 +23,7 @@ import { canonicalizeRequest } from '../canonicalize-request';
 import { digestRequest } from '../digest-request';
 import { GRANT_ISSUER } from '../grant-constants';
 import type { CanonicalRequest } from '../canonical-request';
+import { TEST_PROVIDER, TEST_REGISTRY } from './operation-registry.fixture';
 import type {
   AgentAccountGrant,
   AgentPageId,
@@ -52,14 +53,16 @@ let userId = 'user_1' as UserId;
 
 function canonical(): CanonicalRequest {
   const result = canonicalizeRequest({
+    providerSlug: TEST_PROVIDER,
+    registry: TEST_REGISTRY,
+    request: {
     channel: 'http-executor',
     method: 'POST',
     url: 'https://api.github.com/repos/octo/hello/issues',
     headers: { accept: 'application/json' },
     body: new TextEncoder().encode(BODY),
     resources: { repo: 'octo/hello' },
-    operation: { class: 'write', name: 'github.issues.create' },
-    declaredHeaders: [],
+    },
   });
   if (!result.ok) throw new Error(result.reason);
   return result.canonical;

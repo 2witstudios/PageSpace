@@ -28,6 +28,7 @@ import type {
 } from '../../grant';
 import type { AccountId, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalRequestInput } from '../../canonical-request';
+import { TEST_PROVIDER, TEST_REGISTRY } from '../operation-registry.fixture';
 
 // Threat model A3 (ASI03). Table rows over verifyGrant / decideAccountAccess
 // first; I/O cases last (Control Board §7.7). Every row here is pure.
@@ -48,10 +49,8 @@ function digestOf(resources: Record<string, string>): RequestDigest {
     headers: {},
     body: new Uint8Array(0),
     resources,
-    operation: { class: 'write', name: 'github.issues.create' },
-    declaredHeaders: [],
   };
-  const result = canonicalizeRequest(input);
+  const result = canonicalizeRequest({ request: input, providerSlug: TEST_PROVIDER, registry: TEST_REGISTRY });
   if (!result.ok) throw new Error(result.reason);
   return digestRequest({ canonical: result.canonical, hash });
 }

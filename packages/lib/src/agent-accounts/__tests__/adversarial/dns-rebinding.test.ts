@@ -8,14 +8,9 @@ import { canonicalizeRequest } from '../../canonicalize-request';
 
 function reasonFor(url: string): string {
   const result = canonicalizeRequest({
-    channel: 'http-executor',
-    method: 'GET',
-    url,
-    headers: {},
-    body: new Uint8Array(0),
-    resources: {},
-    operation: { class: 'read', name: 'generic.get' },
-    declaredHeaders: [],
+    request: { channel: 'http-executor', method: 'GET', url, headers: {}, body: new Uint8Array(0), resources: {} },
+    providerSlug: null,
+    registry: [],
   });
   return result.ok ? 'ok' : result.reason;
 }

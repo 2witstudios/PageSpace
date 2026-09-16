@@ -48,6 +48,7 @@ import type {
 } from '../grant';
 import type { AccountId, AccountKind, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalRequestInput } from '../canonical-request';
+import { TEST_PROVIDER, TEST_REGISTRY } from './operation-registry.fixture';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -75,12 +76,10 @@ const REQUEST_INPUT: CanonicalRequestInput = {
   headers: { accept: 'application/json' },
   body: new TextEncoder().encode('{"title":"hello"}'),
   resources: { repo: 'octo/hello' },
-  operation: { class: 'write', name: 'github.issues.create' },
-  declaredHeaders: [],
 };
 
 function digestOf(input: CanonicalRequestInput): RequestDigest {
-  const result = canonicalizeRequest(input);
+  const result = canonicalizeRequest({ request: input, providerSlug: TEST_PROVIDER, registry: TEST_REGISTRY });
   if (!result.ok) throw new Error(result.reason);
   return digestRequest({ canonical: result.canonical, hash });
 }
@@ -563,7 +562,7 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it('given an attacker who rewrites grant.requestDigest to match their own request, should return bad_signature (the signature covers the digest)', () => {
     const original = makeGrant();
     const signature = signWith(issuer.privateKey, original);
-    const evil = digestOf({ ...REQUEST_INPUT, url: 'https://api.github.com/repos/octo/hello/hooks', operation: OPERATION });
+    const evil = digestOf({ ...REQUEST_INPUT, url: 'https://api.github.com/repos/octo/hello/hooks' });
     const actual = run({ ...original, requestDigest: evil }, { signature, requestDigest: evil });
     expect(actual).toEqual(deny('bad_signature'));
   });

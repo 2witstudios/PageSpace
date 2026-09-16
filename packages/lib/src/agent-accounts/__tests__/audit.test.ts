@@ -20,6 +20,7 @@ import { digestRequest } from '../digest-request';
 import { GRANT_ISSUER } from '../grant-constants';
 import type { AgentAccountAuditRecord, AuditOutcome } from '../audit';
 import type { CanonicalRequest, CanonicalRequestInput } from '../canonical-request';
+import { TEST_PROVIDER, TEST_REGISTRY } from './operation-registry.fixture';
 import type {
   AgentAccountGrant,
   AgentPageId,
@@ -51,15 +52,17 @@ const BODY_TEXT = `{"title":"ship it","token":"${SECRET}"}`;
 
 function canonical(overrides: Partial<CanonicalRequestInput> = {}): CanonicalRequest {
   const result = canonicalizeRequest({
+    providerSlug: TEST_PROVIDER,
+    registry: TEST_REGISTRY,
+    request: {
     channel: 'http-executor',
     method: 'POST',
     url: 'https://api.github.com/repos/octo/hello/issues?state=open',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     body: new TextEncoder().encode(BODY_TEXT),
     resources: { repo: 'octo/hello' },
-    operation: { class: 'write', name: 'github.issues.create' },
-    declaredHeaders: [],
     ...overrides,
+    },
   });
   if (!result.ok) throw new Error(result.reason);
   return result.canonical;
