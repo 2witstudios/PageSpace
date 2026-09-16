@@ -668,8 +668,11 @@ networks:
 configs:
   # FAIL-CLOSED provider ACL. No mTLS role is presented, so every request falls to `default`,
   # and `default` is `enforce` with an explicit allowlist: an unlisted public host is refused
-  # even though it is not a private address. The list is generated from the enabled providers'
-  # API hosts (G2) and is empty-means-deny. Schema per smokescreen's egress ACL docs; verify at G2.
+  # even though it is not a private address. The list is GENERATED per tenant (G2), empty-means-deny, from
+  # every host a shipped provider calls: API baseUrl AND tokenUrl AND revokeUrl (refresh must not fail
+  # closed), plus each approved generic-webhook connection's baseUrlOverride origin, added when an
+  # owner creates the connection and removed on delete. An ACL change is applied by regenerating the
+  # config and restarting executor-egress (hot reload unverified at G2); until then that webhook is refused. Schema per smokescreen's egress ACL docs; verify at G2.
   # Residual: a host allowlist bounds destinations, not accounts. A compromised executor can still send
   # data to an attacker-owned account on an allowed shared host (e.g. api.github.com). Per-account origin
   # and operation binding is the executor's grant check, and the proxy does not replace it.
@@ -682,11 +685,15 @@ configs:
         project: pagespace
         action: enforce
         allowed_domains:
-          - api.github.com
-          - api.notion.com
-          - slack.com
-          - www.googleapis.com
-          - api.zoom.us
+          - api.github.com              # github.ts baseUrl
+          - github.com                  # github.ts tokenUrl (/login/oauth/access_token)
+          - api.notion.com              # notion.ts baseUrl + tokenUrl
+          - slack.com                   # slack.ts baseUrl + tokenUrl + revokeUrl
+          - www.googleapis.com          # Google Calendar API
+          - oauth2.googleapis.com       # Google token refresh endpoint
+          - api.zoom.us                 # Zoom API
+          - zoom.us                     # zoom token-refresh.ts (/oauth/token)
+          # + generated: approved generic-webhook baseUrlOverride origins (per connection)
   vault_ingress_nginx:                  # inline `content` needs Docker Compose >= 2.23.1
     content: |
       map $$http_upgrade $$connection_upgrade { default upgrade; '' close; }
