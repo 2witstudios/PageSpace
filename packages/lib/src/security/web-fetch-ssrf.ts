@@ -132,13 +132,39 @@ function parseIpv6(h: string): number[] | null {
 const ipv4From = (hi: number, lo: number): number => ((hi << 16) >>> 0) + lo;
 
 /**
+ * IANA IPv6 Global Unicast Address Assignments: the only prefixes allocated to
+ * RIRs for routing. Everything else in 2000::/3 is unallocated, retired (6bone
+ * 3ffe::/16) or special-purpose (3fff::/20, 5f00::/16), and everything outside
+ * it is loopback / mapped / translated / NAT64 / discard / ULA / link-local /
+ * multicast. A newly allocated block must be added here before it is fetchable.
+ * Each entry is [the first 32 bits of the prefix, prefix length (<= 32)].
+ */
+const IANA_GLOBAL_UNICAST: ReadonlyArray<readonly [number, number]> = [
+  [0x20010000, 16],
+  [0x20020000, 16], // 6to4 — additionally judged by its embedded IPv4 below
+  [0x20030000, 18],
+  [0x24000000, 12],
+  [0x26000000, 12],
+  [0x26100000, 23],
+  [0x26200000, 23],
+  [0x26300000, 12],
+  [0x28000000, 12],
+  [0x2a000000, 12],
+  [0x2c000000, 12],
+];
+
+const inIanaGlobalUnicast = (g0: number, g1: number): boolean => {
+  const high32 = ((g0 << 16) >>> 0) + g1;
+  return IANA_GLOBAL_UNICAST.some(([prefix, length]) => high32 >>> (32 - length) === prefix >>> (32 - length));
+};
+
+/**
  * True only when the IPv6 address is globally routable. Allowlist, not
- * denylist: only global unicast 2000::/3 can be public, so every other range
- * (loopback, unspecified, IPv4-compatible, SIIT-translated ::ffff:0:0:0/96,
- * NAT64 64:ff9b::/96 and 64:ff9b:1::/48, discard 100::/64, ULA, link-local,
- * site-local, multicast) is refused by construction. IPv4-mapped
- * (::ffff:0:0/96) and 6to4 (2002::/16) are judged by the IPv4 they embed.
- * Unparseable input is refused (fail closed).
+ * denylist: only the IANA global unicast allocations can be public, minus
+ * 2001::/23 IETF protocol assignments (incl. Teredo 2001::/32) and
+ * 2001:db8::/32 documentation. IPv4-mapped (::ffff:0:0/96) and 6to4
+ * (2002::/16) are judged by the IPv4 they embed. Unparseable input is refused
+ * (fail closed).
  */
 function isPublicIpv6(host: string): boolean {
   const zone = host.indexOf('%');
@@ -150,12 +176,10 @@ function isPublicIpv6(host: string): boolean {
   if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0xffff) {
     return isPublicIpv4(ipv4From(g6, g7));
   }
-  if ((g0 & 0xe000) !== 0x2000) return false;             // outside 2000::/3 global unicast
-  if (g0 === 0x2001 && g1 < 0x0200) return false;         // 2001::/23 IETF protocol assignments (incl. Teredo 2001::/32)
-  if (g0 === 0x2001 && g1 === 0x0db8) return false;       // 2001:db8::/32 documentation
+  if (!inIanaGlobalUnicast(g0, g1)) return false;
+  if (g0 === 0x2001 && g1 < 0x0200) return false;           // 2001::/23 IETF protocol assignments (incl. Teredo 2001::/32)
+  if (g0 === 0x2001 && g1 === 0x0db8) return false;         // 2001:db8::/32 documentation
   if (g0 === 0x2002) return isPublicIpv4(ipv4From(g1, g2)); // 2002::/16 6to4 embeds an IPv4
-  if (g0 === 0x3fff && g1 < 0x1000) return false;         // 3fff::/20 documentation
-  if (g0 === 0x5f00) return false;                        // 5f00::/16 SRv6 SIDs
   return true;
 }
 
