@@ -108,7 +108,7 @@ The approval UI shows one representation; the executor must run exactly that one
 
 ### 3.3 Where the request is frozen
 
-The authority freezes the canonical request **before** it asks for approval and stores it beside the approval (`agent_account_approvals.requestDigest`). The executor recomputes the digest from the request it is actually about to send and refuses on mismatch. Approval UI text is rendered *from* the canonical request (never from model text — threat-model B-9/B-22, ASI06).
+The authority freezes the canonical request **before** it asks for approval and stores it beside the approval (`agent_account_approvals.requestDigest`). The executor recomputes the digest from the request it is actually about to send and refuses on mismatch. Approval UI text is rendered *from* the canonical request (never from model text — threat-model B-9/B-22, ASI06). `ApprovalSubject` carries everything in the digest that changes what the request does — origin, operation, path, the **canonical query pairs**, resources, body hash and size — plus the **names** of the projected headers, never their values. A subject that showed method, origin and path alone let a human approve `DELETE /repos/x` without seeing `?force=true&recursive=1`, which the digest did bind (G1a review H5).
 
 ### 3.4 Operation classes
 
@@ -287,6 +287,7 @@ Adapters (I/O, G1b): `grant-repository.ts` (nonce consume, approvals, delegation
 26. Given query pairs `?to=a+b`/`?to=a%2Bb`, `?q=/safe`/`?q=%2Fsafe` and `?x=a&b`/`?x=a%26b`, `digestRequest` returns different digests for each pair; given lower-case escape hex or an escaped unreserved character, the same digest as the normalized form; given a body with and without a correct `content-length`, the same digest; given an admitted header value containing CR or LF, or a `content-length` that disagrees with the body, `canonicalizeRequest` refuses `malformed`. The §8.13 round-trip input is built verbatim, never re-encoded by the test (G1b review amendment; §3.2).
 27. Given `human.sessionId = null` and a live, unexpired delegation fact for this account whose `agentPageId` names another agent page, `no_delegation`; whose `delegatedBy` names another user than `grant.human.userId`, `no_delegation`; whose four ids all match, the delegation check passes (G1a review H3).
 28. Given `expected.accountStatus` of `needs_reauth`, `revoked` or `deleted` and an otherwise valid grant, `account_not_active`, returned before `version_mismatch` (a table test over the three statuses × a current and a stale `credentialVersion`); given `active`, the status check passes. `ExpectedBinding` requires `accountStatus` (a binding without it does not compile) (G1a review H4).
+29. Given a canonical request with query `[['force','true'],['recursive','1']]` and an `x-github-api-version` declared header, `renderApprovalSubject` returns `query` equal to `canonical.query` and `headerNames` containing `x-github-api-version`, and `JSON.stringify(subject)` contains no header value (G1a review H5).
 
 ## 9. Consequences
 

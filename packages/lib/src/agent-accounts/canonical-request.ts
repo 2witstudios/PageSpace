@@ -111,11 +111,23 @@ export type CanonicalizeResult =
   | { readonly ok: true; readonly canonical: CanonicalRequest }
   | { readonly ok: false; readonly reason: CanonicalizeRefusal };
 
-/** The human-readable rendering of a canonical request, derived from it ALONE (never model text). */
+/**
+ * The human-readable rendering of a canonical request, derived from it ALONE
+ * (never model text). Everything the digest binds that changes what the
+ * request DOES is shown: the query is part of the digest, so a human
+ * approving `DELETE /repos/x` sees `?force=true&recursive=1` too. Header
+ * NAMES are shown, never header values (G1a review H5).
+ */
 export type ApprovalSubject = {
   readonly headline: string;
   readonly origin: CanonicalOrigin;
   readonly operation: OperationRef;
+  /** `canonical.path`, verbatim. */
+  readonly path: string;
+  /** `canonical.query`, verbatim — the same normalized pairs the digest covers. */
+  readonly query: readonly (readonly [string, string])[];
+  /** The names of `canonical.headers` (projected + declared), sorted; values are never rendered. */
+  readonly headerNames: readonly string[];
   readonly resources: readonly (readonly [string, string])[];
   readonly bodySha256: string;
   readonly bodyBytes: number;

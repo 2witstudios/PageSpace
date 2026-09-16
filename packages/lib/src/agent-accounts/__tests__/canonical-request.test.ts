@@ -36,4 +36,6 @@ describe('digestRequest', () => {
 
 describe('renderApprovalSubject (ASI06)', () => {
   it.todo('given a canonical request, should render the subject from it alone — no field sourced from model text, page body or summary');
+  it.todo('given a canonical request with query force=true&recursive=1, should render subject.query equal to canonical.query [0004 §8.29; G1a review H5]');
+  it.todo('given projected and declared headers, should render subject.headerNames as their sorted names and JSON.stringify(subject) should contain no header value [0004 §8.29]');
 });
