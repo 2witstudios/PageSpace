@@ -82,6 +82,33 @@ afterAll(async () => {
 });
 
 describe('pinnedFetch', () => {
+  it.each([['toString'], ['constructor'], ['__proto__'], ['hasOwnProperty, gzip']])(
+    'given Content-Encoding %s (an Object prototype name), should pass the body through undecoded instead of throwing',
+    async (coding) => {
+      const raw = net.createServer((socket) => {
+        socket.on('error', () => undefined); // the client may reset the connection
+        socket.once('data', () => socket.end(`HTTP/1.1 200 OK\r\nContent-Encoding: ${coding}\r\nContent-Length: 5\r\n\r\nhello`));
+      });
+      await new Promise<void>((resolve) => raw.listen(0, '127.0.0.1', resolve));
+      const rawPort = (raw.address() as AddressInfo).port;
+      try {
+        const outcome = await Promise.race([
+          pinnedFetch(`http://pinned-host.invalid:${rawPort}/hook`, { method: 'GET', pinnedAddresses: ['127.0.0.1'] }).then(
+            (response) => response.text(),
+            (error: Error) => `rejected: ${error.message}`
+          ),
+          new Promise<string>((resolve) => setTimeout(() => resolve('HUNG'), 1000)),
+        ]);
+
+        const actual = outcome;
+        const expected = 'hello';
+        expect(actual).toEqual(expected);
+      } finally {
+        raw.close();
+      }
+    }
+  );
+
   it('given an upstream that answers 101 Switching Protocols, should reject and close the socket instead of hanging', async () => {
     let serverSocketClosed: Promise<void> = Promise.resolve();
     const raw = net.createServer((socket) => {
