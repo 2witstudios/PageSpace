@@ -11,13 +11,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { pinnedFetch } from './pinned-fetch';
+import { pinnedFetch, DEFAULT_USER_AGENT } from './pinned-fetch';
 
 type Received = {
   host?: string;
   url?: string;
   method?: string;
   authorization?: string;
+  userAgent?: string;
   contentLength?: string;
   transferEncoding?: string;
   body: string;
@@ -38,6 +39,7 @@ beforeAll(async () => {
         url: req.url,
         method: req.method,
         authorization: req.headers.authorization,
+        userAgent: req.headers['user-agent'],
         contentLength: req.headers['content-length'],
         transferEncoding: req.headers['transfer-encoding'],
         body,
@@ -59,6 +61,29 @@ afterAll(async () => {
 });
 
 describe('pinnedFetch', () => {
+  it('given no User-Agent, should send a default one (GitHub rejects REST calls without it)', async () => {
+    mode = 'json';
+    await pinnedFetch(`http://pinned-host.invalid:${port}/hook`, { method: 'GET', pinnedAddresses: ['127.0.0.1'] });
+
+    const actual = lastReceived?.userAgent;
+    const expected = DEFAULT_USER_AGENT;
+    expect(actual).toEqual(expected);
+    expect(DEFAULT_USER_AGENT).toMatch(/\S/);
+  });
+
+  it('given a caller User-Agent in any case, should send it unchanged', async () => {
+    mode = 'json';
+    await pinnedFetch(`http://pinned-host.invalid:${port}/hook`, {
+      method: 'GET',
+      headers: { 'user-agent': 'custom-tool/2.0' },
+      pinnedAddresses: ['127.0.0.1'],
+    });
+
+    const actual = lastReceived?.userAgent;
+    const expected = 'custom-tool/2.0';
+    expect(actual).toEqual(expected);
+  });
+
   it('given a buffered body and no Content-Length, should send its UTF-8 byte length rather than a chunked body', async () => {
     mode = 'json';
     const body = '{"name":"café ☕"}';
