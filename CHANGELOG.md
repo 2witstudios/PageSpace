@@ -7,6 +7,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Multi-question prompts from the assistant have Back and Next buttons** — when the assistant
+  asks several questions at once, you could only switch between them by tapping the small
+  numbered tabs or pressing the arrow keys, which is awkward on a phone. Each question now has a
+  Back / Next row with a "2 of 3" counter under it, sized for a finger, and it works on a card you
+  have already answered too. The tabs and arrow keys still work as before.
+- **The marketing site follows your system theme, and light mode has its own hero** — the site used
+  to open in dark mode for everyone, and its space hero only worked on a dark page. Light mode now
+  has a white version of the same scene with dark text over it, and the site starts in whatever
+  theme your device uses (a theme you picked with the toggle still wins), and the browser's
+  address and status bar match whichever theme is showing. Switching themes, or your
+  device switching on its own, fades one hero picture into the other instead of cutting. The
+  preview card shown when a site link is shared now carries the current headline.
 - **The Home screen now tells you what's actually waiting for you** — opening the dashboard used
   to show a generic "How can I help you today?" with no sign of what changed across your drives,
   and the only place that context lived (the sidebar's Pulse note) disappeared the moment you
@@ -543,6 +555,29 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   per 15 minutes, and a send that fails no longer counts against the limit at all — only emails
   that actually go out do.
 
+- **Agents you add to a drive can be @-mentioned in its channels, and they answer** — a drive
+  member can post in the drive's channels, but an agent added as a member could not: its
+  membership never granted posting rights in channels the way a person's or an app's does, so an
+  @-mentioned agent silently said nothing (or its reply was refused after the model call had
+  already been paid for). A freshly created agent with no tool restrictions was skipped as if
+  channel posting were switched off, and an agent added to a drive from another drive was neither
+  offered by the @ picker nor allowed to reply unless you could open its home page. Now a member
+  agent posts in non-private channels by default, the @ picker lists every agent that belongs to
+  the drive, and a mention gets a reply in the channel or in the thread it was made in. Agents
+  whose tool list deliberately leaves out channel posting stay silent, as before.
+- **The open-source licenses screen no longer references a private IP-sale disclosure** — the "Full
+  inventory" notice at Settings → Legal → Open-source licenses said the complete dependency
+  inventory was "maintained in the seller's IP disclosure and is available to recipients on
+  request" — language from a private acquisition process that never belonged in the product. The
+  notice now links directly to OSS-INVENTORY.md, the standalone sanitized inventory published in
+  the open-source PageSpace repository.
+- **The marketing site no longer goes down when a retina screen loads the home page** — the hero's
+  space backdrops were resized on the server the first time each size was asked for, and a
+  high-resolution screen asked for both the dark and light pictures at full 4K size at once, which ran
+  the site's server out of memory. It restarted, forgot every picture it had already made, and the
+  next visitor with a sharp screen took it down again. Every size of both pictures is now made once
+  when the site is built, so loading the page asks the server for nothing but files. The hero looks
+  and fades exactly as before.
 - **Sending several photos at once now makes one message with one gallery, and stops them appearing
   twice** — attaching a batch of photos used to send them as separate messages, one per file: the
   channel or DM filled with a column of single-photo bubbles, the typed text sat on the first one,
@@ -1112,6 +1147,25 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   drawn about you, including ones that were rejected or are still pending, along with the quote
   from your own messages each was based on. Those quotes are removed 90 days after an observation
   is settled.
+
+### Security
+
+- **Only administrators can add a custom integration provider** — the admin check on the
+  provider-creation endpoint compared the wrong thing, so any signed-in account could add a
+  global custom integration provider, and a browser session that failed the cross-site request
+  check was let through as well. Non-admins and failed cross-site checks are now refused, and
+  nothing is created. Installing a built-in provider was already checked correctly and is
+  unaffected.
+- **The AI's sandbox git tools can no longer be tricked into force-pushing your current branch** —
+  the `git_push` tool took its remote and branch names as free text and placed them straight
+  after `-u origin` on the command line. A branch value of `--force` (or a remote of `--mirror`)
+  was therefore read by git as an option rather than a name, which force-pushed whatever branch
+  the sandbox was on, including `main`, with your connected GitHub token and without tripping the
+  guard that refuses force-pushes to the default branch. The tool now refuses any remote or
+  branch that starts with a dash before it builds the command, then runs the default-branch guard
+  on the real destination, and the command itself carries an end-of-options marker so a name can
+  never be read as a flag. The same audit found and closed the same gap in `git_fetch`, `git_pull`
+  (remote and branch), `git_config` (key), and `git_diff` (base and head refs).
 
 ## [1.7.1] — 2026-08-10
 
