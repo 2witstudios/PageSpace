@@ -16,7 +16,7 @@ import { lookupOperation } from '../lookup-operation';
 import { findOperationRegistryConflicts } from '../find-operation-registry-conflicts';
 import { findDuplicateResourceSlots } from '../find-duplicate-resource-slots';
 import type { CanonicalRequest, CanonicalRequestInput, CanonicalizeRefusal, OperationRegistry, OperationRegistryEntry } from '../canonical-request';
-import { TEST_PROVIDER, TEST_REGISTRY } from './operation-registry.fixture';
+import { TEST_ORIGIN, TEST_PROVIDER, TEST_REGISTRY } from './operation-registry.fixture';
 import type { HashBytes } from '../grant';
 
 const hash: HashBytes = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -238,19 +238,19 @@ describe('operation is derived, never declared (ADR 0004 §3.4 amendment, §8.30
   });
 
   it('given a template placeholder, should match exactly one whole non-empty segment — never zero, never several', () => {
-    const match = (path: string) => lookupOperation({ registry: TEST_REGISTRY, providerSlug: TEST_PROVIDER, channel: 'http-executor', method: 'PUT', path })?.entry.operation.name ?? null;
+    const match = (path: string) => lookupOperation({ registry: TEST_REGISTRY, providerSlug: TEST_PROVIDER, origin: TEST_ORIGIN, channel: 'http-executor', method: 'PUT', path })?.entry.operation.name ?? null;
     const actual = [match('/repos/a/b/pulls/7/merge'), match('/repos/a/b/pulls//merge'), match('/repos/a/b/c/pulls/7/merge'), match('/repos/a/b/pulls/7/merge/x'), match('/repos/a/b/pulls/7/merge/')];
     expect(actual).toEqual(['merge_pr', null, null, null, null]);
   });
 
-  it('given a registry with two entries matching the same provider, channel, method and path, should report the conflict at registry load, never resolve it by order', () => {
-    const shadow: OperationRegistryEntry = { ...TEST_REGISTRY[2]!, pathTemplate: '/repos/{owner}/{repo}/pulls/{number}/{action}', operation: { class: 'read', name: 'github.pulls.action' } };
+  it('given a registry with two equally specific entries matching the same provider, origin, channel, method and path, should report the conflict at registry load, never resolve it by order', () => {
+    const shadow: OperationRegistryEntry = { ...TEST_REGISTRY[2]!, pathTemplate: '/repos/{org}/{name}/pulls/{id}/merge', operation: { class: 'read', name: 'github.pulls.action' } };
     const actual = [findOperationRegistryConflicts({ registry: TEST_REGISTRY }), findOperationRegistryConflicts({ registry: [...TEST_REGISTRY, shadow] })];
     expect(actual).toEqual([[], [[TEST_REGISTRY[2]!.pathTemplate, shadow.pathTemplate]]]);
   });
 
-  it('given a registry with an overlapping pair, should resolve neither at lookup (unknown, never the first by order)', () => {
-    const shadow: OperationRegistryEntry = { ...TEST_REGISTRY[2]!, pathTemplate: '/repos/{owner}/{repo}/pulls/{number}/{action}', operation: { class: 'read', name: 'github.pulls.action' } };
+  it('given a registry with an equally specific overlapping pair, should resolve neither at lookup (unknown, never the first by order)', () => {
+    const shadow: OperationRegistryEntry = { ...TEST_REGISTRY[2]!, pathTemplate: '/repos/{org}/{name}/pulls/{id}/merge', operation: { class: 'read', name: 'github.pulls.action' } };
     const actual = canonical({ method: 'PUT', url: 'https://api.github.com/repos/a/b/pulls/7/merge' }, { registry: [...TEST_REGISTRY, shadow] }).operation;
     expect(actual).toEqual({ class: 'unknown', name: 'generic_request' });
   });
@@ -303,7 +303,7 @@ describe('resources come from the path, never the caller (ADR 0004 §3.2, §8.35
   });
 
   it('given a lookup, should return the entry with the slot values it bound from the actual path', () => {
-    const actual = lookupOperation({ registry: TEST_REGISTRY, providerSlug: TEST_PROVIDER, channel: 'http-executor', method: 'PUT', path: '/repos/a/b/pulls/7/merge' });
+    const actual = lookupOperation({ registry: TEST_REGISTRY, providerSlug: TEST_PROVIDER, origin: TEST_ORIGIN, channel: 'http-executor', method: 'PUT', path: '/repos/a/b/pulls/7/merge' });
     expect(actual).toEqual({
       entry: TEST_REGISTRY[2],
       resources: [
