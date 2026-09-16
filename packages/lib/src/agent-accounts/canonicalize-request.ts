@@ -323,7 +323,7 @@ export const canonicalizeRequest: CanonicalizeRequest = (call): CanonicalizeResu
   if (!path.ok) return path;
   const query = canonicalizeQuery(url.search);
   if (!query.ok) return query;
-  const match = lookupOperation({ registry, providerSlug, channel, method: method as CanonicalRequest['method'], path: path.path });
+  const match = lookupOperation({ registry, providerSlug, origin: origin.origin, channel, method: method as CanonicalRequest['method'], path: path.path });
   const headers = canonicalizeHeaders(input.headers, match?.entry.declaredHeaders ?? [], input.body.byteLength);
   if (!headers.ok) return headers;
 

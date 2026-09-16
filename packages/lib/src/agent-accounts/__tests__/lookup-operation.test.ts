@@ -93,6 +93,12 @@ describe('lookupOperation — slot matching (G1c R17)', () => {
     ]);
   });
 
+  it('given a template whose {name+} slot is not last (a load-time defect that still reached lookup), should match nothing rather than ignore the tail', () => {
+    const registry = [entry('/files/{rest+}/tail', 'multi.not.last')];
+    const actual = [nameOf(registry, '/files/a/tail'), nameOf(registry, '/files/a/b')];
+    expect(actual).toEqual([null, null]);
+  });
+
   it('given a literal and a slot entry that both match, should pick the literal — never the first by order', () => {
     const literal = entry('/repos/acme/pulls', 'acme.pulls');
     const slot = entry('/repos/{owner}/pulls', 'any.pulls');
