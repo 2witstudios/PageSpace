@@ -618,4 +618,62 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const expected = 'not_found';
     expect(actual).toEqual(expected);
   });
+
+  // Own review, PR #2646 round 2: `markRevoked` overwrote `revoked_at` on every call, so a second
+  // revoke restarted the REVOKE_RETENTION_MS clock on material that should already be ageing out
+  // (ADR 0005 §2.2 revoke). The first revocation is the one that counts.
+  it('given revoke called twice, should keep the first revocation time', async () => {
+    const adapter = makeAdapter();
+    const accountId = `acct-revoke-twice-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    const first = await adapter.revoke({ ref, reason: 'owner_revoked', identity });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const second = await adapter.revoke({ ref, reason: 'admin', identity });
+    const described = await adapter.describe({ ref, identity });
+
+    const actual = { second: second.ok ? second.revokedAt : null, described: described.ok ? described.revokedAt : null };
+    const expected = { second: first.ok ? first.revokedAt : 'first revoke failed', described: first.ok ? first.revokedAt : 'first revoke failed' };
+    expect(actual).toEqual(expected);
+  });
+
+  // Own review, PR #2646 round 2: `delete` did not take the per-secret advisory lock the writers
+  // hold, so a rotate already past its read could commit AFTER the delete and re-insert the
+  // metadata row (and leave a freshly written grace companion behind) — an erasure that does not
+  // stay erased. Interleaved: the delete starts while the rotate is about to commit, and the
+  // rotate is given time to be overtaken before it commits.
+  it('given a delete issued while a rotate is mid-write, should leave nothing behind once both finish', async () => {
+    const accountId = `acct-delete-race-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
+    const plainAdapter = makeAdapter();
+    let pendingDelete: Promise<unknown> = Promise.resolve();
+    const racingAdapter = makeAdapter({
+      wrapMetadata: (m) => ({
+        ...m,
+        commit: async (input) => {
+          pendingDelete = plainAdapter.delete({ ref, identity, upstream: 'not_attempted' });
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          await m.commit(input);
+        },
+      }),
+    });
+
+    await plainAdapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    await racingAdapter.rotate({ ref, expectedVersion: 1 as never, next: { kind: 'api_key', material: { value: 'sk-v2', placement: { in: 'header', name: 'Authorization' } } }, bindings, identity: refreshIdentity });
+    await pendingDelete;
+
+    const rawInfisical = createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' });
+    const described = await plainAdapter.describe({ ref, identity });
+    const primary = await rawInfisical.getSecret({ projectId: projectAId, credentials: identityA, secretKey: `${accountId}__api_key` });
+    const companion = await rawInfisical.getSecret({ projectId: projectAId, credentials: identityA, secretKey: `${accountId}__api_key__previous` });
+    const actual = { metadata: described.ok ? 'present' : described.reason, primary: primary.ok ? 'present' : primary.reason, companion: companion.ok ? 'present' : companion.reason };
+    const expected = { metadata: 'not_found', primary: 'not_found', companion: 'not_found' };
+    expect(actual).toEqual(expected);
+  });
 });
