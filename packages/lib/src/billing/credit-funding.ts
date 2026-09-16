@@ -75,6 +75,14 @@ interface FundingEventObject {
   parent?: {
     subscription_details?: {
       metadata?: Record<string, string> | null;
+      /**
+       * The subscription this invoice was generated FOR — a string id, or an
+       * expanded object with one, or absent/null for a manual/one-off invoice.
+       * Presence is the SECURITY gate {@link invoiceHasSubscriptionParent} reads
+       * (Codex P1 ruling: discriminate by subscription-parent absence, not by
+       * billing_reason).
+       */
+      subscription?: string | { id?: string | null } | null;
     } | null;
   } | null;
   mode?: string | null;
@@ -213,6 +221,26 @@ function isGiftInvoice(obj: FundingEventObject): boolean {
 }
 
 /**
+ * Whether this invoice was generated FOR an actual subscription (Codex P1 ruling:
+ * discriminate a manual/parentless invoice by the ABSENCE of a subscription
+ * parent, not by billing_reason — an enumerated billing_reason allowlist first
+ * excluded, then had to special-case back in, a legitimate PAID subscription_update
+ * invoice from a mid-cycle upgrade; subscription-parent presence is the structural
+ * fact that actually distinguishes "a real subscription invoice" and needs no
+ * per-billing_reason maintenance). Mirrors dedicated-routing.ts's
+ * `invoiceSubscriptionId` (kept local: that file lives in apps/web and uses the
+ * real Stripe.Invoice type; packages/lib stays Stripe-SDK-free).
+ */
+function invoiceHasSubscriptionParent(obj: FundingEventObject): boolean {
+  const subscription = obj.parent?.subscription_details?.subscription;
+  if (typeof subscription === 'string') return subscription.length > 0;
+  if (subscription && typeof subscription === 'object' && typeof subscription.id === 'string') {
+    return subscription.id.length > 0;
+  }
+  return false;
+}
+
+/**
  * A PAID invoice whose tier resolved to one with no ratio (stored tier still 'free'
  * and no usable price on the line): fail closed — grant nothing — but leave a
  * 'missed_grant' ledger row (amountCents 0, stripeRef = the invoice, paidCents = what
@@ -291,6 +319,7 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
     amountPaidCents: obj.amount_paid,
     subtotalCents: obj.subtotal,
     billingReason: obj.billing_reason,
+    hasSubscriptionParent: invoiceHasSubscriptionParent(obj),
     gifted,
     tier,
   });

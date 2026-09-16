@@ -139,6 +139,11 @@ const PRO_USER = [{ id: 'u1', subscriptionTier: 'pro' }];
 // billing_reason defaults to 'subscription_cycle' — an ordinary renewal — since
 // that is what nearly every fixture in this file represents; the SECURITY tests
 // below override it explicitly to exercise every other reason.
+// A real subscription parent, present by default — every fixture here represents
+// an ordinary renewal unless a test explicitly overrides `parent` (the manual/
+// parentless-invoice SECURITY tests set `parent: undefined`).
+const REAL_SUBSCRIPTION_PARENT = { subscription_details: { subscription: 'sub_test_1' } };
+
 const invoiceEvent = {
   id: 'evt_inv',
   type: 'invoice.paid',
@@ -148,6 +153,7 @@ const invoiceEvent = {
       customer: 'cus_1',
       amount_paid: 1500,
       billing_reason: 'subscription_cycle',
+      parent: REAL_SUBSCRIPTION_PARENT,
       period_start: 1_700_000_000,
       period_end: 1_702_592_000,
     },
@@ -165,6 +171,7 @@ function paidInvoiceEvent(amountPaid: number | undefined, extra: Record<string, 
         customer: 'cus_1',
         amount_paid: amountPaid,
         billing_reason: 'subscription_cycle',
+        parent: REAL_SUBSCRIPTION_PARENT,
         period_start: 1_700_000_000,
         period_end: 1_702_592_000,
         ...extra,
@@ -266,6 +273,7 @@ describe('applyStripeFunding', () => {
           customer: 'cus_1',
           amount_paid: 1500,
           billing_reason: 'subscription_cycle',
+          parent: REAL_SUBSCRIPTION_PARENT,
           period_start: OLD_START,
           period_end: OLD_END,
           lines: { data: [{ period: { start: NEW_START, end: NEW_END } }] },
@@ -298,6 +306,7 @@ describe('applyStripeFunding', () => {
           customer: 'cus_1',
           amount_paid: 1500,
           billing_reason: 'subscription_cycle',
+          parent: REAL_SUBSCRIPTION_PARENT,
           period_start: 1_697_000_000,
           period_end: 1_700_000_000,
           lines: { data: [prorationLine, newPlanLine] },

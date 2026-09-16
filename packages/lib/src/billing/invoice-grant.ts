@@ -2,15 +2,23 @@
  * invoice-grant — pure sizing of a monthly credit grant from a Stripe invoice
  * (Spec MON-2, MON-3; ruling D-OW-16). No I/O; credit-funding is the shell.
  *
- * SECURITY: only a REAL subscription invoice may grant at all — billing_reason must
- * be subscription_cycle or subscription_create. routeInvoice classifies a manual or
- * otherwise parentless invoice as account_plan (it has no subscription to be
- * anything else), and that invoice can still carry a large amount_paid from an
- * existing paid customer; without this gate that invoice would derive a large
- * grant it has nothing to do with (Codex P1, "Restrict derived grants to
- * account-plan invoices"). Every other billing_reason — subscription_update,
- * manual, threshold, upcoming, anything unrecognised or absent — grants nothing,
- * regardless of amount.
+ * SECURITY: only a REAL subscription invoice may grant at all — discriminated by
+ * the PRESENCE of a subscription parent (invoice.parent.subscription_details), not
+ * by billing_reason. routeInvoice classifies a manual or otherwise parentless
+ * invoice as account_plan (it has no subscription to be anything else), and that
+ * invoice can still carry a large amount_paid from an existing paid customer;
+ * without this gate that invoice would derive a large grant it has nothing to do
+ * with (Codex P1, "Restrict derived grants to account-plan invoices"). A manual
+ * or otherwise parentless invoice grants nothing regardless of amount.
+ *
+ * billing_reason alone is NOT the gate (a first attempt at this fix used an
+ * allowlist and wrongly excluded a paid subscription_update invoice — a real,
+ * charged mid-cycle upgrade proration, Codex P1 follow-up "Allow paid
+ * subscription-update invoices to grant credits"). Once an invoice has a real
+ * subscription parent, subscription_cycle and subscription_create follow the
+ * gifted/trial rules below; subscription_update (and any other billing_reason
+ * Stripe assigns to a real subscription invoice) simply grants amount_paid ×
+ * ratio — nothing special, nothing extra.
  *
  * Entitlement otherwise follows the amount ACTUALLY PAID, except for grants we
  * deliberately fund ourselves (D-OW-16):
@@ -48,8 +56,8 @@ export type GrantReason =
   /** something was paid but the resolved tier has no ratio (free/unknown): a MISSED grant. */
   | 'no_ratio'
   /**
-   * billing_reason is not subscription_cycle or subscription_create: not a real
-   * subscription renewal/creation, so never a grant regardless of amount paid
+   * The invoice has no subscription parent — a manual, one-off, or otherwise
+   * account-plan-classified invoice — so never a grant regardless of amount paid
    * (Codex P1 security fix). Distinct from 'zero_amount' — this is refused on the
    * invoice's KIND, not its amount, and is never a missed_grant candidate: there is
    * no tier to repair here, the invoice itself is simply not eligible.
@@ -77,6 +85,16 @@ export interface InvoiceGrantInput {
   subtotalCents?: number | null;
   /** Stripe invoice.billing_reason ('subscription_create' | 'subscription_cycle' | 'subscription_update' | …). */
   billingReason?: string | null;
+  /**
+   * Whether this invoice was generated FOR an actual subscription — read from
+   * invoice.parent.subscription_details.subscription. A manual or otherwise
+   * parentless invoice has none, and never grants regardless of amount_paid or
+   * billing_reason (Codex P1 ruling: discriminate by the ABSENCE of a subscription
+   * parent, not by billing_reason — billing_reason still decides WHAT KIND of
+   * grant a real subscription invoice gets, not WHETHER it can grant at all).
+   * Fails closed: absent or false means not eligible.
+   */
+  hasSubscriptionParent?: boolean;
   /** subscriptions.gifted for the paying subscription. */
   gifted?: boolean;
   tier: SubscriptionTier;
@@ -96,23 +114,16 @@ function toCents(value: unknown): number {
 }
 
 /**
- * The only billing_reason values a derived grant may ever fire on. All three are
- * values Stripe assigns EXCLUSIVELY to an invoice generated for an actual
- * subscription — a manual, one-off, or otherwise parentless invoice can never
- * carry any of them (Stripe computes billing_reason itself; nothing in this
- * codebase sets it). subscription_update covers a mid-cycle plan change invoiced
- * immediately (proration_behavior: 'always_invoice', update-subscription/route.ts):
- * a real, paid upgrade that must still grant its proportional share (MON-2) —
- * excluding it entirely charged the customer for nothing (Codex P1 correction,
- * "Allow paid subscription-update invoices to grant credits"). A $0
- * subscription_update (a downgrade's proration credit, or a no-op) still grants
- * nothing, via the ordinary zero_amount path below — this gate only screens the
- * invoice's KIND, never its amount.
+ * The gate: a manual, one-off, or otherwise parentless invoice never grants,
+ * regardless of billing_reason or amount_paid. Presence of a subscription parent
+ * is a structural fact Stripe attaches to the invoice, not a value this codebase
+ * infers from an enumerated list — so it needs no maintenance when Stripe assigns
+ * a new billing_reason to a real subscription invoice (subscription_threshold,
+ * automatic_pending_invoice_item_invoice, and any future value all pass through
+ * correctly once they carry a subscription parent).
  */
-const GRANT_ELIGIBLE_BILLING_REASONS = new Set(['subscription_cycle', 'subscription_create', 'subscription_update']);
-
-function isGrantEligibleInvoice(billingReason: string | null | undefined): boolean {
-  return typeof billingReason === 'string' && GRANT_ELIGIBLE_BILLING_REASONS.has(billingReason);
+function isGrantEligibleInvoice(input: InvoiceGrantInput): boolean {
+  return input.hasSubscriptionParent === true;
 }
 
 /**
@@ -130,11 +141,11 @@ function isTrialCreate(input: InvoiceGrantInput, paidCents: number): boolean {
 export function grantForInvoice(input: InvoiceGrantInput): InvoiceGrant {
   const paidCents = Math.max(0, toCents(input.amountPaidCents));
 
-  // SECURITY gate FIRST, ahead of gifted/trial: an invoice that is not a real
-  // subscription renewal or creation never grants, no matter what `gifted` says.
-  // This is what confines D-OW-16's gifted/trial carve-outs to invoices that are
-  // actually subscription invoices in the first place.
-  if (!isGrantEligibleInvoice(input.billingReason)) {
+  // SECURITY gate FIRST, ahead of gifted/trial: an invoice with no subscription
+  // parent never grants, no matter what `gifted` says or how much it paid. This is
+  // what confines D-OW-16's gifted/trial carve-outs to invoices that are actually
+  // subscription invoices in the first place.
+  if (!isGrantEligibleInvoice(input)) {
     return { paidCents, allowanceCents: 0, basis: 'none', reason: 'not_a_subscription_invoice' };
   }
 

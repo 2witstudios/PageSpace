@@ -473,6 +473,11 @@ function chargeMc(costDollars: number): number {
 // defaults to subscription_cycle — an ordinary renewal, the only kind of invoice
 // this helper is meant to represent (the SECURITY tests build their own literals
 // for every other billing_reason).
+// A real subscription parent, present by default — every fixture built with this
+// helper represents an ordinary renewal; the SECURITY tests build their own
+// literals for a manual/parentless invoice (parent simply absent).
+const REAL_SUBSCRIPTION_PARENT = { subscription_details: { subscription: 'sub_test_1' } };
+
 const invoicePaid = (id: string, customer: string, periodStart: number, periodEnd: number, amountPaid = 1500) => ({
   id: `evt_${id}`,
   type: 'invoice.paid',
@@ -482,6 +487,7 @@ const invoicePaid = (id: string, customer: string, periodStart: number, periodEn
       customer,
       amount_paid: amountPaid,
       billing_reason: 'subscription_cycle',
+      parent: REAL_SUBSCRIPTION_PARENT,
       period_start: periodStart,
       period_end: periodEnd,
     },
@@ -627,7 +633,7 @@ describe('SECURITY (Codex P1): grants only fire for real subscription invoices, 
           amount_paid: 0,
           subtotal: 1500,
           billing_reason: 'subscription_create',
-          parent: { subscription_details: { metadata: { type: 'gift_subscription' } } },
+          parent: { subscription_details: { subscription: 'sub_gift_1', metadata: { type: 'gift_subscription' } } },
         },
       },
     };
@@ -645,7 +651,7 @@ describe('SECURITY (Codex P1): grants only fire for real subscription invoices, 
       id: 'evt_upgrade',
       type: 'invoice.paid',
       data: {
-        object: { id: 'in_upgrade', customer: 'cus_1', amount_paid: 2000, billing_reason: 'subscription_update' },
+        object: { id: 'in_upgrade', customer: 'cus_1', amount_paid: 2000, billing_reason: 'subscription_update', parent: REAL_SUBSCRIPTION_PARENT },
       },
     };
 
