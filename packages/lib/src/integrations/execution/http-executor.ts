@@ -3,7 +3,48 @@
  *
  * Executes HTTP requests with retry logic, timeout handling,
  * and proper error categorization.
+ *
+ * SSRF guard: every target URL — the initial one and every redirect hop — is
+ * validated (scheme, blocked hosts, and DNS resolution with every address
+ * required to be public) immediately before connecting, and the connection is
+ * then PINNED to the validated address (`pinnedFetch`), so a DNS answer that
+ * changes between validation and connect cannot redirect the request. The
+ * validation itself is bounded by the request's abort signal. Redirects are
+ * never followed by the client; the executor follows only same-origin hops,
+ * so the connection's credential headers never travel to another origin.
  */
+
+import {
+  validateIntegrationTargetUrl,
+  type IntegrationTargetDecision,
+} from '../validation/validate-base-url';
+import { pinnedFetch, type PinnedFetch } from './pinned-fetch';
+
+type TargetValidator = (url: string, signal: AbortSignal) => Promise<IntegrationTargetDecision>;
+
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 5;
+
+/** Upper bound on a server-requested Retry-After wait, so a hostile upstream cannot stall a call for days. */
+export const MAX_RETRY_AFTER_MS = 60_000;
+
+/** Retry-After in whole seconds, bounded; null when absent, non-numeric or negative (use normal backoff). */
+const retryAfterMs = (header: string | null): number | null => {
+  if (header === null || !/^\s*\d+\s*$/.test(header)) return null;
+  return Math.min(Number(header) * 1000, MAX_RETRY_AFTER_MS);
+};
+
+/** Headers that describe a request body; dropped when a redirect rewrites the method to GET (Fetch spec). */
+const REQUEST_BODY_HEADERS = new Set([
+  'content-length',
+  'content-type',
+  'content-encoding',
+  'content-language',
+  'content-location',
+]);
+
+const withoutBodyHeaders = (headers: Record<string, string>): Record<string, string> =>
+  Object.fromEntries(Object.entries(headers).filter(([name]) => !REQUEST_BODY_HEADERS.has(name.toLowerCase())));
 
 export interface HttpRequest {
   url: string;
@@ -60,13 +101,94 @@ export interface ExecuteResult {
   /**
    * Error type for categorization.
    */
-  errorType?: 'timeout' | 'network' | 'rate_limit' | 'client_error' | 'server_error';
+  errorType?:
+    | 'timeout'
+    | 'network'
+    | 'rate_limit'
+    | 'client_error'
+    | 'server_error'
+    | 'blocked_target'
+    | 'redirect_blocked';
 
   /**
    * Number of retry attempts made.
    */
   retries: number;
 }
+
+type GuardedFetchOutcome =
+  | { kind: 'response'; response: Response }
+  | { kind: 'refused'; error: string; errorType: 'blocked_target' | 'redirect_blocked' };
+
+/**
+ * Fetch with the target re-validated before every connect and redirects
+ * followed manually, same-origin only, up to MAX_REDIRECTS hops.
+ * Network errors and aborts propagate to the caller's retry/timeout handling.
+ */
+const fetchGuarded = async (
+  request: HttpRequest,
+  signal: AbortSignal,
+  fetchFn: PinnedFetch,
+  validateTarget: TargetValidator
+): Promise<GuardedFetchOutcome> => {
+  let url = request.url;
+  let method = request.method;
+  let body = request.body;
+  let headers = request.headers;
+
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const decision = await validateTarget(url, signal);
+    if (!decision.ok) {
+      return { kind: 'refused', error: decision.reason, errorType: 'blocked_target' };
+    }
+
+    const response = await fetchFn(url, {
+      method,
+      headers,
+      body,
+      signal,
+      redirect: 'manual',
+      pinnedAddresses: decision.addresses,
+    });
+
+    if (!REDIRECT_STATUSES.has(response.status)) {
+      return { kind: 'response', response };
+    }
+
+    const location = response.headers.get('location');
+    await response.body?.cancel().catch(() => undefined);
+
+    if (!location) {
+      return { kind: 'refused', error: 'Upstream redirect had no Location header', errorType: 'redirect_blocked' };
+    }
+
+    let next: URL;
+    try {
+      next = new URL(location, url);
+    } catch {
+      return { kind: 'refused', error: 'Upstream redirect Location is not a valid URL', errorType: 'redirect_blocked' };
+    }
+
+    if (next.origin !== new URL(url).origin) {
+      return {
+        kind: 'refused',
+        error: `Upstream redirected to another origin (${next.origin}); not followed`,
+        errorType: 'redirect_blocked',
+      };
+    }
+
+    // Same-origin hop: apply the standard method rewrite and re-validate the
+    // target (DNS is re-resolved and re-pinned) before connecting again.
+    if (response.status === 303 || ((response.status === 301 || response.status === 302) && method === 'POST')) {
+      method = 'GET';
+      body = undefined;
+      headers = headers && withoutBodyHeaders(headers);
+    }
+    url = next.toString();
+  }
+
+  return { kind: 'refused', error: 'Too many redirects', errorType: 'redirect_blocked' };
+};
 
 /**
  * Execute an HTTP request with retry logic.
@@ -81,7 +203,8 @@ export interface ExecuteResult {
 export const executeHttpRequest = async (
   request: HttpRequest,
   options: ExecuteOptions = {},
-  fetchFn: typeof fetch = fetch
+  fetchFn: PinnedFetch = pinnedFetch,
+  validateTarget: TargetValidator = (url, signal) => validateIntegrationTargetUrl(url, { signal })
 ): Promise<ExecuteResult> => {
   const { timeoutMs = 30000, maxRetries = 3, retryDelayMs = 1000 } = options;
 
@@ -96,14 +219,19 @@ export const executeHttpRequest = async (
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
       try {
-        const response = await fetchFn(request.url, {
-          method: request.method,
-          headers: request.headers,
-          body: request.body,
-          signal: controller.signal,
-        });
+        const outcome = await fetchGuarded(request, controller.signal, fetchFn, validateTarget);
 
-        clearTimeout(timeoutId);
+        if (outcome.kind === 'refused') {
+          clearTimeout(timeoutId);
+          return {
+            success: false,
+            error: outcome.error,
+            errorType: outcome.errorType,
+            retries: retryCount,
+          };
+        }
+
+        const { response } = outcome;
         const durationMs = Date.now() - startTime;
 
         // Parse response body
@@ -115,8 +243,13 @@ export const executeHttpRequest = async (
           } else {
             body = await response.text();
           }
-        } catch {
+        } catch (error) {
+          // The timeout also bounds the body read: a body that stalls past it
+          // is a timeout, not a successful empty response.
+          if (controller.signal.aborted) throw error;
           body = null;
+        } finally {
+          clearTimeout(timeoutId);
         }
 
         // Convert Headers to plain object (forEach is available in both DOM and Node.js)
@@ -151,10 +284,8 @@ export const executeHttpRequest = async (
 
           if (attempt < maxRetries) {
             retryCount++;
-            const retryAfter = response.headers.get('Retry-After');
-            const delayMs = retryAfter
-              ? parseInt(retryAfter, 10) * 1000
-              : retryDelayMs * Math.pow(2, attempt);
+            const delayMs =
+              retryAfterMs(response.headers.get('Retry-After')) ?? retryDelayMs * Math.pow(2, attempt);
 
             await sleep(delayMs);
             continue;

@@ -13,6 +13,7 @@ import { users } from '@pagespace/db/schema/auth'
 import { pages, drives, pageType, type PageTypeEnum } from '@pagespace/db/schema/core';
 import { driveRoles } from '@pagespace/db/schema/members';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
+import { findGuestAgentMembers, guestAgentSuggestion, shouldOfferGuestAgents } from '@/lib/mentions/guest-agent-members';
 import { z } from 'zod';
 
 /**
@@ -255,6 +256,26 @@ export async function GET(request: Request) {
       }
     }
 
+    // Drives (among the targets) where the requester is a member/owner — the
+    // only drives whose member lists (users AND guest agents) they may see.
+    // Fetched once, lazily, and shared by the user block and the guest-agent
+    // block below; within-drive reuses withinDriveMemberIds.
+    const memberIdsByDrive = new Map<string, string[]>();
+    let requesterMemberDriveIds: string[] | null = null;
+    const getRequesterMemberDriveIds = async (): Promise<string[]> => {
+      if (requesterMemberDriveIds !== null) return requesterMemberDriveIds;
+      const ids: string[] = [];
+      for (const targetDriveId of targetDriveIds) {
+        const memberIds = !crossDrive && targetDriveId === driveId && withinDriveMemberIds
+          ? withinDriveMemberIds
+          : await getDriveRecipientUserIds(targetDriveId);
+        memberIdsByDrive.set(targetDriveId, memberIds);
+        if (memberIds.includes(userId)) ids.push(targetDriveId);
+      }
+      requesterMemberDriveIds = ids;
+      return ids;
+    };
+
     // Group mentions (@everyone, @role) — within-drive only, visible to members/owners only.
     // Users with only page-level access must not see role membership metadata.
     const wantsGroups =
@@ -396,6 +417,29 @@ export async function GET(request: Request) {
           description,
         });
       }
+
+      // Guest agent members: agents that belong to a target drive through
+      // drive_agent_members but whose page lives elsewhere, so the query
+      // above can never return them. Offered only to members/owners of the
+      // drive holding the membership — that membership is the grant, not the
+      // requester's ACL on the agent's home page (see guest-agent-members.ts).
+      if (shouldOfferGuestAgents({ requestedTypes, pageTypeParam, imageOnly, excludePageTypes: excludePageTypesParam })) {
+        const memberDriveIds = await getRequesterMemberDriveIds();
+        if (memberDriveIds.length > 0) {
+          const guestAgents = await findGuestAgentMembers({ memberDriveIds, searchCondition });
+          const seen = new Set(suggestions.map((s) => s.id));
+          for (const guest of guestAgents) {
+            if (seen.has(guest.id)) continue;
+            seen.add(guest.id);
+            suggestions.push(
+              guestAgentSuggestion(guest, {
+                crossDrive,
+                driveName: crossDrive ? driveContextMap.get(guest.memberDriveId) : undefined,
+              }),
+            );
+          }
+        }
+      }
     }
 
     // Search users (if user mentions are requested)
@@ -404,12 +448,9 @@ export async function GET(request: Request) {
       
       if (crossDrive) {
         // Cross-drive: only enumerate members of drives where requester is a member/owner
-        for (const targetDriveId of targetDriveIds) {
-          const memberIds = await getDriveRecipientUserIds(targetDriveId);
-          if (memberIds.includes(userId)) {
-            for (const id of memberIds) {
-              authorizedUserIds.add(id);
-            }
+        for (const targetDriveId of await getRequesterMemberDriveIds()) {
+          for (const id of memberIdsByDrive.get(targetDriveId) ?? []) {
+            authorizedUserIds.add(id);
           }
         }
       } else {

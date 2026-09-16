@@ -11,6 +11,7 @@ vi.mock('resend', () => ({
 
 vi.mock('../../security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(async () => ({ allowed: true, attemptsRemaining: 2 })),
+  refundDistributedRateLimitAttempt: vi.fn(async () => undefined),
 }));
 
 vi.mock('../../deployment-mode', () => ({
@@ -18,7 +19,10 @@ vi.mock('../../deployment-mode', () => ({
 }));
 
 import { sendEmail, resolveAppUrl } from '../email-service';
-import { checkDistributedRateLimit } from '../../security/distributed-rate-limit';
+import {
+  checkDistributedRateLimit,
+  refundDistributedRateLimitAttempt,
+} from '../../security/distributed-rate-limit';
 
 describe('email-service', () => {
   const origApiKey = process.env.RESEND_API_KEY;
@@ -121,6 +125,55 @@ describe('email-service', () => {
     await expect(
       sendEmail({ to: 'user@test.com', subject: 'Test', react: null })
     ).rejects.toThrow('Failed to send email: Bad request');
+  });
+
+  it('given a Resend rejection (error field), should refund the consumed rate-limit attempt', async () => {
+    // A failed send must not permanently consume the recipient's bucket —
+    // otherwise a run of failures can lock a real user out of sign-in email
+    // for the rest of the one-hour window.
+    mockSend.mockResolvedValue({ data: null, error: { message: 'Bad request' } });
+
+    await expect(
+      sendEmail({ to: 'user@test.com', subject: 'Test', react: null })
+    ).rejects.toThrow();
+
+    expect(refundDistributedRateLimitAttempt).toHaveBeenCalledWith(
+      'email:user@test.com',
+      expect.any(Number)
+    );
+  });
+
+  it('given Resend throws (network/API failure), should refund the consumed rate-limit attempt', async () => {
+    mockSend.mockRejectedValue(new Error('socket hang up'));
+
+    await expect(
+      sendEmail({ to: 'user@test.com', subject: 'Test', react: null })
+    ).rejects.toThrow('socket hang up');
+
+    expect(refundDistributedRateLimitAttempt).toHaveBeenCalledWith(
+      'email:user@test.com',
+      expect.any(Number)
+    );
+  });
+
+  it('given a successful send, should not refund the rate-limit attempt', async () => {
+    mockSend.mockResolvedValue({ data: { id: 'email-1' }, error: null });
+
+    await sendEmail({ to: 'user@test.com', subject: 'Test', react: null });
+
+    expect(refundDistributedRateLimitAttempt).not.toHaveBeenCalled();
+  });
+
+  it('given skipRateLimit + Resend error, should not attempt a refund', async () => {
+    // Nothing was consumed for this send (skipRateLimit bypasses the check
+    // entirely), so there is nothing to refund.
+    mockSend.mockResolvedValue({ data: null, error: { message: 'Bad request' } });
+
+    await expect(
+      sendEmail({ to: 'user@test.com', subject: 'Test', react: null, skipRateLimit: true })
+    ).rejects.toThrow();
+
+    expect(refundDistributedRateLimitAttempt).not.toHaveBeenCalled();
   });
 
   it('given onprem mode, should no-op without calling Resend', async () => {
