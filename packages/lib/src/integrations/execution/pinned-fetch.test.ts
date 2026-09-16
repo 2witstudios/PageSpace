@@ -134,7 +134,9 @@ describe('pinnedFetch', () => {
   it.each([
     ['a HEAD response', 'HEAD', 'HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 1234\r\n\r\n'],
     ['an empty GET body', 'GET', 'HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 0\r\n\r\n'],
-  ])('given %s labelled gzip, should read as an empty body rather than a decode error (as fetch does)', async (_label, method, reply) => {
+    ['an empty chunked GET body', 'GET', 'HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n'],
+    ['an empty chunked br body', 'GET', 'HTTP/1.1 200 OK\r\nContent-Encoding: br\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n'],
+  ])('given %s labelled with an encoding, should read as an empty body rather than a decode error (as fetch does)', async (_label, method, reply) => {
     const raw = net.createServer((socket) => {
       socket.on('error', () => undefined); // the client may reset the connection
       socket.once('data', () => socket.end(reply));
