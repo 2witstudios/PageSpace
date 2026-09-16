@@ -44,6 +44,11 @@ vi.mock('@pagespace/db/schema/monitoring', () => ({
 const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../credit-emit', () => ({ emitCreditsUpdated: mockEmitCreditsUpdated }));
 
+const mockReadGateAccount = vi.hoisted(() =>
+  vi.fn(async (): Promise<{ accountType: 'human' | 'agent'; ownerUserId: string | null }> => ({ accountType: 'human', ownerUserId: null })),
+);
+vi.mock('../gate-account', () => ({ readGateAccount: mockReadGateAccount }));
+
 import { canConsumeAI, addOneMonth } from '../credit-gate';
 
 // Default pricing (unmocked credit-pricing): RESERVE_FLOOR_CENTS = 25,
@@ -808,6 +813,80 @@ describe('canConsumeAI', () => {
     expect(sink.updateCalled).toBeFalsy();
     expect(sink.ledgerValues).toBeUndefined();
     expect(r.allowed).toBe(true);
+  });
+});
+
+describe('canConsumeAI — agents get no starter grant (ADR 0007 Decision 9)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsBillingEnabled.mockReturnValue(true);
+    mockDb.insert.mockReturnValue(insertChain());
+    mockReadGateAccount.mockResolvedValue({ accountType: 'human', ownerUserId: null });
+  });
+
+  it('given an agent on the no-row branch, should create a zero-allowance, period-stamped row and write no ledger grant', async () => {
+    mockReadGateAccount.mockResolvedValue({ accountType: 'agent', ownerUserId: null });
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+    const sink: { balanceValues?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {};
+    mockLazyInitTransaction(sink);
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('agent-1', 'free');
+
+    expect(sink.balanceValues).toMatchObject({ userId: 'agent-1', monthlyRemainingCents: 0, monthlyAllowanceCents: 0 });
+    expect(sink.balanceValues?.monthlyPeriodEnd).toBeInstanceOf(Date);
+    expect(sink.ledgerValues).toBeUndefined();
+    expect(r).toMatchObject({ allowed: false, reason: 'requires_funding' });
+  });
+
+  it('given a human on the no-row branch, should still write the free-init grant', async () => {
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+    const sink: { balanceValues?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {};
+    mockLazyInitTransaction(sink);
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('u1', 'free');
+
+    expect(sink.balanceValues).toMatchObject({ monthlyRemainingCents: 500 });
+    expect(sink.ledgerValues).toMatchObject({ stripeRef: 'free-init-u1', amountCents: 500 });
+  });
+
+  it('given an agent on the bare-row branch, should open no grant transaction and leave the row bare', async () => {
+    mockReadGateAccount.mockResolvedValue({ accountType: 'agent', ownerUserId: null });
+    mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]));
+    const sink: { holdValues?: Record<string, unknown> } = {};
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }, { reserved: 0, inFlight: 0 }, sink);
+
+    const r = await canConsumeAI('agent-1', 'free');
+
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1); // the hold transaction only
+    expect(mockDb.select).toHaveBeenCalledTimes(1); // no post-grant re-read
+    expect(r.allowed).toBe(true); // its own top-up is spendable
+  });
+
+  it('given an unclaimed agent out of credits, should refine the denial to requires_funding', async () => {
+    mockReadGateAccount.mockResolvedValue({ accountType: 'agent', ownerUserId: null });
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    expect(await canConsumeAI('agent-1', 'free')).toMatchObject({ allowed: false, reason: 'requires_funding' });
+  });
+
+  it('given a claimed agent out of credits, should keep the ordinary out_of_credits', async () => {
+    mockReadGateAccount.mockResolvedValue({ accountType: 'agent', ownerUserId: 'owner-1' });
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    expect(await canConsumeAI('agent-1', 'free')).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+  });
+
+  it('given a funded row that allows, should never read the account (hot path stays one balance read)', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    mockTransaction({ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('u1', 'pro');
+
+    expect(mockReadGateAccount).not.toHaveBeenCalled();
   });
 });
 
