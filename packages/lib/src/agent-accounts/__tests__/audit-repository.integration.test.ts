@@ -232,18 +232,40 @@ describe('audit acceptance before execute (ADR 0004 F13)', () => {
     });
   });
 
-  it('given a denied verdict, should write the denied row and never call the operation', async () => {
+  it('given a denial of a forged grant, should write a denied row naming only the verified caller and the claim digest — never the principals the grant claims', async () => {
     if (!dbAvailable) return;
     const executor = createAuditedExecutor({ auditRepository: createAgentAccountAuditRepository({ appendPath: createSecurityAuditRepository({ db }) }), hash: sha3 });
-    const grant = makeGrant();
-    const acted: string[] = [];
-    const result = await executor.recordDenial({ grant, canonical: canonical(), reason: 'approval_mismatch', now: AT, declaredResourceKeys: DECLARED_RESOURCE_KEYS });
-    const rows = await rowsFor(grant.grantId);
-    expect({ result, acted, types: rows.map((row) => row.eventType), reason: (rows[0]?.details as { outcome?: { reason?: string } } | null)?.outcome?.reason }).toEqual({
-      result: { ok: true },
-      acted: [],
-      types: ['credential.grant.denied'],
-      reason: 'approval_mismatch',
-    });
+    const forged: AgentAccountGrant = { ...makeGrant(), agentPageId: 'page_forged_victim' as AgentPageId };
+    const claim = new TextEncoder().encode(JSON.stringify(forged));
+    const claimDigest = sha3(claim);
+    try {
+      const result = await executor.recordDenial({
+        caller: { channel: 'http-executor', presenterKeyId: 'pk_authenticated' as PresenterKeyId },
+        claim,
+        reason: 'bad_signature',
+        now: AT,
+      });
+      const rows = await db
+        .select({ eventType: securityAuditLog.eventType, userId: securityAuditLog.userId, details: securityAuditLog.details })
+        .from(securityAuditLog)
+        .where(eq(securityAuditLog.resourceId, claimDigest));
+      const serialized = JSON.stringify(rows);
+      expect({
+        result,
+        types: rows.map((row) => row.eventType),
+        userIds: rows.map((row) => row.userId),
+        namesForgedPrincipal: serialized.includes('page_forged_victim') || serialized.includes(userId) || serialized.includes(forged.grantId),
+        reason: (rows[0]?.details as { reason?: string } | null)?.reason,
+      }).toEqual({
+        result: { ok: true },
+        types: ['credential.grant.denied'],
+        userIds: [null],
+        namesForgedPrincipal: false,
+        reason: 'bad_signature',
+      });
+    } finally {
+      await db.delete(securityAuditLog).where(eq(securityAuditLog.resourceId, claimDigest));
+    }
+  });
   });
 });

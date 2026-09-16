@@ -14,6 +14,7 @@ import { decideAuditGate } from '../decide-audit-gate';
 import { redactKnownValues } from '../redact-known-values';
 import { createAuditedExecutor } from '../audit-gate-executor';
 import type { AuditAcceptance } from '../decide-audit-gate';
+import type { AgentAccountDenialRecord } from '../denial-audit-record';
 import { canonicalizeRequest } from '../canonicalize-request';
 import { digestRequest } from '../digest-request';
 import { GRANT_ISSUER } from '../grant-constants';
@@ -326,14 +327,22 @@ describe('audited executor — the outcome row is part of the answer (ADR 0004 F
    */
   function scriptedRepository(answers: readonly AuditAcceptance['kind'][]) {
     const offered: string[] = [];
+    const denials: AgentAccountDenialRecord[] = [];
     let call = 0;
-    const accept = async ({ record }: { readonly record: AgentAccountAuditRecord }): Promise<AuditAcceptance> => {
-      offered.push(record.outcome.kind);
+    const next = (): AuditAcceptance => {
       const kind = answers[call] ?? 'accepted';
       call += 1;
       return { kind } as AuditAcceptance;
     };
-    return { repository: { accept }, offered };
+    const accept = async ({ record }: { readonly record: AgentAccountAuditRecord }): Promise<AuditAcceptance> => {
+      offered.push(record.outcome.kind);
+      return next();
+    };
+    const acceptDenial = async ({ record }: { readonly record: AgentAccountDenialRecord }): Promise<AuditAcceptance> => {
+      denials.push(record);
+      return next();
+    };
+    return { repository: { accept, acceptDenial }, offered, denials };
   }
 
   it('given the outcome row cannot be accepted after the operation ran, should report the outcome as unrecorded rather than as a plain success', async () => {
@@ -380,4 +389,46 @@ describe('audited executor — the outcome row is part of the answer (ADR 0004 F
     const expected = { outcome: { kind: 'upstream_failed', upstreamStatus: null }, offered: ['allowed', 'upstream_failed'] };
     expect(actual).toEqual(expected);
   });
+
+  it.each(['allowed', 'denied'] as const)('given an operation that returns the pre-execution outcome %s, should record unknown — only executed, upstream_failed or unknown can follow an effect', async (kind) => {
+    const { repository, offered } = scriptedRepository(['accepted', 'accepted']);
+    const executor = createAuditedExecutor({ auditRepository: repository, hash: sha3 });
+    const misreported = (kind === 'allowed' ? { kind } : { kind, reason: 'bad_signature' }) as unknown as Extract<AuditOutcome, { kind: 'unknown' }>;
+    const result = await executor.execute({
+      grant: makeGrant(),
+      canonical: canonical(),
+      now: AT,
+      declaredResourceKeys: [...DECLARED_RESOURCE_KEYS],
+      act: async () => misreported,
+    });
+    const actual = { outcome: result.ok ? result.outcome : null, offered };
+    const expected = { outcome: { kind: 'unknown' }, offered: ['allowed', 'unknown'] };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a denial, should record only the verified caller, a SHA3-256 digest of the presented claim, and the reason — no principal parsed from the grant', async () => {
+    const { repository, denials } = scriptedRepository(['accepted']);
+    const executor = createAuditedExecutor({ auditRepository: repository, hash: sha3 });
+    const claim = new TextEncoder().encode(JSON.stringify(makeGrant({ human: { userId: 'user_victim' as UserId, sessionId: null } })));
+    const result = await executor.recordDenial({
+      caller: { channel: 'http-executor', presenterKeyId: 'pk_authenticated' as PresenterKeyId },
+      claim,
+      reason: 'bad_signature',
+      now: AT,
+    });
+    const actual = { result, denials };
+    const expected = {
+      result: { ok: true },
+      denials: [
+        {
+          caller: { channel: 'http-executor', presenterKeyId: 'pk_authenticated' },
+          claimDigest: sha3(claim),
+          reason: 'bad_signature',
+          at: AT,
+        },
+      ],
+    };
+    expect(actual).toEqual(expected);
+  });
 });
+
