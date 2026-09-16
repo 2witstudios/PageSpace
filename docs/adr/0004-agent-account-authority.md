@@ -52,7 +52,7 @@ Every field is **required**. Absence is encoded as `null` only where the field's
 | `sandbox` | `{ spriteName: SpriteName; instanceId: SandboxInstanceId; generation: SandboxGeneration } \| null` | the sandbox a relay op executes against; `null` for HTTP/browser | `getSprite().id` + the provisioner's generation (ADR 0006) |
 | `callerCeiling` | `{ allowedDriveIds: AgentDispatchPayload['allowedDriveIds']; originatingMcpTokenId: string \| null }` | the inherited credential ceiling | `isDriveWithinCredentialScope(allowedDriveIds, account.driveId)` |
 | `accountId` | `AccountId` | the account | the row |
-| `credentialVersion` | `CredentialVersion` | the store version the executor may resolve | `resolve` refuses any other version |
+| `credentialVersion` | `CredentialVersion` | the store version the executor may resolve | `resolve` refuses any other version, except the plane-attested previous version inside the rotation grace for a grant issued before the rotation (F5a) |
 | `policyVersion` | `PolicyVersion` | the account policy this grant was evaluated under | the row's current `policyVersion` |
 | `bindingDigest` | `BindingDigest` | `hash(canonicalJson(PlaneBindings))` — the authority's signed copy of `(tenantId, ownerRef, allowedOrigins, policyVersion, policyDigest, kind)` it evaluated; `policyDigest` covers the approval policy, resource restrictions and bound agent pages (ADR 0005 §2.4) | the store's own `PlaneBindings` digest at resolve (ADR 0005 §2.4); a tampered main-DB row cannot produce a matching grant |
 | `sessionHttp` | `boolean` | whether the default-off `session_http` permission was granted for this use (§4.1); the only way a `session` kind reaches the HTTP executor | the account's `sessionHttpEnabled` flag and `decideAccountAccess` |
@@ -189,7 +189,7 @@ Provider tool catalogues (`integrations/providers/*.ts`) are reclassified to thi
 | F4 | `tenantId` ≠ the account row's tenant | `tenant_mismatch` |
 | F4a | `human.userId`, `agentPageId`, `conversationId` or `runId` ≠ the presenter's current execution principals | `principal_mismatch` |
 | F5 | `expected.accountStatus` ≠ `'active'` (`needs_reauth`, `revoked`, `deleted`) | `account_not_active` — before any version is compared; the status is recorded in audit |
-| F5a | `accountId` unknown, or `credentialVersion` ≠ current | `version_mismatch` |
+| F5a | `accountId` unknown, or `credentialVersion` ≠ `expected.currentCredentialVersion` — **except** `credentialVersion = expected.previousCredentialVersion` (plane-attested, non-null) with `now < rotatedAt + ROTATION_GRACE_MS` **and** `grant.iat < rotatedAt`, which is admitted (a grant in flight across a rotation; one issued after it never gets the old version). `revoke` clears the previous version, so a revoked account has no grace | `version_mismatch` |
 | F6 | `policyVersion` ≠ current | `policy_epoch` |
 | F7 | `delegationId` null while `human.sessionId` null; delegation expired/revoked; delegation fact whose `delegationId`, `accountId`, `agentPageId` or `delegatedBy` ≠ the grant's `delegationId`, `accountId`, `agentPageId` or `human.userId` | `no_delegation` |
 | F8 | `operation` ≠ the presented request's operation; `requestDigest` ≠ recomputed digest | `digest_mismatch` (constant-time compare) |
@@ -296,6 +296,7 @@ Adapters (I/O, G1b): `grant-repository.ts` (nonce consume, approvals, delegation
 31. Given a concrete approval fact consumed by this `grantId` for this digest but whose `accountId` names another account, `approval_mismatch`; whose `expiresAt` is one ms before the grant's `iat`, `approval_mismatch`; whose `expiresAt` equals `iat` and whose other fields match, the approval check passes (G1a review M3).
 32. Given an account whose `sessionHttpEnabled` flips from `true` to `false` (or back), its `policyVersion` is bumped and written to the plane through `rebind`; an outstanding grant with `sessionHttp: true` issued before the flip is `policy_epoch` at the verifier and `binding_mismatch` at the plane (G1a review M4).
 33. Given a grant whose `sandbox.spriteName` differs from `expected.sandbox.spriteName` with equal `instanceId` and `generation`, `generation_mismatch`; given a grant naming a sandbox and `expected.sandbox = null`, `binding_unavailable` (a member of `GrantDenyReason`), never `ok` (G1a review M6).
+34. Given `expected.previousCredentialVersion = n`, `currentCredentialVersion = n+1`, `rotatedAt = R` and a grant for version `n`: with `iat = R-1` and `now = R + ROTATION_GRACE_MS - 1`, the version check passes; with `now = R + ROTATION_GRACE_MS`, `version_mismatch`; with `iat = R` (issued at or after the rotation), `version_mismatch` at any `now`; with `previousCredentialVersion = null` (never rotated, or cleared by `revoke`), `version_mismatch` (G1a review M7).
 
 ## 9. Consequences
 
