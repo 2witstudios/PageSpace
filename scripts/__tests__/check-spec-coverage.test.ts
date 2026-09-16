@@ -7,11 +7,13 @@ import {
   extractRequirementIds,
   findResultFiles,
   formatTable,
-  hitsFromPassedTests,
+  failsModifierFiles,
+  hitsFromTestOutcomes,
   idsNamedBy,
   isPlaywrightJsonReport,
   isVitestJsonReport,
-  loadPassedTests,
+  loadTestOutcomes,
+  securityOnlyWarnings,
   nameCarriesId,
   parseAllowlist,
   parseArgs,
@@ -88,22 +90,14 @@ describe('coverage gate: parsing Vitest\'s JSON reporter', () => {
     expect(isPlaywrightJsonReport(vitestReport)).toBe(false);
   });
 
-  it('collects only assertionResults with status "passed" — skipped, todo, and failed never count', () => {
+  it('keeps every assertion with its own title, its describe titles, and passed only for status "passed" — skipped, todo, and failed never pass', () => {
+    const file = '/repo/packages/lib/src/__tests__/money.test.ts';
     expect(parseVitestJsonReport(vitestReport)).toEqual([
-      { file: '/repo/packages/lib/src/__tests__/money.test.ts', fullName: 'money model MON-2 one definition of a credit' },
+      { runner: 'vitest', file, title: 'MON-2 one definition of a credit', ancestors: ['money model'], passed: true },
+      { runner: 'vitest', file, title: 'MON-1 skipped price check', ancestors: ['money model'], passed: false },
+      { runner: 'vitest', file, title: 'MON-3 a todo', ancestors: ['money model'], passed: false },
+      { runner: 'vitest', file, title: 'MON-4 a failure', ancestors: ['money model'], passed: false },
     ]);
-  });
-
-  it('falls back to ancestorTitles + title when fullName is absent', () => {
-    const report = {
-      testResults: [
-        {
-          name: '/repo/a.test.ts',
-          assertionResults: [{ ancestorTitles: ['WAL-1 suite'], title: 'a passing case', status: 'passed' }],
-        },
-      ],
-    };
-    expect(parseVitestJsonReport(report)).toEqual([{ file: '/repo/a.test.ts', fullName: 'WAL-1 suite a passing case' }]);
   });
 
   it('returns nothing for a value that is not a Vitest report at all', () => {
@@ -145,10 +139,12 @@ describe('coverage gate: parsing Playwright\'s JSON reporter', () => {
     expect(isVitestJsonReport(playwrightReport)).toBe(false);
   });
 
-  it('builds the full name from every ancestor suite title plus the spec title, only for specs with a passing result (including a retry that eventually passed)', () => {
+  it('keeps every spec with its ancestor suite titles; passed only when some result passed (a retry that eventually passed counts)', () => {
+    const file = 'tests/org-picker.spec.ts';
     expect(parsePlaywrightJsonReport(playwrightReport)).toEqual([
-      { file: 'tests/org-picker.spec.ts', fullName: 'SEAT-1 org picker shows the org name' },
-      { file: 'tests/org-picker.spec.ts', fullName: 'SEAT-1 org picker nested group SEC-1 a nested passing spec' },
+      { runner: 'playwright', file, title: 'shows the org name', ancestors: ['SEAT-1 org picker'], passed: true },
+      { runner: 'playwright', file, title: 'a skipped case', ancestors: ['SEAT-1 org picker'], passed: false },
+      { runner: 'playwright', file, title: 'SEC-1 a nested passing spec', ancestors: ['SEAT-1 org picker', 'nested group'], passed: true },
     ]);
   });
 
@@ -158,18 +154,68 @@ describe('coverage gate: parsing Playwright\'s JSON reporter', () => {
   });
 });
 
-describe('coverage gate: hitsFromPassedTests', () => {
-  it('maps each file to the set of IDs a PASSING test in it names, merging multiple passing tests in the same file', () => {
-    const hits = hitsFromPassedTests(
-      [
-        { file: 'a.test.ts', fullName: 'MON-2 one thing' },
-        { file: 'a.test.ts', fullName: 'X-6 another thing' },
-        { file: 'b.test.ts', fullName: 'unrelated name' },
-      ],
+describe('coverage gate: hitsFromTestOutcomes', () => {
+  const t = (file: string, title: string, ancestors: string[], passed: boolean) => ({ runner: 'vitest' as const, file, title, ancestors, passed });
+
+  it('maps each file to the set of IDs a PASSING test\'s own title names, merging multiple passing tests in the same file', () => {
+    const hits = hitsFromTestOutcomes(
+      [t('a.test.ts', 'MON-2 one thing', [], true), t('a.test.ts', 'X-6 another thing', [], true), t('b.test.ts', 'unrelated name', [], true)],
       ['MON-2', 'X-6'],
     );
     expect([...(hits.get('a.test.ts') ?? [])].sort()).toEqual(['MON-2', 'X-6']);
     expect(hits.has('b.test.ts')).toBe(false);
+  });
+
+  it('never counts a test whose own title names an ID but did not pass', () => {
+    expect(hitsFromTestOutcomes([t('a.test.ts', 'MON-2 skipped', [], false)], ['MON-2']).size).toBe(0);
+  });
+
+  it('does not let a passing sibling carry a describe-level ID when another test under that describe was skipped', () => {
+    const hits = hitsFromTestOutcomes(
+      [t('a.test.ts', 'the real negative check', ['MON-2 suite'], false), t('a.test.ts', 'renders a heading', ['MON-2 suite'], true)],
+      ['MON-2'],
+    );
+    expect(hits.has('a.test.ts')).toBe(false);
+  });
+
+  it('counts a describe-level ID when EVERY test under an ID-named describe in that file passed', () => {
+    const hits = hitsFromTestOutcomes(
+      [t('a.test.ts', 'one', ['MON-2 suite'], true), t('a.test.ts', 'two', ['MON-2 suite', 'nested'], true), t('a.test.ts', 'unrelated skipped', ['other'], false)],
+      ['MON-2'],
+    );
+    expect([...(hits.get('a.test.ts') ?? [])]).toEqual(['MON-2']);
+  });
+
+  it('a passing test that names the ID in its own title still counts even if a describe sibling was skipped', () => {
+    const hits = hitsFromTestOutcomes(
+      [t('a.test.ts', 'MON-2 the real check', ['MON-2 suite'], true), t('a.test.ts', 'a skipped extra', ['MON-2 suite'], false)],
+      ['MON-2'],
+    );
+    expect([...(hits.get('a.test.ts') ?? [])]).toEqual(['MON-2']);
+  });
+});
+
+describe('coverage gate: it.fails ban', () => {
+  it('flags a Vitest file that contributes an ID and uses .fails (Vitest reports it.fails as passed when its body fails)', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'spec-coverage-fails-'));
+    try {
+      fs.writeFileSync(path.join(root, 'a.test.ts'), "it.fails('MON-2 body fails', () => { expect(1).toBe(2); });\n");
+      fs.writeFileSync(path.join(root, 'b.test.ts'), "it('MON-2 honest', () => {});\n");
+      fs.writeFileSync(path.join(root, 'c.test.ts'), "it.fails('no id here', () => {});\n");
+      const hits = new Map([['a.test.ts', new Set(['MON-2'])], ['b.test.ts', new Set(['MON-2'])]]);
+      expect(failsModifierFiles(root, hits)).toEqual(['a.test.ts']);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when a contributing Vitest file cannot be read', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'spec-coverage-fails-'));
+    try {
+      expect(() => failsModifierFiles(root, new Map([['gone.test.ts', new Set(['MON-2'])]]))).toThrow(/Cannot read gone\.test\.ts/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -248,6 +294,8 @@ describe('coverage gate: end to end over a temp repo', () => {
     fs.mkdirSync(path.join(root, 'packages/lib/test-results'), { recursive: true });
     fs.mkdirSync(path.join(root, 'apps/e2e/test-results'), { recursive: true });
     fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'packages/lib/src/__tests__'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'packages/lib/src/__tests__/money.test.ts'), "it('MON-2 one definition of a credit', () => {});\n");
     fs.writeFileSync(path.join(root, 'docs/specs/organizations-wallets.md'), SPEC);
     fs.writeFileSync(path.join(root, 'scripts/spec-coverage-allowlist.txt'), 'MON-1\nMON-10\n');
 
@@ -299,19 +347,55 @@ describe('coverage gate: end to end over a temp repo', () => {
     fs.renameSync(path.join(root, 'apps/e2e/test-results/playwright-results.json'), path.join(root, 'playwright-results.json'));
     fs.rmdirSync(path.join(root, 'apps/e2e/test-results'));
     expect(findResultFiles(root)).toEqual(['packages/lib/test-results/vitest-results.json', 'playwright-results.json']);
-    const loaded = loadPassedTests(root);
+    const loaded = loadTestOutcomes(root);
     expect(loaded.sawPlaywright).toBe(true);
     const warnings: string[] = [];
     run(root, parseArgs(['--offline']), (line) => warnings.push(line));
     expect(warnings.some((line) => line.includes('no Playwright JSON results found'))).toBe(false);
   });
 
-  it('loadPassedTests parses both reporter shapes and reports which sources were seen', () => {
+  it('loadTestOutcomes parses both reporter shapes and reports which sources were seen', () => {
     const root = makeRepo();
-    const loaded = loadPassedTests(root);
+    const loaded = loadTestOutcomes(root);
     expect(loaded.sawVitest).toBe(true);
     expect(loaded.sawPlaywright).toBe(true);
-    expect(loaded.tests.map((t) => t.fullName).sort()).toEqual(['MON-2 one definition of a credit', 'X-6 negatives X-6 a guest sees one drive']);
+    expect(loaded.tests.filter((t) => t.passed).map((t) => t.title).sort()).toEqual(['MON-2 one definition of a credit', 'X-6 a guest sees one drive']);
+  });
+
+  it('fails the gate when a file that contributes an ID uses .fails', () => {
+    const root = makeRepo();
+    fs.writeFileSync(path.join(root, 'packages/lib/src/__tests__/money.test.ts'), "it.fails('MON-2 one definition of a credit', () => {});\n");
+    const lines: string[] = [];
+    expect(run(root, parseArgs(['--offline']), (l) => lines.push(l))).toBe(1);
+    expect(lines.join('\n')).toContain('FAIL: these files contribute Spec IDs but use `.fails`');
+    expect(lines.join('\n')).toContain('packages/lib/src/__tests__/money.test.ts');
+  });
+
+  it('states that only ci.yml runners count, and WARNS when an unmet ID is named in a file only security.yml runs', () => {
+    const root = makeRepo();
+    fs.mkdirSync(path.join(root, '.github/workflows'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'packages/lib/src/permissions/__tests__'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'packages/lib/src/permissions/__tests__/boundary.test.ts'), "it('MON-10 a boundary', () => {});\n");
+    fs.writeFileSync(
+      path.join(root, '.github/workflows/security.yml'),
+      [
+        'jobs:',
+        '  s:',
+        '    steps:',
+        '      - run: |',
+        "          bun run --filter '@pagespace/lib' test:db -- \\",
+        '            src/permissions/__tests__/boundary.test.ts \\',
+        '            src/__tests__/money.test.ts',
+        "      - run: bun run --filter 'web' test -- src/app/api/auth/__tests__/",
+        '',
+      ].join('\n'),
+    );
+    const lines: string[] = [];
+    expect(run(root, parseArgs(['--offline']), (l) => lines.push(l))).toBe(0);
+    const out = lines.join('\n');
+    expect(out).toContain('only test runs in ci.yml reach this gate');
+    expect(out).toContain('WARNING: MON-10 is named in packages/lib/src/permissions/__tests__/boundary.test.ts, which only security.yml runs');
+    expect(securityOnlyWarnings(root, loadTestOutcomes(root).tests, ['MON-2'])).toEqual([]); // money.test.ts names MON-2 and is in security.yml, but ci.yml ran it
   });
 
   it('exits 0 when every ID is covered by a PASSING result or allowlisted, and 1 once the covering results are deleted', () => {

@@ -11,10 +11,13 @@
  *      credential, so CI always reads the snapshot; the orchestrator refreshes it).
  *   2. Extract every requirement ID.
  *   3. Walk `packages/`, `apps/`, `scripts/`, and `infrastructure/` for every `test-results/*.json`
- *      file and collect the full name (describe path + title) of every test that reports
- *      `passed` — Vitest's and Playwright's own JSON reporters, uploaded as CI artifacts and
- *      downloaded back to these same repo-relative paths.
- *   4. Print a table ID → files, and exit non-zero listing every ID that no PASSING test names.
+ *      file (plus the root-extracted `playwright-results.json`) and collect every test's own
+ *      title, describe titles, and whether it `passed` — Vitest's and Playwright's own JSON
+ *      reporters, uploaded as CI artifacts by ci.yml's jobs. Only ci.yml's runs reach this gate;
+ *      suites only security.yml runs never do (see `securityOnlyWarnings`).
+ *   4. Print a table ID → files, and exit non-zero listing every ID that no PASSING test names
+ *      (see `hitsFromTestOutcomes` for how describe-level IDs count, and `failsModifierFiles`
+ *      for why `.fails` is banned in contributing files).
  *
  * COVERAGE SOURCE — read what CI actually RAN, not what the source merely names. Earlier
  * revisions statically parsed test source with the TypeScript compiler API to decide which
@@ -24,9 +27,9 @@
  * ternary, one only reachable through a helper function, vitest's `ctx.skip()`/a destructured
  * `skip`, `test.fixme(cond)`, a file-top-level `test.skip()` — because "does this test execute"
  * is a RUNTIME question in general, not a static one. No static walk closes that gap; only the
- * test runner itself can say what ran. So this gate no longer parses test SOURCE at all: an ID
- * counts only when some test whose full name carries it reports `passed` in a real CI run.
- * See `loadPassedTests` / `parseVitestJsonReport` / `parsePlaywrightJsonReport`.
+ * test runner itself can say what ran. So coverage is never decided from test SOURCE: an ID
+ * counts only when a test named with it reports `passed` in a real CI run.
+ * See `loadTestOutcomes` / `parseVitestJsonReport` / `parsePlaywrightJsonReport`.
  *
  * If no Playwright results are found (the e2e job did not run, was skipped, or failed before
  * uploading), the gate says so explicitly on stdout — it does not fail mysteriously, and it does
@@ -201,11 +204,16 @@ export function formatTable(report: CoverageReport): string {
 // CI test-results parsing — Vitest's and Playwright's own JSON reporters
 // ---------------------------------------------------------------------------
 
-export interface PassedTest {
-  /** Repo-relative (or reporter-relative) source file the passing test belongs to. */
+export interface TestOutcome {
+  runner: 'vitest' | 'playwright';
+  /** Repo-relative (or reporter-relative) source file the test belongs to. */
   file: string;
-  /** describe path + title (Vitest) or ancestor suite titles + spec title (Playwright). */
-  fullName: string;
+  /** The test's OWN title (Vitest `title`, Playwright spec `title`). */
+  title: string;
+  /** Enclosing describe titles (Vitest `ancestorTitles`) or suite titles (Playwright). */
+  ancestors: string[];
+  /** Reported `passed` (Vitest) / some result `passed` (Playwright). Skipped, todo, failed: false. */
+  passed: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -222,25 +230,22 @@ export function isPlaywrightJsonReport(value: unknown): value is Record<string, 
   return isRecord(value) && Array.isArray(value.suites) && !Array.isArray(value.testResults);
 }
 
-/** Every `assertionResults` entry reporting `status: 'passed'`, one row per (file, test). */
-export function parseVitestJsonReport(report: unknown): PassedTest[] {
+/** Every `assertionResults` entry, whatever its status, one row per (file, test). */
+export function parseVitestJsonReport(report: unknown): TestOutcome[] {
   if (!isVitestJsonReport(report)) return [];
-  const out: PassedTest[] = [];
+  const out: TestOutcome[] = [];
   for (const fileResult of report.testResults as unknown[]) {
     if (!isRecord(fileResult)) continue;
     const file = typeof fileResult.name === 'string' ? fileResult.name : undefined;
     const assertions = Array.isArray(fileResult.assertionResults) ? fileResult.assertionResults : [];
     for (const assertion of assertions) {
-      if (!isRecord(assertion) || assertion.status !== 'passed') continue;
+      if (!isRecord(assertion)) continue;
       const ancestors = Array.isArray(assertion.ancestorTitles)
         ? assertion.ancestorTitles.filter((t): t is string => typeof t === 'string')
         : [];
-      const title = typeof assertion.title === 'string' ? assertion.title : '';
-      const fullName =
-        typeof assertion.fullName === 'string' && assertion.fullName.length > 0
-          ? assertion.fullName
-          : [...ancestors, title].filter(Boolean).join(' ');
-      if (file && fullName) out.push({ file, fullName });
+      const title =
+        typeof assertion.title === 'string' ? assertion.title : typeof assertion.fullName === 'string' ? assertion.fullName : '';
+      if (file && title) out.push({ runner: 'vitest', file, title, ancestors, passed: assertion.status === 'passed' });
     }
   }
   return out;
@@ -248,15 +253,14 @@ export function parseVitestJsonReport(report: unknown): PassedTest[] {
 
 /**
  * Walks Playwright's `suites` tree (suites nest suites; a suite's own tests live in `specs`).
- * A spec's full name is every ancestor suite title plus its own title, joined — matching how
- * Playwright itself reports a test's location (`describe title > nested describe > test title`),
- * so `nameCarriesId` sees the same string a human would read in the Playwright report. A spec
- * counts only when at least one of its `tests[].results[]` reports `status: 'passed'` — a retry
- * that eventually passed still counts; one that never did, does not.
+ * Each spec keeps its own title and every ancestor suite title separately. A spec is `passed`
+ * only when at least one of its `tests[].results[]` reports `status: 'passed'` — a retry that
+ * eventually passed still counts; one that never did, does not. (`test.fail()` reports its
+ * results as `failed`, so Playwright has no equivalent of Vitest's `it.fails` trap.)
  */
-export function parsePlaywrightJsonReport(report: unknown): PassedTest[] {
+export function parsePlaywrightJsonReport(report: unknown): TestOutcome[] {
   if (!isPlaywrightJsonReport(report)) return [];
-  const out: PassedTest[] = [];
+  const out: TestOutcome[] = [];
 
   const walkSuite = (suite: unknown, ancestors: string[], inheritedFile: string | undefined): void => {
     if (!isRecord(suite)) return;
@@ -275,8 +279,8 @@ export function parsePlaywrightJsonReport(report: unknown): PassedTest[] {
           Array.isArray(t.results) &&
           t.results.some((r) => isRecord(r) && r.status === 'passed'),
       );
-      if (passed && specFile) {
-        out.push({ file: specFile, fullName: [...nextAncestors, specTitle].filter(Boolean).join(' ') });
+      if (specFile && specTitle) {
+        out.push({ runner: 'playwright', file: specFile, title: specTitle, ancestors: nextAncestors, passed });
       }
     }
 
@@ -317,7 +321,7 @@ export function findResultFiles(root: string, roots: readonly string[] = RESULT_
 }
 
 export interface LoadedResults {
-  tests: PassedTest[];
+  tests: TestOutcome[];
   resultFiles: string[];
   sawVitest: boolean;
   sawPlaywright: boolean;
@@ -329,9 +333,9 @@ export interface LoadedResults {
  * is a hard error — a malformed or unexpected result file must never be silently ignored, since
  * that is exactly the kind of gap that lets an ID pass without ever having run.
  */
-export function loadPassedTests(root: string): LoadedResults {
+export function loadTestOutcomes(root: string): LoadedResults {
   const resultFiles = findResultFiles(root);
-  const tests: PassedTest[] = [];
+  const tests: TestOutcome[] = [];
   let sawVitest = false;
   let sawPlaywright = false;
 
@@ -345,10 +349,10 @@ export function loadPassedTests(root: string): LoadedResults {
     }
     if (isVitestJsonReport(parsed)) {
       sawVitest = true;
-      for (const t of parseVitestJsonReport(parsed)) tests.push({ file: toRepoRelative(root, t.file), fullName: t.fullName });
+      for (const t of parseVitestJsonReport(parsed)) tests.push({ ...t, file: toRepoRelative(root, t.file) });
     } else if (isPlaywrightJsonReport(parsed)) {
       sawPlaywright = true;
-      for (const t of parsePlaywrightJsonReport(parsed)) tests.push({ file: toRepoRelative(root, t.file), fullName: t.fullName });
+      for (const t of parsePlaywrightJsonReport(parsed)) tests.push({ ...t, file: toRepoRelative(root, t.file) });
     } else {
       throw new Error(`${relFile} is neither a Vitest nor a Playwright JSON reporter file — unrecognized shape`);
     }
@@ -357,17 +361,103 @@ export function loadPassedTests(root: string): LoadedResults {
   return { tests, resultFiles, sawVitest, sawPlaywright };
 }
 
-/** Repo-relative file → the IDs a PASSING test in it names. Replaces the old static AST scan. */
-export function hitsFromPassedTests(tests: readonly PassedTest[], ids: readonly string[]): Map<string, Set<string>> {
+/**
+ * Repo-relative file → the IDs its tests cover. An ID counts for a file when either:
+ *   - a PASSING test names it in its OWN title, or
+ *   - it is named by an enclosing describe title AND every test in that file under a describe
+ *     naming it passed.
+ * The second rule exists because a describe title is shared by every test under it: without it,
+ * `describe('MON-2 …')` with a skipped real check and a passing trivial sibling would count MON-2
+ * as covered by a test that never ran.
+ */
+export function hitsFromTestOutcomes(tests: readonly TestOutcome[], ids: readonly string[]): Map<string, Set<string>> {
   const hits = new Map<string, Set<string>>();
+  const add = (file: string, id: string): void => {
+    const existing = hits.get(file) ?? new Set<string>();
+    existing.add(id);
+    hits.set(file, existing);
+  };
+  // `${file}\0${id}` → whether every test under a describe naming that id passed.
+  const describeGroups = new Map<string, { file: string; id: string; allPassed: boolean }>();
   for (const t of tests) {
-    const named = idsNamedBy([t.fullName], ids);
-    if (named.size === 0) continue;
-    const existing = hits.get(t.file) ?? new Set<string>();
-    for (const id of named) existing.add(id);
-    hits.set(t.file, existing);
+    if (t.passed) for (const id of idsNamedBy([t.title], ids)) add(t.file, id);
+    for (const id of idsNamedBy(t.ancestors, ids)) {
+      const key = `${t.file}\0${id}`;
+      const group = describeGroups.get(key) ?? { file: t.file, id, allPassed: true };
+      group.allPassed &&= t.passed;
+      describeGroups.set(key, group);
+    }
   }
+  for (const g of describeGroups.values()) if (g.allPassed) add(g.file, g.id);
   return hits;
+}
+
+/**
+ * Vitest reports `it.fails(...)` as `passed` exactly when its body FAILS, and its JSON reporter
+ * carries no flag saying so. So any Vitest file that contributes an ID must not use `.fails` at
+ * all (a whole-file text check — deliberately blunt, it can only fail closed). An unreadable
+ * contributing file is an error, never a pass.
+ */
+export function failsModifierFiles(
+  root: string,
+  hitsByFile: ReadonlyMap<string, ReadonlySet<string>>,
+  tests: readonly TestOutcome[] = [],
+): string[] {
+  const playwrightFiles = new Set(tests.filter((t) => t.runner === 'playwright').map((t) => t.file));
+  const flagged: string[] = [];
+  for (const [file, idsInFile] of hitsByFile) {
+    if (idsInFile.size === 0 || playwrightFiles.has(file)) continue;
+    let source: string;
+    try {
+      source = fs.readFileSync(path.join(root, file), 'utf8');
+    } catch {
+      throw new Error(`Cannot read ${file} to check it for \`.fails\` — a file that contributes Spec IDs must be readable`);
+    }
+    if (/\.fails\b/.test(source)) flagged.push(file);
+  }
+  return flagged.sort();
+}
+
+const SECURITY_WORKFLOW = '.github/workflows/security.yml';
+
+/**
+ * Only ci.yml's runners upload results to this gate. `security.yml` runs some suites (its
+ * `test:db` steps) that no ci.yml job runs, so a Spec ID named only there always shows unmet.
+ * For every unmet ID named in such a file, returns a WARNING line saying exactly that.
+ */
+export function securityOnlyWarnings(root: string, tests: readonly TestOutcome[], unmetIds: readonly string[]): string[] {
+  let workflow: string;
+  try {
+    workflow = fs.readFileSync(path.join(root, SECURITY_WORKFLOW), 'utf8');
+  } catch {
+    return [];
+  }
+  const ranInCi = new Set(tests.map((t) => t.file));
+  const files = new Set<string>();
+  const invocation = /--filter\s+'([^']+)'\s+test(?::\w+)?\s+--((?:[ \t]+|\\\r?\n|[\w./-]+)*)/g;
+  for (const m of workflow.matchAll(invocation)) {
+    const pkg = m[1];
+    const pkgDir = pkg.startsWith('@pagespace/') ? `packages/${pkg.slice('@pagespace/'.length)}` : `apps/${pkg}`;
+    for (const arg of m[2].split(/[\s\\]+/)) {
+      if (/\.(test|spec)\.tsx?$/.test(arg)) files.add(`${pkgDir}/${arg}`);
+    }
+  }
+  const warnings: string[] = [];
+  for (const file of [...files].sort()) {
+    if (ranInCi.has(file)) continue;
+    let source: string;
+    try {
+      source = fs.readFileSync(path.join(root, file), 'utf8');
+    } catch {
+      continue;
+    }
+    for (const id of idsNamedBy([source], unmetIds)) {
+      warnings.push(
+        `WARNING: ${id} is named in ${file}, which only security.yml runs — its results never reach this gate, so it cannot count. Run that test in a ci.yml job (or name ${id} in one that is).`,
+      );
+    }
+  }
+  return warnings;
 }
 
 // ---------------------------------------------------------------------------
@@ -436,7 +526,7 @@ export function run(root: string, opts: CliOptions, log: (line: string) => void 
   const allowlistPath = path.resolve(root, opts.allowlist);
   const allowlist = fs.existsSync(allowlistPath) ? parseAllowlist(fs.readFileSync(allowlistPath, 'utf8')) : [];
 
-  const { tests, resultFiles, sawVitest, sawPlaywright } = loadPassedTests(root);
+  const { tests, resultFiles, sawVitest, sawPlaywright } = loadTestOutcomes(root);
   if (resultFiles.length === 0) {
     throw new Error(
       'No test-results/*.json files found under packages/, apps/, scripts/, or infrastructure/ ' +
@@ -445,17 +535,20 @@ export function run(root: string, opts: CliOptions, log: (line: string) => void 
     );
   }
 
-  const hitsByFile = hitsFromPassedTests(tests, ids);
+  const hitsByFile = hitsFromTestOutcomes(tests, ids);
   const report = buildReport({ ids, hitsByFile, allowlist, onlyIds: opts.ids });
-  const ok = reportPasses(report);
+  const failsFiles = failsModifierFiles(root, hitsByFile, tests);
+  const securityWarnings = securityOnlyWarnings(root, tests, [...report.missing, ...report.allowlistedMissing]);
+  const ok = reportPasses(report) && failsFiles.length === 0;
 
   if (opts.json) {
-    log(JSON.stringify({ origin: spec.origin, ok, sawVitest, sawPlaywright, resultFiles: resultFiles.length, ...report, rows: report.rows }, null, 2));
+    log(JSON.stringify({ origin: spec.origin, ok, sawVitest, sawPlaywright, resultFiles: resultFiles.length, failsFiles, securityWarnings, ...report, rows: report.rows }, null, 2));
     return ok ? 0 : 1;
   }
 
   log(`Spec source: ${spec.origin === 'page' ? `page ${SPEC_PAGE_ID}` : opts.snapshot} (${ids.length} IDs)`);
-  log(`Test results: ${resultFiles.length} file(s), ${tests.length} passing test(s) parsed`);
+  log(`Test results: ${resultFiles.length} file(s), ${tests.filter((t) => t.passed).length} passing of ${tests.length} test(s) parsed`);
+  log('Coverage source: only test runs in ci.yml reach this gate (security.yml-only suites never do).');
   if (!sawVitest) {
     log('WARNING: no Vitest JSON results found — every unit/integration-covered ID will show as MISSING or allowlisted this run.');
   }
@@ -466,6 +559,7 @@ export function run(root: string, opts: CliOptions, log: (line: string) => void 
         'fail-closed rather than silently counted as covered.',
     );
   }
+  for (const w of securityWarnings) log(w);
   log(formatTable(report));
   log('');
   const covered = report.rows.filter((r) => r.files.length > 0).length;
@@ -478,6 +572,9 @@ export function run(root: string, opts: CliOptions, log: (line: string) => void 
   }
   if (report.missing.length > 0) {
     log(`FAIL: no passing test names these IDs: ${report.missing.join(', ')}`);
+  }
+  if (failsFiles.length > 0) {
+    log(`FAIL: these files contribute Spec IDs but use \`.fails\` (Vitest reports it as passed when its body fails): ${failsFiles.join(', ')}`);
   }
   log(ok ? 'spec-coverage: OK' : 'spec-coverage: FAILED');
   return ok ? 0 : 1;

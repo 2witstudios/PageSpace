@@ -535,17 +535,20 @@ jobs:
       # The gate script only imports Node builtins (fs, path, node:child_process, node:url) — no
       # `bun install` needed to run it, which keeps this job fast even when unit-tests or e2e
       # failed early.
-      - name: Download Vitest JSON results
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: vitest-json-results
-
+      #
       # No `continue-on-error` here: the unit-tests job's upload step runs unconditionally
       # (`if: always()`), so a missing artifact means something more fundamental broke (the job
       # never reached checkout, or the artifact name drifted) — that should fail this job loudly,
       # not be swallowed the way a genuinely-absent e2e run is.
+      - name: Download Vitest JSON results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vitest-json-results
+
+      # `continue-on-error`: a genuinely absent e2e run must not crash this job — the script prints
+      # an explicit WARNING and fails closed (e2e-only IDs report MISSING).
       - name: Download Playwright JSON results
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         continue-on-error: true
         with:
           name: playwright-json-results

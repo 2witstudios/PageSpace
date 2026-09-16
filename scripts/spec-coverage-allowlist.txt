@@ -4,7 +4,9 @@
 # Rules (enforced by scripts/check-spec-coverage.ts):
 #   - Every ID started allowlisted when the gate was introduced (Wave A, lane A4).
 #   - A lane REMOVES its IDs from this file in the same PR that lands the tests naming them
-#     ("MON-2 …" in an it/test/describe name or a riteway given/should). Leaving an ID here
+#     ("MON-2 …" in an it/test title, or a describe title whose tests ALL pass — never only in a
+#     riteway given/should, which no reporter sees). Only test runs in .github/workflows/ci.yml
+#     count: a suite only security.yml runs never reaches the gate. Leaving an ID here
 #     after a test names it FAILS the gate (STALE-ALLOW), so this file can only shrink.
 #   - A token here that is not a Spec ID FAILS the gate (typo guard).
 #   - Never add an ID back. If a test is deleted, the gate goes red; that is the point.
