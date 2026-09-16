@@ -615,14 +615,14 @@ services:
       # admin DB - INSERT-only on the tamper-evident audit tables: durable audit acceptance before execute (§2.4, §6)
       EXECUTOR_AUDIT_DATABASE_URL: ${EXECUTOR_AUDIT_DATABASE_URL:?EXECUTOR_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
       # all outbound provider traffic goes through the non-credentialed allowlisting egress proxy.
-      # Node's global fetch ignores these vars unless proxy support is enabled explicitly: the executor
-      # runs `node --use-env-proxy` (Node >= 24; present in `node --help` on v24.16.0), or installs an
-      # undici ProxyAgent as the global dispatcher. It has no egress-capable network of its own, so a
-      # fetch that bypasses the proxy fails closed rather than leaking.
-      NODE_OPTIONS: --use-env-proxy
-      HTTPS_PROXY: http://executor-egress:4750
-      HTTP_PROXY: http://executor-egress:4750      # approved http: destinations also traverse the proxy
-      NO_PROXY: infisical,postgres,postgres-admin  # plane / DB hosts are reached directly on their networks
+      # NOT env-var proxying: NO_PROXY is process-wide, so a provider redirect to http://infisical:8080 would be
+      # re-routed DIRECTLY over credential_plane (SSRF into the store). The executor uses two explicit undici
+      # dispatchers instead: a PROXIED dispatcher (ProxyAgent -> executor-egress) for every provider call,
+      # with NO bypass list, and a separate DIRECT client used only by the store adapter and the DB drivers,
+      # pinned to their fixed hosts. Provider fetches set `redirect: 'manual'`, and each hop is re-validated
+      # against the grant's origin and re-sent through the proxied dispatcher. A redirect is never
+      # followed onto the direct path.
+      EXECUTOR_EGRESS_PROXY_URL: http://executor-egress:4750
     read_only: true
     security_opt: ["no-new-privileges:true"]
     deploy: { resources: { limits: { memory: 256M } } }
