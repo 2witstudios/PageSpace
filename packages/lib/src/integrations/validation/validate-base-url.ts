@@ -4,7 +4,8 @@
  * A connection's `baseUrlOverride` is user-supplied and becomes the fetch base
  * for every tool call, with the connection's credentials attached. Both the
  * routes that store it and the HTTP executor that uses it run this check so a
- * target can never be a non-globally-routable address — loopback, RFC 1918,
+ * target is always HTTPS (http: would put those credentials on the wire in
+ * cleartext) and can never be a non-globally-routable address — loopback, RFC 1918,
  * CGNAT, link-local, multicast, reserved, IPv6 ULA (Fly 6PN) / link-local /
  * mapped / NAT64, cloud metadata — whether written as an IP literal or as a
  * hostname that resolves there.
@@ -23,6 +24,14 @@ import { validateExternalURL } from '../../security/url-validator';
 import { isPublicIp } from '../../security/web-fetch-ssrf';
 
 const BLOCKED_TARGET_MESSAGE = 'Base URL must point at a public host';
+
+/**
+ * Refusal reason for a non-HTTPS target. Surfaced verbatim to the user by the
+ * create routes (400 `details.baseUrlOverride`) and by the executor's
+ * `blocked_target` error, so it has to read as guidance, not as a code.
+ */
+export const HTTPS_REQUIRED_MESSAGE =
+  'Base URL must use HTTPS — an http:// target would send this connection\'s credentials in cleartext';
 
 export type IntegrationTargetDecision =
   | { ok: true; address: string }
@@ -62,8 +71,9 @@ const raceWithAbort = <T>(promise: Promise<T>, signal: AbortSignal | undefined):
 /**
  * Decide whether an integration may send a credentialed request to `urlString`,
  * and to which address. Fails closed: an unparseable URL, a blocked scheme or
- * hostname, a non-public IP literal, a resolver failure, no addresses, or ANY
- * resolved address that is not public all return `{ ok: false }`.
+ * hostname, a non-HTTPS protocol, a non-public IP literal, a resolver failure,
+ * no addresses, or ANY resolved address that is not public all return
+ * `{ ok: false }`.
  * Rejects (throws) with an `AbortError` if `signal` aborts while resolving.
  */
 export const validateIntegrationTargetUrl = async (
@@ -77,6 +87,15 @@ export const validateIntegrationTargetUrl = async (
   const shape = await validateExternalURL(urlString, { skipDNSCheck: true });
   if (!shape.valid || !shape.url) {
     return { ok: false, reason: shape.error ?? BLOCKED_TARGET_MESSAGE };
+  }
+
+  // `validateExternalURL` allows http: as well as https:. An integration target
+  // carries the connection's credentials on every request, so http: is refused
+  // here — before the address checks, and on every executor redirect hop — and
+  // there is no downgrade path: `pinnedFetch` is only ever reached through this
+  // decision, so the executor can never fall back to plaintext.
+  if (shape.url.protocol !== 'https:') {
+    return { ok: false, reason: HTTPS_REQUIRED_MESSAGE };
   }
 
   // An IP literal: the URL parser already normalized it; it must be public.
