@@ -53,6 +53,8 @@ describe('validateIntegrationTargetUrl', () => {
       'https://[::ffff:127.0.0.1]/hook',
       'https://[::ffff:100.64.0.1]/hook',
       'https://[64:ff9b::a00:1]/hook', // NAT64 embedding 10.0.0.1
+      'https://[::ffff:0:a00:1]/hook', // IPv4-translated (SIIT) embedding 10.0.0.1
+      'https://[2002:a00:1::1]/hook', // 6to4 embedding 10.0.0.1
       'https://[fdaa:0:1:a7b:0:1:2:3]/hook', // Fly 6PN (ULA)
       'https://[fc00::1]/hook',
       'https://[fe80::1]/hook',
@@ -148,6 +150,8 @@ describe('validateIntegrationTargetUrl', () => {
       ['IPv6 link-local', 'fe80::1'],
       ['mapped loopback', '::ffff:127.0.0.1'],
       ['NAT64-embedded private', '64:ff9b::a00:1'],
+      ['IPv4-translated (SIIT) private', '::ffff:0:a00:1'],
+      ['Teredo', '2001:0:4136:e378:8000:63bf:3fff:fdd2'],
       ['not an IP at all', 'garbage'],
     ])('given a hostname resolving to %s (%s), should reject', async (_label, address) => {
       const decision = await validateIntegrationTargetUrl('https://hooks.corp.example/x', { resolve: async () => [address] });

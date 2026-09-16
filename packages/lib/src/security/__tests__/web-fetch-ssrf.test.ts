@@ -82,6 +82,47 @@ describe('web-fetch-ssrf — pure decision functions', () => {
     });
   });
 
+  // Given an IPv6 address outside global unicast, or one that embeds or
+  // translates to a private IPv4, in ANY textual form, isPublicIp should be
+  // false: public IPv6 is allowlisted to 2000::/3, never denylisted by prefix.
+  describe('isPublicIp — blocks IPv6 that embeds, translates or reserves', () => {
+    it.each([
+      ['IPv4-translated (SIIT) private, hextet', '::ffff:0:a00:1'],
+      ['IPv4-translated (SIIT) private, dotted', '::ffff:0:10.0.0.1'],
+      ['IPv4-translated (SIIT) public', '::ffff:0:5db8:d822'],
+      ['IPv4-mapped private, fully expanded', '0:0:0:0:0:ffff:a00:1'],
+      ['IPv4-mapped metadata, leading zeros', '0000:0000:0000:0000:0000:ffff:a9fe:a9fe'],
+      ['IPv4-compatible (deprecated) private', '::10.0.0.1'],
+      ['loopback, fully expanded', '0:0:0:0:0:0:0:1'],
+      ['local-use NAT64 64:ff9b:1::/48', '64:ff9b:1::a00:1'],
+      ['discard-only 100::/64', '100::1'],
+      ['6to4 embedding a private IPv4', '2002:a00:1::1'],
+      ['Teredo 2001::/32', '2001:0:4136:e378:8000:63bf:3fff:fdd2'],
+      ['IETF protocol assignments 2001::/23', '2001:10::1'],
+      ['documentation 2001:db8::/32', '2001:db8::1'],
+      ['documentation 3fff::/20', '3fff::1'],
+      ['SRv6 SIDs 5f00::/16', '5f00::1'],
+      ['unique-local, uppercase', 'FD00::1'],
+      ['malformed IPv6 (fail closed)', 'not:an:ip'],
+      ['too many groups (fail closed)', '1:2:3:4:5:6:7:8:9'],
+      ['two "::" (fail closed)', '2606::4700::1'],
+    ])('blocks %s', (_label, ip) => {
+      const actual = isPublicIp(ip);
+      const expected = false;
+      expect(actual).toEqual(expected);
+    });
+
+    it.each([
+      ['6to4 embedding a public IPv4', '2002:5db8:d822::1'],
+      ['IPv4-mapped public, fully expanded', '0:0:0:0:0:ffff:5db8:d822'],
+      ['public IPv6 with a zone id', '2606:4700:4700::1111%eth0'],
+    ])('allows %s', (_label, ip) => {
+      const actual = isPublicIp(ip);
+      const expected = true;
+      expect(actual).toEqual(expected);
+    });
+  });
+
   describe('isPublicIp — allows public IPs', () => {
     it.each([
       ['public IPv4', '93.184.216.34'],
