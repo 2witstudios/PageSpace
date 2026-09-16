@@ -253,7 +253,6 @@ describe('the two authorities are separate (ADR 0004 §9)', () => {
       request: { op: 'exec', args: { cmd: 'ls', args: [], cwd: null, env: {}, timeoutMs: null, maxBytes: null } },
       verify,
       hash,
-      rotationGraceMs: 300_000,
     });
     expect(actual).toEqual({ ok: false, reason: 'malformed' });
   });

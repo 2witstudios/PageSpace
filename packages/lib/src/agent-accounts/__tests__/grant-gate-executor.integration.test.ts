@@ -115,7 +115,7 @@ function presentation(grant: AgentAccountGrant, signature = sign(grant)) {
     approval: { kind: 'policy' as const, policyVersion: grant.policyVersion, expired: false, limitsExceeded: false },
     verify,
     hash,
-    rotationGraceMs: 300_000,
+    rotationGraceMs: 300_000 as const,
   };
 }
 

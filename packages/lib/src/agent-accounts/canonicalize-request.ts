@@ -53,7 +53,9 @@
  *   - `content-length` is always derived from the body bytes, so a caller who
  *     supplies a correct one digests identically to one who omits it;
  *   - `bodySha256` over the exact bytes (the empty body hashes to the digest
- *     of zero bytes); `resources` sorted by key.
+ *     of zero bytes); `resources` are the matched entry's `{slot}` values
+ *     from the canonical path, sorted by slot, `[]` without a match — the
+ *     request has no resources field (G1a review M8).
  *
  * Every field is checked before it is dereferenced — the containers
  * (`headers`, `body`, `resources`, `declaredHeaders`) included — so malformed
@@ -302,7 +304,7 @@ export const canonicalizeRequest: CanonicalizeRequest = (call): CanonicalizeResu
   if (input === null || typeof input !== 'object') return refuse('malformed');
   if (!isExecutorChannel(input.channel)) return refuse('malformed');
   if (typeof input.method !== 'string' || typeof input.url !== 'string') return refuse('malformed');
-  if (!isStringRecord(input.headers) || !isStringRecord(input.resources)) return refuse('malformed');
+  if (!isStringRecord(input.headers)) return refuse('malformed');
   if (!(input.body instanceof Uint8Array)) return refuse('malformed');
 
   const channel = input.channel;
@@ -321,14 +323,13 @@ export const canonicalizeRequest: CanonicalizeRequest = (call): CanonicalizeResu
   if (!path.ok) return path;
   const query = canonicalizeQuery(url.search);
   if (!query.ok) return query;
-  const entry = lookupOperation({ registry, providerSlug, channel, method: method as CanonicalRequest['method'], path: path.path });
-  const headers = canonicalizeHeaders(input.headers, entry?.declaredHeaders ?? [], input.body.byteLength);
+  const match = lookupOperation({ registry, providerSlug, channel, method: method as CanonicalRequest['method'], path: path.path });
+  const headers = canonicalizeHeaders(input.headers, match?.entry.declaredHeaders ?? [], input.body.byteLength);
   if (!headers.ok) return headers;
 
   const bodySha256 = createHash('sha256').update(input.body).digest('hex');
-  const resources = Object.entries(input.resources)
-    .map(([key, value]) => [key, value] as const)
-    .sort((a, b) => compareStrings(a[0], b[0]) || compareStrings(a[1], b[1]));
+  // Extracted from the path by the matched entry's slots — never the caller's (M8).
+  const resources = match?.resources ?? [];
 
   return {
     ok: true,
@@ -341,7 +342,7 @@ export const canonicalizeRequest: CanonicalizeRequest = (call): CanonicalizeResu
       headers: headers.headers,
       bodySha256,
       resources,
-      operation: entry === null ? GENERIC_OPERATION : { class: entry.operation.class, name: entry.operation.name },
+      operation: match === null ? GENERIC_OPERATION : { class: match.entry.operation.class, name: match.entry.operation.name },
     },
   };
 };

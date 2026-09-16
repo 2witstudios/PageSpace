@@ -308,6 +308,11 @@
       "import": "./dist/agent-accounts/find-operation-registry-conflicts.js",
       "require": "./dist/agent-accounts/find-operation-registry-conflicts.js"
     },
+    "./agent-accounts/find-duplicate-resource-slots": {
+      "types": "./dist/agent-accounts/find-duplicate-resource-slots.d.ts",
+      "import": "./dist/agent-accounts/find-duplicate-resource-slots.js",
+      "require": "./dist/agent-accounts/find-duplicate-resource-slots.js"
+    },
     "./agent-accounts/denial-audit-record": {
       "types": "./dist/agent-accounts/denial-audit-record.d.ts",
       "import": "./dist/agent-accounts/denial-audit-record.js",
