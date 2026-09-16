@@ -90,14 +90,71 @@ describe('X-6 spec ID-coverage gate: test-name extraction', () => {
     expect(extractTestNames(src)).toEqual(['WAL-9 sibling declared after, must still count']);
   });
 
-  it('X-6 still counts it.only, test.describe, test.step, and skipIf(false) declarations', () => {
+  it('X-6 still counts it.only, test.describe, and test.step declarations', () => {
     const src = `
       it.only('SEC-1 only', () => {});
       test.describe('UI-2 playwright group', () => {});
       test.step('UI-3 a step', async () => {});
-      it.skipIf(!tableExists)('POL-1 conditional', () => {});
     `;
-    expect(extractTestNames(src)).toEqual(['SEC-1 only', 'UI-2 playwright group', 'UI-3 a step', 'POL-1 conditional']);
+    expect(extractTestNames(src)).toEqual(['SEC-1 only', 'UI-2 playwright group', 'UI-3 a step']);
+  });
+
+  it('X-6 rejects it.skipIf(cond)/it.runIf(cond) — a conditional it/test is never provably unconditional, same as a conditional describe', () => {
+    const src = `
+      it.skipIf(!tableExists)('POL-1 conditional', () => {});
+      test.runIf(supportsFeature)('POL-2 also conditional', () => {});
+    `;
+    expect(extractTestNames(src)).toEqual([]);
+  });
+
+  it('X-6 rejects it.runIf(false) and it.skipIf(true) even though the condition looks statically resolvable — fail-closed never evaluates it', () => {
+    const src = `
+      it.runIf(false)('POL-3 would never run', () => {});
+      it.skipIf(true)('POL-4 would always be skipped', () => {});
+    `;
+    expect(extractTestNames(src)).toEqual([]);
+  });
+
+  it('X-6 rejects a test whose own body calls Playwright\'s runtime skip guard test.skip(cond, reason) as a statement', () => {
+    const src = `
+      test('WAL-6 conditionally skips itself at runtime', ({ browserName }) => {
+        test.skip(browserName === 'webkit', 'not supported on webkit');
+        doStuff();
+      });
+    `;
+    expect(extractTestNames(src)).toEqual([]);
+  });
+
+  it('X-6 rejects every test in a describe whose body calls the runtime skip guard at the top level', () => {
+    const src = `
+      test.describe('WAL-7 group gated at runtime', () => {
+        test.skip(isCI, 'flaky in CI');
+        test('WAL-7 first test in the gated group', () => {});
+        test('WAL-7 second test in the gated group', () => {});
+      });
+      test('WAL-8 sibling declared outside the gated group, must still count', () => {});
+    `;
+    expect(extractTestNames(src)).toEqual(['WAL-8 sibling declared outside the gated group, must still count']);
+  });
+
+  it("X-6 does not let a runtime test.skip(cond, reason) inside one test's body affect an unrelated sibling test's own coverage", () => {
+    const src = `
+      test('SEC-2 gated test', () => {
+        test.skip(flag, 'reason');
+      });
+      test('SEC-3 unrelated sibling, must still count', () => {});
+    `;
+    expect(extractTestNames(src)).toEqual(['SEC-3 unrelated sibling, must still count']);
+  });
+
+  it('X-6 rejects declarations nested inside a call this scanner does not recognize (an unfamiliar modifier such as .each) — an unknown wrapper never proves its children run', () => {
+    const src = `
+      describe.each(['a', 'b'])('SEC-4 parameterized suite', (variant) => {
+        it('SEC-4 a test inside the unrecognized wrapper', () => {});
+      });
+      it('AUD-1 unrelated sibling declared after, must still count', () => {});
+    `;
+    expect(extractTestNames(src)).toEqual(['AUD-1 unrelated sibling declared after, must still count']);
   });
 
   it('X-6 rejects an it() nested inside describe.skip(...) even though the it() itself carries no skip modifier', () => {

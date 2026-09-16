@@ -16,13 +16,19 @@
  *      literal argument to a `CallExpression` rooted at `it` / `test` / `describe` (and
  *      Playwright's `test.describe` / `test.step`), plus the `given:` / `should:` strings that
  *      are themselves arguments to the repo's riteway-style `assert({ given, should, … })`
- *      helper. None of this counts unless it EXECUTES: a declaration under `.skip` / `.todo` /
- *      `.fixme`, one nested at any depth inside a `describe.skip(...)` / `describe.skipIf(...)
- *      (...)` / `describe.runIf(...)(...)` block (however the wrapping condition or callback are
- *      themselves spelled — the callback is taken from the AST argument list, never by scanning
- *      for the next `{`), a `RegExp.test('MON-2 …')` method call (its callee resolves to a
- *      property access on some `pattern`, not to the `it`/`test`/`describe` identifier), or a
- *      plain object that merely has `given`/`should` keys without being passed to `assert(...)`.
+ *      helper. None of this counts unless it can be PROVEN to execute unconditionally
+ *      (fail-closed — an unrecognized shape is never guessed at as live): a declaration under
+ *      `.skip` / `.todo` / `.fixme`; a curried `.skipIf(cond)(...)` / `.runIf(cond)(...)` — on a
+ *      `describe` OR an individual `it`/`test`, and regardless of what the condition expression
+ *      looks like, even a literal `true`/`false`; one nested at any depth inside such a block
+ *      (however the wrapping condition or callback are themselves spelled — the callback is
+ *      taken from the AST argument list, never by scanning for the next `{`); one whose own body
+ *      calls Playwright's runtime skip guard (`test.skip(cond, reason)` called AS A STATEMENT,
+ *      not as a declaration); one wrapped by a test-framework-rooted call this scanner does not
+ *      recognize (an unfamiliar modifier such as `.each`); a `RegExp.test('MON-2 …')` method
+ *      call (its callee resolves to a property access on some `pattern`, not to the
+ *      `it`/`test`/`describe` identifier); or a plain object that merely has `given`/`should`
+ *      keys without being passed to `assert(...)`.
  *   4. Print a table ID → files, and exit non-zero listing every ID that no test names.
  *
  * The allowlist (`scripts/spec-coverage-allowlist.txt`) holds IDs not yet in scope. EVERY ID
@@ -198,6 +204,57 @@ function isAssertCall(call: ts.CallExpression): boolean {
 }
 
 /**
+ * True for a CallExpression rooted at `it`/`test`/`describe`, REGARDLESS of whether
+ * `resolveTestCall` understood its modifier chain. Used only to decide whether an unrecognized
+ * shape still needs fail-closed treatment (it might be a test-framework call this scanner simply
+ * doesn't model yet), as opposed to an ordinary function call that happens to be a sibling.
+ */
+function isTestFrameworkRootCall(call: ts.CallExpression): boolean {
+  const inner = ts.isCallExpression(call.expression) ? call.expression : call;
+  const chain = resolvePropertyChain(inner.expression);
+  return ts.isIdentifier(chain.root) && TEST_BASE_NAMES.has(chain.root.text);
+}
+
+/**
+ * Playwright's runtime skip guard: `test.skip(condition, reason)` (or the bare `test.skip()`)
+ * called AS A STATEMENT inside a test or describe body, as opposed to `it.skip('name', fn)`
+ * which is a DECLARATION whose first argument is the test's own name. The two are structurally
+ * identical to `resolveTestCall` (root + a single `skip` modifier + up to two more arguments) —
+ * the only distinguishing signal is that a declaration's first argument is a string literal and
+ * this guard's is not (a boolean, an identifier, or nothing at all).
+ */
+function isRuntimeSkipCall(call: ts.CallExpression): boolean {
+  if (ts.isCallExpression(call.expression)) return false; // the curried skipIf/runIf(cond)(...) form is not this shape
+  const chain = resolvePropertyChain(call.expression);
+  if (!ts.isIdentifier(chain.root) || !TEST_BASE_NAMES.has(chain.root.text)) return false;
+  if (chain.modifiers.length !== 1 || chain.modifiers[0] !== 'skip') return false;
+  return !isStringLiteralLike(call.arguments[0]);
+}
+
+/**
+ * Whether `node`'s own body — NOT the body of any test/describe declared inside it, which has
+ * its own separate execution guarantee — contains a runtime skip guard. A describe (or test)
+ * whose callback calls this cannot be proven to run its declared children unconditionally, so
+ * fail-closed treats the whole subtree the same as a static `.skip`.
+ */
+function containsRuntimeSkipGuard(node: ts.Node): boolean {
+  let found = false;
+  const walk = (n: ts.Node): void => {
+    if (found) return;
+    if (ts.isCallExpression(n)) {
+      if (isRuntimeSkipCall(n)) {
+        found = true;
+        return;
+      }
+      if (resolveTestCall(n) !== undefined) return; // a nested declaration owns its own body
+    }
+    ts.forEachChild(n, walk);
+  };
+  ts.forEachChild(node, walk);
+  return found;
+}
+
+/**
  * Test names declared LIVE in a source file: `it`/`test`/`describe` string (or template-literal-
  * without-substitutions) arguments, plus riteway `given:`/`should:` strings that are themselves
  * arguments to an `assert(...)` call. A real TypeScript parse — not text/regex scanning — decides
@@ -205,6 +262,15 @@ function isAssertCall(call: ts.CallExpression): boolean {
  *   - a declaration under `.skip`/`.todo`/`.fixme`, or nested (at any depth) inside a
  *     `describe.skip(...)`/`describe.skipIf(...)(...)`/`describe.runIf(...)(...)` block, never
  *     counts, regardless of how the wrapping suite's condition expression or callback are spelled;
+ *   - a curried `.skipIf(cond)(...)`/`.runIf(cond)(...)` never counts EITHER, on a `describe` or
+ *     on an individual `it`/`test` — fail-closed applies the identical rule to both, even when
+ *     the condition looks statically resolvable (`skipIf(true)`, `runIf(false)`);
+ *   - a declaration whose own body calls Playwright's runtime skip guard
+ *     (`test.skip(cond, reason)` used AS A STATEMENT, not `it.skip('name', fn)` as a
+ *     declaration) never counts — its execution is not provably unconditional either;
+ *   - a call rooted at `it`/`test`/`describe` with a modifier this scanner does not recognize
+ *     (e.g. `.each`) never counts, and neither do any declarations nested inside it — an
+ *     unfamiliar wrapper is never assumed to run its children;
  *   - `someRegex.test('MON-2 …')` is a property-access call on `pattern`, not a call rooted at the
  *     `it`/`test`/`describe` identifier, so it is never resolved as a declaration;
  *   - `{ given: 'WAL-1 …' }` only counts when it is literally `assert(...)`'s first argument, never
@@ -219,10 +285,12 @@ export function extractTestNames(source: string, fileName = 'source.test.tsx'): 
       const resolved = resolveTestCall(node);
       if (resolved) {
         const isUnconditionalSkip = resolved.modifiers.some((m) => SKIP_MODIFIERS.has(m));
-        // A describe-level `.skipIf`/`.runIf` means the SUITE's own declared name — not only its
-        // children — may never run. An individual `it.skipIf`/`test.skipIf` is a single test
-        // whose own execution is conditional, which this scanner still counts (it may well run).
-        const treatAsSkip = isUnconditionalSkip || (resolved.isDescribeFamily && resolved.isConditional);
+        // A curried `.skipIf(cond)`/`.runIf(cond)` cannot be proven to run — a literal-looking
+        // condition (`skipIf(true)`, `runIf(false)`) is not evaluated specially, and neither is
+        // a describe treated any differently from an individual it/test: fail-closed applies the
+        // same rule to both, so this scanner never counts a conditionally-gated declaration.
+        const hasRuntimeSkipGuard = resolved.callbackArg !== undefined && containsRuntimeSkipGuard(resolved.callbackArg);
+        const treatAsSkip = isUnconditionalSkip || resolved.isConditional || hasRuntimeSkipGuard;
         if (!treatAsSkip && skipDepth === 0 && isStringLiteralLike(resolved.nameArg)) {
           names.push(resolved.nameArg.text);
         }
@@ -245,6 +313,13 @@ export function extractTestNames(source: string, fileName = 'source.test.tsx'): 
             }
           }
         }
+      }
+      if (isTestFrameworkRootCall(node)) {
+        // A test-framework-rooted call `resolveTestCall` didn't understand (an unfamiliar
+        // modifier such as `.each`) might still wrap live children we cannot prove run — never
+        // guess: descend fail-closed, one skip level deeper, rather than at the same depth.
+        ts.forEachChild(node, (child) => visit(child, skipDepth + 1));
+        return;
       }
     }
     ts.forEachChild(node, (child) => visit(child, skipDepth));
