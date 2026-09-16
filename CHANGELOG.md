@@ -1166,6 +1166,28 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   on the real destination, and the command itself carries an end-of-options marker so a name can
   never be read as a flag. The same audit found and closed the same gap in `git_fetch`, `git_pull`
   (remote and branch), `git_config` (key), and `git_diff` (base and head refs).
+- **Integration base URLs can no longer point inside the platform** — a custom base URL on an
+  integration connection (the field that lets a webhook or self-hosted API be reached) was only
+  checked for being a well-formed URL. It could name the server's own loopback address, a private
+  network range, or a cloud metadata address, and a tool call would then send the connection's
+  credentials there and hand the reply to the assistant. A base URL is now refused when it is
+  saved if it points at any of those, including a hostname that resolves there, and it is checked
+  again, with a fresh DNS lookup, immediately before every request is sent; the request then
+  connects to exactly the address that was checked, so a name that changes its answer between the
+  check and the connection gains nothing, and a check that stalls is cut off by the same time
+  limit as the request. The check covers every non-public range, not just the common private
+  ones (carrier-grade NAT, multicast, reserved ranges, and any IPv6 address that maps,
+  translates or tunnels to a private IPv4, however it is written). An IPv6 address is only
+  treated as public when it sits in a block the internet registries have actually handed out
+  (as published by IANA on 2025-10-10); a block allocated after that date cannot be fetched by
+  web fetch or by integrations until PageSpace is updated to include it. A base URL must
+  also use `https://` now: an `http://` base URL put the connection's credentials on the wire in
+  the clear for anyone on the network path to read, so it is refused when you save it and again
+  before every request, with a message saying so. Every built-in provider already used `https://`,
+  so only a hand-entered `http://` base URL is affected — change it to `https://`. Upstream
+  redirects are no longer followed automatically: a redirect to a different site is refused
+  outright, so a connection's credentials never travel to a site the integration was not set up
+  for.
 
 ## [1.7.1] — 2026-08-10
 
