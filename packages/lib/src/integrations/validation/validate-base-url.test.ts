@@ -16,7 +16,13 @@ vi.mock('dns', () => ({
 }));
 
 import { promises as dns } from 'dns';
-import { validateIntegrationTargetUrl, HTTPS_REQUIRED_MESSAGE, type HostnameResolver } from './validate-base-url';
+import {
+  validateIntegrationTargetUrl,
+  HTTPS_REQUIRED_MESSAGE,
+  DEFAULT_LOOKUP_TIMEOUT_MS,
+  LOOKUP_TIMED_OUT_MESSAGE,
+  type HostnameResolver,
+} from './validate-base-url';
 
 const PUBLIC = '93.184.216.34';
 const publicResolver: HostnameResolver = async () => [PUBLIC];
@@ -187,6 +193,47 @@ describe('validateIntegrationTargetUrl', () => {
 
       expect(dns.lookup).toHaveBeenCalledWith('api.github.com', { all: true });
       expect(decision).toEqual(REJECTED);
+    });
+  });
+
+  describe('lookup deadline without a signal', () => {
+    // The create routes call the validator with no signal; a stalled DNS
+    // answer must not hold the request (or a resolver thread) open forever.
+    it('given no signal and a resolver that never settles, should refuse the target once the default deadline passes', async () => {
+      vi.useFakeTimers();
+      try {
+        const pending = validateIntegrationTargetUrl('https://slow.example/x', { resolve: neverResolver });
+        await vi.advanceTimersByTimeAsync(DEFAULT_LOOKUP_TIMEOUT_MS);
+        const actual = await pending;
+        const expected = { ok: false, reason: LOOKUP_TIMED_OUT_MESSAGE };
+        expect(actual).toEqual(expected);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('given no signal and a resolver that answers before the deadline, should accept normally', async () => {
+      const actual = await validateIntegrationTargetUrl('https://api.github.com/', { resolve: publicResolver });
+      const expected = { ok: true, address: PUBLIC };
+      expect(actual).toEqual(expected);
+    });
+
+    it('given a caller signal, should leave the deadline to that signal rather than the default', async () => {
+      vi.useFakeTimers();
+      try {
+        const controller = new AbortController();
+        const pending = validateIntegrationTargetUrl('https://slow.example/x', { resolve: neverResolver, signal: controller.signal });
+        let settled = false;
+        pending.then(() => { settled = true; }, () => { settled = true; });
+        await vi.advanceTimersByTimeAsync(DEFAULT_LOOKUP_TIMEOUT_MS * 2);
+        const actual = settled;
+        const expected = false;
+        expect(actual).toEqual(expected);
+        controller.abort();
+        await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
