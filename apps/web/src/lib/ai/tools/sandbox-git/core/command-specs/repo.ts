@@ -35,7 +35,9 @@ export interface ConfigArgsInput {
 }
 
 export function buildConfigArgs({ key, value, global }: ConfigArgsInput): string[] {
-  return ['config', ...optFlag('--global', global), key, value];
+  // "--" ends options: git permutes options after positionals, so without it
+  // a key or value like "--global" / "--unset" would be parsed as a flag.
+  return ['config', ...optFlag('--global', global), '--', key, value];
 }
 
 export interface RemoteAddArgsInput {
