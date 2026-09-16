@@ -25,6 +25,18 @@ type TargetValidator = (url: string, signal: AbortSignal) => Promise<Integration
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 5;
 
+/** Headers that describe a request body; dropped when a redirect rewrites the method to GET (Fetch spec). */
+const REQUEST_BODY_HEADERS = new Set([
+  'content-length',
+  'content-type',
+  'content-encoding',
+  'content-language',
+  'content-location',
+]);
+
+const withoutBodyHeaders = (headers: Record<string, string>): Record<string, string> =>
+  Object.fromEntries(Object.entries(headers).filter(([name]) => !REQUEST_BODY_HEADERS.has(name.toLowerCase())));
+
 export interface HttpRequest {
   url: string;
   method: string;
@@ -113,6 +125,7 @@ const fetchGuarded = async (
   let url = request.url;
   let method = request.method;
   let body = request.body;
+  let headers = request.headers;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const decision = await validateTarget(url, signal);
@@ -122,7 +135,7 @@ const fetchGuarded = async (
 
     const response = await fetchFn(url, {
       method,
-      headers: request.headers,
+      headers,
       body,
       signal,
       redirect: 'manual',
@@ -160,6 +173,7 @@ const fetchGuarded = async (
     if (response.status === 303 || ((response.status === 301 || response.status === 302) && method === 'POST')) {
       method = 'GET';
       body = undefined;
+      headers = headers && withoutBodyHeaders(headers);
     }
     url = next.toString();
   }
