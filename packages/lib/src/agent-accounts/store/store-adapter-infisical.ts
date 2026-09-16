@@ -46,7 +46,7 @@ import type { PlaneMetadataRepository } from './plane-metadata-repository';
 import { lockKeyFor } from './plane-metadata-repository';
 import { decideCas } from './decide-cas';
 import { decideResolve } from './decide-resolve';
-import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
+import { withAdvisoryLock, type AdvisoryLockPool, type WithAdvisoryLockResult } from '@pagespace/db/advisory-lock';
 
 export type ResolveProject = (tenantId: TenantId) => Promise<{ readonly projectId: string } | null>;
 export type ResolveCredentials = (input: { readonly tenantId: TenantId; readonly identityId: string }) => Promise<InfisicalCredentials | null>;
@@ -109,6 +109,17 @@ function stripRefreshToken<K extends AccountKind>(kind: K, material: SecretMater
 export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): StoreAdapter {
   const rotationGraceMs = (deps.rotationGraceMs ?? ROTATION_GRACE_MS_DEFAULT) as StoreLimits['rotationGraceMs'];
 
+  /** `withAdvisoryLock` on the ref's key, retried while busy (see LOCK_RETRY_ATTEMPTS). */
+  async function withSecretLock<T>(ref: SecretRef, fn: () => Promise<T>): Promise<WithAdvisoryLockResult<T>> {
+    const attempt = () => withAdvisoryLock(deps.advisoryLockPool, lockKeyFor(ref), fn);
+    let lockResult = await attempt();
+    for (let tries = 0; lockResult.outcome === 'lock_busy' && tries < LOCK_RETRY_ATTEMPTS; tries += 1) {
+      await sleep(LOCK_RETRY_DELAY_MS);
+      lockResult = await attempt();
+    }
+    return lockResult;
+  }
+
   async function writeSecret(input: {
     readonly ref: PutInput['ref'];
     readonly material: SecretMaterial;
@@ -129,8 +140,7 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     const credentials = await deps.resolveCredentials({ tenantId: ref.tenantId, identityId: identity.identityId });
     if (project === null || credentials === null) return { ok: false, reason: 'store_unavailable' };
 
-    const lockKey = lockKeyFor(ref);
-    const attemptLock = () => withAdvisoryLock(deps.advisoryLockPool, lockKey, async () => {
+    const lockResult = await withSecretLock(ref, async () => {
       const before = await deps.metadata.read(ref);
       // A revoked ref is broker-denied permanently, never reactivated by a later write (ADR 0005
       // §2.2 revoke: "every future resolve returns revoked"). Refuse under the SAME lock a write
@@ -201,12 +211,6 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
       });
       return decision;
     });
-
-    let lockResult = await attemptLock();
-    for (let attempt = 0; lockResult.outcome === 'lock_busy' && attempt < LOCK_RETRY_ATTEMPTS; attempt += 1) {
-      await sleep(LOCK_RETRY_DELAY_MS);
-      lockResult = await attemptLock();
-    }
 
     if (lockResult.outcome === 'lock_busy') return { ok: false, reason: 'lock_unavailable' };
     if (lockResult.outcome === 'connection_error') return { ok: false, reason: 'store_unavailable' };
@@ -293,7 +297,9 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
       if (input.ref.tenantId !== input.identity.tenantId) return { ok: false, reason: 'not_found' };
       const stored = await deps.metadata.read(input.ref);
       if (stored === null) return { ok: false, reason: 'not_found' };
-      const revokedAt = deps.now();
+      // The FIRST revocation is the one REVOKE_RETENTION_MS counts from; a repeated revoke must not
+      // restart that clock.
+      const revokedAt = stored.revokedAt ?? deps.now();
       await deps.metadata.markRevoked({ ref: input.ref, revokedAt });
       return { ok: true, revokedAt };
     },
@@ -304,20 +310,29 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
       const credentials = await deps.resolveCredentials({ tenantId: input.ref.tenantId, identityId: input.identity.identityId });
       if (project === null || credentials === null) return { ok: false, reason: 'store_unavailable' };
 
-      const stored = await deps.metadata.read(input.ref);
-      if (stored === null) return { ok: false, reason: 'not_found' };
+      // Under the writers' lock: a rotate already past its read would otherwise commit AFTER this
+      // delete and re-insert the metadata row (or re-write the grace companion) — an erasure that
+      // does not stay erased.
+      const lockResult = await withSecretLock(input.ref, async (): Promise<DeleteResult | null> => {
+        const stored = await deps.metadata.read(input.ref);
+        if (stored === null) return { ok: false, reason: 'not_found' };
 
-      // The grace companion holds the material `rotate` replaced; erasing the account must erase
-      // it too. Deleted FIRST: absent (never rotated) is fine, any other failure stops before the
-      // primary secret or the metadata row go, so a retried delete still finds both and resumes.
-      const previous = await deps.infisical.deleteSecret({ projectId: project.projectId, credentials, secretKey: previousSecretKeyFor(input.ref.accountId, input.ref.kind) });
-      if (!previous.ok && previous.reason !== 'not_found') return { ok: false, reason: 'store_unavailable' };
+        // The grace companion holds the material `rotate` replaced; erasing the account must erase
+        // it too. Deleted FIRST: absent (never rotated) is fine, any other failure stops before the
+        // primary secret or the metadata row go, so a retried delete still finds both and resumes.
+        const previous = await deps.infisical.deleteSecret({ projectId: project.projectId, credentials, secretKey: previousSecretKeyFor(input.ref.accountId, input.ref.kind) });
+        if (!previous.ok && previous.reason !== 'not_found') return { ok: false, reason: 'store_unavailable' };
 
-      const secretKey = secretKeyFor(input.ref.accountId, input.ref.kind);
-      const result = await deps.infisical.deleteSecret({ projectId: project.projectId, credentials, secretKey });
-      if (!result.ok) return { ok: false, reason: result.reason === 'not_found' ? 'not_found' : 'store_unavailable' };
+        const secretKey = secretKeyFor(input.ref.accountId, input.ref.kind);
+        const result = await deps.infisical.deleteSecret({ projectId: project.projectId, credentials, secretKey });
+        if (!result.ok) return { ok: false, reason: result.reason === 'not_found' ? 'not_found' : 'store_unavailable' };
 
-      await deps.metadata.remove(input.ref);
+        await deps.metadata.remove(input.ref);
+        return null;
+      });
+
+      if (lockResult.outcome !== 'acquired') return { ok: false, reason: 'store_unavailable' };
+      if (lockResult.result !== null) return lockResult.result;
       return { ok: true, removed: true, upstream: input.upstream };
     },
 
