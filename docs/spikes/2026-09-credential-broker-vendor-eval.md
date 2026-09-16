@@ -694,7 +694,13 @@ configs:
   # and operation binding is the executor's grant check, and the proxy does not replace it.
   executor_egress_acl:
     # A GENERATED per-tenant artifact, not inline content. `tenant-stack.sh up` renders it from the
-    # sources above before starting the services, then both services mount it. Illustrative rendering:
+    # sources above, then both services mount it. The sources live in the tenant Postgres, so `up` is staged:
+    #   1. if the file is missing, write a DENY-ALL seed (empty allowed_domains, hash header of the current
+    #      builtinProviderList), so the compose project config is valid;
+    #   2. `compose up -d postgres postgres-admin migrate` and wait for migrations;
+    #   3. render the real ACL from the database (a one-shot generator run on `internal`);
+    #   4. `compose up -d` the rest, which starts executor-egress and credential-executor on the real file.
+    # A failure at step 3 leaves the deny-all seed in place: fail closed, never open. Illustrative rendering:
   #   # builtin-definitions-sha3-256: <hex>
   #   version: v1
   #   services: []
