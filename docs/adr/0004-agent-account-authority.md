@@ -54,7 +54,7 @@ Every field is **required**. Absence is encoded as `null` only where the field's
 | `accountId` | `AccountId` | the account | the row |
 | `credentialVersion` | `CredentialVersion` | the store version the executor may resolve | `resolve` refuses any other version |
 | `policyVersion` | `PolicyVersion` | the account policy this grant was evaluated under | the row's current `policyVersion` |
-| `bindingDigest` | `BindingDigest` | `hash(canonicalJson(PlaneBindings))` — the authority's signed copy of `(tenantId, ownerRef, allowedOrigins, policyVersion, kind)` it evaluated | the store's own `PlaneBindings` digest at resolve (ADR 0005 §2.4); a tampered main-DB row cannot produce a matching grant |
+| `bindingDigest` | `BindingDigest` | `hash(canonicalJson(PlaneBindings))` — the authority's signed copy of `(tenantId, ownerRef, allowedOrigins, policyVersion, policyDigest, kind)` it evaluated; `policyDigest` covers the approval policy, resource restrictions and bound agent pages (ADR 0005 §2.4) | the store's own `PlaneBindings` digest at resolve (ADR 0005 §2.4); a tampered main-DB row cannot produce a matching grant |
 | `sessionHttp` | `boolean` | whether the default-off `session_http` permission was granted for this use (§4.1); the only way a `session` kind reaches the HTTP executor | the account's `sessionHttpEnabled` flag and `decideAccountAccess` |
 | `operation` | `OperationRef` (`{ class: OperationClass; name: string }`) | the typed operation (§3.4) | the request's operation |
 | `requestDigest` | `RequestDigest` | `hash(canonicalizeRequest(request))` | recomputed by the presenter from the frozen request |

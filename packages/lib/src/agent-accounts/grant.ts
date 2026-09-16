@@ -134,10 +134,12 @@ export type AgentAccountGrant = {
   readonly policyVersion: PolicyVersion;
   /**
    * The authority's signed digest of the plane bindings it evaluated
-   * `(tenantId, ownerRef, allowedOrigins, policyVersion, kind)`. The store
-   * compares it with the digest of ITS copy at resolve, so a main-DB writer
-   * who reassigns the owner or widens origins cannot produce a grant the
-   * plane honours (threat model A9; Codex P1 on PR #2637).
+   * `(tenantId, ownerRef, allowedOrigins, policyVersion, policyDigest, kind)`.
+   * The store compares it with the digest of ITS copy at resolve, so a
+   * main-DB writer who reassigns the owner, widens origins, or widens the
+   * approval policy / resource restrictions / agent-page bindings (all inside
+   * `policyDigest`) cannot produce a grant the plane honours (threat model A9;
+   * Codex P1 on PR #2637; G1a review H1).
    */
   readonly bindingDigest: BindingDigest;
   readonly operation: OperationRef;

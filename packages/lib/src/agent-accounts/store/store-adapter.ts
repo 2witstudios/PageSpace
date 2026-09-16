@@ -23,8 +23,9 @@ import type {
   SessionFormat,
   TenantId,
 } from '@pagespace/db/schema/agent-accounts';
-import type { AgentAccountGrant, BindingDigest, HashBytes, PresenterChannel } from '../grant';
+import type { AgentAccountGrant, AgentPageId, BindingDigest, Brand, HashBytes, PresenterChannel } from '../grant';
 import type { CanonicalOrigin } from '../canonical-request';
+import type { AccountApprovalPolicy } from '../approval';
 
 /** Maps to the Infisical path `/<tenantProject>/<accountId>/<kind>`. */
 export type SecretRef = {
@@ -34,15 +35,39 @@ export type SecretRef = {
 };
 
 /**
+ * The security-relevant SCOPE of an account — everything a main-DB writer
+ * could widen without touching owner, tenant or kind: the approval policy,
+ * the per-provider resource restrictions, the agent pages bound to the
+ * account, and the allowed origins (ADR 0005 §2.4). Delegation and approval
+ * rows are deliberately NOT here: each is protected by its own fact compared
+ * against the signed grant (`DelegationFact`, `ApprovalFact`).
+ */
+export type PlaneScope = {
+  readonly approvalPolicy: AccountApprovalPolicy | null;
+  readonly resourceRestrictions: Readonly<Record<string, readonly string[]>>;
+  /** Unrevoked `agent_account_bindings` plus the owner page of an agent-page-owned account; sorted before hashing. */
+  readonly boundAgentPageIds: readonly AgentPageId[];
+  readonly allowedOrigins: readonly CanonicalOrigin[];
+};
+
+/** SHA3-256 over `canonicalJson(PlaneScope)` (ADR 0005 §2.4). */
+export type PolicyDigest = Brand<string, 'PolicyDigest'>;
+
+/**
  * The plane's INDEPENDENT copy of the authority bindings, stored beside the
  * material and compared at resolve (threat model A9: a main-DB writer who
- * reassigns owner/origins produces a grant whose bindings disagree here).
+ * reassigns the owner, widens origins, OR widens the approval policy,
+ * resource restrictions or agent-page bindings produces a grant whose
+ * bindings disagree here). `policyDigest` is what makes the last three
+ * visible to the plane: `policyVersion` is a counter a writer can leave
+ * untouched, a digest is not.
  */
 export type PlaneBindings = {
   readonly tenantId: TenantId;
   readonly ownerRef: AccountOwnerRef;
   readonly allowedOrigins: readonly CanonicalOrigin[];
   readonly policyVersion: PolicyVersion;
+  readonly policyDigest: PolicyDigest;
   readonly kind: AccountKind;
 };
 
@@ -260,6 +285,14 @@ export type StoredSecretFacts = {
 };
 
 export type ResolveDecision = { readonly ok: true } | { readonly ok: false; readonly reason: ResolveDenyReason };
+
+/**
+ * `digestPlaneScope` — SHA3-256 over `canonicalJson(scope)` with
+ * `boundAgentPageIds` and `allowedOrigins` sorted, so the authority (reading
+ * the main DB) and the plane (holding its own copy) derive the same bytes.
+ * The injected `hash` MUST be SHA3-256. G1b implements.
+ */
+export type DigestPlaneScope = (input: { readonly scope: PlaneScope; readonly hash: HashBytes }) => PolicyDigest;
 
 /** `digestBindings` — `hash(canonicalJson(bindings))`, the same bytes on the authority and the store side. G1b implements. */
 export type DigestBindings = (input: { readonly bindings: PlaneBindings; readonly hash: HashBytes }) => BindingDigest;

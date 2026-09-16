@@ -21,6 +21,7 @@ describe('decideResolve (ADR 0005 F1–F5, F10; §10.3–5)', () => {
   it.todo('given stored bindings whose policyVersion differs from those the grant bindingDigest was computed over, should return binding_mismatch [§10.5; PR #2637 P1]');
   it.todo('given stored bindings with a changed ownerRef or allowedOrigins versus the grant bindingDigest, should return binding_mismatch [§10.5]');
   it.todo('given stored bindings differing only in key order from those digested, should compare equal (digestBindings is canonical) [§10.5]');
+  it.todo('given stored bindings whose policyDigest covers a wider approval policy scope, one more resourceRestrictions repo, or one more bound agent page than the grant bindingDigest, with policyVersion unchanged, should return binding_mismatch [§10.20; G1a review H1]');
   it.todo('given decideResolve, should consult no main-DB fact — the bindings check is digestBindings(stored) versus grant.bindingDigest with the injected hash [0005 §2.4]');
   it.todo('given resolve of an oauth2 ref by http-executor or relay-runner, should return material with no refreshToken key (type: MaterialForChannel lacks it; runtime: adapter strips) [§10.16; PR #2637 P1]');
   it.todo('given resolve of an oauth2 ref by refresh-worker, should return material including refreshToken [§10.16]');
@@ -29,6 +30,12 @@ describe('decideResolve (ADR 0005 F1–F5, F10; §10.3–5)', () => {
   it.todo('given the authority issuing a grant, bindingDigest should equal digestBindings over the bindings it read [§10.19]');
   it.todo('given stored null (wrong-tenant identity or absent), should return not_found [F5]');
   it.todo('given revokedAt set, should return revoked regardless of version [F10]');
+});
+
+describe('digestPlaneScope (ADR 0005 §2.4, §10.20)', () => {
+  it.todo('given the same scope with boundAgentPageIds and allowedOrigins in a different order, should return the same PolicyDigest');
+  it.todo('given a scope differing in approvalPolicy, resourceRestrictions, boundAgentPageIds or allowedOrigins, should return a different PolicyDigest');
+  it.todo('given the injected hash, should be SHA3-256 over canonicalJson(scope) — the authority and the plane derive identical bytes');
 });
 
 describe('decideStoreWrite — our CAS (ADR 0005 §10.6)', () => {

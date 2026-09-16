@@ -49,7 +49,7 @@ Exactly three executor classes may call `resolve`: the HTTP executor (G2), the r
 | `delete` | `({ ref; identity; upstream: UpstreamRevocation }) → DeleteResult` | removes the material and all versions. `upstream` records whether an upstream revocation was attempted and its outcome (`'revoked' \| 'unsupported' \| 'failed' \| 'not_attempted'`); the result carries both facts so the UI can say "removed from PageSpace; the key is still valid at the provider" |
 | `describe` | `({ ref; identity }) → DescribeResult` | version, kind, `bindings`, timestamps, revocation state — **never material** |
 
-`SecretRef = { tenantId; accountId; kind }` maps to the Infisical path `/<tenantProject>/<accountId>/<kind>` (one project per tenant, §3). `PlaneBindings = { tenantId; ownerRef; allowedOrigins (canonical); policyVersion; kind }` — the independent binding Codex asked for (threat-model A9). `StoreIdentity` is the tenant-scoped machine identity handle the executor holds; it is a parameter so a test can pass a wrong-tenant identity and watch `resolve` fail.
+`SecretRef = { tenantId; accountId; kind }` maps to the Infisical path `/<tenantProject>/<accountId>/<kind>` (one project per tenant, §3). `PlaneBindings = { tenantId; ownerRef; allowedOrigins (canonical); policyVersion; policyDigest; kind }` — the independent binding Codex asked for (threat-model A9). `policyDigest` = SHA3-256 over `canonicalJson(PlaneScope)`, `PlaneScope = { approvalPolicy; resourceRestrictions; boundAgentPageIds (sorted); allowedOrigins (sorted) }` (§2.4). `StoreIdentity` is the tenant-scoped machine identity handle the executor holds; it is a parameter so a test can pass a wrong-tenant identity and watch `resolve` fail.
 
 ### 2.3 Our CAS (Infisical has none on the write side)
 
@@ -66,9 +66,11 @@ The lock serializes writers per secret across replicas; the verify catches an ov
 
 ### 2.4 Bindings are compared at resolve — through the grant's signed digest
 
-The grant carries `bindingDigest = hash(canonicalJson(PlaneBindings))`, computed by the authority over the bindings it evaluated and signed with the grant (ADR 0004 §2.1). `decideResolve` recomputes `digestBindings(stored.bindings)` with the injected hash and compares the two in constant time; **no main-DB fact is consulted at resolve**. A main-DB writer who reassigns `agent_accounts.ownerUserId` or widens `allowedOrigins` therefore either (a) gets a grant signed over the tampered rows, whose digest differs from the plane's copy → `binding_mismatch`, or (b) cannot get a grant at all. (Codex P1 on PR #2637: the original signature handed `decideResolve` the store's bindings and nothing independently signed to compare against.) Widening therefore requires the `put`/`rotate` path with step-up (ADR 0004 §4.4), which rewrites the bindings under the owner's authenticated consent.
+The grant carries `bindingDigest = hash(canonicalJson(PlaneBindings))`, computed by the authority over the bindings it evaluated and signed with the grant (ADR 0004 §2.1). `decideResolve` recomputes `digestBindings(stored.bindings)` with the injected hash and compares the two in constant time; **no main-DB fact is consulted at resolve**. A main-DB writer who reassigns `agent_accounts.ownerUserId`, widens `allowedOrigins`, or widens `approvalPolicy`, `resourceRestrictions` or the `agent_account_bindings` set therefore either (a) gets a grant signed over the tampered rows, whose digest differs from the plane's copy → `binding_mismatch`, or (b) cannot get a grant at all. (Codex P1 on PR #2637: the original signature handed `decideResolve` the store's bindings and nothing independently signed to compare against.)
 
-### 2.5 Plane metadata tables (G1b creates; main DB is acceptable for metadata because none of it is secret and all of it is cross-checked against the store)
+**Amendment 2026-09-16 (G1a review H1, under threat-model A9).** The first `PlaneBindings` bound only `(tenantId, ownerRef, allowedOrigins, policyVersion, kind)`. `policyVersion` is a counter, so a writer who widened the approval policy's scope, trigger or limits, a resource restriction, or the bound-agent-page set — and left the counter alone — kept `bindingDigest` matching. `PlaneBindings` therefore carries `policyDigest = digestPlaneScope(PlaneScope)`, SHA3-256 over the canonical JSON of exactly those four security-relevant fields. Delegation and approval rows are **not** bound here: they are per-use facts, each protected by its own comparison against the signed grant — `DelegationFact` names the account, agent page and delegating human (ADR 0004 F7), `ApprovalFact` names the account, digest, consuming grant and expiry (ADR 0004 F14). Widening therefore requires the `put`/`rotate` path with step-up (ADR 0004 §4.4), which rewrites the bindings under the owner's authenticated consent.
+
+### 2.5 Plane metadata tables (G1b creates; main DB is acceptable for metadata because none of it is secret and each row is either cross-checked against the store's `PlaneBindings` or compared as a fact against the signed grant)
 
 `agent_account_grant_nonces` (ADR 0004 §2.4), `agent_account_approvals`, `agent_account_delegations`, `agent_account_secret_versions` (`ref`, `currentVersion`, `previousVersion`, `rotatedAt`, `revokedAt`, `revokeReason`), `agent_account_audit` (ADR 0004 §5 shape). The advisory-lock namespace is the plane's, distinct from `advisory-lock.ts`'s existing keys.
 
@@ -175,7 +177,7 @@ Executors run as their own processes/Sprites with: no request-body telemetry; co
 | F2 | `resolve` of kind `password` by any channel but `browser-worker`; `resolve` of kind `session` by `http-executor` (only `resolveSessionOverHttp` with `sessionHttp: true` may) | `kind_not_resolvable` |
 | F2a | `oauth2` resolved by any channel but `refresh-worker` | material is `OAuth2AccessMaterial`; `refreshToken` is absent by type and stripped by the adapter |
 | F3 | `resolve` with `version ≠ current` (rotation happened) | `version_mismatch`; the previous version is readable only inside `ROTATION_GRACE_MS` and only by a grant that named it |
-| F4 | `digestBindings(stored bindings) ≠ grant.bindingDigest` (owner/tenant/origins/policyVersion/kind) | `binding_mismatch` |
+| F4 | `digestBindings(stored bindings) ≠ grant.bindingDigest` (owner/tenant/origins/policyVersion/policyDigest/kind) | `binding_mismatch` |
 | F5 | Identity scoped to tenant X resolving a ref in tenant Y | `not_found` (the store refuses; the adapter does not distinguish) |
 | F6 | `put`/`rotate` with `expectedVersion ≠ observed` | `version_conflict`; nothing written |
 | F7 | Post-write verify disagrees | `write_unverified`; success is not reported; reconciliation runs |
@@ -207,6 +209,9 @@ export type DecideStoreWrite = (input: { expectedVersion: CredentialVersion | nu
   observedBefore: CredentialVersion | null; observedAfter: CredentialVersion | null;
   bindingsAfter: PlaneBindings | null; bindingsWritten: PlaneBindings }) =>
   { outcome: 'commit'; version: CredentialVersion } | { outcome: 'version_conflict' } | { outcome: 'write_unverified' };
+
+// store/digest-plane-scope.ts (G1b) — SHA3-256 over canonicalJson(PlaneScope), id lists sorted
+export type DigestPlaneScope = (input: { scope: PlaneScope; hash: HashBytes }) => PolicyDigest;
 
 // store/digest-bindings.ts (G1b) — the same bytes on the authority and the store side
 export type DigestBindings = (input: { bindings: PlaneBindings; hash: HashBytes }) => BindingDigest;
@@ -249,6 +254,7 @@ export type DecideRefresh = (input: { material: OAuth2Material; now: number; mar
 17. Given `resolve` of a `session` ref by `http-executor`, does not compile (`ResolvableBy<'http-executor'>` excludes `session`) and returns `kind_not_resolvable` if reached; given `resolveSessionOverHttp` with a grant whose `sessionHttp` is `false`, does not compile; with `true`, `ok` (PR #2637 P1).
 18. Given `decideAccountAccess` with `sessionHttpEnabled: false`, `session_http` is `false` whatever else is true; with `true` and `use: false`, still `false`; with both, `true`.
 19. Given the authority issuing a grant, `bindingDigest` equals `digestBindings` over the bindings it read; a grant whose digest was computed over any other bindings fails at the plane, never at the authority (the plane is the independent check).
+20. Given stored bindings whose `policyDigest` was computed over an approval policy with a wider `scope.resources`, a `resourceRestrictions` entry with one more repo, or one more bound agent page than the scope the grant's `bindingDigest` covers — with `policyVersion` UNCHANGED — `decideResolve` returns `binding_mismatch`; `digestPlaneScope` is order-independent over `boundAgentPageIds` and `allowedOrigins` (G1a review H1).
 
 ## 11. Consequences
 
