@@ -934,4 +934,36 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const expected = { previousVersion: null, rotatedAt: null, describedRotatedAt: null };
     expect(actual).toEqual(expected);
   });
+
+  // Own review, PR #2646 (G1a review H2): put/rotate committed whatever bindings the caller passed,
+  // so a rotate carrying the pre-rebind bindings silently reverted a consented rebind — rebind was
+  // not the one path that rewrites PlaneBindings.
+  it('given a rotate or put carrying bindings other than the stored ones after a rebind, should refuse with version_conflict and keep the rebound bindings', async () => {
+    const adapter = makeAdapter();
+    const accountId = `acct-rotate-stale-bindings-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: 'policy-digest-fixture' as PolicyDigest, kind: 'api_key' };
+    const next: PlaneBindings = { ...bindings, policyVersion: 2 as PolicyVersion, policyDigest: 'policy-digest-narrowed' as PolicyDigest };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
+    const manageIdentity = { ...identity, audience: 'manage' as const };
+    const material = { kind: 'api_key' as const, material: { value: 'sk-v2', placement: { in: 'header' as const, name: 'Authorization' } } };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    await adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, consent: ownerConsentTo(next), identity: manageIdentity });
+
+    const actual = {
+      staleRotate: await adapter.rotate({ ref, expectedVersion: 1 as never, next: material, bindings, identity: refreshIdentity }),
+      stalePut: await adapter.put({ ref, material, expectedVersion: 1 as never, bindings, identity }),
+      bindingsAfter: await adapter.describe({ ref, identity }).then((described) => (described.ok ? described.bindings : null)),
+      honestRotate: await adapter.rotate({ ref, expectedVersion: 1 as never, next: material, bindings: next, identity: refreshIdentity }),
+    };
+    const expected = {
+      staleRotate: { ok: false, reason: 'version_conflict' },
+      stalePut: { ok: false, reason: 'version_conflict' },
+      bindingsAfter: next,
+      honestRotate: { ok: true, version: 2 },
+    };
+    expect(actual).toEqual(expected);
+  });
 });
