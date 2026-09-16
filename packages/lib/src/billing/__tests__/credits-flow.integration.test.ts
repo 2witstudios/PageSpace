@@ -777,6 +777,36 @@ describe('credits flow — missed-grant reconcile review fixes (#2645 threads)',
       spy.mockRestore();
     }
   });
+
+  it('MON-2 page failure: a failed subscription lookup counts every row on that page as failed and leaves them all missing', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    seedPricedSubscription('u1', 'price_pro');
+    seedMissedGrantRow('led_m1', 'u1');
+    seedMissedGrantRow('led_m2', 'u1');
+
+    const realSelect = H.db.select;
+    let calls = 0;
+    const spy = vi.spyOn(H.db, 'select').mockImplementation((proj) => {
+      calls++;
+      // Call 1 is the ledger page; call 2 is that page's subscriptions lookup.
+      if (calls === 2) throw new Error('connection terminated');
+      return realSelect(proj);
+    });
+    try {
+      const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
+
+      expect(result).toEqual({ reconciled: 0, stillMissing: 0, failed: 2 });
+      expect(store.creditLedger.filter((r) => r.entryType === 'missed_grant')).toHaveLength(2);
+      expect(balanceOf('u1')).toBeUndefined();
+      expect(H.logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('subscription lookup failed'),
+        expect.anything(),
+        expect.objectContaining({ rows: 2 }),
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe('credits flow — happy path (fund → gate → consume → top-up → drained)', () => {

@@ -7,8 +7,9 @@
  * ledger row instead of guessing: amountCents 0, paidCents = what was actually
  * paid, stripeRef = the invoice. This module re-resolves the tier from the user's
  * subscriptions rows at reconcile time (never the users.subscriptionTier cache —
- * a stale cache is the very failure this repairs), grants amount_paid × ratio exactly once if a
- * ratio now exists, and marks the row consumed by converting it in place into the
+ * a stale cache is the very failure this repairs), grants amount_paid × ratio
+ * exactly once if a ratio now exists, and marks the row consumed by converting it
+ * in place into the
  * 'monthly_grant' it should always have been. A row whose tier still has no ratio
  * is left untouched for the next sweep — never dropped, never double-granted
  * (converting entryType out of 'missed_grant' is what removes it from the next
