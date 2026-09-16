@@ -23,7 +23,7 @@ import type {
   SessionFormat,
   TenantId,
 } from '@pagespace/db/schema/agent-accounts';
-import type { AgentAccountGrant, AgentPageId, BindingDigest, Brand, HashBytes, PresenterChannel } from '../grant';
+import type { AgentAccountGrant, AgentPageId, BindingDigest, Brand, Ed25519Verify, HashBytes, PresenterChannel, UserId } from '../grant';
 import type { CanonicalOrigin } from '../canonical-request';
 import type { AccountApprovalPolicy } from '../approval';
 
@@ -216,6 +216,57 @@ export type RotateInput = {
 
 export type RotateResult = PutResult;
 
+/**
+ * An authenticated owner consent to a binding change: the human who holds
+ * `grant` on the account (ADR 0004 §4.1) passed step-up
+ * (`auth/step-up-decisions.ts`) for EXACTLY these bindings. Signed by the
+ * authority's step-up consent key (distinct from the grant key) so the plane
+ * verifies it without reading the main DB; a DB writer cannot mint one.
+ */
+export type OwnerConsent = {
+  readonly consentId: string;
+  readonly consentingUserId: UserId;
+  readonly stepUpChallengeId: string;
+  /** `digestBindings` over the bindings being written — consent is to these bytes, not to "a change". */
+  readonly bindingsDigest: BindingDigest;
+  /** ms since epoch; the plane refuses a consent older than `StoreLimits['rebindConsentMaxAgeMs']`. */
+  readonly issuedAt: number;
+  /** Base64 Ed25519 over the canonical JSON of the fields above. */
+  readonly signature: string;
+};
+
+/**
+ * `rebind` — the ONE path that rewrites the plane's `PlaneBindings` without
+ * touching material: a `policyVersion` bump (membership, instructions, copy,
+ * move) or a widening (origins, policy, restrictions, agent bindings). CAS on
+ * the stored `policyVersion`. Callable only by a MANAGE-audience identity —
+ * held by the authority's management worker, never by `apps/web` — and only
+ * with a valid `OwnerConsent` for these exact bindings (G1a review H2).
+ */
+export type RebindInput = {
+  readonly ref: SecretRef;
+  /** The `policyVersion` of the bindings the caller last observed in the plane (CAS). */
+  readonly expectedVersion: PolicyVersion;
+  /** `bindings.policyVersion` must be strictly greater than `expectedVersion`; tenant and kind must be unchanged. */
+  readonly bindings: PlaneBindings;
+  readonly consent: OwnerConsent;
+  readonly identity: StoreIdentity & { readonly audience: 'manage' };
+};
+
+export type RebindResult =
+  | { readonly ok: true; readonly policyVersion: PolicyVersion }
+  | {
+      readonly ok: false;
+      readonly reason:
+        | 'version_conflict'
+        | 'consent_invalid'
+        | 'immutable_binding_changed'
+        | 'write_unverified'
+        | 'lock_unavailable'
+        | 'store_unavailable'
+        | 'not_found';
+    };
+
 export type RevokeReason = 'owner_revoked' | 'policy_revoked' | 'rotation_replay' | 'erasure' | 'admin';
 
 export type RevokeInput = { readonly ref: SecretRef; readonly reason: RevokeReason; readonly identity: StoreIdentity };
@@ -249,6 +300,8 @@ export type StoreAdapter = {
   /** See `SessionHttpResolveInput`; unrepresentable without `grant.sessionHttp: true`. */
   readonly resolveSessionOverHttp: (input: SessionHttpResolveInput) => Promise<ResolveResult<'http-executor', 'session'>>;
   readonly rotate: (input: RotateInput) => Promise<RotateResult>;
+  /** Manage-audience identity + owner consent only; see `RebindInput`. */
+  readonly rebind: (input: RebindInput) => Promise<RebindResult>;
   readonly revoke: (input: RevokeInput) => Promise<RevokeResult>;
   readonly delete: (input: DeleteInput) => Promise<DeleteResult>;
   readonly describe: (input: DescribeInput) => Promise<DescribeResult>;
@@ -260,6 +313,8 @@ export type StoreLimits = {
   readonly rotationGraceMs: 300_000;
   /** Revoked material is retained this long so an upstream revocation can still be attempted. */
   readonly revokeRetentionMs: 604_800_000;
+  /** An `OwnerConsent` older than this is `consent_invalid` at `rebind`. */
+  readonly rebindConsentMaxAgeMs: 300_000;
 };
 
 /** `decideStoreWrite` — our CAS as data (ADR 0005 §2.3). G1b implements. */
@@ -273,6 +328,27 @@ export type DecideStoreWrite = (input: {
   | { readonly outcome: 'commit'; readonly version: CredentialVersion }
   | { readonly outcome: 'version_conflict' }
   | { readonly outcome: 'write_unverified' };
+
+/**
+ * `decideRebind` — pure. Refuses unless: the consent signature verifies under
+ * the pinned consent key; `consent.bindingsDigest === digestBindings(next)`;
+ * the consent is fresh; for a user-owned account the consenting user is the
+ * owner in the plane's STORED `ownerRef` (so a tampered owner cannot consent
+ * for itself); `stored.policyVersion === expectedVersion` and
+ * `next.policyVersion > expectedVersion`; `tenantId` and `kind` are unchanged.
+ * G1b implements.
+ */
+export type DecideRebind = (input: {
+  readonly stored: PlaneBindings | null;
+  readonly expectedVersion: PolicyVersion;
+  readonly next: PlaneBindings;
+  readonly consent: OwnerConsent;
+  readonly consentPublicKey: Uint8Array;
+  readonly now: number;
+  readonly maxAgeMs: StoreLimits['rebindConsentMaxAgeMs'];
+  readonly verify: Ed25519Verify;
+  readonly hash: HashBytes;
+}) => { readonly outcome: 'rebind' } | { readonly outcome: 'refuse'; readonly reason: Exclude<RebindResult, { readonly ok: true }>['reason'] };
 
 /** The facts `describe` would return plus revocation state — what `decideResolve` compares against. */
 export type StoredSecretFacts = {
