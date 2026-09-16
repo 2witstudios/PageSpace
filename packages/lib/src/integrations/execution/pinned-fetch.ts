@@ -58,12 +58,24 @@ const BROTLI_OPTIONS = {
   flush: zlib.constants.BROTLI_OPERATION_FLUSH,
   finishFlush: zlib.constants.BROTLI_OPERATION_FLUSH,
 };
-const DECODERS: Record<string, () => Transform> = {
-  gzip: () => zlib.createGunzip(ZLIB_OPTIONS),
-  'x-gzip': () => zlib.createGunzip(ZLIB_OPTIONS),
-  // Some servers send raw deflate instead of zlib-wrapped; unzip detects both.
-  deflate: () => zlib.createUnzip(ZLIB_OPTIONS),
-  br: () => zlib.createBrotliDecompress(BROTLI_OPTIONS),
+/**
+ * The decoder for a content coding, or null when it is not one fetch decodes.
+ * A switch, not an object lookup: a header value such as "constructor" or
+ * "__proto__" must never reach an inherited member.
+ */
+const decoderFor = (coding: string): (() => Transform) | null => {
+  switch (coding) {
+    case 'gzip':
+    case 'x-gzip':
+      return () => zlib.createGunzip(ZLIB_OPTIONS);
+    case 'deflate':
+      // Some servers send raw deflate instead of zlib-wrapped; unzip detects both.
+      return () => zlib.createUnzip(ZLIB_OPTIONS);
+    case 'br':
+      return () => zlib.createBrotliDecompress(BROTLI_OPTIONS);
+    default:
+      return null;
+  }
 };
 
 /**
@@ -76,10 +88,15 @@ const decodeBody = (source: Readable, contentEncoding: string | undefined): Read
     .map((coding) => coding.trim().toLowerCase())
     .filter((coding) => coding !== '' && coding !== 'identity')
     .reverse();
-  if (codings.length === 0 || codings.some((coding) => !(coding in DECODERS))) return source;
+  if (codings.length === 0) return source;
+  const decoders: Transform[] = [];
+  for (const coding of codings) {
+    const createDecoder = decoderFor(coding);
+    if (createDecoder === null) return source;
+    decoders.push(createDecoder());
+  }
   // pipeline destroys every stage when any stage errors or is destroyed early,
   // so cancelling the decoded body (or a decode error) also closes the socket.
-  const decoders = codings.map((coding) => DECODERS[coding]());
   pipeline([source, ...decoders], () => undefined);
   return decoders[decoders.length - 1];
 };
