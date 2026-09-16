@@ -1,7 +1,14 @@
 import { Resend } from 'resend';
-import { checkDistributedRateLimit } from '../security/distributed-rate-limit';
+import {
+  checkDistributedRateLimit,
+  refundDistributedRateLimitAttempt,
+} from '../security/distributed-rate-limit';
 import { isOnPrem } from '../deployment-mode';
 import type * as React from 'react';
+
+// Must match the windowMs passed to checkDistributedRateLimit below, so a
+// refund decrements the same window bucket the failed attempt incremented.
+const EMAIL_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
 function getResendConfig() {
   const apiKey = process.env.RESEND_API_KEY;
@@ -84,13 +91,17 @@ export async function sendEmail(options: SendEmailOptions): Promise<void> {
   const resend = getResend();
 
   // Rate limit email sending (10 per hour per recipient). Every email type
-  // (magic link, invite, notification) shares this bucket, and rejected
-  // attempts still count, so a low cap locks a real user out of sign-in.
+  // (magic link, invite, notification) shares this bucket. A send that fails
+  // below (a Resend rejection or a network error) has its attempt refunded —
+  // see the catch block — so only accepted sends count against the cap;
+  // otherwise a run of failures could lock a real user out of sign-in email
+  // for the rest of the window.
   // Postgres-backed so the limit survives restarts and spans replicas (#977).
+  const rateLimitKey = `email:${options.to}`;
   if (!options.skipRateLimit) {
-    const rateLimit = await checkDistributedRateLimit(`email:${options.to}`, {
+    const rateLimit = await checkDistributedRateLimit(rateLimitKey, {
       maxAttempts: 10,
-      windowMs: 60 * 60 * 1000, // 1 hour
+      windowMs: EMAIL_RATE_LIMIT_WINDOW_MS,
       blockDurationMs: 60 * 60 * 1000,
     });
 
@@ -107,15 +118,22 @@ export async function sendEmail(options: SendEmailOptions): Promise<void> {
     ...(options.headers ? { headers: options.headers } : {}),
   };
 
-  // Only pass the request-options argument when there is something to put in it,
-  // so the common single-argument call stays exactly as it was.
-  const { data, error } = options.idempotencyKey
-    ? await resend.emails.send(payload, { idempotencyKey: options.idempotencyKey })
-    : await resend.emails.send(payload);
+  try {
+    // Only pass the request-options argument when there is something to put in it,
+    // so the common single-argument call stays exactly as it was.
+    const { data, error } = options.idempotencyKey
+      ? await resend.emails.send(payload, { idempotencyKey: options.idempotencyKey })
+      : await resend.emails.send(payload);
 
-  if (error) {
-    throw new Error(`Failed to send email: ${error.message}`);
+    if (error) {
+      throw new Error(`Failed to send email: ${error.message}`);
+    }
+
+    return data as unknown as void;
+  } catch (err) {
+    if (!options.skipRateLimit) {
+      await refundDistributedRateLimitAttempt(rateLimitKey, EMAIL_RATE_LIMIT_WINDOW_MS);
+    }
+    throw err;
   }
-
-  return data as unknown as void;
 }
