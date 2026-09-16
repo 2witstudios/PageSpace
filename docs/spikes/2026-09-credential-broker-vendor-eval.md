@@ -605,14 +605,35 @@ services:
       INFISICAL_URL: http://infisical:8080
       EXECUTOR_CLIENT_ID: ${EXECUTOR_CLIENT_ID:?EXECUTOR_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
       EXECUTOR_CLIENT_SECRET: ${EXECUTOR_CLIENT_SECRET:?EXECUTOR_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
-      # Restricted role on the app Postgres (reachable on `internal`): plane metadata (§7.2 version/digest row),
-      # replay/nonce state and audit tables ONLY: durable audit acceptance and replay before execute (§6).
-      EXECUTOR_DATABASE_URL: ${EXECUTOR_DATABASE_URL:?EXECUTOR_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
+      # Two restricted roles, matching the repo's two trust planes (docker-compose.tenant.yml has
+      # `postgres` and `postgres-admin`, both reachable on `internal`):
+      # app DB  - plane metadata (§7.2 version/digest row) + replay/nonce state ONLY
+      EXECUTOR_APP_DATABASE_URL: ${EXECUTOR_APP_DATABASE_URL:?EXECUTOR_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
+      # admin DB - INSERT-only on the tamper-evident audit tables: durable audit acceptance before execute (§2.4, §6)
+      EXECUTOR_AUDIT_DATABASE_URL: ${EXECUTOR_AUDIT_DATABASE_URL:?EXECUTOR_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
+      # all outbound provider traffic goes through the non-credentialed allowlisting egress proxy
+      HTTPS_PROXY: http://executor-egress:4750
     read_only: true
     security_opt: ["no-new-privileges:true"]
     deploy: { resources: { limits: { memory: 256M } } }
     logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
-    networks: [internal, credential_plane, plane_egress]   # plane_egress: its outbound route to providers (destination allowlist required at G2)
+    networks: [internal, credential_plane, executor_egress]   # NOT on plane_egress: no direct route off-host
+
+  # v1 egress control for the executor. Holds NO credential and NO store identity; it only
+  # enforces a provider-destination allowlist and denies the Docker host, host-published ports,
+  # RFC1918, link-local and the plane hosts. A two-network boundary: executor_egress (internal,
+  # shared with credential-executor) and plane_egress (the only egress-capable network; this
+  # proxy is its only member). An executor compromise or an SSRF in its provider client
+  # therefore cannot dial arbitrary destinations.
+  executor-egress:
+    image: ghcr.io/stripe/smokescreen:0.0.0      # e.g. smokescreen (denies private ranges by default); pin by digest at G2
+    restart: unless-stopped
+    expose: ["4750"]
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    deploy: { resources: { limits: { memory: 128M } } }
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+    networks: [executor_egress, plane_egress]
 
   # agent-proxy is NOT part of the v1 stack (§7.2: it injects nothing until same-fetch version
   # pinning is verified). When G2 enables it, it is added by a separate override file
@@ -632,11 +653,13 @@ networks:
     internal: true                      # Traefik reaches the sidecar over it; the sidecar needs no egress
   plane_egress:
     driver: bridge                      # NOT internal: `internal` and `credential_plane` are both `internal: true`, so without
-                                        # this network the credential-executor could not reach GitHub or any other provider.
-                                        # credential-executor is its only member in v1: the plane's single outbound path.
-                                        # The network itself is unrestricted (Docker host, host-published 80/443,
-                                        # RFC1918). G2 must add a provider-destination allowlist on the proxy and deny
-                                        # host/private addresses; that is not verified as expressible in Agent Proxy.
+                                        # this network no v1 component could reach GitHub or any other provider.
+                                        # executor-egress is its only member: the plane's single outbound path.
+                                        # The network itself is unrestricted, so the allowlist and the private /
+                                        # host denies are enforced by executor-egress, never by this network.
+  executor_egress:
+    driver: bridge
+    internal: true                      # credential-executor <-> executor-egress only
 
 configs:
   vault_ingress_nginx:                  # inline `content` needs Docker Compose >= 2.23.1
@@ -661,14 +684,14 @@ volumes:
   infisical_postgres_data:
 ```
 
-`web` gets one addition only: `CREDENTIAL_EXECUTOR_URL: http://credential-executor:3010` (an address, no secret). No store URL and no machine identity go into `web`'s environment — the web process holds no store identity (Codex #2). **v1 direct-adapter path (round 4):** the `credential-executor` service is the only reader. It sits on `internal`, reached by `web` with the authority's signed grant, and on `credential_plane`, its route to `infisical:8080`. It holds the **per-tenant Universal Auth read identity** (`EXECUTOR_CLIENT_ID`/`_SECRET`, D-29 B, scoped to that tenant's project), and it runs the §7.2 drift check on each resolve. This is option (a) of the executor threat boundary below. `agent-proxy` is not in the v1 stack; enabling it later adds an override file with its own identity and an `AGENT_PROXY_URL` for the executor.
+`web` gets one addition only: `CREDENTIAL_EXECUTOR_URL: http://credential-executor:3010` (an address, no secret). No store URL and no machine identity go into `web`'s environment — the web process holds no store identity (Codex #2). **v1 direct-adapter path (round 4):** the `credential-executor` service is the only reader. It sits on `internal`, reached by `web` with the authority's signed grant, on `credential_plane`, its route to `infisical:8080`, and on `executor_egress`. That last network is its only way off-host, and it leads only to `executor-egress`, a non-credentialed allowlisting forward proxy. Only that proxy sits on the egress-capable `plane_egress`, and it enforces the provider allowlist and denies the Docker host, host-published ports, RFC1918, link-local and the plane hosts. It uses two restricted database roles: app DB for metadata and replay, and Admin Postgres INSERT-only for audit. It holds the **per-tenant Universal Auth read identity** (`EXECUTOR_CLIENT_ID`/`_SECRET`, D-29 B, scoped to that tenant's project), and it runs the §7.2 drift check on each resolve. This is option (a) of the executor threat boundary below. `agent-proxy` is not in the v1 stack; enabling it later adds an override file with its own identity and an `AGENT_PROXY_URL` for the executor.
 
 **Relay-side `connect` identity: UNSPECIFIED, and G2 must close it before any credentialed operation *that goes through Agent Proxy* (PR #2633 round 4).** In v1 that is none: every updatable credential uses the direct store adapter until same-fetch version pinning is verified (§7.2), and the direct path does not use `connect`. This block is the prerequisite for turning Agent Proxy on, not for v1. Agent Proxy authenticates **both** ends (§3.0: `start` on the proxy **and** `connect --client-id/--client-secret` on the caller side). *Once Agent Proxy is enabled* (not v1), the server-side runner becomes a `connect` client, and nothing above gives it an identity for that: the compose credentials belong to the `agent-proxy` process. This is a gap in the future Agent Proxy path, not in v1 and not a change to D-18. The shape G2 must pick and record:
 - **Where the identity lives:** in the credential executor (the Control Board's sole caller of resolve), never in the general `web` environment. **Threat boundary, stated explicitly (round 4):** a process boundary inside the `web` container does **not** survive compromise of that container, because code execution in `web` can read the sibling executor's memory, environment or injected credential. Two options follow. **(a)** If container compromise of `web` is in scope, and the recommendation is that it is, the executor runs as a **separate container** with its own identity, reached over `internal` through the authority's signed grant. **(b)** Otherwise custody is recorded as **per-process only**, with container isolation deferred as a named liability on the register. "`web` holds no store identity" is then true of every non-executor code path but **not** of a compromised `web` container. G2 picks (a) or (b) and records it.
 - **What it may do:** one per-tenant Universal Auth identity (D-29 B), scoped to that tenant's project, with a TTL- and max-uses-bounded Universal Auth client secret (§2.2). That is the only `connect` auth the upstream docs show (`--client-id/--client-secret` or `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID`/`_SECRET`, §3.3). OIDC machine-identity auth (§2.2) is **not** a documented `connect` option. It becomes one only if G2 verifies that `connect` accepts an OIDC-obtained access token, and documents the exchange step it needs. **Not verified:** whether Infisical requires the `connect` identity to hold secret-read permission on the proxied path. If it does, that identity can resolve plaintext, so it counts as a resolving identity under the custody rule and the executor is its only holder. If it does not, it is a non-resolving session identity. G2 verifies this against a sandbox project before binding.
 - **Alternative:** if Agent Proxy cannot take a non-resolving caller, the executor resolves through the store adapter directly (G1b-store) and Agent Proxy is not used for the server-originated path.
 
-**Env vars to append to `env.tenant.template` (all server-side, none `NEXT_PUBLIC_`):** `INFISICAL_POSTGRES_PASSWORD=__GENERATE__` — **URI-safe alphabet only**: it is interpolated unencoded into `DB_CONNECTION_URI`, so a reserved character (`@`, `/`, `#`, `:`, `?`) would re-parse the authority or truncate the password; `generate-tenant-env.sh` must emit it with `alnum_secret 32` (`[a-zA-Z0-9]`, the same helper the app's `POSTGRES_PASSWORD` already uses at `:64`), never `hex_secret`'s peer `openssl rand -base64`; `INFISICAL_ENCRYPTION_KEY=__GENERATE__` ("Must be a random 16-byte hex string. Can be generated with `openssl rand -hex 16`." — https://infisical.com/docs/self-hosting/configuration/envars; the standard `infisical/infisical:v0.165.10` image pinned above. **FIPS mode differs:** "For FIPS-enabled deployments, `ENCRYPTION_KEY` must be a 256-bit base64-encoded key instead" (`openssl rand -base64 32`, `infisical/infisical-fips` image) — same page), `INFISICAL_AUTH_SECRET=__GENERATE__` ("Must be a random 32-byte base64 string."), `INFISICAL_LICENSE_KEY=` (optional; offline key), `EXECUTOR_CLIENT_ID=__SET_BY_PROVISIONER__`, `EXECUTOR_CLIENT_SECRET=__SET_BY_PROVISIONER__` (v1 reader), `EXECUTOR_DATABASE_URL=__SET_BY_PROVISIONER__` (a restricted role limited to the plane metadata, replay and audit tables). The `AGENT_PROXY_*` variables belong to the future override file only. `UPGRADE.md` gets a "credential plane" section because the stack refuses to start without them (the `:?` form above), exactly as the Phase 1/2 admin DB vars do — and the same warning applies: regenerating `INFISICAL_ENCRYPTION_KEY` makes the vault permanently unreadable.
+**Env vars to append to `env.tenant.template` (all server-side, none `NEXT_PUBLIC_`):** `INFISICAL_POSTGRES_PASSWORD=__GENERATE__` — **URI-safe alphabet only**: it is interpolated unencoded into `DB_CONNECTION_URI`, so a reserved character (`@`, `/`, `#`, `:`, `?`) would re-parse the authority or truncate the password; `generate-tenant-env.sh` must emit it with `alnum_secret 32` (`[a-zA-Z0-9]`, the same helper the app's `POSTGRES_PASSWORD` already uses at `:64`), never `hex_secret`'s peer `openssl rand -base64`; `INFISICAL_ENCRYPTION_KEY=__GENERATE__` ("Must be a random 16-byte hex string. Can be generated with `openssl rand -hex 16`." — https://infisical.com/docs/self-hosting/configuration/envars; the standard `infisical/infisical:v0.165.10` image pinned above. **FIPS mode differs:** "For FIPS-enabled deployments, `ENCRYPTION_KEY` must be a 256-bit base64-encoded key instead" (`openssl rand -base64 32`, `infisical/infisical-fips` image) — same page), `INFISICAL_AUTH_SECRET=__GENERATE__` ("Must be a random 32-byte base64 string."), `INFISICAL_LICENSE_KEY=` (optional; offline key), `EXECUTOR_CLIENT_ID=__SET_BY_PROVISIONER__`, `EXECUTOR_CLIENT_SECRET=__SET_BY_PROVISIONER__` (v1 reader), `EXECUTOR_APP_DATABASE_URL=__SET_BY_PROVISIONER__` (a restricted app-DB role limited to plane metadata and replay/nonce state) and `EXECUTOR_AUDIT_DATABASE_URL=__SET_BY_PROVISIONER__` (an INSERT-only role on the Admin Postgres audit tables, keeping the audit trust-plane boundary). The `AGENT_PROXY_*` variables belong to the future override file only. `UPGRADE.md` gets a "credential plane" section because the stack refuses to start without them (the `:?` form above), exactly as the Phase 1/2 admin DB vars do — and the same warning applies: regenerating `INFISICAL_ENCRYPTION_KEY` makes the vault permanently unreadable.
 
 **What `infrastructure/scripts/__tests__/env-var-audit.test.ts` gates:** that test's three cases assert that client-side `.tsx`/`.ts` files never read `NEXT_PUBLIC_APP_URL` without a `WEB_APP_URL` guard. It does not enumerate server env vars. The vars above pass it trivially because none is `NEXT_PUBLIC_*`; the gate that would actually bite is `packages/lib/src/config/env-validation.ts` (`serverEnvSchema`), where `CREDENTIAL_EXECUTOR_URL` should be added as an optional URL with the `.or(z.literal(''))` blank-means-unset convention the file already uses, so a blank value disables the feature rather than failing boot.
 
