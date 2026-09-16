@@ -39,12 +39,21 @@ describe('PlanCard (MON-6, SEAT-2, A-9)', () => {
     expect(screen.getByTestId('plan-price').textContent).toBe('$15');
   });
 
-  it('MON-2 (independent review on #2649) a server-supplied planCredits override actually reaches the rendered card, not just the plain object', () => {
-    // This is the render-level proof the #2643 thread needs: withCreditsCents is a
-    // pure function tested in isolation elsewhere (plans.test.ts), but the DOM is
-    // what a person actually sees. If the settings/plan page stopped calling
-    // withCreditOverrides before rendering, PLANS.pro's own build-time number would
-    // show here instead of the server-supplied one.
+  it('MON-2 (independent review on #2649) a withCreditsCents-patched plan actually reaches the rendered card, not just the plain object', () => {
+    // DOCUMENTATION, not a settings/plan regression guard (independent review,
+    // round 2): this renders PlanCard directly from a patched plan object built
+    // by calling withCreditsCents here in the test — it never loads
+    // settings/plan/page.tsx, so it cannot detect that page dropping the call.
+    // withCreditsCents itself is proven in isolation in plans.test.ts. What this
+    // test DOES prove: PlanCard's DOM actually reflects a patched plan's numbers
+    // rather than some cached/memoized copy of the original. Under D-OW-17 the
+    // scenario the original #2643 thread reported — the client bundle and the
+    // server disagreeing on the included-credit figure — is no longer possible
+    // for ANY plan object: MONEY_MODEL_V2_ACTIVE is a compile-time constant
+    // embedded identically in every process, so there is no divergent number
+    // left for a dropped override to expose. withCreditsCents/withCreditOverrides
+    // remain correct and still exercised here, but are no longer load-bearing
+    // for that specific defect.
     const patched = withCreditsCents(PLANS.pro, 900);
     render(<PlanCard plan={patched} currentTier="free" />);
     expect(screen.getByTestId('plan-included-credits').textContent).toBe('900 credits included each month');
