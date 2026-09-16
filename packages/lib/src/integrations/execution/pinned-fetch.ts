@@ -157,6 +157,14 @@ export const pinnedFetch: PinnedFetch = (url, init) => {
       reject(error);
     });
 
+    // node:http emits 'upgrade' (never 'response' or 'error') for a 101 reply;
+    // unhandled, the request would hang past any timeout.
+    req.on('upgrade', (_res, socket) => {
+      cleanup();
+      socket.destroy();
+      reject(new Error('Upstream switched protocols (101); not supported'));
+    });
+
     req.on('response', (res) => {
       // Keep the abort listener until the body is done: an abort mid-body
       // destroys the socket and fails the body read with an AbortError.
