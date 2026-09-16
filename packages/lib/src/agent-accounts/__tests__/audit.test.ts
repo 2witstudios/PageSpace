@@ -12,6 +12,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { buildAuditRecord } from '../build-audit-record';
 import { decideAuditGate } from '../decide-audit-gate';
 import { redactKnownValues } from '../redact-known-values';
+import { createAuditedExecutor } from '../audit-gate-executor';
+import type { AuditAcceptance } from '../decide-audit-gate';
 import { canonicalizeRequest } from '../canonicalize-request';
 import { digestRequest } from '../digest-request';
 import { GRANT_ISSUER } from '../grant-constants';
@@ -314,4 +316,68 @@ describe('redactKnownValues (Λ10 tripwire, threat model A1)', () => {
 describe('audit acceptance before execute — adapter (ADR 0004 F13)', () => {
   it.todo('given an unavailable audit store, should refuse the operation with audit_unavailable and not act — see audit-repository.integration.test.ts');
   it.todo('given a durable allowed record, should act, then write the outcome row keyed by the same grantId — see audit-repository.integration.test.ts');
+});
+
+describe('audited executor — the outcome row is part of the answer (ADR 0004 F13)', () => {
+  /**
+   * A recording fake: it answers each `accept` from a script and keeps every
+   * record it was offered, so "what reached the chain" is observable. The real
+   * chain is covered by audit-repository.integration.test.ts.
+   */
+  function scriptedRepository(answers: readonly AuditAcceptance['kind'][]) {
+    const offered: string[] = [];
+    let call = 0;
+    const accept = async ({ record }: { readonly record: AgentAccountAuditRecord }): Promise<AuditAcceptance> => {
+      offered.push(record.outcome.kind);
+      const kind = answers[call] ?? 'accepted';
+      call += 1;
+      return { kind } as AuditAcceptance;
+    };
+    return { repository: { accept }, offered };
+  }
+
+  it('given the outcome row cannot be accepted after the operation ran, should report the outcome as unrecorded rather than as a plain success', async () => {
+    const { repository } = scriptedRepository(['accepted', 'unavailable']);
+    const executor = createAuditedExecutor({ auditRepository: repository, hash: sha3 });
+    const actual = await executor.execute({
+      grant: makeGrant(),
+      canonical: canonical(),
+      now: AT,
+      declaredResourceKeys: [...DECLARED_RESOURCE_KEYS],
+      act: async () => ({ kind: 'executed', upstreamStatus: 201 }),
+    });
+    const expected = { ok: true, outcome: { kind: 'executed', upstreamStatus: 201 }, outcomeRecorded: false };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given both rows accepted, should report the outcome as recorded', async () => {
+    const { repository, offered } = scriptedRepository(['accepted', 'accepted']);
+    const executor = createAuditedExecutor({ auditRepository: repository, hash: sha3 });
+    const result = await executor.execute({
+      grant: makeGrant(),
+      canonical: canonical(),
+      now: AT,
+      declaredResourceKeys: [...DECLARED_RESOURCE_KEYS],
+      act: async () => ({ kind: 'executed', upstreamStatus: 201 }),
+    });
+    const actual = { result, offered };
+    const expected = { result: { ok: true, outcome: { kind: 'executed', upstreamStatus: 201 }, outcomeRecorded: true }, offered: ['allowed', 'executed'] };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a failure the operation knows happened before sending, should record the upstream_failed it returns — not unknown', async () => {
+    const { repository, offered } = scriptedRepository(['accepted', 'accepted']);
+    const executor = createAuditedExecutor({ auditRepository: repository, hash: sha3 });
+    const result = await executor.execute({
+      grant: makeGrant(),
+      canonical: canonical(),
+      now: AT,
+      declaredResourceKeys: [...DECLARED_RESOURCE_KEYS],
+      // A connect/DNS/TLS failure is caught by the operation and RETURNED; only a throw means "may have been sent".
+      act: async () => ({ kind: 'upstream_failed', upstreamStatus: null }),
+    });
+    const actual = { outcome: result.ok ? result.outcome : null, offered };
+    const expected = { outcome: { kind: 'upstream_failed', upstreamStatus: null }, offered: ['allowed', 'upstream_failed'] };
+    expect(actual).toEqual(expected);
+  });
 });
