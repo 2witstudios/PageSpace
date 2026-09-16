@@ -285,7 +285,8 @@ export async function POST(request: NextRequest) {
             await handleInvoicePaid(invoice);
             // Grant the monthly credit on each renewal. The grant is sized from what
             // this invoice actually PAID (invoice.amount_paid × the tier's included-
-            // credit ratio, Spec MON-2, behind MONEY_MODEL_V2) — a promo, a proration,
+            // credit ratio, Spec MON-2, behind MONEY_MODEL_V2_ACTIVE — a code
+            // constant, D-OW-17, not an env var) — a promo, a proration,
             // or a price change flows through with no table edit, and a $0 invoice
             // grants nothing. The funding shell reads amount_paid off the event; the
             // ledger row records it as paidCents. Derive the tier from the PAID invoice

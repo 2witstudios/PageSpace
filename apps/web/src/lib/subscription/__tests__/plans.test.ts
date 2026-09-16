@@ -9,6 +9,8 @@ import {
   canDowngrade,
   getAllPlans,
   getPersonalPlans,
+  withCreditsCents,
+  withCreditOverrides,
   isPersonalPlanPriceId,
   type SubscriptionTier,
 } from '../plans';
@@ -223,3 +225,46 @@ describe('Subscription Plans', () => {
     });
   });
 });
+
+describe('MON-2 the settings/plan client component patches its credit copy from server data, never from a client-side env read', () => {
+  describe('withCreditsCents', () => {
+    it('reproduces the reported defect and its fix: the module\'s own (potentially stale) number is replaced by a server-supplied one', () => {
+      // Simulates a server-supplied planCredits figure (e.g. a promo invoice)
+      // that legitimately differs from the plan module's own built-in number —
+      // withCreditsCents must prefer the server value, not the module's own.
+      const patched = withCreditsCents(PLANS.pro, 900);
+      expect(patched.limits.monthlyCreditsCents).toBe(900);
+      expect(patched.includedCredits).toBe('900 credits included each month');
+      expect(patched.features[0].name).toBe('900 credits/month');
+    });
+
+    it('touches only the credit-derived fields — id, price, and every other feature are untouched', () => {
+      const patched = withCreditsCents(PLANS.pro, 900);
+      expect(patched.id).toBe(PLANS.pro.id);
+      expect(patched.price).toEqual(PLANS.pro.price);
+      expect(patched.features.slice(1)).toEqual(PLANS.pro.features.slice(1));
+    });
+
+    it('renders the one-time starter phrasing for a non-refilling tier (free)', () => {
+      const patched = withCreditsCents(PLANS.free, 500);
+      expect(patched.includedCredits).toBe('500 credits to start');
+      expect(patched.features[0].name).toBe('500 credits to start');
+    });
+  });
+
+  describe('withCreditOverrides', () => {
+    it('patches only the tiers present in the map; a tier with no entry keeps its own number unchanged', () => {
+      const [free, pro] = withCreditOverrides([PLANS.free, PLANS.pro], { pro: 900 });
+      expect(pro.limits.monthlyCreditsCents).toBe(900);
+      expect(free).toBe(PLANS.free); // untouched — same reference, not just equal
+    });
+
+    it('is a no-op (returns the same array) when no server data has arrived yet', () => {
+      const plans = [PLANS.free, PLANS.pro];
+      expect(withCreditOverrides(plans, undefined)).toBe(plans);
+      expect(withCreditOverrides(plans, {})).not.toBe(plans); // {} still maps, just patches nothing
+      expect(withCreditOverrides(plans, {}).every((p, i) => p === plans[i])).toBe(true);
+    });
+  });
+});
+

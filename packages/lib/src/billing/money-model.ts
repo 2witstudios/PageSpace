@@ -19,18 +19,32 @@
  * credit VALUE — `creditBalances.*Cents`, the ledger, holds — and this module is how
  * those cents become the counts a person sees.
  *
- * MONEY_MODEL_V2 (server env; deleted in Wave G) gates only the RATIO. Off, a paid
- * tier is granted 100% of its price as credit value, which is exactly today's
- * tabulated allowance (Pro $15 → 1500¢), so balances compute as before until the
- * migration day flips it. The rate and the formatter are not gated: a credit is
- * CREDITS_PER_DOLLAR⁻¹ of a dollar everywhere, immediately.
+ * MONEY_MODEL_V2_ACTIVE (D-OW-17) gates only the RATIO. Off, a paid tier is granted
+ * 100% of its price as credit value, which is exactly today's tabulated allowance
+ * (Pro $15 → 1500¢), so balances compute as before until migration day flips it. The
+ * rate and the formatter are not gated: a credit is CREDITS_PER_DOLLAR⁻¹ of a dollar
+ * everywhere, immediately.
  *
- * Client bundles inline `process.env` at build time, so on the client the flag and
- * MARKUP_BPS reflect the build's defaults — correct for plan copy; the authoritative
- * live balance always comes from `GET /api/credits`.
+ * D-OW-17: the ratio switch is a CODE CONSTANT, not a runtime env var. An earlier
+ * revision of this fix used a server env var (`MONEY_MODEL_V2`), then a client-visible
+ * `NEXT_PUBLIC_` mirror of it, then a server-computed value patched onto the client
+ * after the fact — three attempts at the same problem: a value that must read
+ * identically in every process (web, marketing, a "use client" bundle) cannot be a
+ * value each process reads independently, because nothing enforces that they agree.
+ * Only a value baked into the shared source at build time — this constant — is
+ * identical everywhere by construction: web and marketing both compile
+ * `@pagespace/lib` from the same commit, so both embed the same literal, and a "use
+ * client" bundle embeds it too, no different from any other compile-time constant.
+ * Flipping it is a commit (migration day), deployed to every app together — never an
+ * env var an operator sets on a subset of processes. `MONEY_MODEL_V2_ACTIVE` is FALSE
+ * in this PR; a follow-up commit on migration day changes the literal.
+ *
+ * The seam guard `packages/lib/src/__tests__/seams/credit-conversion.seam.test.ts`
+ * fails if any file (this one included) reads `process.env.MONEY_MODEL_V2` — that
+ * name must never come back.
  */
 
-import { envBool, envInt, type EnvSource } from './env-parse';
+import { envInt } from './env-parse';
 import { TIER_PLAN_LIMITS, isSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 
 /** Markup applied to real provider cost, in basis points. 15000 = 1.5×. */
@@ -56,7 +70,7 @@ export const INCLUDED_CREDIT_RATIO_BPS: Record<SubscriptionTier, number> = {
 };
 
 /**
- * The ratio in force before MONEY_MODEL_V2: the whole price paid becomes credit
+ * The ratio in force with the money model off: the whole price paid becomes credit
  * value, which reproduces the old tabulated allowances exactly.
  */
 const LEGACY_INCLUDED_CREDIT_RATIO_BPS = 10_000;
@@ -69,24 +83,38 @@ const LEGACY_INCLUDED_CREDIT_RATIO_BPS = 10_000;
 export const FREE_STARTER_CREDITS = 500;
 
 /**
- * Whether the decoupled money model (the 60% ratio) is switched on. Reads
- * MONEY_MODEL_V2 at call time; `env` is injectable for callers evaluating a
- * supplied environment.
+ * D-OW-17: whether the decoupled money model (the 60% ratio) is active — a CODE
+ * CONSTANT, never a runtime env var (see the module doc comment for why). FALSE in
+ * this PR; migration day changes this literal in a follow-up commit.
  */
-export function isMoneyModelV2Enabled(env: EnvSource = process.env): boolean {
-  return envBool('MONEY_MODEL_V2', false, env);
+export const MONEY_MODEL_V2_ACTIVE = false;
+
+/**
+ * Whether the decoupled money model is active. Takes no argument and returns
+ * {@link MONEY_MODEL_V2_ACTIVE} directly — kept as a named predicate for callers that
+ * want the flag itself rather than a derived number.
+ */
+export function isMoneyModelV2Enabled(): boolean {
+  return MONEY_MODEL_V2_ACTIVE;
 }
 
 /**
  * The included-credit ratio for `tier`, in basis points. 0 for the free tier and for
  * any unknown/legacy value (nothing is paid, so nothing derives). Accepts the raw
  * `users.subscriptionTier` string.
+ *
+ * PURE: `active` is an explicit parameter, not a hidden read of global state — this
+ * is the actual ratio-selection step D-OW-17 asked to be testable in isolation, with
+ * no env mutation and no module-load timing to manage. Defaults to
+ * {@link MONEY_MODEL_V2_ACTIVE}, so every production call site (which never passes a
+ * third/second argument) gets the real constant "for free"; tests pass `true`/`false`
+ * directly to exercise both branches.
  */
-export function includedCreditRatioBps(tier: string): number {
+export function includedCreditRatioBps(tier: string, active: boolean = MONEY_MODEL_V2_ACTIVE): number {
   if (!isSubscriptionTier(tier)) return 0;
   const ratio = INCLUDED_CREDIT_RATIO_BPS[tier];
   if (ratio <= 0) return 0;
-  return isMoneyModelV2Enabled() ? ratio : LEGACY_INCLUDED_CREDIT_RATIO_BPS;
+  return active ? ratio : LEGACY_INCLUDED_CREDIT_RATIO_BPS;
 }
 
 /**
@@ -94,11 +122,16 @@ export function includedCreditRatioBps(tier: string): number {
  * paid so a price change, a promo, or a partial period flows through without a
  * table edit. Floored to whole cents (never grants more than the ratio of what was
  * paid); fails closed — a negative or non-finite amount, or a tier with no ratio,
- * grants nothing.
+ * grants nothing. `active` defaults to {@link MONEY_MODEL_V2_ACTIVE}, same as
+ * {@link includedCreditRatioBps}.
  */
-export function allowanceCentsForPaidCents(paidCents: number, tier: SubscriptionTier): number {
+export function allowanceCentsForPaidCents(
+  paidCents: number,
+  tier: SubscriptionTier,
+  active: boolean = MONEY_MODEL_V2_ACTIVE,
+): number {
   if (!Number.isFinite(paidCents) || paidCents <= 0) return 0;
-  const ratio = includedCreditRatioBps(tier);
+  const ratio = includedCreditRatioBps(tier, active);
   if (ratio <= 0) return 0;
   return Math.floor((paidCents * ratio) / 10_000);
 }
@@ -114,11 +147,12 @@ export function tierListPriceCents(tier: SubscriptionTier): number {
  * brand-new balance row, and display of an account that has never been granted.
  * Paid tiers derive from the list price; free is the starter grant; an
  * unknown/legacy value (e.g. a stale `users.subscriptionTier`) is treated as free so
- * it is never handed a paid allowance. Accepts the raw column string.
+ * it is never handed a paid allowance. Accepts the raw column string. `active`
+ * defaults to {@link MONEY_MODEL_V2_ACTIVE}, same as {@link allowanceCentsForPaidCents}.
  */
-export function tierAllowanceCents(tier: string): number {
+export function tierAllowanceCents(tier: string, active: boolean = MONEY_MODEL_V2_ACTIVE): number {
   if (isSubscriptionTier(tier) && tier !== 'free') {
-    return allowanceCentsForPaidCents(tierListPriceCents(tier), tier);
+    return allowanceCentsForPaidCents(tierListPriceCents(tier), tier, active);
   }
   return centsFromCredits(FREE_STARTER_CREDITS);
 }

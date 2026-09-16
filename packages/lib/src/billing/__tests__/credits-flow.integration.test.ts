@@ -431,7 +431,7 @@ import {
 import { tierAllowanceCents, allowanceCentsForPaidCents } from '../money-model';
 
 // The allowances the flow grants when no invoice sizes them (MON-2 derivation
-// from the list price; with MONEY_MODEL_V2 off these equal the old table).
+// from the list price at the money-model default, MONEY_MODEL_V2_ACTIVE = false).
 const TIER_MONTHLY_ALLOWANCE_CENTS = {
   free: tierAllowanceCents('free'),
   pro: tierAllowanceCents('pro'),
@@ -516,21 +516,35 @@ beforeEach(() => {
   reset();
   vi.clearAllMocks();
   H.isBillingEnabled.mockReturnValue(true);
-  delete process.env.MONEY_MODEL_V2;
 });
 
-describe('credits flow — grants sized from the invoice paid (MON-2, MONEY_MODEL_V2 on)', () => {
-  beforeEach(() => {
-    process.env.MONEY_MODEL_V2 = 'true';
-  });
-
-  it('MON-2 the ledger row records paidCents and the grant is amount_paid × ratio', async () => {
+// D-OW-17: MONEY_MODEL_V2_ACTIVE is a code constant (false in this PR), not an env
+// var — nothing in this file mutates process.env.MONEY_MODEL_V2 any more. The pure
+// ratio SELECTION is covered directly, with no shell, in money-model.test.ts and
+// invoice-grant.test.ts — but with the constant false the ratio is 100%, so a
+// shell-level test at the default flag alone cannot tell "grant = paid × ratio"
+// from "grant = paid" (both produce the same number). The dedicated active:true
+// test below closes that gap by proving the full webhook → funding → balance path
+// actually applies the ratio, not just amount_paid, end to end.
+describe('credits flow — grants sized from the invoice paid (MON-2)', () => {
+  it('MON-2 the ledger row records paidCents and the grant is amount_paid × the default ratio', async () => {
     seedUser('u1', 'cus_1', 'pro');
     await applyStripeFunding(invoicePaid('in_full', 'cus_1', PERIOD_START, PERIOD_END, 1500));
 
     const grant = ledgerOf('u1').find((r) => r.entryType === 'monthly_grant' && r.stripeRef === 'in_full')!;
     expect(grant.paidCents).toBe(1500);
     expect(grant.amountCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
+    expect(grant.amountCents).toBe(1500);
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
+  });
+
+  it('D-OW-17 test seam: { active: true } through the full webhook → funding → balance path applies the 60% ratio, not a 100% pass-through', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    await applyStripeFunding(invoicePaid('in_ratio', 'cus_1', PERIOD_START, PERIOD_END, 1500), { active: true });
+
+    const grant = ledgerOf('u1').find((r) => r.entryType === 'monthly_grant' && r.stripeRef === 'in_ratio')!;
+    expect(grant.paidCents).toBe(1500);
+    expect(grant.amountCents).toBe(allowanceCentsForPaidCents(1500, 'pro', true));
     expect(grant.amountCents).toBe(900);
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
   });
@@ -557,7 +571,7 @@ describe('credits flow — grants sized from the invoice paid (MON-2, MONEY_MODE
     await applyStripeFunding(evt);
     await applyStripeFunding(evt);
 
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
     expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
   });
 
@@ -567,21 +581,21 @@ describe('credits flow — grants sized from the invoice paid (MON-2, MONEY_MODE
     data: { object: { ...evt.data.object, subtotal, billing_reason: billingReason } },
   });
 
-  it('MON-2 (a) a gifted subscription (subscriptions.gifted) grants list × ratio from a $0 invoice, paidCents 0', async () => {
+  it('MON-2 (a) a gifted subscription (subscriptions.gifted) grants list × the default ratio from a $0 invoice, paidCents 0', async () => {
     seedUser('u1', 'cus_1', 'pro');
     seedLiveSubscription('u1', 'active', true);
     await applyStripeFunding(withReason(invoicePaid('in_gift', 'cus_1', PERIOD_START, PERIOD_END, 0), 1500, 'subscription_cycle'));
 
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
-    expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_gift')).toMatchObject({ entryType: 'monthly_grant', amountCents: 900, paidCents: 0 });
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
+    expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_gift')).toMatchObject({ entryType: 'monthly_grant', amountCents: 1500, paidCents: 0 });
   });
 
-  it('MON-2 (a) a trial-created subscription ($0, subtotal 0, subscription_create) grants list × ratio', async () => {
+  it('MON-2 (a) a trial-created subscription ($0, subtotal 0, subscription_create) grants list × the default ratio', async () => {
     seedUser('u1', 'cus_1', 'pro');
     seedLiveSubscription('u1', 'trialing');
     await applyStripeFunding(withReason(invoicePaid('in_trial', 'cus_1', PERIOD_START, PERIOD_END, 0), 0, 'subscription_create'));
 
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
   });
 
   it('MON-2 (d) a 100% coupon on a non-gifted subscription grants nothing', async () => {

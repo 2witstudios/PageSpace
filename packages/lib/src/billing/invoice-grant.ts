@@ -36,7 +36,7 @@
  */
 
 import type { SubscriptionTier } from './subscription-tiers';
-import { allowanceCentsForPaidCents, tierListPriceCents } from './money-model';
+import { allowanceCentsForPaidCents, tierListPriceCents, MONEY_MODEL_V2_ACTIVE } from './money-model';
 
 /** What the grant was sized from. */
 export type GrantBasis =
@@ -137,8 +137,13 @@ function isTrialCreate(input: InvoiceGrantInput, paidCents: number): boolean {
     && toCents(input.subtotalCents) === 0;
 }
 
-/** Size the grant for a PERSONAL subscription invoice (D-OW-16 a–d). */
-export function grantForInvoice(input: InvoiceGrantInput): InvoiceGrant {
+/**
+ * Size the grant for a PERSONAL subscription invoice (D-OW-16 a–d). `active`
+ * (D-OW-17) defaults to the money-model constant, same as `allowanceCentsForPaidCents`
+ * — production callers (credit-funding.ts) never pass it; tests pass `true`/`false`
+ * directly instead of mutating `process.env.MONEY_MODEL_V2`.
+ */
+export function grantForInvoice(input: InvoiceGrantInput, active: boolean = MONEY_MODEL_V2_ACTIVE): InvoiceGrant {
   const paidCents = Math.max(0, toCents(input.amountPaidCents));
 
   // SECURITY gate FIRST, ahead of gifted/trial: an invoice with no subscription
@@ -152,7 +157,7 @@ export function grantForInvoice(input: InvoiceGrantInput): InvoiceGrant {
   const funded: GrantReason | null = input.gifted === true ? 'gifted' : isTrialCreate(input, paidCents) ? 'trial' : null;
   if (funded) {
     // We front the plan: the grant is what a full-price invoice would derive.
-    const allowanceCents = allowanceCentsForPaidCents(tierListPriceCents(input.tier), input.tier);
+    const allowanceCents = allowanceCentsForPaidCents(tierListPriceCents(input.tier), input.tier, active);
     return allowanceCents > 0
       ? { paidCents, allowanceCents, basis: 'list', reason: funded }
       : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
@@ -160,7 +165,7 @@ export function grantForInvoice(input: InvoiceGrantInput): InvoiceGrant {
 
   if (paidCents === 0) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'zero_amount' };
 
-  const allowanceCents = allowanceCentsForPaidCents(paidCents, input.tier);
+  const allowanceCents = allowanceCentsForPaidCents(paidCents, input.tier, active);
   return allowanceCents > 0
     ? { paidCents, allowanceCents, basis: 'paid', reason: 'paid' }
     : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
@@ -169,17 +174,19 @@ export function grantForInvoice(input: InvoiceGrantInput): InvoiceGrant {
 /**
  * Sum the line items an ORG subscription invoice paid for and size the pool refill
  * from that sum (MON-3): base + extra-seat items, with proration credits netted.
- * Seam for Phase 3 (org Stripe subscriptions); nothing calls it yet.
+ * Seam for Phase 3 (org Stripe subscriptions); nothing calls it yet. `active`
+ * (D-OW-17) defaults to the money-model constant, same as `grantForInvoice`.
  */
 export function grantForInvoiceLines(
   lines: ReadonlyArray<InvoiceGrantLine | null | undefined>,
   tier: SubscriptionTier,
+  active: boolean = MONEY_MODEL_V2_ACTIVE,
 ): InvoiceGrant {
   let sum = 0;
   for (const line of lines) sum += toCents(line?.amount);
   const paidCents = Math.max(0, sum);
   if (paidCents === 0) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'zero_amount' };
-  const allowanceCents = allowanceCentsForPaidCents(paidCents, tier);
+  const allowanceCents = allowanceCentsForPaidCents(paidCents, tier, active);
   return allowanceCents > 0
     ? { paidCents, allowanceCents, basis: 'paid', reason: 'paid' }
     : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };

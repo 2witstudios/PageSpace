@@ -16,10 +16,13 @@ export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.next', 'coverage', '.turbo', '.git', 'build', 'out']);
 const SOURCE_FILE = /\.(ts|tsx)$/;
-const TEST_FILE = /\.(test|spec)\.(ts|tsx)$/;
+const TEST_FILE = /\.(test|spec)\.(ts|tsx|js|mjs|cjs)$/;
 
-/** Every non-test .ts/.tsx source file under `roots` (repo-relative), sorted, posix-separated. */
-export function listSourceFiles(roots: readonly string[]): string[] {
+/**
+ * Every non-test file under `roots` whose basename matches `fileName` (repo-relative),
+ * sorted, posix-separated. `__tests__` directories are skipped, as for source files.
+ */
+export function listFiles(roots: readonly string[], fileName: RegExp): string[] {
   const found: string[] = [];
   const walk = (dir: string): void => {
     let entries: fs.Dirent[];
@@ -32,13 +35,18 @@ export function listSourceFiles(roots: readonly string[]): string[] {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (!SKIP_DIRS.has(entry.name) && entry.name !== '__tests__') walk(full);
-      } else if (entry.isFile() && SOURCE_FILE.test(entry.name) && !TEST_FILE.test(entry.name)) {
+      } else if (entry.isFile() && fileName.test(entry.name) && !TEST_FILE.test(entry.name)) {
         found.push(path.relative(REPO_ROOT, full).split(path.sep).join('/'));
       }
     }
   };
   for (const root of roots) walk(path.join(REPO_ROOT, root));
   return found.sort();
+}
+
+/** Every non-test .ts/.tsx source file under `roots` (repo-relative), sorted, posix-separated. */
+export function listSourceFiles(roots: readonly string[]): string[] {
+  return listFiles(roots, SOURCE_FILE);
 }
 
 export interface Violation {

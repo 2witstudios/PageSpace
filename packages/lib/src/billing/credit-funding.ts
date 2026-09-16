@@ -11,9 +11,10 @@
  *     account-plan-classified invoice grants nothing regardless of amount_paid
  *     (invoice-grant.ts). The grant is sized from what the invoice PAID:
  *     invoice.amount_paid × the tier's included-credit ratio (Spec MON-2, via the
- *     pure invoice-grant module). The ratio itself is what MONEY_MODEL_V2 gates
- *     (money-model.ts); off, 100% of the paid amount is granted, which reproduces
- *     today's amounts for a full-price invoice. Gifts and trials are funded at
+ *     pure invoice-grant module). The ratio itself is what MONEY_MODEL_V2_ACTIVE
+ *     gates (money-model.ts, D-OW-17 — a code constant, not an env var); off, 100%
+ *     of the paid amount is granted, which reproduces today's amounts for a
+ *     full-price invoice. Gifts and trials are funded at
  *     list price × ratio (D-OW-16a) — gifted status is read from the invoice's
  *     own subscription-metadata snapshot first, so it cannot race the
  *     subscription webhook, with the live subscriptions row as a fallback. Any
@@ -47,6 +48,7 @@ import { eq, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { classifyStripeEvent, computeMonthlyRefill, applyPaymentToDebt } from './credit-core';
 import { grantForInvoice } from './invoice-grant';
+import { MONEY_MODEL_V2_ACTIVE } from './money-model';
 import type { SubscriptionTier } from '../services/subscription-utils';
 import { loggers } from '../logging/logger-config';
 
@@ -284,7 +286,11 @@ async function recordMissedGrant(
  * and roll the billing window forward, recording a monthly_grant ledger row keyed
  * on the invoice id. The balance write only runs if the grant row was newly inserted.
  */
-async function applyMonthlyRefill(event: FundingEvent, tierOverride?: SubscriptionTier): Promise<void> {
+async function applyMonthlyRefill(
+  event: FundingEvent,
+  tierOverride?: SubscriptionTier,
+  active: boolean = MONEY_MODEL_V2_ACTIVE,
+): Promise<void> {
   const obj = event.data.object;
   const stripeRef = obj.id ?? null;
   if (!stripeRef) {
@@ -322,7 +328,7 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
     hasSubscriptionParent: invoiceHasSubscriptionParent(obj),
     gifted,
     tier,
-  });
+  }, active);
   const allowanceCents = grant.allowanceCents;
   if (allowanceCents <= 0) {
     if (grant.reason === 'no_ratio' && grant.paidCents > 0) {
@@ -531,6 +537,16 @@ export interface FundingOptions {
    * Only used by the monthly_refill path.
    */
   tier?: SubscriptionTier;
+  /**
+   * D-OW-17 test seam ONLY: overrides the money-model ratio flag for this call.
+   * Defaults to {@link MONEY_MODEL_V2_ACTIVE} — no production caller (the Stripe
+   * webhook route) ever passes this; it exists so a shell-level test can prove
+   * `applyStripeFunding` actually applies the ratio (active=true → 60% of paid)
+   * rather than just passing amount_paid straight through, without mutating
+   * process.env.MONEY_MODEL_V2 (banned by the seam guard). Only used by the
+   * monthly_refill path.
+   */
+  active?: boolean;
 }
 
 export async function applyStripeFunding(event: FundingEvent, opts?: FundingOptions): Promise<void> {
@@ -540,7 +556,7 @@ export async function applyStripeFunding(event: FundingEvent, opts?: FundingOpti
   try {
     switch (action.kind) {
       case 'monthly_refill':
-        await applyMonthlyRefill(event, opts?.tier);
+        await applyMonthlyRefill(event, opts?.tier, opts?.active);
         break;
       case 'topup':
         await applyTopupFunding(event, action.packCents);
