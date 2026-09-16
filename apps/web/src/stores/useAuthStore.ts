@@ -14,6 +14,10 @@ interface User {
   emailVerified?: Date | null;
   role?: 'user' | 'admin';
   subscriptionTier?: SubscriptionTier;
+  /** ADR 0007 — `/api/auth/me` always sends it; optional for persisted pre-agent state. */
+  accountType?: 'human' | 'agent';
+  /** Present only for an agent account. */
+  agent?: { ownerUserId: string | null; claimedAt: string | null; source: string | null };
 }
 
 interface AuthState {

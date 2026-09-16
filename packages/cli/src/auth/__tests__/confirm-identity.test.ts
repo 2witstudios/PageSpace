@@ -30,6 +30,36 @@ describe('whoamiOperation', () => {
   });
 });
 
+describe('whoamiOperation — /api/auth/me shapes (ADR 0007)', () => {
+  const clientReturning = (body: unknown) =>
+    new PageSpaceClient({
+      baseUrl: 'https://pagespace.ai',
+      auth: new StaticTokenProvider('ps_at_test-token'),
+      fetch: (async () =>
+        new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch,
+      skipVersionCheck: true,
+    });
+
+  it('given a human body with the additive accountType, should still parse name and email', async () => {
+    const result = await clientReturning({
+      id: 'u1', name: 'Ada Lovelace', email: 'ada@example.com', image: null, role: 'user',
+      emailVerified: '2026-01-01T00:00:00.000Z', subscriptionTier: 'free', accountType: 'human',
+    }).invoke(whoamiOperation, {});
+
+    expect(result).toEqual({ name: 'Ada Lovelace', email: 'ada@example.com' });
+  });
+
+  it('given an agent body with accountType and the agent ownership block, should parse name and email', async () => {
+    const result = await clientReturning({
+      id: 'a1', name: 'Build Agent', email: 'agent-a1@agents.pagespace.invalid', image: null, role: 'user',
+      emailVerified: null, subscriptionTier: 'free', accountType: 'agent',
+      agent: { ownerUserId: null, claimedAt: null, source: 'claude-code' },
+    }).invoke(whoamiOperation, {});
+
+    expect(result).toEqual({ name: 'Build Agent', email: 'agent-a1@agents.pagespace.invalid' });
+  });
+});
+
 describe('confirmIdentity', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
