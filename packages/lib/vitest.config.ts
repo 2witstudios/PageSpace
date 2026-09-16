@@ -29,6 +29,7 @@ export default defineConfig({
       'src/agent-accounts/__tests__/grant-gate-executor.integration.test.ts',
       'src/agent-accounts/__tests__/audit-repository.integration.test.ts',
       'src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts',
+      'src/services/__tests__/agent-identities.integration.test.ts',
     ],
     setupFiles: ['./src/test/setup.ts'],
     // Run test files sequentially to avoid database race conditions
@@ -79,6 +80,7 @@ export default defineConfig({
       'src/agent-accounts/__tests__/grant-gate-executor.integration.test.ts',
       'src/agent-accounts/__tests__/audit-repository.integration.test.ts',
       'src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts',
+      'src/services/__tests__/agent-identities.integration.test.ts',
       ],
       thresholds: {
         lines: 85,
