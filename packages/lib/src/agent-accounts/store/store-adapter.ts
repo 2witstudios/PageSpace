@@ -23,8 +23,8 @@ import type {
   SessionFormat,
   TenantId,
 } from '@pagespace/db/schema/agent-accounts';
-import type { AgentAccountGrant, AgentPageId, BindingDigest, Brand, Ed25519Verify, HashBytes, PresenterChannel, UserId } from '../grant';
-import type { CanonicalOrigin } from '../canonical-request';
+import type { AgentPageId, BindingDigest, Brand, ConsentId, Ed25519Verify, HashBytes, PresenterChannel, UserId, VerifiedGrant } from '../grant';
+import type { CanonicalOrigin, ResourceRestrictions } from '../canonical-request';
 import type { AccountApprovalPolicy } from '../approval';
 
 /** Maps to the Infisical path `/<tenantProject>/<accountId>/<kind>`. */
@@ -38,16 +38,31 @@ export type SecretRef = {
  * The security-relevant SCOPE of an account — everything a main-DB writer
  * could widen without touching owner, tenant or kind: the approval policy,
  * the per-provider resource restrictions, the agent pages bound to the
- * account, and the allowed origins (ADR 0005 §2.4). Delegation and approval
- * rows are deliberately NOT here: each is protected by its own fact compared
- * against the signed grant (`DelegationFact`, `ApprovalFact`).
+ * account, the allowed and auxiliary origins, the `session_http` flag and the
+ * provider slug that selects the operation catalogue (ADR 0005 §2.4).
+ * Delegation and approval rows are deliberately NOT here: each is protected
+ * by its own fact compared against the signed grant (`DelegationFact`,
+ * `ApprovalFact`).
+ *
+ * AMENDED 2026-09-16 (G1c R1/R7). The first scope left out
+ * `sessionHttpEnabled`, `auxiliaryOrigins` and `providerSlug`. H1's premise is
+ * that a main-DB writer leaves `policyVersion` alone, so a writer could turn
+ * `sessionHttpEnabled` on (the authority then signs `sessionHttp: true`),
+ * add an auxiliary origin, or switch `providerSlug` to a catalogue with
+ * looser classes, and the plane's digest still matched.
  */
 export type PlaneScope = {
   readonly approvalPolicy: AccountApprovalPolicy | null;
-  readonly resourceRestrictions: Readonly<Record<string, readonly string[]>>;
+  readonly resourceRestrictions: ResourceRestrictions;
   /** Unrevoked `agent_account_bindings` plus the owner page of an agent-page-owned account; sorted before hashing. */
   readonly boundAgentPageIds: readonly AgentPageId[];
   readonly allowedOrigins: readonly CanonicalOrigin[];
+  /** Human-approved at capture (S3 §3.5); sorted before hashing. */
+  readonly auxiliaryOrigins: readonly CanonicalOrigin[];
+  /** `agent_accounts.sessionHttpEnabled`: whether a `session` kind may reach the HTTP executor at all. */
+  readonly sessionHttpEnabled: boolean;
+  /** `agent_accounts.providerSlug`: selects the operation registry entries; null = generic origin (no entry matches). */
+  readonly providerSlug: string | null;
 };
 
 /** SHA3-256 over `canonicalJson(PlaneScope)` (ADR 0005 §2.4). */
@@ -149,24 +164,34 @@ export type MaterialForChannel<C extends PresenterChannel, K extends AccountKind
     ? OAuth2AccessMaterial
     : SecretMaterialByKind[K];
 
-/** The tenant-scoped machine identity handle an executor holds. A parameter so a wrong-tenant identity is testable. */
+/**
+ * Which role a store identity was provisioned for. The four presenter
+ * channels resolve; `ingress` is the write-only identity the credential-ingress
+ * handler uses for `put`; `manage` is the authority's management worker, the
+ * only role that may `rebind`, `revoke` or `describe` (ADR 0005 §2.1, F18).
+ */
+export type StoreChannel = PresenterChannel | 'ingress' | 'manage';
+
+/**
+ * The tenant-scoped machine identity handle a caller holds. A parameter so a
+ * wrong-tenant identity is testable.
+ *
+ * AMENDED 2026-09-16 (G1c R8/E3). `channel` is a RUNTIME fact, not only a
+ * type: `decideResolve` refuses when it differs from `grant.aud`, and the
+ * adapter's `rebind`, `revoke` and `describe` refuse unless it is `manage`.
+ * The first shape expressed both only in types, so a value assembled at
+ * runtime (or cast) went unchecked.
+ */
 export type StoreIdentity = {
   readonly tenantId: TenantId;
   readonly identityId: string;
+  readonly channel: StoreChannel;
   /** Per D-29's chosen model; reported so the audit can state the blast radius. */
   readonly blastRadius: 'tenant' | 'tier' | 'all';
 };
 
-/**
- * A grant that already passed `verifyGrant` (nominal; the adapter never
- * re-verifies), generic in its audience. `VerifiedGrant` with no argument is
- * the unnarrowed union — fine for pure decisions that re-check `aud` at
- * runtime, refused by `resolve` (G1a review H6).
- */
-export type VerifiedGrant<A extends PresenterChannel = PresenterChannel> = AgentAccountGrant & {
-  readonly aud: A;
-  readonly __verified: true;
-};
+/** Re-exported: the verifier's branded output (`grant.ts`, G1c R9). */
+export type { VerifiedGrant };
 
 type UnionToIntersection<U> = (U extends unknown ? (value: U) => void : never) extends (value: infer I) => void ? I : never;
 
@@ -181,24 +206,58 @@ export type NarrowedAudience<A extends PresenterChannel> = [A] extends [UnionToI
   ? unknown
   : { readonly __narrowGrantAudienceBeforeResolve: never };
 
+/**
+ * Who may consent to a `rebind` of an account, PINNED in the plane at the
+ * first `put` (G1c R2). A user-owned account's only consenter is the owner in
+ * the stored `ownerRef`. An agent-page-owned account's consenters are the
+ * humans pinned at put (the drive OWNER/ADMIN set the authority read then);
+ * changing that set is itself a rebind that needs a CURRENT pinned consenter.
+ * Main-DB drive roles never mint consent authority: a writer who makes
+ * themselves ADMIN is not in the plane's set.
+ */
+export type PlaneConsenters =
+  | { readonly kind: 'owner' }
+  | { readonly kind: 'pinned'; readonly userIds: readonly UserId[] };
+
+/**
+ * The plane's own row for an account's bindings (G1c R4): separate from the
+ * secret's version row, with CAS on `bindings.policyVersion`. A rebind writes
+ * only this row, so it never changes `secret.version` or `credentialVersion`.
+ * `scope` is kept beside `bindings` (its digest is `bindings.policyDigest`) so
+ * the plane can tell a narrowing rebind from a widening one (R13).
+ */
+export type PlaneBindingsRecord = {
+  readonly bindings: PlaneBindings;
+  readonly scope: PlaneScope;
+  readonly consenters: PlaneConsenters;
+};
+
 export type PutInput = {
   readonly ref: SecretRef;
   readonly material: SecretMaterial;
   /** null = create; otherwise the version the caller last observed (CAS). */
   readonly expectedVersion: CredentialVersion | null;
   readonly bindings: PlaneBindings;
+  /** `digestPlaneScope(scope)` must equal `bindings.policyDigest`. Pinned beside the bindings on the first put; must equal the stored scope afterwards. */
+  readonly scope: PlaneScope;
+  /** `owner` iff `bindings.ownerRef.kind === 'user'`; a non-empty `pinned` set iff `agent_page`. Pinned on the first put; must equal the stored set afterwards. */
+  readonly consenters: PlaneConsenters;
   readonly identity: StoreIdentity;
 };
 
 export type PutResult =
   | { readonly ok: true; readonly version: CredentialVersion }
-  | { readonly ok: false; readonly reason: 'version_conflict' | 'write_unverified' | 'lock_unavailable' | 'store_unavailable' | 'kind_mismatch' };
+  | {
+      readonly ok: false;
+      readonly reason: 'version_conflict' | 'write_unverified' | 'lock_unavailable' | 'store_unavailable' | 'kind_mismatch' | 'consenters_invalid';
+    };
 
 export type ResolveInput<C extends PresenterChannel, K extends ResolvableBy<C> = ResolvableBy<C>> = {
   readonly ref: SecretRef & { readonly kind: K };
   readonly version: CredentialVersion;
   readonly grant: VerifiedGrant<C>;
-  readonly identity: StoreIdentity;
+  /** The caller's own channel must equal `grant.aud` — typed here and re-checked by `decideResolve` (R8). */
+  readonly identity: StoreIdentity & { readonly channel: C };
 };
 
 /**
@@ -211,15 +270,26 @@ export type SessionHttpResolveInput = {
   readonly ref: SecretRef & { readonly kind: 'session' };
   readonly version: CredentialVersion;
   readonly grant: VerifiedGrant<'http-executor'> & { readonly sessionHttp: true };
-  readonly identity: StoreIdentity;
+  readonly identity: StoreIdentity & { readonly channel: 'http-executor' };
 };
 
 export type ResolveDenyReason =
   | 'version_mismatch'
+  /**
+   * The grant was signed under bindings OLDER than the plane's: its
+   * `policyVersion` is below the stored `bindings.policyVersion` (a rebind
+   * landed since issuance). Distinct from `binding_mismatch`, which means the
+   * bindings disagree at the same or a newer epoch — the tampering signal
+   * (G1c H2).
+   */
+  | 'bindings_stale'
   | 'binding_mismatch'
   | 'kind_not_resolvable'
+  /** The identity's `channel` is not `grant.aud` (R8). */
+  | 'identity_refused'
   | 'revoked'
   | 'not_found'
+  /** Includes a ref in the reconcile-required state that could not be reconciled (E1): the ambiguous version is never served. */
   | 'store_unavailable';
 
 export type ResolveResult<C extends PresenterChannel, K extends AccountKind> =
@@ -238,18 +308,29 @@ export type RotateInput = {
 export type RotateResult = PutResult;
 
 /**
- * An authenticated owner consent to a binding change: the human who holds
- * `grant` on the account (ADR 0004 §4.1) passed step-up
- * (`auth/step-up-decisions.ts`) for EXACTLY these bindings. Signed by the
- * authority's step-up consent key (distinct from the grant key) so the plane
- * verifies it without reading the main DB; a DB writer cannot mint one.
+ * An authenticated owner consent to a binding change: a human the plane
+ * PINNED as a consenter (`PlaneConsenters`) passed step-up
+ * (`auth/step-up-decisions.ts`) for EXACTLY this ref, these bindings and this
+ * consenter set. Signed by the authority's step-up consent key (distinct from
+ * the grant key) so the plane verifies it without reading the main DB; a DB
+ * writer cannot mint one.
+ *
+ * AMENDED 2026-09-16 (G1c E2). The first consent bound only a bindings digest.
+ * `PlaneBindings` names no account, so a consent for account A replayed onto
+ * account B with identical bindings verified, and nothing recorded
+ * `consentId`, so the same consent could be applied again inside its max age.
+ * It now names the `ref` and is consumed single-use by `consentId` through the
+ * shared replay store before the rebind is written.
  */
 export type OwnerConsent = {
-  readonly consentId: string;
+  readonly consentId: ConsentId;
   readonly consentingUserId: UserId;
   readonly stepUpChallengeId: string;
+  readonly ref: SecretRef;
   /** `digestBindings` over the bindings being written — consent is to these bytes, not to "a change". */
   readonly bindingsDigest: BindingDigest;
+  /** The consenter set being written (unchanged or not): changing who may consent is itself consented to. */
+  readonly consenters: PlaneConsenters;
   /** ms since epoch; the plane refuses a consent older than `StoreLimits['rebindConsentMaxAgeMs']`. */
   readonly issuedAt: number;
   /** Base64 Ed25519 over the canonical JSON of the fields above. */
@@ -257,21 +338,33 @@ export type OwnerConsent = {
 };
 
 /**
- * `rebind` — the ONE path that rewrites the plane's `PlaneBindings` without
- * touching material: a `policyVersion` bump (membership, instructions, copy,
- * move) or a widening (origins, policy, restrictions, agent bindings). CAS on
- * the stored `policyVersion`. Callable only by a MANAGE-audience identity —
- * held by the authority's management worker, never by `apps/web` — and only
- * with a valid `OwnerConsent` for these exact bindings (G1a review H2).
+ * `rebind` — the ONE path that rewrites the plane's bindings row without
+ * touching material or `secret.version`: a `policyVersion` bump (membership,
+ * instructions, copy, move), a narrowing, or a widening (origins, policy,
+ * restrictions, agent bindings, `session_http`, provider). CAS on the stored
+ * `policyVersion`. Callable only by a `manage` identity — held by the
+ * authority's management worker, never by `apps/web`.
+ *
+ * Consent (G1c R13): a rebind whose `scope` equals or is strictly narrower
+ * than the stored one, with owner, tenant, kind and consenters unchanged,
+ * needs NO consent — a bump caused by someone who is not a consenter (an admin
+ * removing the owner's membership, the owner deleted) must still be writable,
+ * or every grant stays `bindings_stale` forever. Any widening, and any change
+ * to the consenter set, needs an `OwnerConsent` from a CURRENT pinned
+ * consenter (R2).
  */
 export type RebindInput = {
   readonly ref: SecretRef;
   /** The `policyVersion` of the bindings the caller last observed in the plane (CAS). */
   readonly expectedVersion: PolicyVersion;
-  /** `bindings.policyVersion` must be strictly greater than `expectedVersion`; tenant and kind must be unchanged. */
+  /** `bindings.policyVersion` must be strictly greater than `expectedVersion`; tenant, kind and owner kind must be unchanged. */
   readonly bindings: PlaneBindings;
-  readonly consent: OwnerConsent;
-  readonly identity: StoreIdentity & { readonly audience: 'manage' };
+  /** `digestPlaneScope(scope)` must equal `bindings.policyDigest`. */
+  readonly scope: PlaneScope;
+  readonly consenters: PlaneConsenters;
+  /** null only for an equal-or-narrower rebind (R13). */
+  readonly consent: OwnerConsent | null;
+  readonly identity: StoreIdentity & { readonly channel: 'manage' };
 };
 
 export type RebindResult =
@@ -280,8 +373,10 @@ export type RebindResult =
       readonly ok: false;
       readonly reason:
         | 'version_conflict'
+        | 'consent_required'
         | 'consent_invalid'
         | 'immutable_binding_changed'
+        | 'identity_refused'
         | 'write_unverified'
         | 'lock_unavailable'
         | 'store_unavailable'
@@ -290,8 +385,10 @@ export type RebindResult =
 
 export type RevokeReason = 'owner_revoked' | 'policy_revoked' | 'rotation_replay' | 'erasure' | 'admin';
 
-export type RevokeInput = { readonly ref: SecretRef; readonly reason: RevokeReason; readonly identity: StoreIdentity };
-export type RevokeResult = { readonly ok: true; readonly revokedAt: number } | { readonly ok: false; readonly reason: 'not_found' | 'store_unavailable' };
+export type RevokeInput = { readonly ref: SecretRef; readonly reason: RevokeReason; readonly identity: StoreIdentity & { readonly channel: 'manage' } };
+export type RevokeResult =
+  | { readonly ok: true; readonly revokedAt: number }
+  | { readonly ok: false; readonly reason: 'not_found' | 'identity_refused' | 'store_unavailable' };
 
 /** What happened at the PROVIDER when we tried to revoke there. Reported, never inferred. */
 export type UpstreamRevocation = 'revoked' | 'unsupported' | 'failed' | 'not_attempted';
@@ -301,18 +398,27 @@ export type DeleteResult =
   | { readonly ok: true; readonly removed: true; readonly upstream: UpstreamRevocation }
   | { readonly ok: false; readonly reason: 'not_found' | 'store_unavailable' };
 
-export type DescribeInput = { readonly ref: SecretRef; readonly identity: StoreIdentity };
+export type DescribeInput = { readonly ref: SecretRef; readonly identity: StoreIdentity & { readonly channel: 'manage' } };
+/**
+ * Metadata only, never material. `previousVersion` and `rotatedAt` are the
+ * PLANE-ATTESTED rotation facts the verifier consumes as
+ * `ExpectedBinding.previousCredentialVersion` / `rotatedAt` (ADR 0004 F5a):
+ * they come from the plane's own metadata store, never from a main-DB row
+ * (G1c R3 + M7 attestation).
+ */
 export type DescribeResult =
   | {
       readonly ok: true;
       readonly kind: AccountKind;
       readonly version: CredentialVersion;
+      readonly previousVersion: CredentialVersion | null;
       readonly bindings: PlaneBindings;
+      readonly consenters: PlaneConsenters;
       readonly createdAt: number;
       readonly rotatedAt: number | null;
       readonly revokedAt: number | null;
     }
-  | { readonly ok: false; readonly reason: 'not_found' | 'store_unavailable' };
+  | { readonly ok: false; readonly reason: 'not_found' | 'identity_refused' | 'store_unavailable' };
 
 /** The interface (ADR 0005 §2.2). Executors are the only `resolve` callers; the web process never holds a reading identity. */
 export type StoreAdapter = {
@@ -324,7 +430,7 @@ export type StoreAdapter = {
   /** See `SessionHttpResolveInput`; unrepresentable without `grant.sessionHttp: true`. */
   readonly resolveSessionOverHttp: (input: SessionHttpResolveInput) => Promise<ResolveResult<'http-executor', 'session'>>;
   readonly rotate: (input: RotateInput) => Promise<RotateResult>;
-  /** Manage-audience identity + owner consent only; see `RebindInput`. */
+  /** Manage identity; owner consent unless the rebind narrows; see `RebindInput`. */
   readonly rebind: (input: RebindInput) => Promise<RebindResult>;
   readonly revoke: (input: RevokeInput) => Promise<RevokeResult>;
   readonly delete: (input: DeleteInput) => Promise<DeleteResult>;
@@ -354,41 +460,120 @@ export type DecideStoreWrite = (input: {
   | { readonly outcome: 'write_unverified' };
 
 /**
- * `decideRebind` — pure. Refuses unless: the consent signature verifies under
- * the pinned consent key; `consent.bindingsDigest === digestBindings(next)`;
- * the consent is fresh; for a user-owned account the consenting user is the
- * owner in the plane's STORED `ownerRef` (so a tampered owner cannot consent
- * for itself); `stored.policyVersion === expectedVersion` and
- * `next.policyVersion > expectedVersion`; `tenantId` and `kind` are unchanged.
- * G1b implements.
+ * `decideRebind` — pure. Refuses unless: something is stored (`not_found`);
+ * `digestPlaneScope(next.scope) === next.bindings.policyDigest`;
+ * `tenantId`, `kind` and `ownerRef.kind` are unchanged and the owner still
+ * derives the stored tenant (`immutable_binding_changed`, R2);
+ * `stored.bindings.policyVersion === expectedVersion` and
+ * `next.bindings.policyVersion > expectedVersion` (`version_conflict`). Then
+ * consent: an equal-or-narrower scope with unchanged owner and consenters needs
+ * none (R13); anything else needs a consent (`consent_required`) whose
+ * signature verifies under the pinned consent key, whose `ref` is this ref,
+ * whose `bindingsDigest` and `consenters` are exactly `next`, which is fresh,
+ * and whose consenting user is a consenter in the STORED record — the stored
+ * user owner, or a member of the stored pinned set (`consent_invalid`, R2/E2).
+ * A `rebind` verdict names the consent the adapter must consume single-use
+ * BEFORE writing (`consumeConsentId`, null when none was needed).
  */
 export type DecideRebind = (input: {
-  readonly stored: PlaneBindings | null;
+  readonly ref: SecretRef;
+  readonly stored: PlaneBindingsRecord | null;
   readonly expectedVersion: PolicyVersion;
-  readonly next: PlaneBindings;
-  readonly consent: OwnerConsent;
+  readonly next: PlaneBindingsRecord;
+  readonly consent: OwnerConsent | null;
   readonly consentPublicKey: Uint8Array;
   readonly now: number;
   readonly maxAgeMs: StoreLimits['rebindConsentMaxAgeMs'];
   readonly verify: Ed25519Verify;
   readonly hash: HashBytes;
-}) => { readonly outcome: 'rebind' } | { readonly outcome: 'refuse'; readonly reason: Exclude<RebindResult, { readonly ok: true }>['reason'] };
+}) =>
+  | { readonly outcome: 'rebind'; readonly consumeConsentId: ConsentId | null }
+  | { readonly outcome: 'refuse'; readonly reason: Exclude<RebindResult, { readonly ok: true }>['reason'] };
 
-/** The facts `describe` would return plus revocation state — what `decideResolve` compares against. */
+/**
+ * `isScopeNarrowing` — pure (R13). True iff `next` authorizes nothing `stored`
+ * does not: every origin list and the bound agent pages are subsets; each
+ * stored resource restriction key survives with a subset of its values (a new
+ * key only narrows); `sessionHttpEnabled` is not turned on; `providerSlug` is
+ * unchanged; and the approval policy is null (every use asks), or both are
+ * non-null with a subset scope, a trigger that asks for at least as many
+ * classes, an end no later, limits no higher and the same approver. Equal
+ * scopes are narrowing.
+ */
+export type IsScopeNarrowing = (input: { readonly stored: PlaneScope; readonly next: PlaneScope }) => boolean;
+
+/**
+ * The uncertain-write marker (G1c E1). Recorded in the plane metadata row,
+ * under the advisory lock, BEFORE the Infisical write of a replacing
+ * put/rotate; cleared by the metadata commit. A row still carrying one is
+ * reconcile-required: the Infisical write may have landed while the commit
+ * failed. `digest` is `digestWrite` of the attempted value+comment and exists
+ * only while the write is ambiguous.
+ */
+export type PendingWrite = {
+  readonly version: CredentialVersion;
+  readonly digest: WriteDigest;
+  /** `true` when the attempted write was a `rotate` (it opens grace on commit). */
+  readonly rotation: boolean;
+};
+
+/** SHA3-256 over `canonicalJson({ secretValue, secretComment })` of one Infisical write. */
+export type WriteDigest = Brand<string, 'WriteDigest'>;
+
+export type DigestWrite = (input: { readonly secretValue: string; readonly secretComment: string; readonly hash: HashBytes }) => WriteDigest;
+
+/**
+ * `decideReconcile` — pure (E1). The next adapter call on a reconcile-required
+ * ref reads Infisical's current version and write digest under the advisory
+ * lock and hands them here: `commit_forward` only when they are exactly the
+ * pending write; otherwise `fail_closed` (the ref stays reconcile-required and
+ * nothing is served or written).
+ */
+export type DecideReconcile = (input: {
+  readonly pending: PendingWrite;
+  readonly observed: { readonly version: CredentialVersion; readonly digest: WriteDigest } | null;
+}) => { readonly outcome: 'commit_forward'; readonly version: CredentialVersion } | { readonly outcome: 'fail_closed' };
+
+/**
+ * `decideOrphanAdoption` — pure (E1). A first put (no metadata row) that finds
+ * the key already in Infisical — material from an earlier first put whose
+ * commit failed — adopts it only when the orphan is exactly this put's
+ * attempted write; otherwise the orphan is erased before the put proceeds.
+ */
+export type DecideOrphanAdoption = (input: {
+  readonly attempted: WriteDigest;
+  readonly observed: { readonly version: CredentialVersion; readonly digest: WriteDigest };
+}) => { readonly outcome: 'adopt'; readonly version: CredentialVersion } | { readonly outcome: 'erase' };
+
+/**
+ * `decideStoreCaller` — pure (R8/E3). Whether an identity may perform an
+ * operation that requires one role (`manage` for rebind, revoke, describe):
+ * same tenant as the ref and exactly that channel.
+ */
+export type DecideStoreCaller = (input: {
+  readonly identity: StoreIdentity;
+  readonly ref: SecretRef;
+  readonly required: StoreChannel;
+}) => { readonly ok: true } | { readonly ok: false; readonly reason: 'not_found' | 'identity_refused' };
+
+/** The facts `describe` would return plus revocation and reconcile state — what `decideResolve` compares against. */
 export type StoredSecretFacts = {
   readonly kind: AccountKind;
   readonly currentVersion: CredentialVersion;
   readonly previousVersion: CredentialVersion | null;
   readonly rotatedAt: number | null;
   readonly revokedAt: number | null;
+  /** From the bindings row (R4). */
   readonly bindings: PlaneBindings;
+  /** Non-null = reconcile-required (E1); `decideResolve` refuses `store_unavailable`. */
+  readonly pendingWrite: PendingWrite | null;
 };
 
 export type ResolveDecision = { readonly ok: true } | { readonly ok: false; readonly reason: ResolveDenyReason };
 
 /**
  * `digestPlaneScope` — SHA3-256 over `canonicalJson(scope)` with
- * `boundAgentPageIds` and `allowedOrigins` sorted, so the authority (reading
+ * `boundAgentPageIds`, `allowedOrigins` and `auxiliaryOrigins` sorted, so the authority (reading
  * the main DB) and the plane (holding its own copy) derive the same bytes.
  * The injected `hash` MUST be SHA3-256. G1b implements.
  */
@@ -399,11 +584,16 @@ export type DigestBindings = (input: { readonly bindings: PlaneBindings; readonl
 
 /**
  * `decideResolve` — every refusal in ADR 0005 §8 F1–F5, F10 as data. The
- * bindings check is `digestBindings(stored.bindings) === grant.bindingDigest`
- * (constant-time), so the comparison needs no main-DB fact. G1b implements.
+ * identity's `channel` must be `grant.aud` (`identity_refused`, R8); a
+ * reconcile-required ref is `store_unavailable` (E1); a grant whose
+ * `policyVersion` is below the stored bindings' is `bindings_stale` (H2);
+ * otherwise the bindings check is `digestBindings(stored.bindings) ===
+ * grant.bindingDigest` (constant-time), so the comparison needs no main-DB
+ * fact.
  */
 export type DecideResolve = (input: {
   readonly grant: VerifiedGrant;
+  readonly identity: StoreIdentity;
   readonly ref: SecretRef;
   readonly stored: StoredSecretFacts | null;
   readonly now: number;
