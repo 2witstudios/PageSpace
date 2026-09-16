@@ -113,6 +113,7 @@
         "src/schema.ts",
         "src/schema/agent-accounts.ts",
         "src/schema/agent-account-grant-nonces.ts",
+        "src/schema/agent-identities.ts",
         "src/schema/ai-compaction.ts",
         "src/schema/ai-streams.ts",
         "src/schema/auth-handoff-tokens.ts",

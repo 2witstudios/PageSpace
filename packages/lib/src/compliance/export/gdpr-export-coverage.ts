@@ -204,6 +204,12 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // token value is stored, and nothing in the row is authored by or about the
     // subject.
     'app_deploy_token_mints',
+    // An agent's own login (ADR 0007): the SHA3-256 hash of its `ps_agent_*`
+    // secret and of its claim token, beside the owner link. Same shape and
+    // reasoning as `oauth_device_codes` — the claim ceremony row holds a hashed
+    // user code. The agent's `users` row itself is exported under `profile`.
+    'agent_identities',
+    'agent_claims',
   ),
 
   ...withReason(
@@ -220,6 +226,10 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // grant they bound could no longer verify. The credentialed action itself
     // IS disclosed, from the hash-chained security audit, not from here.
     'agent_account_grant_nonces',
+    // Proof-of-work challenges for the agent signup door (ADR 0007 Decision
+    // 10): a hashed random challenge, a difficulty and an expiry, issued
+    // before any account exists and bound to no user.
+    'agent_signup_challenges',
     // The published-app DEDICATED SUBSCRIPTION teardown outbox — same shape and
     // same reasoning as `app_hosting_reclaims` immediately above, just pointed
     // at a Stripe subscription id instead of a Fly app name. Nothing here is

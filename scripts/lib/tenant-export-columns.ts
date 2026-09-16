@@ -94,8 +94,12 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'stripeCustomerId', 'subscriptionTier', 'tosAcceptedAt',
       'failedLoginAttempts', 'lockedUntil', 'suspendedAt', 'suspendedReason',
       'timezone', 'createdAt', 'updatedAt', 'starterSkillsInstalledAt',
-      'onboardingCompletedAt',
+      'onboardingCompletedAt', 'accountType',
     ],
+    // `accountType` MUST travel: a tenant arriving with it defaulted would turn
+    // every agent into a `human` — eligible for the starter grant and for
+    // claiming other agents (ADR 0007 Decisions 1, 9).
+    //
     // `onboardingCompletedAt` MUST travel for the same reason: a tenant arriving
     // with it cleared would show the first-run walkthrough to every migrated
     // user on their next login, as if the whole workspace were brand new.

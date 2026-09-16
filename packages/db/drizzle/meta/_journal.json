@@ -2066,6 +2066,13 @@
       "when": 1789443229156,
       "tag": "0294_agent_account_grant_nonces",
       "breakpoints": true
+    },
+    {
+      "idx": 295,
+      "version": "7",
+      "when": 1789600486947,
+      "tag": "0295_optimal_firebrand",
+      "breakpoints": true
     }
   ]
 }
