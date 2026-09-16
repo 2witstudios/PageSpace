@@ -669,9 +669,12 @@ configs:
   # FAIL-CLOSED provider ACL. No mTLS role is presented, so every request falls to `default`,
   # and `default` is `enforce` with an explicit allowlist: an unlisted public host is refused
   # even though it is not a private address. The list is GENERATED per tenant (G2), empty-means-deny, from
-  # every host a shipped provider calls: API baseUrl AND tokenUrl AND revokeUrl (refresh must not fail
-  # closed), plus each approved generic-webhook connection's baseUrlOverride origin, added when an
-  # owner creates the connection and removed on delete. An ACL change is applied by regenerating the
+  # ALL enabled providers, which includes user-created custom/OpenAPI providers: `listEnabledProviders`
+  # returns system + custom (provider-repository.ts:42-52). For each: config.baseUrl, tokenUrl and
+  # revokeUrl (refresh must not fail closed). Plus EVERY connection's effective destination:
+  # execute-tool.ts:206 uses `connection.baseUrlOverride || providerConfig.baseUrl`, so every
+  # non-empty baseUrlOverride on any provider (not only generic-webhook) is added. Regenerated on
+  # provider or connection create/update/delete. An ACL change is applied by regenerating the
   # config and restarting executor-egress (hot reload unverified at G2); until then that webhook is refused. Schema per smokescreen's egress ACL docs; verify at G2.
   # Residual: a host allowlist bounds destinations, not accounts. A compromised executor can still send
   # data to an attacker-owned account on an allowed shared host (e.g. api.github.com). Per-account origin
@@ -693,7 +696,7 @@ configs:
           - oauth2.googleapis.com       # Google token refresh endpoint
           - api.zoom.us                 # Zoom API
           - zoom.us                     # zoom token-refresh.ts (/oauth/token)
-          # + generated: approved generic-webhook baseUrlOverride origins (per connection)
+          # + generated: every enabled custom provider baseUrl and every connection baseUrlOverride
   vault_ingress_nginx:                  # inline `content` needs Docker Compose >= 2.23.1
     content: |
       map $$http_upgrade $$connection_upgrade { default upgrade; '' close; }
