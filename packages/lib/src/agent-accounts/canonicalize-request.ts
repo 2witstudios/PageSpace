@@ -344,7 +344,7 @@ export const canonicalizeRequest: CanonicalizeRequest = (call): CanonicalizeResu
         : ({ ok: true, resources: [] } as const);
     if (!derived.ok) return refuse(derived.reason);
     const keys = match.entry.restrictionKeys;
-    const keyed = [...body.resources, ...derived.resources].map(([slot, value]) => [Object.hasOwn(keys, slot) ? keys[slot]! : slot, value] as const);
+    const keyed = [...body.resources, ...derived.resources].map(([slot, value]) => [Object.prototype.hasOwnProperty.call(keys, slot) ? keys[slot]! : slot, value] as const);
     resources = sortResourcePairs([...match.resources, ...keyed]);
   }
 

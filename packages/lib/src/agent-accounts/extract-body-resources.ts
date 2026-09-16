@@ -43,7 +43,7 @@ export const extractBodyResources: ExtractBodyResources = ({ slots, body }) => {
   for (const { slot, pointer, shape } of slots) {
     let value: unknown = root;
     for (const key of pointer) {
-      if (!isObject(value) || !Object.hasOwn(value, key)) return refuse;
+      if (!isObject(value) || !Object.prototype.hasOwnProperty.call(value, key)) return refuse;
       value = value[key];
     }
     if (shape === 'string') {

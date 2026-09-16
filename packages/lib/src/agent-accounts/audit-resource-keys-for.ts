@@ -12,5 +12,5 @@ import type { OperationRegistryEntry } from './canonical-request';
 
 export function auditResourceKeysFor({ entry }: { readonly entry: OperationRegistryEntry | null }): readonly string[] {
   if (entry === null) return [];
-  return entry.auditResourceSlots.map((slot) => (Object.hasOwn(entry.restrictionKeys, slot) ? entry.restrictionKeys[slot]! : slot));
+  return entry.auditResourceSlots.map((slot) => (Object.prototype.hasOwnProperty.call(entry.restrictionKeys, slot) ? entry.restrictionKeys[slot]! : slot));
 }

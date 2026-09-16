@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { generateKeyPairSync, sign as nodeSign, verify as nodeVerify, createPublicKey, createHash } from 'node:crypto';
+import type { ApprovalScope } from '../../approval';
 import { verifyGrant } from '../../verify-grant';
 import { encodeGrant } from '../../encode-grant';
 import { GRANT_ISSUER } from '../../grant-constants';
@@ -16,7 +17,8 @@ import type {
   DelegationId,
   DriveId,
   Ed25519Verify,
-  ExpectedBinding,
+  ExpectedRunBinding,
+  KnownAccountBinding,
   GrantId,
   HashBytes,
   Nonce,
@@ -29,6 +31,9 @@ import type {
 import type { AccountId, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalRequestInput } from '../../canonical-request';
 import { TEST_PROVIDER, TEST_REGISTRY } from '../operation-registry.fixture';
+
+/** A delegation scope that admits nothing — these cases decide at F7, never at issuance. */
+const NO_SCOPE: ApprovalScope = { origins: [], operations: [], resources: [] };
 
 // Threat model A3 (ASI03). Table rows over verifyGrant / decideAccountAccess
 // first; I/O cases last (Control Board §7.7). Every row here is pure.
@@ -87,7 +92,7 @@ function grantFor(overrides: Partial<AgentAccountGrant> = {}): AgentAccountGrant
   };
 }
 
-function present(grant: AgentAccountGrant, expected: Partial<ExpectedBinding> = {}, requestDigest: RequestDigest = DIGEST_X) {
+function present(grant: AgentAccountGrant, expected: Partial<ExpectedRunBinding & KnownAccountBinding> = {}, requestDigest: RequestDigest = DIGEST_X) {
   return verifyGrant({
     grant,
     signature: Buffer.from(nodeSign(null, encodeGrant(grant), issuer.privateKey)).toString('base64'),
@@ -109,7 +114,7 @@ function present(grant: AgentAccountGrant, expected: Partial<ExpectedBinding> = 
       previousCredentialVersion: null,
       rotatedAt: null,
       currentPolicyVersion: grant.policyVersion,
-      delegation: grant.delegationId === null ? { kind: 'live_session' } : { kind: 'delegation', delegationId: grant.delegationId, accountId: grant.accountId, agentPageId: grant.agentPageId, delegatedBy: grant.human.userId, expired: false, revoked: false },
+      delegation: grant.delegationId === null ? { kind: 'live_session' } : { kind: 'delegation', delegationId: grant.delegationId, accountId: grant.accountId, agentPageId: grant.agentPageId, delegatedBy: grant.human.userId, scope: NO_SCOPE, expired: false, revoked: false },
       sandbox: null,
       ceilingAdmitsAccount: true,
       ...expected,
@@ -187,13 +192,13 @@ describe('adversarial: cross-agent-substitution', () => {
     const unattended = grantFor({ human: { userId: 'user_1' as UserId, sessionId: null }, delegationId: 'dlg_A' as DelegationId, agentPageId: 'page_B' as AgentPageId });
     // The presenter's current run is page_B; the only delegation on file is for another account/page pairing.
     const actual = present(unattended, {
-      delegation: { kind: 'delegation', delegationId: 'dlg_A' as DelegationId, accountId: 'acct_other' as AccountId, agentPageId: 'page_A' as AgentPageId, delegatedBy: 'user_1' as UserId, expired: false, revoked: false },
+      delegation: { kind: 'delegation', delegationId: 'dlg_A' as DelegationId, accountId: 'acct_other' as AccountId, agentPageId: 'page_A' as AgentPageId, delegatedBy: 'user_1' as UserId, scope: NO_SCOPE, expired: false, revoked: false },
     });
     expect(actual).toEqual({ ok: false, reason: 'no_delegation' });
   });
 
   it('given a delegation recorded for agent page P by user U and an unattended run of page Q, or one acting as human V, presenting a grant naming that delegationId, should return no_delegation [G1a review H3]', () => {
-    const recorded = { kind: 'delegation', delegationId: 'dlg_P' as DelegationId, accountId: 'acct_X' as AccountId, agentPageId: 'page_P' as AgentPageId, delegatedBy: 'user_U' as UserId, expired: false, revoked: false } as const;
+    const recorded = { kind: 'delegation', delegationId: 'dlg_P' as DelegationId, accountId: 'acct_X' as AccountId, agentPageId: 'page_P' as AgentPageId, delegatedBy: 'user_U' as UserId, scope: NO_SCOPE, expired: false, revoked: false } as const;
     const onPageQ = grantFor({ human: { userId: 'user_U' as UserId, sessionId: null }, delegationId: 'dlg_P' as DelegationId, agentPageId: 'page_Q' as AgentPageId });
     const asHumanV = grantFor({ human: { userId: 'user_V' as UserId, sessionId: null }, delegationId: 'dlg_P' as DelegationId, agentPageId: 'page_P' as AgentPageId });
     const asRecorded = grantFor({ human: { userId: 'user_U' as UserId, sessionId: null }, delegationId: 'dlg_P' as DelegationId, agentPageId: 'page_P' as AgentPageId });

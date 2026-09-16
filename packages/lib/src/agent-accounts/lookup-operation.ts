@@ -46,6 +46,6 @@ export const lookupOperation: LookupOperation = ({ registry, providerSlug, origi
   }
   if (best === null || tied) return null;
   const keys = best.entry.restrictionKeys;
-  const resources = best.match.slots.map(([slot, value]) => [Object.hasOwn(keys, slot) ? keys[slot]! : slot, value] as const);
+  const resources = best.match.slots.map(([slot, value]) => [Object.prototype.hasOwnProperty.call(keys, slot) ? keys[slot]! : slot, value] as const);
   return { entry: best.entry, resources: sortResourcePairs(resources) };
 };

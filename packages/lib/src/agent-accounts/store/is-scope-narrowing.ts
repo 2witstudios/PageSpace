@@ -22,8 +22,8 @@
  *
  * Order-independent over every list. Pure.
  */
-import type { AccountApprovalPolicy, ApprovalTrigger } from '../../approval';
-import type { OperationRef } from '../../grant';
+import type { AccountApprovalPolicy, ApprovalTrigger } from '../approval';
+import type { OperationRef } from '../grant';
 import type { IsScopeNarrowing } from './store-adapter';
 
 /** How many operation classes a trigger still asks for: more asks is narrower. */
@@ -39,7 +39,7 @@ function subset<T>(next: readonly T[], stored: readonly T[]): boolean {
 
 /** Every key `stored` restricts, `next` restricts too, to a subset of the values. */
 function restrictsAtLeast(next: Readonly<Record<string, readonly string[]>>, stored: Readonly<Record<string, readonly string[]>>): boolean {
-  return Object.keys(stored).every((key) => Object.hasOwn(next, key) && subset(next[key]!, stored[key]!));
+  return Object.keys(stored).every((key) => Object.prototype.hasOwnProperty.call(next, key) && subset(next[key]!, stored[key]!));
 }
 
 function pairsByKey(pairs: readonly (readonly [string, string])[]): Readonly<Record<string, readonly string[]>> {
