@@ -81,6 +81,9 @@ import type {
 } from './canonical-request';
 import type { ExecutorChannel } from './grant';
 import { lookupOperation } from './lookup-operation';
+import { extractBodyResources } from './extract-body-resources';
+import { deriveGitResources } from './derive-git-resources';
+import { sortResourcePairs } from './sort-resource-pairs';
 
 const METHODS_BY_CHANNEL: { readonly [C in ExecutorChannel]: readonly MethodFor[C][] } = {
   'http-executor': ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
@@ -328,8 +331,22 @@ export const canonicalizeRequest: CanonicalizeRequest = (call): CanonicalizeResu
   if (!headers.ok) return headers;
 
   const bodySha256 = createHash('sha256').update(input.body).digest('hex');
-  // Extracted from the path by the matched entry's slots — never the caller's (M8).
-  const resources = match?.resources ?? [];
+  // Bound by the matched entry from the ACTUAL request — its path slots (M8), its typed body slots
+  // (G1c R5) and, for a relay push, the refs in the git command list (G1c R11) — never the caller's.
+  let resources: readonly (readonly [string, string])[] = [];
+  if (match !== null) {
+    const body = extractBodyResources({ slots: match.entry.bodySlots, body: input.body });
+    if (!body.ok) return refuse(body.reason);
+    // Derived resources are relay-only (a registry defect elsewhere); `channel` already fixed `method` to a relay verb.
+    const derived =
+      channel === 'relay-runner'
+        ? deriveGitResources({ method: method as MethodFor['relay-runner'], rules: match.entry.derivedResources, body: input.body })
+        : ({ ok: true, resources: [] } as const);
+    if (!derived.ok) return refuse(derived.reason);
+    const keys = match.entry.restrictionKeys;
+    const keyed = [...body.resources, ...derived.resources].map(([slot, value]) => [Object.hasOwn(keys, slot) ? keys[slot]! : slot, value] as const);
+    resources = sortResourcePairs([...match.resources, ...keyed]);
+  }
 
   return {
     ok: true,
