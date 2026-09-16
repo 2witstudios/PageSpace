@@ -135,6 +135,19 @@ describe('X-6 spec ID-coverage gate: test-name extraction', () => {
     expect(extractTestNames(src)).toEqual(['WAL-1 a wallet', 'charge nothing']);
   });
 
+  it('X-6 does not let describe.skip(name, namedCallback) — no inline block — swallow later, unrelated code as a skip region', () => {
+    const src = `
+      describe.skip('MON-8 uses a named callback, no inline block', suiteBody);
+      it('MON-10 a normal running test declared later in the file', () => {
+        it('MON-11 nested inside MON-10s own callback, also runs normally', () => {});
+      });
+    `;
+    expect(extractTestNames(src)).toEqual([
+      'MON-10 a normal running test declared later in the file',
+      'MON-11 nested inside MON-10s own callback, also runs normally',
+    ]);
+  });
+
   it('X-6 rejects an assert() call nested inside describe.skip(...)', () => {
     const src = `
       describe.skip('WAL-1 disabled suite', () => {

@@ -183,17 +183,40 @@ function isWithinRegion(index: number, regions: readonly (readonly [number, numb
   return regions.some(([start, end]) => index > start && index < end);
 }
 
+/** The `(...)` immediately at or after `from`, or `null` if there is no unquoted `(` there. */
+function findCallParens(source: string, from: number): [number, number] | null {
+  const open = findNextUnquoted(source, from, '(');
+  if (open === -1) return null;
+  const close = findMatchingBracket(source, open, '(', ')');
+  return close === -1 ? null : [open, close];
+}
+
 /**
  * Byte ranges of every `describe.skip(...)` / `describe.skipIf(...)(...)` (and Playwright's
  * `test.describe.skip`/`test.describe.skipIf`) block body. A nested `it`/`test` inside one of
  * these does not run when the wrapping suite is skipped, however the inner call itself is
  * spelled — so it must not count as live coverage on its own.
+ *
+ * The `{` search is bounded to the triggering call's OWN argument list (the condition call's
+ * parens for `.skipIf`/`.runIf`, then the real call after it). Searching unbounded from the
+ * trigger forward — as an earlier version of this function did — means `describe.skip('name',
+ * namedCallbackRef)` (a named reference, no inline block) has no `{` in its own call, so the
+ * search would run on into whatever comes textually next in the file and could swallow a later,
+ * completely unrelated `it()`'s own callback body as a "skip region".
  */
 function findSkipRegions(source: string): Array<[number, number]> {
   const regions: Array<[number, number]> = [];
   for (const m of source.matchAll(SKIP_BLOCK_TRIGGER)) {
-    const braceIndex = findNextUnquoted(source, m.index + m[0].length, '{');
-    if (braceIndex === -1) continue;
+    const isConditional = /(?:skipIf|runIf)$/.test(m[0]);
+    const firstCall = findCallParens(source, m.index + m[0].length);
+    if (!firstCall) continue;
+    // `.skipIf(cond)(...)`/`.runIf(cond)(...)` are curried: `firstCall` is the condition's own
+    // parens, and the real call — the one that can carry an inline block — is the next one.
+    const callSpan = isConditional ? findCallParens(source, firstCall[1] + 1) : firstCall;
+    if (!callSpan) continue;
+    const [callOpen, callClose] = callSpan;
+    const braceIndex = findNextUnquoted(source, callOpen, '{');
+    if (braceIndex === -1 || braceIndex > callClose) continue;
     const closeIndex = findMatchingBracket(source, braceIndex, '{', '}');
     if (closeIndex === -1) continue;
     regions.push([braceIndex, closeIndex]);
