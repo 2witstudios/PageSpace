@@ -637,6 +637,25 @@ describe('SECURITY (Codex P1): grants only fire for real subscription invoices, 
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
     expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_gift')).toMatchObject({ entryType: 'monthly_grant', paidCents: 0 });
   });
+
+  it('CORRECTION (Codex P1, "Allow paid subscription-update invoices to grant credits"): a paid mid-cycle upgrade (subscription_update, proration_behavior always_invoice) grants proportional credits through the real webhook path', async () => {
+    seedUser('u1', 'cus_1', 'business');
+    seedLiveSubscription('u1', 'active');
+    const upgradeInvoice = {
+      id: 'evt_upgrade',
+      type: 'invoice.paid',
+      data: {
+        object: { id: 'in_upgrade', customer: 'cus_1', amount_paid: 2000, billing_reason: 'subscription_update' },
+      },
+    };
+
+    await applyStripeFunding(upgradeInvoice);
+
+    const grant = ledgerOf('u1').find((r) => r.stripeRef === 'in_upgrade')!;
+    expect(grant).toMatchObject({ entryType: 'monthly_grant', paidCents: 2000 });
+    expect(grant.amountCents).toBeGreaterThan(0);
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(grant.amountCents);
+  });
 });
 
 describe('credits flow — missed-grant reconcile (MON-2, WAL-5)', () => {

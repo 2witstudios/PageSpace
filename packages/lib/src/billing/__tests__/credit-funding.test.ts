@@ -673,7 +673,7 @@ describe('applyStripeFunding', () => {
         );
       });
 
-      it('MON-2 (b) a proration-only / subscription_update invoice that paid $0 grants nothing (excluded by the subscription_cycle/subscription_create SECURITY gate)', async () => {
+      it('MON-2 (b) a proration-only / subscription_update invoice that paid $0 grants nothing (subscription_update is grant-eligible as a KIND; $0 paid is $0 granted)', async () => {
         process.env.MONEY_MODEL_V2 = 'true';
         const cap: Captured = {};
         refill(cap);
@@ -684,8 +684,23 @@ describe('applyStripeFunding', () => {
         expect(cap.ledgerValues).toBeUndefined();
         expect(mockApiLogger.info).toHaveBeenCalledWith(
           'credit funding: invoice grants nothing',
-          expect.objectContaining({ reason: 'not_a_subscription_invoice' }),
+          expect.objectContaining({ reason: 'zero_amount' }),
         );
+      });
+
+      it('CORRECTION (Codex P1, "Allow paid subscription-update invoices to grant credits"): a PAID subscription_update invoice (a mid-cycle upgrade proration) grants proportional credits, unlike a manual invoice', async () => {
+        process.env.MONEY_MODEL_V2 = 'true';
+        const cap: Captured = {};
+        refill(cap);
+
+        await applyStripeFunding(paidInvoiceEvent(1000, { subtotal: 1000, billing_reason: 'subscription_update' }), { tier: 'business' });
+
+        expect(cap.ledgerValues).toMatchObject({
+          entryType: 'monthly_grant',
+          paidCents: 1000,
+          amountCents: allowanceCentsForPaidCents(1000, 'business'),
+        });
+        expect(cap.ledgerValues!.amountCents).toBeGreaterThan(0);
       });
 
       it('MON-2 (c) a partial discount grants from amount_paid: 20% off Pro → 1200 × ratio', async () => {

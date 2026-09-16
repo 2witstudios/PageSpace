@@ -95,8 +95,21 @@ function toCents(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : 0;
 }
 
-/** The only billing_reason values a derived grant may ever fire on. */
-const GRANT_ELIGIBLE_BILLING_REASONS = new Set(['subscription_cycle', 'subscription_create']);
+/**
+ * The only billing_reason values a derived grant may ever fire on. All three are
+ * values Stripe assigns EXCLUSIVELY to an invoice generated for an actual
+ * subscription — a manual, one-off, or otherwise parentless invoice can never
+ * carry any of them (Stripe computes billing_reason itself; nothing in this
+ * codebase sets it). subscription_update covers a mid-cycle plan change invoiced
+ * immediately (proration_behavior: 'always_invoice', update-subscription/route.ts):
+ * a real, paid upgrade that must still grant its proportional share (MON-2) —
+ * excluding it entirely charged the customer for nothing (Codex P1 correction,
+ * "Allow paid subscription-update invoices to grant credits"). A $0
+ * subscription_update (a downgrade's proration credit, or a no-op) still grants
+ * nothing, via the ordinary zero_amount path below — this gate only screens the
+ * invoice's KIND, never its amount.
+ */
+const GRANT_ELIGIBLE_BILLING_REASONS = new Set(['subscription_cycle', 'subscription_create', 'subscription_update']);
 
 function isGrantEligibleInvoice(billingReason: string | null | undefined): boolean {
   return typeof billingReason === 'string' && GRANT_ELIGIBLE_BILLING_REASONS.has(billingReason);

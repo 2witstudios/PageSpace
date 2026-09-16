@@ -73,9 +73,9 @@ describe('grantForInvoice — D-OW-16: entitlement follows amount paid except gr
       .toEqual({ paidCents: 0, allowanceCents: list(), basis: 'list', reason: 'trial' });
   });
 
-  it('MON-2 (b) a proration-only or subscription_update invoice that paid 0 grants nothing (also now excluded by the subscription_cycle/subscription_create SECURITY gate)', () => {
+  it('MON-2 (b) a proration-only or subscription_update invoice that paid 0 grants nothing (subscription_update is grant-eligible as a KIND, but $0 paid is $0 granted, via the ordinary zero_amount path)', () => {
     expect(grantForInvoice({ amountPaidCents: 0, subtotalCents: 0, billingReason: 'subscription_update', tier: 'pro' }))
-      .toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'not_a_subscription_invoice' });
+      .toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'zero_amount' });
     expect(grantForInvoice({ amountPaidCents: 0, subtotalCents: 300, billingReason: 'subscription_update', tier: 'pro' }).allowanceCents).toBe(0);
   });
 
@@ -109,17 +109,30 @@ describe('SECURITY (Codex P1, thread "Restrict derived grants to account-plan in
     expect(result).toMatchObject({ allowanceCents: 0, basis: 'none' });
   });
 
-  it('only billing_reason subscription_cycle or subscription_create may grant; every other reason (including no reason at all) grants nothing regardless of amount', () => {
-    for (const reason of ['manual', 'subscription_update', 'subscription_threshold', 'upcoming', 'automatic_pending_invoice_item_invoice', undefined, null]) {
+  it('only billing_reason values Stripe assigns EXCLUSIVELY to a real subscription invoice may grant; every other reason (including no reason at all) grants nothing regardless of amount', () => {
+    // manual/threshold/upcoming/automatic-pending-item CAN occur without any
+    // subscription behind them (or, for 'upcoming', are previews that are never
+    // actually paid) — none of them may grant.
+    for (const reason of ['manual', 'subscription_threshold', 'upcoming', 'automatic_pending_invoice_item_invoice', undefined, null]) {
       expect(grantForInvoice({ amountPaidCents: 100_000, billingReason: reason, tier: 'business' }).allowanceCents).toBe(0);
     }
-    expect(grantForInvoice({ amountPaidCents: 100_000, billingReason: 'subscription_cycle', tier: 'business' }).allowanceCents).toBeGreaterThan(0);
-    expect(grantForInvoice({ amountPaidCents: 100_000, billingReason: 'subscription_create', tier: 'business' }).allowanceCents).toBeGreaterThan(0);
+    // subscription_cycle, subscription_create, and subscription_update are each
+    // assigned by Stripe ONLY to an invoice generated for an actual subscription.
+    for (const reason of ['subscription_cycle', 'subscription_create', 'subscription_update']) {
+      expect(grantForInvoice({ amountPaidCents: 100_000, billingReason: reason, tier: 'business' }).allowanceCents).toBeGreaterThan(0);
+    }
   });
 
   it('a gifted subscription is still restricted to a real subscription invoice: a manual invoice on a gifted account grants nothing even with gifted: true', () => {
     const result = grantForInvoice({ amountPaidCents: 0, subtotalCents: 5000, billingReason: 'manual', gifted: true, tier: 'business' });
     expect(result.allowanceCents).toBe(0);
+  });
+
+  it('CORRECTION (Codex P1, "Allow paid subscription-update invoices to grant credits"): a PAID subscription_update invoice — a mid-cycle upgrade proration (update-subscription/route.ts, proration_behavior: always_invoice) — must still grant proportional credits, unlike a manual invoice, because billing_reason subscription_update can ONLY be assigned by Stripe to an invoice generated FOR an actual subscription; a one-off manual invoice can never carry it', () => {
+    // A $10 mid-cycle proration charge on an upgrade.
+    const result = grantForInvoice({ amountPaidCents: 1000, billingReason: 'subscription_update', tier: 'business' });
+    expect(result.allowanceCents).toBeGreaterThan(0);
+    expect(result).toMatchObject({ basis: 'paid', reason: 'paid' });
   });
 });
 
