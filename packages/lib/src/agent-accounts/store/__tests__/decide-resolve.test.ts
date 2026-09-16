@@ -247,7 +247,7 @@ describe('decideResolve', () => {
     expect(actual).toEqual(expected);
   });
 
-  it('given stored bindings whose policyVersion differs from those the grant bindingDigest was computed over, should return binding_mismatch', () => {
+  it('given stored bindings at a newer policyVersion than the grant bindingDigest was computed over, should return bindings_stale (G1c H2)', () => {
     const actual = resolveWith({
       grant: makeGrant(),
       ref: REF,
@@ -256,7 +256,7 @@ describe('decideResolve', () => {
       rotationGraceMs: ROTATION_GRACE_MS,
       hash: fakeHash,
     });
-    expect(actual).toEqual({ ok: false, reason: 'binding_mismatch' });
+    expect(actual).toEqual({ ok: false, reason: 'bindings_stale' });
   });
 
   it('given stored bindings with a changed ownerRef, should return binding_mismatch', () => {

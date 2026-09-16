@@ -78,6 +78,7 @@ describe('decideResolve (ADR 0005 F1-F5, F10; §10.3-5)', () => {
       tenantId: REF.tenantId,
       accountKind: REF.kind,
       credentialVersion: 4 as CredentialVersion,
+      policyVersion: BINDINGS.policyVersion,
       bindingDigest: digestBindings({ bindings: BINDINGS, hash }),
       sessionHttp: false,
       ...overrides,
