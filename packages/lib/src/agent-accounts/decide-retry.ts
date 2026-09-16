@@ -49,11 +49,12 @@ const IDEMPOTENT: Readonly<Record<OperationClass, boolean>> = {
 };
 
 /**
- * A gateway that answers 502 or 504 lost the ORIGIN's response: the request
- * reached upstream and the write may have landed. Only these two say so; a
- * 500 or 503 is the origin itself answering.
+ * A gateway that answers one of these lost the ORIGIN's response after the
+ * request may have reached it, so the write may have landed: 502/504, and the
+ * CDN variants 520 (unknown origin error) and 524 (origin timeout). A 500 or
+ * 503 is the origin itself answering; 521-523 mean the origin was never reached.
  */
-const GATEWAY_LOST_RESPONSE: readonly number[] = [502, 504];
+const GATEWAY_LOST_RESPONSE: readonly number[] = [502, 504, 520, 524];
 
 const retry = (): RetryDecision => ({ action: 'retry_with_new_grant' });
 const report = (outcome: ReportedOutcome): RetryDecision => ({ action: 'report', outcome });
