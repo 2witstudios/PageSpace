@@ -360,6 +360,22 @@ describe('canonicalizeRequest normalization', () => {
     expect(actual).toBe('/a/c/~user/sp%20ace/A');
   });
 
+  it.each([
+    ['a semicolon (a path parameter to Tomcat/Spring)', 'https://api.github.com/contents/foo;bar', 'https://api.github.com/contents/foo%3Bbar'],
+    ['a plus', 'https://api.github.com/contents/a+b', 'https://api.github.com/contents/a%2Bb'],
+    ['an at sign', 'https://api.github.com/users/@octo', 'https://api.github.com/users/%40octo'],
+    ['an equals sign', 'https://api.github.com/x/k=v', 'https://api.github.com/x/k%3Dv'],
+  ])('given two paths differing by %s against its percent-encoding, should produce DIFFERENT digests (RFC 3986 §2.2: they are different URIs)', (_label, first, second) => {
+    const a = digestRequest({ canonical: canonical({ url: first }), hash });
+    const b = digestRequest({ canonical: canonical({ url: second }), hash });
+    expect(a).not.toBe(b);
+  });
+
+  it('given a path escape in lower-case hex or an escaped unreserved character, should normalize it (upper-case hex, unreserved unescaped)', () => {
+    const actual = canonical({ url: 'https://api.github.com/contents/foo%3bbar/%7Euser/%41' }).path;
+    expect(actual).toBe('/contents/foo%3Bbar/~user/A');
+  });
+
   it('given an encoded slash inside a segment, should keep it encoded (never a new segment)', () => {
     const actual = canonical({ url: 'https://api.github.com/repos/octo%2Fhello' }).path;
     expect(actual).toBe('/repos/octo%2Fhello');
