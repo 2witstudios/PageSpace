@@ -19,6 +19,7 @@ import { sql } from '@pagespace/db/operators';
 import { agentAccountGrantNonces } from '@pagespace/db/schema/agent-account-grant-nonces';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { createReplayStoreRepository } from '../replay-store-repository';
+import { GRANT_LIMITS } from '../grant-constants';
 import type { Nonce, GrantId } from '../grant';
 
 const PREFIX = 'itest-replay-';
@@ -112,7 +113,8 @@ describe('replay store — atomic, shared across replicas, survives restart (ADR
     const replica = createReplayStoreRepository({ db });
     const expired = nonce();
     const live = nonce();
-    await replica.consume({ nonce: expired, grantId: GRANT, expiresAt: NOW - 1, now: NOW - 60_000 });
+    // Expired beyond the verifier's clock-skew allowance: nothing can still accept it.
+    await replica.consume({ nonce: expired, grantId: GRANT, expiresAt: NOW - GRANT_LIMITS.maxClockSkewMs - 1, now: NOW - 60_000 });
     await replica.consume({ nonce: live, grantId: GRANT, expiresAt: EXP, now: NOW });
     const swept = await replica.sweepExpired({ now: NOW });
     const expiredAfter = await replica.lookup({ nonce: expired });
@@ -122,6 +124,16 @@ describe('replay store — atomic, shared across replicas, survives restart (ADR
       expiredGone: { ok: true, recorded: null },
       liveKept: true,
     });
+  });
+
+  it('given a nonce only just past exp on THIS replica clock, should keep it — a replica whose clock runs behind by up to the skew allowance still accepts the grant, so sweeping it would re-open the nonce', async () => {
+    if (!dbAvailable) return;
+    const replica = createReplayStoreRepository({ db });
+    const recent = nonce();
+    await replica.consume({ nonce: recent, grantId: GRANT, expiresAt: NOW - 20_000, now: NOW - 60_000 });
+    await replica.sweepExpired({ now: NOW });
+    const actual = await replica.lookup({ nonce: recent });
+    expect(actual.ok && actual.recorded !== null).toBe(true);
   });
 
   it('given the store unreachable, should report lookup failed and consume unavailable — never fresh, never consumed', async () => {

@@ -20,6 +20,7 @@
 import type { db as defaultDb } from '@pagespace/db/db';
 import { eq, lt } from '@pagespace/db/operators';
 import { agentAccountGrantNonces } from '@pagespace/db/schema/agent-account-grant-nonces';
+import { GRANT_LIMITS } from './grant-constants';
 import type { GrantId, Nonce } from './grant';
 import type { NonceLookup } from './decide-replay';
 
@@ -33,7 +34,7 @@ export type ReplayStoreRepository = {
   readonly lookup: (input: { readonly nonce: Nonce }) => Promise<NonceLookup>;
   /** Record the nonce as spent. Exactly one caller across all replicas ever gets `consumed`. */
   readonly consume: (input: { readonly nonce: Nonce; readonly grantId: GrantId; readonly expiresAt: number; readonly now: number }) => Promise<ConsumeOutcome>;
-  /** Housekeeping: drop rows past `expiresAt`. Returns the number removed; 0 on failure. */
+  /** Housekeeping: drop rows past `expiresAt` by more than the clock-skew allowance. Returns the number removed; 0 on failure. */
   readonly sweepExpired: (input: { readonly now: number }) => Promise<number>;
 };
 
@@ -69,7 +70,12 @@ export function createReplayStoreRepository({ db }: { readonly db: ReplayStoreDa
 
     async sweepExpired({ now }) {
       try {
-        const result = await db.delete(agentAccountGrantNonces).where(lt(agentAccountGrantNonces.expiresAt, new Date(now)));
+        // Keep a row for the verifier's clock-skew allowance past `exp`: a
+        // replica whose clock runs behind still accepts the grant, and a swept
+        // nonce would read as fresh to it.
+        const result = await db
+          .delete(agentAccountGrantNonces)
+          .where(lt(agentAccountGrantNonces.expiresAt, new Date(now - GRANT_LIMITS.maxClockSkewMs)));
         return result.rowCount ?? 0;
       } catch {
         return 0;

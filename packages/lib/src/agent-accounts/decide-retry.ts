@@ -48,6 +48,13 @@ const IDEMPOTENT: Readonly<Record<OperationClass, boolean>> = {
   unknown: false,
 };
 
+/**
+ * A gateway that answers 502 or 504 lost the ORIGIN's response: the request
+ * reached upstream and the write may have landed. Only these two say so; a
+ * 500 or 503 is the origin itself answering.
+ */
+const GATEWAY_LOST_RESPONSE: readonly number[] = [502, 504];
+
 const retry = (): RetryDecision => ({ action: 'retry_with_new_grant' });
 const report = (outcome: ReportedOutcome): RetryDecision => ({ action: 'report', outcome });
 
@@ -60,6 +67,7 @@ export const decideRetry: DecideRetry = ({ operationClass, failure, attempt, max
       if (!IDEMPOTENT[operationClass]) return report({ kind: 'unknown' });
       return budgetLeft ? retry() : report({ kind: 'upstream_failed', upstreamStatus: null });
     case 'upstream_status':
+      if (!IDEMPOTENT[operationClass] && GATEWAY_LOST_RESPONSE.includes(failure.status)) return report({ kind: 'unknown' });
       if (IDEMPOTENT[operationClass] && failure.status >= 500 && budgetLeft) return retry();
       return report({ kind: 'upstream_failed', upstreamStatus: failure.status });
   }

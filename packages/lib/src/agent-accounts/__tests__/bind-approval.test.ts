@@ -73,6 +73,13 @@ describe('bindApproval', () => {
     expect(actual).toEqual([{ ok: false, reason: 'no_authority' }, { ok: false, reason: 'no_authority' }]);
   });
 
+  it('given a human DENY of a privilege operation over a plain session, should bind it — refusing needs no step-up, and the deny must be recorded', () => {
+    const result = bind(decision({ outcome: 'deny' }), PRIVILEGE);
+    const actual = result.ok ? { outcome: result.approval.outcome, stepUpChallengeId: result.approval.stepUpChallengeId } : result;
+    const expected = { outcome: 'deny', stepUpChallengeId: null };
+    expect(actual).toEqual(expected);
+  });
+
   it('given a privilege operation decided over a plain session (no step-up), should return step_up_required', () => {
     const actual = bind(decision(), PRIVILEGE);
     expect(actual).toEqual({ ok: false, reason: 'step_up_required' });

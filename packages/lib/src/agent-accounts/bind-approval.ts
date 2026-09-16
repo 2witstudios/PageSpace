@@ -79,7 +79,9 @@ export const bindApproval: BindApproval = ({ decision, requestDigest, operation,
   if (!hasAuthority(decision)) return refuse('no_authority');
   if (typeof decision.subjectDigest !== 'string' || !secureCompare(decision.subjectDigest, requestDigest)) return refuse('digest_mismatch');
   if (typeof decision.decidedAt !== 'number' || decision.decidedAt > now || now - decision.decidedAt > ttlMs) return refuse('stale_decision');
-  if (operation.class === 'privilege' && decision.via.kind !== 'step_up') return refuse('step_up_required');
+  // Step-up gates GRANTING authority. Refusing grants none, and a deny that
+  // could not bind would never reach the audit.
+  if (operation.class === 'privilege' && decision.outcome !== 'deny' && decision.via.kind !== 'step_up') return refuse('step_up_required');
   if (decision.outcome === 'always' && !ALWAYS_ALLOWED_BY_CLASS[operation.class]) return refuse('class_never_always');
 
   return {
