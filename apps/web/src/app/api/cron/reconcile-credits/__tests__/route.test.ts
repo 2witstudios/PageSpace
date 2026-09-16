@@ -24,6 +24,11 @@ vi.mock('@pagespace/lib/billing/missed-grant-reconcile', () => ({
   reconcileMissedGrants: mockReconcileMissedGrants,
 }));
 
+vi.mock('@/lib/stripe/price-config', () => ({
+  getTierFromPrice: vi.fn((priceId: string, amount?: number | null) =>
+    priceId === 'price_pro' || amount === 2999 ? 'pro' : 'free'),
+}));
+
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: mockAudit,
 }));
@@ -54,7 +59,7 @@ describe('/api/cron/reconcile-credits', () => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
     mockBackfill.mockResolvedValue({ retried: 0, orphans: 0, expiredHolds: 0 });
-    mockReconcileMissedGrants.mockResolvedValue({ reconciled: 0, stillMissing: 0 });
+    mockReconcileMissedGrants.mockResolvedValue({ reconciled: 0, stillMissing: 0, indeterminate: 0, indeterminateLedgerIds: [], failed: 0 });
   });
 
   it('returns the auth error and never runs either sweep when auth fails', async () => {
@@ -109,5 +114,73 @@ describe('/api/cron/reconcile-credits', () => {
     expect(res.status).toBe(500);
     expect(body.success).toBe(false);
     expect(mockLogError).toHaveBeenCalled();
+  });
+
+  it('MON-2 WAL-5 per-row missed-grant failures make the run non-2xx, are reported, and are NOT audited as a success', async () => {
+    mockBackfill.mockResolvedValue({ retried: 1, orphans: 0, expiredHolds: 0 });
+    mockReconcileMissedGrants.mockResolvedValue({ reconciled: 1, stillMissing: 2, failed: 3 });
+
+    const res = await GET(makeRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body).toMatchObject({
+      success: false,
+      missedGrantsReconciled: 1,
+      missedGrantsStillMissing: 2,
+      missedGrantsFailed: 3,
+    });
+    expect(mockAudit).not.toHaveBeenCalled();
+    expect(mockLogError).toHaveBeenCalled();
+  });
+
+  it('MON-2 indeterminate rows are reported in the response and the audit (a 200: they need a human, not a retry)', async () => {
+    mockReconcileMissedGrants.mockResolvedValue({
+      reconciled: 0, stillMissing: 1, indeterminate: 2, indeterminateLedgerIds: ['led_a', 'led_b'], failed: 0,
+    });
+
+    const res = await GET(makeRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({ missedGrantsIndeterminate: 2 });
+    // Paid-but-ungranted until a human acts: as loud as the failure path, with the ledger ids.
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.stringContaining('indeterminate'),
+      undefined,
+      expect.objectContaining({ indeterminateLedgerIds: ['led_a', 'led_b'] }),
+    );
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ details: expect.objectContaining({ missedGrantsIndeterminate: 2 }) }),
+    );
+  });
+
+  it('MON-2 WAL-5 a clean run reports zero failures with a 200', async () => {
+    mockReconcileMissedGrants.mockResolvedValue({
+      reconciled: 1, stillMissing: 0, indeterminate: 0, indeterminateLedgerIds: [], failed: 0,
+    });
+
+    const res = await GET(makeRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(mockLogError).not.toHaveBeenCalled();
+    expect(body).toMatchObject({ success: true, missedGrantsFailed: 0 });
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ details: expect.objectContaining({ missedGrantsFailed: 0 }) }),
+    );
+  });
+
+  it('MON-2 the sweep resolves tiers through the live Stripe price map, not the users cache', async () => {
+    await GET(makeRequest());
+
+    expect(mockReconcileMissedGrants).toHaveBeenCalledWith({ priceTier: expect.any(Function) });
+    const { priceTier } = mockReconcileMissedGrants.mock.calls[0][0] as {
+      priceTier: (id: string, amountCents?: number | null) => string;
+    };
+    expect(priceTier('price_pro')).toBe('pro');
+    expect(priceTier('price_unknown', 1234)).toBe('free');
+    // The invoice amount reaches getTierFromPrice's legacy-amount fallback.
+    expect(priceTier('price_legacy_unmapped', 2999)).toBe('pro');
   });
 });
