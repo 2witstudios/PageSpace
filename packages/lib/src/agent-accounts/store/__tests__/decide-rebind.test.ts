@@ -186,6 +186,12 @@ describe('decideRebind — the owner kind is immutable and consenters are pinned
     expect(actual).toEqual([REBIND_WITH_CONSENT, refuse('consent_invalid'), refuse('consent_required')]);
   });
 
+  it('given the owner agent page moved within the same drive (tenant unchanged) and no consent, should return consent_required — an owner change is never a narrowing', () => {
+    const moved = record({ scope: SCOPE, policyVersion: 4, ownerRef: { ...PAGE_OWNER, agentPageId: 'page_2' }, consenters: PINNED });
+    const actual = [decidePage(moved, null), decidePage(moved, pageConsent(moved, 'admin_a'))];
+    expect(actual).toEqual([refuse('consent_required'), REBIND_WITH_CONSENT]);
+  });
+
   it('given a consent whose consenters differ from next, should return consent_invalid', () => {
     const actual = decidePage(PAGE_WIDER, consentFor(PAGE_WIDER, { ref: PAGE_REF, consentingUserId: 'admin_a' as UserId, consenters: { kind: 'pinned', userIds: ['admin_a' as UserId, 'admin_c' as UserId] } }));
     expect(actual).toEqual(refuse('consent_invalid'));
