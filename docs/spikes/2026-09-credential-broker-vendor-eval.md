@@ -563,7 +563,10 @@ services:
   # Until then Traefik cannot reach this sidecar. No app container of this or any other
   # tenant has a route to this sidecar, to infisical, or to its DB/Redis.
   vault-ingress:
-    image: nginx:1.28.0-alpine               # pin the real tag at G1b; config = one `location / { proxy_pass http://infisical:8080; }` with websocket upgrade headers
+    image: nginx:1.28.0-alpine               # pin the real tag at G1b
+    configs:
+      - source: vault_ingress_nginx
+        target: /etc/nginx/conf.d/default.conf   # replaces the stock welcome-site config
     restart: unless-stopped
     depends_on:
       infisical: { condition: service_started }
@@ -619,6 +622,23 @@ networks:
                                         # The network itself is unrestricted (Docker host, host-published 80/443,
                                         # RFC1918). G2 must add a provider-destination allowlist on the proxy and deny
                                         # host/private addresses; that is not verified as expressible in Agent Proxy.
+
+configs:
+  vault_ingress_nginx:                  # inline `content` needs Docker Compose >= 2.23.1
+    content: |
+      map $$http_upgrade $$connection_upgrade { default upgrade; '' close; }
+      server {
+        listen 80;
+        location / {
+          proxy_pass http://infisical:8080;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $$http_upgrade;
+          proxy_set_header Connection $$connection_upgrade;
+          proxy_set_header Host $$host;
+          proxy_set_header X-Forwarded-Proto https;
+          proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+        }
+      }
 
 volumes:
   infisical_postgres_data:
