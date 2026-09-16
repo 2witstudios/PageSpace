@@ -168,6 +168,18 @@ describe('pinnedFetch', () => {
     expect(actual).toEqual(expected);
   });
 
+  it('given an earlier request to the same host:port, should not reuse its socket but connect only to this request\'s addresses', async () => {
+    mode = 'json';
+    const url = `http://pinned-host.invalid:${port}/hook`;
+    const first = await pinnedFetch(url, { method: 'GET', pinnedAddresses: ['127.0.0.1'] });
+    await first.text();
+
+    // A pooled keep-alive socket to 127.0.0.1 would let this succeed.
+    await expect(pinnedFetch(url, { method: 'GET', pinnedAddresses: ['::1'] })).rejects.toMatchObject({
+      code: 'ECONNREFUSED',
+    });
+  });
+
   it('given only the unreachable address (control), should fail to connect', async () => {
     mode = 'json';
     await expect(
