@@ -588,9 +588,12 @@ describe('credits flow — grants sized from the invoice paid (MON-2, MONEY_MODE
   });
 });
 
-// The live price → tier map the web app injects (getTierFromPrice); unmapped → 'free'.
-const PRICE_TIER = (priceId: string) =>
-  priceId === 'price_pro' ? 'pro' as const : priceId === 'price_business' ? 'business' as const : 'free' as const;
+// Mirrors the web app's getTierFromPrice: known price ids first, then an exact
+// legacy list-amount fallback (here only 2999 → pro), else 'free'.
+const PRICE_TIER = (priceId: string, amountCents?: number | null) =>
+  priceId === 'price_pro' ? 'pro' as const
+    : priceId === 'price_business' ? 'business' as const
+      : amountCents === 2999 ? 'pro' as const : 'free' as const;
 
 function seedPricedSubscription(userId: string, stripePriceId: string, status = 'active') {
   store.subscriptions.push({ id: `sub_${userId}_${stripePriceId}`, userId, status, gifted: false, stripePriceId });
@@ -725,6 +728,20 @@ describe('credits flow — missed-grant reconcile review fixes (#2645 threads)',
     expect(result).toEqual({ reconciled: 0, stillMissing: 1, failed: 0 });
     expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
     expect(balanceOf('u1')).toBeUndefined();
+  });
+
+  it('MON-2 missed grant: a legacy subscription on an unmapped price id resolves through the invoice amount (the webhook\'s legacy fallback), so it is not stuck indeterminate forever', async () => {
+    seedUser('u1', 'cus_1', 'free');
+    seedPricedSubscription('u1', 'price_legacy_pro_2999');
+    seedMissedGrantRow('led_legacy', 'u1', 2999);
+
+    const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
+
+    expect(result).toEqual({ reconciled: 1, stillMissing: 0, failed: 0 });
+    expect(store.creditLedger.find((r) => r.id === 'led_legacy')).toMatchObject({
+      entryType: 'monthly_grant',
+      amountCents: allowanceCentsForPaidCents(2999, 'pro'),
+    });
   });
 
   it('WAL-5 bounded sweep: 250 unresolved rows ahead of a repairable one cannot starve it — it is granted within a bounded number of runs', async () => {

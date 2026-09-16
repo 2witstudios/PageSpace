@@ -24,11 +24,7 @@ import { isBillingEnabled } from '../deployment-mode';
 import { computeMonthlyRefill } from './credit-core';
 import { allowanceCentsForPaidCents } from './money-model';
 import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
-import {
-  deriveTierFromSubscriptions,
-  type PriceTierResolver,
-  type SubscriptionRowLike,
-} from './subscription-tier-sync';
+import { deriveTierFromSubscriptions, type SubscriptionRowLike } from './subscription-tier-sync';
 import { emitCreditsUpdated } from './credit-emit';
 import { loggers } from '../logging/logger-config';
 
@@ -47,8 +43,14 @@ export interface MissedGrantReconcileResult {
 }
 
 interface MissedGrantReconcileOptions {
-  /** Maps a Stripe price id to its tier (the web app injects getTierFromPrice). */
-  priceTier: PriceTierResolver;
+  /**
+   * Maps a Stripe price id to its tier; the web app injects getTierFromPrice. The
+   * missed invoice's paidCents is passed as the amount so an unmapped legacy price
+   * id still resolves through the exact-match legacy amount table, the same fallback
+   * the subscription webhook applies (the subscriptions table stores no amount).
+   * An amount that matches nothing leaves the derivation indeterminate.
+   */
+  priceTier: (stripePriceId: string, amountCents: number | null) => SubscriptionTier;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +199,9 @@ export async function reconcileMissedGrants(options: MissedGrantReconcileOptions
 
     for (const row of page) {
       try {
-        const derived = deriveTierFromSubscriptions(rowsByUser.get(row.userId) ?? [], options.priceTier);
+        const derived = deriveTierFromSubscriptions(rowsByUser.get(row.userId) ?? [], (priceId) =>
+          options.priceTier(priceId, row.paidCents),
+        );
         const plan = planMissedGrantReconcile(
           { id: row.id, userId: row.userId, paidCents: row.paidCents ?? 0 },
           derived.tier,

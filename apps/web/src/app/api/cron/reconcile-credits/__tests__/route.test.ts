@@ -25,7 +25,8 @@ vi.mock('@pagespace/lib/billing/missed-grant-reconcile', () => ({
 }));
 
 vi.mock('@/lib/stripe/price-config', () => ({
-  getTierFromPrice: (priceId: string) => (priceId === 'price_pro' ? 'pro' : 'free'),
+  getTierFromPrice: vi.fn((priceId: string, amount?: number | null) =>
+    priceId === 'price_pro' || amount === 2999 ? 'pro' : 'free'),
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -150,8 +151,12 @@ describe('/api/cron/reconcile-credits', () => {
     await GET(makeRequest());
 
     expect(mockReconcileMissedGrants).toHaveBeenCalledWith({ priceTier: expect.any(Function) });
-    const { priceTier } = mockReconcileMissedGrants.mock.calls[0][0] as { priceTier: (id: string) => string };
+    const { priceTier } = mockReconcileMissedGrants.mock.calls[0][0] as {
+      priceTier: (id: string, amountCents?: number | null) => string;
+    };
     expect(priceTier('price_pro')).toBe('pro');
-    expect(priceTier('price_unknown')).toBe('free');
+    expect(priceTier('price_unknown', 1234)).toBe('free');
+    // The invoice amount reaches getTierFromPrice's legacy-amount fallback.
+    expect(priceTier('price_legacy_unmapped', 2999)).toBe('pro');
   });
 });
