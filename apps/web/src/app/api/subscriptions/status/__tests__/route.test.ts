@@ -47,14 +47,14 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
-vi.mock('@pagespace/lib/billing/money-model', () => ({
-  tierAllowanceCents: vi.fn((tier: string) => ({ free: 500, pro: 900, business: 3000 })[tier] ?? 0),
-}));
 
 // Import after mocks
 import { GET } from '../route';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+// Real, unmocked: money-model is pure (no IO), and mocking it would defeat the planCredits test.
+import { tierAllowanceCents } from '@pagespace/lib/billing/money-model';
+import { TIERS } from '@pagespace/lib/billing/subscription-tiers';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -339,6 +339,10 @@ describe('GET /api/subscriptions/status', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
+      expect(body.planCredits).toEqual(
+        Object.fromEntries(TIERS.map((tier) => [tier, tierAllowanceCents(tier)])),
+      );
+      // Pinned: D-OW-17's constant-false default grants 100% of list price (free = starter grant).
       expect(body.planCredits).toEqual({ free: 500, pro: 1500, business: 5000 });
     });
   });
