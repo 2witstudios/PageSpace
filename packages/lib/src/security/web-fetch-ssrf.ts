@@ -70,7 +70,12 @@ export function parseIpv4(host: string): number | null {
   return result >>> 0;
 }
 
-/** True only when the 32-bit IPv4 value is globally routable (not private/reserved). */
+/**
+ * True only when the 32-bit IPv4 value is globally routable. Every block the
+ * IANA IPv4 Special-Purpose Address Registry marks "Globally Reachable: False"
+ * (or deprecated) is refused; source
+ * https://www.iana.org/assignments/iana-ipv4-special-registry/ (checked 2026-09-16).
+ */
 function isPublicIpv4(n: number): boolean {
   const a = (n >>> 24) & 0xff;
   const b = (n >>> 16) & 0xff;
@@ -85,6 +90,7 @@ function isPublicIpv4(n: number): boolean {
   if (a === 100 && b >= 64 && b <= 127) return false;     // 100.64.0.0/10 carrier-grade NAT
   if (a === 192 && b === 0 && c === 0) return false;      // 192.0.0.0/24 IETF protocol assignments
   if (a === 192 && b === 0 && c === 2) return false;      // 192.0.2.0/24 TEST-NET-1
+  if (a === 192 && b === 88 && c === 99) return false;   // 192.88.99.0/24 deprecated 6to4 relay anycast (incl. 6a44 relay)
   if (a === 198 && (b === 18 || b === 19)) return false;  // 198.18.0.0/15 benchmarking
   if (a === 198 && b === 51 && c === 100) return false;   // 198.51.100.0/24 TEST-NET-2
   if (a === 203 && b === 0 && c === 113) return false;    // 203.0.113.0/24 TEST-NET-3
@@ -132,25 +138,59 @@ function parseIpv6(h: string): number[] | null {
 const ipv4From = (hi: number, lo: number): number => ((hi << 16) >>> 0) + lo;
 
 /**
- * IANA IPv6 Global Unicast Address Assignments: the only prefixes allocated to
- * RIRs for routing. Everything else in 2000::/3 is unallocated, retired (6bone
- * 3ffe::/16) or special-purpose (3fff::/20, 5f00::/16), and everything outside
- * it is loopback / mapped / translated / NAT64 / discard / ULA / link-local /
- * multicast. A newly allocated block must be added here before it is fetchable.
+ * IANA IPv6 Global Unicast Address Assignments, status ALLOCATED, excluding the
+ * IANA-held 2001::/23 special-purpose block. Source:
+ * https://www.iana.org/assignments/ipv6-unicast-address-assignments/
+ * — registry last updated 2025-10-10, snapshot taken 2026-09-16.
+ *
+ * Everything else is refused: unallocated and reserved 2000::/3 space (incl.
+ * holes inside 2001::/16, retired 6bone 3ffe::/16, 3fff::/20 documentation,
+ * 5f00::/16 SRv6), and everything outside 2000::/3 (loopback, mapped,
+ * translated, NAT64, discard, ULA, link-local, multicast).
+ *
+ * FUNCTIONAL COST: this is fail-closed. A block IANA allocates to an RIR after
+ * the snapshot date is unfetchable by web_fetch and by integrations until it is
+ * added here. When updating, re-derive the whole table from the registry and
+ * bump the snapshot date.
+ *
  * Each entry is [the first 32 bits of the prefix, prefix length (<= 32)].
  */
 const IANA_GLOBAL_UNICAST: ReadonlyArray<readonly [number, number]> = [
-  [0x20010000, 16],
+  [0x20010200, 23], // APNIC
+  [0x20010400, 23], // ARIN
+  [0x20010600, 23], // RIPE NCC
+  [0x20010800, 22], // RIPE NCC
+  [0x20010c00, 23], // APNIC (contains 2001:db8::/32, refused separately)
+  [0x20010e00, 23], // APNIC
+  [0x20011200, 23], // LACNIC
+  [0x20011400, 22], // RIPE NCC
+  [0x20011800, 23], // ARIN
+  [0x20011a00, 23], // RIPE NCC
+  [0x20011c00, 22], // RIPE NCC
+  [0x20012000, 19], // RIPE NCC
+  [0x20014000, 23], // RIPE NCC
+  [0x20014200, 23], // AFRINIC
+  [0x20014400, 23], // APNIC
+  [0x20014600, 23], // RIPE NCC
+  [0x20014800, 23], // ARIN
+  [0x20014a00, 23], // RIPE NCC
+  [0x20014c00, 23], // RIPE NCC
+  [0x20015000, 20], // RIPE NCC
+  [0x20018000, 19], // APNIC
+  [0x2001a000, 20], // APNIC
+  [0x2001b000, 20], // APNIC
   [0x20020000, 16], // 6to4 — additionally judged by its embedded IPv4 below
-  [0x20030000, 18],
-  [0x24000000, 12],
-  [0x26000000, 12],
-  [0x26100000, 23],
-  [0x26200000, 23],
-  [0x26300000, 12],
-  [0x28000000, 12],
-  [0x2a000000, 12],
-  [0x2c000000, 12],
+  [0x20030000, 18], // RIPE NCC
+  [0x24000000, 12], // APNIC
+  [0x24100000, 12], // APNIC
+  [0x26000000, 12], // ARIN
+  [0x26100000, 23], // ARIN
+  [0x26200000, 23], // ARIN
+  [0x26300000, 12], // ARIN
+  [0x28000000, 12], // LACNIC
+  [0x2a000000, 12], // RIPE NCC
+  [0x2a100000, 12], // RIPE NCC
+  [0x2c000000, 12], // AFRINIC
 ];
 
 const inIanaGlobalUnicast = (g0: number, g1: number): boolean => {
@@ -160,11 +200,9 @@ const inIanaGlobalUnicast = (g0: number, g1: number): boolean => {
 
 /**
  * True only when the IPv6 address is globally routable. Allowlist, not
- * denylist: only the IANA global unicast allocations can be public, minus
- * 2001::/23 IETF protocol assignments (incl. Teredo 2001::/32) and
- * 2001:db8::/32 documentation. IPv4-mapped (::ffff:0:0/96) and 6to4
- * (2002::/16) are judged by the IPv4 they embed. Unparseable input is refused
- * (fail closed).
+ * denylist: only `IANA_GLOBAL_UNICAST` can be public, minus 2001:db8::/32
+ * documentation. IPv4-mapped (::ffff:0:0/96) and 6to4 (2002::/16) are judged
+ * by the IPv4 they embed. Unparseable input is refused (fail closed).
  */
 function isPublicIpv6(host: string): boolean {
   const zone = host.indexOf('%');
@@ -177,7 +215,6 @@ function isPublicIpv6(host: string): boolean {
     return isPublicIpv4(ipv4From(g6, g7));
   }
   if (!inIanaGlobalUnicast(g0, g1)) return false;
-  if (g0 === 0x2001 && g1 < 0x0200) return false;           // 2001::/23 IETF protocol assignments (incl. Teredo 2001::/32)
   if (g0 === 0x2001 && g1 === 0x0db8) return false;         // 2001:db8::/32 documentation
   if (g0 === 0x2002) return isPublicIpv4(ipv4From(g1, g2)); // 2002::/16 6to4 embeds an IPv4
   return true;
