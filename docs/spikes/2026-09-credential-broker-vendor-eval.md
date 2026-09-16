@@ -350,7 +350,7 @@ Both need three things inside the agent runtime: `HTTPS_PROXY` set, the MITM CA 
 
 Against a hostile guest (Λ6), the env vars are advisory: root in the Sprite unsets `HTTPS_PROXY` and dials the provider directly. The enforcement is the Sprite's deny-by-default L3 policy (`packages/lib/src/services/sandbox/egress.ts`): the allowlist must name **only** the proxy host, and the Sprites platform must keep blocking direct dials — "Raw IP connections are blocked unless the IP was resolved from an allowed domain." and "Private IPs are always blocked, so a Sprite can't reach into private network ranges," (quoted in `egress.ts` from docs.sprites.dev/concepts/networking). Two consequences for L4, recorded here so G4 does not rediscover them:
 1. The proxy must be reachable by a public DNS name (Sprites block private ranges), which means the proxy's own front door is public and its authentication is load-bearing.
-2. Both brokers put a guest-held bearer in the sandbox — Agent Vault's session token, Agent Proxy's Universal Auth client secret on the `connect` side — the shape S1/D-18 exists to replace. A machine-identity secret inside a hostile guest is extractable and is a standing Infisical credential, so if Agent Proxy is used, `connect`'s identity must be a per-sandbox, per-generation identity with a max-uses/TTL-bounded client secret (§2.2 Universal Auth knobs) minted by our provisioner, or our authority must sit in front of the proxy and the sandbox must never hold one. Either way the broker does not solve the identity problem; S1's answer does.
+2. Both brokers put a guest-held bearer in the sandbox — Agent Vault's session token, Agent Proxy's Universal Auth client secret on the `connect` side — the shape S1/D-18 exists to replace. A machine-identity secret inside a hostile guest is extractable and is a standing Infisical credential, so if Agent Proxy is used, `connect`'s identity must be a per-sandbox, per-generation identity with a max-uses/TTL-bounded client secret (§2.2 Universal Auth knobs) minted by our provisioner, or our authority must sit in front of the proxy and the sandbox must never hold one. Either way the broker does not solve the identity problem; S1's answer does. **v1 (D-18, answered): relay-only** — the server-side tool runner originates every credentialed operation and is the only `connect`-side caller; the sandbox holds no bearer, no Universal Auth secret and no presenter key. How a *sandbox-originated* request would authenticate to the proxy (the per-generation identity above, or the server-opened bound duplex channel from S1 §3.4 / ADR 0006 amendment) is **unresolved here and deferred to G4**; this spike does not specify it.
 
 ## 4. agentgateway (Solo.io / CNCF)
 
@@ -579,9 +579,11 @@ services:
       - "traefik.docker.network=vault_ingress_${TENANT_SLUG}"   # provider default is `traefik` (traefik.yml); the sidecar is not on it
     networks: [credential_plane, vault_ingress]   # never `traefik`
 
-  # The egress broker. Bridges `internal` (so the executor / sandbox path can reach
+  # The egress broker. Bridges `internal` (so the server-side executor can reach
   # it) and `credential_plane` (so it can reach Infisical). Holds the ONLY machine
-  # identity in this stack that can resolve secrets.
+  # identity in this stack that can resolve secrets. v1 is relay-only (D-18): the
+  # sandbox never reaches or authenticates to this proxy; any sandbox-originated
+  # proxy auth is deferred to G4 (§3.3 item 2).
   agent-proxy:
     image: infisical/cli:0.0.0               # "The CLI ships as the `infisical/cli` image."; pin the real tag at G4 (docs use :latest)
     command: ["secrets", "agent-proxy", "start", "--domain", "http://infisical:8080"]
