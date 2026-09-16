@@ -18,7 +18,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import { isIP, type LookupFunction } from 'node:net';
-import { Readable, type Transform } from 'node:stream';
+import { Readable, pipeline, type Transform } from 'node:stream';
 import zlib from 'node:zlib';
 
 /**
@@ -67,12 +67,12 @@ const decodeBody = (source: Readable, contentEncoding: string | undefined): Read
     .map((coding) => coding.trim().toLowerCase())
     .filter((coding) => coding !== '' && coding !== 'identity')
     .reverse();
-  if (codings.some((coding) => !(coding in DECODERS))) return source;
-  return codings.reduce<Readable>((stream, coding) => {
-    const decoder = DECODERS[coding]();
-    stream.on('error', (error) => decoder.destroy(error));
-    return stream.pipe(decoder);
-  }, source);
+  if (codings.length === 0 || codings.some((coding) => !(coding in DECODERS))) return source;
+  // pipeline destroys every stage when any stage errors or is destroyed early,
+  // so cancelling the decoded body (or a decode error) also closes the socket.
+  const decoders = codings.map((coding) => DECODERS[coding]());
+  pipeline([source, ...decoders], () => undefined);
+  return decoders[decoders.length - 1];
 };
 
 const abortError = (): Error => {
