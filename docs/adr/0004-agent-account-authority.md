@@ -186,7 +186,8 @@ Provider tool catalogues (`integrations/providers/*.ts`) are reclassified to thi
 | F3 | Caller ceiling does not admit the account's drive (`isDriveWithinCredentialScope` false); `manage_keys`-only credential | `ceiling` — asked before anything else that needs a DB fact |
 | F4 | `tenantId` ≠ the account row's tenant | `tenant_mismatch` |
 | F4a | `human.userId`, `agentPageId`, `conversationId` or `runId` ≠ the presenter's current execution principals | `principal_mismatch` |
-| F5 | `accountId` unknown, revoked, or `credentialVersion` ≠ current | `version_mismatch` (unknown and revoked collapse into it toward the presenter) |
+| F5 | `expected.accountStatus` ≠ `'active'` (`needs_reauth`, `revoked`, `deleted`) | `account_not_active` — before any version is compared; the status is recorded in audit |
+| F5a | `accountId` unknown, or `credentialVersion` ≠ current | `version_mismatch` |
 | F6 | `policyVersion` ≠ current | `policy_epoch` |
 | F7 | `delegationId` null while `human.sessionId` null; delegation expired/revoked; delegation fact whose `delegationId`, `accountId`, `agentPageId` or `delegatedBy` ≠ the grant's `delegationId`, `accountId`, `agentPageId` or `human.userId` | `no_delegation` |
 | F8 | `operation` ≠ the presented request's operation; `requestDigest` ≠ recomputed digest | `digest_mismatch` (constant-time compare) |
@@ -285,6 +286,7 @@ Adapters (I/O, G1b): `grant-repository.ts` (nonce consume, approvals, delegation
 25. Given a canonical request whose PATH contains a token-shaped segment (`/v1/tokens/ghp_…`) and whose `resources` carry an undeclared key, `buildAuditRecord` produces a record containing **no substring** of either: the path is present only as `pathDigest`, and the undeclared resource is absent entirely. Two requests to the same path still produce the same `pathDigest`, and two different paths produce different ones (G1b review amendment; §5).
 26. Given query pairs `?to=a+b`/`?to=a%2Bb`, `?q=/safe`/`?q=%2Fsafe` and `?x=a&b`/`?x=a%26b`, `digestRequest` returns different digests for each pair; given lower-case escape hex or an escaped unreserved character, the same digest as the normalized form; given a body with and without a correct `content-length`, the same digest; given an admitted header value containing CR or LF, or a `content-length` that disagrees with the body, `canonicalizeRequest` refuses `malformed`. The §8.13 round-trip input is built verbatim, never re-encoded by the test (G1b review amendment; §3.2).
 27. Given `human.sessionId = null` and a live, unexpired delegation fact for this account whose `agentPageId` names another agent page, `no_delegation`; whose `delegatedBy` names another user than `grant.human.userId`, `no_delegation`; whose four ids all match, the delegation check passes (G1a review H3).
+28. Given `expected.accountStatus` of `needs_reauth`, `revoked` or `deleted` and an otherwise valid grant, `account_not_active`, returned before `version_mismatch` (a table test over the three statuses × a current and a stale `credentialVersion`); given `active`, the status check passes. `ExpectedBinding` requires `accountStatus` (a binding without it does not compile) (G1a review H4).
 
 ## 9. Consequences
 

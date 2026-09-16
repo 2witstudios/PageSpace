@@ -22,6 +22,8 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it.todo('given a grant whose human.userId differs from the acting human of the run, should return principal_mismatch [0004 §8.20]');
   it.todo('given ExpectedBinding, should carry the CURRENT human/agentPageId/conversationId/runId from the presenter context, never from the grant (type-level) [0004 §2.1]');
   it.todo('given credentialVersion one behind current, should return version_mismatch [0004 §8.6]');
+  it.todo('given expected.accountStatus needs_reauth, revoked or deleted and an otherwise valid grant, should return account_not_active before version_mismatch (table over the three statuses × current and stale credentialVersion) [0004 §8.28; G1a review H4]');
+  it.todo('given expected.accountStatus active, should pass the status check [0004 §8.28]');
   it.todo('given policyVersion one behind current, should return policy_epoch [0004 §8.6]');
   it.todo('given human.sessionId null and delegationId null, should return no_delegation [0004 §8.7]');
   it.todo('given an expired or revoked delegation fact, should return no_delegation [0004 §8.7]');

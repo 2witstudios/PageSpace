@@ -22,7 +22,7 @@
  * expected (Control Board §7.5).
  */
 import type { AgentDispatchPayload } from '../auth/agent-dispatch-payload';
-import type { AccountId, AccountKind, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
+import type { AccountId, AccountKind, AccountStatus, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 
 // ---------------------------------------------------------------------------
 // Branded principals (threat model §3). One brand per principal; never
@@ -180,6 +180,8 @@ export type GrantDenyReason =
   | 'ceiling'
   | 'tenant_mismatch'
   | 'principal_mismatch'
+  /** `expected.accountStatus` is anything but `active` (F5); the status itself goes to audit. */
+  | 'account_not_active'
   | 'version_mismatch'
   | 'policy_epoch'
   | 'no_delegation'
@@ -265,6 +267,13 @@ export type ExpectedBinding = {
   readonly tenantId: TenantId;
   readonly accountId: AccountId;
   readonly accountKind: AccountKind;
+  /**
+   * `agent_accounts.status` as the adapter read it. Anything but `active`
+   * (`needs_reauth`, `revoked`, `deleted`) is `account_not_active` before any
+   * version is compared — the verifier, not only the plane, ends use of a
+   * revoked account (ADR 0004 F5; G1a review H4).
+   */
+  readonly accountStatus: AccountStatus;
   readonly accountDriveId: DriveId | null;
   readonly currentCredentialVersion: CredentialVersion;
   readonly currentPolicyVersion: PolicyVersion;
