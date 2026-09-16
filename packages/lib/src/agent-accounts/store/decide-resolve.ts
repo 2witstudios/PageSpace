@@ -36,11 +36,15 @@ export const decideResolve: DecideResolve = ({ grant, ref, stored, now, rotation
   const caller = decideResolveCaller({ aud: grant.aud, kind: ref.kind, sessionHttp: grant.sessionHttp });
   if (!caller.ok) return KIND_NOT_RESOLVABLE;
 
+  // The previous version is for a grant IN FLIGHT across the rotation only: issued before
+  // `rotatedAt`, presented strictly inside the window (G1a review M7; the same rule as ADR 0004 F5a).
   const versionOk =
     grant.credentialVersion === stored.currentVersion ||
-    (grant.credentialVersion === stored.previousVersion &&
+    (stored.previousVersion !== null &&
+      grant.credentialVersion === stored.previousVersion &&
       stored.rotatedAt !== null &&
-      now - stored.rotatedAt <= rotationGraceMs);
+      grant.iat < stored.rotatedAt &&
+      now < stored.rotatedAt + rotationGraceMs);
   if (!versionOk) return VERSION_MISMATCH;
 
   const binding = decidePlaneBinding({ storedBindings: stored.bindings, grantBindingDigest: grant.bindingDigest, hash });

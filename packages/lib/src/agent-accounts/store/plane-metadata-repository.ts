@@ -12,6 +12,7 @@
  */
 import type { Pool, PoolClient } from 'pg';
 import type { AdvisoryLockClient, AdvisoryLockPool } from '@pagespace/db/advisory-lock';
+import type { PolicyVersion } from '@pagespace/db/schema/agent-accounts';
 import type { PlaneBindings, RevokeReason, SecretRef, StoredSecretFacts } from './store-adapter';
 
 export type PlaneMetadataPool = AdvisoryLockPool & Pick<Pool, 'query'>;
@@ -38,6 +39,8 @@ export type PlaneMetadataRepository = {
   }) => Promise<void>;
   readonly markRevoked: (input: { readonly ref: SecretRef; readonly revokedAt: number; readonly reason: RevokeReason }) => Promise<void>;
   readonly remove: (ref: SecretRef) => Promise<void>;
+  /** CAS on the stored `bindings.policyVersion`; `false` when another writer moved it first. */
+  readonly updateBindings: (input: { readonly ref: SecretRef; readonly expectedPolicyVersion: PolicyVersion; readonly bindings: PlaneBindings }) => Promise<boolean>;
 };
 
 export function lockKeyFor(ref: SecretRef): string {
@@ -83,12 +86,21 @@ export function createPlaneMetadataRepository({ pool }: { readonly pool: PlaneMe
 
     // Only the FIRST revocation is written: its time is what REVOKE_RETENTION_MS counts from and its
     // reason is what reconciliation and forensics read (a rotation_replay must stay distinguishable
-    // from a later admin revoke). A repeat revoke matches no row and changes nothing.
+    // from a later admin revoke). A repeat revoke matches no row and changes nothing. It also clears
+    // previous_version and rotated_at: no rotation grace survives a revocation (G1a review M7).
     async markRevoked({ ref, revokedAt, reason }) {
       await pool.query(
-        'UPDATE agent_account_secret_versions SET revoked_at = $4, revoke_reason = $5 WHERE tenant_id = $1 AND account_id = $2 AND kind = $3 AND revoked_at IS NULL',
+        'UPDATE agent_account_secret_versions SET revoked_at = $4, revoke_reason = $5, previous_version = NULL, rotated_at = NULL WHERE tenant_id = $1 AND account_id = $2 AND kind = $3 AND revoked_at IS NULL',
         [ref.tenantId, ref.accountId, ref.kind, new Date(revokedAt), reason],
       );
+    },
+
+    async updateBindings({ ref, expectedPolicyVersion, bindings }) {
+      const result = await pool.query(
+        "UPDATE agent_account_secret_versions SET bindings = $4 WHERE tenant_id = $1 AND account_id = $2 AND kind = $3 AND (bindings->>'policyVersion')::integer = $5",
+        [ref.tenantId, ref.accountId, ref.kind, JSON.stringify(bindings), expectedPolicyVersion],
+      );
+      return result.rowCount === 1;
     },
 
     async remove(ref) {

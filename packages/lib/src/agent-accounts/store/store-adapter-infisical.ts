@@ -17,7 +17,7 @@
  * as injected functions so this file never holds a root/admin token itself.
  */
 import type { AccountKind, CredentialVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
-import type { HashBytes, PresenterChannel } from '../grant';
+import type { Ed25519Verify, HashBytes, PresenterChannel } from '../grant';
 import type {
   DeleteInput,
   DeleteResult,
@@ -30,6 +30,8 @@ import type {
   ResolvableBy,
   ResolveInput,
   ResolveResult,
+  RebindInput,
+  RebindResult,
   RevokeInput,
   RevokeResult,
   RotateInput,
@@ -45,6 +47,7 @@ import type { InfisicalClient, InfisicalCredentials } from './infisical-client';
 import type { PlaneMetadataRepository } from './plane-metadata-repository';
 import { lockKeyFor } from './plane-metadata-repository';
 import { decideCas } from './decide-cas';
+import { decideRebind } from './decide-rebind';
 import { decideResolve } from './decide-resolve';
 import { withAdvisoryLock, type AdvisoryLockPool, type WithAdvisoryLockResult } from '@pagespace/db/advisory-lock';
 
@@ -60,9 +63,13 @@ export type StoreAdapterInfisicalDeps = {
   readonly hash: HashBytes;
   readonly now: () => number;
   readonly rotationGraceMs?: number;
+  /** The authority's step-up consent public key (DER SPKI) — distinct from the grant key; `rebind` verifies under it. */
+  readonly consentPublicKey: Uint8Array;
+  readonly verify: Ed25519Verify;
 };
 
 const ROTATION_GRACE_MS_DEFAULT = 300_000;
+const REBIND_CONSENT_MAX_AGE_MS: StoreLimits['rebindConsentMaxAgeMs'] = 300_000;
 /**
  * `withAdvisoryLock` (packages/db) is a TRY lock — a competitor mid-write
  * gets `lock_busy` immediately rather than waiting. A bounded retry turns
@@ -319,6 +326,39 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
 
     async rotate(input: RotateInput): Promise<RotateResult> {
       return writeSecret({ ref: input.ref, material: input.next, expectedVersion: input.expectedVersion, bindings: input.bindings, identity: input.identity, snapshotPreviousOnRotate: true });
+    },
+
+    async rebind(input: RebindInput): Promise<RebindResult> {
+      if (input.ref.tenantId !== input.identity.tenantId) return { ok: false, reason: 'not_found' };
+
+      // Under the writers' lock so a rebind never interleaves with a put/rotate committing bindings.
+      // The SQL update also compares the stored policyVersion, so the CAS holds at the row itself.
+      const lockResult = await withSecretLock(input.ref, async (): Promise<RebindResult> => {
+        const stored = await metadataCall(() => deps.metadata.read(input.ref));
+        if (stored === METADATA_UNAVAILABLE) return { ok: false, reason: 'store_unavailable' };
+
+        const decision = decideRebind({
+          stored: stored?.bindings ?? null,
+          expectedVersion: input.expectedVersion,
+          next: input.bindings,
+          consent: input.consent,
+          consentPublicKey: deps.consentPublicKey,
+          now: deps.now(),
+          maxAgeMs: REBIND_CONSENT_MAX_AGE_MS,
+          verify: deps.verify,
+          hash: deps.hash,
+        });
+        if (decision.outcome === 'refuse') return { ok: false, reason: decision.reason };
+
+        const updated = await metadataCall(() => deps.metadata.updateBindings({ ref: input.ref, expectedPolicyVersion: input.expectedVersion, bindings: input.bindings }));
+        if (updated === METADATA_UNAVAILABLE) return { ok: false, reason: 'store_unavailable' };
+        if (!updated) return { ok: false, reason: 'version_conflict' };
+        return { ok: true, policyVersion: input.bindings.policyVersion };
+      });
+
+      if (lockResult.outcome === 'lock_busy') return { ok: false, reason: 'lock_unavailable' };
+      if (lockResult.outcome === 'connection_error') return { ok: false, reason: 'store_unavailable' };
+      return lockResult.result;
     },
 
     async revoke(input: RevokeInput): Promise<RevokeResult> {
