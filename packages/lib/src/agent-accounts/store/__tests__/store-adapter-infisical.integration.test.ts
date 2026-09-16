@@ -930,8 +930,8 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
 
     const row = await pool.query('SELECT previous_version, rotated_at FROM agent_account_secret_versions WHERE tenant_id = $1 AND account_id = $2 AND kind = $3', [TENANT_A, accountId, 'api_key']);
     const described = await adapter.describe({ ref, identity });
-    const actual = { previousVersion: row.rows[0]?.previous_version ?? 'no row', rotatedAt: row.rows[0]?.rotated_at ?? 'no row', describedRotatedAt: described.ok ? described.rotatedAt : 'not described' };
-    const expected = { previousVersion: null, rotatedAt: null, describedRotatedAt: null };
+    const actual = { rows: row.rows, describedRotatedAt: described.ok ? described.rotatedAt : 'not described' };
+    const expected = { rows: [{ previous_version: null, rotated_at: null }], describedRotatedAt: null };
     expect(actual).toEqual(expected);
   });
 

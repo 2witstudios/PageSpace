@@ -272,10 +272,15 @@ jobs:
         working-directory: packages/lib
         env:
           TZ: UTC
+        # The default reporter names each failing test in the log; the JSON one feeds the
+        # skipped/partial check below, which must run even when vitest itself exited non-zero.
         run: |
+          set +e
           bunx vitest run --config vitest.integration.config.ts \
             src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts \
-            --reporter=json --outputFile=infisical-result.json
+            --reporter=default --reporter=json --outputFile.json=infisical-result.json
+          vitest_status=$?
+          set -e
           node -e "
             const r = require('./infisical-result.json');
             const passed = r.numPassedTests ?? 0;
@@ -285,6 +290,7 @@ jobs:
             if (failed > 0) { console.error('::error::store-adapter-infisical suite has failing tests'); process.exit(1); }
             if (total === 0 || passed !== total) { console.error('::error::store-adapter-infisical suite did not fully run (skipped or partial) — the reachability probe or the Infisical bring-up above must have failed silently'); process.exit(1); }
           "
+          exit $vitest_status
 
       - name: Tear down local Infisical OSS
         if: always()
