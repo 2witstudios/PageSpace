@@ -693,23 +693,26 @@ configs:
   # data to an attacker-owned account on an allowed shared host (e.g. api.github.com). Per-account origin
   # and operation binding is the executor's grant check, and the proxy does not replace it.
   executor_egress_acl:
-    content: |
-      version: v1
-      services: []
-      default:
-        name: credential-executor
-        project: pagespace
-        action: enforce
-        allowed_domains:
-          - api.github.com              # github.ts baseUrl
-          - github.com                  # github.ts tokenUrl (/login/oauth/access_token)
-          - api.notion.com              # notion.ts baseUrl + tokenUrl
-          - slack.com                   # slack.ts baseUrl + tokenUrl + revokeUrl
-          - www.googleapis.com          # Google Calendar API
-          - oauth2.googleapis.com       # Google token refresh endpoint
-          - api.zoom.us                 # Zoom API
-          - zoom.us                     # zoom token-refresh.ts (/oauth/token)
-          # + generated: approved custom-provider baseUrls and approved connection baseUrlOverride origins
+    # A GENERATED per-tenant artifact, not inline content. `tenant-stack.sh up` renders it from the
+    # sources above before starting the services, then both services mount it. Illustrative rendering:
+  #   # builtin-definitions-sha3-256: <hex>
+  #   version: v1
+  #   services: []
+  #   default:
+  #     name: credential-executor
+  #     project: pagespace
+  #     action: enforce
+  #     allowed_domains:
+  #       - api.github.com              # github.ts baseUrl
+  #       - github.com                  # github.ts tokenUrl (/login/oauth/access_token)
+  #       - api.notion.com              # notion.ts baseUrl + tokenUrl
+  #       - slack.com                   # slack.ts baseUrl + tokenUrl + revokeUrl
+  #       - www.googleapis.com          # Google Calendar API
+  #       - oauth2.googleapis.com       # Google token refresh endpoint
+  #       - api.zoom.us                 # Zoom API
+  #       - zoom.us                     # zoom token-refresh.ts (/oauth/token)
+  #       # + generated: approved custom-provider baseUrls and approved connection baseUrlOverride origins
+    file: ./generated/executor-egress-acl.${TENANT_SLUG}.yaml
   vault_ingress_nginx:                  # inline `content` needs Docker Compose >= 2.23.1
     content: |
       map $$http_upgrade $$connection_upgrade { default upgrade; '' close; }
