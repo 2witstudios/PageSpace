@@ -12,6 +12,7 @@ import {
   scheduleTargetsPro,
   reconcilePhasesToPro,
   planScheduleReconciliation,
+  createStripeAdapter,
   type FounderSubscriptionRow,
   type LegacyBusinessRow,
   type MigrationStore,
@@ -134,19 +135,36 @@ describe('founderToProPhases (pure)', () => {
 });
 
 describe('scheduleTargetsPro (pure)', () => {
-  it('A-9 P1 is true when the final phase is Pro', () => {
+  it('A-9 P1 is true when the phase active at period end is Pro', () => {
     expect(scheduleTargetsPro(
       [{ items: [{ price: PRICE.founder }], start_date: PHASE_START, end_date: PERIOD_END }, { items: [{ price: PRICE.pro }], start_date: PERIOD_END }],
+      PERIOD_END,
       PRICE.pro,
     )).toBe(true);
   });
 
-  it('A-9 P1 is false when the final phase is not Pro (a schedule created but never updated)', () => {
-    expect(scheduleTargetsPro([{ items: [{ price: PRICE.founder }], start_date: PHASE_START }], PRICE.pro)).toBe(false);
+  it('A-9 P1 is false when the phase active at period end is not Pro (a schedule created but never updated)', () => {
+    expect(scheduleTargetsPro([{ items: [{ price: PRICE.founder }], start_date: PHASE_START }], PERIOD_END, PRICE.pro)).toBe(false);
   });
 
   it('A-9 P1 is false for an empty phase list', () => {
-    expect(scheduleTargetsPro([], PRICE.pro)).toBe(false);
+    expect(scheduleTargetsPro([], PERIOD_END, PRICE.pro)).toBe(false);
+  });
+
+  it('P2 (independent review) is false when Pro is the LAST phase but an intermediate non-Pro phase is the one actually active at period end', () => {
+    // [founder -> cpe, business cpe -> X, pro X -> ]: Pro is last, but the
+    // phase active AT cpe is business. Checking only the last phase would
+    // wrongly call this schedule "already correct".
+    const X = PERIOD_END + 500;
+    expect(scheduleTargetsPro(
+      [
+        { items: [{ price: PRICE.founder }], start_date: PHASE_START, end_date: PERIOD_END },
+        { items: [{ price: PRICE.legacyBusiness }], start_date: PERIOD_END, end_date: X },
+        { items: [{ price: PRICE.pro }], start_date: X },
+      ],
+      PERIOD_END,
+      PRICE.pro,
+    )).toBe(false);
   });
 });
 
@@ -218,6 +236,77 @@ describe('reconcilePhasesToPro (pure)', () => {
       { items: [{ price: PRICE.pro }], start_date: PERIOD_END },
     ]);
   });
+
+  it('P2 (independent review) refuses a schedule whose every phase already starts at/after period end, rather than capping the first phase into an invalid (end_date <= start_date) one', () => {
+    expect(() =>
+      reconcilePhasesToPro(
+        sub,
+        [{ items: [{ price: 'price_some_other_plan' }], start_date: PERIOD_END }],
+        PRICE.pro,
+      ),
+    ).toThrow(/no phase active at period end/);
+  });
+
+  it('P2 (independent review) preserves the capped phase\'s discounts and item quantity — a lossy round-trip would otherwise drop a founder\'s promo code', () => {
+    const result = reconcilePhasesToPro(
+      sub,
+      [{ items: [{ price: PRICE.founder, quantity: 2 }], start_date: PHASE_START, discounts: [{ coupon: 'promo_50off' }] }],
+      PRICE.pro,
+    );
+    expect(result).toEqual([
+      { items: [{ price: PRICE.founder, quantity: 2 }], start_date: PHASE_START, end_date: PERIOD_END, discounts: [{ coupon: 'promo_50off' }] },
+      { items: [{ price: PRICE.pro }], start_date: PERIOD_END },
+    ]);
+  });
+});
+
+describe('createStripeAdapter().retrieveSchedulePhases (P2, independent review: lossy round-trip)', () => {
+  it('carries through each phase\'s discounts and each item\'s quantity, not just price/start/end', async () => {
+    const fakeStripe = {
+      subscriptionSchedules: {
+        retrieve: async () => ({
+          phases: [
+            {
+              start_date: PHASE_START,
+              end_date: PERIOD_END,
+              items: [{ price: PRICE.founder, quantity: 3 }],
+              discounts: [{ coupon: 'promo_50off', discount: null, promotion_code: null }],
+            },
+          ],
+        }),
+      },
+    } as unknown as import('stripe').Stripe;
+    const adapter = createStripeAdapter(fakeStripe);
+    const phases = await adapter.retrieveSchedulePhases('sched_1');
+    expect(phases).toEqual([
+      {
+        items: [{ price: PRICE.founder, quantity: 3 }],
+        start_date: PHASE_START,
+        end_date: PERIOD_END,
+        discounts: [{ coupon: 'promo_50off', discount: undefined, promotion_code: undefined }],
+      },
+    ]);
+  });
+
+  it('omits discounts entirely when the phase has none, rather than writing back an empty array', async () => {
+    const fakeStripe = {
+      subscriptionSchedules: {
+        retrieve: async () => ({
+          phases: [
+            {
+              start_date: PHASE_START,
+              end_date: PERIOD_END,
+              items: [{ price: PRICE.pro, quantity: 1 }],
+              discounts: [],
+            },
+          ],
+        }),
+      },
+    } as unknown as import('stripe').Stripe;
+    const adapter = createStripeAdapter(fakeStripe);
+    const phases = await adapter.retrieveSchedulePhases('sched_1');
+    expect(phases[0].discounts).toBeUndefined();
+  });
 });
 
 describe('planScheduleReconciliation (pure)', () => {
@@ -263,6 +352,17 @@ describe('planScheduleReconciliation (pure)', () => {
     );
     expect(result).toEqual({ kind: 'db-only' });
   });
+
+  it('P2 (independent review) Pro as the LAST phase with a non-Pro phase active at period end is fix-schedule, not db-only — the schedule is not actually correct yet', () => {
+    const X = PERIOD_END + 500;
+    const proLastButNotAtBoundary: SchedulePhase[] = [
+      { items: [{ price: PRICE.founder }], start_date: PHASE_START, end_date: PERIOD_END },
+      { items: [{ price: 'price_business_100' }], start_date: PERIOD_END, end_date: X },
+      { items: [{ price: PRICE.pro }], start_date: X },
+    ];
+    const result = planScheduleReconciliation(row, live, 'sched_1', proLastButNotAtBoundary, PRICE.pro);
+    expect(result.kind).toBe('fix-schedule');
+  });
 });
 
 describe('runFounderMigration against a seeded Founder row', () => {
@@ -277,6 +377,7 @@ describe('runFounderMigration against a seeded Founder row', () => {
       alreadyComplete: 0,
       dbCompleted: 0,
       reconciled: 0,
+      failed: 0,
       skippedNotOnFounderPrice: 0,
       legacyBusinessRows: 2,
       grandfathered: 1,
@@ -445,5 +546,33 @@ describe('runFounderMigration against a seeded Founder row', () => {
     expect(summary.skippedNotOnFounderPrice).toBe(1);
     expect(writes.schedulesCreated).toEqual([]);
     expect(writes.recordFounderToPro).toEqual([]);
+  });
+
+  it('P2 (independent review) a per-row failure (a malformed schedule reconcilePhasesToPro refuses) does not abort the run — it is skipped and counted, and grandfathering still completes', async () => {
+    // The schedule's only phase already starts AT the period end — there is
+    // no phase active at the boundary to cap, so reconcilePhasesToPro throws
+    // rather than building an invalid phase. Before the P2 fix this threw
+    // out of the whole for-loop, leaving every later founder row AND step 2
+    // (grandfathering) unprocessed.
+    const seed = founderSeed(
+      { scheduleId: 'sched_malformed' },
+      { subscriptionTier: 'founder', stripeScheduleId: null },
+    );
+    const { deps, writes, lines } = seededDeps(seed, {
+      sched_malformed: {
+        phases: [{ items: [{ price: 'price_some_other_plan' }], start_date: PERIOD_END }],
+      },
+    });
+    const summary = await runFounderMigration(deps, { dryRun: false });
+
+    expect(summary.failed).toBe(1);
+    expect(summary.reconciled).toBe(0);
+    expect(summary.dbCompleted).toBe(0);
+    expect(writes.scheduleUpdates).toEqual([]);
+    expect(writes.recordFounderToPro).toEqual([]);
+    expect(lines.some((l) => l.includes('user_jono') && l.includes('FAILED'))).toBe(true);
+    // Step 2 still ran despite the step-1 failure.
+    expect(writes.markGrandfathered).toEqual(['user_biz100']);
+    expect(summary.grandfathered).toBe(1);
   });
 });

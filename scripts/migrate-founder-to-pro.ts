@@ -99,10 +99,37 @@ export interface StripeScheduleView {
   firstPhaseStart: number;
 }
 
+/**
+ * A coupon/promotion-code discount on a schedule phase. Only the id fields —
+ * whatever Stripe's SDK expanded these to on read, this app never needs the
+ * expanded object, only the id to write back on the next update.
+ */
+export interface SchedulePhaseDiscount {
+  coupon?: string;
+  discount?: string;
+  promotion_code?: string;
+}
+
+export interface SchedulePhaseItem {
+  price: string;
+  /** Per-item quantity; omitted preserves Stripe's default. */
+  quantity?: number;
+}
+
 export interface SchedulePhase {
-  items: { price: string }[];
+  items: SchedulePhaseItem[];
   start_date: number;
   end_date?: number;
+  /**
+   * Stackable discounts on this phase (P2, independent review: lossy
+   * round-trip). `retrieveSchedulePhases` must populate this from Stripe's
+   * response, and any function that rebuilds phases from a retrieved one —
+   * `reconcilePhasesToPro`'s preserved/capped phases — must carry it through
+   * rather than silently dropping it, or a founder who subscribed with a
+   * promotion code loses that discount the moment their schedule is
+   * reconciled.
+   */
+  discounts?: SchedulePhaseDiscount[];
 }
 
 /** What the script asks of Stripe. */
@@ -163,10 +190,30 @@ export function planFounderAction(
   return { kind: 'schedule', userId: row.userId, stripeSubscriptionId: row.stripeSubscriptionId };
 }
 
-/** Whether an existing schedule's FINAL phase already lands on Pro. Pure. */
-export function scheduleTargetsPro(phases: SchedulePhase[], proPriceId: string): boolean {
-  const last = phases[phases.length - 1];
-  return last?.items[0]?.price === proPriceId;
+/**
+ * Whether the phase actually ACTIVE at `currentPeriodEnd` — the first phase
+ * whose `start_date >= currentPeriodEnd`, or the last phase if none does —
+ * is Pro. Pure.
+ *
+ * P2 (independent review): this used to check only `phases[length-1]`. A
+ * schedule that reaches Pro through an intermediate non-Pro phase — e.g.
+ * `[founder → cpe, business cpe → X, pro X → ]`, the future-tail shape from
+ * the codex P2 fix, except the tail happens to end on Pro — has Pro as its
+ * LAST phase but Business as the phase actually active at the boundary.
+ * Checking only the last phase called that schedule "already correct" and
+ * left it untouched: at `cpe`, Stripe bills Business until X while the local
+ * row already says the move to Pro landed, and the next webhook re-derives
+ * the tier as 'business', silently undoing the migration.
+ */
+export function scheduleTargetsPro(
+  phases: SchedulePhase[],
+  currentPeriodEnd: number,
+  proPriceId: string,
+): boolean {
+  if (phases.length === 0) return false;
+  const futureTailStart = phases.findIndex((phase) => phase.start_date >= currentPeriodEnd);
+  const boundaryPhase = futureTailStart === -1 ? phases[phases.length - 1] : phases[futureTailStart];
+  return boundaryPhase?.items[0]?.price === proPriceId;
 }
 
 /**
@@ -193,13 +240,24 @@ export function reconcilePhasesToPro(
   }
   const futureTailStart = existingPhases.findIndex((phase) => phase.start_date >= sub.currentPeriodEnd);
   const activeIndex = futureTailStart === -1 ? existingPhases.length - 1 : futureTailStart - 1;
-  // A malformed schedule whose very first phase already starts at/after the
-  // boundary has no phase actually active at the boundary; fall back to
-  // capping that first phase rather than producing an empty preserved list
-  // with a dangling reference.
-  const safeIndex = activeIndex < 0 ? 0 : activeIndex;
-  const preserved = existingPhases.slice(0, safeIndex);
-  const active = existingPhases[safeIndex];
+  // P2 (independent review): a malformed schedule whose very first phase
+  // already starts at/after the boundary has NO phase active at the
+  // boundary to preserve. The old fallback (`safeIndex = 0`) capped that
+  // first phase anyway, setting `end_date = currentPeriodEnd <= start_date`
+  // — exactly the invalid, Stripe-rejected phase this function exists to
+  // avoid producing. Refuse it with a descriptive error instead; the caller
+  // (runFounderMigration) catches this per-row so one malformed schedule
+  // cannot abort the rest of the migration.
+  if (activeIndex < 0) {
+    throw new Error(
+      `Schedule for subscription ${sub.id} has no phase active at period end ` +
+        `(${sub.currentPeriodEnd}) — every existing phase already starts at or ` +
+        `after it, so there is no phase to cap without producing an invalid ` +
+        `(end_date <= start_date) phase`,
+    );
+  }
+  const preserved = existingPhases.slice(0, activeIndex);
+  const active = existingPhases[activeIndex];
   return [
     ...preserved,
     { ...active, end_date: sub.currentPeriodEnd },
@@ -227,7 +285,7 @@ export function planScheduleReconciliation(
   schedulePhases: SchedulePhase[],
   proPriceId: string,
 ): ScheduleReconciliation {
-  const targetsPro = scheduleTargetsPro(schedulePhases, proPriceId);
+  const targetsPro = scheduleTargetsPro(schedulePhases, live.currentPeriodEnd, proPriceId);
   const localComplete = row.subscriptionTier === 'pro' && row.stripeScheduleId === scheduleId;
   if (targetsPro && localComplete) return { kind: 'complete' };
   if (targetsPro) return { kind: 'db-only' };
@@ -244,6 +302,13 @@ export interface MigrationSummary {
   dbCompleted: number;
   /** Existing schedule did NOT end on Pro; fixed, and the local write completed. */
   reconciled: number;
+  /**
+   * P2 (independent review): a per-row error (e.g. a malformed schedule
+   * reconcilePhasesToPro refuses to touch) that stopped THIS row without
+   * stopping the migration — the row is skipped and reported, and every
+   * later row plus step 2 (grandfathering) still runs.
+   */
+  failed: number;
   skippedNotOnFounderPrice: number;
   legacyBusinessRows: number;
   grandfathered: number;
@@ -261,6 +326,7 @@ export async function runFounderMigration(deps: MigrationDeps, opts: { dryRun: b
     alreadyComplete: 0,
     dbCompleted: 0,
     reconciled: 0,
+    failed: 0,
     skippedNotOnFounderPrice: 0,
     legacyBusinessRows: 0,
     grandfathered: 0,
@@ -273,63 +339,75 @@ export async function runFounderMigration(deps: MigrationDeps, opts: { dryRun: b
   summary.founderRows = founderRows.length;
   log(`${mode}${founderRows.length} subscription(s) on the Founder price`);
 
+  // P2 (independent review): each row is isolated in its own try/catch. A
+  // malformed schedule (reconcilePhasesToPro refuses rather than building an
+  // invalid phase) or any other per-row Stripe/DB error used to throw out of
+  // this loop entirely — the remaining Founder rows were left unprocessed
+  // AND step 2 (grandfathering every legacy $100 Business subscriber) never
+  // ran. One odd schedule now costs only that row.
   for (const row of founderRows) {
-    const live = await stripe.retrieveSubscription(row.stripeSubscriptionId);
-    const action = planFounderAction(row, live, priceIds);
-    switch (action.kind) {
-      case 'not-on-founder-price':
-        summary.skippedNotOnFounderPrice++;
-        log(`${mode}  ${row.userId}: ${row.stripeSubscriptionId} is on ${action.currentPriceId}, not the Founder price — skipped`);
-        break;
-      case 'already-scheduled': {
-        const scheduleId = action.scheduleId;
-        const phases = await stripe.retrieveSchedulePhases(scheduleId);
-        const recon = planScheduleReconciliation(row, live, scheduleId, phases, priceIds.pro);
-        const recordThisRow = () =>
-          store.recordFounderToPro({
+    try {
+      const live = await stripe.retrieveSubscription(row.stripeSubscriptionId);
+      const action = planFounderAction(row, live, priceIds);
+      switch (action.kind) {
+        case 'not-on-founder-price':
+          summary.skippedNotOnFounderPrice++;
+          log(`${mode}  ${row.userId}: ${row.stripeSubscriptionId} is on ${action.currentPriceId}, not the Founder price — skipped`);
+          break;
+        case 'already-scheduled': {
+          const scheduleId = action.scheduleId;
+          const phases = await stripe.retrieveSchedulePhases(scheduleId);
+          const recon = planScheduleReconciliation(row, live, scheduleId, phases, priceIds.pro);
+          const recordThisRow = () =>
+            store.recordFounderToPro({
+              userId: row.userId,
+              stripeSubscriptionId: row.stripeSubscriptionId,
+              stripeScheduleId: scheduleId,
+              scheduledPriceId: priceIds.pro,
+              scheduledChangeDate: new Date(live.currentPeriodEnd * 1000),
+            });
+          switch (recon.kind) {
+            case 'complete':
+              summary.alreadyComplete++;
+              log(`${mode}  ${row.userId}: ${scheduleId} already ends on Pro and the local write already landed — nothing to do`);
+              break;
+            case 'db-only':
+              summary.dbCompleted++;
+              log(`${mode}  ${row.userId}: ${scheduleId} already ends on Pro; completing the local write (a prior run's retry target)`);
+              if (!opts.dryRun) await recordThisRow();
+              break;
+            case 'fix-schedule':
+              summary.reconciled++;
+              log(`${mode}  ${row.userId}: ${scheduleId} does not end on Pro — updating its phases and completing the local write`);
+              if (!opts.dryRun) {
+                await stripe.updateSchedulePhases(scheduleId, recon.phases);
+                await recordThisRow();
+              }
+              break;
+          }
+          break;
+        }
+        case 'schedule': {
+          const changeDate = new Date(live.currentPeriodEnd * 1000);
+          log(`${mode}  ${row.userId}: schedule ${row.stripeSubscriptionId} → Pro (${priceIds.pro}) at ${changeDate.toISOString()}; users.subscriptionTier → pro now`);
+          summary.scheduled++;
+          if (opts.dryRun) break;
+          const schedule = await stripe.createScheduleFromSubscription(live.id);
+          await stripe.updateSchedulePhases(schedule.id, founderToProPhases(live, schedule, priceIds.pro));
+          await store.recordFounderToPro({
             userId: row.userId,
             stripeSubscriptionId: row.stripeSubscriptionId,
-            stripeScheduleId: scheduleId,
+            stripeScheduleId: schedule.id,
             scheduledPriceId: priceIds.pro,
-            scheduledChangeDate: new Date(live.currentPeriodEnd * 1000),
+            scheduledChangeDate: changeDate,
           });
-        switch (recon.kind) {
-          case 'complete':
-            summary.alreadyComplete++;
-            log(`${mode}  ${row.userId}: ${scheduleId} already ends on Pro and the local write already landed — nothing to do`);
-            break;
-          case 'db-only':
-            summary.dbCompleted++;
-            log(`${mode}  ${row.userId}: ${scheduleId} already ends on Pro; completing the local write (a prior run's retry target)`);
-            if (!opts.dryRun) await recordThisRow();
-            break;
-          case 'fix-schedule':
-            summary.reconciled++;
-            log(`${mode}  ${row.userId}: ${scheduleId} does not end on Pro — updating its phases and completing the local write`);
-            if (!opts.dryRun) {
-              await stripe.updateSchedulePhases(scheduleId, recon.phases);
-              await recordThisRow();
-            }
-            break;
+          break;
         }
-        break;
       }
-      case 'schedule': {
-        const changeDate = new Date(live.currentPeriodEnd * 1000);
-        log(`${mode}  ${row.userId}: schedule ${row.stripeSubscriptionId} → Pro (${priceIds.pro}) at ${changeDate.toISOString()}; users.subscriptionTier → pro now`);
-        summary.scheduled++;
-        if (opts.dryRun) break;
-        const schedule = await stripe.createScheduleFromSubscription(live.id);
-        await stripe.updateSchedulePhases(schedule.id, founderToProPhases(live, schedule, priceIds.pro));
-        await store.recordFounderToPro({
-          userId: row.userId,
-          stripeSubscriptionId: row.stripeSubscriptionId,
-          stripeScheduleId: schedule.id,
-          scheduledPriceId: priceIds.pro,
-          scheduledChangeDate: changeDate,
-        });
-        break;
-      }
+    } catch (err) {
+      summary.failed++;
+      const message = err instanceof Error ? err.message : String(err);
+      log(`${mode}  ${row.userId}: ${row.stripeSubscriptionId} FAILED — ${message} — skipped, continuing with the rest of the migration`);
     }
   }
 
@@ -351,7 +429,7 @@ export async function runFounderMigration(deps: MigrationDeps, opts: { dryRun: b
   log(
     `${mode}Summary: founder rows ${summary.founderRows} (scheduled ${summary.scheduled}, already complete ${summary.alreadyComplete}, ` +
       `db-completed on retry ${summary.dbCompleted}, schedule reconciled ${summary.reconciled}, ` +
-      `not on founder price ${summary.skippedNotOnFounderPrice}); legacy business rows ${summary.legacyBusinessRows} ` +
+      `failed ${summary.failed}, not on founder price ${summary.skippedNotOnFounderPrice}); legacy business rows ${summary.legacyBusinessRows} ` +
       `(grandfathered ${summary.grandfathered}, already ${summary.alreadyGrandfathered})`,
   );
   return summary;
@@ -431,10 +509,27 @@ export function createStripeAdapter(stripe: import('stripe').Stripe): MigrationS
     },
     async retrieveSchedulePhases(scheduleId) {
       const schedule = await stripe.subscriptionSchedules.retrieve(scheduleId);
+      const idOf = (v: string | { id: string } | null | undefined): string | undefined =>
+        v == null ? undefined : typeof v === 'string' ? v : v.id;
       return schedule.phases.map((phase) => ({
-        items: phase.items.map((item) => ({ price: typeof item.price === 'string' ? item.price : item.price.id })),
+        items: phase.items.map((item) => ({
+          price: typeof item.price === 'string' ? item.price : item.price.id,
+          quantity: item.quantity,
+        })),
         start_date: phase.start_date,
         end_date: phase.end_date ?? undefined,
+        // P2 (independent review): the old mapping kept only price/start/end,
+        // so fix-schedule's write-back silently dropped every phase's
+        // discounts. Carry the coupon/discount/promotion-code ids through —
+        // Stripe's update endpoint round-trips on ids, not the expanded
+        // objects `retrieve` may return.
+        discounts: phase.discounts.length > 0
+          ? phase.discounts.map((d) => ({
+              coupon: idOf(d.coupon),
+              discount: idOf(d.discount),
+              promotion_code: idOf(d.promotion_code),
+            }))
+          : undefined,
       }));
     },
   };
@@ -466,6 +561,9 @@ async function main(): Promise<void> {
   );
   if (summary.founderRows > 1) {
     console.warn(`Expected a single Founder subscriber (A-9) but found ${summary.founderRows}; review the rows above.`);
+  }
+  if (summary.failed > 0) {
+    console.warn(`${summary.failed} row(s) failed and were skipped — review the FAILED lines above and re-run once fixed.`);
   }
 }
 
