@@ -448,6 +448,63 @@ describe('executeHttpRequest target guard', () => {
     );
   });
 
+  it('given a POST rewritten to GET by a 303, should drop body headers (any case) and keep the rest', async () => {
+    mockFetch.mockResolvedValueOnce(withLocation(303, '/result'));
+    mockFetch.mockResolvedValueOnce(createMockResponse(200, { done: true }));
+
+    await executeHttpRequest(
+      {
+        url: 'https://api.example.com/jobs',
+        method: 'POST',
+        body: '{"a":1}',
+        headers: {
+          Authorization: 'Bearer s3cret',
+          'Content-Length': '7',
+          'content-type': 'application/json',
+          'Content-Encoding': 'identity',
+          'Content-Language': 'en',
+          'Content-Location': '/jobs/1',
+          Accept: 'application/json',
+        },
+      },
+      { maxRetries: 0 },
+      mockFetch as unknown as PinnedFetch,
+      allowAll
+    );
+
+    const actual = { first: mockFetch.mock.calls[0][1].headers, second: mockFetch.mock.calls[1][1].headers };
+    const expected = {
+      first: {
+        Authorization: 'Bearer s3cret',
+        'Content-Length': '7',
+        'content-type': 'application/json',
+        'Content-Encoding': 'identity',
+        'Content-Language': 'en',
+        'Content-Location': '/jobs/1',
+        Accept: 'application/json',
+      },
+      second: { Authorization: 'Bearer s3cret', Accept: 'application/json' },
+    };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a 307 that preserves the method and body, should keep the body headers', async () => {
+    mockFetch.mockResolvedValueOnce(withLocation(307, '/jobs-v2'));
+    mockFetch.mockResolvedValueOnce(createMockResponse(200, { done: true }));
+    const headers = { Authorization: 'Bearer s3cret', 'Content-Length': '7', 'Content-Type': 'application/json' };
+
+    await executeHttpRequest(
+      { url: 'https://api.example.com/jobs', method: 'POST', body: '{"a":1}', headers },
+      { maxRetries: 0 },
+      mockFetch as unknown as PinnedFetch,
+      allowAll
+    );
+
+    const actual = mockFetch.mock.calls[1][1];
+    const expected = expect.objectContaining({ method: 'POST', body: '{"a":1}', headers });
+    expect(actual).toEqual(expected);
+  });
+
   it('given an endless same-origin redirect chain, should stop after the hop limit', async () => {
     mockFetch.mockResolvedValue(withLocation(302, '/loop'));
 
