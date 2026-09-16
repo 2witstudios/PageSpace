@@ -58,6 +58,8 @@ describe('web-fetch-ssrf — pure decision functions', () => {
       ['hex-encoded loopback', '0x7f000001'],
       ['octal-encoded loopback', '0177.0.0.1'],
       ['decimal-encoded metadata', '2852039166'],
+      ['deprecated 6to4 relay anycast 192.88.99.0/24', '192.88.99.1'],
+      ['6a44 relay (not globally reachable)', '192.88.99.2'],
     ])('blocks %s', (_label, ip) => {
       expect(isPublicIp(ip)).toBe(false);
     });
@@ -98,6 +100,7 @@ describe('web-fetch-ssrf — pure decision functions', () => {
       ['local-use NAT64 64:ff9b:1::/48', '64:ff9b:1::a00:1'],
       ['discard-only 100::/64', '100::1'],
       ['6to4 embedding a private IPv4', '2002:a00:1::1'],
+      ['6to4 embedding the deprecated relay 192.88.99.1', '2002:c058:6301::1'],
       ['Teredo 2001::/32', '2001:0:4136:e378:8000:63bf:3fff:fdd2'],
       ['IETF protocol assignments 2001::/23', '2001:10::1'],
       ['documentation 2001:db8::/32', '2001:db8::1'],
@@ -108,6 +111,9 @@ describe('web-fetch-ssrf — pure decision functions', () => {
       ['unallocated 2e00::/7', '2e00::1'],
       ['unallocated 3000::/4', '3000::1'],
       ['unallocated beside 2610::/23', '2612::1'],
+      ['unallocated inside 2001::/16 (2001:1000::/23)', '2001:1000::1'],
+      ['unallocated inside 2001::/16 (2001:4e00::/23)', '2001:4e00::1'],
+      ['unallocated inside 2001::/16 (2001:c000::/18)', '2001:c000::1'],
       ['unique-local, uppercase', 'FD00::1'],
       ['malformed IPv6 (fail closed)', 'not:an:ip'],
       ['too many groups (fail closed)', '1:2:3:4:5:6:7:8:9'],
@@ -131,6 +137,9 @@ describe('web-fetch-ssrf — pure decision functions', () => {
       ['IANA 2800::/12', '2800:3f0:4001::1'],
       ['IANA 2a00::/12', '2a00:1450:4001::1'],
       ['IANA 2c00::/12', '2c0f:fb50:4002::1'],
+      ['IANA 2410::/12 (APNIC)', '2410::1'],
+      ['IANA 2a10::/12 (RIPE NCC)', '2a10:50c0::1'],
+      ['IANA 2001:8000::/19 (APNIC)', '2001:8000::1'],
     ])('allows %s', (_label, ip) => {
       const actual = isPublicIp(ip);
       const expected = true;
@@ -142,6 +151,7 @@ describe('web-fetch-ssrf — pure decision functions', () => {
     it.each([
       ['public IPv4', '93.184.216.34'],
       ['public IPv4 (8.8.8.8)', '8.8.8.8'],
+      ['AS112 192.31.196.0/24 (globally reachable)', '192.31.196.1'],
       ['public IPv6', '2606:4700:4700::1111'],
       ['IPv4-mapped public', '::ffff:93.184.216.34'],
     ])('allows %s', (_label, ip) => {

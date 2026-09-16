@@ -47,6 +47,7 @@ describe('validateIntegrationTargetUrl', () => {
       'https://198.18.0.1/hook', // benchmarking
       'https://192.0.2.1/hook', // TEST-NET-1
       'https://255.255.255.255/hook',
+      'https://192.88.99.1/hook', // deprecated 6to4 relay anycast
       'https://240.0.0.1/hook',
       'https://[::1]/hook',
       'https://[::]/hook',
