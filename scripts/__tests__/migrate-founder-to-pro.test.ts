@@ -14,7 +14,13 @@ import {
   runFounderMigration,
   parseMode,
   createStripeReader,
+  migrationPriceIds,
+  selectFounderPriceSubscriptions,
+  selectFounderTierUsers,
+  founderTierToWrite,
+  selectLegacyBusinessSubscribers,
   type MigrationStore,
+  type SubscribedUserCandidate,
   type StripeSubscriptionReader,
 } from '../migrate-founder-to-pro';
 
@@ -31,6 +37,7 @@ interface SubRow {
   stripeSubscriptionId: string;
   stripePriceId: string;
   status: string;
+  updatedAt?: Date;
 }
 
 /** Jono on Founder (tier stored as 'founder'), one $100 personal Business user, one already-flagged, one Pro user. */
@@ -50,29 +57,27 @@ function seed() {
   return { users, subs };
 }
 
+/** Raw user ⟕ subscription rows, as the drizzle store reads them before selection. */
+function candidates(db: ReturnType<typeof seed>): SubscribedUserCandidate[] {
+  return db.users.flatMap((u): SubscribedUserCandidate[] => {
+    const subs = db.subs.filter((s) => s.userId === u.id);
+    const base = { userId: u.id, subscriptionTier: u.subscriptionTier, subscriptionGrandfathered: u.subscriptionGrandfathered };
+    if (subs.length === 0) return [{ ...base, stripeSubscriptionId: null, stripePriceId: null, status: null, updatedAt: null }];
+    return subs.map((s) => ({ ...base, stripeSubscriptionId: s.stripeSubscriptionId, stripePriceId: s.stripePriceId, status: s.status, updatedAt: s.updatedAt ?? null }));
+  });
+}
+
 function fakeStore(db: ReturnType<typeof seed>) {
   const writes = { setTier: [] as { userId: string; tier: string }[], markGrandfathered: [] as string[] };
   const store: MigrationStore = {
-    listFounderPriceSubscriptions: async () =>
-      db.subs
-        .filter((s) => s.stripePriceId === PRICE.founder)
-        .map((s) => ({ userId: s.userId, stripeSubscriptionId: s.stripeSubscriptionId, status: s.status })),
-    listFounderTierUsers: async () =>
-      db.users
-        .filter((u) => u.subscriptionTier === 'founder')
-        .map((u) => ({ userId: u.id, stripePriceId: db.subs.find((s) => s.userId === u.id)?.stripePriceId ?? null })),
+    listFounderPriceSubscriptions: async () => selectFounderPriceSubscriptions(candidates(db), PRICE.founder),
+    listFounderTierUsers: async () => selectFounderTierUsers(candidates(db)),
     normalizeFounderTier: async (userId, tier) => {
       writes.setTier.push({ userId, tier });
       const user = db.users.find((u) => u.id === userId);
       if (user && user.subscriptionTier === 'founder') user.subscriptionTier = tier;
     },
-    listLegacyBusinessSubscribers: async () =>
-      db.subs
-        .filter((s) => s.stripePriceId === PRICE.legacyBusiness)
-        .map((s) => ({
-          userId: s.userId,
-          subscriptionGrandfathered: db.users.find((u) => u.id === s.userId)?.subscriptionGrandfathered ?? false,
-        })),
+    listLegacyBusinessSubscribers: async () => selectLegacyBusinessSubscribers(candidates(db), PRICE.legacyBusiness),
     markGrandfathered: async (userId) => {
       writes.markGrandfathered.push(userId);
       const user = db.users.find((u) => u.id === userId);
@@ -112,8 +117,8 @@ const liveFounderSub = {
 };
 
 // Mirrors apps/web/src/lib/stripe/price-config.ts: the grandfathered Founder price resolves to Pro.
-const deriveTier = (priceId: string) =>
-  ({ [PRICE.founder]: 'pro', [PRICE.pro]: 'pro', [PRICE.legacyBusiness]: 'business' } as const)[priceId] ?? 'free';
+const TIER_BY_PRICE: Record<string, 'pro' | 'business'> = { [PRICE.founder]: 'pro', [PRICE.pro]: 'pro', [PRICE.legacyBusiness]: 'business' };
+const deriveTier = (priceId: string): 'free' | 'pro' | 'business' => TIER_BY_PRICE[priceId] ?? 'free';
 
 function harness(db = seed(), subscription: unknown = liveFounderSub) {
   const { store, writes } = fakeStore(db);
@@ -217,6 +222,18 @@ describe('--apply', () => {
     expect(h.lines.join('\n')).toContain('user_jono');
   });
 
+  it('leaves a founder-tier user whose Founder subscription is canceled at Free-equivalent, with no write', async () => {
+    const db = seed();
+    db.subs = db.subs.map((s) => (s.userId === 'user_jono' ? { ...s, status: 'canceled' } : s));
+    const h = harness(db);
+    const summary = await runFounderMigration(h.deps, { apply: true });
+
+    expect(h.writes.setTier).toEqual([]);
+    expect(summary.normalized).toBe(0);
+    expect(summary.founderTierUnresolved).toBe(1);
+    expect(db.users.find((u) => u.id === 'user_jono')?.subscriptionTier).toBe('founder');
+  });
+
   it('is a no-op on a second run', async () => {
     const db = seed();
     await runFounderMigration(harness(db).deps, { apply: true });
@@ -229,5 +246,120 @@ describe('--apply', () => {
     expect(summary.grandfathered).toBe(0);
     expect(summary.alreadyGrandfathered).toBe(2);
     expect(second.calls).toEqual(['subscriptions.retrieve']);
+  });
+});
+
+describe('migrationPriceIds', () => {
+  it('grandfathers on the legacy $100 price id, not whatever Business sells today', () => {
+    const config = {
+      priceIds: { pro: PRICE.pro, business: 'price_business_org_50' },
+      grandfatheredPriceIds: { founder: PRICE.founder, legacyBusiness: PRICE.legacyBusiness },
+    };
+    expect(migrationPriceIds(config)).toEqual({ founder: PRICE.founder, legacyBusiness: PRICE.legacyBusiness });
+  });
+
+  it('reads a legacyBusiness id from the real Stripe config, identical in web and admin', async () => {
+    const web = await import('../../apps/web/src/lib/stripe-config');
+    const admin = await import('../../apps/admin/src/lib/stripe-config');
+    expect(web.stripeConfig.grandfatheredPriceIds.legacyBusiness).toMatch(/^price_/);
+    expect(migrationPriceIds(web.stripeConfig).legacyBusiness).toBe(web.stripeConfig.grandfatheredPriceIds.legacyBusiness);
+    expect(admin.stripeConfig.grandfatheredPriceIds).toEqual(web.stripeConfig.grandfatheredPriceIds);
+  });
+});
+
+function candidate(overrides: Partial<SubscribedUserCandidate>): SubscribedUserCandidate {
+  return {
+    userId: 'u',
+    subscriptionTier: 'business',
+    subscriptionGrandfathered: false,
+    stripeSubscriptionId: 'sub',
+    stripePriceId: PRICE.legacyBusiness,
+    status: 'active',
+    updatedAt: new Date('2026-01-01T00:00:00Z'),
+    ...overrides,
+  };
+}
+
+describe('selectLegacyBusinessSubscribers', () => {
+  it('keeps active, trialing and past_due subscribers on the legacy price, once per user', () => {
+    const rows = [
+      candidate({ userId: 'a', status: 'active' }),
+      candidate({ userId: 'b', status: 'trialing' }),
+      candidate({ userId: 'c', status: 'past_due', subscriptionGrandfathered: true }),
+      candidate({ userId: 'a', stripeSubscriptionId: 'sub_a2', status: 'active' }),
+    ];
+    expect(selectLegacyBusinessSubscribers(rows, PRICE.legacyBusiness)).toEqual([
+      { userId: 'a', subscriptionGrandfathered: false },
+      { userId: 'b', subscriptionGrandfathered: false },
+      { userId: 'c', subscriptionGrandfathered: true },
+    ]);
+  });
+
+  it('never grandfathers a canceled, unpaid or incomplete subscriber, or one on another price', () => {
+    const rows = [
+      candidate({ userId: 'canceled', status: 'canceled' }),
+      candidate({ userId: 'unpaid', status: 'unpaid' }),
+      candidate({ userId: 'incomplete', status: 'incomplete_expired' }),
+      candidate({ userId: 'org', stripePriceId: 'price_business_org_50' }),
+      candidate({ userId: 'nosub', stripeSubscriptionId: null, stripePriceId: null, status: null, updatedAt: null }),
+    ];
+    expect(selectLegacyBusinessSubscribers(rows, PRICE.legacyBusiness)).toEqual([]);
+  });
+});
+
+describe('selectFounderPriceSubscriptions', () => {
+  it('reports every subscription on the Founder price, whatever its status', () => {
+    const rows = [
+      candidate({ userId: 'jono', stripeSubscriptionId: 'sub_j', stripePriceId: PRICE.founder, status: 'canceled' }),
+      candidate({ userId: 'biz' }),
+    ];
+    expect(selectFounderPriceSubscriptions(rows, PRICE.founder)).toEqual([
+      { userId: 'jono', stripeSubscriptionId: 'sub_j', status: 'canceled' },
+    ]);
+  });
+});
+
+describe('selectFounderTierUsers', () => {
+  const founder = (o: Partial<SubscribedUserCandidate>) => candidate({ userId: 'jono', subscriptionTier: 'founder', stripePriceId: PRICE.founder, ...o });
+
+  it('groups every subscription row of each founder-tier user, whatever its status, in a deterministic order', () => {
+    const older = founder({ stripeSubscriptionId: 'sub_old', status: 'canceled', updatedAt: new Date('2026-01-01T00:00:00Z') });
+    const newer = founder({ stripeSubscriptionId: 'sub_new', status: 'active', updatedAt: new Date('2026-06-01T00:00:00Z') });
+    const expected = [{ userId: 'jono', subscriptions: [{ status: 'active', stripePriceId: PRICE.founder }, { status: 'canceled', stripePriceId: PRICE.founder }] }];
+    expect(selectFounderTierUsers([older, newer])).toEqual(expected);
+    expect(selectFounderTierUsers([newer, older])).toEqual(expected);
+  });
+
+  it('keeps a founder-tier user with no subscription (empty rows) and ignores other tiers', () => {
+    const rows = [
+      founder({ stripeSubscriptionId: null, stripePriceId: null, status: null, updatedAt: null }),
+      candidate({ userId: 'p', subscriptionTier: 'pro' }),
+    ];
+    expect(selectFounderTierUsers(rows)).toEqual([{ userId: 'jono', subscriptions: [] }]);
+  });
+});
+
+describe('founderTierToWrite', () => {
+  it("writes 'pro' for an active or trialing Founder subscription", () => {
+    expect(founderTierToWrite([{ status: 'active', stripePriceId: PRICE.founder }], deriveTier)).toBe('pro');
+    expect(founderTierToWrite([{ status: 'trialing', stripePriceId: PRICE.founder }], deriveTier)).toBe('pro');
+  });
+
+  it('never promotes a canceled, expired or past_due subscriber (webhook parity: they already read as Free)', () => {
+    for (const status of ['canceled', 'incomplete_expired', 'past_due', 'unpaid']) {
+      expect(founderTierToWrite([{ status, stripePriceId: PRICE.founder }], deriveTier)).toBeNull();
+      expect(founderTierToWrite([{ status, stripePriceId: PRICE.legacyBusiness }], deriveTier)).toBeNull();
+    }
+  });
+
+  it('leaves an unmapped price, or no subscription, for a human', () => {
+    expect(founderTierToWrite([{ status: 'active', stripePriceId: 'price_unknown' }], deriveTier)).toBeNull();
+    expect(founderTierToWrite([], deriveTier)).toBeNull();
+    // A mapped paid row beside an unmapped entitled row is only a lower bound, not the truth.
+    const mixed = [
+      { status: 'active', stripePriceId: PRICE.founder },
+      { status: 'active', stripePriceId: 'price_unknown' },
+    ];
+    expect(founderTierToWrite(mixed, deriveTier)).toBeNull();
   });
 });
