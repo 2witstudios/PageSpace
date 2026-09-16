@@ -4,8 +4,8 @@
  */
 import { describe, it, expect } from 'vitest';
 import { decideApproval } from '../decide-approval';
-import type { AccountApprovalPolicy, AlwaysAllowedByClass, UsageCounters } from '../approval';
-import type { CanonicalOrigin } from '../canonical-request';
+import type { AccountApprovalPolicy, AlwaysAllowedByClass, ApprovalScope, UsageCounters } from '../approval';
+import type { CanonicalOrigin, ResourceRestrictions } from '../canonical-request';
 import type { OperationClass, OperationRef, RequestDigest, UserId } from '../grant';
 
 const NOW = 1_800_000_000_000;
@@ -27,9 +27,22 @@ function policy(overrides: Partial<AccountApprovalPolicy> = {}): AccountApproval
   };
 }
 
-function decide(operation: OperationRef, p: AccountApprovalPolicy | null, extra: { resources?: readonly (readonly [string, string])[]; origin?: CanonicalOrigin; now?: number; usage?: UsageCounters } = {}) {
+function decide(
+  operation: OperationRef,
+  p: AccountApprovalPolicy | null,
+  extra: {
+    resources?: readonly (readonly [string, string])[];
+    origin?: CanonicalOrigin;
+    now?: number;
+    usage?: UsageCounters;
+    restrictions?: ResourceRestrictions;
+    delegationScope?: ApprovalScope | null;
+  } = {},
+) {
   return decideApproval({
     operation,
+    restrictions: extra.restrictions ?? {},
+    delegationScope: extra.delegationScope ?? null,
     policy: p,
     requestDigest: DIGEST,
     origin: extra.origin ?? ORIGIN,
@@ -146,5 +159,78 @@ describe('decideApproval', () => {
     const classes: readonly OperationClass[] = ['read', 'write', 'irreversible', 'privilege', 'unknown'];
     const actual = classes.map((c) => table[c]);
     expect(actual).toEqual([true, true, false, false, true]);
+  });
+});
+
+describe('decideApproval — account resource restrictions (ADR 0004 §4.3a, §8.39; G1c R5)', () => {
+  const restrictions: ResourceRestrictions = { 'slack.channel': ['C1'] };
+  const POST: OperationRef = { class: 'write', name: 'slack.chat.postMessage' };
+
+  it('given a restriction key the request does not bind, should refuse out_of_scope whatever the policy — including none', () => {
+    const actual = [decide(POST, policy({ scope: { origins: [ORIGIN], operations: [POST], resources: [] } }), { restrictions }), decide(POST, null, { restrictions })];
+    expect(actual).toEqual([
+      { kind: 'refuse', reason: 'out_of_scope' },
+      { kind: 'refuse', reason: 'out_of_scope' },
+    ]);
+  });
+
+  it('given a bound value outside the restriction list, or one value in and one out, should refuse out_of_scope', () => {
+    const actual = [
+      decide(POST, null, { restrictions, resources: [['slack.channel', 'C2']] }),
+      decide(POST, null, { restrictions, resources: [['slack.channel', 'C1'], ['slack.channel', 'C2']] }),
+    ];
+    expect(actual).toEqual([
+      { kind: 'refuse', reason: 'out_of_scope' },
+      { kind: 'refuse', reason: 'out_of_scope' },
+    ]);
+  });
+
+  it('given every restriction key bound with allowed values, should fall through to the approval decision', () => {
+    const actual = [decide(POST, null, { restrictions, resources: [['slack.channel', 'C1']] }), decide(READ, policy(), { restrictions: {}, resources: [] })];
+    expect(actual).toEqual([{ kind: 'concrete', stepUp: false }, { kind: 'policy' }]);
+  });
+
+  it('given a restriction key with an empty allowlist, should refuse any request — binding it or not', () => {
+    const actual = [decide(POST, null, { restrictions: { 'slack.channel': [] }, resources: [['slack.channel', 'C1']] }), decide(POST, null, { restrictions: { 'slack.channel': [] } })];
+    expect(actual).toEqual([
+      { kind: 'refuse', reason: 'out_of_scope' },
+      { kind: 'refuse', reason: 'out_of_scope' },
+    ]);
+  });
+
+  it('given a policy scope resource key the request does not bind, should refuse out_of_scope (never read as unrestricted)', () => {
+    const scoped = policy({ scope: { origins: [ORIGIN], operations: [WRITE], resources: [['repo', 'A']] } });
+    const actual = decide(WRITE, scoped, { resources: [] });
+    expect(actual).toEqual({ kind: 'refuse', reason: 'out_of_scope' });
+  });
+});
+
+describe('decideApproval — the delegation scope of an unattended run (ADR 0004 §4.3a, §8.40; G1c R12)', () => {
+  const readOnlyRepoA: ApprovalScope = { origins: [ORIGIN], operations: [{ class: 'read', name: '*' }], resources: [['repo', 'A']] };
+  const wide = policy({ scope: { origins: [ORIGIN, OTHER_ORIGIN], operations: [{ class: 'read', name: '*' }, { class: 'write', name: '*' }], resources: [] } });
+
+  it('given a delegation scoped to read-only repo A, should refuse a write, repo B, or another origin even under a policy that covers them', () => {
+    const actual = [
+      decide(WRITE, wide, { delegationScope: readOnlyRepoA, resources: [['repo', 'A']] }),
+      decide(READ, wide, { delegationScope: readOnlyRepoA, resources: [['repo', 'B']] }),
+      decide(READ, wide, { delegationScope: readOnlyRepoA, resources: [['repo', 'A']], origin: OTHER_ORIGIN }),
+    ];
+    expect(actual).toEqual([
+      { kind: 'refuse', reason: 'out_of_scope' },
+      { kind: 'refuse', reason: 'out_of_scope' },
+      { kind: 'refuse', reason: 'out_of_scope' },
+    ]);
+  });
+
+  it('given a request inside the delegation scope, should decide by the policy exactly as a live session would', () => {
+    const actual = [decide(READ, wide, { delegationScope: readOnlyRepoA, resources: [['repo', 'A']] }), decide(READ, null, { delegationScope: readOnlyRepoA, resources: [['repo', 'A']] })];
+    expect(actual).toEqual([{ kind: 'policy' }, { kind: 'concrete', stepUp: false }]);
+  });
+
+  it('given a delegation that names an unknown operation only by wildcard, should refuse it — a wildcard never reaches unknown', () => {
+    const generic: OperationRef = { class: 'unknown', name: 'generic_request' };
+    const wildcard: ApprovalScope = { origins: [ORIGIN], operations: [{ class: 'unknown', name: '*' }], resources: [] };
+    const actual = decide(generic, null, { delegationScope: wildcard });
+    expect(actual).toEqual({ kind: 'refuse', reason: 'out_of_scope' });
   });
 });
