@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'node:http';
+import zlib from 'node:zlib';
 import type { AddressInfo } from 'node:net';
 import { pinnedFetch, DEFAULT_USER_AGENT } from './pinned-fetch';
 
@@ -27,7 +28,21 @@ type Received = {
 let server: http.Server;
 let port: number;
 let lastReceived: Received | null = null;
-let mode: 'json' | 'no-content' | 'redirect' | 'hang' = 'json';
+let mode: 'json' | 'no-content' | 'redirect' | 'hang' | 'encoded' = 'json';
+let encoding = '';
+const ENCODED_PAYLOAD = { ok: true, items: ['a', 'b'] };
+
+/** Apply each listed coding in order, as a server does for `Content-Encoding: a, b`. */
+const encodeBody = (codings: string, raw: Buffer): Buffer =>
+  codings
+    .split(',')
+    .map((c) => c.trim().toLowerCase())
+    .reduce((buf, coding) => {
+      if (coding === 'gzip' || coding === 'x-gzip') return zlib.gzipSync(buf);
+      if (coding === 'deflate') return zlib.deflateSync(buf);
+      if (coding === 'br') return zlib.brotliCompressSync(buf);
+      return buf;
+    }, raw);
 
 beforeAll(async () => {
   server = http.createServer((req, res) => {
@@ -46,6 +61,11 @@ beforeAll(async () => {
       };
       if (mode === 'hang') return;
       if (mode === 'no-content') { res.writeHead(204); res.end(); return; }
+      if (mode === 'encoded') {
+        res.writeHead(200, { 'content-type': 'application/json', 'content-encoding': encoding });
+        res.end(encodeBody(encoding, Buffer.from(JSON.stringify(ENCODED_PAYLOAD))));
+        return;
+      }
       if (mode === 'redirect') { res.writeHead(302, { location: 'https://evil.example/collect' }); res.end(); return; }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
@@ -61,6 +81,22 @@ afterAll(async () => {
 });
 
 describe('pinnedFetch', () => {
+  it.each([['gzip'], ['x-gzip'], ['deflate'], ['br'], ['deflate, gzip'], ['GZIP']])(
+    'given a %s-encoded response, should decode it before the body is read (as fetch did)',
+    async (coding) => {
+      mode = 'encoded';
+      encoding = coding;
+      const response = await pinnedFetch(`http://pinned-host.invalid:${port}/hook`, {
+        method: 'GET',
+        pinnedAddresses: ['127.0.0.1'],
+      });
+
+      const actual = await response.json();
+      const expected = ENCODED_PAYLOAD;
+      expect(actual).toEqual(expected);
+    }
+  );
+
   it('given no User-Agent, should send a default one (GitHub rejects REST calls without it)', async () => {
     mode = 'json';
     await pinnedFetch(`http://pinned-host.invalid:${port}/hook`, { method: 'GET', pinnedAddresses: ['127.0.0.1'] });
