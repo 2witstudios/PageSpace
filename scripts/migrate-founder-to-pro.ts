@@ -52,6 +52,22 @@
  * so only the local write is missing. A user already flagged grandfathered
  * is skipped.
  *
+ * ROUND 4 (independent review + point-guard, ground-truthed against Stripe
+ * TEST MODE — see scripts/__fixtures__/stripe-ground-truth/README.md):
+ *   - The exact-match comparison in (B) now ignores `end_date` on the FINAL
+ *     phase only: Stripe fills it in itself (`currentPeriodEnd` + one
+ *     billing interval) on a schedule with `end_behavior: 'release'`, even
+ *     though this script never sets it — comparing it byte-for-byte refused
+ *     forever, even against a schedule the script itself just created.
+ *   - The recognised start state (A) now also reads `pending_update`,
+ *     `pause_collection`, `trial_end`, item-level discounts,
+ *     `default_tax_rates`, `automatic_tax`, and `collection_method`, and
+ *     refuses on a pending update, a paused subscription, or a future trial
+ *     end. Tax settings and item-level discounts are carried through the
+ *     builder unchanged rather than silently dropped, and (B)'s exact-match
+ *     check now also requires the schedule's inherited automatic_tax and
+ *     collection_method to still equal the subscription's.
+ *
  * Usage:
  *   bun scripts/migrate-founder-to-pro.ts --dry-run    # plan only, no writes
  *   bun scripts/migrate-founder-to-pro.ts              # execute
@@ -123,11 +139,22 @@ export interface SchedulePhaseItem {
    * number, never "undefined means probably 1".
    */
   quantity: number;
+  /**
+   * Item-level discounts (P2, round 4) — distinct from the phase-level
+   * `discounts` below. Always an array, never omitted.
+   */
+  discounts: SchedulePhaseDiscount[];
 }
 
 export interface SchedulePhase {
   items: SchedulePhaseItem[];
   start_date: number;
+  /**
+   * P1 (round 4, ground-truthed): on the FINAL phase of a schedule with
+   * `end_behavior: 'release'`, Stripe fills this in itself (currentPeriodEnd
+   * + one billing interval) even though this script never sets it — see
+   * `phasesEqual`, which ignores it there and only there.
+   */
   end_date?: number;
   /**
    * Always populated explicitly by the adapter as an array (possibly
@@ -135,6 +162,14 @@ export interface SchedulePhase {
    * discounts key" and "empty discounts array" as the same thing.
    */
   discounts: SchedulePhaseDiscount[];
+  /**
+   * Tax rate ids (P2, round 4) — NOT inherited automatically when this
+   * script adds a phase (ground-truthed: `default_settings` is inherited
+   * from the subscription when a schedule is created `from_subscription`,
+   * but a phase's own `default_tax_rates` is not), so the builder must set
+   * it explicitly on every phase it creates.
+   */
+  defaultTaxRateIds: string[];
 }
 
 /** The subset of a Stripe subscription the plan needs. */
@@ -154,6 +189,18 @@ export interface StripeSubscriptionView {
   cancelAt: number | null;
   /** The subscription's current discounts — carried unchanged into the created Founder phase. */
   discounts: SchedulePhaseDiscount[];
+  /** Non-null when a change to the subscription is scheduled but not yet applied (P2, round 4) — refuse. */
+  pendingUpdate: boolean;
+  /** Non-null when billing is paused (P2, round 4) — refuse. */
+  pauseCollection: boolean;
+  /** Unix seconds the current trial ends, or null. A future value is refused (P2, round 4). */
+  trialEnd: number | null;
+  /** `'charge_automatically'` | `'send_invoice'` — carried unchanged into the created phases. */
+  collectionMethod: string;
+  /** Whether Stripe Tax is enabled on the subscription — carried unchanged into the created phases. */
+  automaticTaxEnabled: boolean;
+  /** The subscription's `default_tax_rates`, as ids — carried unchanged into the created phases. */
+  defaultTaxRateIds: string[];
 }
 
 export interface StripeScheduleView {
@@ -167,6 +214,9 @@ export interface ExistingSchedule {
   phases: SchedulePhase[];
   /** Stripe's `end_behavior` — must be `'release'` to be the recognised done state. */
   endBehavior: string;
+  /** From the schedule's `default_settings`, inherited at creation — must still match the subscription's. */
+  automaticTaxEnabled: boolean;
+  collectionMethod: string;
 }
 
 /** What the script asks of Stripe. */
@@ -208,38 +258,66 @@ export function expectedProSchedulePhases(
 ): SchedulePhase[] {
   return [
     {
-      items: [{ price: priceIds.founder, quantity: 1 }],
+      items: [{ price: priceIds.founder, quantity: 1, discounts: live.items[0]?.discounts ?? [] }],
       start_date: firstPhaseStart,
       end_date: live.currentPeriodEnd,
       discounts: live.discounts,
+      defaultTaxRateIds: live.defaultTaxRateIds,
     },
     {
-      items: [{ price: priceIds.pro, quantity: 1 }],
+      items: [{ price: priceIds.pro, quantity: 1, discounts: [] }],
       start_date: live.currentPeriodEnd,
       discounts: [],
+      defaultTaxRateIds: live.defaultTaxRateIds,
     },
   ];
 }
 
-function phasesEqual(a: SchedulePhase[], b: SchedulePhase[]): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+/**
+ * The builder-defined fields of a phase — everything this script decides,
+ * never what Stripe fills in on its own.
+ */
+function phaseCore(phase: SchedulePhase): unknown {
+  return { items: phase.items, start_date: phase.start_date, discounts: phase.discounts, defaultTaxRateIds: phase.defaultTaxRateIds };
+}
+
+/**
+ * P1 (round 4, ground-truthed): a byte-for-byte comparison including
+ * `end_date` refuses FOREVER on the final phase of a `release` schedule,
+ * because Stripe computes that phase's `end_date` itself (currentPeriodEnd +
+ * one billing interval) and this script never sets one. Every OTHER field —
+ * on every phase, including the final one — is builder-defined and compared
+ * exactly; only the final phase's `end_date` is excluded.
+ */
+function phasesEqual(actual: SchedulePhase[], expected: SchedulePhase[]): boolean {
+  if (actual.length !== expected.length) return false;
+  return actual.every((phase, i) => {
+    const exp = expected[i];
+    if (JSON.stringify(phaseCore(phase)) !== JSON.stringify(phaseCore(exp))) return false;
+    const isFinal = i === expected.length - 1;
+    return isFinal || phase.end_date === exp.end_date;
+  });
 }
 
 /**
  * Whether `live` is the RECOGNISED Founder subscription shape this migration
  * knows how to handle: exactly one item, on the Founder price, quantity 1,
- * active, not cancelling. Anything else — a second item, a different
- * quantity, a different price, a non-active status, a cancellation — is not
- * positively recognised, so the caller refuses rather than guesses. Pure.
+ * active, not cancelling, not pending an update, not paused, and not on a
+ * future trial. Anything else is not positively recognised, so the caller
+ * refuses rather than guesses. Pure given the current time (`now`, unix
+ * seconds) as an explicit parameter — never reads the clock itself.
  */
-function isRecognisedFounderSubscription(live: StripeSubscriptionView, priceIds: MigrationPriceIds): boolean {
+function isRecognisedFounderSubscription(live: StripeSubscriptionView, priceIds: MigrationPriceIds, now: number): boolean {
   return (
     live.items.length === 1 &&
     live.items[0].price === priceIds.founder &&
     live.items[0].quantity === 1 &&
     live.status === 'active' &&
     !live.cancelAtPeriodEnd &&
-    live.cancelAt === null
+    live.cancelAt === null &&
+    !live.pendingUpdate &&
+    !live.pauseCollection &&
+    (live.trialEnd === null || live.trialEnd <= now)
   );
 }
 
@@ -258,11 +336,12 @@ export type FounderAction =
    */
   | { kind: 'refuse'; userId: string; stripeSubscriptionId: string; reason: string };
 
-/** Decide what to do with one Founder row given its live Stripe state. Pure. */
+/** Decide what to do with one Founder row given its live Stripe state. Pure given `now` (unix seconds). */
 export function planFounderAction(
   row: FounderSubscriptionRow,
   live: StripeSubscriptionView,
   priceIds: MigrationPriceIds,
+  now: number,
 ): FounderAction {
   if (live.items.length === 1 && live.items[0].price !== priceIds.founder) {
     return {
@@ -272,15 +351,23 @@ export function planFounderAction(
       currentPriceId: live.items[0].price,
     };
   }
-  if (!isRecognisedFounderSubscription(live, priceIds)) {
+  if (!isRecognisedFounderSubscription(live, priceIds, now)) {
     return {
       kind: 'refuse',
       userId: row.userId,
       stripeSubscriptionId: row.stripeSubscriptionId,
       reason:
-        `subscription is not the recognised single-item, quantity-1, active, non-cancelling ` +
-        `Founder shape this migration handles — refusing rather than guessing. ` +
-        `live: ${JSON.stringify({ status: live.status, items: live.items, cancelAtPeriodEnd: live.cancelAtPeriodEnd, cancelAt: live.cancelAt })}`,
+        `subscription is not the recognised single-item, quantity-1, active, non-cancelling, ` +
+        `non-pending, non-paused, non-trialing Founder shape this migration handles — refusing ` +
+        `rather than guessing. live: ${JSON.stringify({
+          status: live.status,
+          items: live.items,
+          cancelAtPeriodEnd: live.cancelAtPeriodEnd,
+          cancelAt: live.cancelAt,
+          pendingUpdate: live.pendingUpdate,
+          pauseCollection: live.pauseCollection,
+          trialEnd: live.trialEnd,
+        })}`,
     };
   }
   if (live.scheduleId == null) {
@@ -318,14 +405,20 @@ export function planExistingScheduleAction(
 ): ExistingScheduleVerdict {
   const firstPhaseStart = schedule.phases[0]?.start_date;
   const expected = firstPhaseStart === undefined ? null : expectedProSchedulePhases(live, firstPhaseStart, priceIds);
-  const matches = schedule.endBehavior === 'release' && expected !== null && phasesEqual(schedule.phases, expected);
+  const matches =
+    schedule.endBehavior === 'release' &&
+    schedule.automaticTaxEnabled === live.automaticTaxEnabled &&
+    schedule.collectionMethod === live.collectionMethod &&
+    expected !== null &&
+    phasesEqual(schedule.phases, expected);
   if (!matches) {
     return {
       kind: 'refuse',
       reason:
         `schedule ${scheduleId} is not byte-for-byte the expected Founder-until-period-end, ` +
         `then-Pro schedule — refusing to touch it rather than guess a fix. ` +
-        `end_behavior=${schedule.endBehavior}, phases=${JSON.stringify(schedule.phases)}, ` +
+        `end_behavior=${schedule.endBehavior}, automaticTaxEnabled=${schedule.automaticTaxEnabled}, ` +
+        `collectionMethod=${schedule.collectionMethod}, phases=${JSON.stringify(schedule.phases)}, ` +
         `expected=${JSON.stringify(expected)}`,
     };
   }
@@ -386,10 +479,11 @@ export async function runFounderMigration(deps: MigrationDeps, opts: { dryRun: b
   // (a Stripe/DB call itself throwing) stops only that row, not the whole
   // migration — the remaining Founder rows and step 2 (grandfathering) still
   // run.
+  const now = Math.floor(Date.now() / 1000);
   for (const row of founderRows) {
     try {
       const live = await stripe.retrieveSubscription(row.stripeSubscriptionId);
-      const action = planFounderAction(row, live, priceIds);
+      const action = planFounderAction(row, live, priceIds, now);
       switch (action.kind) {
         case 'not-on-founder-price':
           summary.notOnFounderPrice++;
@@ -543,15 +637,27 @@ export function createStripeAdapter(stripe: import('stripe').Stripe): MigrationS
         id: sub.id,
         scheduleId: sub.schedule == null ? null : typeof sub.schedule === 'string' ? sub.schedule : sub.schedule.id,
         status: sub.status,
-        items: sub.items.data.map((it) => ({ price: it.price.id, quantity: it.quantity ?? 1 })),
+        items: sub.items.data.map((it) => ({
+          price: it.price.id,
+          quantity: it.quantity ?? 1,
+          discounts: it.discounts.map((d) => ({ discount: idOf(d) })),
+        })),
         currentPeriodEnd: item.current_period_end,
         cancelAtPeriodEnd: sub.cancel_at_period_end,
         cancelAt: sub.cancel_at ?? null,
-        // A Subscription's `discounts` are full Discount objects (or ids),
-        // not the {coupon,discount,promotion_code} param shape a schedule
-        // phase write expects — the Discount's own id round-trips as the
-        // `discount` field, which Stripe's schedule-update API accepts.
+        // A Subscription's `discounts` are Discount-object id STRINGS (not
+        // {coupon,discount,promotion_code} objects), ground-truthed: a
+        // `duration: 'forever'` coupon shows up here, a `duration: 'once'`
+        // coupon already consumed on the first invoice correctly does not —
+        // this field reflects what still applies going forward, exactly
+        // what should carry into the Founder phase.
         discounts: sub.discounts.map((d) => ({ discount: idOf(d) })),
+        pendingUpdate: sub.pending_update != null,
+        pauseCollection: sub.pause_collection != null,
+        trialEnd: sub.trial_end ?? null,
+        collectionMethod: sub.collection_method,
+        automaticTaxEnabled: sub.automatic_tax.enabled,
+        defaultTaxRateIds: (sub.default_tax_rates ?? []).map((tr) => tr.id),
       };
     },
     async createScheduleFromSubscription(subscriptionId) {
@@ -560,7 +666,18 @@ export function createStripeAdapter(stripe: import('stripe').Stripe): MigrationS
     },
     async updateSchedulePhases(scheduleId, phases, endBehavior) {
       await stripe.subscriptionSchedules.update(scheduleId, {
-        phases,
+        // `default_settings` (automatic_tax, collection_method, ...) is
+        // deliberately NOT sent — ground-truthed: it is inherited from the
+        // subscription when the schedule is created `from_subscription` and
+        // untouched by a `phases`-only update, so omitting it here is what
+        // carries it through unchanged.
+        phases: phases.map((phase) => ({
+          items: phase.items.map((item) => ({ price: item.price, quantity: item.quantity, discounts: item.discounts })),
+          start_date: phase.start_date,
+          end_date: phase.end_date,
+          discounts: phase.discounts,
+          default_tax_rates: phase.defaultTaxRateIds,
+        })),
         end_behavior: endBehavior as import('stripe').Stripe.SubscriptionScheduleUpdateParams.EndBehavior,
       });
     },
@@ -568,10 +685,17 @@ export function createStripeAdapter(stripe: import('stripe').Stripe): MigrationS
       const schedule = await stripe.subscriptionSchedules.retrieve(scheduleId);
       return {
         endBehavior: schedule.end_behavior,
+        automaticTaxEnabled: schedule.default_settings.automatic_tax?.enabled ?? false,
+        collectionMethod: schedule.default_settings.collection_method ?? '',
         phases: schedule.phases.map((phase) => ({
           items: phase.items.map((item) => ({
             price: typeof item.price === 'string' ? item.price : item.price.id,
             quantity: item.quantity ?? 1,
+            discounts: item.discounts.map((d) => ({
+              coupon: idOf(d.coupon),
+              discount: idOf(d.discount),
+              promotion_code: idOf(d.promotion_code),
+            })),
           })),
           start_date: phase.start_date,
           end_date: phase.end_date ?? undefined,
@@ -580,6 +704,7 @@ export function createStripeAdapter(stripe: import('stripe').Stripe): MigrationS
             discount: idOf(d.discount),
             promotion_code: idOf(d.promotion_code),
           })),
+          defaultTaxRateIds: (phase.default_tax_rates ?? []).map((tr) => tr.id),
         })),
       };
     },
