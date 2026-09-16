@@ -1132,6 +1132,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Security
 
+- **Only administrators can add a custom integration provider** — the admin check on the
+  provider-creation endpoint compared the wrong thing, so any signed-in account could add a
+  global custom integration provider, and a browser session that failed the cross-site request
+  check was let through as well. Non-admins and failed cross-site checks are now refused, and
+  nothing is created. Installing a built-in provider was already checked correctly and is
+  unaffected.
 - **The AI's sandbox git tools can no longer be tricked into force-pushing your current branch** —
   the `git_push` tool took its remote and branch names as free text and placed them straight
   after `-u origin` on the command line. A branch value of `--force` (or a remote of `--mirror`)
