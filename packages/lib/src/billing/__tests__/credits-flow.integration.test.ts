@@ -59,7 +59,7 @@ const H = vi.hoisted(() => {
   ]);
   const creditHolds = cols('creditHolds', ['id', 'userId', 'estCents', 'aiUsageLogId', 'createdAt', 'expiresAt']);
   const users = cols('users', ['id', 'stripeCustomerId', 'subscriptionTier']);
-  const subscriptions = cols('subscriptions', ['id', 'userId', 'status', 'gifted']);
+  const subscriptions = cols('subscriptions', ['id', 'userId', 'status', 'gifted', 'stripePriceId']);
   const aiUsageLogs = cols('aiUsageLogs', [
     'id', 'userId', 'cost', 'timestamp', 'success', 'provider', 'source',
     'metadata', 'reconcileStatus', 'reconcileAttempts', 'reconciledAt',
@@ -194,6 +194,7 @@ const H = vi.hoisted(() => {
     let joinKey: TableKey | undefined;
     let joinPred: Pred | undefined;
     let wherePred: Pred | undefined;
+    let orderCol: Col | undefined;
 
     const run = (limit?: number): Row[] => {
       const contexts: { ctx: Ctx; primary: Row }[] = [];
@@ -221,6 +222,10 @@ const H = vi.hoisted(() => {
         const reserved = filtered.reduce((s, c) => s + ((c.primary.estCents as number) ?? 0), 0);
         return [{ reserved, inFlight: filtered.length }];
       }
+      if (orderCol) {
+        const oc = orderCol;
+        filtered.sort((a, b) => String(resolve(oc, a.ctx)).localeCompare(String(resolve(oc, b.ctx))));
+      }
       const limited = limit == null ? filtered : filtered.slice(0, limit);
       return limited.map((c) => project(proj, c.ctx, c.primary));
     };
@@ -229,6 +234,7 @@ const H = vi.hoisted(() => {
       from(tbl: { __table: TableKey }) { baseKey = tbl.__table; return api; },
       leftJoin(tbl: { __table: TableKey }, on: Pred) { joinKey = tbl.__table; joinPred = on; return api; },
       where(p: Pred) { wherePred = p; return api; },
+      orderBy(c: Col) { orderCol = c; return api; },
       limit(n: number) { return Promise.resolve(run(n)); },
       for(_mode: string) { return api; }, // return api so .for('update').limit(n) chains
       // Awaitable terminal: `await select(...).from(...).where(...)` (the gate's hold
@@ -661,6 +667,118 @@ describe('credits flow — missed-grant reconcile (MON-2, WAL-5)', () => {
     expect(result).toEqual({ reconciled: 0, stillMissing: 0 });
     expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
     H.isBillingEnabled.mockReturnValue(true);
+  });
+});
+
+// The live price → tier map the web app injects (getTierFromPrice); unmapped → 'free'.
+const PRICE_TIER = (priceId: string) =>
+  priceId === 'price_pro' ? 'pro' as const : priceId === 'price_business' ? 'business' as const : 'free' as const;
+
+function seedPricedSubscription(userId: string, stripePriceId: string, status = 'active') {
+  store.subscriptions.push({ id: `sub_${userId}_${stripePriceId}`, userId, status, gifted: false, stripePriceId });
+}
+
+/** A missed_grant row inserted directly, with an explicit id so keyset order is controlled. */
+function seedMissedGrantRow(id: string, userId: string, paidCents = 1500) {
+  store.creditLedger.push({
+    id, userId, entryType: 'missed_grant', bucket: 'monthly', amountCents: 0, paidCents,
+    stripeRef: `in_${id}`, consumeStatus: 'applied', appliedCents: null, chargeMillicents: null,
+    aiUsageLogId: null, realCostCents: null, markupBps: 15000, reconcileGenerationKey: null, createdAt: new Date(),
+  });
+}
+
+describe('credits flow — missed-grant reconcile review fixes (#2645 threads)', () => {
+  it('MON-2 missed grant: the tier is derived from the subscriptions rows, NOT the stale users.subscriptionTier cache', async () => {
+    seedUser('u1', 'cus_1', 'free'); // the cache is stale — exactly the case this reconciler exists for
+    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    seedPricedSubscription('u1', 'price_pro'); // the source of truth says Pro; the cache never caught up
+
+    const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
+
+    expect(result).toEqual({ reconciled: 1, stillMissing: 0, failed: 0 });
+    expect(store.users.find((r) => r.id === 'u1')!.subscriptionTier).toBe('free'); // cache untouched, not consulted
+    expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_missed')).toMatchObject({
+      entryType: 'monthly_grant',
+      amountCents: allowanceCentsForPaidCents(1500, 'pro'),
+    });
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
+  });
+
+  it('MON-2 missed grant: a cache that says pro does NOT grant when no subscription row entitles the user', async () => {
+    seedUser('u1', 'cus_1', 'free');
+    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    store.users.find((r) => r.id === 'u1')!.subscriptionTier = 'pro';
+    seedPricedSubscription('u1', 'price_pro', 'canceled');
+
+    const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
+
+    expect(result).toEqual({ reconciled: 0, stillMissing: 1, failed: 0 });
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
+    expect(balanceOf('u1')).toBeUndefined();
+  });
+
+  it('MON-2 missed grant: an indeterminate derivation (entitled row on an unmapped price) is left for a later sweep, never granted from a lower bound', async () => {
+    seedUser('u1', 'cus_1', 'free');
+    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    seedPricedSubscription('u1', 'price_pro');
+    seedPricedSubscription('u1', 'price_legacy_unmapped');
+
+    const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
+
+    expect(result).toEqual({ reconciled: 0, stillMissing: 1, failed: 0 });
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
+    expect(balanceOf('u1')).toBeUndefined();
+  });
+
+  it('WAL-5 bounded sweep: 250 unresolved rows ahead of a repairable one cannot starve it — it is granted within a bounded number of runs', async () => {
+    for (let i = 0; i < 250; i++) {
+      const userId = `stuck_${String(i).padStart(3, '0')}`;
+      seedUser(userId, `cus_${userId}`, 'free');
+      seedMissedGrantRow(`led_a${String(i).padStart(3, '0')}`, userId); // no subscription → stays missing
+    }
+    seedUser('payer', 'cus_payer', 'pro'); // cache AND subscription agree: only the sweep order is under test
+    seedPricedSubscription('payer', 'price_pro');
+    seedMissedGrantRow('led_z_payer', 'payer'); // sorts AFTER every unresolved row
+
+    const MAX_RUNS = 3;
+    let runs = 0;
+    while (runs < MAX_RUNS && !balanceOf('payer')) {
+      await reconcileMissedGrants({ priceTier: PRICE_TIER });
+      runs++;
+    }
+
+    expect(balanceOf('payer')?.monthlyRemainingCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
+    expect(store.creditLedger.find((r) => r.id === 'led_z_payer')!.entryType).toBe('monthly_grant');
+    // The unresolved rows are still there for a later sweep — not dropped.
+    expect(store.creditLedger.filter((r) => r.entryType === 'missed_grant')).toHaveLength(250);
+  });
+
+  it('MON-2 per-row failure: a row whose grant transaction throws is COUNTED as failed (not swallowed), stays missing, and the other rows still reconcile', async () => {
+    // Cache and subscriptions agree on pro: only the failure accounting is under test.
+    seedUser('u1', 'cus_1', 'pro');
+    seedUser('u2', 'cus_2', 'pro');
+    seedPricedSubscription('u1', 'price_pro');
+    seedPricedSubscription('u2', 'price_pro');
+    seedMissedGrantRow('led_m1', 'u1');
+    seedMissedGrantRow('led_m2', 'u2');
+
+    const spy = vi.spyOn(H.db, 'transaction').mockRejectedValueOnce(new Error('deadlock detected'));
+    try {
+      const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
+
+      expect(result).toEqual({ reconciled: 1, stillMissing: 0, failed: 1 });
+      expect(store.creditLedger.find((r) => r.id === 'led_m1')!.entryType).toBe('missed_grant');
+      expect(balanceOf('u1')).toBeUndefined();
+      expect(balanceOf('u2')!.monthlyRemainingCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
+      // Logged loudly with the row id, not at debug.
+      expect(H.logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('missed-grant reconcile'),
+        expect.anything(),
+        expect.objectContaining({ ledgerId: 'led_m1' }),
+      );
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
