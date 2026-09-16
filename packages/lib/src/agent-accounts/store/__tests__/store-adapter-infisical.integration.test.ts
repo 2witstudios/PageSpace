@@ -966,4 +966,172 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     };
     expect(actual).toEqual(expected);
   });
+
+  // Adversarial review of PR #2646 (MED): revoke holds no lock, and the commit upsert re-set
+  // previous_version/rotated_at on a row a concurrent revoke had just marked, reporting ok — a write
+  // succeeded on a revoked ref and grace fields came back (ADR 0005 F3: a revoked ref has no
+  // previous version).
+  it('given a revoke that lands while a rotate is mid-write, should refuse the rotate and leave no grace fields', async () => {
+    const accountId = `acct-revoke-race-grace-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: 'policy-digest-fixture' as PolicyDigest, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
+    const plainAdapter = makeAdapter();
+    const racingAdapter = makeAdapter({
+      wrapMetadata: (m) => ({
+        ...m,
+        commit: async (input) => {
+          await plainAdapter.revoke({ ref, reason: 'owner_revoked', identity });
+          await m.commit(input);
+        },
+      }),
+    });
+
+    await plainAdapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    const rotated = await racingAdapter.rotate({ ref, expectedVersion: 1 as never, next: { kind: 'api_key', material: { value: 'sk-v2', placement: { in: 'header', name: 'Authorization' } } }, bindings, identity: refreshIdentity });
+    const row = await pool.query('SELECT previous_version, rotated_at, current_version FROM agent_account_secret_versions WHERE tenant_id = $1 AND account_id = $2 AND kind = $3', [TENANT_A, accountId, 'api_key']);
+
+    const actual = { rotated, rows: row.rows };
+    const expected = { rotated: { ok: false, reason: 'write_unverified' }, rows: [{ previous_version: null, rotated_at: null, current_version: 1 }] };
+    expect(actual).toEqual(expected);
+  });
+
+  // Adversarial review of PR #2646 (HIGH): delete answered not_found from the metadata row alone, so
+  // material a failed first-put commit left in Infisical (no metadata row) survived an erasure.
+  it('given delete of a ref whose material is in Infisical but has no metadata row, should erase the material and report removed', async () => {
+    const adapter = makeAdapter();
+    const accountId = `acct-delete-orphan-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const rawInfisical = createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' });
+    await rawInfisical.createSecret({ projectId: projectAId, credentials: identityA, secretKey: `${accountId}__api_key`, secretValue: JSON.stringify({ kind: 'api_key', material: { value: 'sk-orphan' } }), secretComment: '{}' });
+
+    const deleted = await adapter.delete({ ref, identity, upstream: 'not_attempted' });
+    const left = await rawInfisical.getSecret({ projectId: projectAId, credentials: identityA, secretKey: `${accountId}__api_key` });
+    const neverExisted = await adapter.delete({ ref: { ...ref, accountId: `acct-delete-nothing-${NOW}` as AccountId }, identity, upstream: 'not_attempted' });
+
+    const actual = { deleted, left: left.ok ? 'present' : left.reason, neverExisted };
+    const expected = { deleted: { ok: true, removed: true, upstream: 'not_attempted' }, left: 'not_found', neverExisted: { ok: false, reason: 'not_found' } };
+    expect(actual).toEqual(expected);
+  });
+
+  // Adversarial review of PR #2646 (LOW): put never checked that the bindings it writes describe the
+  // ref they are written under.
+  it('given put whose bindings name another kind or tenant than the ref, should refuse and write nothing', async () => {
+    const adapter = makeAdapter();
+    const accountId = `acct-put-foreign-bindings-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: 'policy-digest-fixture' as PolicyDigest, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const material = { kind: 'api_key' as const, material: { value: 'sk-synthetic', placement: { in: 'header' as const, name: 'Authorization' } } };
+
+    const actual = {
+      otherKind: await adapter.put({ ref, material, expectedVersion: null, bindings: { ...bindings, kind: 'oauth2' }, identity }),
+      otherTenant: await adapter.put({ ref, material, expectedVersion: null, bindings: { ...bindings, tenantId: TENANT_B }, identity }),
+      described: await adapter.describe({ ref, identity }),
+    };
+    const expected = {
+      otherKind: { ok: false, reason: 'kind_mismatch' },
+      otherTenant: { ok: false, reason: 'store_unavailable' },
+      described: { ok: false, reason: 'not_found' },
+    };
+    expect(actual).toEqual(expected);
+  });
+
+  // Adversarial review of PR #2646 (LOW): the injected provisioning lookups and a stored JSON `null`
+  // escaped as throws instead of the contract's store_unavailable.
+  it('given a provisioning lookup that throws, or a stored payload of JSON null, should return store_unavailable rather than throwing', async () => {
+    const accountId = `acct-lookup-throws-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: 'policy-digest-fixture' as PolicyDigest, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const material = { kind: 'api_key' as const, material: { value: 'sk-v1', placement: { in: 'header' as const, name: 'Authorization' } } };
+    const plainAdapter = makeAdapter();
+    const infisical = createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' });
+    const metadata = createPlaneMetadataRepository({ pool: pool as never });
+    const throwingAdapter = createInfisicalStoreAdapter({
+      infisical,
+      metadata,
+      advisoryLockPool: metadata.advisoryLockPool,
+      resolveProject: async () => {
+        throw new Error('synthetic provisioning outage');
+      },
+      resolveCredentials: async () => {
+        throw new Error('synthetic credential store outage');
+      },
+      hash,
+      now: () => Date.now(),
+      consentPublicKey: CONSENT_PUBLIC_KEY,
+      verify: verifyEd25519,
+    });
+    const settle = (promise: Promise<unknown>) => promise.catch((error: unknown) => ({ threw: String(error) }));
+
+    await plainAdapter.put({ ref, material, expectedVersion: null, bindings, identity });
+    const grant = makeGrant({ accountId, bindingDigest: digestBindings({ bindings, hash }) });
+    const lookups = {
+      put: await settle(throwingAdapter.put({ ref: { ...ref, accountId: `acct-lookup-throws-put-${NOW}` as AccountId }, material, expectedVersion: null, bindings, identity })),
+      resolve: await settle(throwingAdapter.resolve({ ref, version: 1 as never, grant, identity })),
+      delete: await settle(throwingAdapter.delete({ ref, identity, upstream: 'not_attempted' })),
+    };
+    await infisical.updateSecret({ projectId: projectAId, credentials: identityA, secretKey: `${accountId}__api_key`, secretValue: 'null', secretComment: JSON.stringify(bindings) });
+    const nullPayload = await settle(plainAdapter.resolve({ ref, version: 1 as never, grant, identity }));
+
+    const actual = { ...lookups, nullPayload };
+    const unavailable = { ok: false, reason: 'store_unavailable' };
+    const expected = { put: unavailable, resolve: unavailable, delete: unavailable, nullPayload: unavailable };
+    expect(actual).toEqual(expected);
+  });
+
+  // Adversarial review of PR #2646 (LOW): revoke read the row, a delete removed it, and revoke's
+  // UPDATE matched nothing — yet revoke still reported ok with a revocation time it never wrote.
+  it('given a delete that lands between revoke reading the row and marking it, should report not_found', async () => {
+    const accountId = `acct-revoke-vs-delete-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: 'policy-digest-fixture' as PolicyDigest, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const plainAdapter = makeAdapter();
+    const racingAdapter = makeAdapter({
+      wrapMetadata: (m) => ({
+        ...m,
+        markRevoked: async (input) => {
+          await plainAdapter.delete({ ref, identity, upstream: 'not_attempted' });
+          await m.markRevoked(input);
+        },
+      }),
+    });
+
+    await plainAdapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    const actual = await racingAdapter.revoke({ ref, reason: 'admin', identity });
+    const expected = { ok: false, reason: 'not_found' };
+    expect(actual).toEqual(expected);
+  });
+
+  // Adversarial review of PR #2646 (LOW): rebind checked only the UPDATE's row count, never that the
+  // plane now holds the bindings it was asked to write (ADR 0005 §2.2: same lock + post-write verify).
+  it('given rebind whose post-write read does not return the bindings it wrote, should return write_unverified', async () => {
+    const accountId = `acct-rebind-unverified-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: 'policy-digest-fixture' as PolicyDigest, kind: 'api_key' };
+    const next: PlaneBindings = { ...bindings, policyVersion: 2 as PolicyVersion, policyDigest: 'policy-digest-next' as PolicyDigest };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const manageIdentity = { ...identity, audience: 'manage' as const };
+    const plainAdapter = makeAdapter();
+    let reads = 0;
+    const staleReadAdapter = makeAdapter({
+      wrapMetadata: (m) => ({
+        ...m,
+        read: async (r) => {
+          reads += 1;
+          const facts = await m.read(r);
+          return reads > 1 && facts !== null ? { ...facts, bindings } : facts;
+        },
+      }),
+    });
+
+    await plainAdapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    const actual = await staleReadAdapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, consent: ownerConsentTo(next), identity: manageIdentity });
+    const expected = { ok: false, reason: 'write_unverified' };
+    expect(actual).toEqual(expected);
+  });
 });

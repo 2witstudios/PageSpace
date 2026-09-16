@@ -214,6 +214,34 @@ describe('decideResolve', () => {
     expect(actual).toEqual(expected);
   });
 
+  // Adversarial review of PR #2646: ADR 0005 §2.2 binds the grant's (tenantId, accountId, kind) to
+  // the ref. The tenant and kind were never compared, and `revoked` was answered before the account
+  // match — so a grant for account A learned whether account B was revoked.
+  it('given a grant whose tenantId or accountKind differs from the ref, should return not_found', () => {
+    const actual = [
+      decideResolve({ grant: makeGrant({ tenantId: 'user:other' as TenantId }), ref: REF, stored: makeStored(), now: NOW, rotationGraceMs: ROTATION_GRACE_MS, hash: fakeHash }),
+      decideResolve({ grant: makeGrant({ accountKind: 'oauth2' }), ref: REF, stored: makeStored(), now: NOW, rotationGraceMs: ROTATION_GRACE_MS, hash: fakeHash }),
+    ];
+    const expected = [
+      { ok: false, reason: 'not_found' },
+      { ok: false, reason: 'not_found' },
+    ];
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a grant for another account and a revoked ref, should return not_found — never reveal the other account is revoked', () => {
+    const actual = decideResolve({
+      grant: makeGrant({ accountId: 'acct_other' as AccountId }),
+      ref: REF,
+      stored: makeStored({ revokedAt: NOW - 500 }),
+      now: NOW,
+      rotationGraceMs: ROTATION_GRACE_MS,
+      hash: fakeHash,
+    });
+    const expected = { ok: false, reason: 'not_found' };
+    expect(actual).toEqual(expected);
+  });
+
   it('given stored bindings whose policyVersion differs from those the grant bindingDigest was computed over, should return binding_mismatch', () => {
     const actual = decideResolve({
       grant: makeGrant(),
