@@ -222,25 +222,20 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
  * MON-2: patch a plan's credit-derived fields with a server-supplied cents value.
  *
  * `PLANS` is a module-level constant built once, using this module's OWN evaluation
- * of the money model (`MONTHLY_CREDIT_CENTS`, computed via the real MONEY_MODEL_V2).
- * That is correct wherever this module runs on the server — this file is apps/web-
- * only (marketing has its own copy in apps/marketing/src/lib/credits.ts, with its
- * own static-prerendering caveat documented on apps/marketing/src/app/pricing/
- * page.tsx). It is NOT reliably correct in the browser: `settings/plan` is a
- * `'use client'` component, and Next.js does not inline a bare (non-`NEXT_PUBLIC_`)
- * env var into the client bundle — reading the flag there, or mirroring it through a
- * second `NEXT_PUBLIC_` var that must be kept in lockstep with the first, both drift.
+ * of the money model (`MONTHLY_CREDIT_CENTS`, computed via `MONEY_MODEL_V2_ACTIVE`).
+ * D-OW-17 made that constant identical in every process, including a `'use client'`
+ * browser bundle — `PLANS`'s own build-time number is now correct there too, not
+ * just on the server. This function, and the `planCredits` fetch it patches from,
+ * remain correct to keep: they are simply no longer load-bearing for a client/server
+ * asymmetry that no longer exists (see money-model.ts's module doc comment for why
+ * an env var, and then a client mirror of one, couldn't guarantee that on their own).
  *
- * The fix is to never derive the number in the browser at all: the plan page already
- * makes an authenticated fetch (`GET /api/subscriptions/status`) before it renders,
- * and that route computes the SAME derivation server-side and returns it as
- * `planCredits`. This function is the one seam that patches a `PlanDefinition`'s
- * credit-derived fields with that server number — `includedCredits`,
- * `limits.monthlyCreditsCents`, and the credit line inside `features` — without
- * touching anything else. The credit feature is matched by its CURRENT text
- * (`monthlyCreditsPhrase(plan.id)`, exactly how `PLANS` built it above) rather than
- * assumed to be at a fixed index, so reordering a tier's `features` array can never
- * silently patch the wrong line.
+ * This function patches a `PlanDefinition`'s credit-derived fields with a supplied
+ * number — `includedCredits`, `limits.monthlyCreditsCents`, and the credit line
+ * inside `features` — without touching anything else. The credit feature is matched
+ * by its CURRENT text (`monthlyCreditsPhrase(plan.id)`, exactly how `PLANS` built it
+ * above) rather than assumed to be at a fixed index, so reordering a tier's
+ * `features` array can never silently patch the wrong line.
  */
 export function withCreditsCents(plan: PlanDefinition, cents: number): PlanDefinition {
   const creditFeatureName = monthlyCreditsPhrase(plan.id);

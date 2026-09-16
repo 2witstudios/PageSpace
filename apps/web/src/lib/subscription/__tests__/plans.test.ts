@@ -209,9 +209,9 @@ describe('Subscription Plans', () => {
 describe('MON-2 the settings/plan client component patches its credit copy from server data, never from a client-side env read', () => {
   describe('withCreditsCents', () => {
     it('reproduces the reported defect and its fix: the module\'s own (potentially stale) number is replaced by a server-supplied one', () => {
-      // Simulates exactly what /api/subscriptions/status's planCredits carries when
-      // MONEY_MODEL_V2 is on server-side: Pro's real derivation is 900, not the
-      // module's own build-time 1,500 that a browser bundle would otherwise show.
+      // Simulates a server-supplied planCredits figure (e.g. a promo invoice)
+      // that legitimately differs from the plan module's own built-in number —
+      // withCreditsCents must prefer the server value, not the module's own.
       const patched = withCreditsCents(PLANS.pro, 900);
       expect(patched.limits.monthlyCreditsCents).toBe(900);
       expect(patched.includedCredits).toBe('900 credits included each month');

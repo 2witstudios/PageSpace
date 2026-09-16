@@ -210,7 +210,6 @@ describe('applyStripeFunding', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsBillingEnabled.mockReturnValue(true);
-    delete process.env.MONEY_MODEL_V2;
   });
 
   it('does nothing when billing is disabled (tenant/onprem)', async () => {
@@ -542,67 +541,63 @@ describe('applyStripeFunding', () => {
       });
     }
 
-    describe('MONEY_MODEL_V2 on (the 60% ratio)', () => {
-      beforeEach(() => {
-        process.env.MONEY_MODEL_V2 = 'true';
+    // D-OW-17: applyStripeFunding calls grantForInvoice/allowanceCentsForPaidCents
+    // with no `active` argument, so it always uses the money-model default
+    // (MONEY_MODEL_V2_ACTIVE = false in this PR — the legacy 100% pass-through).
+    // The ratio math itself, at BOTH active=true and active=false, is covered
+    // directly (no shell, no mocks) in money-model.test.ts and invoice-grant.test.ts;
+    // these tests only prove the funding shell wires amount_paid through correctly.
+    it('MON-2 sizes the grant as amount_paid × the default ratio, not the tier list price, and records paidCents on the ledger row', async () => {
+      const cap: Captured = {};
+      refill(cap);
+
+      await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'pro' });
+
+      const expected = allowanceCentsForPaidCents(1500, 'pro');
+      expect(expected).toBe(1500);
+      expect(cap.ledgerValues).toMatchObject({
+        entryType: 'monthly_grant',
+        amountCents: expected,
+        paidCents: 1500,
+        stripeRef: 'in_123',
       });
-
-      it('MON-2 sizes the grant as amount_paid × ratio, not the tier list price, and records paidCents on the ledger row', async () => {
-        const cap: Captured = {};
-        refill(cap);
-
-        await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'pro' });
-
-        const expected = allowanceCentsForPaidCents(1500, 'pro');
-        expect(expected).toBe(900);
-        expect(cap.ledgerValues).toMatchObject({
-          entryType: 'monthly_grant',
-          amountCents: expected,
-          paidCents: 1500,
-          stripeRef: 'in_123',
-        });
-        expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: expected, monthlyAllowanceCents: expected });
-      });
-
-      it('MON-2 a 50%-off invoice grants half the list grant', async () => {
-        const cap: Captured = {};
-        refill(cap);
-
-        await applyStripeFunding(paidInvoiceEvent(750), { tier: 'pro' });
-
-        const full = allowanceCentsForPaidCents(1500, 'pro');
-        expect(cap.ledgerValues).toMatchObject({ amountCents: full / 2, paidCents: 750 });
-        expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: full / 2, monthlyAllowanceCents: full / 2 });
-      });
-
-      it('MON-2 the derived grant still rolls over: carried balance and debt are netted before the grant is added', async () => {
-        const cap: Captured = {};
-        refill(cap, 400, 100);
-
-        await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'pro' });
-
-        const grant = allowanceCentsForPaidCents(1500, 'pro');
-        expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: 400 - 100 + grant, debtCents: 0 });
-      });
+      expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: expected, monthlyAllowanceCents: expected });
     });
 
-    it('MON-2 a zero-amount invoice grants nothing: no ledger row, no balance write, no transaction (either flag state)', async () => {
-      for (const flag of ['true', undefined]) {
-        vi.clearAllMocks();
-        if (flag) process.env.MONEY_MODEL_V2 = flag; else delete process.env.MONEY_MODEL_V2;
-        const cap: Captured = {};
-        refill(cap);
+    it('MON-2 a 50%-off invoice grants half the list grant', async () => {
+      const cap: Captured = {};
+      refill(cap);
 
-        await applyStripeFunding(paidInvoiceEvent(0), { tier: 'pro' });
+      await applyStripeFunding(paidInvoiceEvent(750), { tier: 'pro' });
 
-        expect(mockDb.transaction).not.toHaveBeenCalled();
-        expect(cap.ledgerValues).toBeUndefined();
-        expect(cap.balanceSet).toBeUndefined();
-        expect(mockApiLogger.info).toHaveBeenCalledWith(
-          'credit funding: invoice grants nothing',
-          expect.objectContaining({ userId: 'u1', paidCents: 0, stripeRef: 'in_123', reason: 'zero_amount' }),
-        );
-      }
+      const full = allowanceCentsForPaidCents(1500, 'pro');
+      expect(cap.ledgerValues).toMatchObject({ amountCents: full / 2, paidCents: 750 });
+      expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: full / 2, monthlyAllowanceCents: full / 2 });
+    });
+
+    it('MON-2 the derived grant still rolls over: carried balance and debt are netted before the grant is added', async () => {
+      const cap: Captured = {};
+      refill(cap, 400, 100);
+
+      await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'pro' });
+
+      const grant = allowanceCentsForPaidCents(1500, 'pro');
+      expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: 400 - 100 + grant, debtCents: 0 });
+    });
+
+    it('MON-2 a zero-amount invoice grants nothing: no ledger row, no balance write, no transaction', async () => {
+      const cap: Captured = {};
+      refill(cap);
+
+      await applyStripeFunding(paidInvoiceEvent(0), { tier: 'pro' });
+
+      expect(mockDb.transaction).not.toHaveBeenCalled();
+      expect(cap.ledgerValues).toBeUndefined();
+      expect(cap.balanceSet).toBeUndefined();
+      expect(mockApiLogger.info).toHaveBeenCalledWith(
+        'credit funding: invoice grants nothing',
+        expect.objectContaining({ userId: 'u1', paidCents: 0, stripeRef: 'in_123', reason: 'zero_amount' }),
+      );
     });
 
     it('MON-2 an invoice with no amount_paid fails closed (nothing granted)', async () => {
@@ -645,8 +640,7 @@ describe('applyStripeFunding', () => {
     });
 
     describe('D-OW-16: grants we deliberately fund', () => {
-      it('MON-2 (a) a gifted subscription grants list price × ratio although it paid nothing', async () => {
-        process.env.MONEY_MODEL_V2 = 'true';
+      it('MON-2 (a) a gifted subscription grants list price × the default ratio although it paid nothing', async () => {
         selectUserThenSubscriptions(PRO_USER, [{ gifted: true, status: 'active' }]);
         const cap: Captured = {};
         mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
@@ -656,7 +650,7 @@ describe('applyStripeFunding', () => {
         await applyStripeFunding(paidInvoiceEvent(0, { subtotal: 1500, billing_reason: 'subscription_cycle' }), { tier: 'pro' });
 
         const list = allowanceCentsForPaidCents(tierListPriceCents('pro'), 'pro');
-        expect(list).toBe(900);
+        expect(list).toBe(1500);
         expect(cap.ledgerValues).toMatchObject({ amountCents: list, paidCents: 0, stripeRef: 'in_123' });
         expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: list, monthlyAllowanceCents: list });
         expect(mockApiLogger.info).toHaveBeenCalledWith(
@@ -665,8 +659,7 @@ describe('applyStripeFunding', () => {
         );
       });
 
-      it('MON-2 (a) a subscription created with a trial (subscription_create, $0, subtotal 0) grants list price × ratio', async () => {
-        process.env.MONEY_MODEL_V2 = 'true';
+      it('MON-2 (a) a subscription created with a trial (subscription_create, $0, subtotal 0) grants list price × the default ratio', async () => {
         selectUserThenSubscriptions(PRO_USER, [{ gifted: false, status: 'trialing' }]);
         const cap: Captured = {};
         mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
@@ -675,7 +668,7 @@ describe('applyStripeFunding', () => {
 
         await applyStripeFunding(paidInvoiceEvent(0, { subtotal: 0, billing_reason: 'subscription_create' }), { tier: 'pro' });
 
-        expect(cap.ledgerValues).toMatchObject({ amountCents: 900, paidCents: 0 });
+        expect(cap.ledgerValues).toMatchObject({ amountCents: 1500, paidCents: 0 });
         expect(mockApiLogger.info).toHaveBeenCalledWith(
           'credit funding: monthly refill applied',
           expect.objectContaining({ basis: 'list', reason: 'trial' }),
@@ -683,7 +676,6 @@ describe('applyStripeFunding', () => {
       });
 
       it('MON-2 (b) a proration-only / subscription_update invoice that paid $0 grants nothing (subscription_update is grant-eligible as a KIND; $0 paid is $0 granted)', async () => {
-        process.env.MONEY_MODEL_V2 = 'true';
         const cap: Captured = {};
         refill(cap);
 
@@ -698,7 +690,6 @@ describe('applyStripeFunding', () => {
       });
 
       it('CORRECTION (Codex P1, "Allow paid subscription-update invoices to grant credits"): a PAID subscription_update invoice (a mid-cycle upgrade proration) grants proportional credits, unlike a manual invoice', async () => {
-        process.env.MONEY_MODEL_V2 = 'true';
         const cap: Captured = {};
         refill(cap);
 
@@ -712,19 +703,17 @@ describe('applyStripeFunding', () => {
         expect(cap.ledgerValues!.amountCents).toBeGreaterThan(0);
       });
 
-      it('MON-2 (c) a partial discount grants from amount_paid: 20% off Pro → 1200 × ratio', async () => {
-        process.env.MONEY_MODEL_V2 = 'true';
+      it('MON-2 (c) a partial discount grants from amount_paid: 20% off Pro → 1200 × the default ratio', async () => {
         const cap: Captured = {};
         refill(cap);
 
         await applyStripeFunding(paidInvoiceEvent(1200, { subtotal: 1500, billing_reason: 'subscription_cycle' }), { tier: 'pro' });
 
         expect(cap.ledgerValues).toMatchObject({ amountCents: allowanceCentsForPaidCents(1200, 'pro'), paidCents: 1200 });
-        expect(allowanceCentsForPaidCents(1200, 'pro')).toBe(720);
+        expect(allowanceCentsForPaidCents(1200, 'pro')).toBe(1200);
       });
 
       it('MON-2 (d) a 100% coupon on a NON-gifted subscription grants nothing — admin gifting is the door', async () => {
-        process.env.MONEY_MODEL_V2 = 'true';
         selectUserThenSubscriptions(PRO_USER, [{ gifted: false, status: 'active' }]);
         const cap: Captured = {};
         mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
@@ -739,7 +728,7 @@ describe('applyStripeFunding', () => {
       });
     });
 
-    it('MON-2 with MONEY_MODEL_V2 off a full-price invoice grants 100% of what it paid, which is today\'s amount', async () => {
+    it('MON-2 / D-OW-17 a full-price invoice grants 100% of what it paid under the current default (MONEY_MODEL_V2_ACTIVE = false)', async () => {
       const cap: Captured = {};
       refill(cap);
 

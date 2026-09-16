@@ -1,16 +1,41 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { TIERS, TIER_PLAN_LIMITS } from '../subscription-tiers';
+import {
+  MARKUP_BPS,
+  CREDITS_PER_DOLLAR,
+  INCLUDED_CREDIT_RATIO_BPS,
+  MONEY_MODEL_V2_ACTIVE,
+  isMoneyModelV2Enabled,
+  includedCreditRatioBps,
+  allowanceCentsForPaidCents,
+  tierAllowanceCents,
+  FREE_STARTER_CREDITS,
+  creditsFromCents,
+  centsFromCredits,
+  dollarsFromCents,
+  formatDollars,
+  formatCreditCount,
+  creditsFromDollars,
+  CREDIT_PACKS,
+  creditPackPriceCents,
+  getCreditPack,
+  validateTopupCredits,
+  CREDIT_TOPUP_MIN_CREDITS,
+  CREDIT_TOPUP_MAX_CREDITS,
+} from '../money-model';
+import { MARKUP_BPS as CREDIT_PRICING_MARKUP_BPS } from '../credit-pricing';
 
-// money-model reads MONEY_MODEL_V2 and CREDIT_MARKUP_BPS at call/import time, so
-// every case re-imports the module against a controlled environment.
+// Only CREDIT_MARKUP_BPS / CREDIT_TOPUP_MIN_CREDITS / CREDIT_TOPUP_MAX_CREDITS are real
+// env vars left in this module (D-OW-17 made the ratio switch a code constant, not an
+// env var) — this loader is only for those, re-importing against a controlled env.
 const ORIGINAL_ENV = { ...process.env };
 
-async function load(env: Record<string, string | undefined> = {}) {
+async function loadWithEnv(env: Record<string, string | undefined> = {}) {
   vi.resetModules();
   process.env = { ...ORIGINAL_ENV };
-  delete process.env.MONEY_MODEL_V2;
-  delete process.env.NEXT_PUBLIC_MONEY_MODEL_V2;
   delete process.env.CREDIT_MARKUP_BPS;
+  delete process.env.CREDIT_TOPUP_MIN_CREDITS;
+  delete process.env.CREDIT_TOPUP_MAX_CREDITS;
   for (const [k, v] of Object.entries(env)) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
@@ -18,137 +43,138 @@ async function load(env: Record<string, string | undefined> = {}) {
   return import('../money-model');
 }
 
-beforeEach(() => {
-  vi.resetModules();
-});
-
 afterEach(() => {
   process.env = { ...ORIGINAL_ENV };
 });
 
 describe('MON-1 one module defines the money model', () => {
   it('MON-1 exports MARKUP_BPS (moved from credit-pricing) with the 1.5× default and env override', async () => {
-    const def = await load();
-    expect(def.MARKUP_BPS).toBe(15000);
-    const over = await load({ CREDIT_MARKUP_BPS: '12000' });
+    expect(MARKUP_BPS).toBe(15000);
+    const over = await loadWithEnv({ CREDIT_MARKUP_BPS: '12000' });
     expect(over.MARKUP_BPS).toBe(12000);
   });
 
-  it('MON-1 credit-pricing re-exports the SAME MARKUP_BPS, not a second definition', async () => {
-    const mm = await load({ CREDIT_MARKUP_BPS: '17000' });
-    const pricing = await import('../credit-pricing');
-    expect(pricing.MARKUP_BPS).toBe(mm.MARKUP_BPS);
-    expect(pricing.MARKUP_BPS).toBe(17000);
+  it('MON-1 credit-pricing re-exports the SAME MARKUP_BPS, not a second definition', () => {
+    expect(CREDIT_PRICING_MARKUP_BPS).toBe(MARKUP_BPS);
   });
 
-  it('A-11 CREDITS_PER_DOLLAR is 100 and INCLUDED_CREDIT_RATIO_BPS is 60% for pro and business', async () => {
-    const { CREDITS_PER_DOLLAR, INCLUDED_CREDIT_RATIO_BPS } = await load();
+  it('A-11 CREDITS_PER_DOLLAR is 100 and INCLUDED_CREDIT_RATIO_BPS is 60% for pro and business', () => {
     expect(CREDITS_PER_DOLLAR).toBe(100);
     expect(INCLUDED_CREDIT_RATIO_BPS.pro).toBe(6000);
     expect(INCLUDED_CREDIT_RATIO_BPS.business).toBe(6000);
   });
 
-  it('MON-1 the ratio table is keyed by the canonical vocabulary; free derives nothing (0)', async () => {
-    const { INCLUDED_CREDIT_RATIO_BPS } = await load();
+  it('MON-1 the ratio table is keyed by the canonical vocabulary; free derives nothing (0)', () => {
     expect(Object.keys(INCLUDED_CREDIT_RATIO_BPS).sort()).toEqual([...TIERS].sort());
     expect(INCLUDED_CREDIT_RATIO_BPS.free).toBe(0);
   });
 
-  it('MON-2 isMoneyModelV2Enabled reads MONEY_MODEL_V2 at call time from an injectable env', async () => {
-    const { isMoneyModelV2Enabled } = await load();
-    expect(isMoneyModelV2Enabled()).toBe(false);
-    process.env.MONEY_MODEL_V2 = 'true';
-    expect(isMoneyModelV2Enabled()).toBe(true);
-    expect(isMoneyModelV2Enabled({ MONEY_MODEL_V2: '0' })).toBe(false);
-    expect(isMoneyModelV2Enabled({ MONEY_MODEL_V2: 'on' })).toBe(true);
-    expect(isMoneyModelV2Enabled({})).toBe(false);
+  it('D-OW-17 MONEY_MODEL_V2_ACTIVE is a plain code constant, FALSE in this PR — migration day is a follow-up commit, never an env var', () => {
+    expect(typeof MONEY_MODEL_V2_ACTIVE).toBe('boolean');
+    expect(MONEY_MODEL_V2_ACTIVE).toBe(false);
+  });
+
+  it('D-OW-17 isMoneyModelV2Enabled() takes no argument and returns the constant directly', () => {
+    expect(isMoneyModelV2Enabled.length).toBe(0);
+    expect(isMoneyModelV2Enabled()).toBe(MONEY_MODEL_V2_ACTIVE);
+  });
+});
+
+describe('D-OW-17 includedCreditRatioBps is a pure function of an explicit `active` flag', () => {
+  it('active=true selects the real per-tier ratio; active=false selects the legacy 1:1 ratio — no env, no module reload needed to see both', () => {
+    expect(includedCreditRatioBps('pro', true)).toBe(6000);
+    expect(includedCreditRatioBps('business', true)).toBe(6000);
+    expect(includedCreditRatioBps('pro', false)).toBe(10000);
+    expect(includedCreditRatioBps('business', false)).toBe(10000);
+  });
+
+  it('the free tier and an unknown tier derive nothing regardless of active', () => {
+    expect(includedCreditRatioBps('free', true)).toBe(0);
+    expect(includedCreditRatioBps('free', false)).toBe(0);
+    expect(includedCreditRatioBps('enterprise', true)).toBe(0);
+    expect(includedCreditRatioBps('enterprise', false)).toBe(0);
+  });
+
+  it('defaults to MONEY_MODEL_V2_ACTIVE when active is omitted — this is "production passing the constant"', () => {
+    expect(includedCreditRatioBps('pro')).toBe(includedCreditRatioBps('pro', MONEY_MODEL_V2_ACTIVE));
+    expect(includedCreditRatioBps.length).toBe(1); // the default isn't a REQUIRED param
   });
 });
 
 describe('MON-2 the monthly allowance is derived from the amount paid, never tabulated', () => {
-  it('MON-2 allowanceCentsForPaidCents = paidCents × ratio for every paid tier (MONEY_MODEL_V2 on)', async () => {
-    const { allowanceCentsForPaidCents, INCLUDED_CREDIT_RATIO_BPS } = await load({ MONEY_MODEL_V2: 'true' });
+  it('MON-2 allowanceCentsForPaidCents = paidCents × ratio for every paid tier, with active=true', () => {
     for (const tier of TIERS) {
       if (tier === 'free') continue;
       const paid = TIER_PLAN_LIMITS[tier].priceMonthlyUsd * 100;
       const expected = Math.floor((paid * INCLUDED_CREDIT_RATIO_BPS[tier]) / 10000);
-      expect(allowanceCentsForPaidCents(paid, tier), tier).toBe(expected);
+      expect(allowanceCentsForPaidCents(paid, tier, true), tier).toBe(expected);
     }
   });
 
-  it('A-11 Pro $15 → 900 credits; Business $50 + 10 seats × $10 → 9,000 credits (Northwind Labs)', async () => {
-    const { allowanceCentsForPaidCents, creditsFromCents } = await load({ MONEY_MODEL_V2: 'true' });
-    expect(creditsFromCents(allowanceCentsForPaidCents(1500, 'pro'))).toBe(900);
-    expect(creditsFromCents(allowanceCentsForPaidCents(5000, 'business'))).toBe(3000);
-    expect(creditsFromCents(allowanceCentsForPaidCents(5000 + 10 * 1000, 'business'))).toBe(9000);
+  it('A-11 Pro $15 → 900 credits; Business $50 + 10 seats × $10 → 9,000 credits (Northwind Labs), with active=true', () => {
+    expect(creditsFromCents(allowanceCentsForPaidCents(1500, 'pro', true))).toBe(900);
+    expect(creditsFromCents(allowanceCentsForPaidCents(5000, 'business', true))).toBe(3000);
+    expect(creditsFromCents(allowanceCentsForPaidCents(5000 + 10 * 1000, 'business', true))).toBe(9000);
     // One extra seat is $10 → 600 credits, so 6 extra seats add 3,600.
-    expect(creditsFromCents(allowanceCentsForPaidCents(1000, 'business'))).toBe(600);
+    expect(creditsFromCents(allowanceCentsForPaidCents(1000, 'business', true))).toBe(600);
   });
 
-  it('MON-2 a promo or partial period flows through: a $12.34 invoice grants floor(1234 × 0.6) = 740¢', async () => {
-    const { allowanceCentsForPaidCents } = await load({ MONEY_MODEL_V2: 'true' });
-    expect(allowanceCentsForPaidCents(1234, 'pro')).toBe(740);
-    expect(allowanceCentsForPaidCents(0, 'pro')).toBe(0);
+  it('MON-2 a promo or partial period flows through: a $12.34 invoice grants floor(1234 × 0.6) = 740¢, with active=true', () => {
+    expect(allowanceCentsForPaidCents(1234, 'pro', true)).toBe(740);
+    expect(allowanceCentsForPaidCents(0, 'pro', true)).toBe(0);
   });
 
-  it('MON-2 the free tier and an unknown tier derive nothing from a payment', async () => {
-    const { allowanceCentsForPaidCents, includedCreditRatioBps } = await load({ MONEY_MODEL_V2: 'true' });
-    expect(allowanceCentsForPaidCents(1500, 'free')).toBe(0);
-    expect(includedCreditRatioBps('enterprise')).toBe(0);
+  it('MON-2 the free tier and an unknown tier derive nothing from a payment, either active value', () => {
+    expect(allowanceCentsForPaidCents(1500, 'free', true)).toBe(0);
+    expect(allowanceCentsForPaidCents(1500, 'free', false)).toBe(0);
+    expect(includedCreditRatioBps('enterprise', true)).toBe(0);
   });
 
-  it('MON-2 a negative or non-finite paid amount grants nothing (never a negative allowance)', async () => {
-    const { allowanceCentsForPaidCents } = await load({ MONEY_MODEL_V2: 'true' });
-    expect(allowanceCentsForPaidCents(-1500, 'pro')).toBe(0);
-    expect(allowanceCentsForPaidCents(Number.NaN, 'pro')).toBe(0);
+  it('MON-2 a negative or non-finite paid amount grants nothing (never a negative allowance)', () => {
+    expect(allowanceCentsForPaidCents(-1500, 'pro', true)).toBe(0);
+    expect(allowanceCentsForPaidCents(Number.NaN, 'pro', true)).toBe(0);
   });
 
-  it('MON-2 with MONEY_MODEL_V2 off the ratio is the legacy 1:1 so balances compute as today', async () => {
-    const { allowanceCentsForPaidCents, includedCreditRatioBps } = await load();
-    expect(includedCreditRatioBps('pro')).toBe(10000);
+  it('MON-2 with active=false the ratio is the legacy 1:1 so balances compute as today (this PR\'s actual production behavior)', () => {
+    expect(includedCreditRatioBps('pro', false)).toBe(10000);
+    expect(allowanceCentsForPaidCents(1500, 'pro', false)).toBe(1500);
+    expect(allowanceCentsForPaidCents(10000, 'business', false)).toBe(10000);
+    // No third argument: production's actual call shape, defaulting to the FALSE constant.
     expect(allowanceCentsForPaidCents(1500, 'pro')).toBe(1500);
-    expect(allowanceCentsForPaidCents(10000, 'business')).toBe(10000);
   });
 
-  it('MON-2 tierAllowanceCents sizes a grant from the list price when there is no invoice, per tier', async () => {
-    const { tierAllowanceCents, allowanceCentsForPaidCents } = await load({ MONEY_MODEL_V2: 'true' });
+  it('MON-2 tierAllowanceCents sizes a grant from the list price when there is no invoice, per tier, both active values', () => {
     for (const tier of TIERS) {
       if (tier === 'free') continue;
       const list = TIER_PLAN_LIMITS[tier].priceMonthlyUsd * 100;
-      expect(tierAllowanceCents(tier), tier).toBe(allowanceCentsForPaidCents(list, tier));
-      expect(tierAllowanceCents(tier), tier).toBeGreaterThan(0);
+      expect(tierAllowanceCents(tier, true), tier).toBe(allowanceCentsForPaidCents(list, tier, true));
+      expect(tierAllowanceCents(tier, true), tier).toBeGreaterThan(0);
     }
-    // Flag off: today's numbers exactly (pro $15 → 1500¢).
-    const legacy = await load();
-    expect(legacy.tierAllowanceCents('pro')).toBe(1500);
+    // No third argument (today's production shape): pro $15 → 1500¢.
+    expect(tierAllowanceCents('pro')).toBe(1500);
   });
 });
 
 describe('MON-8 the free starter grant is a plain credit count, not derived from a price', () => {
-  it('MON-8 FREE_STARTER_CREDITS is an integer credit count', async () => {
-    const { FREE_STARTER_CREDITS } = await load();
+  it('MON-8 FREE_STARTER_CREDITS is an integer credit count', () => {
     expect(Number.isInteger(FREE_STARTER_CREDITS)).toBe(true);
     expect(FREE_STARTER_CREDITS).toBeGreaterThan(0);
   });
 
-  it('MON-8 tierAllowanceCents("free") is the starter grant in cents regardless of the flag or any price', async () => {
-    const on = await load({ MONEY_MODEL_V2: 'true' });
-    const off = await load();
-    expect(on.tierAllowanceCents('free')).toBe(on.centsFromCredits(on.FREE_STARTER_CREDITS));
-    expect(off.tierAllowanceCents('free')).toBe(on.tierAllowanceCents('free'));
+  it('MON-8 tierAllowanceCents("free") is the starter grant in cents regardless of active or any price', () => {
+    expect(tierAllowanceCents('free', true)).toBe(centsFromCredits(FREE_STARTER_CREDITS));
+    expect(tierAllowanceCents('free', false)).toBe(tierAllowanceCents('free', true));
     // Today's $5 of starter value, unchanged.
-    expect(off.tierAllowanceCents('free')).toBe(500);
+    expect(tierAllowanceCents('free')).toBe(500);
   });
 
-  it('MON-8 an unknown/legacy tier is treated as free for grant sizing (never a paid allowance)', async () => {
-    const { tierAllowanceCents } = await load({ MONEY_MODEL_V2: 'true' });
-    expect(tierAllowanceCents('enterprise')).toBe(tierAllowanceCents('free'));
+  it('MON-8 an unknown/legacy tier is treated as free for grant sizing (never a paid allowance)', () => {
+    expect(tierAllowanceCents('enterprise', true)).toBe(tierAllowanceCents('free', true));
   });
 });
 
 describe('MON-5 one definition of a credit', () => {
-  it('MON-5 a credit is CREDITS_PER_DOLLAR⁻¹ of a dollar: creditsFromCents / centsFromCredits round-trip', async () => {
-    const { creditsFromCents, centsFromCredits, CREDITS_PER_DOLLAR } = await load();
+  it('MON-5 a credit is CREDITS_PER_DOLLAR⁻¹ of a dollar: creditsFromCents / centsFromCredits round-trip', () => {
     expect(creditsFromCents(100)).toBe(CREDITS_PER_DOLLAR);
     expect(centsFromCredits(CREDITS_PER_DOLLAR)).toBe(100);
     for (const cents of [0, 1, 500, 1500, 123456]) {
@@ -156,14 +182,12 @@ describe('MON-5 one definition of a credit', () => {
     }
   });
 
-  it('A-11 a $10 top-up pack is 1,000 credits at the full rate, no ratio applied', async () => {
-    const { creditsFromCents, formatCreditCount } = await load({ MONEY_MODEL_V2: 'true' });
+  it('A-11 a $10 top-up pack is 1,000 credits at the full rate, no ratio applied', () => {
     expect(creditsFromCents(1000)).toBe(1000);
     expect(formatCreditCount(1000)).toBe('1,000');
   });
 
-  it('MON-5 dollarsFromCents is the single cents→dollars conversion', async () => {
-    const { dollarsFromCents, formatDollars } = await load();
+  it('MON-5 dollarsFromCents is the single cents→dollars conversion', () => {
     expect(dollarsFromCents(1050)).toBe(10.5);
     expect(formatDollars(1000)).toBe('$10');
     expect(formatDollars(1050)).toBe('$10.50');
@@ -172,8 +196,7 @@ describe('MON-5 one definition of a credit', () => {
 });
 
 describe('MON-5 formatCreditCount renders an integer count with thousands separators', () => {
-  it('MON-5 formats the canvas numbers: 900, 1,200, 3,000, 9,000, 192', async () => {
-    const { formatCreditCount, centsFromCredits } = await load();
+  it('MON-5 formats the canvas numbers: 900, 1,200, 3,000, 9,000, 192', () => {
     expect(formatCreditCount(centsFromCredits(900))).toBe('900');
     expect(formatCreditCount(centsFromCredits(1200))).toBe('1,200');
     expect(formatCreditCount(centsFromCredits(3000))).toBe('3,000');
@@ -182,8 +205,7 @@ describe('MON-5 formatCreditCount renders an integer count with thousands separa
     expect(formatCreditCount(0)).toBe('0');
   });
 
-  it('MON-5 never shows decimals: fractional credits round to the nearest whole credit', async () => {
-    const { formatCreditCount } = await load();
+  it('MON-5 never shows decimals: fractional credits round to the nearest whole credit', () => {
     // 0.4 credits → "0"; 0.6 → "1"; 1,499.5 → "1,500" (half away from zero).
     expect(formatCreditCount(0.4)).toBe('0');
     expect(formatCreditCount(0.6)).toBe('1');
@@ -193,8 +215,7 @@ describe('MON-5 formatCreditCount renders an integer count with thousands separa
     }
   });
 
-  it('UI-12 never carries a dollar sign and negatives (overage) carry a leading minus', async () => {
-    const { formatCreditCount } = await load();
+  it('UI-12 never carries a dollar sign and negatives (overage) carry a leading minus', () => {
     expect(formatCreditCount(-5000)).toBe('-5,000');
     expect(formatCreditCount(-0.2)).toBe('0');
     for (const cents of [-5000, -1, 0, 1, 99, 100, 123456789]) {
@@ -204,8 +225,7 @@ describe('MON-5 formatCreditCount renders an integer count with thousands separa
 });
 
 describe('MON-4 top-ups buy credits at CREDITS_PER_DOLLAR with no ratio; packs are credit counts', () => {
-  it('MON-4 packs are defined as credit counts 1,000 / 2,500 / 5,000 and priced from the rate', async () => {
-    const { CREDIT_PACKS, creditPackPriceCents, CREDITS_PER_DOLLAR } = await load({ MONEY_MODEL_V2: 'true' });
+  it('MON-4 packs are defined as credit counts 1,000 / 2,500 / 5,000 and priced from the rate', () => {
     const packs = Object.values(CREDIT_PACKS).sort((a, b) => a.credits - b.credits);
     expect(packs.map((p) => p.credits)).toEqual([1000, 2500, 5000]);
     for (const pack of packs) {
@@ -215,8 +235,7 @@ describe('MON-4 top-ups buy credits at CREDITS_PER_DOLLAR with no ratio; packs a
     expect(creditPackPriceCents(CREDIT_PACKS.pack_10)).toBe(1000);
   });
 
-  it('MON-4 no pack states a size in cents; the label is a credit count with no dollar sign', async () => {
-    const { CREDIT_PACKS } = await load();
+  it('MON-4 no pack states a size in cents; the label is a credit count with no dollar sign', () => {
     for (const pack of Object.values(CREDIT_PACKS)) {
       expect('cents' in pack).toBe(false);
       expect(pack.label).toBe(`${pack.credits.toLocaleString('en-US')} credits`);
@@ -224,14 +243,12 @@ describe('MON-4 top-ups buy credits at CREDITS_PER_DOLLAR with no ratio; packs a
     }
   });
 
-  it('MON-4 getCreditPack resolves a SKU id and rejects an unknown one', async () => {
-    const { getCreditPack, CREDIT_PACKS } = await load();
+  it('MON-4 getCreditPack resolves a SKU id and rejects an unknown one', () => {
     expect(getCreditPack('pack_25')).toBe(CREDIT_PACKS.pack_25);
     expect(getCreditPack('pack_does_not_exist')).toBeUndefined();
   });
 
-  it('MON-4 a custom top-up is validated in credits: an integer within [min, max]', async () => {
-    const { validateTopupCredits, CREDIT_TOPUP_MIN_CREDITS, CREDIT_TOPUP_MAX_CREDITS } = await load();
+  it('MON-4 a custom top-up is validated in credits: an integer within [min, max]', () => {
     expect(CREDIT_TOPUP_MIN_CREDITS).toBe(500);
     expect(CREDIT_TOPUP_MAX_CREDITS).toBe(50_000);
     expect(validateTopupCredits(1234)).toBe(1234);
@@ -249,44 +266,40 @@ describe('MON-4 top-ups buy credits at CREDITS_PER_DOLLAR with no ratio; packs a
   });
 
   it('MON-4 the top-up bounds take env overrides in credits', async () => {
-    const { CREDIT_TOPUP_MIN_CREDITS, CREDIT_TOPUP_MAX_CREDITS } = await load({
+    const { CREDIT_TOPUP_MIN_CREDITS: min, CREDIT_TOPUP_MAX_CREDITS: max } = await loadWithEnv({
       CREDIT_TOPUP_MIN_CREDITS: '100',
       CREDIT_TOPUP_MAX_CREDITS: '9000',
     });
-    expect(CREDIT_TOPUP_MIN_CREDITS).toBe(100);
-    expect(CREDIT_TOPUP_MAX_CREDITS).toBe(9000);
+    expect(min).toBe(100);
+    expect(max).toBe(9000);
   });
 
-  it('MON-4 a dollar amount buys credits at the full rate: $12.34 → 1,234 credits → 1234¢ charged', async () => {
-    const { creditsFromDollars, centsFromCredits } = await load({ MONEY_MODEL_V2: 'true' });
+  it('MON-4 a dollar amount buys credits at the full rate: $12.34 → 1,234 credits → 1234¢ charged', () => {
     expect(creditsFromDollars(12.34)).toBe(1234);
     expect(creditsFromDollars(10)).toBe(1000);
     expect(centsFromCredits(creditsFromDollars(12.34))).toBe(1234);
   });
 });
 
-describe('MON-2 no client-visible mirror of the flag (single source of truth)', () => {
-  it('exports no display/browser variant of the flag or the derivation — a "use client" component must get the number from server data, never a second env var', async () => {
-    const mod: Record<string, unknown> = await load();
+describe('D-OW-17 no client-visible mirror, and no env var, of the flag (single source of truth: a code constant)', () => {
+  it('exports no display/browser variant of the flag or the derivation — that whole mechanism is superseded by the constant', async () => {
+    const mod: Record<string, unknown> = await import('../money-model');
     expect(mod.isMoneyModelV2EnabledForDisplay).toBeUndefined();
     expect(mod.tierAllowanceCentsForDisplay).toBeUndefined();
   });
 
-  // DOCUMENTATION, not regression coverage (independent-review finding on #2649):
-  // this only asserts the plain flag-off default the MON-2 tests above already
-  // cover — it can't fail for any change this PR makes, and it doesn't simulate
-  // Next's client-bundle inlining. The real regression guard for #2643 (a "use
-  // client" component reading this module's numbers as the final word) lives at
-  // apps/web/src/components/billing/__tests__/PlanCard.test.tsx's "a server-supplied
-  // planCredits override actually reaches the rendered card" — a DOM-level assertion
-  // that fails if settings/plan stops applying withCreditOverrides before rendering.
-  it('why isMoneyModelV2Enabled() must never run client-side (see PlanCard.test.tsx for the actual regression guard)', async () => {
-    // Next.js does not inline MONEY_MODEL_V2 into the browser bundle (only a
-    // NEXT_PUBLIC_-prefixed literal access gets that treatment). Simulating the
-    // browser condition — MONEY_MODEL_V2 simply absent, as it always is there —
-    // shows why this function is server-only: it silently reads as off.
-    const { isMoneyModelV2Enabled, tierAllowanceCents } = await load();
-    expect(isMoneyModelV2Enabled()).toBe(false);
-    expect(tierAllowanceCents('pro')).toBe(1500);
+  it('this module never reads process.env.MONEY_MODEL_V2 — the seam guard in __tests__/seams/credit-conversion.seam.test.ts enforces this repo-wide', () => {
+    // A weaker, local echo of the seam: with the env var explicitly set to something
+    // that would flip legacy env-based behavior, production's own call shape (no
+    // active argument) must still return the FALSE-constant figures.
+    const original = process.env.MONEY_MODEL_V2;
+    process.env.MONEY_MODEL_V2 = 'true';
+    try {
+      expect(tierAllowanceCents('pro')).toBe(1500);
+      expect(isMoneyModelV2Enabled()).toBe(false);
+    } finally {
+      if (original === undefined) delete process.env.MONEY_MODEL_V2;
+      else process.env.MONEY_MODEL_V2 = original;
+    }
   });
 });

@@ -66,3 +66,55 @@ describe('X-6 seam: a credit is converted in one module (the Spec second-convers
     expect(CREDIT_CONVERSION_DEFINITION.test("import { formatCreditCount } from '@pagespace/lib/billing/money-model';")).toBe(false);
   });
 });
+
+/**
+ * Seam guard 3 — D-OW-17: the money-model ratio switch is a CODE CONSTANT
+ * (`MONEY_MODEL_V2_ACTIVE` in money-model.ts), never a runtime env var. A prior
+ * revision of this fix used `process.env.MONEY_MODEL_V2` on the server, then a
+ * `NEXT_PUBLIC_MONEY_MODEL_V2` client mirror — both rejected as a "two flags must
+ * agree" footgun (the mirror can drift from the server value; a cross-app env
+ * pair can drift the same way). A compile-time constant is the only value
+ * guaranteed identical across every process (web, marketing, and every client
+ * bundle) without runtime coordination — so the env var must never come back,
+ * anywhere, including inside money-model.ts itself.
+ *
+ * The allowlist is intentionally EMPTY: after this refactor no production file
+ * reads this var. (money-model.test.ts itself briefly SETS it, in one test, to
+ * prove that doing so has no effect — that file lives in a __tests__ directory,
+ * which listSourceFiles always excludes, so it never reaches this seam.)
+ */
+export const MONEY_MODEL_ENV_READ =
+  /process\.env(?:\.MONEY_MODEL_V2\b|\[['"]MONEY_MODEL_V2['"]\])/;
+
+export const MONEY_MODEL_ENV_ALLOWLIST: Readonly<Record<string, string>> = {};
+
+describe('D-OW-17 seam: the money-model ratio flag is a code constant, never a runtime env var', () => {
+  const result = runSeam({
+    files: listSourceFiles(['apps', 'packages']),
+    pattern: MONEY_MODEL_ENV_READ,
+    exemptPrefixes: [],
+    allowlist: MONEY_MODEL_ENV_ALLOWLIST,
+  });
+
+  it('D-OW-17 no file (production or otherwise) reads process.env.MONEY_MODEL_V2', () => {
+    expect(
+      result.newViolations,
+      `process.env.MONEY_MODEL_V2 must never be read — flip MONEY_MODEL_V2_ACTIVE ` +
+        `in ${MONEY_MODEL_PATH} instead (D-OW-17):\n` +
+        describeViolations(result.newViolations),
+    ).toEqual([]);
+  });
+
+  it('D-OW-17 the allowlist stays empty (the env var never comes back)', () => {
+    expect(result.staleAllowlist).toEqual([]);
+    expect(Object.keys(MONEY_MODEL_ENV_ALLOWLIST)).toEqual([]);
+  });
+
+  it('D-OW-17 the pattern matches both dot and bracket property access', () => {
+    expect(MONEY_MODEL_ENV_READ.test("process.env.MONEY_MODEL_V2 === 'true'")).toBe(true);
+    expect(MONEY_MODEL_ENV_READ.test('process.env["MONEY_MODEL_V2"]')).toBe(true);
+    expect(MONEY_MODEL_ENV_READ.test("process.env['MONEY_MODEL_V2']")).toBe(true);
+    expect(MONEY_MODEL_ENV_READ.test('process.env.MONEY_MODEL_V2_ACTIVE')).toBe(false);
+    expect(MONEY_MODEL_ENV_READ.test('const x = MONEY_MODEL_V2_ACTIVE;')).toBe(false);
+  });
+});

@@ -30,20 +30,18 @@ function perTier<T>(f: (tier: SubscriptionTier) => T): Record<SubscriptionTier, 
  * Included credit value per tier, in whole cents, sized from the list price (MON-2).
  * The free row is the one-time starter grant (MON-8), not a monthly amount.
  *
- * SERVER-authoritative: computed once at module load from the real MONEY_MODEL_V2.
- * A server render that runs PER REQUEST (an API route, admin, or a marketing page
- * that opts out of static generation via `revalidate`/`dynamic`) always sees the
- * correct number — but a build-time prerender does NOT: `next build` evaluates this
- * module once, using whatever env the Docker builder stage happened to have, and
- * bakes the result into static HTML that a later runtime env flip never reaches
- * (apps/marketing/src/app/pricing/page.tsx sets `revalidate` for exactly this
- * reason — see its own comment). A "use client" component (settings/plan) has the
- * same problem for a different reason — Next.js never inlines a bare, non-
- * NEXT_PUBLIC_ env var into the browser bundle — so it must not read this constant
- * as the final word either; it patches its plan data with the server-supplied
- * number from `/api/subscriptions/status`'s `planCredits` instead (see
- * `apps/web/src/lib/subscription/plans.ts`'s `withCreditOverrides`, and the
- * `*ForCents` functions below it calls to rebuild the phrases from that number).
+ * D-OW-17: correct EVERYWHERE, unconditionally — a build-time prerender, a
+ * per-request server render, and a "use client" browser bundle all compile this
+ * module from the same source at the same commit, so they all embed the same
+ * `MONEY_MODEL_V2_ACTIVE` literal. There is no env var to read differently per
+ * process and no client/server asymmetry left to patch around; see money-model.ts's
+ * module doc comment for why earlier revisions of this fix (a server env var, then a
+ * `NEXT_PUBLIC_` mirror, then a server-computed patch) each failed to guarantee that.
+ *
+ * `apps/web/src/lib/subscription/plans.ts`'s `withCreditOverrides` (and the
+ * `*ForCents` functions below it calls) still exist and are still correct to use —
+ * they are simply no longer load-bearing for THIS defect now that the constant is
+ * identical everywhere by construction.
  */
 export const MONTHLY_CREDIT_CENTS: Record<SubscriptionTier, number> = perTier(tierAllowanceCents);
 
@@ -104,8 +102,8 @@ export function includedCreditsPhraseForCents(tier: SubscriptionTier, cents: num
 /**
  * MON-6: the plan card's "included credits" fact — an integer credit COUNT, never a
  * dollar figure. "900 credits included each month" for refilling paid tiers, "500
- * credits to start" for the free tier's one-time grant. Sized by money-model, so the
- * MONEY_MODEL_V2 ratio flips this copy with a rebuild, not a code change.
+ * credits to start" for the free tier's one-time grant. Sized by money-model, so
+ * flipping `MONEY_MODEL_V2_ACTIVE` (a commit, D-OW-17) flips this copy everywhere.
  */
 export function includedCreditsPhrase(tier: SubscriptionTier): string {
   return includedCreditsPhraseForCents(tier, MONTHLY_CREDIT_CENTS[tier]);

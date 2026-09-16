@@ -16,16 +16,19 @@ import { isSandboxTierEligible } from "@pagespace/lib/billing/sandbox-eligibilit
 export const metadata = pageMetadata.pricing;
 
 /**
- * MON-2: this page has no dynamic API usage, so Next.js would otherwise
- * prerender it once at `next build` time (inside the Docker builder stage,
- * where MONEY_MODEL_V2 is never set) and serve that static HTML forever — the
- * flag flipping at runtime would never reach this page's `creditsPhrase` /
- * `includedCreditsPhrase` copy, the exact promise-vs-grant mismatch the
- * #2643 thread reported, now on the public pricing page. Revalidating hourly
- * means a migration-day flag flip reaches this page within an hour, without
- * paying full request-time render cost on every anonymous visit.
+ * MON-2 / D-OW-17: this page prerenders once at `next build` time (inside the
+ * Docker builder stage) and serves that static HTML — but `creditsPhrase` /
+ * `includedCreditsPhrase` read `MONEY_MODEL_V2_ACTIVE`, a compile-time code
+ * constant in money-model.ts, not a runtime env var. Every process that
+ * compiles `@pagespace/lib` from the same commit — this build included —
+ * embeds the same literal, so a static, unrevalidated prerender is correct by
+ * construction: there is no runtime flag that could disagree with it. (A prior
+ * revision of this fix used `process.env.MONEY_MODEL_V2` on the server, then a
+ * `NEXT_PUBLIC_` client mirror, then hourly revalidation to chase marketing's
+ * own copy of the server env var — each rejected in turn as a "two places must
+ * agree" footgun. Flipping the ratio is now a commit, not a runtime toggle, so
+ * none of that coordination is needed.)
  */
-export const revalidate = 3600;
 
 interface Plan {
   name: string;

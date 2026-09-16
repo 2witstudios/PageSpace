@@ -11,9 +11,10 @@
  *     account-plan-classified invoice grants nothing regardless of amount_paid
  *     (invoice-grant.ts). The grant is sized from what the invoice PAID:
  *     invoice.amount_paid × the tier's included-credit ratio (Spec MON-2, via the
- *     pure invoice-grant module). The ratio itself is what MONEY_MODEL_V2 gates
- *     (money-model.ts); off, 100% of the paid amount is granted, which reproduces
- *     today's amounts for a full-price invoice. Gifts and trials are funded at
+ *     pure invoice-grant module). The ratio itself is what MONEY_MODEL_V2_ACTIVE
+ *     gates (money-model.ts, D-OW-17 — a code constant, not an env var); off, 100%
+ *     of the paid amount is granted, which reproduces today's amounts for a
+ *     full-price invoice. Gifts and trials are funded at
  *     list price × ratio (D-OW-16a) — gifted status is read from the invoice's
  *     own subscription-metadata snapshot first, so it cannot race the
  *     subscription webhook, with the live subscriptions row as a fallback. Any

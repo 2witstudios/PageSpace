@@ -328,7 +328,7 @@ describe('GET /api/subscriptions/status', () => {
   });
 
   describe('MON-2 planCredits', () => {
-    it('returns the server-derived included-credit figure per tier (the number a client-side read of MONEY_MODEL_V2 cannot see)', async () => {
+    it('returns the server-derived included-credit figure per tier, matching tierAllowanceCents\'s own default (D-OW-17: MONEY_MODEL_V2_ACTIVE = false, a code constant identical everywhere)', async () => {
       mockSelectWhere.mockResolvedValueOnce([mockUser()]);
 
       const request = new Request('https://example.com/api/subscriptions/status', {
@@ -339,7 +339,7 @@ describe('GET /api/subscriptions/status', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.planCredits).toEqual({ free: 500, pro: 900, business: 3000 });
+      expect(body.planCredits).toEqual({ free: 500, pro: 1500, business: 5000 });
     });
   });
 

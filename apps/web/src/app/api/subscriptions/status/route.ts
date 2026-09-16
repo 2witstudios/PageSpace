@@ -10,14 +10,14 @@ import { tierAllowanceCents } from '@pagespace/lib/billing/money-model';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 /**
- * MON-2: the included-credit figure per tier, computed HERE on the server (the only
- * place `tierAllowanceCents` — which reads the real `MONEY_MODEL_V2` — may run).
- * `settings/plan` is a `'use client'` component and cannot see that env var itself
- * (Next.js never inlines a bare, non-`NEXT_PUBLIC_` name into the browser bundle);
- * it fetches this route and patches its plan data with `planCredits` via
- * `withCreditOverrides` (`@/lib/subscription/plans`) instead of reading any env
- * client-side, or maintaining a second `NEXT_PUBLIC_` mirror that could disagree
- * with this one.
+ * MON-2: the included-credit figure per tier, computed HERE from `tierAllowanceCents`
+ * (D-OW-17: `MONEY_MODEL_V2_ACTIVE` is now a code constant, identical in every
+ * process — web, marketing, and any "use client" bundle — so this route and
+ * `settings/plan`'s own client-side derivation would in fact agree either way).
+ * `settings/plan` still fetches this route and patches its plan data with
+ * `planCredits` via `withCreditOverrides` (`@/lib/subscription/plans`); that seam is
+ * unchanged and still correct, just no longer load-bearing for the env/client
+ * asymmetry it was originally built to close.
  */
 function planCreditsByTier(): Record<SubscriptionTier, number> {
   return Object.fromEntries(TIERS.map((tier) => [tier, tierAllowanceCents(tier)])) as Record<SubscriptionTier, number>;
