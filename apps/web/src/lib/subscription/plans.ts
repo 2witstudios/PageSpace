@@ -328,3 +328,20 @@ export function getPlanFromPriceId(priceId: string): PlanDefinition | null {
   const tier = getTierFromPriceId(priceId);
   return tier ? PLANS[tier] : null;
 }
+
+/**
+ * SEAT-2 P1 fix (independent review, allowlist inversion — Vision principle 6,
+ * "fail closed, deny by default"): whether `priceId` is a price a LONE user
+ * may buy or switch to today. This is an ALLOWLIST — every non-org tier's
+ * CURRENT `stripePriceId` from the one tier table — not a blocklist of the
+ * org plan's id. The previous blocklist form (`!isOrgPlanId`) let the
+ * grandfathered Founder price, a future Wave-C price move, and any other
+ * unrecognized price id all fall through as "not org, so allowed"; a lone
+ * user could POST any of those straight to /api/stripe/create-subscription or
+ * /update-subscription. This form denies by default: a price id is only ever
+ * accepted because it IS on the list, so a new Stripe price cannot silently
+ * become purchasable until it is added to PLANS as a personal tier's price.
+ */
+export function isPersonalPlanPriceId(priceId: string): boolean {
+  return getPersonalPlans().some((plan) => plan.stripePriceId === priceId);
+}

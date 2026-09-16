@@ -130,6 +130,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { stripeConfig } from '@/lib/stripe-config';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -191,7 +192,11 @@ const mockStripeSubscription = (overrides: Partial<{
 
 describe('POST /api/stripe/update-subscription', () => {
   const mockUserId = 'user_123';
-  const mockPriceId = 'price_business_monthly';
+  // SEAT-2 P1 (independent review): the allowlist guard now rejects any
+  // price id this app doesn't recognize as a personal plan's current price,
+  // so the default priceId used across these tests must be a real one —
+  // Pro's actual configured Stripe price id, not an arbitrary string.
+  const mockPriceId = stripeConfig.priceIds.pro;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -493,5 +498,62 @@ describe('POST /api/stripe/update-subscription', () => {
 
       expect(response.status).toBe(200);
     });
+  });
+
+  it('SEAT-2 P1 rejects a plan change targeting the Business (org-plan) price id — the UI hides it, but the server must too', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: stripeConfig.priceIds.business, isDowngrade: false }),
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('This plan cannot be purchased individually.');
+    expect(mockStripeSubscriptionsUpdate).not.toHaveBeenCalled();
+    expect(mockStripeSubscriptionSchedulesCreate).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-2 P1 (independent review) rejects the grandfathered Founder price id — a removed tier is never re-purchasable', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: stripeConfig.grandfatheredPriceIds.founder, isDowngrade: false }),
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('This plan cannot be purchased individually.');
+    expect(mockStripeSubscriptionsUpdate).not.toHaveBeenCalled();
+    expect(mockStripeSubscriptionSchedulesCreate).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-2 P1 (independent review) rejects an unrecognized price id — the allowlist denies by default rather than falling through', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: 'price_not_a_real_plan', isDowngrade: false }),
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('This plan cannot be purchased individually.');
+    expect(mockStripeSubscriptionsUpdate).not.toHaveBeenCalled();
+    expect(mockStripeSubscriptionSchedulesCreate).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-2 P1 (independent review) accepts the Pro price id', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: stripeConfig.priceIds.pro, isDowngrade: false }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(mockStripeSubscriptionsUpdate).toHaveBeenCalled();
   });
 });

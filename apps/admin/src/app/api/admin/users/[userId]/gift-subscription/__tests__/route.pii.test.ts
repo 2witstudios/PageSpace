@@ -319,4 +319,26 @@ describe('Gift subscription PII handling', () => {
       );
     });
   });
+
+  describe('SEAT-2 P2 org-plan exclusion', () => {
+    it('rejects gifting Business (the organization plan) to an ordinary user — no org gifting exists yet', async () => {
+      const res = await POST(postRequest({ tier: 'business', reason: 'thanks' }), ctx);
+      const body = await res.json();
+
+      expect(res.status).toBe(400);
+      expect(body.error).toMatch(/pro/i);
+      // The schema rejection must short-circuit before any DB/Stripe I/O.
+      expect(dbSelectMock).not.toHaveBeenCalled();
+      expect(vi.mocked(stripe.subscriptions.create)).not.toHaveBeenCalled();
+    });
+
+    it('still accepts gifting Pro', async () => {
+      dbSelectMock
+        .mockReturnValueOnce(userSelectThenable)
+        .mockReturnValueOnce(noActiveSubsSelect);
+
+      const res = await POST(postRequest({ tier: 'pro', reason: 'thanks' }), ctx);
+      expect(res.status).toBe(200);
+    });
+  });
 });

@@ -9,8 +9,8 @@
  * import from here instead.
  *
  * SEAT-2 / A-9: the vocabulary is Free, Pro (personal) and Business (the
- * organization plan). 'founder' is gone — its single subscriber is migrated to
- * Pro by scripts/migrate-founder-to-pro.ts, and the legacy $100 personal
+ * organization plan). 'founder' is gone — its single subscriber moves to Pro
+ * by a manual Stripe dashboard step ([D-OW-19]), and the legacy $100 personal
  * Business subscribers keep Business entitlements at their current price via
  * `users.subscriptionGrandfathered` (a flag, not a tier).
  *

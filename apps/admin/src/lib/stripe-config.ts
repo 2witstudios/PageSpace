@@ -27,11 +27,15 @@ interface StripeConfig {
   /**
    * Prices that are no longer sold but still resolve for the subscribers on
    * them (A-9). Never a member of TIERS — a removed tier's price lives here.
-   * `founder` ($50/month) resolves to its migration target, Pro, until
-   * scripts/migrate-founder-to-pro.ts moves the subscription at period end.
+   * `founder` ($50/month) resolves to its migration target, Pro, until the
+   * subscription is moved to Pro at period end by a manual Stripe dashboard
+   * step ([D-OW-19]). `legacyBusiness` is the $100/month personal Business
+   * price whose subscribers are grandfathered (A-9) — today the same id as
+   * `priceIds.business`, which becomes the $50 org price in Wave C.
    */
   grandfatheredPriceIds: {
     founder: string;
+    legacyBusiness: string;
   };
 }
 
@@ -44,6 +48,7 @@ const config: Record<'test' | 'live', StripeConfig> = {
     },
     grandfatheredPriceIds: {
       founder: 'price_1SdbhePCGvbSozobuNjSn5j0',    // $50/month, removed tier (A-9)
+      legacyBusiness: 'price_1SdbhfPCGvbSozobpTMXfqkX', // $100/month personal Business, grandfathered (A-9)
     },
   },
   live: {
@@ -54,6 +59,7 @@ const config: Record<'test' | 'live', StripeConfig> = {
     },
     grandfatheredPriceIds: {
       founder: 'price_1SdfbbPRnBcvXFsofn7L1leP',    // $50/month, removed tier (A-9)
+      legacyBusiness: 'price_1SdfbePRnBcvXFsoCvpJsSxw', // $100/month personal Business, grandfathered (A-9)
     },
   },
 };

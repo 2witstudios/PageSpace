@@ -13,14 +13,19 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
-import { TIERS } from '@pagespace/lib/billing/subscription-tiers';
+import { TIERS, isOrgPlanTier } from '@pagespace/lib/billing/subscription-tiers';
 
-const GIFTABLE_TIERS = TIERS.filter((tier): tier is Exclude<(typeof TIERS)[number], 'free'> => tier !== 'free');
+// SEAT-2 P2: an ordinary user gift can only ever be a PERSONAL tier — Business
+// is the organization plan and buying it creates an org, which does not exist
+// for a gifted subscription. Excluded until org gifting is built, not just
+// hidden from a UI; this is the schema that actually validates the request.
+const GIFTABLE_TIERS = TIERS.filter(
+  (tier): tier is Exclude<(typeof TIERS)[number], 'free'> => tier !== 'free' && !isOrgPlanTier(tier),
+);
 
 type RouteContext = { params: Promise<{ userId: string }> };
 
 const giftSchema = z.object({
-  // SEAT-2: every paid tier of the canonical vocabulary is giftable.
   tier: z.enum(GIFTABLE_TIERS),
   reason: z.string().trim().min(1).max(500).default('Admin gift'),
 });
@@ -54,7 +59,7 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
     const parsed = giftSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json(
-        { error: 'Invalid request. Tier must be "pro" or "business" and reason must be non-empty.', details: parsed.error.flatten().fieldErrors },
+        { error: 'Invalid request. Tier must be "pro" and reason must be non-empty.', details: parsed.error.flatten().fieldErrors },
         { status: 400 }
       );
     }
